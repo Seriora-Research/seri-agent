@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "vela",
+      "name": "hesper",
       "dependencies": {
         "@ai-sdk/groq": "^4.0.19",
         "@vscode/ripgrep": "^1.18.0",

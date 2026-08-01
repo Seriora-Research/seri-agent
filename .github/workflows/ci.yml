@@ -22,9 +22,9 @@ jobs:
       - name: Run compiled binary
         shell: bash
         run: |
-          if [ -f dist/vela.exe ]; then
-            BIN=dist/vela.exe
+          if [ -f dist/hesper.exe ]; then
+            BIN=dist/hesper.exe
           else
-            BIN=dist/vela
+            BIN=dist/hesper
           fi
           "$BIN" --version
