@@ -13,7 +13,8 @@
     "build:windows-x64": "bun build --compile --target=bun-windows-x64 ./src/cli.ts --outfile dist/vela",
     "build:all": "bun run build:linux-x64 && bun run build:linux-arm64 && bun run build:darwin-x64 && bun run build:darwin-arm64 && bun run build:windows-x64",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
   },
   "devDependencies": {
     "typescript": "^5.7.2",
