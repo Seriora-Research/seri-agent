@@ -1,6 +1,8 @@
 node_modules/
 dist/
 *.log
+.env
+.env.*
 build-plan.md
 definitive-harness.md
 research.md
