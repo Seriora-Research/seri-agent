@@ -24,47 +24,47 @@ BYOK-only core — Phase A (WorkOS AuthKit device-flow auth) has shipped; see
 
 ## Architecture
 
-**The loop is a library, not a CLI.** `src/loop/loop.ts` (`runLoop`) is a stateless
+**The loop is a library, not a CLI.** `apps/cli/src/loop/loop.ts` (`runLoop`) is a stateless
 async generator: it takes a model, tools, and messages, and yields `LoopEvent`s
 (text-delta, tool-call, tool-result, permission-denied, compacted, done, error). It
-never touches stdout/stdin directly. `src/cli.ts` is a thin consumer that prints events
+never touches stdout/stdin directly. `apps/cli/src/cli.ts` is a thin consumer that prints events
 and prompts for approval. This boundary is deliberate and load-bearing — a future
 daemon/transport layer is expected to consume the same generator.
 
-**Gate-first permissions**, not sandboxing. `src/gate/gate.ts` defines three
+**Gate-first permissions**, not sandboxing. `apps/cli/src/gate/gate.ts` defines three
 `PermissionMode`s (`read-only` / `approve-each` / `auto`) that cycle via `/mode`.
 Whether a tool needs permission is derived from `WRITE_TOOL_NAMES` in
-`src/provider/tools.ts` (single source of truth — a new write-capable tool must be
+`apps/cli/src/provider/tools.ts` (single source of truth — a new write-capable tool must be
 added there or it silently bypasses the gate). The AI SDK's automatic tool execution
 is disabled (`execute` stripped before `streamText`); `runLoop` calls each tool's
 `execute` itself, after the gate decides whether it's allowed to run.
 
 **Tools are pure functions**, independently testable without a model:
-`read_file`/`write_file`/`edit`/`grep`/`glob` (`src/tools/`), plus `bash` and
+`read_file`/`write_file`/`edit`/`grep`/`glob` (`apps/cli/src/tools/`), plus `bash` and
 `powershell` — two separate shells, no translation layer between them (Windows always
 gets a real PowerShell; bash is opt-in via Git Bash detection). `edit` is a 3-tier
 match cascade (exact → line-trimmed → whitespace-normalized) with a
 disproportionate-match guard against replacing far more than was asked for.
 
-**Provider**: Vercel AI SDK, currently Groq only (`src/provider/groq.ts`,
+**Provider**: Vercel AI SDK, currently Groq only (`apps/cli/src/provider/groq.ts`,
 `llama-3.3-70b-versatile` default). API keys resolve from env var first, then
 `~/.hesper/config.json` (`%LOCALAPPDATA%\hesper\` on Windows) — see
-`src/config/paths.ts` / `src/config/config.ts`.
+`apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`.
 
-**Sessions** (`src/session/session.ts`) persist as one JSON file per session under
+**Sessions** (`apps/cli/src/session/session.ts`) persist as one JSON file per session under
 `<configDir>/sessions/`; `--resume [id]` reloads the most recent (or named) session.
 SQLite was considered and deferred in favor of this for v0/v1.
 
-**Compaction** (`src/loop/compaction.ts`) triggers once input tokens cross a threshold
+**Compaction** (`apps/cli/src/loop/compaction.ts`) triggers once input tokens cross a threshold
 of the model's context window. It summarizes evicted messages into a structured
 goal/progress/blockers/nextSteps recap via `generateText` (not `generateObject` — see
 recent commit history for why) and never cuts the eviction boundary in the middle of an
 {assistant tool-call, tool result} pair, since that reproduces
 `AI_MissingToolResultsError`.
 
-**Auth** (`src/auth/`): `hesper login`/`signup`/`logout`, backed by WorkOS AuthKit's
+**Auth** (`apps/cli/src/auth/`): `hesper login`/`signup`/`logout`, backed by WorkOS AuthKit's
 OAuth device-authorization flow (RFC 8628) — purely additive, zero changes to
-`src/provider/groq.ts` or the BYOK path in `src/config/config.ts`. `deviceFlow.ts`
+`apps/cli/src/provider/groq.ts` or the BYOK path in `apps/cli/src/config/config.ts`. `deviceFlow.ts`
 requests + polls (honoring `authorization_pending`/`slow_down`/`expired_token`/
 `access_denied`); `authStore.ts` persists the session as a single `auth.json` under
 `getConfigDir()` (owner-only file permissions, not the per-id `sessions/` pattern —
@@ -74,7 +74,7 @@ orchestrates (`login`/`signup` are the same underlying call — WorkOS's hosted 
 handles sign-in vs. sign-up). `cli.ts` dispatches these subcommands before the
 existing task/`--resume`/`/mode` handling, mirroring the `/mode` carve-out.
 
-**AGENTS.md loading**: on a fresh (non-resumed) session, `src/agents/loadAgentsFile.ts`
+**AGENTS.md loading**: on a fresh (non-resumed) session, `apps/cli/src/agents/loadAgentsFile.ts`
 walks up from `cwd` looking for the nearest `AGENTS.md` and prepends its contents to
 the system prompt. This file is that file, for this repo.
 
@@ -82,7 +82,7 @@ the system prompt. This file is that file, for this repo.
 
 - `.claude/` holds this project's own Claude Code loop/agent/skill configuration
   (engineering-loop, retro, etc.) — it's gitignored and orthogonal to Hesper's own code.
-- `src/tools/rg-vendored.bin` is a vendored ripgrep binary fetched by
+- `apps/cli/src/tools/rg-vendored.bin` is a vendored ripgrep binary fetched by
   `postinstall`/`vendorRipgrep.ts`; don't hand-edit it.
 - Feature work lands via a branch + PR (`main` has branch protection), not direct
   pushes — see `.claude/rules/git-workflow.md` if present.

@@ -1,6 +1,6 @@
 node_modules/
 dist/
-src/tools/rg-vendored.bin
+apps/cli/src/tools/rg-vendored.bin
 *.log
 .env
 .env.*
