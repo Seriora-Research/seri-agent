@@ -5,15 +5,16 @@
   "scripts": {
     "postinstall": "bun run --cwd apps/cli postinstall",
     "dev": "bun run --cwd apps/cli dev",
-    "build": "bun run --cwd apps/cli build",
+    "dev:server": "bun run --cwd apps/server dev",
+    "build": "bun run --cwd apps/cli build && bun run --cwd apps/server build",
     "build:linux-x64": "bun run --cwd apps/cli build:linux-x64",
     "build:linux-arm64": "bun run --cwd apps/cli build:linux-arm64",
     "build:darwin-x64": "bun run --cwd apps/cli build:darwin-x64",
     "build:darwin-arm64": "bun run --cwd apps/cli build:darwin-arm64",
     "build:windows-x64": "bun run --cwd apps/cli build:windows-x64",
     "build:all": "bun run --cwd apps/cli build:all",
-    "test": "bun run --cwd apps/cli test",
-    "typecheck": "bun run --cwd apps/cli typecheck",
+    "test": "bun run --cwd apps/cli test && bun run --cwd apps/server test",
+    "typecheck": "bun run --cwd apps/cli typecheck && bun run --cwd apps/server typecheck",
     "lint": "bun run --cwd apps/cli lint"
   }
 }

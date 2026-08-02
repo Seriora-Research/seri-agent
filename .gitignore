@@ -1,5 +1,8 @@
 node_modules/
 dist/
+.next/
+.vercel/
+*.tsbuildinfo
 apps/cli/src/tools/rg-vendored.bin
 *.log
 .env
