@@ -11,7 +11,8 @@ describe("spawnCollect", () => {
     const result = await emit("process.stdout.write('hi')");
 
     expect(result.stdout).toBe("hi");
-    expect(result.truncated).toBe(false);
+    expect(result.stdoutTruncated).toBe(false);
+    expect(result.stderrTruncated).toBe(false);
     expect(result.exitCode).toBe(0);
   });
 
@@ -19,14 +20,16 @@ describe("spawnCollect", () => {
     const result = await emit("process.stdout.write('x'.repeat(30000))");
 
     expect(result.stdout).toHaveLength(30000);
-    expect(result.truncated).toBe(false);
+    expect(result.stdoutTruncated).toBe(false);
   });
 
   test("bounds a runaway command instead of growing without limit", async () => {
     // 4 MB of stdout: unbounded accumulation kept every byte of this and handed it to the model.
     const result = await emit("process.stdout.write('A'.repeat(2_000_000) + 'B'.repeat(2_000_000))");
 
-    expect(result.truncated).toBe(true);
+    expect(result.stdoutTruncated).toBe(true);
+    // The stream that was not touched must not be tarred with the same flag.
+    expect(result.stderrTruncated).toBe(false);
     // The elision marker adds a little, so this is a bound rather than an exact length.
     expect(result.stdout.length).toBeLessThan(30_200);
     // Both ends survive: the start of the run and the part that would carry an error.
@@ -36,11 +39,36 @@ describe("spawnCollect", () => {
   });
 
   test("bounds stderr on the same terms", async () => {
-    const result = await emit("process.stderr.write('e'.repeat(1_000_000))");
+    const result = await emit("process.stdout.write('kept whole'); process.stderr.write('e'.repeat(1_000_000))");
 
-    expect(result.truncated).toBe(true);
+    expect(result.stderrTruncated).toBe(true);
     expect(result.stderr.length).toBeLessThan(30_200);
+    // A flood on stderr must not make a complete stdout look incomplete.
+    expect(result.stdoutTruncated).toBe(false);
+    expect(result.stdout).toBe("kept whole");
   });
+
+  test("does not flag a timeout on a command that finishes", async () => {
+    const result = await emit("process.stdout.write('done')");
+
+    expect(result.timedOut).toBe(false);
+  });
+
+  test("kills a command that outruns its timeout and keeps what it printed first", async () => {
+    // Prints immediately, then hangs for well past the timeout it is given.
+    const started = Date.now();
+    const result = await spawnCollect(
+      process.execPath,
+      ["-e", "process.stdout.write('started work'); setTimeout(() => {}, 60_000)"],
+      1500,
+    );
+
+    expect(result.timedOut).toBe(true);
+    // Returning a bare timeout would leave the agent nothing to diagnose from.
+    expect(result.stdout).toBe("started work");
+    // It really was killed rather than waited out.
+    expect(Date.now() - started).toBeLessThan(20_000);
+  }, 30_000);
 
   test("preserves a non-zero exit code", async () => {
     const result = await emit("process.stdout.write('partial'); process.exit(3)");

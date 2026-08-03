@@ -17,7 +17,7 @@ describe("openBrowser", () => {
     let captured: { executable: string; args: string[] } | undefined;
     const spawnFn = async (executable: string, args: string[]) => {
       captured = { executable, args };
-      return { stdout: "", stderr: "", exitCode: 0, truncated: false };
+      return { stdout: "", stderr: "", exitCode: 0, stdoutTruncated: false, stderrTruncated: false, timedOut: false };
     };
 
     await openBrowser("https://example.com/device", spawnFn);
@@ -30,7 +30,7 @@ describe("openBrowser", () => {
     let captured: { executable: string; args: string[] } | undefined;
     const spawnFn = async (executable: string, args: string[]) => {
       captured = { executable, args };
-      return { stdout: "", stderr: "", exitCode: 0, truncated: false };
+      return { stdout: "", stderr: "", exitCode: 0, stdoutTruncated: false, stderrTruncated: false, timedOut: false };
     };
 
     await openBrowser("https://example.com/device", spawnFn);
@@ -43,7 +43,7 @@ describe("openBrowser", () => {
     let captured: { executable: string; args: string[] } | undefined;
     const spawnFn = async (executable: string, args: string[]) => {
       captured = { executable, args };
-      return { stdout: "", stderr: "", exitCode: 0, truncated: false };
+      return { stdout: "", stderr: "", exitCode: 0, stdoutTruncated: false, stderrTruncated: false, timedOut: false };
     };
 
     await openBrowser("https://example.com/device", spawnFn);
@@ -65,7 +65,14 @@ describe("openBrowser", () => {
     const errors: string[] = [];
     const originalError = console.error;
     console.error = (msg: string) => errors.push(String(msg));
-    const spawnFn = async () => ({ stdout: "", stderr: "no handler for URL type", exitCode: 1, truncated: false });
+    const spawnFn = async () => ({
+      stdout: "",
+      stderr: "no handler for URL type",
+      exitCode: 1,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      timedOut: false,
+    });
 
     try {
       await expect(openBrowser("https://example.com/device", spawnFn)).resolves.toBeUndefined();

@@ -25,10 +25,14 @@ function resolveBashCommand(): string {
   return findOnPath("bash") ?? WIN32_GIT_BASH_PATHS.find(existsSync) ?? "bash";
 }
 
-export async function runBash(command: string, isAvailable: () => boolean = isBashAvailable): Promise<ProcessResult> {
+export async function runBash(
+  command: string,
+  isAvailable: () => boolean = isBashAvailable,
+  timeoutMs?: number,
+): Promise<ProcessResult> {
   if (!isAvailable()) {
     throw new Error("bash is not available on this system");
   }
 
-  return spawnCollect(resolveBashCommand(), ["-c", command]);
+  return spawnCollect(resolveBashCommand(), ["-c", command], timeoutMs);
 }
