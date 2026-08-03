@@ -1,5 +1,11 @@
-import { describe, expect, test } from "bun:test";
-import { type DeviceAuthorization, pollForToken, requestDeviceCode } from "../../src/auth/deviceFlow";
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+  DEFAULT_WORKOS_CLIENT_ID,
+  type DeviceAuthorization,
+  getWorkosClientId,
+  pollForToken,
+  requestDeviceCode,
+} from "../../src/auth/deviceFlow";
 
 function fakeResponse(ok: boolean, body: unknown): Response {
   return { ok, text: async () => JSON.stringify(body) } as Response;
@@ -8,6 +14,29 @@ function fakeResponse(ok: boolean, body: unknown): Response {
 function fakeTextResponse(ok: boolean, status: number, text: string): Response {
   return { ok, status, text: async () => text } as Response;
 }
+
+describe("getWorkosClientId", () => {
+  const original = process.env.HESPER_WORKOS_CLIENT_ID;
+
+  afterEach(() => {
+    // Restore by deleting when it was unset — reassigning `undefined` stores the literal
+    // string "undefined" in Node/Bun and leaks into later tests in the same process.
+    if (original === undefined) delete process.env.HESPER_WORKOS_CLIENT_ID;
+    else process.env.HESPER_WORKOS_CLIENT_ID = original;
+  });
+
+  test("falls back to the built-in default when unset", () => {
+    delete process.env.HESPER_WORKOS_CLIENT_ID;
+
+    expect(getWorkosClientId()).toBe(DEFAULT_WORKOS_CLIENT_ID);
+  });
+
+  test("prefers HESPER_WORKOS_CLIENT_ID when set", () => {
+    process.env.HESPER_WORKOS_CLIENT_ID = "client_override_123";
+
+    expect(getWorkosClientId()).toBe("client_override_123");
+  });
+});
 
 describe("requestDeviceCode", () => {
   test("posts client_id as JSON and maps the snake_case response to camelCase", async () => {

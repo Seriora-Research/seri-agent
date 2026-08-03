@@ -5,7 +5,7 @@ import type { ModelMessage } from "ai";
 import pkg from "../package.json";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
-import { DEFAULT_WORKOS_CLIENT_ID } from "./auth/deviceFlow";
+import { getWorkosClientId } from "./auth/deviceFlow";
 import { getConfigDir } from "./config/paths";
 import { cycleMode } from "./gate/gate";
 import { type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "./loop/loop";
@@ -114,7 +114,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (argv[0] === "login" || argv[0] === "signup") {
     const loginFn = deps.login ?? loginReal;
     try {
-      await loginFn(argv[0], DEFAULT_WORKOS_CLIENT_ID, deps.authConfigDir ?? getConfigDir());
+      await loginFn(argv[0], getWorkosClientId(), deps.authConfigDir ?? getConfigDir());
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       return 1;
