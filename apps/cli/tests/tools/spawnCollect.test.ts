@@ -102,6 +102,18 @@ describe("spawnCollect", () => {
     expect(result.stdout).not.toContain("�");
   }, 30_000);
 
+  test("does not strand half a pair at the front of the tail either", async () => {
+    // The head-side and tail-side cuts fail on opposite parities, so one fixture cannot cover
+    // both: the payload above lands the tail on a high surrogate and exercises only the head.
+    // The extra trailing character shifts the last-15000 window by one, which is what puts a
+    // lone low surrogate first in the tail.
+    const result = await emit("process.stdout.write('x' + '\\u{1F600}'.repeat(200_000) + 'y')");
+
+    expect(result.stdoutTruncated).toBe(true);
+    expect(Buffer.from(result.stdout, "utf8").toString("utf8")).toBe(result.stdout);
+    expect(result.stdout).not.toContain("�");
+  }, 30_000);
+
   test("does not corrupt multi-byte characters split across stream chunks", async () => {
     // A guard, not a reproduction: concatenating raw Buffers held up under this runtime's
     // chunking too (measured: zero U+FFFD). setEncoding makes it a guarantee rather than a
