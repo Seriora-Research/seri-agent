@@ -55,13 +55,15 @@ const globTool = tool({
 });
 
 const bashTool = tool({
-  description: "Run a shell command via bash.",
+  description:
+    "Run a shell command via bash. Output is capped at 30000 characters; when `truncated` is true the middle was dropped and both ends kept, so redirect to a file and read the part you need rather than assuming this is the whole output.",
   inputSchema: z.object({ command: z.string() }),
   execute: async ({ command }) => runBash(command),
 });
 
 const powershellTool = tool({
-  description: "Run a shell command via PowerShell.",
+  description:
+    "Run a shell command via PowerShell. Output is capped at 30000 characters; when `truncated` is true the middle was dropped and both ends kept, so redirect to a file and read the part you need rather than assuming this is the whole output.",
   inputSchema: z.object({ command: z.string() }),
   execute: async ({ command }) => runPowerShell(command),
 });
