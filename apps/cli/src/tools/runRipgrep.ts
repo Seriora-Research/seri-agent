@@ -21,10 +21,35 @@ writeFileSync(rgPath, bytes);
 if (process.platform !== "win32") chmodSync(rgPath, 0o755);
 
 // Nothing removed this, so every run left another 5 MB copy of rg behind: 207 directories and
-// 1.07 GB had accumulated on the machine this was found on. A hard kill still leaks one, which
-// is unavoidable for a file the process must be able to execute for its whole lifetime, but
-// that is one instead of one per run.
-process.on("exit", () => rmSync(rgDir, { recursive: true, force: true }));
+// 1.07 GB had accumulated on the machine this was found on.
+function cleanUpExtractedRg(): void {
+  try {
+    // `force` suppresses ENOENT but not EPERM/EBUSY, which Windows raises while an AV scanner
+    // or the search indexer still holds the binary we just executed. Retry briefly, then give
+    // up: throwing from an exit listener lands after the run's real output and turns a success
+    // into an apparent crash — measured at exit code 1 with a stack trace on stderr.
+    rmSync(rgDir, { recursive: true, force: true, maxRetries: 3 });
+  } catch {
+    // Leaving one directory behind beats ending a good run with a stack trace.
+  }
+}
+
+process.on("exit", cleanUpExtractedRg);
+
+// 'exit' does not fire when a signal terminates the process, so on its own the handler above
+// missed the most common way an agent run ends: Ctrl-C part way through a turn. Verified — a
+// SIGTERM left the directory behind exactly as before the fix. Registering a listener
+// suppresses the default termination, so these have to exit themselves, at the conventional
+// 128 + signal number.
+for (const [signal, exitCode] of [
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+] as const) {
+  process.on(signal, () => {
+    cleanUpExtractedRg();
+    process.exit(exitCode);
+  });
+}
 
 // spawnSync buffers rg's entire stdout in memory and kills rg the moment the buffer fills.
 // Node's 1 MB default was low enough that an ordinary --json search (one event per match, a

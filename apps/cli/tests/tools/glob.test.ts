@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { glob } from "../../src/tools/glob";
@@ -26,13 +26,23 @@ describe("glob", () => {
     expect(truncated).toBe(false);
   });
 
-  test("still resolves normally with the `--` separator in the argument list", () => {
-    // grep's own `--` is covered by a flag-shaped pattern; glob has no pattern of its own, so
-    // this only guards that adding the separator did not break rg's argument parsing.
-    const { files } = glob("*.js", { path: tmpDir });
+  test("resolves a path that rg would otherwise read as a flag", () => {
+    // Two dashes, not one: rg happily treats `-weird` as a path, but reads `--weird` as a long
+    // flag and exits 2 with "unrecognized flag", which runRipgrep turns into a thrown error.
+    // The dashes have to lead the argument, so the path must be relative — hence the chdir.
+    mkdirSync(join(tmpDir, "--weird"));
+    writeFileSync(join(tmpDir, "--weird", "d.js"), "d");
 
-    expect(files).toHaveLength(1);
-    expect(files[0].endsWith("c.js")).toBe(true);
+    const originalCwd = process.cwd();
+    process.chdir(tmpDir);
+    try {
+      const { files } = glob("*.js", { path: "--weird" });
+
+      expect(files).toHaveLength(1);
+      expect(files[0].endsWith("d.js")).toBe(true);
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 
   test("caps the results and flags truncation when more files match than the cap", () => {
