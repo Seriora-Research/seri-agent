@@ -42,6 +42,28 @@ describe("spawnCollect", () => {
     expect(result.stderr.length).toBeLessThan(30_200);
   });
 
+  test("does not flag a timeout on a command that finishes", async () => {
+    const result = await emit("process.stdout.write('done')");
+
+    expect(result.timedOut).toBe(false);
+  });
+
+  test("kills a command that outruns its timeout and keeps what it printed first", async () => {
+    // Prints immediately, then hangs for well past the timeout it is given.
+    const started = Date.now();
+    const result = await spawnCollect(
+      process.execPath,
+      ["-e", "process.stdout.write('started work'); setTimeout(() => {}, 60_000)"],
+      1500,
+    );
+
+    expect(result.timedOut).toBe(true);
+    // Returning a bare timeout would leave the agent nothing to diagnose from.
+    expect(result.stdout).toBe("started work");
+    // It really was killed rather than waited out.
+    expect(Date.now() - started).toBeLessThan(20_000);
+  }, 30_000);
+
   test("preserves a non-zero exit code", async () => {
     const result = await emit("process.stdout.write('partial'); process.exit(3)");
 

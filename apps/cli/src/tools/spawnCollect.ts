@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
-export type ProcessResult = { stdout: string; stderr: string; exitCode: number; truncated: boolean };
+export type ProcessResult = { stdout: string; stderr: string; exitCode: number; truncated: boolean; timedOut: boolean };
 
 // Both streams were accumulated into unbounded strings, so a runaway command (`yes`, a `cat`
 // of a large file, a build log) grew the process until it died and, short of that, handed the
@@ -8,6 +8,13 @@ export type ProcessResult = { stdout: string; stderr: string; exitCode: number; 
 // 30k characters for the same two reasons.
 const MAX_OUTPUT_CHARS = 30_000;
 const HALF = MAX_OUTPUT_CHARS / 2;
+
+// A command with no ceiling on its runtime blocks the agent forever - a wedged install, a
+// server that never exits, a network call with no timeout of its own. Claude Code's shell
+// defaults to 2 minutes and allows up to 10, and those numbers hold up here: this repo's
+// heaviest commands are `build:all` at 1.3s and the full test suite at 3.9s.
+const DEFAULT_TIMEOUT_MS = 120_000;
+const MAX_TIMEOUT_MS = 600_000;
 
 // Keeps the first and last HALF characters rather than a plain head cut: the useful parts of a
 // long run sit at both ends — what it started doing, and the error it died on — and keeping
@@ -41,9 +48,32 @@ function createBoundedSink() {
   };
 }
 
-export function spawnCollect(executable: string, args: string[]): Promise<ProcessResult> {
+// Killing the child alone is not enough: verified on Windows that child.kill() reports success
+// and leaves everything the shell started still running, so every timeout would leak a process.
+function killTree(pid: number): void {
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore" });
+    return;
+  }
+
+  try {
+    // The child was spawned into its own process group, so a negative pid signals the whole
+    // group rather than just the shell that fronts it.
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    // Already exited between the timer firing and this call. Nothing left to kill.
+  }
+}
+
+export function spawnCollect(executable: string, args: string[], timeoutMs?: number): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(executable, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      // Own process group on POSIX so a timeout can reach the whole tree. Not on Windows,
+      // where detached means a new console window instead.
+      detached: process.platform !== "win32",
+    });
+
     const out = createBoundedSink();
     const err = createBoundedSink();
 
@@ -54,15 +84,29 @@ export function spawnCollect(executable: string, args: string[]): Promise<Proces
     child.stdout.on("data", (chunk: string) => out.write(chunk));
     child.stderr.on("data", (chunk: string) => err.write(chunk));
 
-    child.on("error", reject);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (child.pid !== undefined) killTree(child.pid);
+    }, Math.min(timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS));
+
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+
     child.on("close", (code) => {
+      clearTimeout(timer);
       const stdout = out.result();
       const stderr = err.result();
+      // Whatever the command managed to say before being killed still goes back. An agent can
+      // diagnose a wedged build from its last output; it can do nothing with a bare timeout.
       resolve({
         stdout: stdout.text,
         stderr: stderr.text,
         exitCode: code ?? 1,
         truncated: stdout.truncated || stderr.truncated,
+        timedOut,
       });
     });
   });

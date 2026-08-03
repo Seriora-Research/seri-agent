@@ -56,16 +56,16 @@ const globTool = tool({
 
 const bashTool = tool({
   description:
-    "Run a shell command via bash. Output is capped at 30000 characters; when `truncated` is true the middle was dropped and both ends kept, so redirect to a file and read the part you need rather than assuming this is the whole output.",
-  inputSchema: z.object({ command: z.string() }),
-  execute: async ({ command }) => runBash(command),
+    "Run a shell command via bash. Output is capped at 30000 characters; when `truncated` is true the middle was dropped and both ends kept, so redirect to a file and read the part you need rather than assuming this is the whole output. Commands are killed after 2 minutes and `timedOut` is set, with whatever they printed first; pass timeoutMs (up to 600000) for a command you expect to take longer.",
+  inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
+  execute: async ({ command, timeoutMs }) => runBash(command, undefined, timeoutMs),
 });
 
 const powershellTool = tool({
   description:
-    "Run a shell command via PowerShell. Output is capped at 30000 characters; when `truncated` is true the middle was dropped and both ends kept, so redirect to a file and read the part you need rather than assuming this is the whole output.",
-  inputSchema: z.object({ command: z.string() }),
-  execute: async ({ command }) => runPowerShell(command),
+    "Run a shell command via PowerShell. Output is capped at 30000 characters; when `truncated` is true the middle was dropped and both ends kept, so redirect to a file and read the part you need rather than assuming this is the whole output. Commands are killed after 2 minutes and `timedOut` is set, with whatever they printed first; pass timeoutMs (up to 600000) for a command you expect to take longer.",
+  inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
+  execute: async ({ command, timeoutMs }) => runPowerShell(command, timeoutMs),
 });
 
 export const toolDefinitions = {
