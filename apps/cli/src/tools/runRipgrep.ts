@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import rgAsset from "./rg-vendored.bin" with { type: "file" };
@@ -19,6 +19,12 @@ const rgDir = mkdtempSync(join(tmpdir(), "hesper-rg-"));
 export const rgPath = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg");
 writeFileSync(rgPath, bytes);
 if (process.platform !== "win32") chmodSync(rgPath, 0o755);
+
+// Nothing removed this, so every run left another 5 MB copy of rg behind: 207 directories and
+// 1.07 GB had accumulated on the machine this was found on. A hard kill still leaks one, which
+// is unavoidable for a file the process must be able to execute for its whole lifetime, but
+// that is one instead of one per run.
+process.on("exit", () => rmSync(rgDir, { recursive: true, force: true }));
 
 // spawnSync buffers rg's entire stdout in memory and kills rg the moment the buffer fills.
 // Node's 1 MB default was low enough that an ordinary --json search (one event per match, a

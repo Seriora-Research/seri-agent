@@ -77,6 +77,18 @@ describe("spawnCollect", () => {
     expect(result.stdout).toBe("partial");
   });
 
+  test("does not strand half a surrogate pair when the cut lands inside one", async () => {
+    // An emoji is two UTF-16 units. The leading 'x' makes every pair start on an odd index, so
+    // the 15000-character head boundary falls between the halves of one — which used to keep a
+    // lone high surrogate in head and a lone low surrogate at the front of tail.
+    const result = await emit("process.stdout.write('x' + '\\u{1F600}'.repeat(1_000_000))");
+
+    expect(result.stdoutTruncated).toBe(true);
+    // A lone surrogate cannot be encoded, so it comes back as U+FFFD and the round trip differs.
+    expect(Buffer.from(result.stdout, "utf8").toString("utf8")).toBe(result.stdout);
+    expect(result.stdout).not.toContain("�");
+  }, 30_000);
+
   test("does not corrupt multi-byte characters split across stream chunks", async () => {
     // A guard, not a reproduction: concatenating raw Buffers held up under this runtime's
     // chunking too (measured: zero U+FFFD). setEncoding makes it a guarantee rather than a

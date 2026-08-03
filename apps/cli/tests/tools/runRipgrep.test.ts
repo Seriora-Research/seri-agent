@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { renameSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, renameSync } from "node:fs";
+import { dirname } from "node:path";
+import { pathToFileURL } from "node:url";
 import { rgPath, runRipgrep } from "../../src/tools/runRipgrep";
 
 let tmpDir: string;
@@ -37,6 +40,20 @@ describe("runRipgrep", () => {
     expect(truncated).toBe(true);
     expect(stdout.length).toBeGreaterThan(0);
   });
+
+  test("removes the extracted rg when the process exits", () => {
+    // The binary is written to a fresh temp dir at startup and has to stay executable for the
+    // whole process lifetime, so this can only be checked from outside: run a real child, ask
+    // it where it put rg, then look after it is gone. Every run used to leave 5 MB behind.
+    const modulePath = pathToFileURL(join(import.meta.dir, "../../src/tools/runRipgrep.ts")).href;
+    const child = spawnSync(process.execPath, ["-e", `const m = await import(${JSON.stringify(modulePath)}); console.log(m.rgPath);`], {
+      encoding: "utf8",
+    });
+
+    const childRgPath = child.stdout.trim();
+    expect(childRgPath).toContain("hesper-rg-");
+    expect(existsSync(dirname(childRgPath))).toBe(false);
+  }, 30_000);
 
   test("still throws when rg genuinely fails", () => {
     expect(() => runRipgrep(["--definitely-not-a-real-flag", tmpDir])).toThrow(/rg exited with code/);

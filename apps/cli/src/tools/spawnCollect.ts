@@ -27,6 +27,15 @@ const HALF = MAX_OUTPUT_CHARS / 2;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 
+// A JS string is UTF-16, so a character outside the BMP — every emoji, and plenty of CJK —
+// occupies two units. Slicing at an arbitrary index can land between them and strand half a
+// pair, which renders as a replacement character and no longer survives a UTF-8 round trip.
+// Chunk boundaries themselves are safe: setEncoding buffers partial sequences, so a pair is
+// always delivered whole. Only our own cuts can split one.
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
 // Keeps the first and last HALF characters rather than a plain head cut: the useful parts of a
 // long run sit at both ends — what it started doing, and the error it died on — and keeping
 // only the head throws away the half that explains the failure.
@@ -40,14 +49,24 @@ function createBoundedSink() {
       total += chunk.length;
 
       if (head.length < HALF) {
-        const room = HALF - head.length;
+        let room = HALF - head.length;
+        // Cutting here would strand a high surrogate at the end of head. Leave the whole pair
+        // for the tail instead — nothing is lost either way, the boundary just moves by one.
+        if (room < chunk.length && isHighSurrogate(chunk.charCodeAt(room - 1))) room -= 1;
         head += chunk.slice(0, room);
         chunk = chunk.slice(room);
       }
 
       // Rolling window, so a process that never stops writing still cannot grow this past
       // MAX_OUTPUT_CHARS in memory.
-      if (chunk) tail = (tail + chunk).slice(-HALF);
+      if (chunk) {
+        const merged = tail + chunk;
+        let start = Math.max(0, merged.length - HALF);
+        // Starting here would open the window on the low half of a pair whose high half was
+        // just dropped. Step past it rather than keeping an orphan.
+        if (start > 0 && isHighSurrogate(merged.charCodeAt(start - 1))) start += 1;
+        tail = merged.slice(start);
+      }
     },
 
     result(): { text: string; truncated: boolean } {

@@ -26,6 +26,15 @@ describe("glob", () => {
     expect(truncated).toBe(false);
   });
 
+  test("still resolves normally with the `--` separator in the argument list", () => {
+    // grep's own `--` is covered by a flag-shaped pattern; glob has no pattern of its own, so
+    // this only guards that adding the separator did not break rg's argument parsing.
+    const { files } = glob("*.js", { path: tmpDir });
+
+    expect(files).toHaveLength(1);
+    expect(files[0].endsWith("c.js")).toBe(true);
+  });
+
   test("caps the results and flags truncation when more files match than the cap", () => {
     for (let i = 0; i < MAX_FILE_RESULTS + 50; i++) writeFileSync(join(tmpDir, `f${i}.md`), "x");
 
