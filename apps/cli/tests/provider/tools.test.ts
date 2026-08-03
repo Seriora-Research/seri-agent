@@ -46,10 +46,22 @@ describe("toolDefinitions", () => {
     tmpDir = makeTmpDir();
     writeFileSync(join(tmpDir, "a.txt"), "hello world\nfoo bar\n");
     const result = await toolDefinitions.grep.execute?.({ pattern: "hello", path: tmpDir }, execOpts);
-    const { matches, truncated } = result as GrepResult;
-    expect(matches).toHaveLength(1);
-    expect(matches[0].text).toBe("hello world");
+    const { mode, files, truncated } = result as GrepResult;
+    expect(mode).toBe("files_with_matches");
+    expect(files).toHaveLength(1);
+    expect(files?.[0]).toContain("a.txt");
     expect(truncated).toBe(false);
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("grep passes mode through to return matched lines", async () => {
+    tmpDir = makeTmpDir();
+    writeFileSync(join(tmpDir, "a.txt"), "hello world\nfoo bar\n");
+    const result = await toolDefinitions.grep.execute?.({ pattern: "hello", path: tmpDir, mode: "content" }, execOpts);
+    const { mode, matches } = result as GrepResult;
+    expect(mode).toBe("content");
+    expect(matches).toHaveLength(1);
+    expect(matches?.[0].text).toBe("hello world");
     rmSync(tmpDir, { recursive: true, force: true });
   });
 

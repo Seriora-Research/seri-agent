@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { glob } from "../../src/tools/glob";
-import { MAX_RESULTS } from "../../src/tools/runRipgrep";
+import { MAX_FILE_RESULTS } from "../../src/tools/runRipgrep";
 
 let tmpDir: string;
 
@@ -27,11 +27,11 @@ describe("glob", () => {
   });
 
   test("caps the results and flags truncation when more files match than the cap", () => {
-    for (let i = 0; i < MAX_RESULTS + 50; i++) writeFileSync(join(tmpDir, `f${i}.md`), "x");
+    for (let i = 0; i < MAX_FILE_RESULTS + 50; i++) writeFileSync(join(tmpDir, `f${i}.md`), "x");
 
     const { files, truncated } = glob("*.md", { path: tmpDir });
 
-    expect(files).toHaveLength(MAX_RESULTS);
+    expect(files).toHaveLength(MAX_FILE_RESULTS);
     expect(truncated).toBe(true);
   });
 });
