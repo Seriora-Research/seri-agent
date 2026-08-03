@@ -5,6 +5,7 @@ import { edit } from "../tools/edit";
 import { glob } from "../tools/glob";
 import { grep } from "../tools/grep";
 import { runPowerShell } from "../tools/powershell";
+import { MAX_RESULTS } from "../tools/runRipgrep";
 import { readFile } from "../tools/readFile";
 import { writeFile } from "../tools/writeFile";
 
@@ -35,8 +36,7 @@ const editTool = tool({
 });
 
 const grepTool = tool({
-  description:
-    "Search for a pattern in files under a path using ripgrep. Returns at most 100 matches; when `truncated` is true the results are incomplete, so narrow the pattern or path, or pass a glob, rather than assuming these are all of them.",
+  description: `Search for a pattern in files under a path using ripgrep. Returns at most ${MAX_RESULTS} matches; when \`truncated\` is true the results are incomplete and re-running the same search can return a different subset, so narrow the pattern or path, or pass a glob, rather than assuming these are all of them.`,
   inputSchema: z.object({
     pattern: z.string(),
     path: z.string(),
@@ -46,8 +46,7 @@ const grepTool = tool({
 });
 
 const globTool = tool({
-  description:
-    "List files under a path matching a glob pattern. Returns at most 100 files; when `truncated` is true the results are incomplete, so narrow the pattern or path rather than assuming these are all of them.",
+  description: `List files under a path matching a glob pattern. Returns at most ${MAX_RESULTS} files; when \`truncated\` is true the results are incomplete and re-running the same search can return a different subset, so narrow the pattern or path rather than assuming these are all of them.`,
   inputSchema: z.object({
     pattern: z.string(),
     path: z.string(),

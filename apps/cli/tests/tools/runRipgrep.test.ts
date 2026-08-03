@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runRipgrep } from "../../src/tools/runRipgrep";
+import { renameSync } from "node:fs";
+import { rgPath, runRipgrep } from "../../src/tools/runRipgrep";
 
 let tmpDir: string;
 
@@ -39,6 +40,19 @@ describe("runRipgrep", () => {
 
   test("still throws when rg genuinely fails", () => {
     expect(() => runRipgrep(["--definitely-not-a-real-flag", tmpDir])).toThrow(/rg exited with code/);
+  });
+
+  test("names the cause when rg cannot be run at all", () => {
+    // The embedded rg is extracted to a temp file at startup, so it can vanish mid-session —
+    // reaped by a tmp cleaner, or quarantined by antivirus. spawnSync then reports no status
+    // and no stderr, which the exit-code path rendered as "rg exited with code undefined: null".
+    const parked = `${rgPath}.parked`;
+    renameSync(rgPath, parked);
+    try {
+      expect(() => runRipgrep(["--json", "needle", tmpDir])).toThrow(/failed to run rg/);
+    } finally {
+      renameSync(parked, rgPath);
+    }
   });
 
   test("ignores the user's own ripgrep config", () => {

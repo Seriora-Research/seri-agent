@@ -50,6 +50,21 @@ describe("grep", () => {
     expect(truncated).toBe(false);
   });
 
+  test("survives a line that is not valid UTF-8, and still returns the other files' matches", () => {
+    // rg emits base64 `bytes` instead of `text` for anything that is not valid UTF-8. Reading
+    // `.text` unconditionally threw here and lost every match in the tree, not just this one.
+    // 0xE9 is 'é' in latin-1 and is invalid on its own in UTF-8.
+    writeFileSync(join(tmpDir, "latin1.txt"), Buffer.concat([Buffer.from("needle caf"), Buffer.from([0xe9]), Buffer.from(" x\n")]));
+    writeFileSync(join(tmpDir, "clean.txt"), "needle plain ascii\n");
+
+    const { matches, truncated } = grep("needle", { path: tmpDir });
+
+    expect(matches).toHaveLength(2);
+    expect(matches.some((match) => match.file.endsWith("clean.txt"))).toBe(true);
+    expect(matches.some((match) => match.file.endsWith("latin1.txt"))).toBe(true);
+    expect(truncated).toBe(false);
+  });
+
   test("returns a capped page instead of throwing when rg outruns the stdout buffer", () => {
     // The bug this tool shipped with: a broad pattern over a large tree threw
     // `rg exited with code null:` and lost every match rg had already found.

@@ -16,7 +16,7 @@ import rgAsset from "./rg-vendored.bin" with { type: "file" };
 // extract it to a real temp file once at startup.
 const bytes = new Uint8Array(await Bun.file(rgAsset).arrayBuffer());
 const rgDir = mkdtempSync(join(tmpdir(), "hesper-rg-"));
-const rgPath = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg");
+export const rgPath = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg");
 writeFileSync(rgPath, bytes);
 if (process.platform !== "win32") chmodSync(rgPath, 0o755);
 
@@ -32,6 +32,11 @@ const MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 // thousands of hits — they bury the useful ones and burn context — so both tools return a
 // bounded page and report when there is more. Lives here because the buffer above only has
 // to be large enough to reach this cap; the two numbers move together.
+//
+// Capping makes rg's output order load-bearing, and rg only guarantees an order under
+// --sort, which is deliberately not passed: on a large tree --sort=path measured ~7x slower
+// (9s -> 69s) because it costs rg its parallelism. So a truncated page is not a stable
+// subset across identical runs, and the tool descriptions tell the model exactly that.
 export const MAX_RESULTS = 100;
 
 export function runRipgrep(args: string[]): { stdout: string; truncated: boolean } {
@@ -43,8 +48,15 @@ export function runRipgrep(args: string[]): { stdout: string; truncated: boolean
     maxBuffer: MAX_BUFFER_BYTES,
   });
 
-  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOBUFS") {
-    return { stdout: result.stdout, truncated: true };
+  if (result.error) {
+    if ((result.error as NodeJS.ErrnoException).code === "ENOBUFS") {
+      return { stdout: result.stdout, truncated: true };
+    }
+    // rg never started, so status and stderr are both empty and the exit-code message below
+    // would name neither a cause nor a real code — the same unreadable failure this file was
+    // fixed for. Reachable when the extracted binary is reaped from temp by a tmp cleaner or
+    // quarantined by AV mid-session.
+    throw new Error(`failed to run rg: ${result.error.message}`);
   }
 
   // rg exits 1 when there are no matches (not an error); anything else is a real failure.
