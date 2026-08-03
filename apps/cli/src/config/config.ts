@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "./paths";
 
@@ -21,10 +21,21 @@ export function loadConfig(configDir: string = getConfigDir()): Record<string, s
 // auth.json (see auth/authStore.ts).
 function writeConfig(config: Record<string, string>, configDir: string): void {
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
-  // mkdirSync's mode is a no-op when configDir already exists (POSIX mkdir ignores mode for
-  // a pre-existing directory), which is the common case here — chmod explicitly.
+  // mkdirSync's and writeFileSync's `mode` are both no-ops when the target already exists
+  // (POSIX mkdir ignores mode for an existing dir; Node applies a file's mode only on
+  // O_CREAT) — and a pre-existing config.json is the common case, since users hand-created
+  // it before this command existed. chmod both explicitly.
   if (process.platform !== "win32") chmodSync(configDir, 0o700);
-  writeFileSync(configPath(configDir), JSON.stringify(config, null, 2), { mode: 0o600 });
+
+  // Write-then-rename: a truncating in-place write that is interrupted leaves a partial
+  // config.json, which makes every later command throw from JSON.parse — including
+  // `hesper config` itself, since it reads before writing. rename is atomic, so readers
+  // see either the old file or the new one.
+  const path = configPath(configDir);
+  const tmpPath = `${path}.tmp`;
+  writeFileSync(tmpPath, JSON.stringify(config, null, 2), { mode: 0o600 });
+  if (process.platform !== "win32") chmodSync(tmpPath, 0o600);
+  renameSync(tmpPath, path);
 }
 
 export function setConfigValue(key: string, value: string, configDir: string = getConfigDir()): void {
@@ -42,6 +53,10 @@ export function unsetConfigValue(key: string, configDir: string = getConfigDir()
   return true;
 }
 
-export function getApiKey(name: string): string | undefined {
-  return process.env[name] ?? loadConfig()[name];
+// configDir is threaded through rather than always resolved internally so that a caller
+// which writes with an explicit dir (`hesper config set`) reads back from that same dir.
+export function getApiKey(name: string, configDir?: string): string | undefined {
+  // Deliberately not `??`: an env var set to the empty string should fall through to the
+  // config file and then to the caller's default, not win as a valid-looking value.
+  return process.env[name] || loadConfig(configDir)[name] || undefined;
 }

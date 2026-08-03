@@ -17,7 +17,9 @@ export function configCommand(args: string[], configDir: string): number {
   const [subcommand, key, value] = args;
 
   if (subcommand === "set") {
-    if (!key || value === undefined) {
+    // An empty value would persist a key that `config list` shows as present but every
+    // reader treats as unset — reject it rather than storing that contradiction.
+    if (!key || !value) {
       console.error(USAGE);
       return 1;
     }

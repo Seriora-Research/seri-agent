@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configCommand, maskValue } from "../../src/config/commands";
@@ -57,6 +57,31 @@ describe("configCommand", () => {
     expect(code).toBe(1);
     expect(errors.length).toBeGreaterThan(0);
     expect(loadConfig(configDir)).toEqual({});
+  });
+
+  test("set rejects an empty value rather than storing a key readers treat as unset", () => {
+    const code = configCommand(["set", "GROQ_API_KEY", ""], configDir);
+
+    expect(code).toBe(1);
+    expect(loadConfig(configDir)).toEqual({});
+  });
+
+  test.skipIf(process.platform === "win32")("set tightens permissions on a pre-existing world-readable config", () => {
+    // The upgrade path: config.json was hand-created before this command existed, so it
+    // carries default-umask (0644) permissions that a plain writeFileSync mode won't change.
+    const path = join(configDir, "config.json");
+    writeFileSync(path, JSON.stringify({ EXISTING: "value" }), { mode: 0o644 });
+    chmodSync(path, 0o644);
+
+    configCommand(["set", "GROQ_API_KEY", "gsk_test_value"], configDir);
+
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  test("set leaves no temp file behind", () => {
+    configCommand(["set", "GROQ_API_KEY", "gsk_test_value"], configDir);
+
+    expect(readdirSync(configDir)).toEqual(["config.json"]);
   });
 
   test("list masks stored values instead of printing them in full", () => {

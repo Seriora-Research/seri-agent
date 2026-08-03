@@ -14,7 +14,8 @@ BYOK-only core — Phase A (WorkOS AuthKit device-flow auth) has shipped; see
 
 ## Commands
 
-- `bun run dev -- <args>` — run the CLI from source
+- `bun run dev -- <args>` — run the CLI from source (CLI only; `bun run dev:server`
+  for `apps/server`)
 - `bun test` — run the test suite (bun's built-in runner)
 - `bun test path/to/file.test.ts` — run a single test file
 - `bun run typecheck` (alias `lint`) — `tsc --noEmit`
@@ -49,7 +50,11 @@ disproportionate-match guard against replacing far more than was asked for.
 **Provider**: Vercel AI SDK, currently Groq only (`apps/cli/src/provider/groq.ts`,
 `llama-3.3-70b-versatile` default). API keys resolve from env var first, then
 `~/.hesper/config.json` (`%LOCALAPPDATA%\hesper\` on Windows) — see
-`apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`.
+`apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`. `hesper config
+set|list|unset` (`apps/cli/src/config/commands.ts`) manages that file; it's written
+owner-only and via write-then-rename, since it holds API keys and a partial write
+would break every later command's `loadConfig`. `list` masks values and flags any
+shadowed by an env var, because `getApiKey` prefers `process.env`.
 
 **Sessions** (`apps/cli/src/session/session.ts`) persist as one JSON file per session under
 `<configDir>/sessions/`; `--resume [id]` reloads the most recent (or named) session.

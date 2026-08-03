@@ -12,8 +12,8 @@ export const DEFAULT_WORKOS_CLIENT_ID = "client_01KZ1JXPJK16ADCG718H7C6VRM";
 // (config/config.ts), so pointing the CLI at a different WorkOS environment — e.g.
 // verifying Production before committing to it — doesn't require editing this file and
 // rebuilding the binary.
-export function getWorkosClientId(): string {
-  return getApiKey("HESPER_WORKOS_CLIENT_ID") ?? DEFAULT_WORKOS_CLIENT_ID;
+export function getWorkosClientId(configDir?: string): string {
+  return getApiKey("HESPER_WORKOS_CLIENT_ID", configDir) ?? DEFAULT_WORKOS_CLIENT_ID;
 }
 
 const AUTHORIZE_DEVICE_URL = "https://api.workos.com/user_management/authorize/device";

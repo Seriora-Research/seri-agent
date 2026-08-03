@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setConfigValue } from "../../src/config/config";
 import {
   DEFAULT_WORKOS_CLIENT_ID,
   type DeviceAuthorization,
@@ -17,24 +21,46 @@ function fakeTextResponse(ok: boolean, status: number, text: string): Response {
 
 describe("getWorkosClientId", () => {
   const original = process.env.HESPER_WORKOS_CLIENT_ID;
+  let configDir: string;
+
+  beforeEach(() => {
+    // Read from a temp dir, never the developer's real config: WORKOS-PRODUCTION.md tells
+    // users to put HESPER_WORKOS_CLIENT_ID in config.json, so a test that resolves the real
+    // config dir would fail on the machine of anyone who followed those instructions.
+    configDir = mkdtempSync(join(tmpdir(), "hesper-clientid-test-"));
+  });
 
   afterEach(() => {
     // Restore by deleting when it was unset — reassigning `undefined` stores the literal
     // string "undefined" in Node/Bun and leaks into later tests in the same process.
     if (original === undefined) delete process.env.HESPER_WORKOS_CLIENT_ID;
     else process.env.HESPER_WORKOS_CLIENT_ID = original;
+    rmSync(configDir, { recursive: true, force: true });
   });
 
   test("falls back to the built-in default when unset", () => {
     delete process.env.HESPER_WORKOS_CLIENT_ID;
 
-    expect(getWorkosClientId()).toBe(DEFAULT_WORKOS_CLIENT_ID);
+    expect(getWorkosClientId(configDir)).toBe(DEFAULT_WORKOS_CLIENT_ID);
   });
 
   test("prefers HESPER_WORKOS_CLIENT_ID when set", () => {
     process.env.HESPER_WORKOS_CLIENT_ID = "client_override_123";
 
-    expect(getWorkosClientId()).toBe("client_override_123");
+    expect(getWorkosClientId(configDir)).toBe("client_override_123");
+  });
+
+  test("reads from config.json when the env var is unset", () => {
+    delete process.env.HESPER_WORKOS_CLIENT_ID;
+    setConfigValue("HESPER_WORKOS_CLIENT_ID", "client_from_config", configDir);
+
+    expect(getWorkosClientId(configDir)).toBe("client_from_config");
+  });
+
+  test("ignores an empty env var instead of sending an empty client id", () => {
+    process.env.HESPER_WORKOS_CLIENT_ID = "";
+
+    expect(getWorkosClientId(configDir)).toBe(DEFAULT_WORKOS_CLIENT_ID);
   });
 });
 

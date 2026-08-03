@@ -116,7 +116,8 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (argv[0] === "login" || argv[0] === "signup") {
     const loginFn = deps.login ?? loginReal;
     try {
-      await loginFn(argv[0], getWorkosClientId(), deps.authConfigDir ?? getConfigDir());
+      const configDir = deps.authConfigDir ?? getConfigDir();
+      await loginFn(argv[0], getWorkosClientId(configDir), configDir);
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       return 1;
