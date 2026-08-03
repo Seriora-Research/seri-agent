@@ -1,6 +1,14 @@
 // The process's one SIGINT/SIGTERM owner. Everything else that has to clean up on Ctrl-C
-// registers a callback here instead of adding a listener of its own, because the re-raise below
-// kills the process where it stands: whatever has not already run does not run at all.
+// registers a callback here instead of adding a listener of its own, because a second listener
+// is work that never happens: the re-raise below kills the process where it stands. Measured in
+// bun on Linux — the handler's first line runs, the line after process.kill(process.pid, signal)
+// never does. Note that removeAllListeners is not what drops the second listener; emit iterates
+// a clone of the array, so a listener registered later still runs in that same emit (measured:
+// ran = ["first","second"]). The kill is what drops it, which is why this registry exists.
+//
+// A cleanup must not throw — it would take the remaining cleanups and the re-raise with it — and
+// must not depend on running before or after another, since this array is ordered by nothing
+// more meaningful than module import order.
 const cleanups: Array<() => void> = [];
 
 export function onSignalCleanup(fn: () => void): void {
@@ -17,11 +25,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     // into one press per iteration. xargs and make read it the same way.
     //
     // Node only restores a signal's default disposition when no listener is left, so clearing
-    // them is what makes the re-raise land rather than re-entering this handler. What clearing
-    // them does not do is drop a listener registered later: emit iterates a clone of the array,
-    // so that one still runs in this same emit (measured: ran = ["first","second"]). The kill
-    // is what drops it — measured on Linux, a handler that re-raises never reaches its next
-    // line, so a second listener never gets its turn. Hence the registry above.
+    // them is what makes the re-raise land rather than re-entering this handler.
     process.removeAllListeners(signal);
     process.kill(process.pid, signal);
   });

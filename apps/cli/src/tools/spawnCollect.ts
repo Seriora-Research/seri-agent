@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { onSignalCleanup } from "../signals";
 
 // Truncation is reported per stream rather than as one flag. A single OR'd boolean cannot say
@@ -101,13 +101,11 @@ function killTree(pid: number): void {
 // The timeout timer was the only thing that could reach a spawned child, so a Ctrl-C part way
 // through a turn left every one of them running: detached puts them in a process group the
 // terminal's signal never reaches, and a sleeper that writes nothing takes no EPIPE either.
-// Pids rather than ChildProcess objects, because killTree takes a pid and a spawn that fails
-// leaves child.pid undefined — so it is simply never added instead of needing a check here.
-const inFlight = new Set<number>();
+const inFlightChildren = new Set<ChildProcess>();
 
 function killInFlightChildren(): void {
-  for (const pid of inFlight) killTree(pid);
-  inFlight.clear();
+  for (const child of inFlightChildren) if (child.pid !== undefined) killTree(child.pid);
+  inFlightChildren.clear();
 }
 
 onSignalCleanup(killInFlightChildren);
@@ -120,7 +118,7 @@ export function spawnCollect(executable: string, args: string[], timeoutMs?: num
       // where detached means a new console window instead.
       detached: process.platform !== "win32",
     });
-    if (child.pid !== undefined) inFlight.add(child.pid);
+    inFlightChildren.add(child);
 
     const out = createBoundedSink();
     const err = createBoundedSink();
@@ -140,13 +138,13 @@ export function spawnCollect(executable: string, args: string[], timeoutMs?: num
 
     child.on("error", (error) => {
       clearTimeout(timer);
-      if (child.pid !== undefined) inFlight.delete(child.pid);
+      inFlightChildren.delete(child);
       reject(error);
     });
 
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (child.pid !== undefined) inFlight.delete(child.pid);
+      inFlightChildren.delete(child);
       const stdout = out.result();
       const stderr = err.result();
       // Whatever the command managed to say before being killed still goes back. An agent can

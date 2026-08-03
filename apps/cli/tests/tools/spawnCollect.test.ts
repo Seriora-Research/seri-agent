@@ -31,7 +31,7 @@ async function waitFor(cond: () => boolean, budgetMs: number): Promise<boolean> 
 
 async function waitForPid(file: string): Promise<number> {
   let pid = Number.NaN;
-  await waitFor(() => {
+  const reported = await waitFor(() => {
     try {
       pid = Number.parseInt(readFileSync(file, "utf8"), 10);
       return Number.isInteger(pid);
@@ -39,7 +39,7 @@ async function waitForPid(file: string): Promise<number> {
       return false;
     }
   }, 10_000);
-  if (!Number.isInteger(pid)) throw new Error("grandchild never reported its pid");
+  if (!reported) throw new Error("grandchild never reported its pid");
   return pid;
 }
 
