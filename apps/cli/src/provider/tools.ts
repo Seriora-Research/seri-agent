@@ -5,7 +5,7 @@ import { edit } from "../tools/edit";
 import { glob } from "../tools/glob";
 import { grep } from "../tools/grep";
 import { runPowerShell } from "../tools/powershell";
-import { MAX_RESULTS } from "../tools/runRipgrep";
+import { MAX_FILE_RESULTS, MAX_RESULTS } from "../tools/runRipgrep";
 import { readFile } from "../tools/readFile";
 import { writeFile } from "../tools/writeFile";
 
@@ -36,17 +36,18 @@ const editTool = tool({
 });
 
 const grepTool = tool({
-  description: `Search for a pattern in files under a path using ripgrep. Returns at most ${MAX_RESULTS} matches; when \`truncated\` is true the results are incomplete and re-running the same search can return a different subset, so narrow the pattern or path, or pass a glob, rather than assuming these are all of them.`,
+  description: `Search for a pattern in files under a path using ripgrep. Defaults to returning only the names of files that match, which is what most searches need and costs a fraction of the tokens; pass mode "content" only when you actually need the matched lines, or "count" for per-file totals. Returns at most ${MAX_FILE_RESULTS} files or ${MAX_RESULTS} matched lines; when \`truncated\` is true the results are incomplete and re-running the same search can return a different subset, so narrow the pattern or path, or pass a glob, rather than assuming these are all of them.`,
   inputSchema: z.object({
     pattern: z.string(),
     path: z.string(),
     glob: z.string().optional(),
+    mode: z.enum(["files_with_matches", "content", "count"]).optional(),
   }),
-  execute: ({ pattern, path, glob: globFilter }) => grep(pattern, { path, glob: globFilter }),
+  execute: ({ pattern, path, glob: globFilter, mode }) => grep(pattern, { path, glob: globFilter, mode }),
 });
 
 const globTool = tool({
-  description: `List files under a path matching a glob pattern. Returns at most ${MAX_RESULTS} files; when \`truncated\` is true the results are incomplete and re-running the same search can return a different subset, so narrow the pattern or path rather than assuming these are all of them.`,
+  description: `List files under a path matching a glob pattern. Returns at most ${MAX_FILE_RESULTS} files; when \`truncated\` is true the results are incomplete and re-running the same search can return a different subset, so narrow the pattern or path rather than assuming these are all of them.`,
   inputSchema: z.object({
     pattern: z.string(),
     path: z.string(),
