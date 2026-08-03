@@ -35,7 +35,8 @@ const editTool = tool({
 });
 
 const grepTool = tool({
-  description: "Search for a pattern in files under a path using ripgrep.",
+  description:
+    "Search for a pattern in files under a path using ripgrep. Returns at most 100 matches; when `truncated` is true the results are incomplete, so narrow the pattern or path, or pass a glob, rather than assuming these are all of them.",
   inputSchema: z.object({
     pattern: z.string(),
     path: z.string(),
@@ -45,7 +46,8 @@ const grepTool = tool({
 });
 
 const globTool = tool({
-  description: "List files under a path matching a glob pattern.",
+  description:
+    "List files under a path matching a glob pattern. Returns at most 100 files; when `truncated` is true the results are incomplete, so narrow the pattern or path rather than assuming these are all of them.",
   inputSchema: z.object({
     pattern: z.string(),
     path: z.string(),

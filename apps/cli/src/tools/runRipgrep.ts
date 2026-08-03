@@ -20,12 +20,37 @@ const rgPath = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg");
 writeFileSync(rgPath, bytes);
 if (process.platform !== "win32") chmodSync(rgPath, 0o755);
 
-export function runRipgrep(args: string[]): string {
-  const result = spawnSync(rgPath, args, { encoding: "utf8" });
+// spawnSync buffers rg's entire stdout in memory and kills rg the moment the buffer fills.
+// Node's 1 MB default was low enough that an ordinary --json search (one event per match, a
+// few hundred bytes each) blew it after a few thousand matches, and the overflow arrives as
+// `status: null` with an empty stderr — indistinguishable from an rg crash unless the
+// ENOBUFS error is checked. Callers cap their results far below this, so a full buffer only
+// ever means "more than we were going to return anyway": that is truncation, not a failure.
+const MAX_BUFFER_BYTES = 8 * 1024 * 1024;
+
+// How many results grep and glob hand back. A model searching a real repo gains nothing from
+// thousands of hits — they bury the useful ones and burn context — so both tools return a
+// bounded page and report when there is more. Lives here because the buffer above only has
+// to be large enough to reach this cap; the two numbers move together.
+export const MAX_RESULTS = 100;
+
+export function runRipgrep(args: string[]): { stdout: string; truncated: boolean } {
+  // --no-config: rg reads RIPGREP_CONFIG_PATH from the environment, so without this a
+  // developer's own ~/.ripgreprc (--smart-case, --hidden, glob excludes) silently changes
+  // what hesper finds on their machine and nowhere else.
+  const result = spawnSync(rgPath, ["--no-config", ...args], {
+    encoding: "utf8",
+    maxBuffer: MAX_BUFFER_BYTES,
+  });
+
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOBUFS") {
+    return { stdout: result.stdout, truncated: true };
+  }
+
   // rg exits 1 when there are no matches (not an error); anything else is a real failure.
   if (result.status !== 0 && result.status !== 1) {
     throw new Error(`rg exited with code ${result.status}: ${result.stderr}`);
   }
 
-  return result.stdout;
+  return { stdout: result.stdout, truncated: false };
 }
