@@ -38,16 +38,22 @@ process.on("exit", cleanUpExtractedRg);
 
 // 'exit' does not fire when a signal terminates the process, so on its own the handler above
 // missed the most common way an agent run ends: Ctrl-C part way through a turn. Verified — a
-// SIGTERM left the directory behind exactly as before the fix. Registering a listener
-// suppresses the default termination, so these have to exit themselves, at the conventional
-// 128 + signal number.
-for (const [signal, exitCode] of [
-  ["SIGINT", 130],
-  ["SIGTERM", 143],
-] as const) {
+// SIGTERM left the directory behind exactly as before the fix.
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     cleanUpExtractedRg();
-    process.exit(exitCode);
+
+    // Re-raise instead of exiting with 128 + n. A normal exit reports a status, not a death by
+    // signal, and shells branch on that: `for f in a b c; do hesper "$f"; done` only breaks out
+    // of the loop when the child was killed *by* SIGINT, so a plain exit would turn one Ctrl-C
+    // into one press per iteration. xargs and make read it the same way.
+    //
+    // Node only restores a signal's default disposition when no listener is left, so clearing
+    // them is what makes the re-raise land rather than re-entering this handler. That also
+    // means a listener registered later — a future "Ctrl-C cancels the turn" — would be
+    // dropped here, which is the argument for owning this in cli.ts rather than in a tool.
+    process.removeAllListeners(signal);
+    process.kill(process.pid, signal);
   });
 }
 

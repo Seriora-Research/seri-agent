@@ -92,8 +92,10 @@ describe("spawnCollect", () => {
 
   test("does not strand half a surrogate pair when the cut lands inside one", async () => {
     // An emoji is two UTF-16 units. The leading 'x' makes every pair start on an odd index, so
-    // the 15000-character head boundary falls between the halves of one — which used to keep a
-    // lone high surrogate in head and a lone low surrogate at the front of tail.
+    // the 15000-character head boundary falls between the halves of one and used to leave a
+    // lone high surrogate at the end of head. This covers the head cut only: at 2000001 units
+    // the last-15000 window opens on a high surrogate, so nothing is stranded at the front of
+    // the tail. The test below carries the parity that exercises that side.
     const result = await emit("process.stdout.write('x' + '\\u{1F600}'.repeat(1_000_000))");
 
     expect(result.stdoutTruncated).toBe(true);

@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, renameSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { rgPath, runRipgrep } from "../../src/tools/runRipgrep";
 
