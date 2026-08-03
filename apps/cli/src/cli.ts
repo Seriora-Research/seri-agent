@@ -6,6 +6,7 @@ import pkg from "../package.json";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
 import { getWorkosClientId } from "./auth/deviceFlow";
+import { configCommand as configCommandReal } from "./config/commands";
 import { getConfigDir } from "./config/paths";
 import { cycleMode } from "./gate/gate";
 import { type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "./loop/loop";
@@ -21,6 +22,7 @@ type CliDeps = {
   authConfigDir?: string;
   login?: typeof loginReal;
   logout?: typeof logoutReal;
+  configCommand?: typeof configCommandReal;
 };
 
 function parseTaskArgs(argv: string[]): { resuming: boolean; resumeId: string | undefined; taskText: string } {
@@ -130,6 +132,16 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       return 1;
     }
     return 0;
+  }
+
+  if (argv[0] === "config") {
+    const configCommandFn = deps.configCommand ?? configCommandReal;
+    try {
+      return configCommandFn(argv.slice(1), deps.authConfigDir ?? getConfigDir());
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 1;
+    }
   }
 
   const { resuming, resumeId, taskText } = parseTaskArgs(argv);

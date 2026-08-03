@@ -33,7 +33,7 @@ afterEach(() => {
 
 describe("getGroqModel", () => {
   test("throws a clear error when GROQ_API_KEY is unset", () => {
-    expect(() => getGroqModel()).toThrow("GROQ_API_KEY is not set (env var or config file)");
+    expect(() => getGroqModel()).toThrow("GROQ_API_KEY is not set. Run: hesper config set GROQ_API_KEY <your-key>");
   });
 
   test("returns a model object without a network call when GROQ_API_KEY is set", () => {
