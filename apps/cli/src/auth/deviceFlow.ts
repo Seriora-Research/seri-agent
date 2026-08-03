@@ -1,6 +1,20 @@
-// Production WorkOS AuthKit client ID (overridable, e.g. from an env var, for the sandbox
-// integration test against WorkOS Staging).
-export const DEFAULT_WORKOS_CLIENT_ID = "client_01KZ1JXPZSYG07NQZBCPQAN46N";
+import { getApiKey } from "../config/config";
+
+// WorkOS AuthKit client ID (Staging environment). Deliberately not the Production
+// environment's client ID: that environment has never been activated (no API keys, no
+// auth methods enabled, no redirect URIs), so its hosted sign-in page offers only SSO
+// and dead-ends on a 404 after authenticating — verified live, 2026-08-02. Switch to
+// Production's client ID once that environment is fully configured in the WorkOS
+// dashboard. Not a secret: an OAuth public-client id is meant to ship inside the binary.
+export const DEFAULT_WORKOS_CLIENT_ID = "client_01KZ1JXPJK16ADCG718H7C6VRM";
+
+// Resolved through the same env-var-then-config.json lookup used for provider API keys
+// (config/config.ts), so pointing the CLI at a different WorkOS environment — e.g.
+// verifying Production before committing to it — doesn't require editing this file and
+// rebuilding the binary.
+export function getWorkosClientId(configDir?: string): string {
+  return getApiKey("HESPER_WORKOS_CLIENT_ID", configDir) ?? DEFAULT_WORKOS_CLIENT_ID;
+}
 
 const AUTHORIZE_DEVICE_URL = "https://api.workos.com/user_management/authorize/device";
 const AUTHENTICATE_URL = "https://api.workos.com/user_management/authenticate";
