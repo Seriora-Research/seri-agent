@@ -30,7 +30,9 @@ describe("run (--selftest)", () => {
 
     let code: number;
     try {
-      code = await run(["--selftest"], { grep: () => [{ file: "probe.txt", line: 1, text: "hesper selftest probe" }] });
+      code = await run(["--selftest"], {
+        grep: () => ({ matches: [{ file: "probe.txt", line: 1, text: "hesper selftest probe" }], truncated: false }),
+      });
     } finally {
       console.log = originalLog;
     }

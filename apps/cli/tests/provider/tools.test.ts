@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
 import { toolDefinitions } from "../../src/provider/tools";
+import type { GlobResult } from "../../src/tools/glob";
+import type { GrepResult } from "../../src/tools/grep";
 
 // Minimal stub satisfying the AI SDK's execute() options param; unused by our adapters.
 const execOpts: ToolExecutionOptions<Record<string, unknown>> = { toolCallId: "test-call", messages: [], context: {} };
@@ -44,8 +46,10 @@ describe("toolDefinitions", () => {
     tmpDir = makeTmpDir();
     writeFileSync(join(tmpDir, "a.txt"), "hello world\nfoo bar\n");
     const result = await toolDefinitions.grep.execute?.({ pattern: "hello", path: tmpDir }, execOpts);
-    expect(result).toHaveLength(1);
-    expect((result as { text: string }[])[0].text).toBe("hello world");
+    const { matches, truncated } = result as GrepResult;
+    expect(matches).toHaveLength(1);
+    expect(matches[0].text).toBe("hello world");
+    expect(truncated).toBe(false);
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -54,8 +58,10 @@ describe("toolDefinitions", () => {
     writeFileSync(join(tmpDir, "a.txt"), "");
     writeFileSync(join(tmpDir, "b.md"), "");
     const result = await toolDefinitions.glob.execute?.({ pattern: "*.txt", path: tmpDir }, execOpts);
-    expect(result).toHaveLength(1);
-    expect((result as string[])[0]).toContain("a.txt");
+    const { files, truncated } = result as GlobResult;
+    expect(files).toHaveLength(1);
+    expect(files[0]).toContain("a.txt");
+    expect(truncated).toBe(false);
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
