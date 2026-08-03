@@ -39,6 +39,18 @@ const MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 // subset across identical runs, and the tool descriptions tell the model exactly that.
 export const MAX_RESULTS = 100;
 
+// File lists get a higher cap than matches because they cost far less: a path is tens of
+// bytes where a match carries its whole line. 250 is what Claude Code's file search uses.
+export const MAX_FILE_RESULTS = 250;
+
+// rg's line-oriented output, with the partial trailing line dropped when a full buffer cut
+// the stream mid-line. Shared so every caller drops it the same way.
+export function outputLines(stdout: string, truncated: boolean): string[] {
+  const lines = stdout.split("\n").filter(Boolean);
+  if (truncated) lines.pop();
+  return lines;
+}
+
 export function runRipgrep(args: string[]): { stdout: string; truncated: boolean } {
   // --no-config: rg reads RIPGREP_CONFIG_PATH from the environment, so without this a
   // developer's own ~/.ripgreprc (--smart-case, --hidden, glob excludes) silently changes

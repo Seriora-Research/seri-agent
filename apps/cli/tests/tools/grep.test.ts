@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { grep } from "../../src/tools/grep";
-import { MAX_RESULTS } from "../../src/tools/runRipgrep";
+import { MAX_FILE_RESULTS, MAX_RESULTS } from "../../src/tools/runRipgrep";
 
 let tmpDir: string;
 
@@ -16,38 +16,70 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-describe("grep", () => {
-  test("finds a known pattern, returns correct file/line/text", () => {
-    const { matches, truncated } = grep("hello", { path: tmpDir });
-    expect(matches).toHaveLength(2);
-    expect(matches[0].file).toContain("a.txt");
-    expect(matches[0].line).toBe(1);
-    expect(matches[0].text).toBe("hello world");
-    expect(matches[1].line).toBe(3);
-    expect(matches[1].text).toBe("hello again");
-    expect(truncated).toBe(false);
+describe("grep (default mode)", () => {
+  test("returns only the names of matching files, not their lines", () => {
+    writeFileSync(join(tmpDir, "b.txt"), "hello from b\n");
+    writeFileSync(join(tmpDir, "c.txt"), "nothing here\n");
+
+    const result = grep("hello", { path: tmpDir });
+
+    expect(result.mode).toBe("files_with_matches");
+    expect(result.files).toHaveLength(2);
+    expect(result.files?.every((file) => file.endsWith(".txt"))).toBe(true);
+    expect(result.files?.some((file) => file.endsWith("c.txt"))).toBe(false);
+    // The whole point of the default: no line text is carried back.
+    expect(result.matches).toBeUndefined();
+    expect(result.truncated).toBe(false);
   });
 
-  test("returns [] for no matches", () => {
-    expect(grep("nomatchxyz", { path: tmpDir })).toEqual({ matches: [], truncated: false });
+  test("returns no files when nothing matches", () => {
+    const result = grep("nomatchxyz", { path: tmpDir });
+
+    expect(result.files).toEqual([]);
+    expect(result.truncated).toBe(false);
+  });
+
+  test("caps file names at the file limit, which is higher than the match limit", () => {
+    for (let i = 0; i < MAX_FILE_RESULTS + 20; i++) writeFileSync(join(tmpDir, `f${i}.md`), "needle\n");
+
+    const result = grep("needle", { path: tmpDir });
+
+    expect(result.files).toHaveLength(MAX_FILE_RESULTS);
+    expect(result.truncated).toBe(true);
+  });
+});
+
+describe("grep (content mode)", () => {
+  test("finds a known pattern, returns correct file/line/text", () => {
+    const result = grep("hello", { path: tmpDir, mode: "content" });
+
+    expect(result.mode).toBe("content");
+    expect(result.matches).toHaveLength(2);
+    expect(result.matches?.[0].file).toContain("a.txt");
+    expect(result.matches?.[0].line).toBe(1);
+    expect(result.matches?.[0].text).toBe("hello world");
+    expect(result.matches?.[1].line).toBe(3);
+    expect(result.matches?.[1].text).toBe("hello again");
+    expect(result.files).toBeUndefined();
+    expect(result.truncated).toBe(false);
   });
 
   test("caps the results and flags truncation when there are more matches than the cap", () => {
     writeFileSync(join(tmpDir, "many.txt"), "needle\n".repeat(MAX_RESULTS + 50));
 
-    const { matches, truncated } = grep("needle", { path: tmpDir });
+    const result = grep("needle", { path: tmpDir, mode: "content" });
 
-    expect(matches).toHaveLength(MAX_RESULTS);
-    expect(truncated).toBe(true);
+    expect(result.matches).toHaveLength(MAX_RESULTS);
+    expect(result.truncated).toBe(true);
   });
 
   test("does not flag truncation when the matches land exactly on the cap", () => {
     writeFileSync(join(tmpDir, "exact.txt"), "needle\n".repeat(MAX_RESULTS));
 
-    const { matches, truncated } = grep("needle", { path: tmpDir });
+    const result = grep("needle", { path: tmpDir, mode: "content" });
 
-    expect(matches).toHaveLength(MAX_RESULTS);
-    expect(truncated).toBe(false);
+    expect(result.matches).toHaveLength(MAX_RESULTS);
+    expect(result.truncated).toBe(false);
   });
 
   test("survives a line that is not valid UTF-8, and still returns the other files' matches", () => {
@@ -57,12 +89,12 @@ describe("grep", () => {
     writeFileSync(join(tmpDir, "latin1.txt"), Buffer.concat([Buffer.from("needle caf"), Buffer.from([0xe9]), Buffer.from(" x\n")]));
     writeFileSync(join(tmpDir, "clean.txt"), "needle plain ascii\n");
 
-    const { matches, truncated } = grep("needle", { path: tmpDir });
+    const result = grep("needle", { path: tmpDir, mode: "content" });
 
-    expect(matches).toHaveLength(2);
-    expect(matches.some((match) => match.file.endsWith("clean.txt"))).toBe(true);
-    expect(matches.some((match) => match.file.endsWith("latin1.txt"))).toBe(true);
-    expect(truncated).toBe(false);
+    expect(result.matches).toHaveLength(2);
+    expect(result.matches?.some((match) => match.file.endsWith("clean.txt"))).toBe(true);
+    expect(result.matches?.some((match) => match.file.endsWith("latin1.txt"))).toBe(true);
+    expect(result.truncated).toBe(false);
   });
 
   test("returns a capped page instead of throwing when rg outruns the stdout buffer", () => {
@@ -70,11 +102,35 @@ describe("grep", () => {
     // `rg exited with code null:` and lost every match rg had already found.
     writeFileSync(join(tmpDir, "big.txt"), "needle here on this line\n".repeat(60_000));
 
-    const { matches, truncated } = grep("needle", { path: tmpDir });
+    const result = grep("needle", { path: tmpDir, mode: "content" });
 
-    expect(matches).toHaveLength(MAX_RESULTS);
-    expect(truncated).toBe(true);
+    expect(result.matches).toHaveLength(MAX_RESULTS);
+    expect(result.truncated).toBe(true);
     // The buffer cuts mid-line, so the partial trailing event must not reach JSON.parse.
-    expect(matches.every((match) => match.text === "needle here on this line")).toBe(true);
+    expect(result.matches?.every((match) => match.text === "needle here on this line")).toBe(true);
+  });
+});
+
+describe("grep (count mode)", () => {
+  test("returns per-file totals without carrying any line text", () => {
+    writeFileSync(join(tmpDir, "b.txt"), "hello once\n");
+
+    const result = grep("hello", { path: tmpDir, mode: "count" });
+
+    expect(result.mode).toBe("count");
+    expect(result.counts).toHaveLength(2);
+    expect(result.counts?.find((entry) => entry.file.endsWith("a.txt"))?.count).toBe(2);
+    expect(result.counts?.find((entry) => entry.file.endsWith("b.txt"))?.count).toBe(1);
+    expect(result.matches).toBeUndefined();
+  });
+
+  test("splits the path from the count on the right, so a Windows drive letter survives", () => {
+    // rg prints `path:count`, and an absolute Windows path already contains a colon.
+    const result = grep("hello", { path: tmpDir, mode: "count" });
+
+    for (const entry of result.counts ?? []) {
+      expect(entry.file).toContain(tmpDir);
+      expect(Number.isNaN(entry.count)).toBe(false);
+    }
   });
 });
