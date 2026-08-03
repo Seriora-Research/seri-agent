@@ -23,6 +23,19 @@ describe("spawnCollect", () => {
     expect(result.stdoutTruncated).toBe(false);
   });
 
+  test("keeps output that lands exactly on the cap when a surrogate pair straddles the seam", async () => {
+    // 30000 units, with the leading 'x' placing every pair on an odd index so one sits exactly
+    // across the head/tail boundary. Repairing the seam unconditionally cost a whole pair here
+    // and reported a truncation that never happened — on output the same length as the ASCII
+    // case above, which passes through whole.
+    const result = await emit("process.stdout.write('x' + '\\u{1F600}'.repeat(14999) + 'y')");
+
+    expect(result.stdout).toHaveLength(30000);
+    expect(result.stdoutTruncated).toBe(false);
+    expect(result.stdout).not.toContain("characters omitted");
+    expect(Buffer.from(result.stdout, "utf8").toString("utf8")).toBe(result.stdout);
+  }, 30_000);
+
   test("bounds a runaway command instead of growing without limit", async () => {
     // 4 MB of stdout: unbounded accumulation kept every byte of this and handed it to the model.
     const result = await emit("process.stdout.write('A'.repeat(2_000_000) + 'B'.repeat(2_000_000))");

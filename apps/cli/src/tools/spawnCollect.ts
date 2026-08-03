@@ -28,12 +28,16 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 
 // A JS string is UTF-16, so a character outside the BMP — every emoji, and plenty of CJK —
-// occupies two units. Slicing at an arbitrary index can land between them and strand half a
-// pair, which renders as a replacement character and no longer survives a UTF-8 round trip.
-// Chunk boundaries themselves are safe: setEncoding buffers partial sequences, so a pair is
-// always delivered whole. Only our own cuts can split one.
+// occupies two units, and a cut between them strands half a pair: a replacement character that
+// no longer survives a UTF-8 round trip. Chunk boundaries are safe on their own, since
+// setEncoding buffers partial sequences and delivers a pair whole; only our own cut can split
+// one, and only ever in two places (see `result`).
 function isHighSurrogate(code: number): boolean {
   return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
 }
 
 // Keeps the first and last HALF characters rather than a plain head cut: the useful parts of a
@@ -49,31 +53,29 @@ function createBoundedSink() {
       total += chunk.length;
 
       if (head.length < HALF) {
-        let room = HALF - head.length;
-        // Cutting here would strand a high surrogate at the end of head. Leave the whole pair
-        // for the tail instead — nothing is lost either way, the boundary just moves by one.
-        if (room < chunk.length && isHighSurrogate(chunk.charCodeAt(room - 1))) room -= 1;
+        const room = HALF - head.length;
         head += chunk.slice(0, room);
         chunk = chunk.slice(room);
       }
 
       // Rolling window, so a process that never stops writing still cannot grow this past
       // MAX_OUTPUT_CHARS in memory.
-      if (chunk) {
-        const merged = tail + chunk;
-        let start = Math.max(0, merged.length - HALF);
-        // Starting here would open the window on the low half of a pair whose high half was
-        // just dropped. Step past it rather than keeping an orphan.
-        if (start > 0 && isHighSurrogate(merged.charCodeAt(start - 1))) start += 1;
-        tail = merged.slice(start);
-      }
+      if (chunk) tail = (tail + chunk).slice(-HALF);
     },
 
     result(): { text: string; truncated: boolean } {
-      const omitted = total - head.length - tail.length;
-      // Anything at or under the cap survives whole; head and tail simply rejoin.
-      if (omitted <= 0) return { text: head + tail, truncated: false };
-      return { text: `${head}\n... [${omitted} characters omitted] ...\n${tail}`, truncated: true };
+      // Anything at or under the cap survives whole: the two halves rejoin exactly, including
+      // a surrogate pair sitting across the seam. Nothing to repair, so do not try.
+      if (total <= head.length + tail.length) return { text: head + tail, truncated: false };
+
+      // Only a real gap can strand a surrogate, and only in two places: the pair that straddled
+      // the cut has its high half last in head and its low half first in tail, and they no
+      // longer meet. A lone one can never end up anywhere else — head only ever grows at its
+      // end, and the rolling window drops index 0 of tail the moment it slides again.
+      const start = isHighSurrogate(head.charCodeAt(head.length - 1)) ? head.slice(0, -1) : head;
+      const end = isLowSurrogate(tail.charCodeAt(0)) ? tail.slice(1) : tail;
+      const omitted = total - start.length - end.length;
+      return { text: `${start}\n... [${omitted} characters omitted] ...\n${end}`, truncated: true };
     },
   };
 }
