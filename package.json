@@ -6,7 +6,8 @@
     "postinstall": "bun run --cwd apps/cli postinstall",
     "dev": "bun run --cwd apps/cli dev",
     "dev:server": "bun run --cwd apps/server dev",
-    "build": "bun run --cwd apps/cli build && bun run --cwd apps/server build",
+    "dev:web": "bun run --cwd apps/web dev",
+    "build": "bun run --cwd apps/cli build && bun run --cwd apps/server build && bun run --cwd apps/web build",
     "build:linux-x64": "bun run --cwd apps/cli build:linux-x64",
     "build:linux-arm64": "bun run --cwd apps/cli build:linux-arm64",
     "build:darwin-x64": "bun run --cwd apps/cli build:darwin-x64",
@@ -14,7 +15,7 @@
     "build:windows-x64": "bun run --cwd apps/cli build:windows-x64",
     "build:all": "bun run --cwd apps/cli build:all",
     "test": "bun run --cwd apps/cli test && bun run --cwd apps/server test",
-    "typecheck": "bun run --cwd apps/cli typecheck && bun run --cwd apps/server typecheck",
+    "typecheck": "bun run --cwd apps/cli typecheck && bun run --cwd apps/server typecheck && bun run --cwd apps/web typecheck",
     "lint": "bun run --cwd apps/cli lint"
   }
 }
