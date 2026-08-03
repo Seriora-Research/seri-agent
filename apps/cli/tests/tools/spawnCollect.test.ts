@@ -23,6 +23,19 @@ describe("spawnCollect", () => {
     expect(result.stdoutTruncated).toBe(false);
   });
 
+  test("keeps output that lands exactly on the cap when a surrogate pair straddles the seam", async () => {
+    // 30000 units, with the leading 'x' placing every pair on an odd index so one sits exactly
+    // across the head/tail boundary. Repairing the seam unconditionally cost a whole pair here
+    // and reported a truncation that never happened — on output the same length as the ASCII
+    // case above, which passes through whole.
+    const result = await emit("process.stdout.write('x' + '\\u{1F600}'.repeat(14999) + 'y')");
+
+    expect(result.stdout).toHaveLength(30000);
+    expect(result.stdoutTruncated).toBe(false);
+    expect(result.stdout).not.toContain("characters omitted");
+    expect(Buffer.from(result.stdout, "utf8").toString("utf8")).toBe(result.stdout);
+  }, 30_000);
+
   test("bounds a runaway command instead of growing without limit", async () => {
     // 4 MB of stdout: unbounded accumulation kept every byte of this and handed it to the model.
     const result = await emit("process.stdout.write('A'.repeat(2_000_000) + 'B'.repeat(2_000_000))");
@@ -76,6 +89,32 @@ describe("spawnCollect", () => {
     expect(result.exitCode).toBe(3);
     expect(result.stdout).toBe("partial");
   });
+
+  test("does not strand half a surrogate pair when the cut lands inside one", async () => {
+    // An emoji is two UTF-16 units. The leading 'x' makes every pair start on an odd index, so
+    // the 15000-character head boundary falls between the halves of one and used to leave a
+    // lone high surrogate at the end of head. This covers the head cut only: at 2000001 units
+    // the last-15000 window opens on a high surrogate, so nothing is stranded at the front of
+    // the tail. The test below carries the parity that exercises that side.
+    const result = await emit("process.stdout.write('x' + '\\u{1F600}'.repeat(1_000_000))");
+
+    expect(result.stdoutTruncated).toBe(true);
+    // A lone surrogate cannot be encoded, so it comes back as U+FFFD and the round trip differs.
+    expect(Buffer.from(result.stdout, "utf8").toString("utf8")).toBe(result.stdout);
+    expect(result.stdout).not.toContain("�");
+  }, 30_000);
+
+  test("does not strand half a pair at the front of the tail either", async () => {
+    // The head-side and tail-side cuts fail on opposite parities, so one fixture cannot cover
+    // both: the payload above lands the tail on a high surrogate and exercises only the head.
+    // The extra trailing character shifts the last-15000 window by one, which is what puts a
+    // lone low surrogate first in the tail.
+    const result = await emit("process.stdout.write('x' + '\\u{1F600}'.repeat(200_000) + 'y')");
+
+    expect(result.stdoutTruncated).toBe(true);
+    expect(Buffer.from(result.stdout, "utf8").toString("utf8")).toBe(result.stdout);
+    expect(result.stdout).not.toContain("�");
+  }, 30_000);
 
   test("does not corrupt multi-byte characters split across stream chunks", async () => {
     // A guard, not a reproduction: concatenating raw Buffers held up under this runtime's

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import rgAsset from "./rg-vendored.bin" with { type: "file" };
@@ -19,6 +19,43 @@ const rgDir = mkdtempSync(join(tmpdir(), "hesper-rg-"));
 export const rgPath = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg");
 writeFileSync(rgPath, bytes);
 if (process.platform !== "win32") chmodSync(rgPath, 0o755);
+
+// Nothing removed this, so every run left another 5 MB copy of rg behind: 207 directories and
+// 1.07 GB had accumulated on the machine this was found on.
+function cleanUpExtractedRg(): void {
+  try {
+    // `force` suppresses ENOENT but not EPERM/EBUSY, which Windows raises while an AV scanner
+    // or the search indexer still holds the binary we just executed. Retry briefly, then give
+    // up: throwing from an exit listener lands after the run's real output and turns a success
+    // into an apparent crash — measured at exit code 1 with a stack trace on stderr.
+    rmSync(rgDir, { recursive: true, force: true, maxRetries: 3 });
+  } catch {
+    // Leaving one directory behind beats ending a good run with a stack trace.
+  }
+}
+
+process.on("exit", cleanUpExtractedRg);
+
+// 'exit' does not fire when a signal terminates the process, so on its own the handler above
+// missed the most common way an agent run ends: Ctrl-C part way through a turn. Verified — a
+// SIGTERM left the directory behind exactly as before the fix.
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    cleanUpExtractedRg();
+
+    // Re-raise instead of exiting with 128 + n. A normal exit reports a status, not a death by
+    // signal, and shells branch on that: `for f in a b c; do hesper "$f"; done` only breaks out
+    // of the loop when the child was killed *by* SIGINT, so a plain exit would turn one Ctrl-C
+    // into one press per iteration. xargs and make read it the same way.
+    //
+    // Node only restores a signal's default disposition when no listener is left, so clearing
+    // them is what makes the re-raise land rather than re-entering this handler. That also
+    // means a listener registered later — a future "Ctrl-C cancels the turn" — would be
+    // dropped here, which is the argument for owning this in cli.ts rather than in a tool.
+    process.removeAllListeners(signal);
+    process.kill(process.pid, signal);
+  });
+}
 
 // spawnSync buffers rg's entire stdout in memory and kills rg the moment the buffer fills.
 // Node's 1 MB default was low enough that an ordinary --json search (one event per match, a

@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { renameSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { rgPath, runRipgrep } from "../../src/tools/runRipgrep";
 
 let tmpDir: string;
@@ -37,6 +38,55 @@ describe("runRipgrep", () => {
     expect(truncated).toBe(true);
     expect(stdout.length).toBeGreaterThan(0);
   });
+
+  test("removes the extracted rg when the process exits", () => {
+    // The binary is written to a fresh temp dir at startup and has to stay executable for the
+    // whole process lifetime, so this can only be checked from outside: run a real child, ask
+    // it where it put rg, then look after it is gone. Every run used to leave 5 MB behind.
+    const modulePath = pathToFileURL(join(import.meta.dir, "../../src/tools/runRipgrep.ts")).href;
+    const child = spawnSync(process.execPath, ["-e", `const m = await import(${JSON.stringify(modulePath)}); console.log(m.rgPath);`], {
+      encoding: "utf8",
+    });
+
+    // spawnSync leaves stdout null when the spawn itself fails, and the child's import throws
+    // outright on a fresh clone that has not run postinstall. Surface either as itself rather
+    // than as a TypeError or an empty-string mismatch that names neither.
+    if (child.status !== 0) throw new Error(`probe child exited ${child.status}: ${child.error ?? child.stderr}`);
+
+    const childRgPath = child.stdout.trim();
+    expect(childRgPath).toContain("hesper-rg-");
+    expect(existsSync(dirname(childRgPath))).toBe(false);
+  }, 30_000);
+
+  test("registers signal cleanup, since 'exit' alone misses Ctrl-C", () => {
+    // Importing the module is what wires these up. Weak on its own, but it is the only part of
+    // the signal path Windows can observe: process.kill(self, "SIGTERM") there terminates
+    // without ever running the handler (measured), so the behavioral check below is POSIX-only.
+    expect(process.listenerCount("SIGINT")).toBeGreaterThan(0);
+    expect(process.listenerCount("SIGTERM")).toBeGreaterThan(0);
+  });
+
+  test.skipIf(process.platform === "win32")("removes the extracted rg when a signal ends the run", async () => {
+    // The case the 'exit' listener alone missed: a run aborted part way through, which is what
+    // Ctrl-C does. Keeps the child alive with a timer so the signal is what ends it.
+    const modulePath = pathToFileURL(join(import.meta.dir, "../../src/tools/runRipgrep.ts")).href;
+    const child = spawn(
+      process.execPath,
+      ["-e", `const m = await import(${JSON.stringify(modulePath)}); console.log(m.rgPath); setInterval(() => {}, 1000);`],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+
+    const childRgPath = await new Promise<string>((resolve) => {
+      child.stdout.setEncoding("utf8");
+      child.stdout.once("data", (chunk: string) => resolve(chunk.trim()));
+    });
+    expect(existsSync(dirname(childRgPath))).toBe(true);
+
+    child.kill("SIGTERM");
+    await new Promise((resolve) => child.once("exit", resolve));
+
+    expect(existsSync(dirname(childRgPath))).toBe(false);
+  }, 30_000);
 
   test("still throws when rg genuinely fails", () => {
     expect(() => runRipgrep(["--definitely-not-a-real-flag", tmpDir])).toThrow(/rg exited with code/);
