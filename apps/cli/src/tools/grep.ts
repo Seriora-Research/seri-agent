@@ -39,9 +39,21 @@ export function grep(
   // of paths fits under the cap far more often than a list of matched lines does.
   const mode = opts.mode ?? "files_with_matches";
 
-  const args = mode === "content" ? ["--json"] : mode === "count" ? ["--count"] : ["--files-with-matches"];
+  // --with-filename because rg omits the name when handed exactly one file and prints a bare
+  // number, which left the `path:count` parser below slicing digits and returning a fragment
+  // of the count as the file name.
+  //
+  // The file-name and count modes are plain byte output with no base64 fallback, so a path
+  // that is not valid UTF-8 comes back with replacement characters where --json would have
+  // survived it. Routing them through --json is not the fix: --json overrides
+  // --files-with-matches and emits every match with its full line text, which is the entire
+  // cost this mode exists to avoid, and `--files --json` is rejected by rg outright.
+  const args =
+    mode === "content" ? ["--json"] : mode === "count" ? ["--count", "--with-filename"] : ["--files-with-matches"];
   if (opts.glob) args.push("-g", opts.glob);
-  args.push(pattern, opts.path);
+  // `--` so a pattern that looks like a flag ("--force", "-v") is searched for rather than
+  // parsed by rg, which otherwise exits 2 and surfaces to the model as a thrown error.
+  args.push("--", pattern, opts.path);
 
   const { stdout, truncated: overflowed } = runRipgrep(args);
   const lines = outputLines(stdout, overflowed);

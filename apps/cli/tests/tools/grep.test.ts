@@ -39,6 +39,17 @@ describe("grep (default mode)", () => {
     expect(result.truncated).toBe(false);
   });
 
+  test("searches for a pattern that looks like a flag instead of letting rg parse it", () => {
+    // Without a `--` separator rg reads "--force" as an unrecognized flag, exits 2, and the
+    // model gets a thrown error instead of the match it asked for.
+    writeFileSync(join(tmpDir, "flag.txt"), "run it with --force here\n");
+
+    const result = grep("--force", { path: tmpDir });
+
+    expect(result.files).toHaveLength(1);
+    expect(result.files?.[0].endsWith("flag.txt")).toBe(true);
+  });
+
   test("caps file names at the file limit, which is higher than the match limit", () => {
     for (let i = 0; i < MAX_FILE_RESULTS + 20; i++) writeFileSync(join(tmpDir, `f${i}.md`), "needle\n");
 
@@ -125,12 +136,21 @@ describe("grep (count mode)", () => {
   });
 
   test("splits the path from the count on the right, so a Windows drive letter survives", () => {
-    // rg prints `path:count`, and an absolute Windows path already contains a colon.
+    // rg prints `path:count`, and an absolute Windows path already contains a colon of its own.
     const result = grep("hello", { path: tmpDir, mode: "count" });
 
-    for (const entry of result.counts ?? []) {
-      expect(entry.file).toContain(tmpDir);
-      expect(Number.isNaN(entry.count)).toBe(false);
-    }
+    expect(result.counts).toHaveLength(1);
+    expect(result.counts?.[0].file.endsWith("a.txt")).toBe(true);
+    expect(result.counts?.[0].count).toBe(2);
+  });
+
+  test("still names the file when the path is a single file rather than a directory", () => {
+    // rg drops the filename prefix when handed exactly one file and prints a bare count, so
+    // without --with-filename the parser returned a fragment of the digits as the file name.
+    const result = grep("hello", { path: join(tmpDir, "a.txt"), mode: "count" });
+
+    expect(result.counts).toHaveLength(1);
+    expect(result.counts?.[0].file.endsWith("a.txt")).toBe(true);
+    expect(result.counts?.[0].count).toBe(2);
   });
 });
