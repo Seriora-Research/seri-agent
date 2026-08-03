@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { ModelMessage } from "ai";
@@ -13,6 +15,7 @@ import { type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "./l
 import { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { toolDefinitions } from "./provider/tools";
 import { findMostRecentSession, loadSession, saveSession, type SessionState } from "./session/session";
+import { grep as grepReal } from "./tools/grep";
 
 type CliDeps = {
   runLoop?: typeof runLoopReal;
@@ -23,6 +26,7 @@ type CliDeps = {
   login?: typeof loginReal;
   logout?: typeof logoutReal;
   configCommand?: typeof configCommandReal;
+  grep?: typeof grepReal;
 };
 
 function parseTaskArgs(argv: string[]): { resuming: boolean; resumeId: string | undefined; taskText: string } {
@@ -111,6 +115,30 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (argv.length === 0 || argv.includes("--version") || argv.includes("-v")) {
     if (argv.includes("--version") || argv.includes("-v")) console.log(`hesper ${pkg.version}`);
     return 0;
+  }
+
+  // Undocumented build-verification flag: the embedded ripgrep is vendored for the build
+  // host, so a cross-compiled binary can ship one that cannot run on the target. Spawning
+  // it for real is the only way to catch that from a shipped artifact; the release workflow
+  // runs this on every platform. Greps a throwaway file rather than the cwd so the result
+  // never depends on what happens to be in the directory hesper was launched from.
+  if (argv.includes("--selftest")) {
+    const grepFn = deps.grep ?? grepReal;
+    try {
+      const dir = mkdtempSync(join(tmpdir(), "hesper-selftest-"));
+      try {
+        writeFileSync(join(dir, "probe.txt"), "hesper selftest probe\n");
+        const matches = grepFn("selftest probe", { path: dir });
+        if (matches.length !== 1) throw new Error(`ripgrep returned ${matches.length} matches, expected 1`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+      console.log("selftest ok: embedded ripgrep ran");
+      return 0;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 1;
+    }
   }
 
   if (argv[0] === "login" || argv[0] === "signup") {

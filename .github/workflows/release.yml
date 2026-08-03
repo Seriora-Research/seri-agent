@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match apps/cli/package.json
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./apps/cli/package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME implies version $TAG_VERSION, but apps/cli/package.json says $PKG_VERSION."
+            echo "hesper --version reads package.json, so this release would ship a binary that misreports itself."
+            exit 1
+          fi
+          echo "Tag $GITHUB_REF_NAME matches package.json version $PKG_VERSION."
+
+  build:
+    needs: verify-version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Each target builds on a runner that already matches it: the vendored ripgrep is
+          # resolved for the build host, so cross-compiling would embed the wrong binary.
+          - runner: ubuntu-latest
+            target: linux-x64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+          - runner: macos-13
+            target: darwin-x64
+          - runner: macos-latest
+            target: darwin-arm64
+          - runner: windows-latest
+            target: windows-x64
+            ext: .exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd apps/cli build:${{ matrix.target }}
+      - name: Smoke-test the binary
+        shell: bash
+        run: |
+          BIN="apps/cli/dist/hesper-${{ matrix.target }}${{ matrix.ext }}"
+          chmod +x "$BIN"
+          REPORTED="$("$BIN" --version)"
+          if [ "$REPORTED" != "hesper ${GITHUB_REF_NAME#v}" ]; then
+            echo "Binary reports '$REPORTED', expected 'hesper ${GITHUB_REF_NAME#v}'."
+            exit 1
+          fi
+          "$BIN" --selftest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hesper-${{ matrix.target }}${{ matrix.ext }}
+          path: apps/cli/dist/hesper-${{ matrix.target }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Generate SHA256SUMS
+        shell: bash
+        working-directory: artifacts
+        run: |
+          sha256sum hesper-* > SHA256SUMS
+          cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*

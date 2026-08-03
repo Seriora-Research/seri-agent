@@ -22,6 +22,44 @@ describe("run", () => {
   });
 });
 
+describe("run (--selftest)", () => {
+  test("returns 0 and reports success when grep runs", async () => {
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+
+    let code: number;
+    try {
+      code = await run(["--selftest"], { grep: () => [{ file: "probe.txt", line: 1, text: "hesper selftest probe" }] });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(code).toBe(0);
+    expect(logs).toEqual(["selftest ok: embedded ripgrep ran"]);
+  });
+
+  test("returns 1 and logs the error when grep throws", async () => {
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+
+    let code: number;
+    try {
+      code = await run(["--selftest"], {
+        grep: () => {
+          throw new Error("ripgrep failed: Exec format error");
+        },
+      });
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(code).toBe(1);
+    expect(errors).toEqual(["ripgrep failed: Exec format error"]);
+  });
+});
+
 describe("run (task invocation)", () => {
   const originalKey = process.env.GROQ_API_KEY;
   const originalLocalAppData = process.env.LOCALAPPDATA;
