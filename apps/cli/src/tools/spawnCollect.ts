@@ -1,6 +1,17 @@
 import { spawn, spawnSync } from "node:child_process";
 
-export type ProcessResult = { stdout: string; stderr: string; exitCode: number; truncated: boolean; timedOut: boolean };
+// Truncation is reported per stream rather than as one flag. A single OR'd boolean cannot say
+// which stream was cut, so a command that floods stderr while returning a complete stdout
+// reads identically to one whose stdout was chopped — and the model re-runs work it already
+// had, or trusts output it should not have.
+export type ProcessResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+  timedOut: boolean;
+};
 
 // Both streams were accumulated into unbounded strings, so a runaway command (`yes`, a `cat`
 // of a large file, a build log) grew the process until it died and, short of that, handed the
@@ -105,7 +116,8 @@ export function spawnCollect(executable: string, args: string[], timeoutMs?: num
         stdout: stdout.text,
         stderr: stderr.text,
         exitCode: code ?? 1,
-        truncated: stdout.truncated || stderr.truncated,
+        stdoutTruncated: stdout.truncated,
+        stderrTruncated: stderr.truncated,
         timedOut,
       });
     });
