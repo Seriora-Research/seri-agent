@@ -289,6 +289,38 @@ describe("run (/mode)", () => {
     expect(loadSession("abc", sessionsDir).permissionMode).toBe("approve-each");
   });
 
+  test("`/mode is broken, fix it` stays a task and does not cycle the mode", async () => {
+    // An ordinary task before the dispatch table existed. /mode takes no arguments, so any
+    // argument at all means this is not an invocation of it.
+    const originalKey = process.env.GROQ_API_KEY;
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const existing: SessionState = { id: "ghi", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
+    saveSession(existing, sessionsDir);
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let captured: RunLoopOpts | undefined;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      captured = opts;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["/mode", "is", "broken,", "fix", "it"], { sessionsDir, runLoop: runLoopFake, loadAgentsFile: () => "" });
+    } finally {
+      console.log = originalLog;
+      // Deleted rather than reassigned when it was unset: `process.env.X = undefined` stores the
+      // literal string "undefined" and pollutes every later test in the process.
+      if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+      else process.env.GROQ_API_KEY = originalKey;
+    }
+
+    expect(captured?.messages.at(-1)).toEqual({ role: "user", content: "/mode is broken, fix it" });
+    expect(loadSession("ghi", sessionsDir).permissionMode).toBe("read-only");
+  });
+
   test("bare `/mode` (no --resume) cycles the most-recent session instead of creating a new orphan session", async () => {
     const existing: SessionState = { id: "def", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
     saveSession(existing, sessionsDir);
@@ -419,13 +451,15 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     expect(readFileSync(join(workTree, "new.ts"), "utf8")).toBe("new\n");
   }, 20_000);
 
-  test("`--resume /restore` is not misparsed as a session id", async () => {
+  test("`--resume /restore <sha>` is not misparsed as a session id", async () => {
     seed();
 
-    const code = await run(["--resume", "/restore"], { sessionsDir, checkpointsDir });
+    // Resolving to the most recent session and failing on the sha is the proof: taken as a session
+    // id, "/restore" would have failed to load a session instead.
+    const code = await run(["--resume", "/restore", "deadbeef"], { sessionsDir, checkpointsDir });
 
     expect(code).toBe(1);
-    expect(errors.join("\n")).toContain("/restore takes one argument");
+    expect(errors.join("\n")).toContain("deadbeef is not a checkpoint");
   }, 15_000);
 
   test("/rewind truncates the conversation and leaves the filesystem byte-identical", async () => {
@@ -495,13 +529,41 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     expect(logs.join("\n")).not.toContain("Undid to checkpoint");
   }, 20_000);
 
-  test("rejects a non-numeric step count instead of silently undoing one step", async () => {
+  test("a task whose first word is a slash command is sent to the model, and undoes nothing", async () => {
+    // The dispatch splits the task on whitespace and looks up token one, so this was claimed by
+    // /undo and died in the step parser with the task never sent — the second regression out of
+    // the same table, after the Object.prototype walk. The command forms are exact, so anything
+    // outside them falls through to the model, which is the only direction that cannot swallow
+    // work silently.
     seed();
+    const originalKey = process.env.GROQ_API_KEY;
+    process.env.GROQ_API_KEY = "fake-test-key";
 
-    const code = await run(["--resume", SESSION_ID, "/undo", "x"], { sessionsDir, checkpointsDir });
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let captured: RunLoopOpts | undefined;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      captured = opts;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
 
-    expect(code).toBe(1);
-    expect(errors.join("\n")).toContain("positive number of steps");
+    let code: number;
+    try {
+      code = await run(["--resume", SESSION_ID, "/undo", "the", "rename", "and", "try", "again"], {
+        sessionsDir,
+        checkpointsDir,
+        runLoop: runLoopFake,
+        loadAgentsFile: () => "",
+      });
+    } finally {
+      // Deleted rather than reassigned when it was unset: `process.env.X = undefined` stores the
+      // literal string "undefined" and pollutes every later test in the process.
+      if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+      else process.env.GROQ_API_KEY = originalKey;
+    }
+
+    expect(code).toBe(0);
+    expect(captured?.messages.at(-1)).toEqual({ role: "user", content: "/undo the rename and try again" });
     expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("final\n");
-  }, 15_000);
+  }, 20_000);
 });

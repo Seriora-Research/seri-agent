@@ -42,11 +42,34 @@ type CliDeps = {
   grep?: typeof grepReal;
 };
 
+type CommandDirs = { sessionsDir: string; checkpointsDir: string };
+
+type SlashCommand = {
+  // Whether these arguments are an invocation of this command at all — checked BEFORE the dispatch
+  // claims the input, because the first word of a task is not a command. The dispatch splits the
+  // task on whitespace and looks up token one, so `seri "/undo the rename and try again"` was
+  // hijacked and died in the step parser with the task never sent, and `seri "/mode is broken, fix
+  // it"` — an ordinary task before the table existed — went the same way. The command forms are
+  // exact and small, so anything outside them falls through to the model, which is the only
+  // direction that cannot silently swallow work.
+  accepts: (args: string[]) => boolean;
+  run: (session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs) => void;
+};
+
+// A step count, or nothing at all.
+function isStepCount(args: string[]): boolean {
+  return args.length === 0 || (args.length === 1 && /^[1-9]\d*$/.test(args[0] ?? ""));
+}
+
+function steps(args: string[]): number {
+  return args[0] === undefined ? 1 : Number(args[0]);
+}
+
 // Commands that operate on the resume target rather than being a task for the model. One table,
 // so a new one is added in exactly one place: `parseTaskArgs` derives the names it must not
 // mistake for a session id from these keys, and the dispatch in `run()` shares the resume-target
-// resolution and the error reporting. Handlers throw to report a bad invocation; the caller turns
-// that into a message and a non-zero exit.
+// resolution and the error reporting. Handlers throw to report a failure; the caller turns that
+// into a message and a non-zero exit.
 //
 // A Map rather than an object literal, because an object literal inherits Object.prototype and a
 // lookup keyed on user input walks it: `SLASH_COMMANDS["toString"]` returned a function, so
@@ -55,14 +78,13 @@ type CliDeps = {
 // `valueOf`, `hasOwnProperty` and `isPrototypeOf` did the same, and `__proto__` resolved to an
 // object and crashed with "command is not a function". A Map has no prototype chain to walk, so
 // the hazard is gone from every call site rather than from the ones that remember Object.hasOwn.
-const SLASH_COMMANDS = new Map<string, (session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs) => void>([
-  ["/mode", cycleModeCommand],
-  ["/undo", undoCommand],
-  ["/restore", restoreCommand],
-  ["/rewind", rewindCommand],
+const SLASH_COMMANDS = new Map<string, SlashCommand>([
+  ["/mode", { accepts: (args) => args.length === 0, run: cycleModeCommand }],
+  ["/undo", { accepts: isStepCount, run: undoCommand }],
+  // A sha and nothing else. `seri "/restore the header spacing"` is a task.
+  ["/restore", { accepts: (args) => args.length === 1 && /^[0-9a-f]{4,40}$/.test(args[0] ?? ""), run: restoreCommand }],
+  ["/rewind", { accepts: isStepCount, run: rewindCommand }],
 ]);
-
-type CommandDirs = { sessionsDir: string; checkpointsDir: string };
 
 function parseTaskArgs(argv: string[]): { resuming: boolean; resumeId: string | undefined; taskText: string } {
   const args = [...argv];
@@ -79,16 +101,7 @@ function parseTaskArgs(argv: string[]): { resuming: boolean; resumeId: string | 
   return { resuming: true, resumeId, taskText: args.join(" ").trim() };
 }
 
-function parseSteps(name: string, args: string[]): number {
-  const steps = args[0] === undefined ? 1 : Number(args[0]);
-  if (args.length > 1 || !Number.isInteger(steps) || steps < 1) {
-    throw new Error(`${name} takes at most one argument, a positive number of steps.`);
-  }
-  return steps;
-}
-
-function cycleModeCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
-  if (args.length > 0) throw new Error("/mode takes no arguments.");
+function cycleModeCommand(session: SessionState<ModelMessage>, _args: string[], dirs: CommandDirs): void {
   session.permissionMode = cycleMode(session.permissionMode);
   saveSession(session, dirs.sessionsDir);
   console.log(`Session ${session.id}: permission mode is now ${session.permissionMode}`);
@@ -99,19 +112,25 @@ function undoCommand(session: SessionState<ModelMessage>, args: string[], dirs: 
     storeDir: checkpointStoreDir(dirs.checkpointsDir, session.cwd),
     worktree: session.cwd,
     sessionId: session.id,
-    steps: parseSteps("/undo", args),
+    steps: steps(args),
     onPlan: printUndoPlan,
   });
+  // The step the user asked for, not the record's `seq`. `seq` is the 0-based index of a tool
+  // record while `/undo n` is 1-based over DISTINCT trees, so the two only ever agreed by
+  // accident: the first checkpoint printed "checkpoint 0", and over records [T0, T1, T1, T2]
+  // `/undo 2` printed "checkpoint 2" while restoring the state that preceded tool call 1. A
+  // number a user is shown has to be one they can hand back to the command that showed it.
+  //
   // A step count is absolute — the n-th most recent distinct checkpoint — not relative to wherever
   // a previous undo left the worktree, so `/undo 1` run three times aims at the same checkpoint
-  // three times. Measured before this: each of the three printed `Undid to checkpoint 1.` and
-  // minted a fresh recovery commit while the file stayed exactly where the first one put it.
-  // Saying so is the same honesty `/rewind`'s "dropped 0 message(s)" already applies.
+  // three times. Measured before this: each of the three printed that it had undone and minted a
+  // fresh recovery commit while the file stayed exactly where the first one put it. Saying so is
+  // the same honesty `/rewind`'s "dropped 0 message(s)" already applies.
   if (result.restored.length === 0 && result.deleted.length === 0) {
-    console.log(`Already at checkpoint ${result.seq}; no file changed.`);
+    console.log(`Already at checkpoint ${steps(args)}; no file changed.`);
     return;
   }
-  console.log(`Undid to checkpoint ${result.seq}.`);
+  console.log(`Undid to checkpoint ${steps(args)}.`);
   printRecovery(result);
 }
 
@@ -119,9 +138,7 @@ function undoCommand(session: SessionState<ModelMessage>, args: string[], dirs: 
 // recorded. It exists so recovery is a command that reuses the restore path — removal pass
 // included — rather than a git incantation the user pastes and hopes about.
 function restoreCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
-  const [commit, ...rest] = args;
-  if (commit === undefined || rest.length > 0) throw new Error("/restore takes one argument, the commit to restore.");
-
+  const commit = args[0] ?? "";
   const result = restoreCommit({
     storeDir: checkpointStoreDir(dirs.checkpointsDir, session.cwd),
     worktree: session.cwd,
@@ -147,7 +164,7 @@ function rewindCommand(session: SessionState<ModelMessage>, args: string[], dirs
   const { rewindTo } = rewindConversation({
     storeDir: checkpointStoreDir(dirs.checkpointsDir, session.cwd),
     sessionId: session.id,
-    steps: parseSteps("/rewind", args),
+    steps: steps(args),
   });
   // Clamped, because an anchor can outlive the array it indexed: a previous /rewind truncated the
   // session and the messages that followed reused those indices. Slicing past the end is a silent
@@ -320,14 +337,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // running them from a different directory still finds the store the edits were recorded in.
   const [name = "", ...commandArgs] = taskText.split(/\s+/).filter(Boolean);
   const command = SLASH_COMMANDS.get(name);
-  if (command !== undefined) {
+  if (command !== undefined && command.accepts(commandArgs)) {
     const id = resumeId ?? findMostRecentSession(sessionsDir);
     if (!id) {
       console.error(`No session to run ${name} against.`);
       return 1;
     }
     try {
-      command(loadSession<ModelMessage>(id, sessionsDir), commandArgs, { sessionsDir, checkpointsDir });
+      command.run(loadSession<ModelMessage>(id, sessionsDir), commandArgs, { sessionsDir, checkpointsDir });
       return 0;
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
