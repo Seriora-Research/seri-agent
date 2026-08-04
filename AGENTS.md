@@ -67,6 +67,22 @@ recent commit history for why) and never cuts the eviction boundary in the middl
 {assistant tool-call, tool result} pair, since that reproduces
 `AI_MissingToolResultsError`.
 
+**Checkpoints** (`apps/cli/src/checkpoint/`): every call to one of the three tools that
+can change the filesystem — `write_file`, `bash`, `powershell` (`FS_MUTATING_TOOL_NAMES`,
+deliberately not `WRITE_TOOL_NAMES`, which is the permission set and includes `edit`, a
+pure string transform that writes nothing) — snapshots the whole worktree into a bare
+shadow git repo under `<configDir>/checkpoints/<sha256(worktree)[0..16]>/git`, keyed so
+the project itself need not be a git repo and nothing is ever written into the user's
+`.git`. `seri [--resume <id>] /undo [n]` restores byte-identical prior state with a
+reviewable diff and an explicit removal pass (`checkout-index` alone is additive);
+`/rewind [n]` truncates the conversation to the same anchor and touches no file. Both
+read one append-only JSONL log per session, so the two histories cannot drift apart.
+`runLoop` is still stateless and I/O-free: `withCheckpoints` is a pure function over a
+`ToolSet` that `cli.ts` applies before injection, so checkpointing is consumer policy
+and `loop.ts` has zero changes. The snapshot runs inside the wrapped `execute` before
+delegating, and the callback returns `void` rather than `Promise<void>` so no `await`
+can ever be introduced between the snapshot and the write.
+
 **Auth** (`apps/cli/src/auth/`): `seri login`/`signup`/`logout`, backed by WorkOS AuthKit's
 OAuth device-authorization flow (RFC 8628) — purely additive, zero changes to
 `apps/cli/src/provider/groq.ts` or the BYOK path in `apps/cli/src/config/config.ts`. `deviceFlow.ts`
