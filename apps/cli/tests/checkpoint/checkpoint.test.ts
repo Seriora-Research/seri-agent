@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,11 +15,12 @@ import {
   type CheckpointRecord,
 } from "../../src/checkpoint/checkpoint";
 import {
+  applyRestore,
   commitTree,
   initShadow,
   isGitAvailable,
   listSessionRefs,
-  restoreTree,
+  planRestore,
   updateRef,
   writeTree,
 } from "../../src/checkpoint/shadowGit";
@@ -26,8 +28,9 @@ import { withCheckpoints, type MutationContext } from "../../src/checkpoint/wrap
 import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
 
-// The cold first snapshot measured 300 ms on Windows and these tests take several each.
-const GIT_TEST_TIMEOUT_MS = 15_000;
+// The cold first snapshot measured 300 ms on Windows and these tests take several each. Same
+// 30 s margin as shadowGit.test.ts, for the same reason.
+const GIT_TEST_TIMEOUT_MS = 30_000;
 
 let root: string;
 let storeDir: string;
@@ -56,6 +59,17 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
+
+// Deliberately not routed through shadowGit: evidence about the store should not come from the
+// module that wrote it.
+function plainGit(gitDir: string, args: string[]): string {
+  const result = spawnSync("git", [`--git-dir=${gitDir}`, ...args], { encoding: "utf8", windowsHide: true });
+  return result.stdout;
+}
+
+function undo(steps: number) {
+  return undoFiles({ storeDir, worktree: workTree, sessionId: SESSION, steps, onPlan: () => {} });
+}
 
 function checkpointer(overrides: Partial<Parameters<typeof createCheckpointer>[0]> = {}) {
   return createCheckpointer({
@@ -175,7 +189,7 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       writeFileSync(join(workTree, "new.txt"), "new\n");
       snapshot(mutation({ toolCallId: "c2" }));
 
-      const result = undoFiles({ storeDir, worktree: workTree, sessionId: SESSION, steps: 2 });
+      const result = undo(2);
 
       expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
       expect(existsSync(join(workTree, "new.txt"))).toBe(false);
@@ -200,8 +214,32 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       // Three records, two distinct trees — so `/undo 2` must reach the original content rather
       // than land on the duplicate.
       expect(toolRecords()).toHaveLength(3);
-      undoFiles({ storeDir, worktree: workTree, sessionId: SESSION, steps: 2 });
+      undo(2);
 
+      expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "ranks a tree that reappears later by its newest occurrence, not its oldest",
+    () => {
+      // The ordinary flow, not a contrived one: an undo restores an earlier tree, and the next
+      // checkpoint records that same tree again — a non-adjacent duplicate the undo itself
+      // created. Rank it at its first occurrence and `/undo 1` steps FORWARD onto a state the
+      // user just reverted, while printing that it undid.
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" })); // v0
+      writeFileSync(join(workTree, "a.txt"), "v1\n");
+      snapshot(mutation({ toolCallId: "c2" })); // v1
+      writeFileSync(join(workTree, "a.txt"), "v2\n");
+      undo(2); // back to v0
+      snapshot(mutation({ toolCallId: "c3" })); // v0 again — the duplicate
+      writeFileSync(join(workTree, "a.txt"), "v3\n");
+
+      undo(1);
+
+      // "before" is v0 — the seeded content the first checkpoint captured.
       expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
     },
     GIT_TEST_TIMEOUT_MS,
@@ -218,10 +256,35 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
 
       // Undoing now writes a pre-undo record whose tree ("v3") appears in no tool record, so if
       // the selection counted pre-undo records the step below would land on it and stop at "v2".
-      undoFiles({ storeDir, worktree: workTree, sessionId: SESSION, steps: 1 });
-      undoFiles({ storeDir, worktree: workTree, sessionId: SESSION, steps: 2 });
+      undo(1);
+      undo(2);
 
       expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "keeps every recovery commit it printed reachable from the session ref",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+      writeFileSync(join(workTree, "a.txt"), "v2\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      writeFileSync(join(workTree, "a.txt"), "v3\n");
+      const first = undo(1);
+      writeFileSync(join(workTree, "a.txt"), "v4\n");
+      const second = undo(1);
+
+      // Read with plain git: /undo hands each of these hashes to the user as the way back to the
+      // state it replaced, and pruneSessions runs `gc` at the start of every session, so a commit
+      // that is not an ancestor of the ref is a promise with an expiry date on it.
+      const gitDir = join(storeDir, "git");
+      const reachable = plainGit(gitDir, ["rev-list", `refs/seri/sessions/${SESSION}`]).split("\n");
+      expect(reachable).toContain(first.preUndoCommit);
+      expect(reachable).toContain(second.preUndoCommit);
+      expect(plainGit(gitDir, ["fsck", "--unreachable"])).not.toContain(first.preUndoCommit);
     },
     GIT_TEST_TIMEOUT_MS,
   );
@@ -237,7 +300,7 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       writeFileSync(join(workTree, "a.txt"), "after\n");
       snapshot(mutation({ toolCallId: "c2" }));
 
-      const result = undoFiles({ storeDir, worktree: workTree, sessionId: SESSION, steps: 2 });
+      const result = undo(2);
 
       expect(result.ignored).toEqual(["secret.log"]);
       expect([...result.restored, ...result.deleted]).not.toContain("secret.log");
@@ -251,7 +314,7 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
     () => {
       checkpointer()(mutation());
 
-      expect(() => undoFiles({ storeDir, worktree: workTree, sessionId: SESSION, steps: 5 })).toThrow(
+      expect(() => undo(5)).toThrow(
         "This session has 1 checkpoint(s) to undo to; asked for 5.",
       );
     },
@@ -271,6 +334,25 @@ describe.skipIf(!isGitAvailable())("rewindConversation", () => {
 
       expect(rewindConversation({ storeDir, sessionId: SESSION, steps: 1 })).toEqual({ rewindTo: 7 });
       expect(rewindConversation({ storeDir, sessionId: SESSION, steps: 2 })).toEqual({ rewindTo: 3 });
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "ranks an anchor that reappears later by its newest occurrence, not its oldest",
+    () => {
+      // Anchors are monotonic only within one uninterrupted run. A /rewind truncates the array and
+      // the messages that follow reuse indices already recorded, so 3, 7, 9, 7, 8 is an ordinary
+      // sequence. Ranked by first occurrence it reads [8, 9, 7, 3], and `/rewind 2` then targets
+      // 9 — past the end of an 8-message array, where slice is a silent no-op.
+      const snapshot = checkpointer();
+      for (const [index, rewindTo] of [3, 7, 9, 7, 8].entries()) {
+        writeFileSync(join(workTree, "a.txt"), `v${index}\n`);
+        snapshot(mutation({ toolCallId: `c${index}`, rewindTo }));
+      }
+
+      const at = (steps: number) => rewindConversation({ storeDir, sessionId: SESSION, steps }).rewindTo;
+      expect([at(1), at(2), at(3), at(4)]).toEqual([8, 7, 9, 3]);
     },
     GIT_TEST_TIMEOUT_MS,
   );
@@ -306,7 +388,7 @@ describe.skipIf(!isGitAvailable())("rewindConversation", () => {
   );
 });
 
-// success_check (c). The discriminating case against a per-edit design: `sed -i` and a shell
+// The discriminating case against a per-edit design: `sed -i` and a shell
 // redirection never call the `edit` tool, so a design that snapshots on edits records nothing at
 // all here. The trigger is the tool call and the subject is the whole tree, so seri never has to
 // know what the shell did. Bash guard carried forward from tests/tools/bash.test.ts:27.
@@ -326,7 +408,7 @@ describe.skipIf(!isGitAvailable() || !isBashAvailable())("checkpoints around a b
       expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("after\n");
       expect(readFileSync(join(workTree, "b.txt"), "utf8")).toBe("kept\nappended\n");
 
-      undoFiles({ storeDir, worktree: workTree, sessionId: SESSION, steps: 1 });
+      undo(1);
 
       expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
       expect(readFileSync(join(workTree, "b.txt"), "utf8")).toBe("kept\n");
@@ -363,7 +445,7 @@ describe.skipIf(!isGitAvailable())("pruneSessions", () => {
 
       // The surviving sessions' snapshots are still reachable after the gc that pruning ran.
       writeFileSync(join(workTree, "a.txt"), "clobbered\n");
-      restoreTree(gitDir, workTree, trees[21] ?? "");
+      applyRestore(gitDir, workTree, planRestore(gitDir, workTree, trees[21] ?? "").deleted);
       expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("session 21\n");
     },
     60_000,

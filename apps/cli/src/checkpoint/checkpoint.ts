@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
+  applyRestore,
   commitTree,
   deleteRef,
   diffTree,
@@ -10,7 +11,8 @@ import {
   isGitAvailable,
   isIgnored,
   listSessionRefs,
-  restoreTree,
+  planRestore,
+  resolveRef,
   updateRef,
   writeTree,
 } from "./shadowGit";
@@ -31,6 +33,13 @@ export type CheckpointRecord =
   | { kind: "pre-undo"; tree: string; commit: string; at: string };
 
 type ToolRecord = Extract<CheckpointRecord, { kind: "tool" }>;
+type AnchoredRecord = Extract<CheckpointRecord, { tree: string; commit: string }>;
+
+// Every record that carries a snapshot — tool checkpoints and the states an undo replaced. Both
+// sit in the commit chain; only the first kind is somewhere `/undo` may step to.
+function anchored(log: CheckpointRecord[]): AnchoredRecord[] {
+  return log.filter((record): record is AnchoredRecord => record.kind === "tool" || record.kind === "pre-undo");
+}
 
 // One store per worktree, under <configDir>/checkpoints. Lowercased first on win32 because NTFS
 // paths are case-insensitive and `C:\p` and `c:\p` are the same directory — hashing them
@@ -84,6 +93,12 @@ function append(storeDir: string, sessionId: string, record: CheckpointRecord): 
 }
 
 export function appendBarrier(storeDir: string, sessionId: string): void {
+  // No log means this session never took a checkpoint — git absent, or the error latch tripped —
+  // so there is nothing for a barrier to protect and nowhere to write it. The predicate lives here
+  // because it is about this session's log; asking the caller to test for the store directory
+  // instead would answer a different question, since the store is keyed per worktree and is
+  // already there whenever any earlier session in the same directory checkpointed.
+  if (!existsSync(logPath(storeDir, sessionId))) return;
   append(storeDir, sessionId, { kind: "compaction-barrier", at: new Date().toISOString() });
 }
 
@@ -125,23 +140,32 @@ export function createCheckpointer(opts: {
       return false;
     }
     initStore(opts.storeDir, opts.worktree);
-    pruneSessions(opts.storeDir);
+    // Retention is housekeeping, not part of taking a checkpoint. `gc` exits non-zero when another
+    // process holds gc.pid or the packed-refs lock — exactly the two-seri-processes-in-one-project
+    // case — and letting that reach the latch below would turn a failed tidy-up into no undo for
+    // the rest of the session. Nothing is lost by skipping it: no snapshot goes away, the store is
+    // just larger than intended, so there is nothing to tell the user either.
+    try {
+      pruneSessions(opts.storeDir);
+    } catch {}
 
     // Resuming a session picks up its existing chain, so --resume keeps appending to one ref
-    // rather than orphaning what came before it.
-    const existing = readLog(opts.storeDir, opts.sessionId).filter((r): r is ToolRecord => r.kind === "tool");
-    seq = existing.length;
-    previousTree = existing.at(-1)?.tree;
-    previousCommit = existing.at(-1)?.commit;
+    // rather than orphaning what came before it. The parent comes from the ref, not from the log:
+    // the tip may be a pre-undo commit, which is not a tool record, and branching beside it would
+    // strand the recovery commit /undo already printed to the user.
+    const log = readLog(opts.storeDir, opts.sessionId);
+    seq = log.filter((record) => record.kind === "tool").length;
+    previousTree = anchored(log).at(-1)?.tree;
+    previousCommit = resolveRef(gitDir, sessionRef(opts.sessionId));
     return true;
   }
 
   function warnIfIgnored(tool: string, args: unknown, toolCallId: string): void {
     // Only `write_file` declares a path. For `bash`/`powershell` the path is buried inside an
     // arbitrary shell command and recovering it would mean parsing shell, which this does not
-    // pretend to do — so clause (f)'s "name the ignored file" half is knowingly partial. The other
-    // half holds for all three tools: /undo reports paths from git's own output, which by
-    // construction never contains an ignored file.
+    // pretend to do — so naming the ignored file is knowingly partial, covering one of the three
+    // tools. What does hold for all three: /undo reports paths from git's own output, which by
+    // construction never contains an ignored file, so it can never claim to have restored one.
     if (tool !== "write_file") return;
     const path = (args as { path?: unknown }).path;
     if (typeof path !== "string") return;
@@ -208,45 +232,69 @@ export function createCheckpointer(opts: {
   };
 }
 
-// `/undo` and `/rewind` both step over DISTINCT anchors, so the deduped no-op checkpoints and the
-// several tool calls that share one assistant message never produce a step that does nothing.
-function distinct<T>(values: T[]): T[] {
-  return [...new Set(values)];
-}
-
 function toolRecords(log: CheckpointRecord[]): ToolRecord[] {
   return log.filter((record): record is ToolRecord => record.kind === "tool");
 }
 
-export type UndoResult = {
+// The steps `/undo n` and `/rewind n` count: newest first, one per distinct anchor, so the deduped
+// no-op checkpoints and the several tool calls sharing one assistant message never produce a step
+// that does nothing.
+//
+// The reversal happens BEFORE the dedupe, and that ordering is the whole point. A Set keeps each
+// value at its FIRST insertion position, so deduping and then reversing ranks a repeated anchor at
+// its OLDEST occurrence. Repeats are not exotic here — an undo restores an earlier tree, and the
+// next checkpoint records that same tree again — and the effect was that `/undo 1` could move the
+// worktree FORWARD onto a state the user had just reverted, while printing that it had undone.
+function newestDistinct<T, K>(records: T[], key: (record: T) => K): T[] {
+  const byKey = new Map<K, T>();
+  for (const record of [...records].reverse()) if (!byKey.has(key(record))) byKey.set(key(record), record);
+  return [...byKey.values()];
+}
+
+// What `/undo` is about to do, handed to the caller before any of it is done — the diff and the
+// deletion list are the reviewable part, and a user learning which of their files were removed
+// only afterwards is being told, not asked.
+export type UndoPlan = {
   seq: number;
   tree: string;
   diff: string;
   restored: string[];
   deleted: string[];
   ignored: string[];
-  preUndoCommit: string;
 };
 
-export function undoFiles(opts: { storeDir: string; worktree: string; sessionId: string; steps: number }): UndoResult {
+export type UndoResult = UndoPlan & {
+  preUndoCommit: string;
+  // Plain git, not a seri subcommand, and safe to paste: the store's own config carries the crlf
+  // settings (initShadow), and the paths are quoted so a project directory with a space in it
+  // still works.
+  recoverCommand: string;
+};
+
+export function undoFiles(opts: {
+  storeDir: string;
+  worktree: string;
+  sessionId: string;
+  steps: number;
+  onPlan: (plan: UndoPlan) => void;
+}): UndoResult {
   const log = readLog(opts.storeDir, opts.sessionId);
-  const records = toolRecords(log);
-  // `pre-undo` records are excluded by construction — they describe state an undo replaced, not a
-  // point the user asked to be able to return to, and stepping onto one would make `/undo 2` mean
-  // "undo the undo".
-  const trees = distinct(records.map((record) => record.tree)).reverse();
-  const tree = trees[opts.steps - 1];
-  if (tree === undefined) {
-    throw new Error(`This session has ${trees.length} checkpoint(s) to undo to; asked for ${opts.steps}.`);
+  // `pre-undo` records are excluded here — they describe state an undo replaced, not a point the
+  // user asked to be able to return to, and stepping onto one would make `/undo 2` mean "undo the
+  // undo". They are still part of the commit chain; see the parent below.
+  const targets = newestDistinct(toolRecords(log), (record) => record.tree);
+  const target = targets[opts.steps - 1];
+  if (target === undefined) {
+    throw new Error(`This session has ${targets.length} checkpoint(s) to undo to; asked for ${opts.steps}.`);
   }
-  const target = records.find((record) => record.tree === tree);
 
   const gitDir = gitDirOf(opts.storeDir);
-  // Snapshotted before anything is touched, so undo is never the operation that loses work: the
-  // commit below holds the current state and is reachable from the session ref.
+  // Taken before anything is touched, so undo is never the operation that loses work. The parent
+  // is the ref itself rather than the last tool record: a second undo would otherwise branch off
+  // beside the first pre-undo commit instead of through it, leaving a hash this function already
+  // printed to the user unreachable and on gc's clock.
   const currentTree = writeTree(gitDir, opts.worktree);
-  const parent = records.at(-1)?.commit;
-  const preUndoCommit = commitTree(gitDir, opts.worktree, currentTree, parent);
+  const preUndoCommit = commitTree(gitDir, opts.worktree, currentTree, resolveRef(gitDir, sessionRef(opts.sessionId)));
   updateRef(gitDir, sessionRef(opts.sessionId), preUndoCommit);
   append(opts.storeDir, opts.sessionId, {
     kind: "pre-undo",
@@ -255,19 +303,27 @@ export function undoFiles(opts: { storeDir: string; worktree: string; sessionId:
     at: new Date().toISOString(),
   });
 
-  const diff = diffTree(gitDir, opts.worktree, tree);
-  const { restored, deleted } = restoreTree(gitDir, opts.worktree, tree);
-
-  return {
-    seq: target?.seq ?? 0,
-    tree,
-    diff,
-    restored,
-    deleted,
+  const plan: UndoPlan = {
+    seq: target.seq,
+    tree: target.tree,
+    diff: diffTree(gitDir, opts.worktree, target.tree),
+    ...planRestore(gitDir, opts.worktree, target.tree),
     // Reported so the user is told what undo did NOT cover, rather than left to infer it from a
     // list that silently omits them.
-    ignored: distinct(log.filter((record) => record.kind === "ignored").map((record) => record.path)),
+    ignored: newestDistinct(
+      log.filter((record) => record.kind === "ignored"),
+      (record) => record.path,
+    ).map((record) => record.path),
+  };
+  opts.onPlan(plan);
+  applyRestore(gitDir, opts.worktree, plan.deleted);
+
+  return {
+    ...plan,
     preUndoCommit,
+    recoverCommand:
+      `git --git-dir="${gitDir}" --work-tree="${opts.worktree}" read-tree ${preUndoCommit} && ` +
+      `git --git-dir="${gitDir}" --work-tree="${opts.worktree}" checkout-index -a -f`,
   };
 }
 
@@ -276,19 +332,18 @@ export function undoFiles(opts: { storeDir: string; worktree: string; sessionId:
 export function rewindConversation(opts: { storeDir: string; sessionId: string; steps: number }): { rewindTo: number } {
   const log = readLog(opts.storeDir, opts.sessionId);
 
-  // loop.ts:65 splices the whole message array on compaction, so a rewindTo recorded before it
-  // indexes into an array that no longer exists. Refusing is the honest answer; silently slicing
-  // a compacted array would hand back garbage.
-  let barrier = -1;
-  for (let i = log.length - 1; i >= 0; i--) {
-    if (log[i]?.kind === "compaction-barrier") {
-      barrier = i;
-      break;
-    }
-  }
+  // Compaction splices the whole message array, so a rewindTo recorded before it indexes into an
+  // array that no longer exists. Refusing is the honest answer; silently slicing a compacted array
+  // would hand back garbage.
+  // `findLastIndex` would say this in one word, but it is ES2023 and this package compiles against
+  // the ES2022 lib.
+  const barrier = log.reduce((last, record, index) => (record.kind === "compaction-barrier" ? index : last), -1);
 
-  const anchors = distinct(toolRecords(log.slice(barrier + 1)).map((record) => record.rewindTo)).reverse();
-  const rewindTo = anchors[opts.steps - 1];
+  // Anchors are not monotonic across a session: a `/rewind` truncates the array and the messages
+  // that follow reuse indices already seen, so newestDistinct's ordering matters here for the same
+  // reason it does above.
+  const anchors = newestDistinct(toolRecords(log.slice(barrier + 1)), (record) => record.rewindTo);
+  const rewindTo = anchors[opts.steps - 1]?.rewindTo;
   if (rewindTo === undefined) {
     throw new Error(
       barrier === -1
