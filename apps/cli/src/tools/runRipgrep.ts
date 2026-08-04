@@ -43,16 +43,12 @@ export function resolveRg(): RgResolution {
 }
 
 function resolveRgUncached(): RgResolution {
-  // An explicit path wins over everything, and SERI_USE_BUILTIN_RIPGREP=0 skips the vendored copy
-  // entirely. Both are gated: an rg seri did not vendor is an rg seri has never run a test against.
-  const override = process.env.SERI_RIPGREP;
-  if (override) {
-    gateForeignRg(override);
-    return { mode: "system", command: override };
-  }
-  if (process.env.SERI_USE_BUILTIN_RIPGREP === "0") {
-    gateForeignRg("rg");
-    return { mode: "system", command: "rg" };
+  // An explicit path wins over everything, and SERI_USE_BUILTIN_RIPGREP=0 means "whatever is on
+  // PATH". Both are the same request — use an rg seri did not vendor — so both take the same gate.
+  const forced = process.env.SERI_RIPGREP || (process.env.SERI_USE_BUILTIN_RIPGREP === "0" ? "rg" : undefined);
+  if (forced) {
+    gateForeignRg(forced);
+    return { mode: "system", command: forced };
   }
 
   try {
