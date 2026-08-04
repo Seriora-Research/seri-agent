@@ -116,6 +116,36 @@ describe("runRipgrep", () => {
     }
   }, 30_000);
 
+  test("sweeps directories left under the pre-rename prefix, reading the pid past that prefix", () => {
+    // The rename from `hesper` to `seri` changed the prefix new runs create, and the sweep is the
+    // only thing that ever deletes these — so without the old prefix in the list every directory
+    // predating the rename is orphaned forever, which is most of the 1222 MB backlog measured on
+    // the dev box. `hesper-rg-` is two characters longer than `seri-rg-`, so a sweep that strips
+    // the new prefix's length reads "" as the pid segment instead of the real one and misjudges
+    // both directories below; that is what the second assertion is for.
+    const dead = spawnSync(process.execPath, ["-e", ""]);
+    if (dead.status !== 0) throw new Error(`pid-donor child exited ${dead.status}: ${dead.error ?? dead.stderr}`);
+
+    const abandoned = mkdtempSync(join(tmpdir(), `hesper-rg-${dead.pid}-`));
+    const live = mkdtempSync(join(tmpdir(), `hesper-rg-${process.pid}-`));
+    writeFileSync(join(abandoned, "rg"), "not really rg");
+    writeFileSync(join(live, "rg"), "not really rg");
+
+    try {
+      const modulePath = pathToFileURL(join(import.meta.dir, "../../src/tools/runRipgrep.ts")).href;
+      const child = spawnSync(process.execPath, ["-e", `await import(${JSON.stringify(modulePath)});`], {
+        encoding: "utf8",
+      });
+      if (child.status !== 0) throw new Error(`probe child exited ${child.status}: ${child.error ?? child.stderr}`);
+
+      expect(existsSync(abandoned)).toBe(false);
+      expect(existsSync(live)).toBe(true);
+    } finally {
+      rmSync(abandoned, { recursive: true, force: true });
+      rmSync(live, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("still throws when rg genuinely fails", () => {
     expect(() => runRipgrep(["--definitely-not-a-real-flag", tmpDir])).toThrow(/rg exited with code/);
   });
