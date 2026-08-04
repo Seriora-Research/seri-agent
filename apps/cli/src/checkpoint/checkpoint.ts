@@ -184,10 +184,20 @@ export function createCheckpointer(opts: {
   // ZERO records in the log and every later edit unprotected. Reading exit 128 as "outside" would
   // fix that case and break another, because git also exits 128 with "not a git repository" for a
   // store that is genuinely broken, which must still latch off.
+  // A relative path is resolved against process.cwd(), because that is what the tool itself does
+  // with it — writeFile.ts passes the declared path straight to node:fs. Resolving it against the
+  // worktree instead put the answer under a different file whenever the two differ: `seri --resume
+  // <id>` run from `repo/packages/api` resolved a declared "secrets.txt" to `repo/secrets.txt`,
+  // so a root-anchored `/secrets.txt` in .gitignore warned that a file "is gitignored, so /undo
+  // cannot restore it" about a file that had in fact been checkpointed — and silence for a
+  // genuinely ignored one was just as easy. isIgnored is handed the absolute path for the same
+  // reason: run() sets cwd to the worktree, so a relative path would be anchored there a second
+  // time.
   function scopeOf(path: string): PathScope {
-    const inside = relative(opts.worktree, resolve(opts.worktree, path));
+    const absolute = resolve(path);
+    const inside = relative(opts.worktree, absolute);
     if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return "outside";
-    return isIgnored(gitDir, opts.worktree, path) ? "ignored" : "checkpointed";
+    return isIgnored(gitDir, opts.worktree, absolute) ? "ignored" : "checkpointed";
   }
 
   function warnIfNotCheckpointed(tool: string, args: unknown, toolCallId: string): void {

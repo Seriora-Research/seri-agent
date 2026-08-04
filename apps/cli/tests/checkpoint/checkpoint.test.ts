@@ -39,8 +39,12 @@ let warnings: string[];
 
 const SESSION = "session-1";
 
+// Absolute paths, because a declared relative path is resolved against process.cwd() — which is
+// the repo root under `bun test`, not the temp worktree. That is the resolution the tools
+// themselves use, so anchoring these to `workTree` by hand is what a real `write_file` call in
+// this worktree would have declared.
 function mutation(overrides: Partial<MutationContext> = {}): MutationContext {
-  return { tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 1, ...overrides };
+  return { tool: "write_file", toolCallId: "c1", args: { path: join(workTree, "a.txt") }, rewindTo: 1, ...overrides };
 }
 
 function toolRecords(sessionId = SESSION): Extract<CheckpointRecord, { kind: "tool" }>[] {
@@ -140,11 +144,12 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       writeFileSync(join(workTree, ".gitignore"), "*.log\n");
       const snapshot = checkpointer();
 
-      snapshot(mutation({ args: { path: "secret.log" } }));
+      const secret = join(workTree, "secret.log");
+      snapshot(mutation({ args: { path: secret } }));
 
-      expect(warnings).toEqual(["secret.log is gitignored, so it is not checkpointed — /undo cannot restore it"]);
+      expect(warnings).toEqual([`${secret} is gitignored, so it is not checkpointed — /undo cannot restore it`]);
       expect(readLog(storeDir, SESSION).filter((record) => record.kind === "ignored")).toEqual([
-        expect.objectContaining({ kind: "ignored", path: "secret.log", toolCallId: "c1" }),
+        expect.objectContaining({ kind: "ignored", path: secret, toolCallId: "c1" }),
       ]);
       expect(toolRecords()).toHaveLength(1);
     },
@@ -211,10 +216,25 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   );
 
   test(
+    "resolves a declared relative path the way the tool that declared it will",
+    () => {
+      // process.cwd() under `bun test` is the repo root, not this temp worktree — the same
+      // divergence as `seri --resume <id>` run from a subdirectory. write_file passes the declared
+      // path straight to node:fs, so it would create <cwd>/a.txt; resolving it against the worktree
+      // instead answered about a different file, and with a root-anchored rule in .gitignore that
+      // produced a warning about a file that had in fact been checkpointed.
+      checkpointer()(mutation({ args: { path: "a.txt" } }));
+
+      expect(warnings).toEqual([`a.txt is outside ${workTree}, so it is not checkpointed — /undo cannot restore it`]);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
     "says nothing about a path that is not ignored",
     () => {
       writeFileSync(join(workTree, ".gitignore"), "*.log\n");
-      checkpointer()(mutation({ args: { path: "a.txt" } }));
+      checkpointer()(mutation({ args: { path: join(workTree, "a.txt") } }));
 
       expect(warnings).toEqual([]);
     },
@@ -354,14 +374,14 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       writeFileSync(join(workTree, ".gitignore"), "*.log\n");
       writeFileSync(join(workTree, "secret.log"), "original\n");
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1", args: { path: "secret.log" } }));
+      snapshot(mutation({ toolCallId: "c1", args: { path: join(workTree, "secret.log") } }));
       writeFileSync(join(workTree, "secret.log"), "mutated\n");
       writeFileSync(join(workTree, "a.txt"), "after\n");
       snapshot(mutation({ toolCallId: "c2" }));
 
       const result = undo(2);
 
-      expect(result.ignored).toEqual(["secret.log"]);
+      expect(result.ignored).toEqual([join(workTree, "secret.log")]);
       expect([...result.restored, ...result.deleted]).not.toContain("secret.log");
       expect(readFileSync(join(workTree, "secret.log"), "utf8")).toBe("mutated\n");
     },
@@ -376,7 +396,7 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       // it either way.
       writeFileSync(join(workTree, ".gitignore"), "*.log\n");
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1", args: { path: "secret.log" } }));
+      snapshot(mutation({ toolCallId: "c1", args: { path: join(workTree, "secret.log") } }));
       writeFileSync(join(workTree, "a.txt"), "v2\n");
       snapshot(mutation({ toolCallId: "c2" }));
       writeFileSync(join(workTree, "a.txt"), "v3\n");
@@ -385,7 +405,7 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       expect(undo(1).ignored).toEqual([]);
       // Stepping back to the checkpoint the ignored write happened at does report it: the record is
       // appended just before that call's own tool record.
-      expect(undo(3).ignored).toEqual(["secret.log"]);
+      expect(undo(3).ignored).toEqual([join(workTree, "secret.log")]);
     },
     GIT_TEST_TIMEOUT_MS,
   );
