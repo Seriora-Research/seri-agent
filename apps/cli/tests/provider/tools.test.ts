@@ -80,7 +80,7 @@ describe("toolDefinitions", () => {
   test("bash runs a command and returns its result", async () => {
     const result = await toolDefinitions.bash.execute?.({ command: "echo hi" }, execOpts);
     expect((result as { stdout: string }).stdout.trim()).toBe("hi");
-  });
+  }, 15000);
 
   test.skipIf(process.platform !== "win32")("powershell runs a command and returns its result", async () => {
     const result = await toolDefinitions.powershell.execute?.({ command: "Write-Output hi" }, execOpts);

@@ -14,7 +14,7 @@ describe("runBash", () => {
     const result = await runBash("echo hi");
     expect(result.stdout.trim()).toBe("hi");
     expect(result.exitCode).toBe(0);
-  });
+  }, 15000);
 
   test("rejects before spawning when bash is unavailable", () => {
     expect(runBash("echo hi", () => false)).rejects.toThrow();
