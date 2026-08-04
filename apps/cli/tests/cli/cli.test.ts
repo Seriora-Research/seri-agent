@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ModelMessage } from "ai";
 import pkg from "../../package.json";
+import { checkpointStoreDir, createCheckpointer } from "../../src/checkpoint/checkpoint";
+import { isGitAvailable } from "../../src/checkpoint/shadowGit";
 import { run } from "../../src/cli";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { toolDefinitions } from "../../src/provider/tools";
@@ -145,11 +148,48 @@ describe("run (task invocation)", () => {
     expect(code).toBe(0);
     expect(captured).toBeDefined();
     expect(captured?.permissionMode).toBe("read-only");
-    expect(captured?.tools).toBe(toolDefinitions);
+    // The same tool set, with only the filesystem-mutating tools wrapped for checkpointing.
+    expect(Object.keys(captured?.tools ?? {})).toEqual(Object.keys(toolDefinitions));
+    expect(captured?.tools.read_file).toBe(toolDefinitions.read_file);
+    expect(captured?.tools.edit).toBe(toolDefinitions.edit);
+    expect(captured?.tools.write_file).not.toBe(toolDefinitions.write_file);
     expect(captured?.messages.at(-1)).toEqual({ role: "user", content: "write hello.txt" });
     expect(captured?.messages).toHaveLength(1);
     expect(captured?.system).toBe("You are seri, a coding agent.");
   });
+
+  // A task whose first word happens to name an Object.prototype member is an ordinary task, and it
+  // has to reach the model. Looked up on an object literal, `SLASH_COMMANDS["toString"]` returned
+  // Object.prototype.toString — a function, so it passed the dispatch guard, was called against the
+  // most recent session, printed nothing and exited 0. The task silently never ran.
+  test.each(["toString", "constructor", "valueOf", "hasOwnProperty", "isPrototypeOf", "__proto__"])(
+    "a task starting with %p is sent to the model, not dispatched as a slash command",
+    async (word) => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+      const existing: SessionState = { id: "proto", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
+      saveSession(existing, sessionsDir);
+
+      type RunLoopOpts = Parameters<typeof runLoop>[0];
+      let captured: RunLoopOpts | undefined;
+      async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+        captured = opts;
+        yield { type: "done", reason: "no-tool-call" };
+        return opts.messages;
+      }
+
+      const originalLog = console.log;
+      console.log = () => {};
+      let code: number;
+      try {
+        code = await run([word, "is", "wrong", "on", "User"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+      } finally {
+        console.log = originalLog;
+      }
+
+      expect(code).toBe(0);
+      expect(captured?.messages.at(-1)).toEqual({ role: "user", content: `${word} is wrong on User` });
+    },
+  );
 });
 
 describe("run (login/signup/logout)", () => {
@@ -249,6 +289,38 @@ describe("run (/mode)", () => {
     expect(loadSession("abc", sessionsDir).permissionMode).toBe("approve-each");
   });
 
+  test("`/mode is broken, fix it` stays a task and does not cycle the mode", async () => {
+    // An ordinary task before the dispatch table existed. /mode takes no arguments, so any
+    // argument at all means this is not an invocation of it.
+    const originalKey = process.env.GROQ_API_KEY;
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const existing: SessionState = { id: "ghi", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
+    saveSession(existing, sessionsDir);
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let captured: RunLoopOpts | undefined;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      captured = opts;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["/mode", "is", "broken,", "fix", "it"], { sessionsDir, runLoop: runLoopFake, loadAgentsFile: () => "" });
+    } finally {
+      console.log = originalLog;
+      // Deleted rather than reassigned when it was unset: `process.env.X = undefined` stores the
+      // literal string "undefined" and pollutes every later test in the process.
+      if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+      else process.env.GROQ_API_KEY = originalKey;
+    }
+
+    expect(captured?.messages.at(-1)).toEqual({ role: "user", content: "/mode is broken, fix it" });
+    expect(loadSession("ghi", sessionsDir).permissionMode).toBe("read-only");
+  });
+
   test("bare `/mode` (no --resume) cycles the most-recent session instead of creating a new orphan session", async () => {
     const existing: SessionState = { id: "def", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
     saveSession(existing, sessionsDir);
@@ -259,4 +331,279 @@ describe("run (/mode)", () => {
     expect(readdirSync(sessionsDir)).toHaveLength(1);
     expect(loadSession("def", sessionsDir).permissionMode).toBe("approve-each");
   });
+});
+
+describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
+  const SESSION_ID = "ckpt";
+  const messages: ModelMessage[] = [
+    { role: "user", content: "one" },
+    { role: "assistant", content: [{ type: "text", text: "a" }] },
+    { role: "user", content: "two" },
+    { role: "assistant", content: [{ type: "text", text: "b" }] },
+  ];
+
+  let root: string;
+  let sessionsDir: string;
+  let checkpointsDir: string;
+  let workTree: string;
+  let logs: string[];
+  let errors: string[];
+  let originalLog: typeof console.log;
+  let originalError: typeof console.error;
+
+  // Two checkpoints over one worktree: the first captures "before" at message anchor 1, the second
+  // captures "after" at anchor 3, and the disk is left holding "final".
+  function seed(): void {
+    writeFileSync(join(workTree, "a.txt"), "before\n");
+    const snapshot = createCheckpointer({
+      storeDir: checkpointStoreDir(checkpointsDir, workTree),
+      worktree: workTree,
+      sessionId: SESSION_ID,
+      onWarning: () => {},
+    });
+    snapshot({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 1 });
+    writeFileSync(join(workTree, "a.txt"), "after\n");
+    snapshot({ tool: "write_file", toolCallId: "c2", args: { path: "a.txt" }, rewindTo: 3 });
+    writeFileSync(join(workTree, "a.txt"), "final\n");
+
+    saveSession(
+      { id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages },
+      sessionsDir,
+    );
+  }
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "seri-cli-checkpoint-"));
+    sessionsDir = join(root, "sessions");
+    checkpointsDir = join(root, "checkpoints");
+    workTree = join(root, "work");
+    mkdirSync(workTree, { recursive: true });
+    logs = [];
+    errors = [];
+    originalLog = console.log;
+    originalError = console.error;
+    console.log = (msg: string) => logs.push(String(msg));
+    console.error = (msg: string) => errors.push(String(msg));
+  });
+
+  afterEach(() => {
+    console.log = originalLog;
+    console.error = originalError;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("`--resume /undo` is not misparsed as a session id", async () => {
+    seed();
+
+    const code = await run(["--resume", "/undo", "2"], { sessionsDir, checkpointsDir });
+
+    expect(errors).toEqual([]);
+    expect(code).toBe(0);
+    expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
+  }, 15_000);
+
+  test("`--resume /rewind` is not misparsed as a session id", async () => {
+    seed();
+
+    const code = await run(["--resume", "/rewind"], { sessionsDir, checkpointsDir });
+
+    expect(errors).toEqual([]);
+    expect(code).toBe(0);
+    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toHaveLength(3);
+  }, 15_000);
+
+  test("/undo reports the diff, the restored path and the command that recovers what it replaced", async () => {
+    seed();
+
+    await run(["--resume", SESSION_ID, "/undo", "2"], { sessionsDir, checkpointsDir });
+
+    expect(logs.join("\n")).toContain("restored a.txt");
+    expect(logs.join("\n")).toMatch(/The state this replaced is commit [0-9a-f]{40}\./);
+    expect(logs.join("\n")).toMatch(new RegExp(`seri --resume ${SESSION_ID} /restore [0-9a-f]{40}`));
+  }, 15_000);
+
+  test("the recovery command /undo prints puts back exactly the state it replaced", async () => {
+    // The case the printed git incantation got wrong. `read-tree` + `checkout-index -a -f` is
+    // additive: it recreated new.ts and left old.ts sitting beside it, a state that had never
+    // existed, under a line reading "To get it back". The assertion that discriminates is
+    // old.ts being gone again, not new.ts coming back.
+    writeFileSync(join(workTree, "old.ts"), "old\n");
+    createCheckpointer({
+      storeDir: checkpointStoreDir(checkpointsDir, workTree),
+      worktree: workTree,
+      sessionId: SESSION_ID,
+      onWarning: () => {},
+    })({ tool: "write_file", toolCallId: "c1", args: { path: "old.ts" }, rewindTo: 1 });
+    rmSync(join(workTree, "old.ts"));
+    writeFileSync(join(workTree, "new.ts"), "new\n");
+    saveSession({ id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages }, sessionsDir);
+
+    await run(["--resume", SESSION_ID, "/undo"], { sessionsDir, checkpointsDir });
+    expect(existsSync(join(workTree, "old.ts"))).toBe(true);
+    expect(existsSync(join(workTree, "new.ts"))).toBe(false);
+
+    const recovery = logs.join("\n").match(/seri --resume \S+ (\/restore [0-9a-f]{40})/)?.[1] ?? "";
+    const code = await run(["--resume", SESSION_ID, ...recovery.split(" ")], { sessionsDir, checkpointsDir });
+
+    expect(errors).toEqual([]);
+    expect(code).toBe(0);
+    expect(existsSync(join(workTree, "old.ts"))).toBe(false);
+    expect(readFileSync(join(workTree, "new.ts"), "utf8")).toBe("new\n");
+  }, 20_000);
+
+  test("`--resume /restore <sha>` is not misparsed as a session id", async () => {
+    seed();
+
+    // Resolving to the most recent session and failing on the sha is the proof: taken as a session
+    // id, "/restore" would have failed to load a session instead.
+    const code = await run(["--resume", "/restore", "deadbeef"], { sessionsDir, checkpointsDir });
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("deadbeef is not a checkpoint");
+  }, 15_000);
+
+  test("a rewind invalidates the anchors recorded before it, instead of slicing into a rebuilt array", async () => {
+    // The walkthrough, exactly: nine messages with anchors [1,3,5,7]; `/rewind 2` takes anchor 5
+    // and truncates to five; the resume appends five more and records [6,8]. `/rewind 3` then used
+    // to reach the stale anchor 7 — small enough to still land, so the clamp never saw it — and
+    // slice to 7, leaving an assistant tool-call whose tool result had been dropped. That is
+    // AI_MissingToolResultsError on the next resume, the exact failure `rewindTo = length - 1`
+    // exists to prevent.
+    const nine: ModelMessage[] = Array.from({ length: 9 }, (_, i) =>
+      i % 2 === 0
+        ? { role: "user", content: `u${i}` }
+        : { role: "assistant", content: [{ type: "text", text: `a${i}` }] },
+    );
+    writeFileSync(join(workTree, "a.txt"), "before\n");
+    const snapshot = createCheckpointer({
+      storeDir: checkpointStoreDir(checkpointsDir, workTree),
+      worktree: workTree,
+      sessionId: SESSION_ID,
+      onWarning: () => {},
+    });
+    const record = (rewindTo: number) =>
+      snapshot({ tool: "write_file", toolCallId: `c${rewindTo}`, args: { path: join(workTree, "a.txt") }, rewindTo });
+    for (const anchor of [1, 3, 5, 7]) record(anchor);
+    saveSession({ id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages: nine }, sessionsDir);
+
+    await run(["--resume", SESSION_ID, "/rewind", "2"], { sessionsDir, checkpointsDir });
+    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toHaveLength(5);
+
+    // The resume: five more messages, and the two anchors that run would record against them.
+    const resumed = loadSession<ModelMessage>(SESSION_ID, sessionsDir);
+    resumed.messages = [...resumed.messages, ...nine.slice(0, 5)];
+    saveSession(resumed, sessionsDir);
+    for (const anchor of [6, 8]) record(anchor);
+
+    const code = await run(["--resume", SESSION_ID, "/rewind", "3"], { sessionsDir, checkpointsDir });
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("since the last rewind");
+    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toHaveLength(10);
+  }, 30_000);
+
+  test("/rewind truncates the conversation and leaves the filesystem byte-identical", async () => {
+    seed();
+    const before = readFileSync(join(workTree, "a.txt"));
+
+    const code = await run(["--resume", SESSION_ID, "/rewind", "2"], { sessionsDir, checkpointsDir });
+
+    expect(code).toBe(0);
+    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toEqual(messages.slice(0, 1));
+    expect(readFileSync(join(workTree, "a.txt")).equals(before)).toBe(true);
+  }, 15_000);
+
+  test("/undo then /rewind lands on the same anchor as /rewind then /undo", async () => {
+    seed();
+    await run(["--resume", SESSION_ID, "/undo", "2"], { sessionsDir, checkpointsDir });
+    await run(["--resume", SESSION_ID, "/rewind", "2"], { sessionsDir, checkpointsDir });
+    const undoFirst = {
+      file: readFileSync(join(workTree, "a.txt"), "utf8"),
+      messages: loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages,
+    };
+
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(workTree, { recursive: true });
+    seed();
+    await run(["--resume", SESSION_ID, "/rewind", "2"], { sessionsDir, checkpointsDir });
+    await run(["--resume", SESSION_ID, "/undo", "2"], { sessionsDir, checkpointsDir });
+
+    expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe(undoFirst.file);
+    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toEqual(undoFirst.messages);
+    expect(undoFirst.file).toBe("before\n");
+  }, 20_000);
+
+  test("clamps an anchor that outlived the array it indexed, and reports what was actually dropped", async () => {
+    // A previous /rewind can leave the session shorter than an anchor recorded before it. Slicing
+    // past the end is a no-op, so reporting the anchor rather than the count would announce a
+    // truncation that never happened.
+    writeFileSync(join(workTree, "a.txt"), "before\n");
+    createCheckpointer({
+      storeDir: checkpointStoreDir(checkpointsDir, workTree),
+      worktree: workTree,
+      sessionId: SESSION_ID,
+      onWarning: () => {},
+    })({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 9 });
+    saveSession(
+      { id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages: messages.slice(0, 2) },
+      sessionsDir,
+    );
+
+    const code = await run(["--resume", SESSION_ID, "/rewind"], { sessionsDir, checkpointsDir });
+
+    expect(code).toBe(0);
+    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toHaveLength(2);
+    expect(logs.join("\n")).toContain("dropped 0 message(s), 2 remain");
+  }, 30_000);
+
+  test("a repeated /undo says nothing changed instead of reporting a second undo", async () => {
+    seed();
+
+    await run(["--resume", SESSION_ID, "/undo"], { sessionsDir, checkpointsDir });
+    logs.length = 0;
+    const code = await run(["--resume", SESSION_ID, "/undo"], { sessionsDir, checkpointsDir });
+
+    expect(code).toBe(0);
+    expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("after\n");
+    expect(logs.join("\n")).toContain("Already at checkpoint 1; no file changed.");
+    expect(logs.join("\n")).not.toContain("Undid to checkpoint");
+  }, 20_000);
+
+  test("a task whose first word is a slash command is sent to the model, and undoes nothing", async () => {
+    // The dispatch splits the task on whitespace and looks up token one, so this was claimed by
+    // /undo and died in the step parser with the task never sent — the second regression out of
+    // the same table, after the Object.prototype walk. The command forms are exact, so anything
+    // outside them falls through to the model, which is the only direction that cannot swallow
+    // work silently.
+    seed();
+    const originalKey = process.env.GROQ_API_KEY;
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let captured: RunLoopOpts | undefined;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      captured = opts;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    let code: number;
+    try {
+      code = await run(["--resume", SESSION_ID, "/undo", "the", "rename", "and", "try", "again"], {
+        sessionsDir,
+        checkpointsDir,
+        runLoop: runLoopFake,
+        loadAgentsFile: () => "",
+      });
+    } finally {
+      // Deleted rather than reassigned when it was unset: `process.env.X = undefined` stores the
+      // literal string "undefined" and pollutes every later test in the process.
+      if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+      else process.env.GROQ_API_KEY = originalKey;
+    }
+
+    expect(code).toBe(0);
+    expect(captured?.messages.at(-1)).toEqual({ role: "user", content: "/undo the rename and try again" });
+    expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("final\n");
+  }, 20_000);
 });

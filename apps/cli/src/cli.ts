@@ -1,13 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface } from "node:readline";
 import type { ModelMessage } from "ai";
 import pkg from "../package.json";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
 import { getWorkosClientId } from "./auth/deviceFlow";
+import {
+  appendBarrier,
+  checkpointStoreDir,
+  createCheckpointer,
+  restoreCommit,
+  type RestorePlan,
+  type RestoreResult,
+  rewindConversation,
+  undoFiles,
+} from "./checkpoint/checkpoint";
+import { projectRoot } from "./checkpoint/shadowGit";
+import { withCheckpoints } from "./checkpoint/wrapTools";
 import { configCommand as configCommandReal } from "./config/commands";
 import { getConfigDir } from "./config/paths";
 import { cycleMode } from "./gate/gate";
@@ -23,12 +35,57 @@ type CliDeps = {
   getGroqModel?: typeof getGroqModelReal;
   loadAgentsFile?: typeof loadAgentsFileReal;
   sessionsDir?: string;
+  checkpointsDir?: string;
   authConfigDir?: string;
   login?: typeof loginReal;
   logout?: typeof logoutReal;
   configCommand?: typeof configCommandReal;
   grep?: typeof grepReal;
 };
+
+type CommandDirs = { sessionsDir: string; checkpointsDir: string };
+
+type SlashCommand = {
+  // Whether these arguments are an invocation of this command at all — checked BEFORE the dispatch
+  // claims the input, because the first word of a task is not a command. The dispatch splits the
+  // task on whitespace and looks up token one, so `seri "/undo the rename and try again"` was
+  // hijacked and died in the step parser with the task never sent, and `seri "/mode is broken, fix
+  // it"` — an ordinary task before the table existed — went the same way. The command forms are
+  // exact and small, so anything outside them falls through to the model, which is the only
+  // direction that cannot silently swallow work.
+  accepts: (args: string[]) => boolean;
+  run: (session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs) => void;
+};
+
+// A step count, or nothing at all.
+function isStepCount(args: string[]): boolean {
+  return args.length === 0 || (args.length === 1 && /^[1-9]\d*$/.test(args[0] ?? ""));
+}
+
+function steps(args: string[]): number {
+  return args[0] === undefined ? 1 : Number(args[0]);
+}
+
+// Commands that operate on the resume target rather than being a task for the model. One table,
+// so a new one is added in exactly one place: `parseTaskArgs` derives the names it must not
+// mistake for a session id from these keys, and the dispatch in `run()` shares the resume-target
+// resolution and the error reporting. Handlers throw to report a failure; the caller turns that
+// into a message and a non-zero exit.
+//
+// A Map rather than an object literal, because an object literal inherits Object.prototype and a
+// lookup keyed on user input walks it: `SLASH_COMMANDS["toString"]` returned a function, so
+// `seri "toString is wrong on User, fix it"` dispatched Object.prototype.toString against the most
+// recent session, printed nothing and exited 0 — the task never reached the model. `constructor`,
+// `valueOf`, `hasOwnProperty` and `isPrototypeOf` did the same, and `__proto__` resolved to an
+// object and crashed with "command is not a function". A Map has no prototype chain to walk, so
+// the hazard is gone from every call site rather than from the ones that remember Object.hasOwn.
+const SLASH_COMMANDS = new Map<string, SlashCommand>([
+  ["/mode", { accepts: (args) => args.length === 0, run: cycleModeCommand }],
+  ["/undo", { accepts: isStepCount, run: undoCommand }],
+  // A sha and nothing else. `seri "/restore the header spacing"` is a task.
+  ["/restore", { accepts: (args) => args.length === 1 && /^[0-9a-f]{4,40}$/.test(args[0] ?? ""), run: restoreCommand }],
+  ["/rewind", { accepts: isStepCount, run: rewindCommand }],
+]);
 
 function parseTaskArgs(argv: string[]): { resuming: boolean; resumeId: string | undefined; taskText: string } {
   const args = [...argv];
@@ -37,13 +94,105 @@ function parseTaskArgs(argv: string[]): { resuming: boolean; resumeId: string | 
 
   args.splice(resumeIndex, 1);
   const next = args[resumeIndex];
-  // "/mode" is never a session id, even though it doesn't start with "-": it's the mode-
-  // cycle command, and must fall through to the taskText below so `run()` can special-case
-  // it against the resume target instead of throwing "session not found".
-  const resumeId = next !== undefined && next !== "/mode" && !next.startsWith("-") ? next : undefined;
+  // A slash command is never a session id, even though none of them starts with "-": it has to
+  // fall through to the taskText below instead of being looked up and throwing "session not found".
+  const resumeId = next !== undefined && !SLASH_COMMANDS.has(next) && !next.startsWith("-") ? next : undefined;
   if (resumeId !== undefined) args.splice(resumeIndex, 1);
 
   return { resuming: true, resumeId, taskText: args.join(" ").trim() };
+}
+
+function cycleModeCommand(session: SessionState<ModelMessage>, _args: string[], dirs: CommandDirs): void {
+  session.permissionMode = cycleMode(session.permissionMode);
+  saveSession(session, dirs.sessionsDir);
+  console.log(`Session ${session.id}: permission mode is now ${session.permissionMode}`);
+}
+
+// The tree a session's checkpoints are of, and the store they live in. The session records the
+// directory seri was started in, which is not necessarily the project — resolving the root here
+// rather than at each call site is what keeps the live run and the three restoring commands
+// addressing the same store, since the key is derived from it.
+function checkpointTarget(session: SessionState<ModelMessage>, dirs: CommandDirs): {
+  storeDir: string;
+  worktree: string;
+} {
+  const worktree = projectRoot(session.cwd);
+  return { storeDir: checkpointStoreDir(dirs.checkpointsDir, worktree), worktree };
+}
+
+function undoCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
+  const result = undoFiles({
+    ...checkpointTarget(session, dirs),
+    sessionId: session.id,
+    steps: steps(args),
+    onPlan: printUndoPlan,
+  });
+  // The step the user asked for, not the record's `seq`. `seq` is the 0-based index of a tool
+  // record while `/undo n` is 1-based over DISTINCT trees, so the two only ever agreed by
+  // accident: the first checkpoint printed "checkpoint 0", and over records [T0, T1, T1, T2]
+  // `/undo 2` printed "checkpoint 2" while restoring the state that preceded tool call 1. A
+  // number a user is shown has to be one they can hand back to the command that showed it.
+  //
+  // A step count is absolute — the n-th most recent distinct checkpoint — not relative to wherever
+  // a previous undo left the worktree, so `/undo 1` run three times aims at the same checkpoint
+  // three times. Measured before this: each of the three printed that it had undone and minted a
+  // fresh recovery commit while the file stayed exactly where the first one put it. Saying so is
+  // the same honesty `/rewind`'s "dropped 0 message(s)" already applies.
+  if (result.restored.length === 0 && result.deleted.length === 0) {
+    console.log(`Already at checkpoint ${steps(args)}; no file changed.`);
+    return;
+  }
+  console.log(`Undid to checkpoint ${steps(args)}.`);
+  printRecovery(result);
+}
+
+// The other end of what /undo and /restore print: put the worktree back to a commit this session
+// recorded. It exists so recovery is a command that reuses the restore path — removal pass
+// included — rather than a git incantation the user pastes and hopes about.
+function restoreCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
+  const commit = args[0] ?? "";
+  const result = restoreCommit({
+    ...checkpointTarget(session, dirs),
+    sessionId: session.id,
+    commit,
+    onPlan: printUndoPlan,
+  });
+  if (result.restored.length === 0 && result.deleted.length === 0) {
+    console.log(`Already at ${commit}; no file changed.`);
+    return;
+  }
+  console.log(`Restored ${commit}.`);
+  printRecovery(result);
+}
+
+// Restoring is never the operation that loses work: the state it just replaced was committed first.
+function printRecovery(result: RestoreResult): void {
+  console.log(`The state this replaced is commit ${result.preUndoCommit}. To get it back:`);
+  console.log(`  ${result.recoverCommand}`);
+}
+
+function rewindCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
+  const { storeDir } = checkpointTarget(session, dirs);
+  const { rewindTo } = rewindConversation({ storeDir, sessionId: session.id, steps: steps(args) });
+  // Clamped, because an anchor can outlive the array it indexed: a previous /rewind truncated the
+  // session and the messages that followed reused those indices. Slicing past the end is a silent
+  // no-op, and reporting the anchor rather than the count would announce a truncation that never
+  // happened.
+  const kept = Math.min(rewindTo, session.messages.length);
+  const dropped = session.messages.length - kept;
+  session.messages = session.messages.slice(0, kept);
+  saveSession(session, dirs.sessionsDir);
+  // Clamping only catches the anchors that are too LARGE, and those are the harmless ones. An
+  // older anchor small enough to index the rebuilt array points at a DIFFERENT message: with
+  // anchors [1,3,5,7] over nine messages, `/rewind 2` truncates to five, a resume appends five
+  // more and records [6,8], and `/rewind 3` then reaches the stale 7 and slices to 7 — leaving an
+  // assistant tool-call whose tool result was dropped, which is AI_MissingToolResultsError on the
+  // next resume and the exact failure `rewindTo = messages.length - 1` exists to prevent. So a
+  // rewind draws the same kind of line compaction does. Recorded only when something was actually
+  // dropped: a no-op rewind invalidates nothing, and a barrier for it would throw away history
+  // that is still good.
+  if (dropped > 0) appendBarrier(storeDir, session.id, "rewind");
+  console.log(`Session ${session.id}: dropped ${dropped} message(s), ${kept} remain. No file was touched.`);
 }
 
 function loadOrCreateSession(
@@ -84,6 +233,24 @@ function makeApprovalPrompt(): ApprovalPrompt {
         resolve(answer.trim().toLowerCase() === "y");
       });
     });
+}
+
+// stderr, not stdout: stdout carries the model's own output and is routinely piped, and a warning
+// that a file will not be recoverable must not end up inside whatever consumed that pipe.
+function printWarning(message: string): void {
+  console.error(`⚠ ${message}`);
+}
+
+// Printed before the restore happens, not after. Every path here comes from git's own output, so
+// an ignored file can never appear under "restored" or "deleted"; the ones that were written and
+// skipped are listed separately rather than left for the user to notice was missing. The deletion
+// list matters most: the removal pass takes every untracked, non-ignored file, including ones a
+// human made by hand in another terminal.
+function printUndoPlan(plan: RestorePlan): void {
+  if (plan.diff) console.log(plan.diff);
+  for (const path of plan.restored) console.log(`restored ${path}`);
+  for (const path of plan.deleted) console.log(`deleted  ${path}`);
+  if (plan.ignored.length > 0) console.log(`not restored (gitignored): ${plan.ignored.join(", ")}`);
 }
 
 function printEvent(event: LoopEvent): void {
@@ -178,23 +345,29 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   const { resuming, resumeId, taskText } = parseTaskArgs(argv);
   const sessionsDir = deps.sessionsDir ?? join(getConfigDir(), "sessions");
+  const checkpointsDir = deps.checkpointsDir ?? join(getConfigDir(), "checkpoints");
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
 
-  // `/mode` is a mode-cycle command, not a task for the model. It always operates on the
-  // resume target (an explicit --resume id, or the most-recent session) and never creates
-  // a new session just to cycle it — checked before loadOrCreateSession so a bare `/mode`
-  // (no --resume) doesn't fall into the new-session path below.
-  if (taskText === "/mode") {
+  // A slash command always operates on the resume target — an explicit --resume id, or the most
+  // recent session — and never creates a session just to act on it, so this is checked before
+  // loadOrCreateSession and a bare `/undo` (no --resume) does not fall into the new-session path
+  // below. `/undo` and `/rewind` are keyed on the session's own `cwd`, not the current one, so
+  // running them from a different directory still finds the store the edits were recorded in.
+  const [name = "", ...commandArgs] = taskText.split(/\s+/).filter(Boolean);
+  const command = SLASH_COMMANDS.get(name);
+  if (command !== undefined && command.accepts(commandArgs)) {
     const id = resumeId ?? findMostRecentSession(sessionsDir);
     if (!id) {
-      console.error("No session to cycle the mode of.");
+      console.error(`No session to run ${name} against.`);
       return 1;
     }
-    const session = loadSession(id, sessionsDir);
-    session.permissionMode = cycleMode(session.permissionMode);
-    saveSession(session, sessionsDir);
-    console.log(`Session ${session.id}: permission mode is now ${session.permissionMode}`);
-    return 0;
+    try {
+      command.run(loadSession<ModelMessage>(id, sessionsDir), commandArgs, { sessionsDir, checkpointsDir });
+      return 0;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 1;
+    }
   }
 
   let session: SessionState<ModelMessage>;
@@ -222,10 +395,33 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   saveSession(session, sessionsDir);
 
+  // Checkpointing is enabled by exactly this call, which is also why rolling it back is a one-line
+  // revert: `runLoop`, the session store, the gate and every tool are unmodified, and the store
+  // lives entirely outside the user's repository.
+  const { storeDir, worktree } = checkpointTarget(session, { sessionsDir, checkpointsDir });
+
+  // `write_file`, `bash` and `powershell` write relative to process.cwd(), while the snapshot
+  // covers the project root. Anywhere inside the project is fine — that is the whole point of
+  // resolving the root, and it is why a subdirectory launch no longer trips this. What is left is
+  // a genuine cross-project resume: it would snapshot one project while the tools edit another,
+  // and a later /undo would run its removal pass in the ORIGINAL project, deleting untracked files
+  // a human made there. Said out loud rather than left to be discovered by the deletion.
+  const inProject = relative(worktree, process.cwd());
+  if (inProject === ".." || inProject.startsWith(`..${sep}`) || isAbsolute(inProject)) {
+    printWarning(
+      `this session's files are checkpointed under ${worktree}, but tools run in ${process.cwd()} — /undo will act on ${worktree}`,
+    );
+  }
+
+  const tools = withCheckpoints(
+    toolDefinitions,
+    createCheckpointer({ storeDir, worktree, sessionId: session.id, onWarning: printWarning }),
+  );
+
   const runLoopFn = deps.runLoop ?? runLoopReal;
   for await (const event of runLoopFn({
     model,
-    tools: toolDefinitions,
+    tools,
     messages: session.messages,
     permissionMode: session.permissionMode,
     approvalPrompt: makeApprovalPrompt(),
@@ -234,6 +430,27 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     if (event.type === "messages-updated") {
       saveSession({ ...session, messages: event.messages }, sessionsDir);
       continue;
+    }
+    // Compaction splices the whole message array, so every rewind anchor recorded before this
+    // point indexes into an array that no longer exists. The barrier is what lets `/rewind` say so
+    // instead of silently slicing garbage. A session that never checkpointed has no log, and
+    // appendBarrier no-ops rather than making this caller guess at that.
+    //
+    // Wrapped, because this is the only checkpoint call on the run path that was outside the
+    // degrade-never-fail policy every other one obeys: the checkpointer catches and latches, and
+    // the slash commands sit inside the dispatch's try. An appendFileSync that fails here —
+    // ENOSPC, EACCES, the store removed mid-session — threw straight out of this loop and killed
+    // the user's in-flight session, which is a checkpointing failure taking down the thing
+    // checkpointing exists to protect. The cost of losing a barrier is that a later /rewind may
+    // cross this compaction, so it is a warning and not silence.
+    if (event.type === "compacted") {
+      try {
+        appendBarrier(storeDir, session.id, "compaction");
+      } catch (err) {
+        printWarning(
+          `could not record the compaction barrier, so /rewind may not be able to cross this point: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
     printEvent(event);
   }

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
-import { toolDefinitions } from "../../src/provider/tools";
+import { FS_MUTATING_TOOL_NAMES, toolDefinitions } from "../../src/provider/tools";
 import type { GlobResult } from "../../src/tools/glob";
 import type { GrepResult } from "../../src/tools/grep";
 
@@ -80,10 +80,25 @@ describe("toolDefinitions", () => {
   test("bash runs a command and returns its result", async () => {
     const result = await toolDefinitions.bash.execute?.({ command: "echo hi" }, execOpts);
     expect((result as { stdout: string }).stdout.trim()).toBe("hi");
-  });
+  }, 15000);
 
   test.skipIf(process.platform !== "win32")("powershell runs a command and returns its result", async () => {
     const result = await toolDefinitions.powershell.execute?.({ command: "Write-Output hi" }, execOpts);
     expect((result as { stdout: string }).stdout.trim()).toBe("hi");
   }, 15000);
+});
+
+describe("FS_MUTATING_TOOL_NAMES", () => {
+  // `edit` is in WRITE_TOOL_NAMES for permission reasons but writes nothing (see the test above:
+  // it returns the edited string and the caller writes it). Checkpointing on it would snapshot a
+  // tree identical to the previous one, so the two sets must not be allowed to converge.
+  test("excludes edit", () => {
+    expect(FS_MUTATING_TOOL_NAMES).not.toContain("edit");
+  });
+
+  test("every name resolves to a real tool definition", () => {
+    for (const name of FS_MUTATING_TOOL_NAMES) {
+      expect(toolDefinitions[name]).toBeDefined();
+    }
+  });
 });

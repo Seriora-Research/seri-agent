@@ -83,3 +83,14 @@ export const toolDefinitions = {
 // gate.ts derives its permission set from this list so a new write-capable tool can't
 // silently drift out of sync with what read-only mode blocks.
 export const WRITE_TOOL_NAMES: (keyof typeof toolDefinitions)[] = ["write_file", "edit", "bash", "powershell"];
+
+// Tools that can change the contents of the filesystem, which is what a checkpoint has to be
+// taken in front of. Deliberately NOT WRITE_TOOL_NAMES: that set is the *permission*
+// classification and contains `edit`, but `edit()` (tools/edit.ts:100) is
+// `(content: string, oldString, newString) => string` — a pure string transform whose schema
+// takes the content itself, not a path. It never touches disk; the model has to follow up with
+// `write_file`. Snapshotting on it would only ever produce a checkpoint identical to its
+// predecessor. Kept as a separate list rather than derived from the other so the two can each be
+// wrong independently: a tool that needs approval but writes nothing, or (worse) one that writes
+// without needing approval, must not be forced to be the same mistake twice.
+export const FS_MUTATING_TOOL_NAMES: (keyof typeof toolDefinitions)[] = ["write_file", "bash", "powershell"];

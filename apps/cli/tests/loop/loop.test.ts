@@ -100,6 +100,39 @@ describe("runLoop", () => {
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain("ok");
   });
 
+  // Pins the ordering that the checkpoint wrapper's `rewindTo` depends on. runLoop pushes the
+  // assistant message carrying the tool call immediately before the execute loop and pushes tool
+  // results only after it, so at execute time the last message IS that assistant message and
+  // `messages.length - 1` truncates to just before it. Truncating to `messages.length` instead
+  // would leave a trailing assistant tool-call with no tool result, which is the
+  // AI_MissingToolResultsError compaction.ts already goes out of its way to avoid. That coupling
+  // lives here, in a test, rather than in a comment in the wrapper.
+  test("the last message when a tool executes is the assistant message carrying that tool call", async () => {
+    let captured: ModelMessage[] = [];
+    const tools: ToolSet = {
+      write_file: tool({
+        description: "write a file",
+        inputSchema: z.object({ path: z.string() }),
+        execute: async (_input, options) => {
+          captured = [...options.messages];
+          return "ok";
+        },
+      }),
+    };
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    await collect(runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }));
+
+    const rewindTo = captured.length - 1;
+    expect(captured[rewindTo]).toMatchObject({ role: "assistant" });
+    expect(JSON.stringify(captured[rewindTo])).toContain("call-1");
+    expect(captured.slice(0, rewindTo)).toEqual(baseMessages);
+  });
+
   test("coerces an undefined tool result (e.g. writeFile's void return) to a valid JSON value", async () => {
     const tools = makeTools(async () => undefined as unknown as string);
     const model = new MockLanguageModelV4({
