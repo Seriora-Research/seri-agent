@@ -204,6 +204,19 @@ export function writeTree(gitDir: string, workTree: string): string {
   return git(gitDir, workTree, ["write-tree"]).trim();
 }
 
+// One pass over the staged index, for the two things a snapshot cannot say about itself. Run once
+// per session by the caller, on the already-cold first snapshot, because it costs a spawn.
+//
+// `ls-files --stage -z` emits `<mode> <sha> <stage>\t<path>` per entry, and mode 160000 is a
+// gitlink — how `add -A` records any directory that is itself a git repository.
+export function summarizeIndex(gitDir: string, workTree: string): { files: number; nested: string[] } {
+  const entries = paths(git(gitDir, workTree, ["ls-files", "--stage", "-z"]));
+  return {
+    files: entries.length,
+    nested: entries.filter((entry) => entry.startsWith("160000 ")).map((entry) => entry.slice(entry.indexOf("\t") + 1)),
+  };
+}
+
 export function commitTree(gitDir: string, workTree: string, tree: string, parent?: string): string {
   const args = ["commit-tree", tree, "-m", "seri checkpoint"];
   if (parent !== undefined) args.push("-p", parent);

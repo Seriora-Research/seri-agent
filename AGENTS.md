@@ -80,7 +80,13 @@ read one append-only JSONL log per session, so the two histories cannot drift ap
 `/undo` commits the state it replaced first and prints `/restore <commit>`, which takes
 the same restore path back — recovery is a command that runs the removal pass, not a git
 incantation pasted into a shell that would leave a state which never existed.
-`runLoop` is still stateless and I/O-free: `withCheckpoints` is a pure function over a
+Two things a snapshot cannot cover, both warned about once per session rather than left
+to be discovered: a **nested git repository** is staged as a gitlink holding only its HEAD
+sha, so edits inside a submodule or vendored clone change the shadow tree not at all and
+`/undo` will not revert them; and a worktree with **no `.gitignore`** is snapshotted whole
+on every mutating call, with `/undo`'s removal pass reaching all of it. Neither is capped
+— a threshold that silently narrowed the snapshot would be the skipped pre-state the
+design refused. `runLoop` is still stateless and I/O-free: `withCheckpoints` is a pure function over a
 `ToolSet` that `cli.ts` applies before injection, so checkpointing is consumer policy
 and `loop.ts` has zero changes. The snapshot runs inside the wrapped `execute` before
 delegating, and the callback returns `void` rather than `Promise<void>` so no `await`

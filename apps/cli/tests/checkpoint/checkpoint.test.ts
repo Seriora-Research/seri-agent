@@ -231,6 +231,36 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   );
 
   test(
+    "warns that a nested git repository is not covered, rather than reporting an undo that missed it",
+    () => {
+      // `add -A` records a nested repo as a gitlink holding only its HEAD sha. Measured: editing
+      // nested/a.txt and creating nested/b.txt left write-tree returning the identical sha, so
+      // /undo restores the outer files, prints "restored …" and leaves every change under a
+      // submodule or vendored clone in place — green and empty, in a narrower form.
+      const nested = join(workTree, "nested");
+      mkdirSync(nested, { recursive: true });
+      spawnSync("git", ["init", "-q"], { cwd: nested, windowsHide: true });
+      writeFileSync(join(nested, "a.txt"), "v1\n");
+      spawnSync("git", ["add", "-A"], { cwd: nested, windowsHide: true });
+      spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"], {
+        cwd: nested,
+        windowsHide: true,
+      });
+
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+      // Second call: the warning is once per session, not once per tool call.
+      writeFileSync(join(nested, "a.txt"), "v2\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      expect(warnings).toEqual([
+        "nested is a nested git repository — changes inside are not checkpointed and /undo will not revert them",
+      ]);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
     "says nothing about a path that is not ignored",
     () => {
       writeFileSync(join(workTree, ".gitignore"), "*.log\n");

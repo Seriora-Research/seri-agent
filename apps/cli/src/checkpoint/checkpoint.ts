@@ -14,6 +14,7 @@ import {
   mirrorLocalExcludes,
   planRestore,
   resolveRef,
+  summarizeIndex,
   updateRef,
   writeTree,
 } from "./shadowGit";
@@ -26,6 +27,11 @@ import type { OnBeforeMutation } from "./wrapTools";
 // snapshots are dangling commits nothing references, so their undo history expires silently at
 // seven days and git's automatic gc can take it sooner.
 const MAX_RETAINED_SESSIONS = 20;
+
+// Far above any hand-written project (this repo stages 106) and far below an unignored
+// node_modules (29,808 here), so it fires on the shape that is a surprise and not on the one that
+// is a normal repository.
+const LARGE_WORKTREE_FILES = 5_000;
 
 export type CheckpointRecord =
   | { kind: "tool"; seq: number; toolCallId: string; tool: string; tree: string; commit: string; rewindTo: number; at: string }
@@ -139,6 +145,7 @@ export function createCheckpointer(opts: {
 
   let enabled = true;
   let started = false;
+  let scoped = false;
   let seq = 0;
   let previousTree: string | undefined;
   let previousCommit: string | undefined;
@@ -232,6 +239,36 @@ export function createCheckpointer(opts: {
     append(opts.storeDir, opts.sessionId, { kind: "ignored", toolCallId, path, at: new Date().toISOString() });
   }
 
+  // What the first snapshot of the session turned out to cover. One extra spawn, once, on the
+  // already-cold first checkpoint — it needs the index, so it cannot run in start().
+  function warnAboutScope(): void {
+    const { files, nested } = summarizeIndex(gitDir, opts.worktree);
+
+    // `add -A` records a directory that is itself a git repository as a gitlink (mode 160000)
+    // holding only its HEAD sha, so the shadow tree does not change AT ALL for edits inside it —
+    // measured: editing nested/a.txt and creating nested/b.txt left write-tree returning the
+    // identical sha. /undo would then restore the outer files, print "restored …" and leave every
+    // change under a submodule or vendored clone in place. Nothing outside git can fix that, so it
+    // is said out loud, for the same reason the outside-the-worktree write is.
+    if (nested.length > 0) {
+      opts.onWarning(
+        `${nested.join(", ")} ${nested.length === 1 ? "is a nested git repository" : "are nested git repositories"} — changes inside are not checkpointed and /undo will not revert them`,
+      );
+    }
+
+    // `add -A` covers the whole worktree minus its ignores, so a project with no .gitignore at all
+    // — seri launched in $HOME, or beside an unignored node_modules — hashes every file on every
+    // mutating tool call, and /undo's removal pass then reaches every untracked file made since,
+    // across all of it. No limit is imposed: a threshold that silently narrowed the snapshot would
+    // be the skipped pre-state this design already refused to accept. The size is reported instead,
+    // once, so it is a number the user saw rather than one they find out from a deletion.
+    if (files > LARGE_WORKTREE_FILES) {
+      opts.onWarning(
+        `checkpointing ${files} files under ${opts.worktree} on every file-modifying tool call — /undo's removal pass covers all of them; a .gitignore would narrow it`,
+      );
+    }
+  }
+
   return (context) => {
     if (!enabled) return;
 
@@ -247,6 +284,10 @@ export function createCheckpointer(opts: {
       warnIfNotCheckpointed(context.tool, context.args, context.toolCallId);
 
       const tree = writeTree(gitDir, opts.worktree);
+      if (!scoped) {
+        scoped = true;
+        warnAboutScope();
+      }
       // The one optimisation taken: an unchanged tree means nothing happened since the last
       // checkpoint, so commit-tree and update-ref are skipped — 48.5 ms instead of 107.2 ms,
       // measured. This is the common case, because most `bash` calls read rather than write
