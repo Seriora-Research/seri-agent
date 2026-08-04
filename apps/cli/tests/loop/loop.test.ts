@@ -381,7 +381,7 @@ describe("runLoop", () => {
       ];
     }
 
-    function toolRowOf(events: LoopEvent[]): { toolCalls: number; outputs: { type: string }[] } {
+    function toolRowOf(events: LoopEvent[]): { toolCalls: number; outputs: { type: string; reason?: string }[] } {
       const update = events
         .filter((e): e is Extract<LoopEvent, { type: "messages-updated" }> => e.type === "messages-updated")
         .at(-1);
@@ -390,7 +390,7 @@ describe("runLoop", () => {
       const content = Array.isArray(assistant?.content) ? assistant.content : [];
       return {
         toolCalls: content.filter((part) => part.type === "tool-call").length,
-        outputs: (toolMessage?.content as { output: { type: string } }[]).map((part) => part.output),
+        outputs: (toolMessage?.content as { output: { type: string; reason?: string } }[]).map((part) => part.output),
       };
     }
 
@@ -552,6 +552,44 @@ describe("runLoop", () => {
       expect(model.doStreamCalls).toHaveLength(compactAtIteration + 1);
       expect(events.find((e) => e.type === "compacted")).toBeUndefined();
       expect(events.find((e) => e.type === "error")).toBeUndefined();
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    });
+
+    test("a cancel at the approval prompt is recorded as a cancel, not as a denial", async () => {
+      const controller = new AbortController();
+      const executed: string[] = [];
+      const model = new MockLanguageModelV4({ doStream: async () => streamResult(twoToolCalls()) });
+
+      const events = await collect(
+        runLoop({
+          model,
+          tools: makeTools(async (input) => {
+            executed.push(input.path);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "approve-each",
+          // Exactly what cli.ts's prompt does when Ctrl-C arrives while it is parked: it closes the
+          // readline and resolves false, which on its own is indistinguishable from a typed "n".
+          approvalPrompt: async () => {
+            controller.abort();
+            return false;
+          },
+          signal: controller.signal,
+        }),
+      );
+
+      // The row count is not what discriminates here — it matches either way, because a denial also
+      // writes a row and the pre-call guard then fills the rest. What the model reads is the reason,
+      // and "was not permitted to run" would tell it a human refused the call it was interrupted in.
+      const { toolCalls, outputs } = toolRowOf(events);
+      expect(toolCalls).toBe(2);
+      expect(outputs.map((output) => output.reason)).toEqual([
+        'Tool "write_file" was cancelled by the user before it completed.',
+        'Tool "write_file" was cancelled by the user before it completed.',
+      ]);
+      expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
+      expect(executed).toEqual([]);
       expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
     });
   });

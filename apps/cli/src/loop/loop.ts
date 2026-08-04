@@ -175,6 +175,18 @@ export async function* runLoop(opts: {
           (await opts.approvalPrompt(call.toolName, call.input, opts.signal)));
       // approve-each with no approvalPrompt given, or an explicit denial, is treated as blocked.
 
+      // Re-checked after the prompt, because a cancel that lands while the user is being asked
+      // resolves it false (cli.ts closes the readline to unpark the turn) and false is otherwise
+      // indistinguishable from a typed "n". Without this the row below would tell the model the
+      // call "was not permitted to run" — a denial the user never made — and the model would resume
+      // believing its own tool call had been refused rather than interrupted. Only an await can let
+      // an abort in, so this is the one place a second check is needed: the guard above already
+      // covers the case where the signal was aborted before the call.
+      if (opts.signal?.aborted) {
+        cancelledFrom = index;
+        break;
+      }
+
       if (!approved) {
         yield { type: "permission-denied", name: call.toolName };
         toolResults.push({
