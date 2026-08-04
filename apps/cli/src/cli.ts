@@ -16,6 +16,7 @@ import { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { toolDefinitions } from "./provider/tools";
 import { findMostRecentSession, loadSession, saveSession, type SessionState } from "./session/session";
 import { grep as grepReal } from "./tools/grep";
+import { resolveRg, rgVersion } from "./tools/runRipgrep";
 
 type CliDeps = {
   runLoop?: typeof runLoopReal;
@@ -133,7 +134,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
-      console.log("selftest ok: embedded ripgrep ran");
+      // Names the version, because "it worked" leaves the one thing a cross-compiled artifact can
+      // get wrong — which rg was actually vendored for this target — unsaid.
+      console.log(`selftest ok: ripgrep ${rgVersion(resolveRg())}`);
       return 0;
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
