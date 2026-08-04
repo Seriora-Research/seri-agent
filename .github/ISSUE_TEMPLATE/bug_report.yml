@@ -1,0 +1,87 @@
+name: Bug report
+description: Something in seri doesn't work the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If the bug has security impact — the permission gate, API keys, checkpoints
+        writing outside the shadow repo, the installers — **stop and read
+        [SECURITY.md](https://github.com/lzvxck/seri-agent/blob/main/SECURITY.md)**
+        instead. Don't file it here.
+
+  - type: input
+    id: version
+    attributes:
+      label: seri version
+      description: Output of `seri --version`. If you're running from source, the commit sha.
+      placeholder: seri 0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (x64)
+        - Linux (arm64)
+        - WSL
+    validations:
+      required: true
+
+  - type: input
+    id: shell
+    attributes:
+      label: Shell
+      description: Which shell you ran seri from, and its version if you know it.
+      placeholder: PowerShell 7.4 / zsh 5.9 / bash 5.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - install.sh
+        - install.ps1
+        - Downloaded a binary from Releases
+        - Built from source
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: >
+        The exact commands, in order. If it involves a prompt to the agent, include the
+        prompt verbatim — behaviour often depends on it.
+      placeholder: |
+        1. seri config set GROQ_API_KEY ...
+        2. seri "..."
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output
+      description: >
+        Relevant terminal output or the error. **Redact your API keys** before pasting.
+      render: shell
+    validations:
+      required: false

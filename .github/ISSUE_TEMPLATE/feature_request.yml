@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest something seri should do
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What are you trying to do that seri makes hard or impossible today? Describe the
+        problem, not the solution — it's often solvable a way you hadn't considered.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like it to do
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Workarounds you're using now, or other tools that solve this well.
+    validations:
+      required: false
