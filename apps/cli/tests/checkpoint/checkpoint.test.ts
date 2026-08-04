@@ -178,6 +178,39 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   );
 
   test(
+    "honours the user's .git/info/exclude, so a locally-excluded file is neither copied nor deleted",
+    () => {
+      // `--exclude-standard` reads $GIT_DIR/info/exclude, and $GIT_DIR is the shadow store, so the
+      // user's local excludes were invisible in both directions: the file was copied into
+      // <configDir> (outside the repo, where git clean never reaches it) and a locally-excluded
+      // file made after a snapshot was deleted by the removal pass without appearing in the plan.
+      spawnSync("git", ["init", "-q"], { cwd: workTree, windowsHide: true });
+      mkdirSync(join(workTree, ".git", "info"), { recursive: true });
+      writeFileSync(join(workTree, ".git", "info", "exclude"), "local-secret.txt\n*.local\n");
+      writeFileSync(join(workTree, "local-secret.txt"), "SECRET\n");
+
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+      writeFileSync(join(workTree, "a.txt"), "v2\n");
+      writeFileSync(join(workTree, "made-later.local"), "notes\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      // Half one: never copied into the store.
+      const tree = toolRecords()[0]?.tree ?? "";
+      expect(plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", tree])).not.toContain("local-secret.txt");
+
+      // Half two: never deleted by the removal pass.
+      const result = undo(2);
+
+      expect(result.deleted).not.toContain("made-later.local");
+      expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
+      expect(readFileSync(join(workTree, "local-secret.txt"), "utf8")).toBe("SECRET\n");
+      expect(readFileSync(join(workTree, "made-later.local"), "utf8")).toBe("notes\n");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
     "says nothing about a path that is not ignored",
     () => {
       writeFileSync(join(workTree, ".gitignore"), "*.log\n");

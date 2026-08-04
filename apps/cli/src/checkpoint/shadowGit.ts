@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 // spawnSync buffers the child's entire stdout and kills it the moment the buffer fills, and the
@@ -152,6 +152,31 @@ export function initShadow(gitDir: string): void {
   // that must never be conditional.
   mkdirSync(join(gitDir, "info"), { recursive: true });
   writeFileSync(join(gitDir, "info", "attributes"), "* -text\n");
+}
+
+// The user's own `.git/info/exclude`, mirrored into the shadow store. Called on every session
+// start, so removing an entry takes effect rather than living on in the store — which is also why
+// the file is written even when there is no source to copy.
+//
+// `--exclude-standard` resolves "the repository's exclude file" against $GIT_DIR, and $GIT_DIR here
+// is the shadow store, so without this the user's local excludes are invisible in BOTH directions.
+// Measured on git 2.54.0.windows.1 with `local-secret.txt` in `.git/info/exclude`:
+//   - `add -A` STAGED it — copied verbatim into <configDir>/checkpoints, outside the repo, where
+//     `git clean` and even deleting the repo never reach it. `.git/info/exclude` is the
+//     conventional home for `.env.local` and personal scratch files, so this is precisely the leak
+//     the "never override the project's own declarations" policy exists to prevent.
+//   - a locally-excluded file created after a snapshot appeared in the output of
+//     `ls-files --others --exclude-standard` — the removal list — so /undo deleted it, without
+//     ever naming it in the plan.
+// Mirroring the file is the only lever available: `git add` has no `--exclude-from`.
+//
+// The user's global `core.excludesFile` needs nothing done to it: git reads the global config
+// regardless of --git-dir, so it is already honoured. `.gitignore` likewise, being read from the
+// worktree.
+export function mirrorLocalExcludes(gitDir: string, workTree: string): void {
+  const source = join(workTree, ".git", "info", "exclude");
+  mkdirSync(join(gitDir, "info"), { recursive: true });
+  writeFileSync(join(gitDir, "info", "exclude"), existsSync(source) ? readFileSync(source) : "");
 }
 
 // The tip of a session's commit chain, or undefined when the session has no ref yet. This is the

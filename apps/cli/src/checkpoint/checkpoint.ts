@@ -11,6 +11,7 @@ import {
   isGitAvailable,
   isIgnored,
   listSessionRefs,
+  mirrorLocalExcludes,
   planRestore,
   resolveRef,
   updateRef,
@@ -79,6 +80,7 @@ function initStore(storeDir: string, worktree: string): void {
   // project a store belongs to.
   writeFileSync(join(storeDir, "worktree"), `${resolve(worktree)}\n`);
   initShadow(gitDirOf(storeDir));
+  mirrorLocalExcludes(gitDirOf(storeDir), worktree);
 }
 
 export function readLog(storeDir: string, sessionId: string): CheckpointRecord[] {
