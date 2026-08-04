@@ -487,4 +487,36 @@ describe.skipIf(!isGitAvailable())("pruneSessions", () => {
     },
     60_000,
   );
+
+  test(
+    "never prunes the ref of the session doing the pruning",
+    () => {
+      // Resuming a session that has fallen outside the newest 20 used to delete its own ref and
+      // then gc: the resumed session started a fresh root chain, and everything it had snapshotted
+      // before went unreachable while its log went on listing those commits.
+      mkdirSync(storeDir, { recursive: true });
+      const gitDir = join(storeDir, "git");
+      initShadow(gitDir);
+
+      // The resumed session's own ref goes in first, so oldest-first puts it at the head of the
+      // deletion list.
+      writeFileSync(join(workTree, "a.txt"), "session own\n");
+      const ownCommit = commitTree(gitDir, workTree, writeTree(gitDir, workTree));
+      updateRef(gitDir, `refs/seri/sessions/${SESSION}`, ownCommit);
+      for (let i = 0; i < 21; i++) {
+        writeFileSync(join(workTree, "a.txt"), `session ${i}\n`);
+        updateRef(gitDir, `refs/seri/sessions/s${String(i).padStart(2, "0")}`, commitTree(gitDir, workTree, writeTree(gitDir, workTree)));
+      }
+      // Seed a log so the resumed session is resuming rather than starting.
+      writeFileSync(join(storeDir, `${SESSION}.jsonl`), "");
+
+      checkpointer()(mutation({ toolCallId: "c1" }));
+
+      expect(listSessionRefs(gitDir)).toContain(`refs/seri/sessions/${SESSION}`);
+      // The new checkpoint extends the chain it resumed rather than rooting a new one.
+      const commit = toolRecords()[0]?.commit ?? "";
+      expect(plainGit(gitDir, ["rev-list", commit]).split("\n").filter(Boolean)).toContain(ownCommit);
+    },
+    60_000,
+  );
 });

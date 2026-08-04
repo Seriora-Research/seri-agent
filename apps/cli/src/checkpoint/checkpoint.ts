@@ -108,9 +108,16 @@ export function appendBarrier(storeDir: string, sessionId: string): void {
 
 // Runs once per session, on the already-cold first checkpoint, and only deletes refs — the
 // snapshots themselves stay reachable until gc's default expiry.
-export function pruneSessions(storeDir: string): void {
+//
+// `keep` is the ref of the session doing the pruning, and it is excluded from the candidates
+// rather than merely counted among them. Pruning runs BEFORE the session's own tip is read back
+// out of the ref, and the ordering is oldest-first, so resuming a session that has fallen outside
+// the newest 20 deleted its own ref and then gc'd: `previousCommit` came back undefined, the
+// session silently started a fresh root chain, and its earlier snapshots went unreachable while
+// the log went on listing them. Excluding it means at most 20 other sessions plus this one.
+export function pruneSessions(storeDir: string, keep?: string): void {
   const gitDir = gitDirOf(storeDir);
-  const refs = listSessionRefs(gitDir);
+  const refs = listSessionRefs(gitDir).filter((ref) => ref !== keep);
   if (refs.length <= MAX_RETAINED_SESSIONS) return;
 
   for (const ref of refs.slice(0, refs.length - MAX_RETAINED_SESSIONS)) deleteRef(gitDir, ref);
@@ -150,7 +157,7 @@ export function createCheckpointer(opts: {
     // the rest of the session. Nothing is lost by skipping it: no snapshot goes away, the store is
     // just larger than intended, so there is nothing to tell the user either.
     try {
-      pruneSessions(opts.storeDir);
+      pruneSessions(opts.storeDir, sessionRef(opts.sessionId));
     } catch {}
 
     // Resuming a session picks up its existing chain, so --resume keeps appending to one ref
