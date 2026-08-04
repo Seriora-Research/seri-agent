@@ -15,6 +15,7 @@ import {
   planRestore,
   resolveRef,
   summarizeIndex,
+  treeExists,
   updateRef,
   writeTree,
 } from "./shadowGit";
@@ -388,6 +389,13 @@ function ignoredSince(log: CheckpointRecord[], index: number): string[] {
 
 function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): RestoreResult {
   const gitDir = gitDirOf(opts.storeDir);
+  // Before the ref moves and before a record is written, so a bad argument costs nothing. Without
+  // it, `seri /restore deadbeef` failed with a raw `fatal: bad revision` from the diff, having
+  // already minted a commit, advanced the session ref and appended a pre-undo record — and each
+  // retry appended another.
+  if (!treeExists(gitDir, treeish)) {
+    throw new Error(`${treeish} is not a checkpoint in this session's store.`);
+  }
   // Taken before anything is touched, so restoring is never the operation that loses work. The
   // parent is the ref itself rather than the last tool record: a second undo would otherwise branch
   // off beside the first pre-undo commit instead of through it, leaving a hash this function

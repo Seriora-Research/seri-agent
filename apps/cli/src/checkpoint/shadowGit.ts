@@ -188,6 +188,15 @@ export function resolveRef(gitDir: string, ref: string): string | undefined {
   return result.status === 0 ? result.stdout.trim() : undefined;
 }
 
+// Whether a commit or tree named by a user is actually in this store. Asked before a restore
+// touches anything: `/restore` takes a sha out of the user's scrollback, and a typo — or a sha
+// from a session that retention has since pruned — used to fail only at the diff, by which point
+// the session ref had moved, a commit had been minted and a `pre-undo` record appended, with every
+// retry appending another.
+export function treeExists(gitDir: string, treeish: string): boolean {
+  return run(gitDir, undefined, ["rev-parse", "--verify", "--quiet", `${treeish}^{tree}`]).status === 0;
+}
+
 // `add -A` then `write-tree` — two spawns, no `git commit`. Measured on this repo: the porcelain
 // `add` + `commit` path is 233.5 ms against 107.2 ms for the four-command plumbing path, because
 // `git commit` alone costs ~217 ms and neither --no-verify nor gc.auto=0 moves it.

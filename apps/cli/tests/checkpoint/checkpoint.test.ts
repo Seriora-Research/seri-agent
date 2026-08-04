@@ -10,6 +10,7 @@ import {
   createCheckpointer,
   pruneSessions,
   readLog,
+  restoreCommit,
   rewindConversation,
   undoFiles,
   type CheckpointRecord,
@@ -436,6 +437,24 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       // Stepping back to the checkpoint the ignored write happened at does report it: the record is
       // appended just before that call's own tool record.
       expect(undo(3).ignored).toEqual([join(workTree, "secret.log")]);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "rejects a commit that is not in the store without touching the ref or the log",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+      const before = readLog(storeDir, SESSION).length;
+
+      expect(() =>
+        restoreCommit({ storeDir, worktree: workTree, sessionId: SESSION, commit: "deadbeef", onPlan: () => {} }),
+      ).toThrow("deadbeef is not a checkpoint in this session's store.");
+
+      // The point of validating first: a typo used to leave a minted commit, a moved ref and a
+      // pre-undo record behind, and every retry appended another.
+      expect(readLog(storeDir, SESSION)).toHaveLength(before);
     },
     GIT_TEST_TIMEOUT_MS,
   );
