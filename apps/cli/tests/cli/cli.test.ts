@@ -157,6 +157,39 @@ describe("run (task invocation)", () => {
     expect(captured?.messages).toHaveLength(1);
     expect(captured?.system).toBe("You are seri, a coding agent.");
   });
+
+  // A task whose first word happens to name an Object.prototype member is an ordinary task, and it
+  // has to reach the model. Looked up on an object literal, `SLASH_COMMANDS["toString"]` returned
+  // Object.prototype.toString — a function, so it passed the dispatch guard, was called against the
+  // most recent session, printed nothing and exited 0. The task silently never ran.
+  test.each(["toString", "constructor", "valueOf", "hasOwnProperty", "isPrototypeOf", "__proto__"])(
+    "a task starting with %p is sent to the model, not dispatched as a slash command",
+    async (word) => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+      const existing: SessionState = { id: "proto", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
+      saveSession(existing, sessionsDir);
+
+      type RunLoopOpts = Parameters<typeof runLoop>[0];
+      let captured: RunLoopOpts | undefined;
+      async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+        captured = opts;
+        yield { type: "done", reason: "no-tool-call" };
+        return opts.messages;
+      }
+
+      const originalLog = console.log;
+      console.log = () => {};
+      let code: number;
+      try {
+        code = await run([word, "is", "wrong", "on", "User"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+      } finally {
+        console.log = originalLog;
+      }
+
+      expect(code).toBe(0);
+      expect(captured?.messages.at(-1)).toEqual({ role: "user", content: `${word} is wrong on User` });
+    },
+  );
 });
 
 describe("run (login/signup/logout)", () => {

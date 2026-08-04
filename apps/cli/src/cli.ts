@@ -45,11 +45,19 @@ type CliDeps = {
 // mistake for a session id from these keys, and the dispatch in `run()` shares the resume-target
 // resolution and the error reporting. Handlers throw to report a bad invocation; the caller turns
 // that into a message and a non-zero exit.
-const SLASH_COMMANDS: Record<string, (session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs) => void> = {
-  "/mode": cycleModeCommand,
-  "/undo": undoCommand,
-  "/rewind": rewindCommand,
-};
+//
+// A Map rather than an object literal, because an object literal inherits Object.prototype and a
+// lookup keyed on user input walks it: `SLASH_COMMANDS["toString"]` returned a function, so
+// `seri "toString is wrong on User, fix it"` dispatched Object.prototype.toString against the most
+// recent session, printed nothing and exited 0 — the task never reached the model. `constructor`,
+// `valueOf`, `hasOwnProperty` and `isPrototypeOf` did the same, and `__proto__` resolved to an
+// object and crashed with "command is not a function". A Map has no prototype chain to walk, so
+// the hazard is gone from every call site rather than from the ones that remember Object.hasOwn.
+const SLASH_COMMANDS = new Map<string, (session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs) => void>([
+  ["/mode", cycleModeCommand],
+  ["/undo", undoCommand],
+  ["/rewind", rewindCommand],
+]);
 
 type CommandDirs = { sessionsDir: string; checkpointsDir: string };
 
@@ -62,7 +70,7 @@ function parseTaskArgs(argv: string[]): { resuming: boolean; resumeId: string | 
   const next = args[resumeIndex];
   // A slash command is never a session id, even though none of them starts with "-": it has to
   // fall through to the taskText below instead of being looked up and throwing "session not found".
-  const resumeId = next !== undefined && !Object.hasOwn(SLASH_COMMANDS, next) && !next.startsWith("-") ? next : undefined;
+  const resumeId = next !== undefined && !SLASH_COMMANDS.has(next) && !next.startsWith("-") ? next : undefined;
   if (resumeId !== undefined) args.splice(resumeIndex, 1);
 
   return { resuming: true, resumeId, taskText: args.join(" ").trim() };
@@ -273,7 +281,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // below. `/undo` and `/rewind` are keyed on the session's own `cwd`, not the current one, so
   // running them from a different directory still finds the store the edits were recorded in.
   const [name = "", ...commandArgs] = taskText.split(/\s+/).filter(Boolean);
-  const command = SLASH_COMMANDS[name];
+  const command = SLASH_COMMANDS.get(name);
   if (command !== undefined) {
     const id = resumeId ?? findMostRecentSession(sessionsDir);
     if (!id) {
