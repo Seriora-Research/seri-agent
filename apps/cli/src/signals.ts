@@ -6,9 +6,13 @@
 // a clone of the array, so a listener registered later still runs in that same emit (measured:
 // ran = ["first","second"]). The kill is what drops it, which is why this registry exists.
 //
-// A cleanup must not throw — it would take the remaining cleanups and the re-raise with it — and
-// must not depend on running before or after another, since this array is ordered by nothing
-// more meaningful than module import order.
+// A cleanup that throws is contained rather than trusted not to, which is a deliberate exception
+// to this repo's "no error handling for scenarios that cannot happen" rule: neither registrant
+// can throw today, but one that did would skip every later cleanup AND the re-raise, so
+// removeAllListeners would never run and the signal death would surface as an uncaught exception
+// with exit 1 — inverting the very 128 + n semantics this file exists to protect. A cleanup must
+// still not depend on running before or after another, and that half is not enforced: the array
+// is ordered by nothing more meaningful than module import order.
 const cleanups: Array<() => void> = [];
 
 export function onSignalCleanup(fn: () => void): void {
@@ -17,7 +21,13 @@ export function onSignalCleanup(fn: () => void): void {
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
-    for (const fn of cleanups) fn();
+    for (const fn of cleanups) {
+      try {
+        fn();
+      } catch {
+        // One cleanup's bug must not cost the others their turn, or the process its re-raise.
+      }
+    }
 
     // Re-raise instead of exiting with 128 + n. A normal exit reports a status, not a death by
     // signal, and shells branch on that: `for f in a b c; do hesper "$f"; done` only breaks out
