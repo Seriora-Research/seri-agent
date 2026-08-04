@@ -99,6 +99,15 @@ function undoCommand(session: SessionState<ModelMessage>, args: string[], dirs: 
     steps: parseSteps("/undo", args),
     onPlan: printUndoPlan,
   });
+  // A step count is absolute — the n-th most recent distinct checkpoint — not relative to wherever
+  // a previous undo left the worktree, so `/undo 1` run three times aims at the same checkpoint
+  // three times. Measured before this: each of the three printed `Undid to checkpoint 1.` and
+  // minted a fresh recovery commit while the file stayed exactly where the first one put it.
+  // Saying so is the same honesty `/rewind`'s "dropped 0 message(s)" already applies.
+  if (result.restored.length === 0 && result.deleted.length === 0) {
+    console.log(`Already at checkpoint ${result.seq}; no file changed.`);
+    return;
+  }
   console.log(`Undid to checkpoint ${result.seq}.`);
   // Undo is never the operation that loses work: the state it just replaced was committed first.
   console.log(`The state this replaced is commit ${result.preUndoCommit}. To get it back:`);

@@ -444,6 +444,19 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     expect(logs.join("\n")).toContain("dropped 0 message(s), 2 remain");
   }, 30_000);
 
+  test("a repeated /undo says nothing changed instead of reporting a second undo", async () => {
+    seed();
+
+    await run(["--resume", SESSION_ID, "/undo"], { sessionsDir, checkpointsDir });
+    logs.length = 0;
+    const code = await run(["--resume", SESSION_ID, "/undo"], { sessionsDir, checkpointsDir });
+
+    expect(code).toBe(0);
+    expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("after\n");
+    expect(logs.join("\n")).toContain("Already at checkpoint 1; no file changed.");
+    expect(logs.join("\n")).not.toContain("Undid to checkpoint");
+  }, 20_000);
+
   test("rejects a non-numeric step count instead of silently undoing one step", async () => {
     seed();
 
