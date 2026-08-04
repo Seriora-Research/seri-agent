@@ -43,7 +43,11 @@ const grepTool = tool({
     glob: z.string().optional(),
     mode: z.enum(["files_with_matches", "content", "count"]).optional(),
   }),
-  execute: ({ pattern, path, glob: globFilter, mode }) => grep(pattern, { path, glob: globFilter, mode }),
+  // The second argument is the AI SDK's execution options, and this is the only place in the
+  // program that holds both the signal and the call into the search — discard it here and a
+  // cancel reaches the tool boundary and stops there.
+  execute: ({ pattern, path, glob: globFilter, mode }, { abortSignal }) =>
+    grep(pattern, { path, glob: globFilter, mode }, abortSignal),
 });
 
 const globTool = tool({
@@ -52,7 +56,7 @@ const globTool = tool({
     pattern: z.string(),
     path: z.string(),
   }),
-  execute: ({ pattern, path }) => glob(pattern, { path }),
+  execute: ({ pattern, path }, { abortSignal }) => glob(pattern, { path }, abortSignal),
 });
 
 const bashTool = tool({

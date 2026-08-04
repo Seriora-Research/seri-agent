@@ -17,11 +17,11 @@ afterEach(() => {
 });
 
 describe("grep (default mode)", () => {
-  test("returns only the names of matching files, not their lines", () => {
+  test("returns only the names of matching files, not their lines", async () => {
     writeFileSync(join(tmpDir, "b.txt"), "hello from b\n");
     writeFileSync(join(tmpDir, "c.txt"), "nothing here\n");
 
-    const result = grep("hello", { path: tmpDir });
+    const result = await grep("hello", { path: tmpDir });
 
     expect(result.mode).toBe("files_with_matches");
     expect(result.files).toHaveLength(2);
@@ -32,28 +32,28 @@ describe("grep (default mode)", () => {
     expect(result.truncated).toBe(false);
   });
 
-  test("returns no files when nothing matches", () => {
-    const result = grep("nomatchxyz", { path: tmpDir });
+  test("returns no files when nothing matches", async () => {
+    const result = await grep("nomatchxyz", { path: tmpDir });
 
     expect(result.files).toEqual([]);
     expect(result.truncated).toBe(false);
   });
 
-  test("searches for a pattern that looks like a flag instead of letting rg parse it", () => {
+  test("searches for a pattern that looks like a flag instead of letting rg parse it", async () => {
     // Without a `--` separator rg reads "--force" as an unrecognized flag, exits 2, and the
     // model gets a thrown error instead of the match it asked for.
     writeFileSync(join(tmpDir, "flag.txt"), "run it with --force here\n");
 
-    const result = grep("--force", { path: tmpDir });
+    const result = await grep("--force", { path: tmpDir });
 
     expect(result.files).toHaveLength(1);
     expect(result.files?.[0].endsWith("flag.txt")).toBe(true);
   });
 
-  test("caps file names at the file limit, which is higher than the match limit", () => {
+  test("caps file names at the file limit, which is higher than the match limit", async () => {
     for (let i = 0; i < MAX_FILE_RESULTS + 20; i++) writeFileSync(join(tmpDir, `f${i}.md`), "needle\n");
 
-    const result = grep("needle", { path: tmpDir });
+    const result = await grep("needle", { path: tmpDir });
 
     expect(result.files).toHaveLength(MAX_FILE_RESULTS);
     expect(result.truncated).toBe(true);
@@ -61,8 +61,8 @@ describe("grep (default mode)", () => {
 });
 
 describe("grep (content mode)", () => {
-  test("finds a known pattern, returns correct file/line/text", () => {
-    const result = grep("hello", { path: tmpDir, mode: "content" });
+  test("finds a known pattern, returns correct file/line/text", async () => {
+    const result = await grep("hello", { path: tmpDir, mode: "content" });
 
     expect(result.mode).toBe("content");
     expect(result.matches).toHaveLength(2);
@@ -75,32 +75,32 @@ describe("grep (content mode)", () => {
     expect(result.truncated).toBe(false);
   });
 
-  test("caps the results and flags truncation when there are more matches than the cap", () => {
+  test("caps the results and flags truncation when there are more matches than the cap", async () => {
     writeFileSync(join(tmpDir, "many.txt"), "needle\n".repeat(MAX_RESULTS + 50));
 
-    const result = grep("needle", { path: tmpDir, mode: "content" });
+    const result = await grep("needle", { path: tmpDir, mode: "content" });
 
     expect(result.matches).toHaveLength(MAX_RESULTS);
     expect(result.truncated).toBe(true);
   });
 
-  test("does not flag truncation when the matches land exactly on the cap", () => {
+  test("does not flag truncation when the matches land exactly on the cap", async () => {
     writeFileSync(join(tmpDir, "exact.txt"), "needle\n".repeat(MAX_RESULTS));
 
-    const result = grep("needle", { path: tmpDir, mode: "content" });
+    const result = await grep("needle", { path: tmpDir, mode: "content" });
 
     expect(result.matches).toHaveLength(MAX_RESULTS);
     expect(result.truncated).toBe(false);
   });
 
-  test("survives a line that is not valid UTF-8, and still returns the other files' matches", () => {
+  test("survives a line that is not valid UTF-8, and still returns the other files' matches", async () => {
     // rg emits base64 `bytes` instead of `text` for anything that is not valid UTF-8. Reading
     // `.text` unconditionally threw here and lost every match in the tree, not just this one.
     // 0xE9 is 'é' in latin-1 and is invalid on its own in UTF-8.
     writeFileSync(join(tmpDir, "latin1.txt"), Buffer.concat([Buffer.from("needle caf"), Buffer.from([0xe9]), Buffer.from(" x\n")]));
     writeFileSync(join(tmpDir, "clean.txt"), "needle plain ascii\n");
 
-    const result = grep("needle", { path: tmpDir, mode: "content" });
+    const result = await grep("needle", { path: tmpDir, mode: "content" });
 
     expect(result.matches).toHaveLength(2);
     expect(result.matches?.some((match) => match.file.endsWith("clean.txt"))).toBe(true);
@@ -108,12 +108,12 @@ describe("grep (content mode)", () => {
     expect(result.truncated).toBe(false);
   });
 
-  test("returns a capped page instead of throwing when rg outruns the stdout buffer", () => {
+  test("returns a capped page instead of throwing when rg outruns the stdout buffer", async () => {
     // The bug this tool shipped with: a broad pattern over a large tree threw
     // `rg exited with code null:` and lost every match rg had already found.
     writeFileSync(join(tmpDir, "big.txt"), "needle here on this line\n".repeat(60_000));
 
-    const result = grep("needle", { path: tmpDir, mode: "content" });
+    const result = await grep("needle", { path: tmpDir, mode: "content" });
 
     expect(result.matches).toHaveLength(MAX_RESULTS);
     expect(result.truncated).toBe(true);
@@ -123,10 +123,10 @@ describe("grep (content mode)", () => {
 });
 
 describe("grep (count mode)", () => {
-  test("returns per-file totals without carrying any line text", () => {
+  test("returns per-file totals without carrying any line text", async () => {
     writeFileSync(join(tmpDir, "b.txt"), "hello once\n");
 
-    const result = grep("hello", { path: tmpDir, mode: "count" });
+    const result = await grep("hello", { path: tmpDir, mode: "count" });
 
     expect(result.mode).toBe("count");
     expect(result.counts).toHaveLength(2);
@@ -135,19 +135,19 @@ describe("grep (count mode)", () => {
     expect(result.matches).toBeUndefined();
   });
 
-  test("splits the path from the count on the right, so a Windows drive letter survives", () => {
+  test("splits the path from the count on the right, so a Windows drive letter survives", async () => {
     // rg prints `path:count`, and an absolute Windows path already contains a colon of its own.
-    const result = grep("hello", { path: tmpDir, mode: "count" });
+    const result = await grep("hello", { path: tmpDir, mode: "count" });
 
     expect(result.counts).toHaveLength(1);
     expect(result.counts?.[0].file.endsWith("a.txt")).toBe(true);
     expect(result.counts?.[0].count).toBe(2);
   });
 
-  test("still names the file when the path is a single file rather than a directory", () => {
+  test("still names the file when the path is a single file rather than a directory", async () => {
     // rg drops the filename prefix when handed exactly one file and prints a bare count, so
     // without --with-filename the parser returned a fragment of the digits as the file name.
-    const result = grep("hello", { path: join(tmpDir, "a.txt"), mode: "count" });
+    const result = await grep("hello", { path: join(tmpDir, "a.txt"), mode: "count" });
 
     expect(result.counts).toHaveLength(1);
     expect(result.counts?.[0].file.endsWith("a.txt")).toBe(true);

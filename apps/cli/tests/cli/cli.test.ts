@@ -34,7 +34,7 @@ describe("run (--selftest)", () => {
     let code: number;
     try {
       code = await run(["--selftest"], {
-        grep: () => ({
+        grep: async () => ({
           mode: "content" as const,
           matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
           truncated: false,
@@ -60,7 +60,7 @@ describe("run (--selftest)", () => {
     let code: number;
     try {
       code = await run(["--selftest"], {
-        grep: () => {
+        grep: async () => {
           throw new Error("ripgrep failed: Exec format error");
         },
       });

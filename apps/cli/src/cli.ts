@@ -296,7 +296,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       const dir = mkdtempSync(join(tmpdir(), "seri-selftest-"));
       try {
         writeFileSync(join(dir, "probe.txt"), "seri selftest probe\n");
-        const { matches = [] } = grepFn("selftest probe", { path: dir, mode: "content" });
+        const { matches = [] } = await grepFn("selftest probe", { path: dir, mode: "content" });
         if (matches.length !== 1) throw new Error(`ripgrep returned ${matches.length} matches, expected 1`);
       } finally {
         rmSync(dir, { recursive: true, force: true });
