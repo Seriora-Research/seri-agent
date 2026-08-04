@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -8,6 +8,14 @@ import pkg from "../package.json";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
 import { getWorkosClientId } from "./auth/deviceFlow";
+import {
+  appendBarrier,
+  checkpointStoreDir,
+  createCheckpointer,
+  rewindConversation,
+  undoFiles,
+} from "./checkpoint/checkpoint";
+import { withCheckpoints } from "./checkpoint/wrapTools";
 import { configCommand as configCommandReal } from "./config/commands";
 import { getConfigDir } from "./config/paths";
 import { cycleMode } from "./gate/gate";
@@ -23,12 +31,18 @@ type CliDeps = {
   getGroqModel?: typeof getGroqModelReal;
   loadAgentsFile?: typeof loadAgentsFileReal;
   sessionsDir?: string;
+  checkpointsDir?: string;
   authConfigDir?: string;
   login?: typeof loginReal;
   logout?: typeof logoutReal;
   configCommand?: typeof configCommandReal;
   grep?: typeof grepReal;
 };
+
+// None of these is ever a session id, even though none starts with "-": each is a command that
+// operates on the resume target, so it must fall through to the taskText below and be
+// special-cased by `run()` instead of being looked up and throwing "session not found".
+const SLASH_COMMANDS = new Set(["/mode", "/undo", "/rewind"]);
 
 function parseTaskArgs(argv: string[]): { resuming: boolean; resumeId: string | undefined; taskText: string } {
   const args = [...argv];
@@ -37,10 +51,7 @@ function parseTaskArgs(argv: string[]): { resuming: boolean; resumeId: string | 
 
   args.splice(resumeIndex, 1);
   const next = args[resumeIndex];
-  // "/mode" is never a session id, even though it doesn't start with "-": it's the mode-
-  // cycle command, and must fall through to the taskText below so `run()` can special-case
-  // it against the resume target instead of throwing "session not found".
-  const resumeId = next !== undefined && next !== "/mode" && !next.startsWith("-") ? next : undefined;
+  const resumeId = next !== undefined && !SLASH_COMMANDS.has(next) && !next.startsWith("-") ? next : undefined;
   if (resumeId !== undefined) args.splice(resumeIndex, 1);
 
   return { resuming: true, resumeId, taskText: args.join(" ").trim() };
@@ -84,6 +95,32 @@ function makeApprovalPrompt(): ApprovalPrompt {
         resolve(answer.trim().toLowerCase() === "y");
       });
     });
+}
+
+// stderr, not stdout: stdout carries the model's own output and is routinely piped, and a warning
+// that a file will not be recoverable must not end up inside whatever consumed that pipe.
+function printWarning(message: string): void {
+  console.error(`⚠ ${message}`);
+}
+
+// Every path here comes from git's own output, so an ignored file can never appear under
+// "restored" or "deleted". The ones that were written and skipped are listed separately rather
+// than left for the user to notice was missing.
+function printUndo(result: ReturnType<typeof undoFiles>, storeDir: string, worktree: string): void {
+  if (result.diff) console.log(result.diff);
+  for (const path of result.restored) console.log(`restored ${path}`);
+  for (const path of result.deleted) console.log(`deleted  ${path}`);
+  if (result.ignored.length > 0) console.log(`not restored (gitignored): ${result.ignored.join(", ")}`);
+  console.log(`Undid to checkpoint ${result.seq}.`);
+
+  // Undo is never the operation that loses work: the state it just replaced was committed first,
+  // and the command that brings it back is plain git, not a seri subcommand.
+  const gitDir = join(storeDir, "git");
+  console.log(`The state this replaced is commit ${result.preUndoCommit}. To get it back:`);
+  console.log(
+    `  git --git-dir=${gitDir} --work-tree=${worktree} read-tree ${result.preUndoCommit} && ` +
+      `git --git-dir=${gitDir} --work-tree=${worktree} checkout-index -a -f`,
+  );
 }
 
 function printEvent(event: LoopEvent): void {
@@ -178,6 +215,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   const { resuming, resumeId, taskText } = parseTaskArgs(argv);
   const sessionsDir = deps.sessionsDir ?? join(getConfigDir(), "sessions");
+  const checkpointsDir = deps.checkpointsDir ?? join(getConfigDir(), "checkpoints");
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
 
   // `/mode` is a mode-cycle command, not a task for the model. It always operates on the
@@ -195,6 +233,41 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     saveSession(session, sessionsDir);
     console.log(`Session ${session.id}: permission mode is now ${session.permissionMode}`);
     return 0;
+  }
+
+  // `/undo` (files) and `/rewind` (conversation) read the same log, so running both — in either
+  // order — rewinds both axes and there is no third command and no flag. Like `/mode` they are
+  // argv rather than REPL commands, and they always operate on the resume target. Both are keyed
+  // on the session's own `cwd`, not the current one, so undoing from a different directory still
+  // finds the store the edits were recorded in.
+  const [checkpointCommand, stepsArg] = taskText.split(/\s+/);
+  if (checkpointCommand === "/undo" || checkpointCommand === "/rewind") {
+    const steps = stepsArg === undefined ? 1 : Number(stepsArg);
+    if (!Number.isInteger(steps) || steps < 1) {
+      console.error(`${checkpointCommand} takes a positive number of steps; got "${stepsArg}".`);
+      return 1;
+    }
+    const id = resumeId ?? findMostRecentSession(sessionsDir);
+    if (!id) {
+      console.error(`No session to run ${checkpointCommand} against.`);
+      return 1;
+    }
+    try {
+      const target = loadSession<ModelMessage>(id, sessionsDir);
+      const storeDir = checkpointStoreDir(checkpointsDir, target.cwd);
+      if (checkpointCommand === "/rewind") {
+        const { rewindTo } = rewindConversation({ storeDir, sessionId: target.id, steps });
+        target.messages = target.messages.slice(0, rewindTo);
+        saveSession(target, sessionsDir);
+        console.log(`Session ${target.id}: rewound to ${rewindTo} message(s). No file was touched.`);
+        return 0;
+      }
+      printUndo(undoFiles({ storeDir, worktree: target.cwd, sessionId: target.id, steps }), storeDir, target.cwd);
+      return 0;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 1;
+    }
   }
 
   let session: SessionState<ModelMessage>;
@@ -222,10 +295,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   saveSession(session, sessionsDir);
 
+  // Checkpointing is enabled by exactly this call, which is also why rolling it back is a one-line
+  // revert: `runLoop`, the session store, the gate and every tool are unmodified, and the store
+  // lives entirely outside the user's repository.
+  const storeDir = checkpointStoreDir(checkpointsDir, session.cwd);
+  const tools = withCheckpoints(
+    toolDefinitions,
+    createCheckpointer({ storeDir, worktree: session.cwd, sessionId: session.id, onWarning: printWarning }),
+  );
+
   const runLoopFn = deps.runLoop ?? runLoopReal;
   for await (const event of runLoopFn({
     model,
-    tools: toolDefinitions,
+    tools,
     messages: session.messages,
     permissionMode: session.permissionMode,
     approvalPrompt: makeApprovalPrompt(),
@@ -235,6 +317,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       saveSession({ ...session, messages: event.messages }, sessionsDir);
       continue;
     }
+    // Compaction splices the whole message array, so every rewind anchor recorded before this
+    // point indexes into an array that no longer exists. The barrier is what lets `/rewind` say so
+    // instead of silently slicing garbage. Only written if a checkpoint actually started — with
+    // git absent there is no store to append to.
+    if (event.type === "compacted" && existsSync(storeDir)) appendBarrier(storeDir, session.id);
     printEvent(event);
   }
 

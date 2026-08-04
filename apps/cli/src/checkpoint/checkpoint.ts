@@ -32,16 +32,16 @@ export type CheckpointRecord =
 
 type ToolRecord = Extract<CheckpointRecord, { kind: "tool" }>;
 
-// One store per worktree, under getConfigDir(). Lowercased first on win32 because NTFS paths are
-// case-insensitive and `C:\p` and `c:\p` are the same directory — hashing them separately would
-// give one project two undo histories depending on how it was typed.
-export function checkpointStoreDir(configDir: string, worktree: string): string {
+// One store per worktree, under <configDir>/checkpoints. Lowercased first on win32 because NTFS
+// paths are case-insensitive and `C:\p` and `c:\p` are the same directory — hashing them
+// separately would give one project two undo histories depending on how it was typed.
+export function checkpointStoreDir(checkpointsDir: string, worktree: string): string {
   const resolved = resolve(worktree);
   const key = createHash("sha256")
     .update(process.platform === "win32" ? resolved.toLowerCase() : resolved)
     .digest("hex")
     .slice(0, 16);
-  return join(configDir, "checkpoints", key);
+  return join(checkpointsDir, key);
 }
 
 function gitDirOf(storeDir: string): string {

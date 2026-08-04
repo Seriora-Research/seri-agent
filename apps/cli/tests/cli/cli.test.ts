@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ModelMessage } from "ai";
 import pkg from "../../package.json";
+import { checkpointStoreDir, createCheckpointer } from "../../src/checkpoint/checkpoint";
+import { isGitAvailable } from "../../src/checkpoint/shadowGit";
 import { run } from "../../src/cli";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { toolDefinitions } from "../../src/provider/tools";
@@ -145,7 +148,11 @@ describe("run (task invocation)", () => {
     expect(code).toBe(0);
     expect(captured).toBeDefined();
     expect(captured?.permissionMode).toBe("read-only");
-    expect(captured?.tools).toBe(toolDefinitions);
+    // The same tool set, with only the filesystem-mutating tools wrapped for checkpointing.
+    expect(Object.keys(captured?.tools ?? {})).toEqual(Object.keys(toolDefinitions));
+    expect(captured?.tools.read_file).toBe(toolDefinitions.read_file);
+    expect(captured?.tools.edit).toBe(toolDefinitions.edit);
+    expect(captured?.tools.write_file).not.toBe(toolDefinitions.write_file);
     expect(captured?.messages.at(-1)).toEqual({ role: "user", content: "write hello.txt" });
     expect(captured?.messages).toHaveLength(1);
     expect(captured?.system).toBe("You are seri, a coding agent.");
@@ -259,4 +266,135 @@ describe("run (/mode)", () => {
     expect(readdirSync(sessionsDir)).toHaveLength(1);
     expect(loadSession("def", sessionsDir).permissionMode).toBe("approve-each");
   });
+});
+
+describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
+  const SESSION_ID = "ckpt";
+  const messages: ModelMessage[] = [
+    { role: "user", content: "one" },
+    { role: "assistant", content: [{ type: "text", text: "a" }] },
+    { role: "user", content: "two" },
+    { role: "assistant", content: [{ type: "text", text: "b" }] },
+  ];
+
+  let root: string;
+  let sessionsDir: string;
+  let checkpointsDir: string;
+  let workTree: string;
+  let logs: string[];
+  let errors: string[];
+  let originalLog: typeof console.log;
+  let originalError: typeof console.error;
+
+  // Two checkpoints over one worktree: the first captures "before" at message anchor 1, the second
+  // captures "after" at anchor 3, and the disk is left holding "final".
+  function seed(): void {
+    writeFileSync(join(workTree, "a.txt"), "before\n");
+    const snapshot = createCheckpointer({
+      storeDir: checkpointStoreDir(checkpointsDir, workTree),
+      worktree: workTree,
+      sessionId: SESSION_ID,
+      onWarning: () => {},
+    });
+    snapshot({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 1 });
+    writeFileSync(join(workTree, "a.txt"), "after\n");
+    snapshot({ tool: "write_file", toolCallId: "c2", args: { path: "a.txt" }, rewindTo: 3 });
+    writeFileSync(join(workTree, "a.txt"), "final\n");
+
+    saveSession(
+      { id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages },
+      sessionsDir,
+    );
+  }
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "seri-cli-checkpoint-"));
+    sessionsDir = join(root, "sessions");
+    checkpointsDir = join(root, "checkpoints");
+    workTree = join(root, "work");
+    mkdirSync(workTree, { recursive: true });
+    logs = [];
+    errors = [];
+    originalLog = console.log;
+    originalError = console.error;
+    console.log = (msg: string) => logs.push(String(msg));
+    console.error = (msg: string) => errors.push(String(msg));
+  });
+
+  afterEach(() => {
+    console.log = originalLog;
+    console.error = originalError;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("`--resume /undo` is not misparsed as a session id", async () => {
+    seed();
+
+    const code = await run(["--resume", "/undo", "2"], { sessionsDir, checkpointsDir });
+
+    expect(errors).toEqual([]);
+    expect(code).toBe(0);
+    expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
+  }, 15_000);
+
+  test("`--resume /rewind` is not misparsed as a session id", async () => {
+    seed();
+
+    const code = await run(["--resume", "/rewind"], { sessionsDir, checkpointsDir });
+
+    expect(errors).toEqual([]);
+    expect(code).toBe(0);
+    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toHaveLength(3);
+  }, 15_000);
+
+  test("/undo reports the diff, the restored path and the command that recovers what it replaced", async () => {
+    seed();
+
+    await run(["--resume", SESSION_ID, "/undo", "2"], { sessionsDir, checkpointsDir });
+
+    expect(logs.join("\n")).toContain("restored a.txt");
+    expect(logs.join("\n")).toMatch(/The state this replaced is commit [0-9a-f]{40}\./);
+    expect(logs.join("\n")).toContain("checkout-index -a -f");
+  }, 15_000);
+
+  test("/rewind truncates the conversation and leaves the filesystem byte-identical", async () => {
+    seed();
+    const before = readFileSync(join(workTree, "a.txt"));
+
+    const code = await run(["--resume", SESSION_ID, "/rewind", "2"], { sessionsDir, checkpointsDir });
+
+    expect(code).toBe(0);
+    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toEqual(messages.slice(0, 1));
+    expect(readFileSync(join(workTree, "a.txt")).equals(before)).toBe(true);
+  }, 15_000);
+
+  test("/undo then /rewind lands on the same anchor as /rewind then /undo", async () => {
+    seed();
+    await run(["--resume", SESSION_ID, "/undo", "2"], { sessionsDir, checkpointsDir });
+    await run(["--resume", SESSION_ID, "/rewind", "2"], { sessionsDir, checkpointsDir });
+    const undoFirst = {
+      file: readFileSync(join(workTree, "a.txt"), "utf8"),
+      messages: loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages,
+    };
+
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(workTree, { recursive: true });
+    seed();
+    await run(["--resume", SESSION_ID, "/rewind", "2"], { sessionsDir, checkpointsDir });
+    await run(["--resume", SESSION_ID, "/undo", "2"], { sessionsDir, checkpointsDir });
+
+    expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe(undoFirst.file);
+    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toEqual(undoFirst.messages);
+    expect(undoFirst.file).toBe("before\n");
+  }, 20_000);
+
+  test("rejects a non-numeric step count instead of silently undoing one step", async () => {
+    seed();
+
+    const code = await run(["--resume", SESSION_ID, "/undo", "x"], { sessionsDir, checkpointsDir });
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("positive number of steps");
+    expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("final\n");
+  }, 15_000);
 });
