@@ -61,13 +61,31 @@ function anchored(log: CheckpointRecord[]): AnchoredRecord[] {
 
 // One store per project, under <configDir>/checkpoints. `worktree` is the project root from
 // `projectRoot`, not the directory seri was started in, so every session in one repository shares
-// a store however deep in it the user was standing. Lowercased first on win32 because NTFS paths
-// are case-insensitive and `C:\p` and `c:\p` are the same directory — hashing them separately
-// would give one project two undo histories depending on how it was typed.
+// a store however deep in it the user was standing.
+//
+// Lowercased first on win32 AND darwin, because NTFS and APFS are both case-insensitive by
+// default: `/Users/x/Proj` and `/Users/x/proj` are one directory, and hashing them separately
+// gives one project two undo histories depending on how the path was typed. It does not take a
+// typo to get there — shell autocomplete, a symlink, or a script assembling the path differently
+// all do.
+//
+// The residual, stated rather than hidden: APFS *can* be formatted case-sensitive, and NTFS has
+// supported per-directory case sensitivity since Windows 10. On such a volume two projects whose
+// paths differ only in case are genuinely different directories, and this folds them into one
+// store — checkpoints from one restoring over the other, which is a worse failure than a split
+// history. It is accepted on both platforms for the same two reasons: that case needs a
+// case-sensitive volume *and* two projects differing only in case, where the case this prevents
+// needs only a differently-capitalised invocation; and win32 already made exactly this trade, so
+// folding darwin is consistency with a decision this code took rather than a new one.
+//
+// A runtime probe — write a temp file, see whether the other-case name resolves — would be correct
+// on both APFS variants. It was weighed and rejected as disproportionate: filesystem I/O and a
+// cache on every store lookup, to separate two projects that differ only in capitalisation.
 export function checkpointStoreDir(checkpointsDir: string, worktree: string): string {
   const resolved = resolve(worktree);
+  const foldsCase = process.platform === "win32" || process.platform === "darwin";
   const key = createHash("sha256")
-    .update(process.platform === "win32" ? resolved.toLowerCase() : resolved)
+    .update(foldsCase ? resolved.toLowerCase() : resolved)
     .digest("hex")
     .slice(0, 16);
   return join(checkpointsDir, key);

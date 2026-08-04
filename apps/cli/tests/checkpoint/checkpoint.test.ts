@@ -92,6 +92,14 @@ describe("checkpointStoreDir", () => {
     expect(checkpointStoreDir("cfg", "C:\\Projects\\App")).toBe(checkpointStoreDir("cfg", "c:\\projects\\app"));
   });
 
+  // Neither development box can run this one: Windows skips it and WSL skips it, so CI's macOS leg
+  // is the only thing anywhere that will ever execute it. That is the reason it has to exist —
+  // APFS is case-insensitive by default exactly as NTFS is, and without this nothing checks that
+  // the folding still covers darwin.
+  test.skipIf(process.platform !== "darwin")("keys /Proj and /proj to one store on darwin", () => {
+    expect(checkpointStoreDir("cfg", "/Users/x/Projects/App")).toBe(checkpointStoreDir("cfg", "/users/x/projects/app"));
+  });
+
   test("keys different worktrees to different stores", () => {
     expect(checkpointStoreDir("cfg", join(root, "one"))).not.toBe(checkpointStoreDir("cfg", join(root, "two")));
   });
