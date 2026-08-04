@@ -32,6 +32,26 @@ never touches stdout/stdin directly. `apps/cli/src/cli.ts` is a thin consumer th
 and prompts for approval. This boundary is deliberate and load-bearing — a future
 daemon/transport layer is expected to consume the same generator.
 
+**Cancellation belongs to the consumer.** `runLoop` accepts an optional `AbortSignal` and never
+constructs one — `apps/cli/src/cli.ts` owns an `AbortController` per run, because only the consumer
+knows what a Ctrl-C means. The signal reaches all three model round-trips (`streamText`,
+`compactMessages`, and every tool through `ToolExecutionOptions.abortSignal`, which rides through
+`withCheckpoints` untouched), and the turn ends as `done.reason: "aborted"` rather than as an
+`error`: a user-initiated cancel is not a failure. The **first** press cancels the in-flight turn —
+`apps/cli/src/signals.ts` holds a single-slot `onSignalCancel` callback and returns from the handler
+*before* the fatal body, so no cleanups run and the listener survives for the next press — and the
+loop unwinds far enough to write one `execution-denied` tool-result row for the interrupted call and
+for every call after it, which is what leaves the session resumable (an unanswered tool call is
+`AI_MissingToolResultsError` on the next `--resume`). When the loop returns, `cli.ts` calls
+`raiseSignal`, so the process still dies **by** signal; `exit(0)` would report a status instead of a
+death and turn one Ctrl-C into one press per iteration of `for f in a b c; do seri "$f"; done`. The
+**second** press finds the slot empty and takes the untouched fatal path. Making any of this
+reachable is why `runRipgrep` — and therefore `grep`/`glob` — is async: `spawnSync` blocks the event
+loop, so a SIGINT during a search was not delivered to any handler until rg finished on its own.
+`spawnCollect` and `runRipgrep` **reject** when their child was killed by a cancel rather than
+resolving with a normal-looking result, at the source rather than in the loop, because not every
+caller is inside the loop.
+
 **Gate-first permissions**, not sandboxing. `apps/cli/src/gate/gate.ts` defines three
 `PermissionMode`s (`read-only` / `approve-each` / `auto`) that cycle via `/mode`.
 Whether a tool needs permission is derived from `WRITE_TOOL_NAMES` in
