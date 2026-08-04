@@ -7,7 +7,7 @@ import { findAgentsFile, loadAgentsFile } from "../../src/agents/loadAgentsFile"
 let tmpRoot: string;
 
 beforeEach(() => {
-  tmpRoot = mkdtempSync(join(tmpdir(), "hesper-loadAgentsFile-test-"));
+  tmpRoot = mkdtempSync(join(tmpdir(), "seri-loadAgentsFile-test-"));
 });
 
 afterEach(() => {

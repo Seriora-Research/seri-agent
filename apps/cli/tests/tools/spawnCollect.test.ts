@@ -163,7 +163,7 @@ describe("spawnCollect", () => {
   });
 
   test.skipIf(process.platform === "win32")("kills in-flight children when a signal ends the run", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "hesper-signal-test-"));
+    const dir = mkdtempSync(join(tmpdir(), "seri-signal-test-"));
     const pidFile = join(dir, "grandchild.pid");
     const modulePath = pathToFileURL(join(import.meta.dir, "../../src/tools/spawnCollect.ts")).href;
 
@@ -173,11 +173,11 @@ describe("spawnCollect", () => {
     const grandchild =
       `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));` +
       `setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 60000);`;
-    const hesperSide =
+    const seriSide =
       `const m = await import(${JSON.stringify(modulePath)});` +
       `m.spawnCollect(process.execPath, ["-e", ${JSON.stringify(grandchild)}]);`;
 
-    const child = spawn(process.execPath, ["-e", hesperSide], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, ["-e", seriSide], { stdio: ["ignore", "pipe", "pipe"] });
     try {
       // The pid file is the readiness handshake, not a sleep: it cannot exist until the module was
       // imported (which is what installs the handler) AND spawnCollect actually spawned.

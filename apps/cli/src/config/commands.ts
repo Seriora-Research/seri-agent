@@ -2,9 +2,9 @@ import { join } from "node:path";
 import { loadConfig, setConfigValue, unsetConfigValue } from "./config";
 
 const USAGE = `Usage:
-  hesper config set <KEY> <VALUE>
-  hesper config list
-  hesper config unset <KEY>`;
+  seri config set <KEY> <VALUE>
+  seri config list
+  seri config unset <KEY>`;
 
 // Values are provider API keys — show just enough to identify which key is stored without
 // printing it in full, since `config list` output tends to end up in screenshots and issues.

@@ -9,7 +9,7 @@ import { rgPath, runRipgrep } from "../../src/tools/runRipgrep";
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "hesper-runripgrep-test-"));
+  tmpDir = mkdtempSync(join(tmpdir(), "seri-runripgrep-test-"));
 });
 
 afterEach(() => {
@@ -54,7 +54,7 @@ describe("runRipgrep", () => {
     if (child.status !== 0) throw new Error(`probe child exited ${child.status}: ${child.error ?? child.stderr}`);
 
     const childRgPath = child.stdout.trim();
-    expect(childRgPath).toContain("hesper-rg-");
+    expect(childRgPath).toContain("seri-rg-");
     expect(existsSync(dirname(childRgPath))).toBe(false);
   }, 30_000);
 
@@ -94,8 +94,8 @@ describe("runRipgrep", () => {
     // accumulate: 236 of them holding 1222 MB on the dev box, 69 from a single day. Not
     // POSIX-guarded, because Windows is where that was measured. Driven through a child because
     // the sweep runs at module scope, which has already happened in this process.
-    const abandoned = mkdtempSync(join(tmpdir(), "hesper-rg-"));
-    const live = mkdtempSync(join(tmpdir(), `hesper-rg-${process.pid}-`));
+    const abandoned = mkdtempSync(join(tmpdir(), "seri-rg-"));
+    const live = mkdtempSync(join(tmpdir(), `seri-rg-${process.pid}-`));
     writeFileSync(join(abandoned, "rg"), "not really rg");
     writeFileSync(join(live, "rg"), "not really rg");
 
@@ -135,7 +135,7 @@ describe("runRipgrep", () => {
 
   test("ignores the user's own ripgrep config", () => {
     // rg picks up RIPGREP_CONFIG_PATH from the environment, so without --no-config a
-    // developer's ~/.ripgreprc silently changes what hesper finds on their machine and
+    // developer's ~/.ripgreprc silently changes what seri finds on their machine and
     // nowhere else. This config would hide the only matching file.
     writeFileSync(join(tmpDir, "a.txt"), "needle\n");
     const configPath = join(tmpDir, "ripgreprc");

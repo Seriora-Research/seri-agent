@@ -58,7 +58,7 @@ function loadOrCreateSession(
   }
 
   const agentsContent = loadAgentsFileFn(process.cwd());
-  const systemPrompt = agentsContent ? `You are Hesper, a coding agent.\n\n${agentsContent}` : "You are Hesper, a coding agent.";
+  const systemPrompt = agentsContent ? `You are seri, a coding agent.\n\n${agentsContent}` : "You are seri, a coding agent.";
   return {
     id: randomUUID(),
     cwd: process.cwd(),
@@ -113,7 +113,7 @@ function printEvent(event: LoopEvent): void {
 
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (argv.length === 0 || argv.includes("--version") || argv.includes("-v")) {
-    if (argv.includes("--version") || argv.includes("-v")) console.log(`hesper ${pkg.version}`);
+    if (argv.includes("--version") || argv.includes("-v")) console.log(`seri ${pkg.version}`);
     return 0;
   }
 
@@ -121,13 +121,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // host, so a cross-compiled binary can ship one that cannot run on the target. Spawning
   // it for real is the only way to catch that from a shipped artifact; the release workflow
   // runs this on every platform. Greps a throwaway file rather than the cwd so the result
-  // never depends on what happens to be in the directory hesper was launched from.
+  // never depends on what happens to be in the directory seri was launched from.
   if (argv.includes("--selftest")) {
     const grepFn = deps.grep ?? grepReal;
     try {
-      const dir = mkdtempSync(join(tmpdir(), "hesper-selftest-"));
+      const dir = mkdtempSync(join(tmpdir(), "seri-selftest-"));
       try {
-        writeFileSync(join(dir, "probe.txt"), "hesper selftest probe\n");
+        writeFileSync(join(dir, "probe.txt"), "seri selftest probe\n");
         const { matches = [] } = grepFn("selftest probe", { path: dir, mode: "content" });
         if (matches.length !== 1) throw new Error(`ripgrep returned ${matches.length} matches, expected 1`);
       } finally {

@@ -9,7 +9,7 @@ import rgAsset from "./rg-vendored.bin" with { type: "file" };
 // template-built `require.resolve(...)` call. That's fine for `bun run`/`bun test` (real
 // node_modules on disk), but inside a `bun build --compile` standalone executable it
 // resolves against the CURRENT WORKING DIRECTORY at runtime, not anything embedded in the
-// binary — so it throws "Could not find @vscode/ripgrep-<platform>" the instant hesper is
+// binary — so it throws "Could not find @vscode/ripgrep-<platform>" the instant seri is
 // run from any directory other than this repo's own checkout. `rg-vendored.bin` (see
 // vendorRipgrep.ts, run via `postinstall`) is a literal local file, so bun embeds its bytes
 // directly into the compiled executable, CWD-independent. The embedded asset resolves to
@@ -17,9 +17,8 @@ import rgAsset from "./rg-vendored.bin" with { type: "file" };
 // extract it to a real temp file once at startup.
 //
 // The pid goes in the name so a later run can tell an abandoned directory from a live one; see
-// sweepAbandonedRgDirs. The `hesper-rg-` prefix stays exactly as it was, since it is what
-// identifies these as ours.
-const RG_DIR_PREFIX = "hesper-rg-";
+// sweepAbandonedRgDirs. The `seri-rg-` prefix is what identifies these as ours.
+const RG_DIR_PREFIX = "seri-rg-";
 const bytes = new Uint8Array(await Bun.file(rgAsset).arrayBuffer());
 const rgDir = mkdtempSync(join(tmpdir(), `${RG_DIR_PREFIX}${process.pid}-`));
 export const rgPath = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg");
@@ -72,7 +71,7 @@ function isOwnerAlive(name: string): boolean {
 // The first run after this ships therefore deletes ~1.2 GB synchronously at startup; that is
 // paid once, and steady state is a handful of directories.
 //
-// A live sibling is skipped rather than deleted because it belongs to a concurrent hesper, and
+// A live sibling is skipped rather than deleted because it belongs to a concurrent seri, and
 // POSIX will happily unlink a running binary: that process keeps working, but the path it
 // re-spawns rg from is gone and its next grep fails. Windows refuses to delete a locked rg.exe
 // with EPERM, which catches the same case by accident, but only there — the pid check is the
@@ -129,7 +128,7 @@ export function outputLines(stdout: string, truncated: boolean): string[] {
 export function runRipgrep(args: string[]): { stdout: string; truncated: boolean } {
   // --no-config: rg reads RIPGREP_CONFIG_PATH from the environment, so without this a
   // developer's own ~/.ripgreprc (--smart-case, --hidden, glob excludes) silently changes
-  // what hesper finds on their machine and nowhere else.
+  // what seri finds on their machine and nowhere else.
   const result = spawnSync(rgPath, ["--no-config", ...args], {
     encoding: "utf8",
     maxBuffer: MAX_BUFFER_BYTES,

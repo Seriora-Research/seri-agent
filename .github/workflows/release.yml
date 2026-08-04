@@ -16,7 +16,7 @@ jobs:
           PKG_VERSION="$(node -p "require('./apps/cli/package.json').version")"
           if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
             echo "Tag $GITHUB_REF_NAME implies version $TAG_VERSION, but apps/cli/package.json says $PKG_VERSION."
-            echo "hesper --version reads package.json, so this release would ship a binary that misreports itself."
+            echo "seri --version reads package.json, so this release would ship a binary that misreports itself."
             exit 1
           fi
           echo "Tag $GITHUB_REF_NAME matches package.json version $PKG_VERSION."
@@ -51,18 +51,18 @@ jobs:
       - name: Smoke-test the binary
         shell: bash
         run: |
-          BIN="apps/cli/dist/hesper-${{ matrix.target }}${{ matrix.ext }}"
+          BIN="apps/cli/dist/seri-${{ matrix.target }}${{ matrix.ext }}"
           chmod +x "$BIN"
           REPORTED="$("$BIN" --version)"
-          if [ "$REPORTED" != "hesper ${GITHUB_REF_NAME#v}" ]; then
-            echo "Binary reports '$REPORTED', expected 'hesper ${GITHUB_REF_NAME#v}'."
+          if [ "$REPORTED" != "seri ${GITHUB_REF_NAME#v}" ]; then
+            echo "Binary reports '$REPORTED', expected 'seri ${GITHUB_REF_NAME#v}'."
             exit 1
           fi
           "$BIN" --selftest
       - uses: actions/upload-artifact@v4
         with:
-          name: hesper-${{ matrix.target }}${{ matrix.ext }}
-          path: apps/cli/dist/hesper-${{ matrix.target }}${{ matrix.ext }}
+          name: seri-${{ matrix.target }}${{ matrix.ext }}
+          path: apps/cli/dist/seri-${{ matrix.target }}${{ matrix.ext }}
           if-no-files-found: error
 
   release:
@@ -79,7 +79,7 @@ jobs:
         shell: bash
         working-directory: artifacts
         run: |
-          sha256sum hesper-* > SHA256SUMS
+          sha256sum seri-* > SHA256SUMS
           cat SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
