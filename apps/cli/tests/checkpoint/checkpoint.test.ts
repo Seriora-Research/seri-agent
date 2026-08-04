@@ -388,20 +388,31 @@ describe.skipIf(!isGitAvailable())("rewindConversation", () => {
   );
 });
 
-// The discriminating case against a per-edit design: `sed -i` and a shell
-// redirection never call the `edit` tool, so a design that snapshots on edits records nothing at
-// all here. The trigger is the tool call and the subject is the whole tree, so seri never has to
-// know what the shell did. Bash guard carried forward from tests/tools/bash.test.ts:27.
+// The discriminating case against a per-edit design: a sed-through-a-temp-file rewrite and an
+// appending redirection never call the `edit` tool, so a design that snapshots on edits records
+// nothing at all here. The trigger is the tool call and the subject is the whole tree, so seri
+// never has to know what the shell did. Bash guard carried forward from tests/tools/bash.test.ts:27.
+//
+// Deliberately not `sed -i`: GNU sed reads `-i` as "in place, no backup", BSD sed — which is what
+// macOS ships — requires an explicit suffix argument and so reads the script as the backup suffix
+// and the filename as the script. There is no single `sed -i` spelling that works on both, and
+// skipping this on one platform would leave open exactly the hole this test exists to close.
+// `> tmp && mv` is portable, and tests the snapshot slightly harder: `mv` replaces the inode
+// rather than rewriting the file in place.
 describe.skipIf(!isGitAvailable() || !isBashAvailable())("checkpoints around a bash tool call", () => {
   test(
-    "captures and undoes a change made only through sed -i and a shell redirection",
+    "captures and undoes a change made only through a shell rewrite and an appending redirection",
     async () => {
       writeFileSync(join(workTree, "b.txt"), "kept\n");
       const tools = withCheckpoints(toolDefinitions, checkpointer());
       const options = { toolCallId: "c1", messages: [{ role: "user" as const, content: "go" }], context: {} };
 
       await tools.bash?.execute?.(
-        { command: `cd "${workTree.replaceAll("\\", "/")}" && sed -i 's/before/after/' a.txt && echo appended >> b.txt` },
+        {
+          command:
+            `cd "${workTree.replaceAll("\\", "/")}" && ` +
+            `sed 's/before/after/' a.txt > a.tmp && mv a.tmp a.txt && echo appended >> b.txt`,
+        },
         options as ToolExecutionOptions<Record<string, unknown>>,
       );
 
