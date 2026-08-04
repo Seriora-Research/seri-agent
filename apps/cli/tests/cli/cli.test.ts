@@ -158,6 +158,68 @@ describe("run (task invocation)", () => {
     expect(captured?.system).toBe("You are seri, a coding agent.");
   });
 
+  // cli.ts is the only thing that constructs the controller — runLoop is a library that is handed a
+  // signal and never makes one — so if this stops arriving, every abort check downstream (the
+  // streamText round-trip, the compaction round-trip, the per-tool guard, spawnCollect, runRipgrep)
+  // is dead code that keeps passing its own tests.
+  test("hands runLoop a live AbortSignal", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let captured: RunLoopOpts | undefined;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      captured = opts;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["write", "hello.txt"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(captured?.signal).toBeInstanceOf(AbortSignal);
+    expect(captured?.signal?.aborted).toBe(false);
+  });
+
+  // The prompt is where a cancel is easiest to lose: the loop is parked in rl.question when Ctrl-C
+  // arrives, and a readline nobody closes never settles, so the turn would hang until the user
+  // pressed again — which kills the process before the tool row is written and leaves the session
+  // unresumable. Exercised through the prompt runLoop is actually given, because makeApprovalPrompt
+  // is not exported and the wiring is half of what is being asserted.
+  test("the approval prompt it gives runLoop resolves false on abort instead of hanging", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    const answers: (boolean | undefined)[] = [];
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      // Aborted while the prompt is already open, which is the real sequence, and then aborted
+      // before it is opened at all — an already-aborted signal fires no abort event, so a listener
+      // on its own would wait forever for something that has already happened.
+      const parked = new AbortController();
+      const pending = opts.approvalPrompt?.("write_file", { path: "a.txt" }, parked.signal);
+      parked.abort();
+      answers.push(await pending);
+
+      answers.push(await opts.approvalPrompt?.("write_file", { path: "b.txt" }, AbortSignal.abort()));
+      yield { type: "done", reason: "aborted" };
+      return opts.messages;
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["write", "hello.txt"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(answers).toEqual([false, false]);
+  }, 10_000);
+
   // A task whose first word happens to name an Object.prototype member is an ordinary task, and it
   // has to reach the model. Looked up on an object literal, `SLASH_COMMANDS["toString"]` returned
   // Object.prototype.toString — a function, so it passed the dispatch guard, was called against the
