@@ -251,9 +251,17 @@ export function planRestore(gitDir: string, workTree: string, tree: string): { r
 // Not defensible from here: a backgrounded `bash` command still writing while `checkout-index`
 // runs. spawnCollect detaches into its own process group and resolves on the direct child's
 // close, so nothing outside the shell can know a grandchild is still going.
+//
+// Restore first, remove second, and the order is chosen for what a partial failure leaves behind.
+// `force: true` swallows only ENOENT; on Windows a file held open by a watcher or a dev server
+// throws EPERM/EBUSY, and with the removal running first that threw after the files were gone and
+// before anything had been checked out — nothing restored, files deleted, and printUndoPlan had
+// already told the user both lists. Checking out first means the same failure leaves the worktree
+// restored with some post-snapshot files still on it, which is recoverable by rerunning; the other
+// order is strictly worse than either state.
 export function applyRestore(gitDir: string, workTree: string, deleted: string[]): void {
-  for (const path of deleted) rmSync(join(workTree, path), { force: true });
   git(gitDir, workTree, ["checkout-index", "-a", "-f"]);
+  for (const path of deleted) rmSync(join(workTree, path), { force: true });
 }
 
 export function diffTree(gitDir: string, workTree: string, tree: string): string {
