@@ -152,6 +152,32 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   );
 
   test(
+    "keeps checkpointing the worktree after a write to a path outside it",
+    () => {
+      // Writing a scratch file to a temp dir or ~/.config is ordinary model behaviour. `git
+      // check-ignore` exits 128 for such a path ("is outside repository"), which used to throw
+      // into the error latch and turn checkpointing off for the whole session — measured: zero
+      // records in the log and one warning, with every later edit unprotected.
+      const outside = join(root, "notes.md");
+      const snapshot = checkpointer();
+
+      snapshot(mutation({ toolCallId: "c1", args: { path: outside } }));
+      writeFileSync(join(workTree, "a.txt"), "v2\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+      writeFileSync(join(workTree, "a.txt"), "v3\n");
+      snapshot(mutation({ toolCallId: "c3" }));
+
+      expect(toolRecords()).toHaveLength(3);
+      expect(warnings).toEqual([`${outside} is outside ${workTree}, so it is not checkpointed — /undo cannot restore it`]);
+
+      undo(2);
+
+      expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("v2\n");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
     "says nothing about a path that is not ignored",
     () => {
       writeFileSync(join(workTree, ".gitignore"), "*.log\n");

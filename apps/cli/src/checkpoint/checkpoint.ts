@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   applyRestore,
   commitTree,
@@ -34,6 +34,10 @@ export type CheckpointRecord =
 
 type ToolRecord = Extract<CheckpointRecord, { kind: "tool" }>;
 type AnchoredRecord = Extract<CheckpointRecord, { tree: string; commit: string }>;
+
+// What a snapshot can do for a path a tool declared: capture it, skip it because the project's own
+// .gitignore excludes it, or not see it at all because it is not in the tree being snapshotted.
+type PathScope = "checkpointed" | "ignored" | "outside";
 
 // Every record that carries a snapshot — tool checkpoints and the states an undo replaced. Both
 // sit in the commit chain; only the first kind is somewhere `/undo` may step to.
@@ -122,7 +126,7 @@ export function createCheckpointer(opts: {
 }): OnBeforeMutation {
   const gitAvailable = opts.gitAvailable ?? isGitAvailable;
   const gitDir = gitDirOf(opts.storeDir);
-  const ignoredCache = new Map<string, boolean>();
+  const scopeCache = new Map<string, PathScope>();
 
   let enabled = true;
   let started = false;
@@ -160,7 +164,24 @@ export function createCheckpointer(opts: {
     return true;
   }
 
-  function warnIfIgnored(tool: string, args: unknown, toolCallId: string): void {
+  // Whether a path a tool declared is inside the tree this session snapshots, and if so whether the
+  // project's own .gitignore excludes it.
+  //
+  // The outside case is decided here by path arithmetic rather than by asking git, and that is the
+  // point: `git check-ignore` exits 128 for any absolute path outside the worktree and for any
+  // `../` path (measured, git 2.54.0.windows.1: `fatal: '<p>' is outside repository at '<w>'`),
+  // isIgnored throws on any status outside {0,1}, and that throw reached the error latch below —
+  // so a model writing one scratch file to a temp dir on its first tool call ended the session with
+  // ZERO records in the log and every later edit unprotected. Reading exit 128 as "outside" would
+  // fix that case and break another, because git also exits 128 with "not a git repository" for a
+  // store that is genuinely broken, which must still latch off.
+  function scopeOf(path: string): PathScope {
+    const inside = relative(opts.worktree, resolve(opts.worktree, path));
+    if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return "outside";
+    return isIgnored(gitDir, opts.worktree, path) ? "ignored" : "checkpointed";
+  }
+
+  function warnIfNotCheckpointed(tool: string, args: unknown, toolCallId: string): void {
     // Only `write_file` declares a path. For `bash`/`powershell` the path is buried inside an
     // arbitrary shell command and recovering it would mean parsing shell, which this does not
     // pretend to do — so naming the ignored file is knowingly partial, covering one of the three
@@ -171,13 +192,22 @@ export function createCheckpointer(opts: {
     if (typeof path !== "string") return;
 
     // Cached per path: check-ignore is 23.5 ms, and a model rewriting one file in a loop would
-    // otherwise pay it on every call.
-    let ignored = ignoredCache.get(path);
-    if (ignored === undefined) {
-      ignored = isIgnored(gitDir, opts.worktree, path);
-      ignoredCache.set(path, ignored);
+    // otherwise pay it on every call. It also makes each warning fire once per path rather than
+    // once per write.
+    let scope = scopeCache.get(path);
+    if (scope === undefined) {
+      scope = scopeOf(path);
+      scopeCache.set(path, scope);
     }
-    if (!ignored) return;
+    if (scope === "checkpointed") return;
+
+    if (scope === "outside") {
+      // No `ignored` record for this one: that record feeds /undo's "not restored (gitignored)"
+      // line, and a path outside the worktree is not gitignored — filing it there would put a
+      // wrong reason next to a right file.
+      opts.onWarning(`${path} is outside ${opts.worktree}, so it is not checkpointed — /undo cannot restore it`);
+      return;
+    }
 
     opts.onWarning(`${path} is gitignored, so it is not checkpointed — /undo cannot restore it`);
     append(opts.storeDir, opts.sessionId, { kind: "ignored", toolCallId, path, at: new Date().toISOString() });
@@ -195,7 +225,7 @@ export function createCheckpointer(opts: {
         started = true;
       }
 
-      warnIfIgnored(context.tool, context.args, context.toolCallId);
+      warnIfNotCheckpointed(context.tool, context.args, context.toolCallId);
 
       const tree = writeTree(gitDir, opts.worktree);
       // The one optimisation taken: an unchanged tree means nothing happened since the last
