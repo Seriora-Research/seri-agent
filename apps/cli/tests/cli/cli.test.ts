@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
@@ -387,7 +387,45 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
 
     expect(logs.join("\n")).toContain("restored a.txt");
     expect(logs.join("\n")).toMatch(/The state this replaced is commit [0-9a-f]{40}\./);
-    expect(logs.join("\n")).toContain("checkout-index -a -f");
+    expect(logs.join("\n")).toMatch(new RegExp(`seri --resume ${SESSION_ID} /restore [0-9a-f]{40}`));
+  }, 15_000);
+
+  test("the recovery command /undo prints puts back exactly the state it replaced", async () => {
+    // The case the printed git incantation got wrong. `read-tree` + `checkout-index -a -f` is
+    // additive: it recreated new.ts and left old.ts sitting beside it, a state that had never
+    // existed, under a line reading "To get it back". The assertion that discriminates is
+    // old.ts being gone again, not new.ts coming back.
+    writeFileSync(join(workTree, "old.ts"), "old\n");
+    createCheckpointer({
+      storeDir: checkpointStoreDir(checkpointsDir, workTree),
+      worktree: workTree,
+      sessionId: SESSION_ID,
+      onWarning: () => {},
+    })({ tool: "write_file", toolCallId: "c1", args: { path: "old.ts" }, rewindTo: 1 });
+    rmSync(join(workTree, "old.ts"));
+    writeFileSync(join(workTree, "new.ts"), "new\n");
+    saveSession({ id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages }, sessionsDir);
+
+    await run(["--resume", SESSION_ID, "/undo"], { sessionsDir, checkpointsDir });
+    expect(existsSync(join(workTree, "old.ts"))).toBe(true);
+    expect(existsSync(join(workTree, "new.ts"))).toBe(false);
+
+    const recovery = logs.join("\n").match(/seri --resume \S+ (\/restore [0-9a-f]{40})/)?.[1] ?? "";
+    const code = await run(["--resume", SESSION_ID, ...recovery.split(" ")], { sessionsDir, checkpointsDir });
+
+    expect(errors).toEqual([]);
+    expect(code).toBe(0);
+    expect(existsSync(join(workTree, "old.ts"))).toBe(false);
+    expect(readFileSync(join(workTree, "new.ts"), "utf8")).toBe("new\n");
+  }, 20_000);
+
+  test("`--resume /restore` is not misparsed as a session id", async () => {
+    seed();
+
+    const code = await run(["--resume", "/restore"], { sessionsDir, checkpointsDir });
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("/restore takes one argument");
   }, 15_000);
 
   test("/rewind truncates the conversation and leaves the filesystem byte-identical", async () => {

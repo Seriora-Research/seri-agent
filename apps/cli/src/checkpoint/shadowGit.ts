@@ -264,8 +264,17 @@ export function applyRestore(gitDir: string, workTree: string, deleted: string[]
   for (const path of deleted) rmSync(join(workTree, path), { force: true });
 }
 
+// Display only, and deliberately non-fatal. `git diff` is the one command here that can produce
+// real volume, and spawnSync reports a run past MAX_BUFFER_BYTES as an error rather than truncated
+// output — so a throw here failed `/undo` outright for exactly the large change a user most wants
+// to undo. Nothing about the restore depends on this string; the paths that are actually acted on
+// come from planRestore, which reports names and not contents and so cannot overflow the same way.
 export function diffTree(gitDir: string, workTree: string, tree: string): string {
-  return git(gitDir, workTree, ["diff", tree]);
+  try {
+    return git(gitDir, workTree, ["diff", tree]);
+  } catch (err) {
+    return `(diff not shown: ${err instanceof Error ? err.message : String(err)})`;
+  }
 }
 
 // exit 0 = ignored, exit 1 = not ignored. Measured at 23.5 ms per path.

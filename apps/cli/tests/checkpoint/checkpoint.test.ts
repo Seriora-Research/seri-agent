@@ -336,6 +336,28 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
   );
 
   test(
+    "reports only the ignored writes at or after the checkpoint it restores to",
+    () => {
+      // Session-wide, `/undo 1` announced a gitignored file written twenty tool calls earlier in
+      // the same breath as the paths it had just restored — an undo that was never going to touch
+      // it either way.
+      writeFileSync(join(workTree, ".gitignore"), "*.log\n");
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1", args: { path: "secret.log" } }));
+      writeFileSync(join(workTree, "a.txt"), "v2\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+      writeFileSync(join(workTree, "a.txt"), "v3\n");
+      snapshot(mutation({ toolCallId: "c3" }));
+
+      expect(undo(1).ignored).toEqual([]);
+      // Stepping back to the checkpoint the ignored write happened at does report it: the record is
+      // appended just before that call's own tool record.
+      expect(undo(3).ignored).toEqual(["secret.log"]);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
     "refuses to step further back than the session goes",
     () => {
       checkpointer()(mutation());

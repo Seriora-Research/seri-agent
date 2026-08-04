@@ -77,6 +77,9 @@ the project itself need not be a git repo and nothing is ever written into the u
 reviewable diff and an explicit removal pass (`checkout-index` alone is additive);
 `/rewind [n]` truncates the conversation to the same anchor and touches no file. Both
 read one append-only JSONL log per session, so the two histories cannot drift apart.
+`/undo` commits the state it replaced first and prints `/restore <commit>`, which takes
+the same restore path back — recovery is a command that runs the removal pass, not a git
+incantation pasted into a shell that would leave a state which never existed.
 `runLoop` is still stateless and I/O-free: `withCheckpoints` is a pure function over a
 `ToolSet` that `cli.ts` applies before injection, so checkpointing is consumer policy
 and `loop.ts` has zero changes. The snapshot runs inside the wrapped `execute` before

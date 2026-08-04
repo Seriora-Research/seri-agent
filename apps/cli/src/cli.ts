@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface } from "node:readline";
 import type { ModelMessage } from "ai";
 import pkg from "../package.json";
@@ -12,9 +12,11 @@ import {
   appendBarrier,
   checkpointStoreDir,
   createCheckpointer,
+  restoreCommit,
+  type RestorePlan,
+  type RestoreResult,
   rewindConversation,
   undoFiles,
-  type UndoPlan,
 } from "./checkpoint/checkpoint";
 import { withCheckpoints } from "./checkpoint/wrapTools";
 import { configCommand as configCommandReal } from "./config/commands";
@@ -56,6 +58,7 @@ type CliDeps = {
 const SLASH_COMMANDS = new Map<string, (session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs) => void>([
   ["/mode", cycleModeCommand],
   ["/undo", undoCommand],
+  ["/restore", restoreCommand],
   ["/rewind", rewindCommand],
 ]);
 
@@ -109,7 +112,33 @@ function undoCommand(session: SessionState<ModelMessage>, args: string[], dirs: 
     return;
   }
   console.log(`Undid to checkpoint ${result.seq}.`);
-  // Undo is never the operation that loses work: the state it just replaced was committed first.
+  printRecovery(result);
+}
+
+// The other end of what /undo and /restore print: put the worktree back to a commit this session
+// recorded. It exists so recovery is a command that reuses the restore path — removal pass
+// included — rather than a git incantation the user pastes and hopes about.
+function restoreCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
+  const [commit, ...rest] = args;
+  if (commit === undefined || rest.length > 0) throw new Error("/restore takes one argument, the commit to restore.");
+
+  const result = restoreCommit({
+    storeDir: checkpointStoreDir(dirs.checkpointsDir, session.cwd),
+    worktree: session.cwd,
+    sessionId: session.id,
+    commit,
+    onPlan: printUndoPlan,
+  });
+  if (result.restored.length === 0 && result.deleted.length === 0) {
+    console.log(`Already at ${commit}; no file changed.`);
+    return;
+  }
+  console.log(`Restored ${commit}.`);
+  printRecovery(result);
+}
+
+// Restoring is never the operation that loses work: the state it just replaced was committed first.
+function printRecovery(result: RestoreResult): void {
   console.log(`The state this replaced is commit ${result.preUndoCommit}. To get it back:`);
   console.log(`  ${result.recoverCommand}`);
 }
@@ -182,7 +211,7 @@ function printWarning(message: string): void {
 // skipped are listed separately rather than left for the user to notice was missing. The deletion
 // list matters most: the removal pass takes every untracked, non-ignored file, including ones a
 // human made by hand in another terminal.
-function printUndoPlan(plan: UndoPlan): void {
+function printUndoPlan(plan: RestorePlan): void {
   if (plan.diff) console.log(plan.diff);
   for (const path of plan.restored) console.log(`restored ${path}`);
   for (const path of plan.deleted) console.log(`deleted  ${path}`);
@@ -330,6 +359,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   saveSession(session, sessionsDir);
+
+  // `write_file`, `bash` and `powershell` write relative to process.cwd(), but the store and /undo
+  // are keyed on the session's own cwd. A subdirectory is fine — it is inside the tree being
+  // snapshotted — but resuming a session from an unrelated project snapshots one tree while the
+  // tools edit another, and a later /undo runs its removal pass in the ORIGINAL project, deleting
+  // untracked files a human made there. Said out loud rather than left to be discovered by the
+  // deletion.
+  const inSessionTree = relative(session.cwd, process.cwd());
+  if (inSessionTree === ".." || inSessionTree.startsWith(`..${sep}`) || isAbsolute(inSessionTree)) {
+    printWarning(
+      `this session's files are checkpointed under ${session.cwd}, but tools run in ${process.cwd()} — /undo will act on ${session.cwd}`,
+    );
+  }
 
   // Checkpointing is enabled by exactly this call, which is also why rolling it back is a one-line
   // revert: `runLoop`, the session store, the gate and every tool are unmodified, and the store

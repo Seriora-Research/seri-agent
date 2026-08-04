@@ -288,11 +288,10 @@ function newestDistinct<T, K>(records: T[], key: (record: T) => K): T[] {
   return [...byKey.values()];
 }
 
-// What `/undo` is about to do, handed to the caller before any of it is done — the diff and the
-// deletion list are the reviewable part, and a user learning which of their files were removed
-// only afterwards is being told, not asked.
-export type UndoPlan = {
-  seq: number;
+// What a file-restoring command is about to do, handed to the caller before any of it is done —
+// the diff and the deletion list are the reviewable part, and a user learning which of their files
+// were removed only afterwards is being told, not asked.
+export type RestorePlan = {
   tree: string;
   diff: string;
   restored: string[];
@@ -300,36 +299,46 @@ export type UndoPlan = {
   ignored: string[];
 };
 
-export type UndoResult = UndoPlan & {
+export type RestoreResult = RestorePlan & {
   preUndoCommit: string;
-  // Plain git, not a seri subcommand, and safe to paste: the store's own config carries the crlf
-  // settings (initShadow), and the paths are quoted so a project directory with a space in it
-  // still works.
+  // A seri subcommand rather than a pasted git incantation. `read-tree` + `checkout-index -a -f`
+  // is additive — it recreates files but deletes nothing — so the command printed here used to
+  // reconstruct a state that never existed: after the agent deleted `old.ts` and created `new.ts`,
+  // `/undo` restored `old.ts` and deleted `new.ts`, and pasting the printed command brought
+  // `new.ts` back and LEFT `old.ts`. Routing recovery through `/restore` reuses planRestore and
+  // applyRestore, removal pass included, and it is a path a test can exercise — which the raw
+  // string, by its third distinct defect (missing crlf flags, missing quoting, missing removal),
+  // had shown it was not.
   recoverCommand: string;
 };
 
-export function undoFiles(opts: {
+export type UndoResult = RestoreResult & { seq: number };
+
+type RestoreOpts = {
   storeDir: string;
   worktree: string;
   sessionId: string;
-  steps: number;
-  onPlan: (plan: UndoPlan) => void;
-}): UndoResult {
-  const log = readLog(opts.storeDir, opts.sessionId);
-  // `pre-undo` records are excluded here — they describe state an undo replaced, not a point the
-  // user asked to be able to return to, and stepping onto one would make `/undo 2` mean "undo the
-  // undo". They are still part of the commit chain; see the parent below.
-  const targets = newestDistinct(toolRecords(log), (record) => record.tree);
-  const target = targets[opts.steps - 1];
-  if (target === undefined) {
-    throw new Error(`This session has ${targets.length} checkpoint(s) to undo to; asked for ${opts.steps}.`);
-  }
+  onPlan: (plan: RestorePlan) => void;
+};
 
+// Reported so the user is told what the restore did NOT cover, rather than left to infer it from a
+// list that silently omits them. Sliced rather than session-wide, because an ignored write from
+// twenty tool calls before the checkpoint being restored is not something this restore was ever
+// going to have an opinion about — the same reason planRestore subtracts the deleted paths from
+// the restored ones.
+function ignoredSince(log: CheckpointRecord[], index: number): string[] {
+  return newestDistinct(
+    log.slice(index).filter((record) => record.kind === "ignored"),
+    (record) => record.path,
+  ).map((record) => record.path);
+}
+
+function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): RestoreResult {
   const gitDir = gitDirOf(opts.storeDir);
-  // Taken before anything is touched, so undo is never the operation that loses work. The parent
-  // is the ref itself rather than the last tool record: a second undo would otherwise branch off
-  // beside the first pre-undo commit instead of through it, leaving a hash this function already
-  // printed to the user unreachable and on gc's clock.
+  // Taken before anything is touched, so restoring is never the operation that loses work. The
+  // parent is the ref itself rather than the last tool record: a second undo would otherwise branch
+  // off beside the first pre-undo commit instead of through it, leaving a hash this function
+  // already printed to the user unreachable and on gc's clock.
   const currentTree = writeTree(gitDir, opts.worktree);
   const preUndoCommit = commitTree(gitDir, opts.worktree, currentTree, resolveRef(gitDir, sessionRef(opts.sessionId)));
   updateRef(gitDir, sessionRef(opts.sessionId), preUndoCommit);
@@ -340,28 +349,43 @@ export function undoFiles(opts: {
     at: new Date().toISOString(),
   });
 
-  const plan: UndoPlan = {
-    seq: target.seq,
-    tree: target.tree,
-    diff: diffTree(gitDir, opts.worktree, target.tree),
-    ...planRestore(gitDir, opts.worktree, target.tree),
-    // Reported so the user is told what undo did NOT cover, rather than left to infer it from a
-    // list that silently omits them.
-    ignored: newestDistinct(
-      log.filter((record) => record.kind === "ignored"),
-      (record) => record.path,
-    ).map((record) => record.path),
+  const plan: RestorePlan = {
+    tree: treeish,
+    // Before planRestore, which rewrites the index. Display only, and non-fatal by design — see
+    // diffTree.
+    diff: diffTree(gitDir, opts.worktree, treeish),
+    ...planRestore(gitDir, opts.worktree, treeish),
+    ignored,
   };
   opts.onPlan(plan);
   applyRestore(gitDir, opts.worktree, plan.deleted);
 
-  return {
-    ...plan,
-    preUndoCommit,
-    recoverCommand:
-      `git --git-dir="${gitDir}" --work-tree="${opts.worktree}" read-tree ${preUndoCommit} && ` +
-      `git --git-dir="${gitDir}" --work-tree="${opts.worktree}" checkout-index -a -f`,
-  };
+  return { ...plan, preUndoCommit, recoverCommand: `seri --resume ${opts.sessionId} /restore ${preUndoCommit}` };
+}
+
+export function undoFiles(opts: RestoreOpts & { steps: number }): UndoResult {
+  const log = readLog(opts.storeDir, opts.sessionId);
+  // `pre-undo` records are excluded here — they describe state an undo replaced, not a point the
+  // user asked to be able to return to, and stepping onto one would make `/undo 2` mean "undo the
+  // undo". They are still part of the commit chain; see the parent in restoreTo.
+  const targets = newestDistinct(toolRecords(log), (record) => record.tree);
+  const target = targets[opts.steps - 1];
+  if (target === undefined) {
+    throw new Error(`This session has ${targets.length} checkpoint(s) to undo to; asked for ${opts.steps}.`);
+  }
+
+  // Everything logged for the tool call being restored to, and everything after it. The `ignored`
+  // record for a call is appended immediately before its `tool` record, so cutting at the tool
+  // record would drop the very write that checkpoint was taken in front of.
+  const from = log.findIndex((record) => "toolCallId" in record && record.toolCallId === target.toolCallId);
+  return { ...restoreTo(opts, target.tree, ignoredSince(log, from)), seq: target.seq };
+}
+
+// The other end of `recoverCommand`: put back a commit this session recorded, whatever it was.
+// Every ignored write in the session is reported, because an arbitrary commit has no position in
+// the log to measure "since" from.
+export function restoreCommit(opts: RestoreOpts & { commit: string }): RestoreResult {
+  return restoreTo(opts, opts.commit, ignoredSince(readLog(opts.storeDir, opts.sessionId), 0));
 }
 
 // Reads the log and nothing else — it has no path to shadowGit, so "rewind leaves the filesystem
