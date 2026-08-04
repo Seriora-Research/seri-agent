@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import pkg from "../../package.json";
-import { runRipgrep } from "../../src/tools/runRipgrep";
+import { resolveRg, runRipgrep } from "../../src/tools/runRipgrep";
 
 const MODULE = pathToFileURL(join(import.meta.dir, "../../src/tools/runRipgrep.ts")).href;
 const ASSET = join(import.meta.dir, "../../src/tools/rg-vendored.bin");
@@ -172,7 +172,7 @@ describe("rg resolution", () => {
         IMPORT,
         `const rg = m.resolveRg();`,
         `console.log(rg);`,
-        `console.log(m.runRipgrep(["--json", "needle", ${JSON.stringify(tmpDir)}]).stdout.includes("needle"));`,
+        `console.log((await m.runRipgrep(["--json", "needle", ${JSON.stringify(tmpDir)}])).stdout.includes("needle"));`,
         `process.on("exit", () => console.log(existsSync(dirname(rg))));`,
       ],
       cacheEnv(root),
@@ -196,7 +196,7 @@ describe("rg resolution", () => {
         IMPORT,
         `const rg = m.resolveRg();`,
         `renameSync(rg, rg + ".parked");`,
-        `try { m.runRipgrep(["--json", "needle", ${JSON.stringify(tmpDir)}]); console.log("no throw"); }`,
+        `try { await m.runRipgrep(["--json", "needle", ${JSON.stringify(tmpDir)}]); console.log("no throw"); }`,
         `catch (error) { console.log(error.message); }`,
       ],
       cacheEnv(cacheRoot),
@@ -207,33 +207,33 @@ describe("rg resolution", () => {
 });
 
 describe("runRipgrep", () => {
-  test("returns stdout and reports no truncation for an ordinary search", () => {
+  test("returns stdout and reports no truncation for an ordinary search", async () => {
     writeFileSync(join(tmpDir, "a.txt"), "needle\n");
 
-    const { stdout, truncated } = runRipgrep(["--json", "needle", tmpDir]);
+    const { stdout, truncated } = await runRipgrep(["--json", "needle", tmpDir]);
 
     expect(truncated).toBe(false);
     expect(stdout).toContain("needle");
   });
 
-  test("reports truncation instead of throwing when rg outruns the stdout buffer", () => {
+  test("reports truncation instead of throwing when rg outruns the stdout buffer", async () => {
     // --json emits one event per match at a few hundred bytes each, so this overshoots the
     // buffer several times over rather than sitting on the limit. Before the fix spawnSync
     // killed rg here and the caller saw `rg exited with code null:` with an empty stderr —
     // an rg crash that never happened, and every match found so far thrown away.
     writeFileSync(join(tmpDir, "big.txt"), "needle here on this line\n".repeat(60_000));
 
-    const { stdout, truncated } = runRipgrep(["--json", "needle", tmpDir]);
+    const { stdout, truncated } = await runRipgrep(["--json", "needle", tmpDir]);
 
     expect(truncated).toBe(true);
     expect(stdout.length).toBeGreaterThan(0);
   });
 
-  test("still throws when rg genuinely fails", () => {
-    expect(() => runRipgrep(["--definitely-not-a-real-flag", tmpDir])).toThrow(/rg exited with code/);
+  test("still throws when rg genuinely fails", async () => {
+    await expect(runRipgrep(["--definitely-not-a-real-flag", tmpDir])).rejects.toThrow(/rg exited with code/);
   });
 
-  test("ignores the user's own ripgrep config", () => {
+  test("ignores the user's own ripgrep config", async () => {
     // rg picks up RIPGREP_CONFIG_PATH from the environment, so without --no-config a
     // developer's ~/.ripgreprc silently changes what seri finds on their machine and
     // nowhere else. This config would hide the only matching file.
@@ -244,7 +244,7 @@ describe("runRipgrep", () => {
     const original = process.env.RIPGREP_CONFIG_PATH;
     process.env.RIPGREP_CONFIG_PATH = configPath;
     try {
-      const { stdout } = runRipgrep(["--json", "needle", tmpDir]);
+      const { stdout } = await runRipgrep(["--json", "needle", tmpDir]);
       expect(stdout).toContain("needle");
     } finally {
       // Assigning a captured `undefined` back would set the literal string "undefined".
@@ -252,4 +252,48 @@ describe("runRipgrep", () => {
       else process.env.RIPGREP_CONFIG_PATH = original;
     }
   });
+
+  test.skipIf(process.platform === "win32")("a cancelled search is killed rather than run to completion", async () => {
+    // A 2 GiB sparse file, not a large tree, and not a timing margin. Both obvious fixtures were
+    // measured and rejected on this box: rg scans 200 MB across 180 files in 152 ms, so no tree a
+    // test can afford to write makes a search long enough to time; and a FIFO does not block rg at
+    // all — it opens it, searches 0 bytes and returns, so "the search is still running" was true in
+    // one probe and false in the next. ftruncate costs 0 ms and allocates 0 blocks, and -a stops rg
+    // skipping it as binary, which buys a search measured at ~7.7 s per GiB — long enough that
+    // "still searching" below is an assertion rather than a race.
+    const dir = mkdtempSync(join(tmpdir(), "seri-rg-cancel-"));
+    const big = join(dir, "big.bin");
+    writeFileSync(big, "");
+    truncateSync(big, 2 * 1024 * 1024 * 1024);
+
+    const controller = new AbortController();
+    const search = runRipgrep(["-a", "--files-with-matches", "--", "needle", dir], controller.signal);
+    // Attached now, not after the abort: a rejection observed by nothing in between would surface
+    // as an unhandled rejection rather than as this test's own result.
+    const outcome = search.then(() => "resolved", (err: Error) => `rejected: ${err.message}`);
+    const settledWithin = (ms: number): Promise<string> =>
+      Promise.race([outcome, new Promise<string>((r) => setTimeout(() => r("still searching"), ms))]);
+    const rgPath = resolveRg();
+    const survivors = (): string => spawnSync("pgrep", ["-f", rgPath], { encoding: "utf8" }).stdout.trim();
+
+    try {
+      // Interrupting a live search, not tidying up a finished one — asserted on the promise and on
+      // the process, since clause (c) is explicitly not satisfied by the call merely returning.
+      expect(await settledWithin(500)).toBe("still searching");
+      expect(survivors()).not.toBe("");
+
+      controller.abort();
+
+      // Raced rather than plainly awaited so that dropping the abort listener fails here in 5 s
+      // with "still searching" instead of hanging for the rest of the 2 GiB.
+      expect(await settledWithin(5_000)).toBe("rejected: cancelled");
+
+      // Polled: a just-killed process is briefly a zombie and pgrep still lists it.
+      const deadline = Date.now() + 5_000;
+      while (survivors() !== "" && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+      expect(survivors()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 45_000);
 });

@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -147,12 +147,16 @@ export function rgVersion(command: string): string {
   return `${match[1]}.${match[2]}.${match[3]}`;
 }
 
-// spawnSync buffers rg's entire stdout in memory and kills rg the moment the buffer fills.
-// Node's 1 MB default was low enough that an ordinary --json search (one event per match, a
-// few hundred bytes each) blew it after a few thousand matches, and the overflow arrives as
-// `status: null` with an empty stderr — indistinguishable from an rg crash unless the
-// ENOBUFS error is checked. Callers cap their results far below this, so a full buffer only
-// ever means "more than we were going to return anyway": that is truncation, not a failure.
+// The ceiling on how much of rg's stdout is kept before it is killed and the result reported as
+// truncated. A --json search emits one event per match at a few hundred bytes each, so a broad
+// pattern over a monorepo produces far more than any caller returns: callers cap their results
+// far below this, so a full buffer only ever means "more than we were going to return anyway",
+// which is truncation and not a failure.
+//
+// The name still says BYTES and the accumulation is now a JS string, so the unit is really UTF-16
+// units — 8 M characters rather than 8 MB. Deliberately not renamed: shadowGit.ts:8
+// cross-references this constant by name and 8 M units is the same order of magnitude for any
+// input, which is all this number was ever chosen to be.
 const MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 
 // How many results grep and glob hand back. A model searching a real repo gains nothing from
@@ -178,37 +182,95 @@ export function outputLines(stdout: string, truncated: boolean): string[] {
   return lines;
 }
 
-export function runRipgrep(args: string[]): { stdout: string; truncated: boolean } {
-  // --no-config: rg reads RIPGREP_CONFIG_PATH from the environment, so without this a
-  // developer's own ~/.ripgreprc (--smart-case, --hidden, glob excludes) silently changes
-  // what seri finds on their machine and nowhere else.
-  const result = spawnSync(resolveRg(), ["--no-config", ...args], {
-    encoding: "utf8",
-    maxBuffer: MAX_BUFFER_BYTES,
-    timeout: RG_TIMEOUT_MS,
-    windowsHide: true,
+// spawn, not spawnSync, and the reason is not only the abort: spawnSync blocks the event loop for
+// the whole search, so a SIGINT arriving during a grep was not delivered to any JS handler until
+// rg had finished on its own. Nothing could interrupt a search, cancellation or otherwise.
+//
+// It also cannot reuse spawnCollect. That sink truncates by dropping the MIDDLE and rejoining the
+// two ends with a marker, and grep parses this stdout one JSON line at a time — a marker on the
+// seam line is a parse error, and in files_with_matches/count mode it would silently delete files
+// from the middle of the list. This keeps the HEAD and drops the partial trailing line, which is
+// what outputLines already assumes.
+export function runRipgrep(args: string[], signal?: AbortSignal): Promise<{ stdout: string; truncated: boolean }> {
+  return new Promise((resolve, reject) => {
+    // --no-config: rg reads RIPGREP_CONFIG_PATH from the environment, so without this a
+    // developer's own ~/.ripgreprc (--smart-case, --hidden, glob excludes) silently changes
+    // what seri finds on their machine and nowhere else.
+    const child = spawn(resolveRg(), ["--no-config", ...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let truncated = false;
+    let timedOut = false;
+    let aborted = false;
+
+    // Decoding per chunk would split multi-byte characters across stream boundaries; setEncoding
+    // buffers the partial sequence instead. Same reason spawnCollect does it.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      if (truncated) return;
+      stdout += chunk;
+      if (stdout.length >= MAX_BUFFER_BYTES) {
+        truncated = true;
+        child.kill("SIGKILL");
+      }
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+
+    // A plain kill, not spawnCollect's killTree: rg starts no children, so there is no process
+    // group to reach and nothing for taskkill /t to find.
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, RG_TIMEOUT_MS);
+
+    const onAbort = (): void => {
+      aborted = true;
+      child.kill("SIGKILL");
+    };
+    signal?.addEventListener("abort", onAbort);
+
+    const settled = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    child.on("error", (error) => {
+      settled();
+      // rg never started, so there is no exit code and no stderr, and the exit-code message below
+      // would name neither a cause nor a real code. Reachable when the resolved binary is removed
+      // or quarantined mid-session.
+      reject(new Error(`failed to run rg: ${error.message}`));
+    });
+
+    child.on("close", (code) => {
+      settled();
+      if (aborted) {
+        reject(new Error("cancelled"));
+        return;
+      }
+      if (timedOut) {
+        reject(new Error(`rg did not finish within ${RG_TIMEOUT_MS / 1000}s and was killed`));
+        return;
+      }
+      // Before the exit-code check, not after: a truncation kills rg, so it closes with
+      // `code === null`, which the check below would report as `rg exited with code null`.
+      if (truncated) {
+        resolve({ stdout, truncated: true });
+        return;
+      }
+      // rg exits 1 when there are no matches (not an error); anything else is a real failure.
+      if (code !== 0 && code !== 1) {
+        reject(new Error(`rg exited with code ${code}: ${stderr}`));
+        return;
+      }
+      resolve({ stdout, truncated: false });
+    });
   });
-
-  if (result.error) {
-    if ((result.error as NodeJS.ErrnoException).code === "ENOBUFS") {
-      return { stdout: result.stdout, truncated: true };
-    }
-    // A timed-out rg arrives as an error rather than an exit code — measured: `status: null`,
-    // `signal: "SIGTERM"`, `code: "ETIMEDOUT"`. Without this it would fall into the generic
-    // message below, which names spawnSync's wording and never the timeout that caused it.
-    if ((result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
-      throw new Error(`rg did not finish within ${RG_TIMEOUT_MS / 1000}s and was killed`);
-    }
-    // rg never started, so status and stderr are both empty and the exit-code message below
-    // would name neither a cause nor a real code — the same unreadable failure this file was
-    // fixed for. Reachable when the resolved binary is removed or quarantined mid-session.
-    throw new Error(`failed to run rg: ${result.error.message}`);
-  }
-
-  // rg exits 1 when there are no matches (not an error); anything else is a real failure.
-  if (result.status !== 0 && result.status !== 1) {
-    throw new Error(`rg exited with code ${result.status}: ${result.stderr}`);
-  }
-
-  return { stdout: result.stdout, truncated: false };
 }
