@@ -110,7 +110,15 @@ function killInFlightChildren(): void {
 
 onSignalCleanup(killInFlightChildren);
 
-export function spawnCollect(executable: string, args: string[], timeoutMs?: number): Promise<ProcessResult> {
+// The signal is a fourth positional rather than an options bag: timeoutMs is already an optional
+// positional that three call sites pass, and converting the shape would churn bash.ts,
+// powershell.ts, browser.ts and three test files for no behavioural gain.
+export function spawnCollect(
+  executable: string,
+  args: string[],
+  timeoutMs?: number,
+  signal?: AbortSignal,
+): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       stdio: ["ignore", "pipe", "pipe"],
@@ -136,15 +144,35 @@ export function spawnCollect(executable: string, args: string[], timeoutMs?: num
       if (child.pid !== undefined) killTree(child.pid);
     }, Math.min(timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS));
 
+    // Killing the tree is only half of a cancel. `close` still fires afterwards with a code and
+    // timedOut false, so without this flag the promise would resolve with an ordinary-looking
+    // ProcessResult and the caller would hand a model a real tool result for a command the user
+    // stopped. Nothing observed that before, because a Ctrl-C used to kill this process outright
+    // and the promise never settled at all.
+    let aborted = false;
+    const onAbort = (): void => {
+      aborted = true;
+      if (child.pid !== undefined) killTree(child.pid);
+    };
+    signal?.addEventListener("abort", onAbort);
+
     child.on("error", (error) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       inFlightChildren.delete(child);
       reject(error);
     });
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       inFlightChildren.delete(child);
+      // Rejects rather than returning an `aborted` boolean: a flag is a thing every call site can
+      // forget to read, where a rejection propagates by default all the way out to the loop.
+      if (aborted) {
+        reject(new Error("cancelled"));
+        return;
+      }
       const stdout = out.result();
       const stderr = err.result();
       // Whatever the command managed to say before being killed still goes back. An agent can

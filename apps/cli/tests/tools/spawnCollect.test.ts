@@ -196,4 +196,34 @@ describe("spawnCollect", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 30_000);
+
+  test.skipIf(process.platform === "win32")("rejects a cancelled command instead of resolving with a result", async () => {
+    // Same pid-file handshake as the test above, for the same reason: spawnCollect does not expose
+    // the child it spawned, so the child reports its own pid. The 60s self-destruct is twice this
+    // test's timeout, so it can never turn a red into a green.
+    const dir = mkdtempSync(join(tmpdir(), "seri-cancel-test-"));
+    const pidFile = join(dir, "child.pid");
+    const script =
+      `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));` +
+      `setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 60000);`;
+
+    const controller = new AbortController();
+    const running = spawnCollect(process.execPath, ["-e", script], undefined, controller.signal);
+    try {
+      const pid = await waitForPid(pidFile);
+      expect(isAlive(pid)).toBe(true);
+
+      controller.abort();
+
+      // The latent bug this guards: `close` fires after the kill with timedOut still false, so
+      // before the reject the promise settled with a normal ProcessResult for a cancelled command.
+      await expect(running).rejects.toThrow(/cancelled/);
+
+      // Polled: a just-killed child is briefly a zombie, and kill(pid, 0) succeeds on a zombie.
+      const dead = await waitFor(() => !isAlive(pid), 5_000);
+      expect(dead ? "killed" : `child ${pid} survived the cancel`).toBe("killed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
