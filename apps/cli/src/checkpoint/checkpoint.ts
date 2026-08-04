@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   applyRestore,
@@ -38,7 +38,13 @@ export type CheckpointRecord =
   | { kind: "tool"; seq: number; toolCallId: string; tool: string; tree: string; commit: string; rewindTo: number; at: string }
   | { kind: "ignored"; toolCallId: string; path: string; at: string }
   | { kind: "compaction-barrier"; at: string }
+  | { kind: "rewind-barrier"; at: string }
   | { kind: "pre-undo"; tree: string; commit: string; at: string };
+
+// The two events that make every rewind anchor recorded before them meaningless, and so the two
+// things `/rewind` may not step across. Compaction splices the message array; a rewind truncates it
+// and lets the messages that follow reuse the indices that were freed.
+type BarrierCause = "compaction" | "rewind";
 
 type ToolRecord = Extract<CheckpointRecord, { kind: "tool" }>;
 type AnchoredRecord = Extract<CheckpointRecord, { tree: string; commit: string }>;
@@ -53,9 +59,11 @@ function anchored(log: CheckpointRecord[]): AnchoredRecord[] {
   return log.filter((record): record is AnchoredRecord => record.kind === "tool" || record.kind === "pre-undo");
 }
 
-// One store per worktree, under <configDir>/checkpoints. Lowercased first on win32 because NTFS
-// paths are case-insensitive and `C:\p` and `c:\p` are the same directory — hashing them
-// separately would give one project two undo histories depending on how it was typed.
+// One store per project, under <configDir>/checkpoints. `worktree` is the project root from
+// `projectRoot`, not the directory seri was started in, so every session in one repository shares
+// a store however deep in it the user was standing. Lowercased first on win32 because NTFS paths
+// are case-insensitive and `C:\p` and `c:\p` are the same directory — hashing them separately
+// would give one project two undo histories depending on how it was typed.
 export function checkpointStoreDir(checkpointsDir: string, worktree: string): string {
   const resolved = resolve(worktree);
   const key = createHash("sha256")
@@ -73,8 +81,10 @@ function logPath(storeDir: string, sessionId: string): string {
   return join(storeDir, `${sessionId}.jsonl`);
 }
 
+const SESSION_REF_PREFIX = "refs/seri/sessions/";
+
 function sessionRef(sessionId: string): string {
-  return `refs/seri/sessions/${sessionId}`;
+  return `${SESSION_REF_PREFIX}${sessionId}`;
 }
 
 function initStore(storeDir: string, worktree: string): void {
@@ -93,30 +103,44 @@ function initStore(storeDir: string, worktree: string): void {
 export function readLog(storeDir: string, sessionId: string): CheckpointRecord[] {
   const path = logPath(storeDir, sessionId);
   if (!existsSync(path)) return [];
-  // An unrecognised `kind` written by a future version simply never matches a filter below, so it
-  // is skipped rather than fatal. That is the whole of the forward-compatibility story.
+  // Two ways a line can be unusable, both skipped rather than fatal — which is the whole of the
+  // forward-compatibility story, and now actually true of both. An unrecognised `kind` written by
+  // a future version never matches a filter below. An unparseable line is dropped here: the log is
+  // appended to with no fsync, so a kill or an ENOSPC mid-appendFileSync leaves a truncated final
+  // line, and a JSON.parse throw for it latched checkpointing off for the rest of the session with
+  // a raw SyntaxError as the warning, and left /undo, /rewind and /restore unusable for that
+  // session permanently. One bad tail line is not worth the whole history.
   return readFileSync(path, "utf8")
     .split("\n")
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as CheckpointRecord);
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line) as CheckpointRecord];
+      } catch {
+        return [];
+      }
+    });
 }
 
 function append(storeDir: string, sessionId: string, record: CheckpointRecord): void {
   appendFileSync(logPath(storeDir, sessionId), `${JSON.stringify(record)}\n`);
 }
 
-export function appendBarrier(storeDir: string, sessionId: string): void {
+export function appendBarrier(storeDir: string, sessionId: string, cause: BarrierCause): void {
   // No log means this session never took a checkpoint — git absent, or the error latch tripped —
   // so there is nothing for a barrier to protect and nowhere to write it. The predicate lives here
   // because it is about this session's log; asking the caller to test for the store directory
-  // instead would answer a different question, since the store is keyed per worktree and is
-  // already there whenever any earlier session in the same directory checkpointed.
+  // instead would answer a different question, since the store is keyed per project and is
+  // already there whenever any earlier session in the same project checkpointed.
   if (!existsSync(logPath(storeDir, sessionId))) return;
-  append(storeDir, sessionId, { kind: "compaction-barrier", at: new Date().toISOString() });
+  const kind = cause === "compaction" ? "compaction-barrier" : "rewind-barrier";
+  append(storeDir, sessionId, { kind, at: new Date().toISOString() });
 }
 
-// Runs once per session, on the already-cold first checkpoint, and only deletes refs — the
-// snapshots themselves stay reachable until gc's default expiry.
+// Runs once per session, on the already-cold first checkpoint. The log goes with the ref, because
+// a log outliving its snapshots is worse than no log: /undo on a pruned session read a full
+// history, computed targets from it, and then failed at `treeExists` with "not a checkpoint in
+// this session's store" while the file it had just read listed dozens of them.
 //
 // `keep` is the ref of the session doing the pruning, and it is excluded from the candidates
 // rather than merely counted among them. Pruning runs BEFORE the session's own tip is read back
@@ -129,7 +153,10 @@ export function pruneSessions(storeDir: string, keep?: string): void {
   const refs = listSessionRefs(gitDir).filter((ref) => ref !== keep);
   if (refs.length <= MAX_RETAINED_SESSIONS) return;
 
-  for (const ref of refs.slice(0, refs.length - MAX_RETAINED_SESSIONS)) deleteRef(gitDir, ref);
+  for (const ref of refs.slice(0, refs.length - MAX_RETAINED_SESSIONS)) {
+    deleteRef(gitDir, ref);
+    rmSync(logPath(storeDir, ref.slice(SESSION_REF_PREFIX.length)), { force: true });
+  }
   gc(gitDir);
 }
 
@@ -452,23 +479,29 @@ export function restoreCommit(opts: RestoreOpts & { commit: string }): RestoreRe
 export function rewindConversation(opts: { storeDir: string; sessionId: string; steps: number }): { rewindTo: number } {
   const log = readLog(opts.storeDir, opts.sessionId);
 
-  // Compaction splices the whole message array, so a rewindTo recorded before it indexes into an
-  // array that no longer exists. Refusing is the honest answer; silently slicing a compacted array
-  // would hand back garbage.
+  // Both barriers mean the same thing to an anchor: the array it indexed is gone. Compaction
+  // splices it; a rewind truncates it and the messages that follow reuse the freed indices, which
+  // is the more dangerous of the two because a stale anchor then still LANDS — on a different
+  // message — instead of falling off the end where clamping would catch it. Refusing is the honest
+  // answer; slicing on either would hand back garbage.
   // `findLastIndex` would say this in one word, but it is ES2023 and this package compiles against
   // the ES2022 lib.
-  const barrier = log.reduce((last, record, index) => (record.kind === "compaction-barrier" ? index : last), -1);
+  let barrier = -1;
+  let barrierCause: BarrierCause | undefined;
+  for (const [index, record] of log.entries()) {
+    if (record.kind === "compaction-barrier") [barrier, barrierCause] = [index, "compaction"];
+    if (record.kind === "rewind-barrier") [barrier, barrierCause] = [index, "rewind"];
+  }
 
-  // Anchors are not monotonic across a session: a `/rewind` truncates the array and the messages
-  // that follow reuse indices already seen, so newestDistinct's ordering matters here for the same
-  // reason it does above.
   const anchors = newestDistinct(toolRecords(log.slice(barrier + 1)), (record) => record.rewindTo);
   const rewindTo = anchors[opts.steps - 1]?.rewindTo;
   if (rewindTo === undefined) {
     throw new Error(
-      barrier === -1
+      barrierCause === undefined
         ? `This session has ${anchors.length} point(s) to rewind to; asked for ${opts.steps}.`
-        : `This session only has ${anchors.length} point(s) to rewind to since the last compaction; anything older than that was summarized away by compaction and cannot be restored.`,
+        : barrierCause === "compaction"
+          ? `This session only has ${anchors.length} point(s) to rewind to since the last compaction; anything older than that was summarized away by compaction and cannot be restored.`
+          : `This session only has ${anchors.length} point(s) to rewind to since the last rewind; anything older than that points into messages that rewind removed.`,
     );
   }
   return { rewindTo };

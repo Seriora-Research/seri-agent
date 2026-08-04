@@ -70,20 +70,28 @@ recent commit history for why) and never cuts the eviction boundary in the middl
 **Checkpoints** (`apps/cli/src/checkpoint/`): every call to one of the three tools that
 can change the filesystem — `write_file`, `bash`, `powershell` (`FS_MUTATING_TOOL_NAMES`,
 deliberately not `WRITE_TOOL_NAMES`, which is the permission set and includes `edit`, a
-pure string transform that writes nothing) — snapshots the whole worktree into a bare
-shadow git repo under `<configDir>/checkpoints/<sha256(worktree)[0..16]>/git`, keyed so
+pure string transform that writes nothing) — snapshots the whole **project** into a bare
+shadow git repo under `<configDir>/checkpoints/<sha256(projectRoot)[0..16]>/git`, keyed so
 the project itself need not be a git repo and nothing is ever written into the user's
-`.git`. `seri [--resume <id>] /undo [n]` restores byte-identical prior state with a
+`.git`. The project is `git rev-parse --show-toplevel` from the session's cwd, falling back
+to that cwd outside a repo, and **every** other question is derived from it — the
+`--work-tree`, and therefore which `.gitignore` files are in scope; where the user's
+`info/exclude` lives (`--git-path`, since `.git` is a file in a linked worktree); and the
+store key. Deriving those separately produced the same leak three times in three layouts.
+`seri [--resume <id>] /undo [n]` restores byte-identical prior state with a
 reviewable diff and an explicit removal pass (`checkout-index` alone is additive);
 `/rewind [n]` truncates the conversation to the same anchor and touches no file. Both
-read one append-only JSONL log per session, so the two histories cannot drift apart.
+read one append-only JSONL log per session, and a pruned session's log is deleted with its
+ref, so the log never outlives the snapshots it names. Compaction and `/rewind` both write
+a barrier record, because each makes every anchor before it index into an array that no
+longer exists.
 `/undo` commits the state it replaced first and prints `/restore <commit>`, which takes
 the same restore path back — recovery is a command that runs the removal pass, not a git
 incantation pasted into a shell that would leave a state which never existed.
 Two things a snapshot cannot cover, both warned about once per session rather than left
 to be discovered: a **nested git repository** is staged as a gitlink holding only its HEAD
 sha, so edits inside a submodule or vendored clone change the shadow tree not at all and
-`/undo` will not revert them; and a worktree with **no `.gitignore`** is snapshotted whole
+`/undo` will not revert them; and a project with **no `.gitignore`** is snapshotted whole
 on every mutating call, with `/undo`'s removal pass reaching all of it. Neither is capped
 — a threshold that silently narrowed the snapshot would be the skipped pre-state the
 design refused. `runLoop` is still stateless and I/O-free: `withCheckpoints` is a pure function over a

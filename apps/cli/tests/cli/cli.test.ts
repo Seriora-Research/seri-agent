@@ -462,6 +462,46 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     expect(errors.join("\n")).toContain("deadbeef is not a checkpoint");
   }, 15_000);
 
+  test("a rewind invalidates the anchors recorded before it, instead of slicing into a rebuilt array", async () => {
+    // The walkthrough, exactly: nine messages with anchors [1,3,5,7]; `/rewind 2` takes anchor 5
+    // and truncates to five; the resume appends five more and records [6,8]. `/rewind 3` then used
+    // to reach the stale anchor 7 — small enough to still land, so the clamp never saw it — and
+    // slice to 7, leaving an assistant tool-call whose tool result had been dropped. That is
+    // AI_MissingToolResultsError on the next resume, the exact failure `rewindTo = length - 1`
+    // exists to prevent.
+    const nine: ModelMessage[] = Array.from({ length: 9 }, (_, i) =>
+      i % 2 === 0
+        ? { role: "user", content: `u${i}` }
+        : { role: "assistant", content: [{ type: "text", text: `a${i}` }] },
+    );
+    writeFileSync(join(workTree, "a.txt"), "before\n");
+    const snapshot = createCheckpointer({
+      storeDir: checkpointStoreDir(checkpointsDir, workTree),
+      worktree: workTree,
+      sessionId: SESSION_ID,
+      onWarning: () => {},
+    });
+    const record = (rewindTo: number) =>
+      snapshot({ tool: "write_file", toolCallId: `c${rewindTo}`, args: { path: join(workTree, "a.txt") }, rewindTo });
+    for (const anchor of [1, 3, 5, 7]) record(anchor);
+    saveSession({ id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages: nine }, sessionsDir);
+
+    await run(["--resume", SESSION_ID, "/rewind", "2"], { sessionsDir, checkpointsDir });
+    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toHaveLength(5);
+
+    // The resume: five more messages, and the two anchors that run would record against them.
+    const resumed = loadSession<ModelMessage>(SESSION_ID, sessionsDir);
+    resumed.messages = [...resumed.messages, ...nine.slice(0, 5)];
+    saveSession(resumed, sessionsDir);
+    for (const anchor of [6, 8]) record(anchor);
+
+    const code = await run(["--resume", SESSION_ID, "/rewind", "3"], { sessionsDir, checkpointsDir });
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("since the last rewind");
+    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toHaveLength(10);
+  }, 30_000);
+
   test("/rewind truncates the conversation and leaves the filesystem byte-identical", async () => {
     seed();
     const before = readFileSync(join(workTree, "a.txt"));

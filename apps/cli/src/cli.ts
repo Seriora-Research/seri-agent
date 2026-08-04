@@ -18,6 +18,7 @@ import {
   rewindConversation,
   undoFiles,
 } from "./checkpoint/checkpoint";
+import { projectRoot } from "./checkpoint/shadowGit";
 import { withCheckpoints } from "./checkpoint/wrapTools";
 import { configCommand as configCommandReal } from "./config/commands";
 import { getConfigDir } from "./config/paths";
@@ -107,10 +108,21 @@ function cycleModeCommand(session: SessionState<ModelMessage>, _args: string[], 
   console.log(`Session ${session.id}: permission mode is now ${session.permissionMode}`);
 }
 
+// The tree a session's checkpoints are of, and the store they live in. The session records the
+// directory seri was started in, which is not necessarily the project — resolving the root here
+// rather than at each call site is what keeps the live run and the three restoring commands
+// addressing the same store, since the key is derived from it.
+function checkpointTarget(session: SessionState<ModelMessage>, dirs: CommandDirs): {
+  storeDir: string;
+  worktree: string;
+} {
+  const worktree = projectRoot(session.cwd);
+  return { storeDir: checkpointStoreDir(dirs.checkpointsDir, worktree), worktree };
+}
+
 function undoCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
   const result = undoFiles({
-    storeDir: checkpointStoreDir(dirs.checkpointsDir, session.cwd),
-    worktree: session.cwd,
+    ...checkpointTarget(session, dirs),
     sessionId: session.id,
     steps: steps(args),
     onPlan: printUndoPlan,
@@ -140,8 +152,7 @@ function undoCommand(session: SessionState<ModelMessage>, args: string[], dirs: 
 function restoreCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
   const commit = args[0] ?? "";
   const result = restoreCommit({
-    storeDir: checkpointStoreDir(dirs.checkpointsDir, session.cwd),
-    worktree: session.cwd,
+    ...checkpointTarget(session, dirs),
     sessionId: session.id,
     commit,
     onPlan: printUndoPlan,
@@ -161,11 +172,8 @@ function printRecovery(result: RestoreResult): void {
 }
 
 function rewindCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
-  const { rewindTo } = rewindConversation({
-    storeDir: checkpointStoreDir(dirs.checkpointsDir, session.cwd),
-    sessionId: session.id,
-    steps: steps(args),
-  });
+  const { storeDir } = checkpointTarget(session, dirs);
+  const { rewindTo } = rewindConversation({ storeDir, sessionId: session.id, steps: steps(args) });
   // Clamped, because an anchor can outlive the array it indexed: a previous /rewind truncated the
   // session and the messages that followed reused those indices. Slicing past the end is a silent
   // no-op, and reporting the anchor rather than the count would announce a truncation that never
@@ -174,6 +182,16 @@ function rewindCommand(session: SessionState<ModelMessage>, args: string[], dirs
   const dropped = session.messages.length - kept;
   session.messages = session.messages.slice(0, kept);
   saveSession(session, dirs.sessionsDir);
+  // Clamping only catches the anchors that are too LARGE, and those are the harmless ones. An
+  // older anchor small enough to index the rebuilt array points at a DIFFERENT message: with
+  // anchors [1,3,5,7] over nine messages, `/rewind 2` truncates to five, a resume appends five
+  // more and records [6,8], and `/rewind 3` then reaches the stale 7 and slices to 7 — leaving an
+  // assistant tool-call whose tool result was dropped, which is AI_MissingToolResultsError on the
+  // next resume and the exact failure `rewindTo = messages.length - 1` exists to prevent. So a
+  // rewind draws the same kind of line compaction does. Recorded only when something was actually
+  // dropped: a no-op rewind invalidates nothing, and a barrier for it would throw away history
+  // that is still good.
+  if (dropped > 0) appendBarrier(storeDir, session.id, "rewind");
   console.log(`Session ${session.id}: dropped ${dropped} message(s), ${kept} remain. No file was touched.`);
 }
 
@@ -377,26 +395,27 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   saveSession(session, sessionsDir);
 
-  // `write_file`, `bash` and `powershell` write relative to process.cwd(), but the store and /undo
-  // are keyed on the session's own cwd. A subdirectory is fine — it is inside the tree being
-  // snapshotted — but resuming a session from an unrelated project snapshots one tree while the
-  // tools edit another, and a later /undo runs its removal pass in the ORIGINAL project, deleting
-  // untracked files a human made there. Said out loud rather than left to be discovered by the
-  // deletion.
-  const inSessionTree = relative(session.cwd, process.cwd());
-  if (inSessionTree === ".." || inSessionTree.startsWith(`..${sep}`) || isAbsolute(inSessionTree)) {
-    printWarning(
-      `this session's files are checkpointed under ${session.cwd}, but tools run in ${process.cwd()} — /undo will act on ${session.cwd}`,
-    );
-  }
-
   // Checkpointing is enabled by exactly this call, which is also why rolling it back is a one-line
   // revert: `runLoop`, the session store, the gate and every tool are unmodified, and the store
   // lives entirely outside the user's repository.
-  const storeDir = checkpointStoreDir(checkpointsDir, session.cwd);
+  const { storeDir, worktree } = checkpointTarget(session, { sessionsDir, checkpointsDir });
+
+  // `write_file`, `bash` and `powershell` write relative to process.cwd(), while the snapshot
+  // covers the project root. Anywhere inside the project is fine — that is the whole point of
+  // resolving the root, and it is why a subdirectory launch no longer trips this. What is left is
+  // a genuine cross-project resume: it would snapshot one project while the tools edit another,
+  // and a later /undo would run its removal pass in the ORIGINAL project, deleting untracked files
+  // a human made there. Said out loud rather than left to be discovered by the deletion.
+  const inProject = relative(worktree, process.cwd());
+  if (inProject === ".." || inProject.startsWith(`..${sep}`) || isAbsolute(inProject)) {
+    printWarning(
+      `this session's files are checkpointed under ${worktree}, but tools run in ${process.cwd()} — /undo will act on ${worktree}`,
+    );
+  }
+
   const tools = withCheckpoints(
     toolDefinitions,
-    createCheckpointer({ storeDir, worktree: session.cwd, sessionId: session.id, onWarning: printWarning }),
+    createCheckpointer({ storeDir, worktree, sessionId: session.id, onWarning: printWarning }),
   );
 
   const runLoopFn = deps.runLoop ?? runLoopReal;
@@ -416,7 +435,23 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // point indexes into an array that no longer exists. The barrier is what lets `/rewind` say so
     // instead of silently slicing garbage. A session that never checkpointed has no log, and
     // appendBarrier no-ops rather than making this caller guess at that.
-    if (event.type === "compacted") appendBarrier(storeDir, session.id);
+    //
+    // Wrapped, because this is the only checkpoint call on the run path that was outside the
+    // degrade-never-fail policy every other one obeys: the checkpointer catches and latches, and
+    // the slash commands sit inside the dispatch's try. An appendFileSync that fails here —
+    // ENOSPC, EACCES, the store removed mid-session — threw straight out of this loop and killed
+    // the user's in-flight session, which is a checkpointing failure taking down the thing
+    // checkpointing exists to protect. The cost of losing a barrier is that a later /rewind may
+    // cross this compaction, so it is a warning and not silence.
+    if (event.type === "compacted") {
+      try {
+        appendBarrier(storeDir, session.id, "compaction");
+      } catch (err) {
+        printWarning(
+          `could not record the compaction barrier, so /rewind may not be able to cross this point: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     printEvent(event);
   }
 

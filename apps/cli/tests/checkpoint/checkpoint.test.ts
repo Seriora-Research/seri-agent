@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
 import {
   appendBarrier,
@@ -22,6 +22,7 @@ import {
   isGitAvailable,
   listSessionRefs,
   planRestore,
+  projectRoot,
   updateRef,
   writeTree,
 } from "../../src/checkpoint/shadowGit";
@@ -179,6 +180,43 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       undo(2);
 
       expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("v2\n");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "checkpoints the project root, so a repo-root .gitignore applies to a session started below it",
+    () => {
+      // gitignore(5) reads .gitignore files only up to the top level of the work tree, so with the
+      // work-tree pointed at the subdirectory the root's rules were never consulted. Measured:
+      // `--work-tree=repo/pkg add -A` staged `.env` and `node_modules/x.js` against a repo-root
+      // .gitignore naming both, i.e. `cd repo/pkg && seri "…"` copied the project's secrets into
+      // <configDir>, outside the repo where git clean never reaches them.
+      const repo = join(root, "repo");
+      const sub = join(repo, "pkg");
+      mkdirSync(join(sub, "node_modules"), { recursive: true });
+      spawnSync("git", ["init", "-q"], { cwd: repo, windowsHide: true });
+      writeFileSync(join(repo, ".gitignore"), "node_modules/\n.env\n");
+      writeFileSync(join(sub, ".env"), "SECRET=1\n");
+      writeFileSync(join(sub, "node_modules", "x.js"), "x\n");
+      writeFileSync(join(sub, "a.txt"), "a\n");
+
+      const worktree = projectRoot(sub);
+      // Compared by name, not by string: on macOS the toplevel comes back through /private and
+      // would not equal the path the test built.
+      expect(basename(worktree)).toBe("repo");
+
+      createCheckpointer({ storeDir, worktree, sessionId: SESSION, onWarning: (m) => warnings.push(m) })({
+        tool: "write_file",
+        toolCallId: "c1",
+        args: { path: join(sub, "a.txt") },
+        rewindTo: 1,
+      });
+
+      const staged = plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", toolRecords()[0]?.tree ?? ""]);
+      expect(staged).toContain("pkg/a.txt");
+      expect(staged).not.toContain(".env");
+      expect(staged).not.toContain("node_modules");
     },
     GIT_TEST_TIMEOUT_MS,
   );
@@ -442,6 +480,26 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
   );
 
   test(
+    "drops a truncated final log line instead of latching checkpointing off for the session",
+    () => {
+      // The log is appended to with no fsync, so a kill or an ENOSPC mid-appendFileSync leaves half
+      // a line. A JSON.parse throw for it used to latch checkpointing off with a raw SyntaxError
+      // as the warning, and leave /undo, /rewind and /restore unusable for that session forever.
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+      writeFileSync(join(workTree, "a.txt"), "v2\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+      // The process died here, mid-append, leaving half a record as the last line.
+      appendFileSync(join(storeDir, `${SESSION}.jsonl`), '{"kind":"tool","seq":2,"tre');
+
+      expect(toolRecords()).toHaveLength(2);
+      undo(2);
+      expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
     "rejects a commit that is not in the store without touching the ref or the log",
     () => {
       const snapshot = checkpointer();
@@ -512,7 +570,7 @@ describe.skipIf(!isGitAvailable())("rewindConversation", () => {
     () => {
       const snapshot = checkpointer();
       snapshot(mutation({ toolCallId: "c1", rewindTo: 3 }));
-      appendBarrier(storeDir, SESSION);
+      appendBarrier(storeDir, SESSION, "compaction");
       writeFileSync(join(workTree, "a.txt"), "after\n");
       snapshot(mutation({ toolCallId: "c2", rewindTo: 2 }));
 
@@ -608,6 +666,30 @@ describe.skipIf(!isGitAvailable())("pruneSessions", () => {
       writeFileSync(join(workTree, "a.txt"), "clobbered\n");
       applyRestore(gitDir, workTree, planRestore(gitDir, workTree, trees[21] ?? "").deleted);
       expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("session 21\n");
+    },
+    60_000,
+  );
+
+  test(
+    "deletes a pruned session's log with its ref, so no log outlives its snapshots",
+    () => {
+      mkdirSync(storeDir, { recursive: true });
+      const gitDir = join(storeDir, "git");
+      initShadow(gitDir);
+
+      for (let i = 0; i < 21; i++) {
+        writeFileSync(join(workTree, "a.txt"), `session ${i}\n`);
+        const ref = `refs/seri/sessions/s${String(i).padStart(2, "0")}`;
+        updateRef(gitDir, ref, commitTree(gitDir, workTree, writeTree(gitDir, workTree)));
+        writeFileSync(join(storeDir, `s${String(i).padStart(2, "0")}.jsonl`), "");
+      }
+
+      pruneSessions(storeDir);
+
+      // Left behind, /undo on the pruned session read a full history, computed targets from it and
+      // then failed at treeExists — contradicting the file it had just read.
+      expect(existsSync(join(storeDir, "s00.jsonl"))).toBe(false);
+      expect(existsSync(join(storeDir, "s20.jsonl"))).toBe(true);
     },
     60_000,
   );

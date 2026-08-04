@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 // spawnSync buffers the child's entire stdout and kills it the moment the buffer fills, and the
 // overflow arrives as `status: null` with an empty stderr — indistinguishable from a crashed git.
@@ -74,22 +74,67 @@ function childEnv(): NodeJS.ProcessEnv {
 
 type GitResult = { status: number | null; stdout: string; stderr: string };
 
-// `cwd: workTree` as well as `--work-tree`: `checkout-index` and `ls-files` report paths relative
-// to the current directory, and running from outside the worktree makes them relative to a
-// directory the caller never named.
-function run(gitDir: string, workTree: string | undefined, args: string[]): GitResult {
-  const prefix = [...SHADOW_CONFIG, `--git-dir=${gitDir}`];
-  if (workTree !== undefined) prefix.push(`--work-tree=${workTree}`);
-
-  const result = spawnSync("git", [...prefix, ...args], {
+function spawnGit(args: string[], cwd: string | undefined): GitResult {
+  const result = spawnSync("git", args, {
     encoding: "utf8",
-    cwd: workTree,
+    cwd,
     env: childEnv(),
     maxBuffer: MAX_BUFFER_BYTES,
     windowsHide: true,
   });
   if (result.error) throw new Error(`failed to run git: ${result.error.message}`);
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+// `cwd: workTree` as well as `--work-tree`: `checkout-index` and `ls-files` report paths relative
+// to the current directory, and running from outside the worktree makes them relative to a
+// directory the caller never named.
+function run(gitDir: string, workTree: string | undefined, args: string[]): GitResult {
+  const prefix = [...SHADOW_CONFIG, `--git-dir=${gitDir}`];
+  if (workTree !== undefined) prefix.push(`--work-tree=${workTree}`);
+  return spawnGit([...prefix, ...args], workTree);
+}
+
+// The two questions about the USER's repository, asked of git rather than assumed. Both run
+// without --git-dir, because the answer has to come from discovery around `from`, not from the
+// shadow store.
+
+// The directory a checkpoint is *of*. Everything downstream is derived from it — the `--work-tree`
+// passed to every command, and therefore which .gitignore files are in scope; where the user's
+// exclude file lives; and the store key — because deriving those separately is what produced the
+// same defect three times in three different configurations.
+//
+// gitignore(5) reads .gitignore files only "up to the top-level of the work tree", so pointing
+// --work-tree at a subdirectory silently drops every rule the repo root declares. Measured on git
+// 2.54.0.windows.1, repo/.gitignore naming `node_modules/` and `.env`, with those files inside
+// repo/apps/api: `--work-tree=repo/apps/api add -A` staged `.env` and `node_modules/x.js`;
+// `--work-tree=repo` staged neither. So `cd repo/apps/api && seri "…"` copied the project's
+// secrets into <configDir>/checkpoints, outside the repo where `git clean` and even deleting the
+// repo never reach them.
+//
+// Falls back to the directory itself when there is no repository — checkpointing a project that is
+// not a git repo at all is a deliberate property of this design, not an edge case.
+export function projectRoot(from: string): string {
+  const result = spawnGit(["rev-parse", "--show-toplevel"], from);
+  const top = result.stdout.trim();
+  // --show-toplevel answers with forward slashes on Windows; resolve() puts it back into the
+  // platform's own form, which matters because this string is both compared with `relative()` and
+  // hashed into the store key.
+  return result.status === 0 && top !== "" ? resolve(top) : resolve(from);
+}
+
+// Where this repository's exclude file actually is. Not `<root>/.git/info/exclude`: `.git` is a
+// FILE in a linked worktree (`git worktree add`) and in a submodule, and git shares `info/` from
+// the common dir rather than the per-worktree one. Measured: from a linked worktree, `--git-path
+// info/exclude` answers with the MAIN repo's `.git/info/exclude`, which is the file the user
+// actually edits, while `join(workTree, ".git", …)` does not exist at all — and an existsSync miss
+// there silently wrote an empty shadow exclude, disabling the protection entirely.
+//
+// The answer is relative to the cwd it was asked from (`.git/info/exclude`, `../../.git/…`) and
+// absolute for a linked worktree, so it is resolved against that same directory.
+function localExcludePath(root: string): string | undefined {
+  const result = spawnGit(["rev-parse", "--git-path", "info/exclude"], root);
+  return result.status === 0 ? resolve(root, result.stdout.trim()) : undefined;
 }
 
 function git(gitDir: string, workTree: string | undefined, args: string[]): string {
@@ -154,9 +199,15 @@ export function initShadow(gitDir: string): void {
   writeFileSync(join(gitDir, "info", "attributes"), "* -text\n");
 }
 
-// The user's own `.git/info/exclude`, mirrored into the shadow store. Called on every session
-// start, so removing an entry takes effect rather than living on in the store — which is also why
-// the file is written even when there is no source to copy.
+// The user's own exclude file, mirrored into the shadow store. Called on every session start, so
+// removing an entry takes effect rather than living on in the store — which is also why the file
+// is written even when there is no source to copy.
+//
+// `root` must be the project root from `projectRoot`, and the source is located by asking git (see
+// localExcludePath) rather than by joining `.git/info/exclude` onto it. That join was wrong for a
+// linked worktree, for a submodule, and for any launch from a subdirectory, and in all three the
+// existsSync miss wrote an EMPTY shadow exclude — silently turning off the protection the rest of
+// this comment describes.
 //
 // `--exclude-standard` resolves "the repository's exclude file" against $GIT_DIR, and $GIT_DIR here
 // is the shadow store, so without this the user's local excludes are invisible in BOTH directions.
@@ -173,10 +224,10 @@ export function initShadow(gitDir: string): void {
 // The user's global `core.excludesFile` needs nothing done to it: git reads the global config
 // regardless of --git-dir, so it is already honoured. `.gitignore` likewise, being read from the
 // worktree.
-export function mirrorLocalExcludes(gitDir: string, workTree: string): void {
-  const source = join(workTree, ".git", "info", "exclude");
+export function mirrorLocalExcludes(gitDir: string, root: string): void {
+  const source = localExcludePath(root);
   mkdirSync(join(gitDir, "info"), { recursive: true });
-  writeFileSync(join(gitDir, "info", "exclude"), existsSync(source) ? readFileSync(source) : "");
+  writeFileSync(join(gitDir, "info", "exclude"), source !== undefined && existsSync(source) ? readFileSync(source) : "");
 }
 
 // The tip of a session's commit chain, or undefined when the session has no ref yet. This is the
@@ -201,13 +252,20 @@ export function treeExists(gitDir: string, treeish: string): boolean {
 // `add` + `commit` path is 233.5 ms against 107.2 ms for the four-command plumbing path, because
 // `git commit` alone costs ~217 ms and neither --no-verify nor gc.auto=0 moves it.
 //
-// The worktree's own `.gitignore` is honoured even though the git-dir is foreign (verified on
-// Windows and WSL), and no shadow-side exclude is added on top of it. That is deliberate: an
-// ignored path is the only declaration a project makes about what is not its source, and
-// overriding it would mean copying the user's `.env` into <configDir> — outside the repo, where
-// no `.gitignore`, no `git clean` and no repo deletion will ever reach it. That is a security
-// regression traded for an undo nobody asked for. `.claude/` and `dist/` fall outside the undo for
-// the same reason.
+// The project's own ignore rules are honoured even though the git-dir is foreign — but only
+// because `workTree` is the PROJECT ROOT and nothing else. gitignore(5) reads .gitignore files
+// only up to the top level of the work tree, so passing any subdirectory here silently drops every
+// rule the root declares; and `--exclude-standard` reads `info/exclude` from $GIT_DIR, which is
+// the shadow store, so the user's local excludes reach this only via mirrorLocalExcludes. Both of
+// those were once assumed rather than arranged, and both leaked. Callers get the root from
+// `projectRoot`; this function cannot check that for them, which is exactly why the derivation
+// happens in one place.
+//
+// The reason it matters: an ignored path is the only declaration a project makes about what is not
+// its source, and overriding it means copying the user's `.env` into <configDir> — outside the
+// repo, where no `.gitignore`, no `git clean` and no repo deletion will ever reach it. That is a
+// security regression traded for an undo nobody asked for. `.claude/` and `dist/` fall outside the
+// undo for the same reason.
 export function writeTree(gitDir: string, workTree: string): string {
   git(gitDir, workTree, ["add", "-A"]);
   return git(gitDir, workTree, ["write-tree"]).trim();
