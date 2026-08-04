@@ -4,7 +4,7 @@ Guidance for AI agents working in this repository.
 
 ## What this is
 
-Hesper is a cross-platform coding-agent CLI (ships as the `hesper` binary), written in
+seri is a cross-platform coding-agent CLI (ships as the `seri` binary), written in
 TypeScript on Bun. It's currently mid-build against `build-plan.md` (Stage 3 of a
 staged plan; Stage 4 "Checkpoints" is next). `definitive-harness.md` and `research.md`
 are the design spec and research this plan is built from. A separate, parallel track
@@ -19,7 +19,7 @@ BYOK-only core — Phase A (WorkOS AuthKit device-flow auth) has shipped; see
 - `bun test` — run the test suite (bun's built-in runner)
 - `bun test path/to/file.test.ts` — run a single test file
 - `bun run typecheck` (alias `lint`) — `tsc --noEmit`
-- `bun run build` — compile to `dist/hesper` for the current platform
+- `bun run build` — compile to `dist/seri` for the current platform
 - CI (`.github/workflows/ci.yml`) runs typecheck + test + build on Linux, macOS, and
   Windows on every push — treat all three as required, not just the local OS
 
@@ -49,8 +49,8 @@ disproportionate-match guard against replacing far more than was asked for.
 
 **Provider**: Vercel AI SDK, currently Groq only (`apps/cli/src/provider/groq.ts`,
 `llama-3.3-70b-versatile` default). API keys resolve from env var first, then
-`~/.hesper/config.json` (`%LOCALAPPDATA%\hesper\` on Windows) — see
-`apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`. `hesper config
+`~/.seri/config.json` (`%LOCALAPPDATA%\seri\` on Windows) — see
+`apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`. `seri config
 set|list|unset` (`apps/cli/src/config/commands.ts`) manages that file; it's written
 owner-only and via write-then-rename, since it holds API keys and a partial write
 would break every later command's `loadConfig`. `list` masks values and flags any
@@ -67,7 +67,7 @@ recent commit history for why) and never cuts the eviction boundary in the middl
 {assistant tool-call, tool result} pair, since that reproduces
 `AI_MissingToolResultsError`.
 
-**Auth** (`apps/cli/src/auth/`): `hesper login`/`signup`/`logout`, backed by WorkOS AuthKit's
+**Auth** (`apps/cli/src/auth/`): `seri login`/`signup`/`logout`, backed by WorkOS AuthKit's
 OAuth device-authorization flow (RFC 8628) — purely additive, zero changes to
 `apps/cli/src/provider/groq.ts` or the BYOK path in `apps/cli/src/config/config.ts`. `deviceFlow.ts`
 requests + polls (honoring `authorization_pending`/`slow_down`/`expired_token`/
@@ -86,7 +86,7 @@ the system prompt. This file is that file, for this repo.
 ## Notes for agents
 
 - `.claude/` holds this project's own Claude Code loop/agent/skill configuration
-  (engineering-loop, retro, etc.) — it's gitignored and orthogonal to Hesper's own code.
+  (engineering-loop, retro, etc.) — it's gitignored and orthogonal to seri's own code.
 - `apps/cli/src/tools/rg-vendored.bin` is a vendored ripgrep binary fetched by
   `postinstall`/`vendorRipgrep.ts`; don't hand-edit it.
 - Feature work lands via a branch + PR (`main` has branch protection), not direct

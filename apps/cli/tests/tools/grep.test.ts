@@ -8,7 +8,7 @@ import { MAX_FILE_RESULTS, MAX_RESULTS } from "../../src/tools/runRipgrep";
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "hesper-grep-test-"));
+  tmpDir = mkdtempSync(join(tmpdir(), "seri-grep-test-"));
   writeFileSync(join(tmpDir, "a.txt"), "hello world\nfoo bar\nhello again\n");
 });
 

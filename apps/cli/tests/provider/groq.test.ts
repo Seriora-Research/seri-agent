@@ -19,7 +19,7 @@ beforeEach(() => {
   delete process.env.GROQ_API_KEY;
   // Point the config dir at an empty temp dir so a real config.json on this
   // machine can never supply GROQ_API_KEY and mask the "unset" case.
-  tmpRoot = mkdtempSync(join(tmpdir(), "hesper-groq-test-"));
+  tmpRoot = mkdtempSync(join(tmpdir(), "seri-groq-test-"));
   if (process.platform === "win32") process.env.LOCALAPPDATA = tmpRoot;
   else process.env.HOME = tmpRoot;
 });
@@ -33,7 +33,7 @@ afterEach(() => {
 
 describe("getGroqModel", () => {
   test("throws a clear error when GROQ_API_KEY is unset", () => {
-    expect(() => getGroqModel()).toThrow("GROQ_API_KEY is not set. Run: hesper config set GROQ_API_KEY <your-key>");
+    expect(() => getGroqModel()).toThrow("GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>");
   });
 
   test("returns a model object without a network call when GROQ_API_KEY is set", () => {

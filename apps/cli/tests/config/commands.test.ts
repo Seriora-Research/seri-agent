@@ -23,7 +23,7 @@ describe("configCommand", () => {
   const originalError = console.error;
 
   beforeEach(() => {
-    configDir = mkdtempSync(join(tmpdir(), "hesper-config-cmd-test-"));
+    configDir = mkdtempSync(join(tmpdir(), "seri-config-cmd-test-"));
     logs = [];
     errors = [];
     console.log = (msg: string) => logs.push(String(msg));

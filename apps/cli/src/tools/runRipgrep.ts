@@ -9,7 +9,7 @@ import rgAsset from "./rg-vendored.bin" with { type: "file" };
 // template-built `require.resolve(...)` call. That's fine for `bun run`/`bun test` (real
 // node_modules on disk), but inside a `bun build --compile` standalone executable it
 // resolves against the CURRENT WORKING DIRECTORY at runtime, not anything embedded in the
-// binary — so it throws "Could not find @vscode/ripgrep-<platform>" the instant hesper is
+// binary — so it throws "Could not find @vscode/ripgrep-<platform>" the instant seri is
 // run from any directory other than this repo's own checkout. `rg-vendored.bin` (see
 // vendorRipgrep.ts, run via `postinstall`) is a literal local file, so bun embeds its bytes
 // directly into the compiled executable, CWD-independent. The embedded asset resolves to
@@ -17,9 +17,15 @@ import rgAsset from "./rg-vendored.bin" with { type: "file" };
 // extract it to a real temp file once at startup.
 //
 // The pid goes in the name so a later run can tell an abandoned directory from a live one; see
-// sweepAbandonedRgDirs. The `hesper-rg-` prefix stays exactly as it was, since it is what
-// identifies these as ours.
-const RG_DIR_PREFIX = "hesper-rg-";
+// sweepAbandonedRgDirs. The prefix is what identifies these as ours.
+const RG_DIR_PREFIX = "seri-rg-";
+
+// Every prefix this project has ever created directories under. New ones always use
+// RG_DIR_PREFIX; the older names are here because the sweep is the only thing that ever deletes
+// them, so dropping one from this list does not merely stop cleaning those directories — it
+// orphans them permanently, since nothing else on the machine knows the name. `hesper-rg-` is
+// what the binary was called before it was renamed to `seri`.
+const SWEEP_PREFIXES = [RG_DIR_PREFIX, "hesper-rg-"] as const;
 const bytes = new Uint8Array(await Bun.file(rgAsset).arrayBuffer());
 const rgDir = mkdtempSync(join(tmpdir(), `${RG_DIR_PREFIX}${process.pid}-`));
 export const rgPath = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg");
@@ -49,10 +55,12 @@ onSignalCleanup(cleanUpExtractedRg);
 // alive: signal 0 sends nothing and only asks, but it can still fail for reasons that are not
 // "gone" (EPERM, a pid owned by another user). Guessing "alive" costs one leaked directory that
 // the next run reconsiders; guessing "dead" breaks a session that is still running.
-function isOwnerAlive(name: string): boolean {
+// `prefix` is whichever SWEEP_PREFIXES entry matched, not RG_DIR_PREFIX: they differ in length,
+// so slicing by the wrong one shifts the pid segment and the name parses as a legacy one.
+function isOwnerAlive(name: string, prefix: string): boolean {
   // Legacy names are the prefix plus mkdtemp's six random characters and carry no pid segment at
   // all — every directory on disk before this shipped. Nobody owns them, so nothing to protect.
-  const segments = name.slice(RG_DIR_PREFIX.length).split("-");
+  const segments = name.slice(prefix.length).split("-");
   if (segments.length < 2) return false;
 
   try {
@@ -70,19 +78,22 @@ function isOwnerAlive(name: string): boolean {
 // dev box 2026-08-04: 236 abandoned directories holding 1222 MB, 69 of them created in the last
 // 24 hours, the newest postdating the handlers above — an ongoing leak, not a historical one.
 // The first run after this ships therefore deletes ~1.2 GB synchronously at startup; that is
-// paid once, and steady state is a handful of directories.
+// paid once, and steady state is a handful of directories. That measurement predates the rename,
+// so most of the backlog it counts sits under the old prefix — which is exactly why the sweep
+// walks SWEEP_PREFIXES rather than just the one new runs create.
 //
-// A live sibling is skipped rather than deleted because it belongs to a concurrent hesper, and
+// A live sibling is skipped rather than deleted because it belongs to a concurrent seri, and
 // POSIX will happily unlink a running binary: that process keeps working, but the path it
 // re-spawns rg from is gone and its next grep fails. Windows refuses to delete a locked rg.exe
 // with EPERM, which catches the same case by accident, but only there — the pid check is the
 // real protection.
 function sweepAbandonedRgDirs(): void {
   for (const name of readdirSync(tmpdir())) {
-    if (!name.startsWith(RG_DIR_PREFIX)) continue;
+    const prefix = SWEEP_PREFIXES.find((candidate) => name.startsWith(candidate));
+    if (!prefix) continue;
 
     const dir = join(tmpdir(), name);
-    if (dir === rgDir || isOwnerAlive(name)) continue;
+    if (dir === rgDir || isOwnerAlive(name, prefix)) continue;
 
     try {
       rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
@@ -129,7 +140,7 @@ export function outputLines(stdout: string, truncated: boolean): string[] {
 export function runRipgrep(args: string[]): { stdout: string; truncated: boolean } {
   // --no-config: rg reads RIPGREP_CONFIG_PATH from the environment, so without this a
   // developer's own ~/.ripgreprc (--smart-case, --hidden, glob excludes) silently changes
-  // what hesper finds on their machine and nowhere else.
+  // what seri finds on their machine and nowhere else.
   const result = spawnSync(rgPath, ["--no-config", ...args], {
     encoding: "utf8",
     maxBuffer: MAX_BUFFER_BYTES,

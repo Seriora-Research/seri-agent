@@ -24,7 +24,7 @@ describe("getConfigDir", () => {
   test("win32 with LOCALAPPDATA set returns joined path", () => {
     setPlatform("win32");
     process.env.LOCALAPPDATA = "C:\\Users\\test\\AppData\\Local";
-    expect(getConfigDir()).toBe(join("C:\\Users\\test\\AppData\\Local", "hesper"));
+    expect(getConfigDir()).toBe(join("C:\\Users\\test\\AppData\\Local", "seri"));
   });
 
   test("win32 without LOCALAPPDATA throws", () => {
@@ -33,8 +33,8 @@ describe("getConfigDir", () => {
     expect(() => getConfigDir()).toThrow();
   });
 
-  test("posix returns ~/.hesper", () => {
+  test("posix returns ~/.seri", () => {
     setPlatform("linux");
-    expect(getConfigDir()).toBe(join(homedir(), ".hesper"));
+    expect(getConfigDir()).toBe(join(homedir(), ".seri"));
   });
 });

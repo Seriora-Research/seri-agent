@@ -70,10 +70,10 @@ describe("runLoop", () => {
   test("passes the system option through to streamText", async () => {
     const model = new MockLanguageModelV4({ doStream: async () => streamResult(textOnlyChunks("Hello")) });
     await collect(
-      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto", system: "You are Hesper, a coding agent." }),
+      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto", system: "You are seri, a coding agent." }),
     );
 
-    expect(model.doStreamCalls[0]?.prompt[0]).toEqual({ role: "system", content: "You are Hesper, a coding agent." });
+    expect(model.doStreamCalls[0]?.prompt[0]).toEqual({ role: "system", content: "You are seri, a coding agent." });
   });
 
   test("executes a tool call and appends the result to the next turn", async () => {

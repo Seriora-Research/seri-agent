@@ -8,7 +8,7 @@ import { MAX_FILE_RESULTS } from "../../src/tools/runRipgrep";
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "hesper-glob-test-"));
+  tmpDir = mkdtempSync(join(tmpdir(), "seri-glob-test-"));
   writeFileSync(join(tmpDir, "a.txt"), "a");
   writeFileSync(join(tmpDir, "b.txt"), "b");
   writeFileSync(join(tmpDir, "c.js"), "c");

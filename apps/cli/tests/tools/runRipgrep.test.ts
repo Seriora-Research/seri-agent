@@ -9,7 +9,7 @@ import { rgPath, runRipgrep } from "../../src/tools/runRipgrep";
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "hesper-runripgrep-test-"));
+  tmpDir = mkdtempSync(join(tmpdir(), "seri-runripgrep-test-"));
 });
 
 afterEach(() => {
@@ -54,7 +54,7 @@ describe("runRipgrep", () => {
     if (child.status !== 0) throw new Error(`probe child exited ${child.status}: ${child.error ?? child.stderr}`);
 
     const childRgPath = child.stdout.trim();
-    expect(childRgPath).toContain("hesper-rg-");
+    expect(childRgPath).toContain("seri-rg-");
     expect(existsSync(dirname(childRgPath))).toBe(false);
   }, 30_000);
 
@@ -94,8 +94,8 @@ describe("runRipgrep", () => {
     // accumulate: 236 of them holding 1222 MB on the dev box, 69 from a single day. Not
     // POSIX-guarded, because Windows is where that was measured. Driven through a child because
     // the sweep runs at module scope, which has already happened in this process.
-    const abandoned = mkdtempSync(join(tmpdir(), "hesper-rg-"));
-    const live = mkdtempSync(join(tmpdir(), `hesper-rg-${process.pid}-`));
+    const abandoned = mkdtempSync(join(tmpdir(), "seri-rg-"));
+    const live = mkdtempSync(join(tmpdir(), `seri-rg-${process.pid}-`));
     writeFileSync(join(abandoned, "rg"), "not really rg");
     writeFileSync(join(live, "rg"), "not really rg");
 
@@ -109,6 +109,36 @@ describe("runRipgrep", () => {
       expect(existsSync(abandoned)).toBe(false);
       // The assertion that carries the test: deleting every sibling would satisfy the one above
       // while breaking a concurrent session, whose next grep re-spawns rg from inside its dir.
+      expect(existsSync(live)).toBe(true);
+    } finally {
+      rmSync(abandoned, { recursive: true, force: true });
+      rmSync(live, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("sweeps directories left under the pre-rename prefix, reading the pid past that prefix", () => {
+    // The rename from `hesper` to `seri` changed the prefix new runs create, and the sweep is the
+    // only thing that ever deletes these — so without the old prefix in the list every directory
+    // predating the rename is orphaned forever, which is most of the 1222 MB backlog measured on
+    // the dev box. `hesper-rg-` is two characters longer than `seri-rg-`, so a sweep that strips
+    // the new prefix's length reads "" as the pid segment instead of the real one and misjudges
+    // both directories below; that is what the second assertion is for.
+    const dead = spawnSync(process.execPath, ["-e", ""]);
+    if (dead.status !== 0) throw new Error(`pid-donor child exited ${dead.status}: ${dead.error ?? dead.stderr}`);
+
+    const abandoned = mkdtempSync(join(tmpdir(), `hesper-rg-${dead.pid}-`));
+    const live = mkdtempSync(join(tmpdir(), `hesper-rg-${process.pid}-`));
+    writeFileSync(join(abandoned, "rg"), "not really rg");
+    writeFileSync(join(live, "rg"), "not really rg");
+
+    try {
+      const modulePath = pathToFileURL(join(import.meta.dir, "../../src/tools/runRipgrep.ts")).href;
+      const child = spawnSync(process.execPath, ["-e", `await import(${JSON.stringify(modulePath)});`], {
+        encoding: "utf8",
+      });
+      if (child.status !== 0) throw new Error(`probe child exited ${child.status}: ${child.error ?? child.stderr}`);
+
+      expect(existsSync(abandoned)).toBe(false);
       expect(existsSync(live)).toBe(true);
     } finally {
       rmSync(abandoned, { recursive: true, force: true });
@@ -135,7 +165,7 @@ describe("runRipgrep", () => {
 
   test("ignores the user's own ripgrep config", () => {
     // rg picks up RIPGREP_CONFIG_PATH from the environment, so without --no-config a
-    // developer's ~/.ripgreprc silently changes what hesper finds on their machine and
+    // developer's ~/.ripgreprc silently changes what seri finds on their machine and
     // nowhere else. This config would hide the only matching file.
     writeFileSync(join(tmpDir, "a.txt"), "needle\n");
     const configPath = join(tmpDir, "ripgreprc");

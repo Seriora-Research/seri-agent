@@ -13,7 +13,7 @@ function setPlatform(platform: string): void {
 let tmpRoot: string;
 
 beforeEach(() => {
-  tmpRoot = mkdtempSync(join(tmpdir(), "hesper-writeFile-test-"));
+  tmpRoot = mkdtempSync(join(tmpdir(), "seri-writeFile-test-"));
 });
 
 afterEach(() => {

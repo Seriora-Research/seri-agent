@@ -18,7 +18,7 @@ describe("run", () => {
 
     console.log = originalLog;
     expect(code).toBe(0);
-    expect(logs).toEqual([`hesper ${pkg.version}`]);
+    expect(logs).toEqual([`seri ${pkg.version}`]);
   });
 });
 
@@ -33,7 +33,7 @@ describe("run (--selftest)", () => {
       code = await run(["--selftest"], {
         grep: () => ({
           mode: "content" as const,
-          matches: [{ file: "probe.txt", line: 1, text: "hesper selftest probe" }],
+          matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
           truncated: false,
         }),
       });
@@ -79,10 +79,10 @@ describe("run (task invocation)", () => {
   }
 
   beforeEach(() => {
-    sessionsDir = mkdtempSync(join(tmpdir(), "hesper-cli-test-sessions-"));
+    sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-sessions-"));
     // Redirect the config dir to an empty temp dir so a real config.json on this machine
     // can never supply GROQ_API_KEY and mask the "unset" case (same guard as groq.test.ts).
-    tmpConfigRoot = mkdtempSync(join(tmpdir(), "hesper-cli-test-config-"));
+    tmpConfigRoot = mkdtempSync(join(tmpdir(), "seri-cli-test-config-"));
     if (process.platform === "win32") process.env.LOCALAPPDATA = tmpConfigRoot;
     else process.env.HOME = tmpConfigRoot;
   });
@@ -144,7 +144,7 @@ describe("run (task invocation)", () => {
     expect(captured?.tools).toBe(toolDefinitions);
     expect(captured?.messages.at(-1)).toEqual({ role: "user", content: "write hello.txt" });
     expect(captured?.messages).toHaveLength(1);
-    expect(captured?.system).toBe("You are Hesper, a coding agent.");
+    expect(captured?.system).toBe("You are seri, a coding agent.");
   });
 });
 
@@ -153,7 +153,7 @@ describe("run (login/signup/logout)", () => {
     throw new Error(`${name} should not be called`);
   };
 
-  test("`hesper login` calls deps.login with mode 'login' and never touches the model/loop/session code", async () => {
+  test("`seri login` calls deps.login with mode 'login' and never touches the model/loop/session code", async () => {
     let captured: [string, string, string] | undefined;
     const code = await run(["login"], {
       login: async (mode, clientId, configDir) => {
@@ -169,7 +169,7 @@ describe("run (login/signup/logout)", () => {
     expect(captured?.[2]).toBe("fake-config-dir");
   });
 
-  test("`hesper signup` calls deps.login with mode 'signup'", async () => {
+  test("`seri signup` calls deps.login with mode 'signup'", async () => {
     let capturedMode: string | undefined;
     const code = await run(["signup"], {
       login: async (mode) => {
@@ -207,7 +207,7 @@ describe("run (login/signup/logout)", () => {
     expect(errors).toEqual(["device code request failed: 429"]);
   });
 
-  test("`hesper logout` calls deps.logout and never touches the model/loop/session code", async () => {
+  test("`seri logout` calls deps.logout and never touches the model/loop/session code", async () => {
     let capturedConfigDir: string | undefined;
     const code = await run(["logout"], {
       logout: (configDir) => {
@@ -227,7 +227,7 @@ describe("run (/mode)", () => {
   let sessionsDir: string;
 
   beforeEach(() => {
-    sessionsDir = mkdtempSync(join(tmpdir(), "hesper-cli-test-mode-sessions-"));
+    sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-mode-sessions-"));
   });
 
   afterEach(() => {

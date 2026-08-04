@@ -29,7 +29,7 @@ function writeConfig(config: Record<string, string>, configDir: string): void {
 
   // Write-then-rename: a truncating in-place write that is interrupted leaves a partial
   // config.json, which makes every later command throw from JSON.parse — including
-  // `hesper config` itself, since it reads before writing. rename is atomic, so readers
+  // `seri config` itself, since it reads before writing. rename is atomic, so readers
   // see either the old file or the new one.
   const path = configPath(configDir);
   const tmpPath = `${path}.tmp`;
@@ -54,7 +54,7 @@ export function unsetConfigValue(key: string, configDir: string = getConfigDir()
 }
 
 // configDir is threaded through rather than always resolved internally so that a caller
-// which writes with an explicit dir (`hesper config set`) reads back from that same dir.
+// which writes with an explicit dir (`seri config set`) reads back from that same dir.
 export function getApiKey(name: string, configDir?: string): string | undefined {
   // Deliberately not `??`: an env var set to the empty string should fall through to the
   // config file and then to the caller's default, not win as a valid-looking value.

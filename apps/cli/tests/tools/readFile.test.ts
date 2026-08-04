@@ -7,7 +7,7 @@ import { readFile } from "../../src/tools/readFile";
 let tmpRoot: string;
 
 beforeEach(() => {
-  tmpRoot = mkdtempSync(join(tmpdir(), "hesper-readFile-test-"));
+  tmpRoot = mkdtempSync(join(tmpdir(), "seri-readFile-test-"));
 });
 
 afterEach(() => {

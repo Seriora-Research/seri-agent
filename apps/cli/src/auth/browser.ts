@@ -37,7 +37,7 @@ export function openBrowser(url: string, spawnFn: BrowserLauncher = spawnReal): 
     // Nothing inherited, so there is nothing left holding a pipe open once the launcher hands
     // off to the browser.
     stdio: "ignore",
-    // Its own process group, so a Ctrl-C aimed at hesper does not close the user's browser.
+    // Its own process group, so a Ctrl-C aimed at seri does not close the user's browser.
     detached: process.platform !== "win32",
   });
 
@@ -45,6 +45,6 @@ export function openBrowser(url: string, spawnFn: BrowserLauncher = spawnReal): 
   child.on("exit", (code) => {
     if (code !== 0) console.error(`Failed to open browser (exit code ${code})`);
   });
-  // A browser outlives the run that opened it, and hesper must not wait on one to exit.
+  // A browser outlives the run that opened it, and seri must not wait on one to exit.
   child.unref();
 }

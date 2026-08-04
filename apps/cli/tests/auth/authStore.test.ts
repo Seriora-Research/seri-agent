@@ -8,7 +8,7 @@ describe("authStore", () => {
   let configDir: string;
 
   beforeEach(() => {
-    configDir = mkdtempSync(join(tmpdir(), "hesper-authstore-test-"));
+    configDir = mkdtempSync(join(tmpdir(), "seri-authstore-test-"));
   });
 
   afterEach(() => {

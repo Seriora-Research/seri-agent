@@ -5,7 +5,7 @@ export function getConfigDir(): string {
   if (process.platform === "win32") {
     const localAppData = process.env.LOCALAPPDATA;
     if (!localAppData) throw new Error("LOCALAPPDATA environment variable is not set");
-    return join(localAppData, "hesper");
+    return join(localAppData, "seri");
   }
-  return join(process.env.HOME || homedir(), ".hesper");
+  return join(process.env.HOME || homedir(), ".seri");
 }

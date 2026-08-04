@@ -13,7 +13,7 @@ const execOpts: ToolExecutionOptions<Record<string, unknown>> = { toolCallId: "t
 let tmpDir: string;
 
 function makeTmpDir(): string {
-  return mkdtempSync(join(tmpdir(), "hesper-tools-adapter-test-"));
+  return mkdtempSync(join(tmpdir(), "seri-tools-adapter-test-"));
 }
 
 describe("toolDefinitions", () => {

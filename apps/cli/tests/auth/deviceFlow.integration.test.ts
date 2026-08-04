@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { pollForToken, requestDeviceCode } from "../../src/auth/deviceFlow";
 
 // Live test against the WorkOS Staging sandbox — silently skipped unless
-// HESPER_TEST_WORKOS_CLIENT_ID is set (e.g. in a developer's own shell). Never hardcode
+// SERI_TEST_WORKOS_CLIENT_ID is set (e.g. in a developer's own shell). Never hardcode
 // the sandbox client id here; it's read from the env var only, so this is skipped
 // everywhere that var isn't set (including CI, which has no WorkOS secret configured).
-describe.skipIf(!process.env.HESPER_TEST_WORKOS_CLIENT_ID)("requestDeviceCode + pollForToken (live WorkOS sandbox)", () => {
+describe.skipIf(!process.env.SERI_TEST_WORKOS_CLIENT_ID)("requestDeviceCode + pollForToken (live WorkOS sandbox)", () => {
   test("requestDeviceCode returns a well-formed device authorization, and an immediate poll is pending", async () => {
-    const clientId = process.env.HESPER_TEST_WORKOS_CLIENT_ID as string;
+    const clientId = process.env.SERI_TEST_WORKOS_CLIENT_ID as string;
 
     const device = await requestDeviceCode(clientId);
 

@@ -128,7 +128,7 @@ describe("openBrowser", () => {
 
     // The three things that make "does not wait" true, rather than the absence of a hang, which
     // a synchronous test cannot observe: nothing inherited to hold a pipe open, a process group
-    // hesper's own signals cannot reach, and no reference keeping the event loop alive.
+    // seri's own signals cannot reach, and no reference keeping the event loop alive.
     expect(launcher.seen.options).toEqual({ stdio: "ignore", detached: true });
     expect(launcher.seen.unrefs).toBe(1);
   });

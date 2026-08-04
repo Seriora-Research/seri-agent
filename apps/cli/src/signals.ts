@@ -30,7 +30,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     }
 
     // Re-raise instead of exiting with 128 + n. A normal exit reports a status, not a death by
-    // signal, and shells branch on that: `for f in a b c; do hesper "$f"; done` only breaks out
+    // signal, and shells branch on that: `for f in a b c; do seri "$f"; done` only breaks out
     // of the loop when the child was killed *by* SIGINT, so a plain exit would turn one Ctrl-C
     // into one press per iteration. xargs and make read it the same way.
     //
