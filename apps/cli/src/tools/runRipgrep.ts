@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { onSignalCleanup } from "../signals";
 import rgAsset from "./rg-vendored.bin" with { type: "file" };
 
 // @vscode/ripgrep's own `rgPath` export resolves the platform binary via a dynamic,
@@ -14,8 +15,13 @@ import rgAsset from "./rg-vendored.bin" with { type: "file" };
 // directly into the compiled executable, CWD-independent. The embedded asset resolves to
 // bun's virtual `B:/~BUN/root/...` path, which isn't a real file `spawnSync` can execute —
 // extract it to a real temp file once at startup.
+//
+// The pid goes in the name so a later run can tell an abandoned directory from a live one; see
+// sweepAbandonedRgDirs. The `hesper-rg-` prefix stays exactly as it was, since it is what
+// identifies these as ours.
+const RG_DIR_PREFIX = "hesper-rg-";
 const bytes = new Uint8Array(await Bun.file(rgAsset).arrayBuffer());
-const rgDir = mkdtempSync(join(tmpdir(), "hesper-rg-"));
+const rgDir = mkdtempSync(join(tmpdir(), `${RG_DIR_PREFIX}${process.pid}-`));
 export const rgPath = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg");
 writeFileSync(rgPath, bytes);
 if (process.platform !== "win32") chmodSync(rgPath, 0o755);
@@ -36,26 +42,58 @@ function cleanUpExtractedRg(): void {
 
 process.on("exit", cleanUpExtractedRg);
 
-// 'exit' does not fire when a signal terminates the process, so on its own the handler above
-// missed the most common way an agent run ends: Ctrl-C part way through a turn. Verified — a
-// SIGTERM left the directory behind exactly as before the fix.
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => {
-    cleanUpExtractedRg();
+// 'exit' does not fire when a signal ends the process — verified: a SIGTERM left the dir behind.
+onSignalCleanup(cleanUpExtractedRg);
 
-    // Re-raise instead of exiting with 128 + n. A normal exit reports a status, not a death by
-    // signal, and shells branch on that: `for f in a b c; do hesper "$f"; done` only breaks out
-    // of the loop when the child was killed *by* SIGINT, so a plain exit would turn one Ctrl-C
-    // into one press per iteration. xargs and make read it the same way.
-    //
-    // Node only restores a signal's default disposition when no listener is left, so clearing
-    // them is what makes the re-raise land rather than re-entering this handler. That also
-    // means a listener registered later — a future "Ctrl-C cancels the turn" — would be
-    // dropped here, which is the argument for owning this in cli.ts rather than in a tool.
-    process.removeAllListeners(signal);
-    process.kill(process.pid, signal);
-  });
+// Whether the owner of a directory is still using it. Any error other than ESRCH counts as
+// alive: signal 0 sends nothing and only asks, but it can still fail for reasons that are not
+// "gone" (EPERM, a pid owned by another user). Guessing "alive" costs one leaked directory that
+// the next run reconsiders; guessing "dead" breaks a session that is still running.
+function isOwnerAlive(name: string): boolean {
+  // Legacy names are the prefix plus mkdtemp's six random characters and carry no pid segment at
+  // all — every directory on disk before this shipped. Nobody owns them, so nothing to protect.
+  const segments = name.slice(RG_DIR_PREFIX.length).split("-");
+  if (segments.length < 2) return false;
+
+  try {
+    process.kill(Number(segments[0]), 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }
+
+// Neither handler above runs when a process is terminated abruptly: on Windows every kill path
+// ends in TerminateProcess, which executes no user code whatsoever. So they cannot be the whole
+// answer, and a third handler would not be either — the problem is precisely that handlers do
+// not run. Each run cleans up after the ones that never got the chance instead. Measured on the
+// dev box 2026-08-04: 236 abandoned directories holding 1222 MB, 69 of them created in the last
+// 24 hours, the newest postdating the handlers above — an ongoing leak, not a historical one.
+// The first run after this ships therefore deletes ~1.2 GB synchronously at startup; that is
+// paid once, and steady state is a handful of directories.
+//
+// A live sibling is skipped rather than deleted because it belongs to a concurrent hesper, and
+// POSIX will happily unlink a running binary: that process keeps working, but the path it
+// re-spawns rg from is gone and its next grep fails. Windows refuses to delete a locked rg.exe
+// with EPERM, which catches the same case by accident, but only there — the pid check is the
+// real protection.
+function sweepAbandonedRgDirs(): void {
+  for (const name of readdirSync(tmpdir())) {
+    if (!name.startsWith(RG_DIR_PREFIX)) continue;
+
+    const dir = join(tmpdir(), name);
+    if (dir === rgDir || isOwnerAlive(name)) continue;
+
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      // A lock or a permission this process does not have. One directory must not abort the
+      // sweep, and the next run reaches it anyway.
+    }
+  }
+}
+
+sweepAbandonedRgDirs();
 
 // spawnSync buffers rg's entire stdout in memory and kills rg the moment the buffer fills.
 // Node's 1 MB default was low enough that an ordinary --json search (one event per match, a

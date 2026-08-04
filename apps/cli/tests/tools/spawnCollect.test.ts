@@ -1,9 +1,46 @@
 import { describe, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { spawnCollect } from "../../src/tools/spawnCollect";
 
 // Drives the current runtime as a child process so the fixtures behave the same on every OS.
 function emit(script: string): Promise<ReturnType<typeof spawnCollect> extends Promise<infer R> ? R : never> {
   return spawnCollect(process.execPath, ["-e", script]);
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitFor(cond: () => boolean, budgetMs: number): Promise<boolean> {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    if (cond()) return true;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return cond();
+}
+
+async function waitForPid(file: string): Promise<number> {
+  let pid = Number.NaN;
+  const reported = await waitFor(() => {
+    try {
+      pid = Number.parseInt(readFileSync(file, "utf8"), 10);
+      return Number.isInteger(pid);
+    } catch {
+      return false;
+    }
+  }, 10_000);
+  if (!reported) throw new Error("grandchild never reported its pid");
+  return pid;
 }
 
 describe("spawnCollect", () => {
@@ -124,4 +161,39 @@ describe("spawnCollect", () => {
 
     expect(result.stdout).not.toContain("�");
   });
+
+  test.skipIf(process.platform === "win32")("kills in-flight children when a signal ends the run", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hesper-signal-test-"));
+    const pidFile = join(dir, "grandchild.pid");
+    const modulePath = pathToFileURL(join(import.meta.dir, "../../src/tools/spawnCollect.ts")).href;
+
+    // The grandchild reports its own pid, because spawnCollect deliberately does not expose the
+    // child it spawned. The 60s self-destruct keeps a failing run from stranding it; it is twice
+    // the test's own timeout, so it can never turn a red into a green.
+    const grandchild =
+      `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));` +
+      `setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 60000);`;
+    const hesperSide =
+      `const m = await import(${JSON.stringify(modulePath)});` +
+      `m.spawnCollect(process.execPath, ["-e", ${JSON.stringify(grandchild)}]);`;
+
+    const child = spawn(process.execPath, ["-e", hesperSide], { stdio: ["ignore", "pipe", "pipe"] });
+    try {
+      // The pid file is the readiness handshake, not a sleep: it cannot exist until the module was
+      // imported (which is what installs the handler) AND spawnCollect actually spawned.
+      const pid = await waitForPid(pidFile);
+      expect(isAlive(pid)).toBe(true);
+
+      child.kill("SIGTERM");
+      await new Promise((resolve) => child.once("exit", resolve));
+
+      // Polled, not asserted once: the grandchild is briefly a zombie child of the process we just
+      // killed, and kill(pid, 0) succeeds on a zombie until init reaps it.
+      const dead = await waitFor(() => !isAlive(pid), 5_000);
+      expect(dead ? "killed" : `grandchild ${pid} survived SIGTERM`).toBe("killed");
+    } finally {
+      child.kill("SIGKILL");
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

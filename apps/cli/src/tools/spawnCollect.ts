@@ -1,4 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { onSignalCleanup } from "../signals";
 
 // Truncation is reported per stream rather than as one flag. A single OR'd boolean cannot say
 // which stream was cut, so a command that floods stderr while returning a complete stdout
@@ -97,6 +98,18 @@ function killTree(pid: number): void {
   }
 }
 
+// The timeout timer was the only thing that could reach a spawned child, so a Ctrl-C part way
+// through a turn left every one of them running: detached puts them in a process group the
+// terminal's signal never reaches, and a sleeper that writes nothing takes no EPIPE either.
+const inFlightChildren = new Set<ChildProcess>();
+
+function killInFlightChildren(): void {
+  for (const child of inFlightChildren) if (child.pid !== undefined) killTree(child.pid);
+  inFlightChildren.clear();
+}
+
+onSignalCleanup(killInFlightChildren);
+
 export function spawnCollect(executable: string, args: string[], timeoutMs?: number): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
@@ -105,6 +118,7 @@ export function spawnCollect(executable: string, args: string[], timeoutMs?: num
       // where detached means a new console window instead.
       detached: process.platform !== "win32",
     });
+    inFlightChildren.add(child);
 
     const out = createBoundedSink();
     const err = createBoundedSink();
@@ -124,11 +138,13 @@ export function spawnCollect(executable: string, args: string[], timeoutMs?: num
 
     child.on("error", (error) => {
       clearTimeout(timer);
+      inFlightChildren.delete(child);
       reject(error);
     });
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      inFlightChildren.delete(child);
       const stdout = out.result();
       const stderr = err.result();
       // Whatever the command managed to say before being killed still goes back. An agent can
