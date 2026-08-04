@@ -88,6 +88,34 @@ describe("runRipgrep", () => {
     expect(existsSync(dirname(childRgPath))).toBe(false);
   }, 30_000);
 
+  test("sweeps rg directories abandoned by earlier runs, but not a live one", () => {
+    // Neither the 'exit' listener nor the signal path runs when a process is killed abruptly —
+    // on Windows every kill path is TerminateProcess, which runs no user code — so directories
+    // accumulate: 236 of them holding 1222 MB on the dev box, 69 from a single day. Not
+    // POSIX-guarded, because Windows is where that was measured. Driven through a child because
+    // the sweep runs at module scope, which has already happened in this process.
+    const abandoned = mkdtempSync(join(tmpdir(), "hesper-rg-"));
+    const live = mkdtempSync(join(tmpdir(), `hesper-rg-${process.pid}-`));
+    writeFileSync(join(abandoned, "rg"), "not really rg");
+    writeFileSync(join(live, "rg"), "not really rg");
+
+    try {
+      const modulePath = pathToFileURL(join(import.meta.dir, "../../src/tools/runRipgrep.ts")).href;
+      const child = spawnSync(process.execPath, ["-e", `await import(${JSON.stringify(modulePath)});`], {
+        encoding: "utf8",
+      });
+      if (child.status !== 0) throw new Error(`probe child exited ${child.status}: ${child.error ?? child.stderr}`);
+
+      expect(existsSync(abandoned)).toBe(false);
+      // The assertion that carries the test: deleting every sibling would satisfy the one above
+      // while breaking a concurrent session, whose next grep re-spawns rg from inside its dir.
+      expect(existsSync(live)).toBe(true);
+    } finally {
+      rmSync(abandoned, { recursive: true, force: true });
+      rmSync(live, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("still throws when rg genuinely fails", () => {
     expect(() => runRipgrep(["--definitely-not-a-real-flag", tmpDir])).toThrow(/rg exited with code/);
   });
