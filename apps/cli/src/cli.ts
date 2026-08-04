@@ -16,6 +16,7 @@ import { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { toolDefinitions } from "./provider/tools";
 import { findMostRecentSession, loadSession, saveSession, type SessionState } from "./session/session";
 import { grep as grepReal } from "./tools/grep";
+import { resolveRg, rgVersion } from "./tools/runRipgrep";
 
 type CliDeps = {
   runLoop?: typeof runLoopReal;
@@ -133,7 +134,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
-      console.log("selftest ok: embedded ripgrep ran");
+      // Names which rg actually ran, because "it worked" is only half the answer once there is
+      // more than one way to get one: a release artifact must report `cached`, and a `system` here
+      // means the cache could not be written on that machine.
+      const rg = resolveRg();
+      console.log(`selftest ok: ripgrep ${rgVersion(rg.command)} (${rg.mode === "cached" ? "cached" : `system: ${rg.command}`})`);
       return 0;
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));

@@ -42,7 +42,11 @@ describe("run (--selftest)", () => {
     }
 
     expect(code).toBe(0);
-    expect(logs).toEqual(["selftest ok: embedded ripgrep ran"]);
+    // Matched rather than compared: the vendored rg's version moves when it is re-vendored, and
+    // pinning it here would fail the build for a reason that has nothing to do with the CLI. What
+    // has to hold is that the line names a version and the mode that produced it.
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/^selftest ok: ripgrep \d+\.\d+\.\d+ \((cached|system: .+)\)$/);
   });
 
   test("returns 1 and logs the error when grep throws", async () => {
