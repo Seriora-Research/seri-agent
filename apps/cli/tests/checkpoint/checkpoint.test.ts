@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ToolExecutionOptions } from "ai";
 import {
   appendBarrier,
   checkpointStoreDir,
@@ -21,7 +22,9 @@ import {
   updateRef,
   writeTree,
 } from "../../src/checkpoint/shadowGit";
-import type { MutationContext } from "../../src/checkpoint/wrapTools";
+import { withCheckpoints, type MutationContext } from "../../src/checkpoint/wrapTools";
+import { toolDefinitions } from "../../src/provider/tools";
+import { isBashAvailable } from "../../src/tools/bash";
 
 // The cold first snapshot measured 300 ms on Windows and these tests take several each.
 const GIT_TEST_TIMEOUT_MS = 15_000;
@@ -300,6 +303,35 @@ describe.skipIf(!isGitAvailable())("rewindConversation", () => {
       expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("after\n");
     },
     GIT_TEST_TIMEOUT_MS,
+  );
+});
+
+// success_check (c). The discriminating case against a per-edit design: `sed -i` and a shell
+// redirection never call the `edit` tool, so a design that snapshots on edits records nothing at
+// all here. The trigger is the tool call and the subject is the whole tree, so seri never has to
+// know what the shell did. Bash guard carried forward from tests/tools/bash.test.ts:27.
+describe.skipIf(!isGitAvailable() || !isBashAvailable())("checkpoints around a bash tool call", () => {
+  test(
+    "captures and undoes a change made only through sed -i and a shell redirection",
+    async () => {
+      writeFileSync(join(workTree, "b.txt"), "kept\n");
+      const tools = withCheckpoints(toolDefinitions, checkpointer());
+      const options = { toolCallId: "c1", messages: [{ role: "user" as const, content: "go" }], context: {} };
+
+      await tools.bash?.execute?.(
+        { command: `cd "${workTree.replaceAll("\\", "/")}" && sed -i 's/before/after/' a.txt && echo appended >> b.txt` },
+        options as ToolExecutionOptions<Record<string, unknown>>,
+      );
+
+      expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("after\n");
+      expect(readFileSync(join(workTree, "b.txt"), "utf8")).toBe("kept\nappended\n");
+
+      undoFiles({ storeDir, worktree: workTree, sessionId: SESSION, steps: 1 });
+
+      expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
+      expect(readFileSync(join(workTree, "b.txt"), "utf8")).toBe("kept\n");
+    },
+    30_000,
   );
 });
 
