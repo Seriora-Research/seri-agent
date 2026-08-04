@@ -1,6 +1,7 @@
 {
   "name": "seri-monorepo",
   "private": true,
+  "license": "Apache-2.0",
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "postinstall": "bun run --cwd apps/cli postinstall",
