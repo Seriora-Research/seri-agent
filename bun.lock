@@ -44,6 +44,7 @@
       "dependencies": {
         "@polar-sh/nextjs": "^0.9.6",
         "@polar-sh/sdk": "^0.47.1",
+        "@seri/plans": "workspace:*",
         "@seri/ui": "workspace:*",
         "@supabase/supabase-js": "^2.111.0",
         "@tailwindcss/postcss": "^4",
@@ -66,6 +67,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@polar-sh/nextjs": "^0.9.6",
+        "@seri/plans": "workspace:*",
         "@supabase/supabase-js": "^2.111.0",
         "next": "^16.2.12",
         "react": "^19.2.8",
@@ -95,6 +97,14 @@
       "devDependencies": {
         "@types/node": "^26.0.0",
         "@types/react": "^19.0.0",
+        "bun-types": "^1.3.14",
+        "typescript": "^5.7.2",
+      },
+    },
+    "packages/plans": {
+      "name": "@seri/plans",
+      "version": "0.0.1",
+      "devDependencies": {
         "bun-types": "^1.3.14",
         "typescript": "^5.7.2",
       },
@@ -248,6 +258,8 @@
     "@radix-ui/react-use-layout-effect": ["@radix-ui/react-use-layout-effect@1.1.4", "", { "peerDependencies": { "@types/react": "*", "react": "^16.8 || ^17.0 || ^18.0 || ^19.0 || ^19.0.0-rc" }, "optionalPeers": ["@types/react"] }, "sha512-K20DkRkUwDnxEYMBPcg3Y6voLkEy5p5QQmszZgLngKKiC7dzBR/aEuK3w1qlx2JWDUNH6FluahYdgR3BP+QbYw=="],
 
     "@seri/lab": ["@seri/lab@workspace:apps/lab"],
+
+    "@seri/plans": ["@seri/plans@workspace:packages/plans"],
 
     "@seri/portal": ["@seri/portal@workspace:apps/portal"],
 
