@@ -33,8 +33,8 @@ function toolCallChunks(
   ];
 }
 
-function streamResult(chunks: LanguageModelV4StreamPart[]) {
-  return { stream: simulateReadableStream({ chunks }) };
+function streamResult(chunks: LanguageModelV4StreamPart[], chunkDelayInMs?: number) {
+  return { stream: simulateReadableStream({ chunks, chunkDelayInMs }) };
 }
 
 async function collect(events: AsyncGenerator<LoopEvent>): Promise<LoopEvent[]> {
@@ -365,6 +365,195 @@ describe("runLoop", () => {
     expect(events.find((e) => e.type === "compacted")).toBeUndefined();
     expect(events.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
     expect(model.doStreamCalls).toHaveLength(totalIterations);
+  });
+
+  describe("abort", () => {
+    // Every case here drives a real AbortController through runLoop, because the decisions this
+    // stage had to make — discard the partial message, kill the in-flight tool, never start the
+    // next one — are decisions, not implementation details, and an untested decision is whatever
+    // the code happens to do.
+
+    function twoToolCalls(): LanguageModelV4StreamPart[] {
+      return [
+        { type: "tool-call", toolCallId: "call-1", toolName: "write_file", input: JSON.stringify({ path: "a.txt" }) },
+        { type: "tool-call", toolCallId: "call-2", toolName: "write_file", input: JSON.stringify({ path: "b.txt" }) },
+        { type: "finish", finishReason: { unified: "tool-calls", raw: undefined }, usage: usage(5, 5) },
+      ];
+    }
+
+    function toolRowOf(events: LoopEvent[]): { toolCalls: number; outputs: { type: string }[] } {
+      const update = events
+        .filter((e): e is Extract<LoopEvent, { type: "messages-updated" }> => e.type === "messages-updated")
+        .at(-1);
+      const toolMessage = update?.messages.at(-1);
+      const assistant = update?.messages.at(-2);
+      const content = Array.isArray(assistant?.content) ? assistant.content : [];
+      return {
+        toolCalls: content.filter((part) => part.type === "tool-call").length,
+        outputs: (toolMessage?.content as { output: { type: string } }[]).map((part) => part.output),
+      };
+    }
+
+    test("a cancel mid-stream discards the partial assistant message and ends done: aborted", async () => {
+      const controller = new AbortController();
+      const model = new MockLanguageModelV4({
+        doStream: async () =>
+          streamResult(
+            [
+              { type: "text-start", id: "1" },
+              { type: "text-delta", id: "1", delta: "half a " },
+              { type: "text-delta", id: "1", delta: "sentence" },
+              { type: "text-end", id: "1" },
+              { type: "finish", finishReason: { unified: "stop", raw: undefined }, usage: usage(5, 5) },
+            ],
+            20,
+          ),
+      });
+
+      const events: LoopEvent[] = [];
+      for await (const event of runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        signal: controller.signal,
+      })) {
+        events.push(event);
+        if (event.type === "text-delta") controller.abort();
+      }
+
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+      // Not an error: a user-initiated cancel is not a failure, and printEvent routes error to
+      // stderr, which is where the user's pipe is not.
+      expect(events.find((e) => e.type === "error")).toBeUndefined();
+      // No messages-updated at all, so the array the session holds is the pre-turn one, byte for
+      // byte. This is the discard decision, asserted rather than assumed.
+      expect(events.find((e) => e.type === "messages-updated")).toBeUndefined();
+    });
+
+    test("a cancel during tool execution still writes one tool-result row per tool call", async () => {
+      const controller = new AbortController();
+      const started: string[] = [];
+      const tools: ToolSet = {
+        write_file: tool({
+          description: "write a file",
+          inputSchema: z.object({ path: z.string() }),
+          // Settles only when cancelled, which is what makes this a test of the in-flight case
+          // rather than of a tool that happened to finish first. It answers an already-aborted
+          // signal too, exactly as spawnCollect and runRipgrep now do — an abort landing while the
+          // loop is suspended on its tool-call event arrives before execute is ever entered, and a
+          // listener alone would wait for an event that has already been and gone.
+          execute: async (input: { path: string }, options) => {
+            started.push(input.path);
+            return await new Promise<string>((_resolve, reject) => {
+              const cancel = (): void => reject(new Error("cancelled"));
+              options.abortSignal?.addEventListener("abort", cancel, { once: true });
+              if (options.abortSignal?.aborted === true) cancel();
+            });
+          },
+        }),
+      };
+      const model = new MockLanguageModelV4({ doStream: async () => streamResult(twoToolCalls()) });
+
+      const events: LoopEvent[] = [];
+      for await (const event of runLoop({
+        model,
+        tools,
+        messages: baseMessages,
+        permissionMode: "auto",
+        signal: controller.signal,
+      })) {
+        events.push(event);
+        if (event.type === "tool-call") controller.abort();
+      }
+
+      // The mechanical proxy for AI_MissingToolResultsError: the provider rejects a persisted
+      // assistant message whose tool calls are not all answered, so the counts have to match.
+      const { toolCalls, outputs } = toolRowOf(events);
+      expect(toolCalls).toBe(2);
+      expect(outputs).toHaveLength(2);
+      expect(outputs.every((output) => output.type === "execution-denied")).toBe(true);
+      expect(started).toEqual(["a.txt"]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    });
+
+    test("a tool is never started once the signal is already aborted", async () => {
+      const controller = new AbortController();
+      const started: string[] = [];
+      const tools = makeTools(async (input) => {
+        started.push(input.path);
+        return "ok";
+      });
+      const model = new MockLanguageModelV4({ doStream: async () => streamResult(twoToolCalls()) });
+
+      const events: LoopEvent[] = [];
+      for await (const event of runLoop({
+        model,
+        tools,
+        messages: baseMessages,
+        permissionMode: "auto",
+        signal: controller.signal,
+      })) {
+        events.push(event);
+        // The assistant message carrying the tool calls has just been pushed and the tool phase
+        // has not begun, which is exactly the window this guard covers.
+        if (event.type === "messages-updated") controller.abort();
+      }
+
+      // Half of "a half-written write_file is not a possible outcome": a cancelled write either
+      // never started (here) or completed atomically (writeFile.ts's renameSync publish, covered
+      // by its own tests). Neither half is sufficient alone.
+      expect(started).toEqual([]);
+      const { toolCalls, outputs } = toolRowOf(events);
+      expect(toolCalls).toBe(2);
+      expect(outputs).toHaveLength(2);
+      expect(outputs.every((output) => output.type === "execution-denied")).toBe(true);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    });
+
+    test("a cancel during compaction ends the turn instead of starting another", async () => {
+      const controller = new AbortController();
+      const tools = makeTools(async () => "ok");
+      // Same shape as the compaction tests above, because the eviction boundary needs a real
+      // history to land in: with only three messages findSafeEvictionBoundary returns null and
+      // compaction never runs at all.
+      const totalIterations = 25;
+      const compactAtIteration = 11;
+      const model = new MockLanguageModelV4({
+        doStream: Array.from({ length: totalIterations }, (_, i) =>
+          streamResult(toolCallChunks(`call-${i}`, "write_file", { path: "a.txt" }, usage(i === compactAtIteration ? 6000 : 100, 10))),
+        ),
+        // Stands in for generateText rejecting on an aborted signal, which is what the real
+        // compaction round-trip does once it is handed one.
+        doGenerate: async () => {
+          controller.abort();
+          throw new Error("The operation was aborted.");
+        },
+      });
+
+      const events = await collect(
+        runLoop({
+          model,
+          tools,
+          messages: baseMessages,
+          permissionMode: "auto",
+          maxIterations: totalIterations,
+          contextWindowSize: 10_000,
+          compactionThreshold: 0.5,
+          preserveRecentMessages: 6,
+          signal: controller.signal,
+        }),
+      );
+
+      // Stops at the turn that triggered the compaction rather than opening the next one: the
+      // compaction catch yields an error and deliberately keeps going, so without an abort check
+      // there it would fall straight into a fresh streamText call.
+      expect(model.doGenerateCalls).toHaveLength(1);
+      expect(model.doStreamCalls).toHaveLength(compactAtIteration + 1);
+      expect(events.find((e) => e.type === "compacted")).toBeUndefined();
+      expect(events.find((e) => e.type === "error")).toBeUndefined();
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    });
   });
 
   describe("approve-each", () => {
