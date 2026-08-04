@@ -51,3 +51,7 @@ seri "explain what this repo does"
 The first search of each release unpacks its bundled ripgrep to `%LOCALAPPDATA%\seri\rg\<key>\`
 on Windows, or `~/.seri/rg/<key>/` elsewhere. Deleting that directory is safe — the next search
 writes it again — and a run that cannot write there falls back to a temporary copy.
+
+## License
+
+[Apache License 2.0](./LICENSE). Copyright 2026 Seriora Research.
