@@ -155,6 +155,12 @@ export function spawnCollect(
       if (child.pid !== undefined) killTree(child.pid);
     };
     signal?.addEventListener("abort", onAbort);
+    // A signal that was ALREADY aborted fires no event, so the listener alone is not enough. The
+    // window is real: loop.ts checks the signal before the call, then yields a tool-call event,
+    // and the consumer's signal handler can run in exactly that suspension. Without this the
+    // command would run to completion and resolve normally — the bug the reject above exists for,
+    // surviving through a narrower door.
+    if (signal?.aborted === true) onAbort();
 
     child.on("error", (error) => {
       clearTimeout(timer);

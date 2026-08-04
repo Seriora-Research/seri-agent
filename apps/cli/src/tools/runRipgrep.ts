@@ -235,6 +235,10 @@ export function runRipgrep(args: string[], signal?: AbortSignal): Promise<{ stdo
       child.kill("SIGKILL");
     };
     signal?.addEventListener("abort", onAbort);
+    // An already-aborted signal fires no event, and loop.ts can enter a tool with one: it checks
+    // the signal, then yields a tool-call event, and the consumer's handler runs in exactly that
+    // suspension. Without this the search would run to completion and resolve.
+    if (signal?.aborted === true) onAbort();
 
     const settled = (): void => {
       clearTimeout(timer);
