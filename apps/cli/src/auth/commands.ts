@@ -16,7 +16,7 @@ export async function login(
 
   console.log(`To continue, open: ${device.verificationUri}`);
   console.log(`And enter code: ${device.userCode}`);
-  await openBrowserFn(device.verificationUriComplete);
+  openBrowserFn(device.verificationUriComplete);
 
   const result = await pollForTokenFn(clientId, device);
 
