@@ -366,8 +366,6 @@ export type RestoreResult = RestorePlan & {
   recoverCommand: string;
 };
 
-export type UndoResult = RestoreResult & { seq: number };
-
 type RestoreOpts = {
   storeDir: string;
   worktree: string;
@@ -424,7 +422,7 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
   return { ...plan, preUndoCommit, recoverCommand: `seri --resume ${opts.sessionId} /restore ${preUndoCommit}` };
 }
 
-export function undoFiles(opts: RestoreOpts & { steps: number }): UndoResult {
+export function undoFiles(opts: RestoreOpts & { steps: number }): RestoreResult {
   const log = readLog(opts.storeDir, opts.sessionId);
   // `pre-undo` records are excluded here — they describe state an undo replaced, not a point the
   // user asked to be able to return to, and stepping onto one would make `/undo 2` mean "undo the
@@ -439,7 +437,7 @@ export function undoFiles(opts: RestoreOpts & { steps: number }): UndoResult {
   // record for a call is appended immediately before its `tool` record, so cutting at the tool
   // record would drop the very write that checkpoint was taken in front of.
   const from = log.findIndex((record) => "toolCallId" in record && record.toolCallId === target.toolCallId);
-  return { ...restoreTo(opts, target.tree, ignoredSince(log, from)), seq: target.seq };
+  return restoreTo(opts, target.tree, ignoredSince(log, from));
 }
 
 // The other end of `recoverCommand`: put back a commit this session recorded, whatever it was.
