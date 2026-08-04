@@ -388,6 +388,29 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     expect(undoFirst.file).toBe("before\n");
   }, 20_000);
 
+  test("clamps an anchor that outlived the array it indexed, and reports what was actually dropped", async () => {
+    // A previous /rewind can leave the session shorter than an anchor recorded before it. Slicing
+    // past the end is a no-op, so reporting the anchor rather than the count would announce a
+    // truncation that never happened.
+    writeFileSync(join(workTree, "a.txt"), "before\n");
+    createCheckpointer({
+      storeDir: checkpointStoreDir(checkpointsDir, workTree),
+      worktree: workTree,
+      sessionId: SESSION_ID,
+      onWarning: () => {},
+    })({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 9 });
+    saveSession(
+      { id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages: messages.slice(0, 2) },
+      sessionsDir,
+    );
+
+    const code = await run(["--resume", SESSION_ID, "/rewind"], { sessionsDir, checkpointsDir });
+
+    expect(code).toBe(0);
+    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toHaveLength(2);
+    expect(logs.join("\n")).toContain("dropped 0 message(s), 2 remain");
+  }, 30_000);
+
   test("rejects a non-numeric step count instead of silently undoing one step", async () => {
     seed();
 

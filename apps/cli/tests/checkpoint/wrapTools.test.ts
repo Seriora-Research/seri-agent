@@ -103,7 +103,7 @@ describe("withCheckpoints", () => {
   });
 });
 
-// success_check (d): the snapshot must be proven to happen BEFORE the tool wrote, not after.
+// The snapshot must be proven to happen BEFORE the tool wrote, not after.
 // opencode's own test suite records this as "a real bug" in their design — the SDK executes the
 // tool before their start-step handler can snapshot, so both the before and after snapshots carry
 // the same tree hash and the diff comes back empty. A checkpoint feature can be fully green and
@@ -111,7 +111,7 @@ describe("withCheckpoints", () => {
 //
 // Neither assertion depends on timing or on how slowly the tool returns, which is precisely what
 // opencode's race destroyed: the fake tool below writes synchronously and returns immediately.
-describe.skipIf(!isGitAvailable())("withCheckpoints (clause d)", () => {
+describe.skipIf(!isGitAvailable())("withCheckpoints (snapshot precedes the write)", () => {
   let root: string;
   let gitDir: string;
   let workTree: string;
