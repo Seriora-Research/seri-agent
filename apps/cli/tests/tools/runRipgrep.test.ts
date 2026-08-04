@@ -1,15 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import pkg from "../../package.json";
-import { resolveRg, runRipgrep } from "../../src/tools/runRipgrep";
+import { runRipgrep } from "../../src/tools/runRipgrep";
 
 const MODULE = pathToFileURL(join(import.meta.dir, "../../src/tools/runRipgrep.ts")).href;
 const ASSET = join(import.meta.dir, "../../src/tools/rg-vendored.bin");
-const RESOLVE = [`const m = await import(${JSON.stringify(MODULE)});`, `console.log(m.resolveRg().command);`];
+const IMPORT = `const m = await import(${JSON.stringify(MODULE)});`;
+const RESOLVE = [IMPORT, `console.log(m.resolveRg());`];
 
 let tmpDir: string;
 let cacheRoot: string;
@@ -27,28 +28,13 @@ afterEach(() => {
 // environment before falling back to homedir(), so setting one variable redirects the whole cache.
 // It has to be set at spawn time on a child rather than mutated in process: resolveRg() memoizes,
 // so any one process can only ever observe a single cache.
-function cacheEnv(root: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+function cacheEnv(root: string): NodeJS.ProcessEnv {
   const home = process.platform === "win32" ? { LOCALAPPDATA: root } : { HOME: root };
-  return { ...process.env, ...home, ...extra };
+  return { ...process.env, ...home };
 }
 
 function configDirIn(root: string): string {
   return join(root, process.platform === "win32" ? "seri" : ".seri");
-}
-
-// An rg stand-in that answers --version and nothing else, for the two rejections in the gate test.
-// A .cmd is what Windows can execute without a shell — measured: bun's spawnSync runs one directly
-// — and a shebang script does the same job everywhere else.
-function versionStub(line: string): string {
-  if (process.platform === "win32") {
-    const path = join(tmpDir, "rgstub.cmd");
-    writeFileSync(path, `@echo off\r\necho ${line}\r\n`);
-    return path;
-  }
-  const path = join(tmpDir, "rgstub.sh");
-  writeFileSync(path, `#!/bin/sh\necho '${line}'\n`);
-  chmodSync(path, 0o755);
-  return path;
 }
 
 function runChild(script: string[], env: NodeJS.ProcessEnv): string[] {
@@ -59,6 +45,166 @@ function runChild(script: string[], env: NodeJS.ProcessEnv): string[] {
   if (child.status !== 0) throw new Error(`probe child exited ${child.status}: ${child.error ?? child.stderr}`);
   return child.stdout.trim().split(/\r?\n/);
 }
+
+// Everything about where rg comes from runs in a child against a throwaway cache root. The cache
+// is shared, persistent, machine-wide state — resolving it in this process would touch the
+// developer's real one, and a test that renamed that binary would break any concurrent seri.
+describe("rg resolution", () => {
+  test("writes nothing until something actually searches", () => {
+    // The whole point of the change: --version, login, logout and config never search, and used
+    // to pay 5 429 760 bytes of extraction anyway.
+    const [before, command] = runChild(
+      [
+        `const { existsSync } = await import("node:fs");`,
+        IMPORT,
+        `console.log(existsSync(${JSON.stringify(configDirIn(cacheRoot))}));`,
+        `console.log(m.resolveRg());`,
+      ],
+      cacheEnv(cacheRoot),
+    );
+
+    expect(before).toBe("false");
+    expect(existsSync(String(command))).toBe(true);
+  }, 30_000);
+
+  test("serves later runs from the cache instead of writing it again", () => {
+    // The cache-hit contract, and the assertion that fails the moment resolution stops being
+    // memoized or starts re-populating: a second process must reuse the very same file,
+    // untouched. Two stats cost 0.033 ms where a rewrite costs 2.80 ms and 5.4 MB.
+    const script = [
+      `const { statSync } = await import("node:fs");`,
+      IMPORT,
+      `console.log(m.resolveRg());`,
+      `console.log(m.resolveRg());`,
+      `console.log(statSync(m.resolveRg()).mtimeMs);`,
+    ];
+    const [firstCommand, secondCommand, firstMtime] = runChild(script, cacheEnv(cacheRoot));
+    const [thirdCommand, , secondMtime] = runChild(script, cacheEnv(cacheRoot));
+
+    expect(secondCommand).toBe(String(firstCommand));
+    expect(thirdCommand).toBe(String(firstCommand));
+    expect(secondMtime).toBe(String(firstMtime));
+  }, 30_000);
+
+  test("survives four processes populating one empty cache at once", async () => {
+    // No lockfile, by design: every racer writes byte-identical bytes to its own pid-suffixed
+    // temp name and renames, so last-writer-wins is indistinguishable from first. What this
+    // checks is that nobody ever sees a half-written binary and nobody leaves a .tmp behind.
+    const script = [IMPORT, `m.resolveRg();`].join("\n");
+    const codes = await Promise.all(
+      [0, 1, 2, 3].map(
+        () =>
+          new Promise<number | null>((resolve) => {
+            const child = spawn(process.execPath, ["-e", script], { env: cacheEnv(cacheRoot), stdio: "ignore" });
+            child.once("exit", resolve);
+          }),
+      ),
+    );
+    expect(codes).toEqual([0, 0, 0, 0]);
+
+    const cacheDir = join(configDirIn(cacheRoot), "rg");
+    const keyDir = join(cacheDir, String(readdirSync(cacheDir)[0]));
+    expect(readdirSync(keyDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+
+    const rg = join(keyDir, process.platform === "win32" ? "rg.exe" : "rg");
+    expect(statSync(rg).size).toBe(statSync(ASSET).size);
+    expect(spawnSync(rg, ["--version"], { encoding: "utf8" }).stdout).toContain("ripgrep");
+  }, 30_000);
+
+  test("replaces a cached binary that is the wrong size instead of running it", () => {
+    // A truncated rg is worse than an absent one: it either fails unreadably or, worse, half
+    // works. The atomic rename makes that impossible from an interrupted populate, so this forces
+    // the case a full disk or a bad restore would produce and checks the size guard catches it.
+    const [command] = runChild(RESOLVE, cacheEnv(cacheRoot));
+    writeFileSync(String(command), "not really rg");
+
+    const [again] = runChild(RESOLVE, cacheEnv(cacheRoot));
+
+    expect(again).toBe(String(command));
+    expect(statSync(String(again)).size).toBe(statSync(ASSET).size);
+  }, 30_000);
+
+  test.skipIf(process.platform === "win32")("repopulates a cached rg that lost its exec bit", () => {
+    // Right size, wrong mode — what a home restored from a backup, an rsync without -p or a round
+    // trip through exFAT leaves behind. Size alone would accept it, spawnSync would fail EACCES,
+    // and since resolution never re-resolves that machine would be bricked for good. Windows has
+    // no exec bit, so the branch this guards does not exist there.
+    const [command] = runChild(RESOLVE, cacheEnv(cacheRoot));
+    chmodSync(String(command), 0o644);
+
+    const [again] = runChild(RESOLVE, cacheEnv(cacheRoot));
+
+    expect(again).toBe(String(command));
+    expect(statSync(String(again)).mode & 0o111).not.toBe(0);
+  }, 30_000);
+
+  test("keys the cache so a different seri or a different rg cannot reuse it", () => {
+    // Every release ships exactly one vendored rg, so the version bump alone would do — the asset
+    // size is there for the developer who re-vendors a different rg without bumping. An entry
+    // under another key is left strictly alone: nothing here sweeps, by design.
+    const [command] = runChild(RESOLVE, cacheEnv(cacheRoot));
+    const cacheDir = join(configDirIn(cacheRoot), "rg");
+    expect(readdirSync(cacheDir)).toEqual([`${pkg.version}-${process.platform}-${process.arch}-${statSync(ASSET).size}`]);
+
+    const foreign = join(cacheDir, "0.0.0-otherplatform-otherarch-1");
+    mkdirSync(foreign, { recursive: true });
+    writeFileSync(join(foreign, "rg"), "another seri's rg");
+
+    const [again] = runChild(RESOLVE, cacheEnv(cacheRoot));
+
+    expect(again).toBe(String(command));
+    expect(statSync(join(foreign, "rg")).size).toBe("another seri's rg".length);
+  }, 30_000);
+
+  test("falls back to a temp copy of its own rg when the cache cannot be written", () => {
+    // Every container and CI with a read-only or absent home takes this path — and LOCALAPPDATA
+    // simply being unset is enough, since getConfigDir() throws on it outright. Pointed at a
+    // regular file so the config dir is genuinely unusable rather than merely missing. seri keeps
+    // searching, and keeps searching with the rg it vendored rather than an untested one off PATH.
+    const root = join(tmpDir, "unwritable-file");
+    writeFileSync(root, "not a directory");
+    writeFileSync(join(tmpDir, "a.txt"), "needle\n");
+
+    const [command, found, removed] = runChild(
+      [
+        `const { existsSync } = await import("node:fs");`,
+        `const { dirname } = await import("node:path");`,
+        IMPORT,
+        `const rg = m.resolveRg();`,
+        `console.log(rg);`,
+        `console.log(m.runRipgrep(["--json", "needle", ${JSON.stringify(tmpDir)}]).stdout.includes("needle"));`,
+        `process.on("exit", () => console.log(existsSync(dirname(rg))));`,
+      ],
+      cacheEnv(root),
+    );
+
+    expect(command).toContain("seri-rg-");
+    expect(found).toBe("true");
+    // Printed from a later 'exit' listener than the one that removes the directory: listeners run
+    // in registration order, so this observes the state after cleanup rather than racing it.
+    expect(removed).toBe("false");
+  }, 30_000);
+
+  test("names the cause when rg goes missing mid-session", () => {
+    // The resolved rg can vanish while seri is running — an installer, a disk cleaner, an AV
+    // quarantine. spawnSync then reports no status and no stderr, which the exit-code path
+    // rendered as "rg exited with code undefined: null". Parking it after resolution is what
+    // makes this a real test: resolution is memoized, so nothing silently re-populates it.
+    const [message] = runChild(
+      [
+        `const { renameSync } = await import("node:fs");`,
+        IMPORT,
+        `const rg = m.resolveRg();`,
+        `renameSync(rg, rg + ".parked");`,
+        `try { m.runRipgrep(["--json", "needle", ${JSON.stringify(tmpDir)}]); console.log("no throw"); }`,
+        `catch (error) { console.log(error.message); }`,
+      ],
+      cacheEnv(cacheRoot),
+    );
+
+    expect(message).toMatch(/failed to run rg/);
+  }, 30_000);
+});
 
 describe("runRipgrep", () => {
   test("returns stdout and reports no truncation for an ordinary search", () => {
@@ -83,146 +229,8 @@ describe("runRipgrep", () => {
     expect(stdout.length).toBeGreaterThan(0);
   });
 
-  test("writes nothing until something actually searches", () => {
-    // The whole point of the change: --version, login, logout and config never search, and used
-    // to pay 5 429 760 bytes of extraction anyway. Only a child can show it, because this process
-    // has already resolved rg.
-    const [before, command] = runChild(
-      [
-        `const { existsSync } = await import("node:fs");`,
-        `const m = await import(${JSON.stringify(MODULE)});`,
-        `console.log(existsSync(${JSON.stringify(configDirIn(cacheRoot))}));`,
-        `console.log(m.resolveRg().command);`,
-      ],
-      cacheEnv(cacheRoot),
-    );
-
-    expect(before).toBe("false");
-    expect(existsSync(String(command))).toBe(true);
-  }, 30_000);
-
-  test("serves later runs from the cache instead of writing it again", () => {
-    // The cache-hit contract, and the assertion that fails the moment resolution stops being
-    // memoized or starts re-populating: a second process must reuse the very same file,
-    // untouched. Two stats cost 0.033 ms where a rewrite costs 2.80 ms and 5.4 MB.
-    const script = [
-      `const { statSync } = await import("node:fs");`,
-      `const m = await import(${JSON.stringify(MODULE)});`,
-      `console.log(m.resolveRg().command);`,
-      `console.log(m.resolveRg().command);`,
-      `console.log(statSync(m.resolveRg().command).mtimeMs);`,
-    ];
-    const [firstCommand, secondCommand, firstMtime] = runChild(script, cacheEnv(cacheRoot));
-    const [thirdCommand, , secondMtime] = runChild(script, cacheEnv(cacheRoot));
-
-    expect(secondCommand).toBe(String(firstCommand));
-    expect(thirdCommand).toBe(String(firstCommand));
-    expect(secondMtime).toBe(String(firstMtime));
-  }, 30_000);
-
-  test("survives four processes populating one empty cache at once", () => {
-    // No lockfile, by design: every racer writes byte-identical bytes to its own pid-suffixed
-    // temp name and renames, so last-writer-wins is indistinguishable from first. What this
-    // checks is that nobody ever sees a half-written binary and nobody leaves a .tmp behind.
-    const script = [`const m = await import(${JSON.stringify(MODULE)});`, `m.resolveRg();`].join("\n");
-    const exits = Promise.all(
-      [0, 1, 2, 3].map(
-        () =>
-          new Promise<number | null>((resolve) => {
-            const child = spawn(process.execPath, ["-e", script], { env: cacheEnv(cacheRoot), stdio: "ignore" });
-            child.once("exit", resolve);
-          }),
-      ),
-    );
-
-    return exits.then((codes) => {
-      expect(codes).toEqual([0, 0, 0, 0]);
-
-      const cacheDir = join(configDirIn(cacheRoot), "rg");
-      const keyDir = join(cacheDir, String(readdirSync(cacheDir)[0]));
-      expect(readdirSync(keyDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
-
-      const rg = join(keyDir, process.platform === "win32" ? "rg.exe" : "rg");
-      expect(statSync(rg).size).toBe(statSync(ASSET).size);
-      expect(spawnSync(rg, ["--version"], { encoding: "utf8" }).stdout).toContain("ripgrep");
-    });
-  }, 30_000);
-
-  test("replaces a cached binary that is the wrong size instead of running it", () => {
-    // A truncated rg is worse than an absent one: it either fails unreadably or, worse, half
-    // works. The atomic rename makes that impossible from an interrupted populate, so this forces
-    // the case a full disk or a bad restore would produce and checks the size guard catches it.
-    const [command] = runChild(RESOLVE, cacheEnv(cacheRoot));
-    writeFileSync(String(command), "not really rg");
-
-    const [again] = runChild(RESOLVE, cacheEnv(cacheRoot));
-
-    expect(again).toBe(String(command));
-    expect(statSync(String(again)).size).toBe(statSync(ASSET).size);
-  }, 30_000);
-
-  test("keys the cache so a different seri or a different rg cannot reuse it", () => {
-    // Every release ships exactly one vendored rg, so the version bump alone would do — the asset
-    // size is there for the developer who re-vendors a different rg without bumping. An entry
-    // under another key is left strictly alone: nothing here sweeps, by design.
-    const [command] = runChild(RESOLVE, cacheEnv(cacheRoot));
-    const cacheDir = join(configDirIn(cacheRoot), "rg");
-    expect(readdirSync(cacheDir)).toEqual([`${pkg.version}-${process.platform}-${process.arch}-${statSync(ASSET).size}`]);
-
-    const foreign = join(cacheDir, "0.0.0-otherplatform-otherarch-1");
-    mkdirSync(foreign, { recursive: true });
-    writeFileSync(join(foreign, "rg"), "another seri's rg");
-
-    const [again] = runChild(RESOLVE, cacheEnv(cacheRoot));
-
-    expect(again).toBe(String(command));
-    expect(statSync(join(foreign, "rg")).size).toBe("another seri's rg".length);
-  }, 30_000);
-
-  test("only trusts an rg it did not vendor once that rg has proved itself", () => {
-    // SERI_RIPGREP and SERI_USE_BUILTIN_RIPGREP hand seri a binary its own suite has never run.
-    // The gate is a version floor plus a real --json round trip, because the risk is not a parse
-    // error — three rg builds, including a third-party fork, emitted byte-identical --json — it is
-    // a build old or odd enough that nobody has checked. The vendored copy stands in for "a system
-    // rg" because there is no rg on PATH on this box at all, which would make a PATH test a coin
-    // flip.
-    writeFileSync(join(tmpDir, "a.txt"), "needle\n");
-    const script = [
-      `const m = await import(${JSON.stringify(MODULE)});`,
-      `try {`,
-      `  const found = m.runRipgrep(["--json", "needle", ${JSON.stringify(tmpDir)}]).stdout.includes("needle");`,
-      `  console.log(m.resolveRg().mode + " " + found);`,
-      `} catch (error) { console.log("rejected: " + error.message); }`,
-    ];
-
-    const [tooOld] = runChild(script, cacheEnv(cacheRoot, { SERI_RIPGREP: versionStub("ripgrep 9.9.9") }));
-    expect(tooOld).toContain("rejected:");
-    expect(tooOld).toContain("9.9.9");
-
-    const [notRg] = runChild(script, cacheEnv(cacheRoot, { SERI_RIPGREP: versionStub("not-ripgrep 15.0.0") }));
-    expect(notRg).toContain("rejected:");
-
-    const [vendored] = runChild(script, cacheEnv(cacheRoot, { SERI_RIPGREP: resolveRg().command }));
-    expect(vendored).toBe("system true");
-  }, 30_000);
-
   test("still throws when rg genuinely fails", () => {
     expect(() => runRipgrep(["--definitely-not-a-real-flag", tmpDir])).toThrow(/rg exited with code/);
-  });
-
-  test("names the cause when rg cannot be run at all", () => {
-    // The cached rg can vanish mid-session — an installer, a disk cleaner, an AV quarantine.
-    // spawnSync then reports no status and no stderr, which the exit-code path rendered as
-    // "rg exited with code undefined: null". Resolution is memoized and never re-runs, so parking
-    // the binary really does break rg rather than being silently healed.
-    const rgPath = resolveRg().command;
-    const parked = `${rgPath}.parked`;
-    renameSync(rgPath, parked);
-    try {
-      expect(() => runRipgrep(["--json", "needle", tmpDir])).toThrow(/failed to run rg/);
-    } finally {
-      renameSync(parked, rgPath);
-    }
   });
 
   test("ignores the user's own ripgrep config", () => {

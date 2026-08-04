@@ -134,11 +134,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
-      // Names which rg actually ran, because "it worked" is only half the answer once there is
-      // more than one way to get one: a release artifact must report `cached`, and a `system` here
-      // means the cache could not be written on that machine.
-      const rg = resolveRg();
-      console.log(`selftest ok: ripgrep ${rgVersion(rg.command)} (${rg.mode === "cached" ? "cached" : `system: ${rg.command}`})`);
+      // Names the version, because "it worked" leaves the one thing a cross-compiled artifact can
+      // get wrong — which rg was actually vendored for this target — unsaid.
+      console.log(`selftest ok: ripgrep ${rgVersion(resolveRg())}`);
       return 0;
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));

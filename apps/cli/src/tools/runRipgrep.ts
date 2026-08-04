@@ -1,9 +1,42 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import pkg from "../../package.json";
 import { getConfigDir } from "../config/paths";
 import rgAsset from "./rg-vendored.bin" with { type: "file" };
+
+// A wedged rg is killed rather than left hanging the session. 30 s, not the 10 s Claude Code
+// passes: the --sort note further down records a legitimate 9 s search of a large tree, which
+// 10 s would leave about a second of margin over.
+const RG_TIMEOUT_MS = 30_000;
+
+let resolution: string | undefined;
+
+// Resolved once, on the first actual search: --version, login, logout and config never search, so
+// they never write, stat or spawn anything. It never re-resolves, so an rg that goes missing
+// mid-session fails loudly rather than being silently replaced under the caller.
+export function resolveRg(): string {
+  resolution ??= detectRg();
+  return resolution;
+}
+
+function detectRg(): string {
+  try {
+    const cached = rgCachePath();
+    if (!isCachedRg(cached)) populateCache(cached);
+    return cached;
+  } catch {
+    // getConfigDir() throws outright when LOCALAPPDATA is unset, and the directory it names can be
+    // read-only or full. Not noexec: that fails at exec time, which happens outside this try, so
+    // the fallback never sees it — and tmpdir() is itself sometimes mounted noexec, so falling
+    // back would not help if it did. Falling back to a temp copy keeps the invariant that matters:
+    // seri always searches with the rg it vendored, on every machine. Borrowing an rg off PATH
+    // would need a version floor and a capability probe to defend, and would still leave the user
+    // with different ignore, hidden-file and binary-detection defaults than this suite ever runs.
+    return extractToTemp();
+  }
+}
 
 // @vscode/ripgrep's own `rgPath` export resolves the platform binary via a dynamic,
 // template-built `require.resolve(...)` call. That's fine for `bun run`/`bun test` (real
@@ -14,104 +47,29 @@ import rgAsset from "./rg-vendored.bin" with { type: "file" };
 // vendorRipgrep.ts, run via `postinstall`) is a literal local file, so bun embeds its bytes
 // directly into the compiled executable, CWD-independent. The embedded asset resolves to
 // bun's virtual `B:/~BUN/root/...` path, which isn't a real file `spawnSync` can execute, so
-// it still has to reach a real one — but once per seri version, into the cache below, rather
-// than once per run into a temp directory that nothing reliably deleted.
+// it has to reach disk — but once per seri version, not once per run.
 //
-// A wedged rg is killed rather than left hanging the session. 30 s, not the 10 s Claude Code
-// passes: the --sort note further down records a legitimate 9 s search of a large tree, which
-// 10 s would leave about a second of margin over.
-const RG_TIMEOUT_MS = 30_000;
-
-// The oldest ripgrep whose --json output was actually compared against the vendored 15.0.0 and
-// found byte-identical (14.1.1, and a 15.1.0 third-party fork agreed too). Not a claim that 13.x
-// is broken — a claim that nobody has checked it. Only the major is compared, because the floor's
-// minor is 0 and a minor check could therefore never reject anything.
-const MIN_RG_MAJOR = 14;
-
-export type RgResolution = { mode: "cached" | "system"; command: string };
-
-let resolution: RgResolution | undefined;
-
-// Resolved once, on the first actual search: --version, login, logout and config never search, so
-// they never write, stat or spawn anything. It never re-resolves once cached, deliberately — a
-// resolver that noticed its binary had gone and quietly replaced it would turn "an installer or a
-// disk cleaner removed rg mid-session" from the named error below into silence, and would make the
-// test that parks the binary on disk pass while testing nothing.
-export function resolveRg(): RgResolution {
-  resolution ??= resolveRgUncached();
-  return resolution;
-}
-
-function resolveRgUncached(): RgResolution {
-  // An explicit path wins over everything, and SERI_USE_BUILTIN_RIPGREP=0 means "whatever is on
-  // PATH". Both are the same request — use an rg seri did not vendor — so both take the same gate.
-  const forced = process.env.SERI_RIPGREP || (process.env.SERI_USE_BUILTIN_RIPGREP === "0" ? "rg" : undefined);
-  if (forced) {
-    gateForeignRg(forced);
-    return { mode: "system", command: forced };
-  }
-
-  try {
-    const cached = cachedRgPath();
-    if (!isCachedRg(cached)) populateCache(cached);
-    return { mode: "cached", command: cached };
-  } catch (cacheError) {
-    // A read-only home, a noexec mount, LOCALAPPDATA unset, an AV quarantine: the cache is the
-    // whole design, so when it cannot be written the only thing left is somebody else's rg. Said
-    // out loud rather than silently, because this is the one path where seri searches with a
-    // binary it did not ship — once per process, since resolution is memoized.
-    try {
-      gateForeignRg("rg");
-    } catch (systemError) {
-      throw new Error(
-        `no usable ripgrep: caching the bundled copy failed (${asMessage(cacheError)}) and rg on PATH was rejected (${asMessage(systemError)}). Set SERI_RIPGREP to a ripgrep ${MIN_RG_MAJOR}+ binary, or SERI_USE_BUILTIN_RIPGREP=0 to force the one on PATH.`,
-      );
-    }
-    console.error(`seri: could not cache the bundled ripgrep (${asMessage(cacheError)}); falling back to rg on PATH`);
-    return { mode: "system", command: "rg" };
-  }
-}
-
-// Two spawns an rg seri did not vendor has to survive before it is trusted with a search, and
-// neither is on the default path. The version floor rejects what has never been checked; the probe
-// then reads back the exact contract grep.ts parses, including the base64 `bytes` fallback that a
-// non-UTF-8 line takes — fed on stdin, so it needs no fixture file and leaves nothing behind.
-function gateForeignRg(command: string): void {
-  const version = rgVersion(command);
-  if (Number(version.split(".")[0]) < MIN_RG_MAJOR) {
-    throw new Error(`${command} is ripgrep ${version}, older than the ${MIN_RG_MAJOR}.0 seri has verified its --json output against`);
-  }
-
-  const probe = spawnSync(command, ["--no-config", "--json", "--", "needle", "-"], {
-    input: Buffer.concat([Buffer.from("needle "), Buffer.from([0xe9, 0x0a])]),
-    encoding: "utf8",
-    timeout: RG_TIMEOUT_MS,
-    windowsHide: true,
-  });
-  const parses = probe.stdout.split("\n").some((line) => {
-    try {
-      const event = JSON.parse(line) as { type: string; data?: { lines?: { bytes?: string } } };
-      return event.type === "match" && typeof event.data?.lines?.bytes === "string";
-    } catch {
-      return false;
-    }
-  });
-  if (!parses) throw new Error(`${command} is ripgrep ${version} but its --json output is not the shape seri parses`);
-}
-
-function asMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 // Keyed so a cached binary can never outlive the asset it came from: seri ships exactly one
 // vendored rg per release, so a version bump always changes the key, and the asset's size catches
 // a developer re-vendoring a different rg without bumping. Hashing the asset instead was measured
 // and rejected — SHA-256 over 5.4 MB costs the same order as the 2.80 ms write it would be
 // protecting, so it would defeat the cache on every hit; statSync costs 0.033 ms and returns the
 // real 5 429 760 even for the compiled build's virtual asset path.
-function cachedRgPath(): string {
+function rgCachePath(): string {
   const key = `${pkg.version}-${process.platform}-${process.arch}-${statSync(rgAsset).size}`;
   return join(getConfigDir(), "rg", key, process.platform === "win32" ? "rg.exe" : "rg");
+}
+
+// Verified, not trusted: two stats cost 0.033 ms against running a 5 MB binary that a full disk or
+// a botched restore left short. The exec bit counts as much as the size — a home restored from a
+// backup, an rsync without -p or a round trip through exFAT strips it, and an entry that is the
+// right size but not executable would fail EACCES on every run from then on, since resolution
+// never re-resolves and nothing would ever repair it. Treating it as a miss costs one rewrite.
+function isCachedRg(cached: string): boolean {
+  if (!existsSync(cached)) return false;
+
+  const stats = statSync(cached);
+  return stats.size === statSync(rgAsset).size && (process.platform === "win32" || (stats.mode & 0o111) !== 0);
 }
 
 // Published by renaming a fully written, already chmodded file — never by writing in place, and
@@ -131,24 +89,55 @@ function populateCache(cached: string): void {
   const tmp = `${cached}.${process.pid}.tmp`;
   writeFileSync(tmp, readFileSync(rgAsset));
   if (process.platform !== "win32") chmodSync(tmp, 0o755);
-  try {
-    renameSync(tmp, cached);
-  } catch (error) {
-    rmSync(tmp, { force: true });
-    if (!isCachedRg(cached)) throw error;
+  // Twice, not once. A loser almost always finds the winner's file already in place and adopts
+  // it — measured 28 collisions across 12 rounds of 6 racers, 28 adoptions — but an EPERM can
+  // also be observed in the window *before* the winner's rename publishes, and the check would
+  // then have nothing to find. Without the second attempt that racer abandons the cache and runs
+  // the rest of its session from the temp fallback.
+  for (const attempt of [1, 2]) {
+    try {
+      renameSync(tmp, cached);
+      return;
+    } catch (error) {
+      if (isCachedRg(cached)) break;
+      if (attempt === 2) {
+        rmSync(tmp, { force: true });
+        throw error;
+      }
+    }
   }
+  rmSync(tmp, { force: true });
 }
 
-// Verified, not trusted. The rename above makes a short file at this path impossible from an
-// interrupted write, but not from a full disk, a botched restore or a half-synced home directory —
-// and two stats cost 0.033 ms against running a truncated 5 MB binary.
-function isCachedRg(cached: string): boolean {
-  return existsSync(cached) && statSync(cached).size === statSync(rgAsset).size;
+function extractToTemp(): string {
+  const dir = mkdtempSync(join(tmpdir(), "seri-rg-"));
+  const path = join(dir, process.platform === "win32" ? "rg.exe" : "rg");
+  writeFileSync(path, readFileSync(rgAsset));
+  if (process.platform !== "win32") chmodSync(path, 0o755);
+
+  // Nothing else will ever reclaim this: the sweep that used to hunt abandoned copies is gone
+  // along with the per-run extraction that needed it. One 'exit' listener is the entire cleanup —
+  // no pid-in-dirname scheme, no readdir of tmpdir at every startup. It does miss signals and
+  // Windows' TerminateProcess, so a machine that keeps landing here can still accumulate copies;
+  // that residue is bounded by how often a config dir is unwritable, where the leak this replaced
+  // was one directory per run of every process on every machine. Closing the remaining gap would
+  // mean restoring the apparatus this change exists to delete, which is not worth it for a path
+  // reached only on an already-degraded machine.
+  process.on("exit", () => {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      // Throwing from an exit listener lands after the run's real output and turns a success into
+      // an apparent crash — measured at exit code 1 with a stack trace. Windows raises EPERM here
+      // while an AV scanner still holds the rg we just executed. One directory left behind is the
+      // cheaper failure.
+    }
+  });
+  return path;
 }
 
-// The first line of `rg --version` is `ripgrep 15.0.0 (rev 3a612f88b8)` — the same shape on the
-// vendored 15.0.0, on a 14.1.1 build and on a third-party 15.1.0 fork. Only --selftest and the
-// gate below need it, so no ordinary search ever pays for the spawn.
+// The first line of `rg --version` is `ripgrep 15.0.0 (rev 3a612f88b8)`. Only --selftest needs it,
+// so no ordinary search ever pays for the spawn.
 export function rgVersion(command: string): string {
   const result = spawnSync(command, ["--version"], { encoding: "utf8", timeout: RG_TIMEOUT_MS, windowsHide: true });
   if (result.error) throw new Error(`failed to run ${command}: ${result.error.message}`);
@@ -193,7 +182,7 @@ export function runRipgrep(args: string[]): { stdout: string; truncated: boolean
   // --no-config: rg reads RIPGREP_CONFIG_PATH from the environment, so without this a
   // developer's own ~/.ripgreprc (--smart-case, --hidden, glob excludes) silently changes
   // what seri finds on their machine and nowhere else.
-  const result = spawnSync(resolveRg().command, ["--no-config", ...args], {
+  const result = spawnSync(resolveRg(), ["--no-config", ...args], {
     encoding: "utf8",
     maxBuffer: MAX_BUFFER_BYTES,
     timeout: RG_TIMEOUT_MS,
@@ -212,7 +201,7 @@ export function runRipgrep(args: string[]): { stdout: string; truncated: boolean
     }
     // rg never started, so status and stderr are both empty and the exit-code message below
     // would name neither a cause nor a real code — the same unreadable failure this file was
-    // fixed for. Reachable when the cached binary is removed or quarantined mid-session.
+    // fixed for. Reachable when the resolved binary is removed or quarantined mid-session.
     throw new Error(`failed to run rg: ${result.error.message}`);
   }
 
