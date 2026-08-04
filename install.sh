@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs the seri CLI on macOS or Linux. Safe to run as:
-#   curl -fsSL https://raw.githubusercontent.com/lzvxck/seri-agent/main/install.sh | bash
+#   curl -fsSL https://seri-agent.seriora.ai/install.sh | bash
 # Set SERI_VERSION=v0.1.0 to install a specific release instead of the latest one.
 set -euo pipefail
 
