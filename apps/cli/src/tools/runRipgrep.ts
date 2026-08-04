@@ -22,6 +22,12 @@ import rgAsset from "./rg-vendored.bin" with { type: "file" };
 // 10 s would leave about a second of margin over.
 const RG_TIMEOUT_MS = 30_000;
 
+// The oldest ripgrep whose --json output was actually compared against the vendored 15.0.0 and
+// found byte-identical (14.1.1, and a 15.1.0 third-party fork agreed too). Not a claim that 13.x
+// is broken — a claim that nobody has checked it. Only the major is compared, because the floor's
+// minor is 0 and a minor check could therefore never reject anything.
+const MIN_RG_MAJOR = 14;
+
 export type RgResolution = { mode: "cached" | "system"; command: string };
 
 let resolution: RgResolution | undefined;
@@ -37,13 +43,68 @@ export function resolveRg(): RgResolution {
 }
 
 function resolveRgUncached(): RgResolution {
+  // An explicit path wins over everything, and SERI_USE_BUILTIN_RIPGREP=0 skips the vendored copy
+  // entirely. Both are gated: an rg seri did not vendor is an rg seri has never run a test against.
+  const override = process.env.SERI_RIPGREP;
+  if (override) {
+    gateForeignRg(override);
+    return { mode: "system", command: override };
+  }
+  if (process.env.SERI_USE_BUILTIN_RIPGREP === "0") {
+    gateForeignRg("rg");
+    return { mode: "system", command: "rg" };
+  }
+
   try {
     const cached = cachedRgPath();
     if (!isCachedRg(cached)) populateCache(cached);
     return { mode: "cached", command: cached };
-  } catch (error) {
-    throw new Error(`could not cache the bundled ripgrep: ${error instanceof Error ? error.message : String(error)}`);
+  } catch (cacheError) {
+    // A read-only home, a noexec mount, LOCALAPPDATA unset, an AV quarantine: the cache is the
+    // whole design, so when it cannot be written the only thing left is somebody else's rg. Said
+    // out loud rather than silently, because this is the one path where seri searches with a
+    // binary it did not ship — once per process, since resolution is memoized.
+    try {
+      gateForeignRg("rg");
+    } catch (systemError) {
+      throw new Error(
+        `no usable ripgrep: caching the bundled copy failed (${asMessage(cacheError)}) and rg on PATH was rejected (${asMessage(systemError)}). Set SERI_RIPGREP to a ripgrep ${MIN_RG_MAJOR}+ binary, or SERI_USE_BUILTIN_RIPGREP=0 to force the one on PATH.`,
+      );
+    }
+    console.error(`seri: could not cache the bundled ripgrep (${asMessage(cacheError)}); falling back to rg on PATH`);
+    return { mode: "system", command: "rg" };
   }
+}
+
+// Two spawns an rg seri did not vendor has to survive before it is trusted with a search, and
+// neither is on the default path. The version floor rejects what has never been checked; the probe
+// then reads back the exact contract grep.ts parses, including the base64 `bytes` fallback that a
+// non-UTF-8 line takes — fed on stdin, so it needs no fixture file and leaves nothing behind.
+function gateForeignRg(command: string): void {
+  const version = rgVersion(command);
+  if (Number(version.split(".")[0]) < MIN_RG_MAJOR) {
+    throw new Error(`${command} is ripgrep ${version}, older than the ${MIN_RG_MAJOR}.0 seri has verified its --json output against`);
+  }
+
+  const probe = spawnSync(command, ["--no-config", "--json", "--", "needle", "-"], {
+    input: Buffer.concat([Buffer.from("needle "), Buffer.from([0xe9, 0x0a])]),
+    encoding: "utf8",
+    timeout: RG_TIMEOUT_MS,
+    windowsHide: true,
+  });
+  const parses = probe.stdout.split("\n").some((line) => {
+    try {
+      const event = JSON.parse(line) as { type: string; data?: { lines?: { bytes?: string } } };
+      return event.type === "match" && typeof event.data?.lines?.bytes === "string";
+    } catch {
+      return false;
+    }
+  });
+  if (!parses) throw new Error(`${command} is ripgrep ${version} but its --json output is not the shape seri parses`);
+}
+
+function asMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 // Keyed so a cached binary can never outlive the asset it came from: seri ships exactly one

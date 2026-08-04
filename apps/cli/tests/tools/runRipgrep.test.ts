@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -34,6 +34,21 @@ function cacheEnv(root: string, extra: Record<string, string> = {}): NodeJS.Proc
 
 function configDirIn(root: string): string {
   return join(root, process.platform === "win32" ? "seri" : ".seri");
+}
+
+// An rg stand-in that answers --version and nothing else, for the two rejections in the gate test.
+// A .cmd is what Windows can execute without a shell — measured: bun's spawnSync runs one directly
+// — and a shebang script does the same job everywhere else.
+function versionStub(line: string): string {
+  if (process.platform === "win32") {
+    const path = join(tmpDir, "rgstub.cmd");
+    writeFileSync(path, `@echo off\r\necho ${line}\r\n`);
+    return path;
+  }
+  const path = join(tmpDir, "rgstub.sh");
+  writeFileSync(path, `#!/bin/sh\necho '${line}'\n`);
+  chmodSync(path, 0o755);
+  return path;
 }
 
 function runChild(script: string[], env: NodeJS.ProcessEnv): string[] {
@@ -162,6 +177,33 @@ describe("runRipgrep", () => {
 
     expect(again).toBe(String(command));
     expect(statSync(join(foreign, "rg")).size).toBe("another seri's rg".length);
+  }, 30_000);
+
+  test("only trusts an rg it did not vendor once that rg has proved itself", () => {
+    // SERI_RIPGREP and SERI_USE_BUILTIN_RIPGREP hand seri a binary its own suite has never run.
+    // The gate is a version floor plus a real --json round trip, because the risk is not a parse
+    // error — three rg builds, including a third-party fork, emitted byte-identical --json — it is
+    // a build old or odd enough that nobody has checked. The vendored copy stands in for "a system
+    // rg" because there is no rg on PATH on this box at all, which would make a PATH test a coin
+    // flip.
+    writeFileSync(join(tmpDir, "a.txt"), "needle\n");
+    const script = [
+      `const m = await import(${JSON.stringify(MODULE)});`,
+      `try {`,
+      `  const found = m.runRipgrep(["--json", "needle", ${JSON.stringify(tmpDir)}]).stdout.includes("needle");`,
+      `  console.log(m.resolveRg().mode + " " + found);`,
+      `} catch (error) { console.log("rejected: " + error.message); }`,
+    ];
+
+    const [tooOld] = runChild(script, cacheEnv(cacheRoot, { SERI_RIPGREP: versionStub("ripgrep 9.9.9") }));
+    expect(tooOld).toContain("rejected:");
+    expect(tooOld).toContain("9.9.9");
+
+    const [notRg] = runChild(script, cacheEnv(cacheRoot, { SERI_RIPGREP: versionStub("not-ripgrep 15.0.0") }));
+    expect(notRg).toContain("rejected:");
+
+    const [vendored] = runChild(script, cacheEnv(cacheRoot, { SERI_RIPGREP: resolveRg().command }));
+    expect(vendored).toBe("system true");
   }, 30_000);
 
   test("still throws when rg genuinely fails", () => {
