@@ -1,7 +1,7 @@
 {
   "name": "seri-monorepo",
   "private": true,
-  "workspaces": ["apps/*"],
+  "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "postinstall": "bun run --cwd apps/cli postinstall",
     "dev": "bun run --cwd apps/cli dev",
