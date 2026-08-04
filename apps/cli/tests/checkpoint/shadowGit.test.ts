@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import {
+  applyRestore,
   commitTree,
   deleteRef,
   diffTree,
@@ -12,14 +13,17 @@ import {
   isGitAvailable,
   isIgnored,
   listSessionRefs,
-  restoreTree,
+  planRestore,
   updateRef,
   writeTree,
 } from "../../src/checkpoint/shadowGit";
 
 // The cold first snapshot of a real repo measured 300 ms on Windows, and every test here takes
 // several snapshots plus a restore. bun's default is comfortably too tight on a loaded runner.
-const GIT_TEST_TIMEOUT_MS = 15_000;
+// 30 s rather than 15: the heaviest test here also runs `git init` and a real `git commit` in a
+// second repo (~217 ms for the commit alone on Windows), and observed 19.8 s once while the other
+// checkpoint files ran alongside it.
+const GIT_TEST_TIMEOUT_MS = 30_000;
 
 let root: string;
 let gitDir: string;
@@ -65,6 +69,14 @@ function manifest(dir: string): Record<string, string> {
   return out;
 }
 
+// The two halves of a restore, as /undo runs them: plan first so the caller can show what is
+// about to be deleted, then apply.
+function restore(tree: string): { restored: string[]; deleted: string[] } {
+  const plan = planRestore(gitDir, workTree, tree);
+  applyRestore(gitDir, workTree, plan.deleted);
+  return plan;
+}
+
 function snapshot(parent?: string): { tree: string; commit: string } {
   const tree = writeTree(gitDir, workTree);
   return { tree, commit: commitTree(gitDir, workTree, tree, parent) };
@@ -87,7 +99,7 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
         parent = snapshot(parent).commit;
       }
 
-      restoreTree(gitDir, workTree, first.tree);
+      restore(first.tree);
 
       expect(manifest(workTree)).toEqual(before);
     },
@@ -107,8 +119,55 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
       writeFileSync(join(workTree, "sub", "nested.txt"), "mutated\n");
       snapshot(first.commit);
 
-      restoreTree(gitDir, workTree, first.tree);
+      restore(first.tree);
 
+      expect(manifest(workTree)).toEqual(before);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "really deletes a non-ASCII path rather than reporting a deletion that did not happen",
+    () => {
+      // core.quotePath defaults to true, so git names this file `"\321\202\320\265..."` — quotes
+      // and octal escapes included — unless the listing is asked for with -z. Handing that string
+      // to rmSync throws EFAULT on Windows between read-tree and checkout-index, so nothing gets
+      // restored; on POSIX `force: true` swallows the ENOENT, the file survives, and it is still
+      // reported as deleted. Cyrillic rather than an accented Latin letter on purpose: it has no
+      // Unicode decomposition, so macOS's core.precomposeunicode cannot make this flaky.
+      const name = "тест-файл.txt";
+      seedWorktree(workTree);
+      initShadow(gitDir);
+      const first = snapshot();
+
+      writeFileSync(join(workTree, name), "created after the snapshot\n");
+
+      const { deleted } = restore(first.tree);
+
+      expect(deleted).toEqual([name]);
+      expect(existsSync(join(workTree, name))).toBe(false);
+      // The restore must have completed, not thrown part-way through it.
+      expect(readFileSync(join(workTree, "lf.txt"), "utf8")).toBe("line1\nline2\n");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "restores a tracked non-ASCII path byte-identically",
+    () => {
+      const name = "тест-файл.txt";
+      seedWorktree(workTree);
+      writeFileSync(join(workTree, name), "original\n");
+      initShadow(gitDir);
+      const before = manifest(workTree);
+      const first = snapshot();
+
+      writeFileSync(join(workTree, name), "mutated\n");
+      snapshot(first.commit);
+
+      const { restored } = restore(first.tree);
+
+      expect(restored).toEqual([name]);
       expect(manifest(workTree)).toEqual(before);
     },
     GIT_TEST_TIMEOUT_MS,
@@ -126,7 +185,7 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
       writeFileSync(join(workTree, "newdir", "deep.txt"), "deep\n");
       rmSync(join(workTree, "sub", "nested.txt"));
 
-      const { restored, deleted } = restoreTree(gitDir, workTree, first.tree);
+      const { restored, deleted } = restore(first.tree);
 
       expect(existsSync(join(workTree, "newfile.txt"))).toBe(false);
       expect(existsSync(join(workTree, "newdir", "deep.txt"))).toBe(false);
@@ -155,7 +214,7 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
       writeFileSync(join(workTree, "node_modules", "dep.js"), "mutated dep\n");
       writeFileSync(join(workTree, "lf.txt"), "mutated\n");
 
-      const { restored, deleted } = restoreTree(gitDir, workTree, first.tree);
+      const { restored, deleted } = restore(first.tree);
 
       expect(readFileSync(join(workTree, "secret.log"), "utf8")).toBe("mutated secret\n");
       expect(readFileSync(join(workTree, "node_modules", "dep.js"), "utf8")).toBe("mutated dep\n");
@@ -210,7 +269,7 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
       writeFileSync(join(workTree, "lf.txt"), "mutated\n");
       writeFileSync(join(workTree, "newfile.txt"), "new\n");
       snapshot(first.commit);
-      restoreTree(gitDir, workTree, first.tree);
+      restore(first.tree);
 
       expect([
         userGit(["status", "--porcelain"]),
@@ -229,7 +288,7 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
       const first = snapshot();
       writeFileSync(join(workTree, "lf.txt"), "mutated\n");
 
-      restoreTree(gitDir, workTree, first.tree);
+      restore(first.tree);
 
       expect(readFileSync(join(workTree, "lf.txt"), "utf8")).toBe("line1\nline2\n");
       expect(existsSync(join(workTree, ".git"))).toBe(false);
@@ -283,7 +342,7 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
       deleteRef(gitDir, "refs/seri/sessions/a");
       expect(listSessionRefs(gitDir)).toEqual(["refs/seri/sessions/b"]);
 
-      restoreTree(gitDir, workTree, first.tree);
+      restore(first.tree);
       expect(readFileSync(join(workTree, "lf.txt"), "utf8")).toBe("line1\nline2\n");
     },
     GIT_TEST_TIMEOUT_MS,
