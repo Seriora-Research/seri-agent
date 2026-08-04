@@ -1,5 +1,5 @@
 # Installs the seri CLI on Windows. Safe to run as:
-#   irm https://raw.githubusercontent.com/lzvxck/seri-agent/main/install.ps1 | iex
+#   irm https://seri-agent.seriora.ai/install.ps1 | iex
 # Set $env:SERI_VERSION = 'v0.1.0' to install a specific release instead of the latest one.
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell renders a progress bar per chunk, which dominates a 100 MB download.

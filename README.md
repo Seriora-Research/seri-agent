@@ -8,13 +8,13 @@ to install — and is written in TypeScript on [Bun](https://bun.com).
 ### macOS
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lzvxck/seri-agent/main/install.sh | bash
+curl -fsSL https://seri-agent.seriora.ai/install.sh | bash
 ```
 
 ### Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lzvxck/seri-agent/main/install.sh | bash
+curl -fsSL https://seri-agent.seriora.ai/install.sh | bash
 ```
 
 Installs to `~/.local/bin`. If that directory isn't on your `PATH`, the script prints the
@@ -23,7 +23,7 @@ line to add — it never edits your shell config for you.
 ### Windows
 
 ```powershell
-irm https://raw.githubusercontent.com/lzvxck/seri-agent/main/install.ps1 | iex
+irm https://seri-agent.seriora.ai/install.ps1 | iex
 ```
 
 Installs to `%LOCALAPPDATA%\seri\bin` and adds it to your user `PATH`. No admin rights
