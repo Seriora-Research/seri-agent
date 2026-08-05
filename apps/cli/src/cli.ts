@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
-import { createInterface } from "node:readline";
+import { createInterface, type Interface } from "node:readline";
 import type { ModelMessage } from "ai";
 import pkg from "../package.json";
+import { onAbort } from "./abort";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
 import { getWorkosClientId } from "./auth/deviceFlow";
@@ -27,6 +28,7 @@ import { type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "./l
 import { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { toolDefinitions } from "./provider/tools";
 import { findMostRecentSession, loadSession, saveSession, type SessionState } from "./session/session";
+import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 
@@ -41,6 +43,7 @@ type CliDeps = {
   logout?: typeof logoutReal;
   configCommand?: typeof configCommandReal;
   grep?: typeof grepReal;
+  createInterface?: () => Interface;
 };
 
 type CommandDirs = { sessionsDir: string; checkpointsDir: string };
@@ -224,11 +227,48 @@ function loadOrCreateSession(
 
 // One readline prompt per approval, opened and closed on demand, so a task that never
 // needs approval (read-only/auto modes) never touches stdin at all.
-function makeApprovalPrompt(): ApprovalPrompt {
-  return (toolName, args) =>
+//
+// Two wires into the same cancel, because a Ctrl-C at this prompt is not delivered the way a
+// Ctrl-C during streaming is. Measured on a real pty, all three candidate handlers registered while
+// rl.question was up, one real 0x03 sent: rl's SIGINT fired, rl's close fired, and
+// process.on("SIGINT") NEVER fired. Readline in terminal mode puts stdin in raw mode, so the tty
+// stops generating the signal for the process and hands the byte over as data; readline emits the
+// event on the INTERFACE instead. With nothing listening there, readline closes itself, the
+// question's callback never runs, the event loop empties and the process is simply gone — with the
+// turn's tool calls persisted and no tool-result row, i.e. AI_MissingToolResultsError on the next
+// --resume. Reproduced end to end on the compiled binary before this listener existed.
+//
+// So rl's SIGINT is routed into deliverSignal — signals.ts's own entry point, the one its
+// process-level listener uses — rather than into a second copy of the cancel rules that would
+// drift from it. The first press spends the single cancel slot and cli.ts unwinds the turn; a
+// second press finds the slot empty and takes the fatal path, exactly as it would mid-stream —
+// and it gets there as a real process signal rather than through this interface, because the abort
+// listener below closes the readline, which puts the tty back out of raw mode and lets it generate
+// SIGINT again.
+//
+// The onAbort registration is the other direction: a cancel that originated elsewhere while the
+// prompt is up. Closing the interface and resolving false is what unparks the turn. The loop tells
+// that false apart from a typed "n" by re-checking the signal, so the row the model sees says the
+// call was cancelled rather than denied. A signal that is already aborted returns before the
+// interface is opened — onAbort would catch that case too, that being the whole point of it, but a
+// turn that has already been cancelled should not touch stdin to find out.
+function makeApprovalPrompt(
+  openInterface: () => Interface = () => createInterface({ input: process.stdin, output: process.stdout }),
+): ApprovalPrompt {
+  return (toolName, args, signal) =>
     new Promise<boolean>((resolve) => {
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      if (signal?.aborted === true) {
+        resolve(false);
+        return;
+      }
+      const rl = openInterface();
+      const abort = onAbort(signal, () => {
+        rl.close();
+        resolve(false);
+      });
+      rl.on("SIGINT", () => deliverSignal("SIGINT"));
       rl.question(`Approve ${toolName}(${JSON.stringify(args)})? [y/N] `, (answer) => {
+        abort.dispose();
         rl.close();
         resolve(answer.trim().toLowerCase() === "y");
       });
@@ -296,7 +336,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       const dir = mkdtempSync(join(tmpdir(), "seri-selftest-"));
       try {
         writeFileSync(join(dir, "probe.txt"), "seri selftest probe\n");
-        const { matches = [] } = grepFn("selftest probe", { path: dir, mode: "content" });
+        const { matches = [] } = await grepFn("selftest probe", { path: dir, mode: "content" });
         if (matches.length !== 1) throw new Error(`ripgrep returned ${matches.length} matches, expected 1`);
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -419,41 +459,70 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   );
 
   const runLoopFn = deps.runLoop ?? runLoopReal;
-  for await (const event of runLoopFn({
-    model,
-    tools,
-    messages: session.messages,
-    permissionMode: session.permissionMode,
-    approvalPrompt: makeApprovalPrompt(),
-    system: session.systemPrompt,
-  })) {
-    if (event.type === "messages-updated") {
-      saveSession({ ...session, messages: event.messages }, sessionsDir);
-      continue;
-    }
-    // Compaction splices the whole message array, so every rewind anchor recorded before this
-    // point indexes into an array that no longer exists. The barrier is what lets `/rewind` say so
-    // instead of silently slicing garbage. A session that never checkpointed has no log, and
-    // appendBarrier no-ops rather than making this caller guess at that.
-    //
-    // Wrapped, because this is the only checkpoint call on the run path that was outside the
-    // degrade-never-fail policy every other one obeys: the checkpointer catches and latches, and
-    // the slash commands sit inside the dispatch's try. An appendFileSync that fails here —
-    // ENOSPC, EACCES, the store removed mid-session — threw straight out of this loop and killed
-    // the user's in-flight session, which is a checkpointing failure taking down the thing
-    // checkpointing exists to protect. The cost of losing a barrier is that a later /rewind may
-    // cross this compaction, so it is a warning and not silence.
-    if (event.type === "compacted") {
-      try {
-        appendBarrier(storeDir, session.id, "compaction");
-      } catch (err) {
-        printWarning(
-          `could not record the compaction barrier, so /rewind may not be able to cross this point: ${err instanceof Error ? err.message : String(err)}`,
-        );
+
+  // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
+  // the consumer is the only thing that knows what a Ctrl-C means. The first press lands in
+  // signals.ts's cancel slot, aborts the turn, and the loop unwinds far enough to yield a final
+  // messages-updated — which the body below persists, so the session left behind is resumable. The
+  // second press finds the slot empty and takes the file's untouched fatal path.
+  const controller = new AbortController();
+  let cancelledBy: NodeJS.Signals | undefined;
+  const unregisterCancel = onSignalCancel((signal) => {
+    cancelledBy = signal;
+    controller.abort();
+  });
+
+  try {
+    for await (const event of runLoopFn({
+      model,
+      tools,
+      messages: session.messages,
+      permissionMode: session.permissionMode,
+      approvalPrompt: makeApprovalPrompt(deps.createInterface),
+      system: session.systemPrompt,
+      signal: controller.signal,
+    })) {
+      if (event.type === "messages-updated") {
+        saveSession({ ...session, messages: event.messages }, sessionsDir);
+        continue;
       }
+      // Compaction splices the whole message array, so every rewind anchor recorded before this
+      // point indexes into an array that no longer exists. The barrier is what lets `/rewind` say
+      // so instead of silently slicing garbage. A session that never checkpointed has no log, and
+      // appendBarrier no-ops rather than making this caller guess at that.
+      //
+      // Wrapped, because this is the only checkpoint call on the run path that was outside the
+      // degrade-never-fail policy every other one obeys: the checkpointer catches and latches, and
+      // the slash commands sit inside the dispatch's try. An appendFileSync that fails here —
+      // ENOSPC, EACCES, the store removed mid-session — threw straight out of this loop and killed
+      // the user's in-flight session, which is a checkpointing failure taking down the thing
+      // checkpointing exists to protect. The cost of losing a barrier is that a later /rewind may
+      // cross this compaction, so it is a warning and not silence.
+      if (event.type === "compacted") {
+        try {
+          appendBarrier(storeDir, session.id, "compaction");
+        } catch (err) {
+          printWarning(
+            `could not record the compaction barrier, so /rewind may not be able to cross this point: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+      printEvent(event);
     }
-    printEvent(event);
+  } finally {
+    // In a finally, so a run that throws out of the loop does not leave the slot pointing at a
+    // controller nothing is waiting on — a later signal would then be swallowed as a cancel of a
+    // turn that is no longer running instead of killing the process.
+    unregisterCancel();
   }
+
+  // The turn was cancelled, so the process still dies the way Ctrl-C makes a process die. Not
+  // process.exit: a status is not a death by signal, and `for f in a b c; do seri "$f"; done` only
+  // breaks out of the loop when the child was killed BY SIGINT — exiting 0 here would turn one
+  // Ctrl-C into one press per iteration, the exact regression signals.ts's re-raise exists to
+  // prevent. raiseSignal is that same re-raise, shared rather than re-implemented, and it does not
+  // return, so the 0 below is for every other way this function ends.
+  if (cancelledBy !== undefined) raiseSignal(cancelledBy);
 
   return 0;
 }

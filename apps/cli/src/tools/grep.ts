@@ -30,10 +30,11 @@ function decodeRgText(value: RgText): string {
   return "text" in value ? value.text : Buffer.from(value.bytes, "base64").toString("utf8");
 }
 
-export function grep(
+export async function grep(
   pattern: string,
   opts: { path: string; glob?: string; mode?: GrepMode },
-): GrepResult {
+  signal?: AbortSignal,
+): Promise<GrepResult> {
   // Defaults to file names for the same reason Claude Code does: it answers "where does this
   // live" — most of what a search is actually for — at a fraction of the tokens, and a list
   // of paths fits under the cap far more often than a list of matched lines does.
@@ -55,7 +56,7 @@ export function grep(
   // parsed by rg, which otherwise exits 2 and surfaces to the model as a thrown error.
   args.push("--", pattern, opts.path);
 
-  const { stdout, truncated: overflowed } = runRipgrep(args);
+  const { stdout, truncated: overflowed } = await runRipgrep(args, signal);
   const lines = outputLines(stdout, overflowed);
 
   if (mode === "files_with_matches") {

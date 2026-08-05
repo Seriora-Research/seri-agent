@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createInterface, type Interface } from "node:readline";
+import { PassThrough } from "node:stream";
 import type { ModelMessage } from "ai";
 import pkg from "../../package.json";
 import { checkpointStoreDir, createCheckpointer } from "../../src/checkpoint/checkpoint";
@@ -9,6 +11,7 @@ import { isGitAvailable } from "../../src/checkpoint/shadowGit";
 import { run } from "../../src/cli";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { toolDefinitions } from "../../src/provider/tools";
+import { onSignalCancel } from "../../src/signals";
 import { loadSession, saveSession, type SessionState } from "../../src/session/session";
 
 describe("run", () => {
@@ -34,7 +37,7 @@ describe("run (--selftest)", () => {
     let code: number;
     try {
       code = await run(["--selftest"], {
-        grep: () => ({
+        grep: async () => ({
           mode: "content" as const,
           matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
           truncated: false,
@@ -60,7 +63,7 @@ describe("run (--selftest)", () => {
     let code: number;
     try {
       code = await run(["--selftest"], {
-        grep: () => {
+        grep: async () => {
           throw new Error("ripgrep failed: Exec format error");
         },
       });
@@ -157,6 +160,138 @@ describe("run (task invocation)", () => {
     expect(captured?.messages).toHaveLength(1);
     expect(captured?.system).toBe("You are seri, a coding agent.");
   });
+
+  // cli.ts is the only thing that constructs the controller — runLoop is a library that is handed a
+  // signal and never makes one — so if this stops arriving, every abort check downstream (the
+  // streamText round-trip, the compaction round-trip, the per-tool guard, spawnCollect, runRipgrep)
+  // is dead code that keeps passing its own tests.
+  test("hands runLoop a live AbortSignal", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let captured: RunLoopOpts | undefined;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      captured = opts;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["write", "hello.txt"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(captured?.signal).toBeInstanceOf(AbortSignal);
+    expect(captured?.signal?.aborted).toBe(false);
+  });
+
+  // The prompt is where a cancel is easiest to lose: the loop is parked in rl.question when Ctrl-C
+  // arrives, and a readline nobody closes never settles, so the turn would hang until the user
+  // pressed again — which kills the process before the tool row is written and leaves the session
+  // unresumable. Exercised through the prompt runLoop is actually given, because makeApprovalPrompt
+  // is not exported and the wiring is half of what is being asserted.
+  test("the approval prompt it gives runLoop resolves false on abort instead of hanging", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    const answers: (boolean | undefined)[] = [];
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      // Aborted while the prompt is already open, which is the real sequence, and then aborted
+      // before it is opened at all — an already-aborted signal fires no abort event, so a listener
+      // on its own would wait forever for something that has already happened.
+      const parked = new AbortController();
+      const pending = opts.approvalPrompt?.("write_file", { path: "a.txt" }, parked.signal);
+      parked.abort();
+      answers.push(await pending);
+
+      answers.push(await opts.approvalPrompt?.("write_file", { path: "b.txt" }, AbortSignal.abort()));
+      yield { type: "done", reason: "aborted" };
+      return opts.messages;
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["write", "hello.txt"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(answers).toEqual([false, false]);
+  }, 10_000);
+
+  // The press this prompt has to catch never arrives as a process signal. Measured on a real pty
+  // with all three candidate handlers registered while rl.question was up and one real 0x03 sent:
+  // rl's SIGINT and close fired, process.on("SIGINT") did not — readline's raw mode stops the tty
+  // generating the signal and delivers the byte as data. The test above drives the AbortSignal
+  // directly, so it passes with nothing listening on the interface at all; this one drives the
+  // interface, which is the wire that was missing when a real Ctrl-C at a real prompt killed the
+  // process outright and left the session unresumable.
+  //
+  // "Cancelled" rather than "denied" is asserted as the cancel slot being spent, because both
+  // answers are `false` — that is exactly how the loop tells them apart, by re-checking the signal.
+  test("a SIGINT on the readline interface cancels through signals.ts instead of denying", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    let rl: Interface | undefined;
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let answer: boolean | "unsettled" | undefined;
+    let cancelledBy: NodeJS.Signals | undefined;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      // The run's own cancel is displaced for the duration of the turn, deliberately: signals.ts
+      // holds ONE slot, and letting cli.ts's own registration win would end this turn in
+      // raiseSignal — the correct production behaviour, and a test process that kills the runner.
+      // Observing the slot is also the assertion, since a prompt that re-implemented the cancel
+      // rules locally instead of calling deliverSignal would never reach it.
+      const parked = new AbortController();
+      const unregister = onSignalCancel((signal) => {
+        cancelledBy = signal;
+        parked.abort();
+      });
+      try {
+        // The executor runs synchronously, so the interface exists and its listener is attached by
+        // the time the call returns — no wait to race with.
+        const pending = opts.approvalPrompt?.("write_file", { path: "a.txt" }, parked.signal);
+        rl?.emit("SIGINT");
+        // Raced rather than awaited outright. Without the interface listener the prompt never
+        // settles — that IS the defect — and a bare await turns this test's negative control into a
+        // wedged runner instead of a red line. Measured: the whole chain from emit to resolve is
+        // synchronous, so a settled promise always wins this race.
+        answer = await Promise.race([pending, new Promise<"unsettled">((r) => setTimeout(() => r("unsettled"), 1000))]);
+      } finally {
+        unregister();
+        rl?.close();
+      }
+      yield { type: "done", reason: "aborted" };
+      return opts.messages;
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["write", "hello.txt"], {
+        runLoop: runLoopFake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        // A real readline over a pair of pipes rather than a mock: emitting SIGINT on it is the
+        // same call readline itself makes on a terminal, and nothing else about the interface is
+        // being stood in for.
+        createInterface: () => {
+          rl = createInterface({ input: new PassThrough(), output: new PassThrough() });
+          return rl;
+        },
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(cancelledBy).toBe("SIGINT");
+    expect(answer).toBe(false);
+  }, 10_000);
 
   // A task whose first word happens to name an Object.prototype member is an ordinary task, and it
   // has to reach the model. Looked up on an object literal, `SLASH_COMMANDS["toString"]` returned

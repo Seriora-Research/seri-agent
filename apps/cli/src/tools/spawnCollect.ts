@@ -1,4 +1,5 @@
-import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { onAbort } from "../abort";
 import { onSignalCleanup } from "../signals";
 
 // Truncation is reported per stream rather than as one flag. A single OR'd boolean cannot say
@@ -94,23 +95,58 @@ function killTree(pid: number): void {
     // group rather than just the shell that fronts it.
     process.kill(-pid, "SIGKILL");
   } catch {
-    // Already exited between the timer firing and this call. Nothing left to kill.
+    // The group is already gone. Reached from every killer this file has — the timeout timer, a
+    // cancel, and the fatal-signal cleanup below — because none of them can know the child did not
+    // exit in the window between deciding to kill it and getting here. Nothing left to kill in any
+    // of the three.
   }
 }
 
 // The timeout timer was the only thing that could reach a spawned child, so a Ctrl-C part way
 // through a turn left every one of them running: detached puts them in a process group the
 // terminal's signal never reaches, and a sleeper that writes nothing takes no EPIPE either.
-const inFlightChildren = new Set<ChildProcess>();
+//
+// Kill callbacks rather than the children themselves, because the two registrants do not die the
+// same way. The child below fronts a shell and needs its whole process group, while runRipgrep's is
+// a bare rg left in this process's own group — killTree's negative pid would there name a group
+// that does not exist, raise ESRCH and be swallowed by the catch above, so it registers the plain
+// child.kill it already uses on timeout. Each registrant naming its own kill keeps that difference
+// where it was decided instead of re-deriving it here.
+//
+// Fatal presses only, which is the whole scope of this list: signals.ts's cancel branch returns
+// before the cleanup loop, so on press 1 an in-flight child is killed by its own abort
+// registration below rather than from here.
+const inFlightKills = new Set<() => void>();
+
+// Deregistration is returned rather than assumed, and every caller runs it when its child settles:
+// a set that only ever grew would signal pids the OS has since handed to somebody else.
+export function killOnFatalSignal(kill: () => void): () => void {
+  inFlightKills.add(kill);
+  return () => inFlightKills.delete(kill);
+}
 
 function killInFlightChildren(): void {
-  for (const child of inFlightChildren) if (child.pid !== undefined) killTree(child.pid);
-  inFlightChildren.clear();
+  for (const kill of inFlightKills) kill();
+  inFlightKills.clear();
 }
 
 onSignalCleanup(killInFlightChildren);
 
-export function spawnCollect(executable: string, args: string[], timeoutMs?: number): Promise<ProcessResult> {
+// The signal is a fourth positional rather than an options bag, and the cost of converting is
+// small: bash.ts and powershell.ts are the only production callers, plus one test file.
+// auth/browser.ts is not one of them — it spawns its own child and says at the top of that file
+// why it deliberately does not come through here.
+//
+// What decides it is the shape rather than the count. runBash and runPowerShell take the same two
+// optional parameters in the same order and pass them straight through, so a bag at this one frame
+// would leave both of them translating into it, and a bag at all three would rename the same two
+// values three times over for no behavioural gain.
+export function spawnCollect(
+  executable: string,
+  args: string[],
+  timeoutMs?: number,
+  signal?: AbortSignal,
+): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       stdio: ["ignore", "pipe", "pipe"],
@@ -118,7 +154,9 @@ export function spawnCollect(executable: string, args: string[], timeoutMs?: num
       // where detached means a new console window instead.
       detached: process.platform !== "win32",
     });
-    inFlightChildren.add(child);
+    const untrack = killOnFatalSignal(() => {
+      if (child.pid !== undefined) killTree(child.pid);
+    });
 
     const out = createBoundedSink();
     const err = createBoundedSink();
@@ -136,15 +174,34 @@ export function spawnCollect(executable: string, args: string[], timeoutMs?: num
       if (child.pid !== undefined) killTree(child.pid);
     }, Math.min(timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS));
 
-    child.on("error", (error) => {
+    // Killing the tree is only half of a cancel. `close` still fires afterwards with a code and
+    // timedOut false, so without remembering that a cancel happened the promise would resolve with
+    // an ordinary-looking ProcessResult and the caller would hand a model a real tool result for a
+    // command the user stopped. Nothing observed that before, because a Ctrl-C used to kill this
+    // process outright and the promise never settled at all.
+    const abort = onAbort(signal, () => {
+      if (child.pid !== undefined) killTree(child.pid);
+    });
+
+    const settled = (): void => {
       clearTimeout(timer);
-      inFlightChildren.delete(child);
+      abort.dispose();
+      untrack();
+    };
+
+    child.on("error", (error) => {
+      settled();
       reject(error);
     });
 
     child.on("close", (code) => {
-      clearTimeout(timer);
-      inFlightChildren.delete(child);
+      settled();
+      // Rejects rather than returning an `aborted` boolean: a flag is a thing every call site can
+      // forget to read, where a rejection propagates by default all the way out to the loop.
+      if (abort.aborted()) {
+        reject(new Error("cancelled"));
+        return;
+      }
       const stdout = out.result();
       const stderr = err.result();
       // Whatever the command managed to say before being killed still goes back. An agent can
