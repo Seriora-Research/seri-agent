@@ -8,7 +8,7 @@ import type { ModelMessage } from "ai";
 import pkg from "../../package.json";
 import { checkpointStoreDir, createCheckpointer } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable } from "../../src/checkpoint/shadowGit";
-import { run } from "../../src/cli";
+import { run, SLASH_COMMANDS } from "../../src/cli";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { toolDefinitions } from "../../src/provider/tools";
 import { onSignalCancel } from "../../src/signals";
@@ -148,7 +148,12 @@ describe("run (task invocation)", () => {
     }
 
     expect(code).toBe(0);
-    expect(logs.join("\n")).toContain("Usage:");
+    const usage = logs.join("\n");
+    expect(usage).toContain("Usage:");
+    // The usage text restates the SLASH_COMMANDS table, whose whole point is that a command is
+    // defined in one place. `toContain("Usage:")` alone let every advertised line be deleted, so
+    // the half of the text that has a table behind it is checked against the table.
+    for (const name of SLASH_COMMANDS.keys()) expect(usage).toContain(name);
     expect(called).toBe(false);
     expect(readdirSync(sessionsDir)).toEqual([]);
   });
@@ -182,18 +187,32 @@ describe("run (task invocation)", () => {
   });
 
   test("bare seri prints usage instead of exiting silently", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
     const logs: string[] = [];
     const originalLog = console.log;
     console.log = (msg: string) => logs.push(String(msg));
     let code: number;
     try {
-      code = await run([], { sessionsDir, loadAgentsFile: () => "" });
+      code = await run([], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
     } finally {
       console.log = originalLog;
     }
 
     expect(code).toBe(0);
     expect(logs.join("\n")).toContain("Usage:");
+    // Same two guards as the --help case above: with the key set, a fall-through to the task path
+    // would call the model and write a session file rather than failing at getGroqModel.
+    expect(called).toBe(false);
+    expect(readdirSync(sessionsDir)).toEqual([]);
   });
 
   test("constructs runLoop with the expected messages, permissionMode, and tools", async () => {

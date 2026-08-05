@@ -82,7 +82,7 @@ function steps(args: string[]): number {
 // `valueOf`, `hasOwnProperty` and `isPrototypeOf` did the same, and `__proto__` resolved to an
 // object and crashed with "command is not a function". A Map has no prototype chain to walk, so
 // the hazard is gone from every call site rather than from the ones that remember Object.hasOwn.
-const SLASH_COMMANDS = new Map<string, SlashCommand>([
+export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   ["/mode", { accepts: (args) => args.length === 0, run: cycleModeCommand }],
   ["/undo", { accepts: isStepCount, run: undoCommand }],
   // A sha and nothing else. `seri "/restore the header spacing"` is a task.
