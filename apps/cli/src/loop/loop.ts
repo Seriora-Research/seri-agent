@@ -63,9 +63,12 @@ export async function* runLoop(opts: {
   let lastInputTokens = 0;
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
-    // Checked at the top of every iteration, not only around the model call: the compaction catch
-    // below yields an error and deliberately continues, so without this an abort during a
-    // summarization would be swallowed there and the loop would open a fresh turn.
+    // What this actually stops, measured rather than assumed: a second streamText setup when the
+    // abort landed after a tool phase that completed normally, and a first one when the caller
+    // handed in a signal that was already aborted. It is NOT what stops the compaction case, even
+    // though that reading is the obvious one — the catch below returns, so control never reaches
+    // here again; removing this line leaves that test green. Kept because those two windows are
+    // real and nothing else covers them, not because the compaction path needs it.
     if (opts.signal?.aborted) {
       yield { type: "done", reason: "aborted" };
       return;

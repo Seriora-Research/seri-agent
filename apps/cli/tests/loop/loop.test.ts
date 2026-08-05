@@ -513,6 +513,23 @@ describe("runLoop", () => {
       expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
     });
 
+    test("a signal that is already aborted opens no turn at all", async () => {
+      // The top-of-iteration check's own test, and the reason it needed one: the compaction case
+      // below was long assumed to be what covered it, and measurement said otherwise — that catch
+      // returns, so the top check is never reached a second time and deleting it leaves the
+      // compaction test green. This is the window that is actually its: nothing has run yet, so
+      // there is no catch downstream to notice the abort, and without the check the loop would set
+      // up a streamText call with a signal that is already spent.
+      const model = new MockLanguageModelV4({ doStream: async () => streamResult(textOnlyChunks("Hello")) });
+
+      const events = await collect(
+        runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto", signal: AbortSignal.abort() }),
+      );
+
+      expect(model.doStreamCalls).toHaveLength(0);
+      expect(events).toEqual([{ type: "done", reason: "aborted" }]);
+    });
+
     test("a cancel during compaction ends the turn instead of starting another", async () => {
       const controller = new AbortController();
       const tools = makeTools(async () => "ok");
