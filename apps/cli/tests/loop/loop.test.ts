@@ -273,6 +273,76 @@ describe("runLoop", () => {
     expect(model.doStreamCalls).toHaveLength(2);
   });
 
+  // ai@7.0.48 defaults streamText's onError to `({ error }) => console.error(error)`
+  // (dist/index.js:8792), so every provider failure put Bun's inspection of the whole error object
+  // — request body, every response header including set-cookie, a node_modules stack — on stderr
+  // from inside the generator AGENTS.md documents as never touching stdout/stdin. The same error
+  // arrives on fullStream and is yielded below, so that print was a duplicate, not the only report.
+  test("a provider error is surfaced as an event and never printed by the loop", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new Error("boom from provider");
+      },
+    });
+    const printed: unknown[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      printed.push(args[0]);
+    };
+    let events: LoopEvent[];
+    try {
+      events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(printed).toEqual([]);
+    // Proves the loop really ran and really reported the failure, so a green `printed` can only
+    // mean the print was suppressed rather than that nothing happened.
+    expect(events).toEqual([{ type: "error", error: "Error: boom from provider" }]);
+    expect(events.find((e) => e.type === "done")).toBeUndefined();
+  });
+
+  // The payload is verbatim the `responseBody` of a live Groq 401 — a provider is free to reject
+  // with a plain object, and String() of one is "[object Object]", which names neither the failure
+  // nor its origin.
+  test("a non-Error provider error renders its payload instead of [object Object]", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw { error: { message: "tool call validation failed", type: "invalid_request_error" } };
+      },
+    });
+    const events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent?.error).toContain("tool call validation failed");
+    expect(errorEvent?.error).not.toBe("[object Object]");
+  });
+
+  // JSON.stringify throws on a cyclic value, and the site that renders a thrown tool failure is not
+  // inside any try — a TypeError there escapes the generator and reaches cli.ts as an unhandled
+  // rejection instead of as one error event. Measured against errorText written as a bare
+  // JSON.stringify: this test failed with `TypeError: JSON.stringify cannot serialize cyclic
+  // structures.` thrown out of collect(), with no `done` event at all.
+  test("a tool that throws a circular non-Error value is reported instead of crashing the loop", async () => {
+    const circular: { message: string; self?: unknown } = { message: "tool call validation failed" };
+    circular.self = circular;
+    const tools = makeTools(async () => {
+      throw circular;
+    });
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    const events = await collect(runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }));
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent?.error).toContain('Tool "write_file" threw during execution');
+    expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+  });
+
   test("compacts history once lastInputTokens crosses the threshold across a ~25-turn run, and a pre-compaction fact survives via the summary", async () => {
     const marker = "MARKER_FACT_777";
     const tools = makeTools(async (input: { path: string }) => (input.path === "marker.txt" ? marker : "ok"));
