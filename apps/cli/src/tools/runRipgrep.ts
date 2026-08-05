@@ -184,6 +184,17 @@ export function outputLines(stdout: string, truncated: boolean): string[] {
   return lines;
 }
 
+// rg exits 2 for a missing path, an unrecognized flag and an invalid regex alike, and by the time
+// the close handler below runs it holds only that code and rg's stderr — whose tail is the OS's own
+// strerror and is localized ("The system cannot find the file specified." here, "No such file or
+// directory" on Linux, something else again on a non-English Windows), so classifying it there is
+// matching a string that moves. Checked before the spawn instead, at the one point that still knows
+// the path is a path. TOCTOU is not a concern: a path removed in the window between this and rg
+// falls back to exactly the message this replaces.
+export function assertSearchPath(path: string): void {
+  if (!existsSync(path)) throw new Error(`Path not found: ${path}`);
+}
+
 // spawn, not spawnSync, and the reason is not only the abort: spawnSync blocks the event loop for
 // the whole search, so a SIGINT arriving during a grep was not delivered to any JS handler until
 // rg had finished on its own. Nothing could interrupt a search, cancellation or otherwise.
