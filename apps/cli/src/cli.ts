@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
-import { createInterface } from "node:readline";
+import { createInterface, type Interface } from "node:readline";
 import type { ModelMessage } from "ai";
 import pkg from "../package.json";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
@@ -27,7 +27,7 @@ import { type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "./l
 import { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { toolDefinitions } from "./provider/tools";
 import { findMostRecentSession, loadSession, saveSession, type SessionState } from "./session/session";
-import { onSignalCancel, raiseSignal } from "./signals";
+import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 
@@ -42,6 +42,7 @@ type CliDeps = {
   logout?: typeof logoutReal;
   configCommand?: typeof configCommandReal;
   grep?: typeof grepReal;
+  createInterface?: () => Interface;
 };
 
 type CommandDirs = { sessionsDir: string; checkpointsDir: string };
@@ -226,27 +227,42 @@ function loadOrCreateSession(
 // One readline prompt per approval, opened and closed on demand, so a task that never
 // needs approval (read-only/auto modes) never touches stdin at all.
 //
-// The signal is what lets Ctrl-C do anything while this prompt is up: the loop is parked in
-// rl.question when the press arrives, and a readline nobody closes never settles its promise — so
-// the first press would appear to do nothing, the user would press again, and the session would be
-// left holding tool calls with no tool-result row, which is AI_MissingToolResultsError on the next
-// --resume. Closing the interface and resolving false is what unwinds the turn instead. The loop
-// tells that false apart from a typed "n" by re-checking the signal, so the row the model sees says
-// the call was cancelled rather than denied. An already-aborted signal emits no abort event, so it
-// is answered up front rather than by a listener that would wait for something already past.
-function makeApprovalPrompt(): ApprovalPrompt {
+// Two wires into the same cancel, because a Ctrl-C at this prompt is not delivered the way a
+// Ctrl-C during streaming is. Measured on a real pty, all three candidate handlers registered while
+// rl.question was up, one real 0x03 sent: rl's SIGINT fired, rl's close fired, and
+// process.on("SIGINT") NEVER fired. Readline in terminal mode puts stdin in raw mode, so the tty
+// stops generating the signal for the process and hands the byte over as data; readline emits the
+// event on the INTERFACE instead. With nothing listening there, readline closes itself, the
+// question's callback never runs, the event loop empties and the process is simply gone — with the
+// turn's tool calls persisted and no tool-result row, i.e. AI_MissingToolResultsError on the next
+// --resume. Reproduced end to end on the compiled binary before this listener existed.
+//
+// So rl's SIGINT is routed into deliverSignal — signals.ts's own entry point, the one its
+// process-level listener uses — rather than into a second copy of the cancel rules that would
+// drift from it. The first press spends the single cancel slot and cli.ts unwinds the turn; a
+// second press finds the slot empty and takes the fatal path, exactly as it would mid-stream.
+//
+// The abort listener is the other direction: a cancel that originated elsewhere while the prompt is
+// up. Closing the interface and resolving false is what unparks the turn. The loop tells that false
+// apart from a typed "n" by re-checking the signal, so the row the model sees says the call was
+// cancelled rather than denied. An already-aborted signal emits no abort event, so it is answered
+// up front rather than by a listener that would wait for something already past.
+function makeApprovalPrompt(
+  openInterface: () => Interface = () => createInterface({ input: process.stdin, output: process.stdout }),
+): ApprovalPrompt {
   return (toolName, args, signal) =>
     new Promise<boolean>((resolve) => {
       if (signal?.aborted === true) {
         resolve(false);
         return;
       }
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const rl = openInterface();
       const onAbort = (): void => {
         rl.close();
         resolve(false);
       };
       signal?.addEventListener("abort", onAbort, { once: true });
+      rl.on("SIGINT", () => deliverSignal("SIGINT"));
       rl.question(`Approve ${toolName}(${JSON.stringify(args)})? [y/N] `, (answer) => {
         signal?.removeEventListener("abort", onAbort);
         rl.close();
@@ -458,7 +474,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       tools,
       messages: session.messages,
       permissionMode: session.permissionMode,
-      approvalPrompt: makeApprovalPrompt(),
+      approvalPrompt: makeApprovalPrompt(deps.createInterface),
       system: session.systemPrompt,
       signal: controller.signal,
     })) {

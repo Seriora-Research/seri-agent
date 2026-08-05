@@ -49,30 +49,39 @@ export function raiseSignal(signal: NodeJS.Signals): void {
   process.kill(process.pid, signal);
 }
 
+// What a press does, independent of how it arrived. Exported because one press does NOT arrive as
+// a process signal: while cli.ts's approval prompt is up, readline has stdin in raw mode, so the
+// tty stops generating SIGINT and hands 0x03 over as data, and readline emits the event on its own
+// interface instead. Measured on a real pty with all three candidate handlers registered — rl's
+// SIGINT and close fired, process.on("SIGINT") never did. That press has to spend the same single
+// slot and fall through to the same fatal body as any other, so the prompt calls this rather than
+// carrying a second copy of the rules that would drift from these.
+export function deliverSignal(signal: NodeJS.Signals): void {
+  // The first press, and it returns before the fatal body below rather than after it. That
+  // ordering is the whole mechanism: removeAllListeners never runs, so the process listener is
+  // still installed when the second press arrives, and clearing the slot as it is invoked is
+  // what makes that second press fall through to the fatal path — no separate flag.
+  //
+  // The first press is not survival, it is an orderly death: cli.ts cancels the turn, lets it
+  // unwind far enough to leave a resumable session, and then calls raiseSignal itself.
+  if (cancel !== undefined) {
+    const fn = cancel;
+    cancel = undefined;
+    fn(signal);
+    return;
+  }
+
+  for (const fn of cleanups) {
+    try {
+      fn();
+    } catch {
+      // One cleanup's bug must not cost the others their turn, or the process its re-raise.
+    }
+  }
+
+  raiseSignal(signal);
+}
+
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => {
-    // The first press, and it returns before the fatal body below rather than after it. That
-    // ordering is the whole mechanism: removeAllListeners never runs, so this same listener is
-    // still installed when the second press arrives, and clearing the slot as it is invoked is
-    // what makes that second press fall through to the fatal path — no separate flag.
-    //
-    // The first press is not survival, it is an orderly death: cli.ts cancels the turn, lets it
-    // unwind far enough to leave a resumable session, and then calls raiseSignal itself.
-    if (cancel !== undefined) {
-      const fn = cancel;
-      cancel = undefined;
-      fn(signal);
-      return;
-    }
-
-    for (const fn of cleanups) {
-      try {
-        fn();
-      } catch {
-        // One cleanup's bug must not cost the others their turn, or the process its re-raise.
-      }
-    }
-
-    raiseSignal(signal);
-  });
+  process.on(signal, () => deliverSignal(signal));
 }
