@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { onAbort } from "../abort";
 import { onSignalCleanup } from "../signals";
 
 // Truncation is reported per stream rather than as one flag. A single OR'd boolean cannot say
@@ -145,37 +146,30 @@ export function spawnCollect(
     }, Math.min(timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS));
 
     // Killing the tree is only half of a cancel. `close` still fires afterwards with a code and
-    // timedOut false, so without this flag the promise would resolve with an ordinary-looking
-    // ProcessResult and the caller would hand a model a real tool result for a command the user
-    // stopped. Nothing observed that before, because a Ctrl-C used to kill this process outright
-    // and the promise never settled at all.
-    let aborted = false;
-    const onAbort = (): void => {
-      aborted = true;
+    // timedOut false, so without remembering that a cancel happened the promise would resolve with
+    // an ordinary-looking ProcessResult and the caller would hand a model a real tool result for a
+    // command the user stopped. Nothing observed that before, because a Ctrl-C used to kill this
+    // process outright and the promise never settled at all.
+    const abort = onAbort(signal, () => {
       if (child.pid !== undefined) killTree(child.pid);
+    });
+
+    const settled = (): void => {
+      clearTimeout(timer);
+      abort.dispose();
+      inFlightChildren.delete(child);
     };
-    signal?.addEventListener("abort", onAbort);
-    // A signal that was ALREADY aborted fires no event, so the listener alone is not enough. The
-    // window is real: loop.ts checks the signal before the call, then yields a tool-call event,
-    // and the consumer's signal handler can run in exactly that suspension. Without this the
-    // command would run to completion and resolve normally — the bug the reject above exists for,
-    // surviving through a narrower door.
-    if (signal?.aborted === true) onAbort();
 
     child.on("error", (error) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      inFlightChildren.delete(child);
+      settled();
       reject(error);
     });
 
     child.on("close", (code) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      inFlightChildren.delete(child);
+      settled();
       // Rejects rather than returning an `aborted` boolean: a flag is a thing every call site can
       // forget to read, where a rejection propagates by default all the way out to the loop.
-      if (aborted) {
+      if (abort.aborted()) {
         reject(new Error("cancelled"));
         return;
       }

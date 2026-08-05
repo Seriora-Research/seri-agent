@@ -5,6 +5,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import type { ModelMessage } from "ai";
 import pkg from "../package.json";
+import { onAbort } from "./abort";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
 import { getWorkosClientId } from "./auth/deviceFlow";
@@ -245,11 +246,12 @@ function loadOrCreateSession(
 // listener below closes the readline, which puts the tty back out of raw mode and lets it generate
 // SIGINT again.
 //
-// The abort listener is the other direction: a cancel that originated elsewhere while the prompt is
-// up. Closing the interface and resolving false is what unparks the turn. The loop tells that false
-// apart from a typed "n" by re-checking the signal, so the row the model sees says the call was
-// cancelled rather than denied. An already-aborted signal emits no abort event, so it is answered
-// up front rather than by a listener that would wait for something already past.
+// The onAbort registration is the other direction: a cancel that originated elsewhere while the
+// prompt is up. Closing the interface and resolving false is what unparks the turn. The loop tells
+// that false apart from a typed "n" by re-checking the signal, so the row the model sees says the
+// call was cancelled rather than denied. A signal that is already aborted returns before the
+// interface is opened — onAbort would catch that case too, that being the whole point of it, but a
+// turn that has already been cancelled should not touch stdin to find out.
 function makeApprovalPrompt(
   openInterface: () => Interface = () => createInterface({ input: process.stdin, output: process.stdout }),
 ): ApprovalPrompt {
@@ -260,14 +262,13 @@ function makeApprovalPrompt(
         return;
       }
       const rl = openInterface();
-      const onAbort = (): void => {
+      const abort = onAbort(signal, () => {
         rl.close();
         resolve(false);
-      };
-      signal?.addEventListener("abort", onAbort, { once: true });
+      });
       rl.on("SIGINT", () => deliverSignal("SIGINT"));
       rl.question(`Approve ${toolName}(${JSON.stringify(args)})? [y/N] `, (answer) => {
-        signal?.removeEventListener("abort", onAbort);
+        abort.dispose();
         rl.close();
         resolve(answer.trim().toLowerCase() === "y");
       });

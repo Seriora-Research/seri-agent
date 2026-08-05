@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import pkg from "../../package.json";
+import { onAbort } from "../abort";
 import { getConfigDir } from "../config/paths";
 import rgAsset from "./rg-vendored.bin" with { type: "file" };
 
@@ -205,7 +206,6 @@ export function runRipgrep(args: string[], signal?: AbortSignal): Promise<{ stdo
     let stderr = "";
     let truncated = false;
     let timedOut = false;
-    let aborted = false;
 
     // Decoding per chunk would split multi-byte characters across stream boundaries; setEncoding
     // buffers the partial sequence instead. Same reason spawnCollect does it.
@@ -230,19 +230,11 @@ export function runRipgrep(args: string[], signal?: AbortSignal): Promise<{ stdo
       child.kill("SIGKILL");
     }, RG_TIMEOUT_MS);
 
-    const onAbort = (): void => {
-      aborted = true;
-      child.kill("SIGKILL");
-    };
-    signal?.addEventListener("abort", onAbort);
-    // An already-aborted signal fires no event, and loop.ts can enter a tool with one: it checks
-    // the signal, then yields a tool-call event, and the consumer's handler runs in exactly that
-    // suspension. Without this the search would run to completion and resolve.
-    if (signal?.aborted === true) onAbort();
+    const abort = onAbort(signal, () => child.kill("SIGKILL"));
 
     const settled = (): void => {
       clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
+      abort.dispose();
     };
 
     child.on("error", (error) => {
@@ -255,7 +247,7 @@ export function runRipgrep(args: string[], signal?: AbortSignal): Promise<{ stdo
 
     child.on("close", (code) => {
       settled();
-      if (aborted) {
+      if (abort.aborted()) {
         reject(new Error("cancelled"));
         return;
       }
