@@ -302,7 +302,13 @@ function printEvent(event: LoopEvent): void {
       console.log(`\n→ ${event.name}(${JSON.stringify(event.args)})`);
       break;
     case "tool-result":
-      console.log(`✓ ${event.name} done`);
+      // `edit` returns the edited text and writes nothing (provider/tools.ts's
+      // FS_MUTATING_TOOL_NAMES comment), so a bare "done" reads as a file that changed — observed
+      // live, with the model moving on as though it had. Named here rather than in the loop, which
+      // knows no tool names by design.
+      console.log(
+        event.name === "edit" ? "✓ edit done (text returned, nothing written)" : `✓ ${event.name} done`,
+      );
       break;
     case "permission-denied":
       console.log(`✗ ${event.name} blocked`);

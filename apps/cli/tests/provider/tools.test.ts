@@ -42,6 +42,13 @@ describe("toolDefinitions", () => {
     expect(result).toBe("hello there");
   });
 
+  // The description is the only model-facing channel that says so: the tool result is the returned
+  // string wrapped as `{ type: "json", value }`, indistinguishable from a tool that did write, and
+  // the model was observed treating a returned edit as a saved file and moving on.
+  test("edit's description says the result has to be written with write_file", () => {
+    expect(toolDefinitions.edit.description).toContain("write_file");
+  });
+
   test("grep finds a known pattern", async () => {
     tmpDir = makeTmpDir();
     writeFileSync(join(tmpDir, "a.txt"), "hello world\nfoo bar\n");

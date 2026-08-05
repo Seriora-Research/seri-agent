@@ -339,6 +339,34 @@ describe("run (task invocation)", () => {
     expect(answer).toBe(false);
   }, 10_000);
 
+  // `✓ edit done` read as a completed file edit for a tool that returns text and writes nothing.
+  // The write_file assertion is the control in the other direction: it goes red if the shared line
+  // is changed instead of branched, which would make every tool claim it wrote nothing. Nothing
+  // else in the suite pins the `✓ <tool> done` format, so this test becomes that pin.
+  test("an edit result is reported as text returned, not as a file written", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      yield { type: "tool-result", name: "edit", result: "edited text" };
+      yield { type: "tool-result", name: "write_file", result: "ok" };
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    try {
+      await run(["edit", "a.txt"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(logs.join("\n")).toContain("nothing written");
+    expect(logs.join("\n")).toContain("✓ write_file done");
+  });
+
   // A provider failure exited 0, so `seri "…" && next-thing` ran next-thing on a turn that never
   // happened. The discriminator is the generator ending with no `done` event, which loop.ts's two
   // stream-error returns are the only exits to do.
