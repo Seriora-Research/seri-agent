@@ -339,10 +339,9 @@ const USAGE = `Usage:
   seri --version | --help`;
 
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
-  // Bare `seri` is Stage 11's slot: build-plan.md gives it an interactive Ink TUI as the v0.1.0
-  // release gate. Until then it prints the same usage as --help rather than exiting silently. This
-  // is a placeholder the TUI entry point replaces, not a decision that bare `seri` means "print
-  // usage".
+  // Bare `seri` is a placeholder for the interactive TUI that gates the v0.1.0 release. Until then
+  // it prints the same usage as --help rather than exiting silently — a line the TUI entry point
+  // replaces, not a decision that bare `seri` means "print usage".
   //
   // The flag counts only as the whole invocation, here and for --version below: `includes` matched
   // it anywhere in argv, so `seri fix the --help output` printed usage and exited 0 with the task
@@ -556,13 +555,17 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // breaks out of the loop when the child was killed BY SIGINT — exiting 0 here would turn one
   // Ctrl-C into one press per iteration, the exact regression signals.ts's re-raise exists to
   // prevent. raiseSignal is that same re-raise, shared rather than re-implemented, and it does not
-  // return, so the 0 below is for every other way this function ends.
+  // return, so the status below is for every other way this function ends.
   if (cancelledBy !== undefined) raiseSignal(cancelledBy);
 
   // Not "an error event was seen": loop.ts yields `error` and carries on at three sites, and a run
-  // that recovered from a failed tool call and then answered the user did not fail. Its two
-  // stream-error returns are the only exits that end the generator with no `done`, so "no done" is
-  // exactly "the turn never finished" — which used to exit 0 and let `seri "…" && next` run next.
+  // that recovered from a failed tool call and then answered the user did not fail. Of the exits
+  // that reach this line, loop.ts's two stream-error returns are the only ones that end the
+  // generator with no `done` — a throw escaping runLoop outright (`approvalPrompt` rejecting, or
+  // findSafeEvictionBoundary, neither of which is inside a try) ends it with no `done` too, but it
+  // comes out of the `for await` above and never gets here. So a run that used to exit 0 and let
+  // `seri "…" && next` run next now exits 1. A cap is not one of those: `max-iterations` and
+  // `token-budget` yield `done`, so a run that burned the cap without answering exits 0.
   return finished ? 0 : 1;
 }
 

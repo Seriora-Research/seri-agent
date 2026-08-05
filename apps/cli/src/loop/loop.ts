@@ -41,7 +41,10 @@ const DEFAULT_PRESERVE_RECENT_MESSAGES = 20;
 // rejecting with a self-referencing object took `TypeError: JSON.stringify cannot serialize cyclic
 // structures.` straight out of the generator and into cli.ts as an unhandled rejection, turning one
 // reportable tool error into a dead process. The fallback is the "[object Object]" this function
-// exists to avoid, which is still strictly better than not returning at all.
+// exists to avoid, which is still strictly better than not returning at all — for every value whose
+// `String()` is defined, which is every value a provider or an in-repo tool produces. A value that
+// defeats JSON.stringify AND String() (a null-prototype cyclic object) still escapes; guarding that
+// is padding for a case nothing here can reach.
 function errorText(err: unknown): string {
   if (err instanceof Error) return String(err);
   try {
@@ -131,8 +134,9 @@ export async function* runLoop(opts: {
         // ai@7.0.48 defaults this to `({ error }) => console.error(error)` (dist/index.js:8792),
         // which put 66 lines of raw APICallError — request body, every response header including
         // set-cookie, a node_modules stack — on stderr from inside a generator this repo
-        // documents as never touching stdout/stdin. The same error arrives on fullStream as an
-        // `error` part and is yielded below, so this is a duplicate print, not the only report.
+        // documents as never touching stdout/stdin. Measured for a doStream that rejects — the case
+        // the blob came from: the same error also arrives on fullStream as an `error` part and is
+        // yielded below, so nothing was silenced there that the consumer does not still get.
         onError: () => {},
       });
       for await (const part of result.fullStream) {
