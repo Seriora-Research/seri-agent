@@ -3,6 +3,15 @@
 A cross-platform coding-agent CLI. seri ships as a single `seri` binary — no runtime
 to install — and is written in TypeScript on [Bun](https://bun.com).
 
+## Scope
+
+seri is **code-first, not code-only**. Coding is what it does today, and it is the only
+thing this release is built for — the tools it ships are file, search, and shell tools.
+
+The design is deliberately not bounded by that. The loop, the session store, and the
+permission model assume no repository, and general assistant work is a planned direction.
+It is a direction, not a shipped feature: **evaluate seri today as a coding agent.**
+
 ## Install
 
 ### macOS
