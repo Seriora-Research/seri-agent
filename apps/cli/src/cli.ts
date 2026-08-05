@@ -240,7 +240,10 @@ function loadOrCreateSession(
 // So rl's SIGINT is routed into deliverSignal — signals.ts's own entry point, the one its
 // process-level listener uses — rather than into a second copy of the cancel rules that would
 // drift from it. The first press spends the single cancel slot and cli.ts unwinds the turn; a
-// second press finds the slot empty and takes the fatal path, exactly as it would mid-stream.
+// second press finds the slot empty and takes the fatal path, exactly as it would mid-stream —
+// and it gets there as a real process signal rather than through this interface, because the abort
+// listener below closes the readline, which puts the tty back out of raw mode and lets it generate
+// SIGINT again.
 //
 // The abort listener is the other direction: a cancel that originated elsewhere while the prompt is
 // up. Closing the interface and resolving false is what unparks the turn. The loop tells that false
