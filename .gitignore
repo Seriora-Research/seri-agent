@@ -13,3 +13,6 @@ research.md
 .claude/
 docs-tmp/
 supabase-pass.md
+
+# Live credentials for the portal deploy — never commit (public repo).
+PORTAL-ENV.md
