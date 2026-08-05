@@ -504,7 +504,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     controller.abort();
   });
 
-  let finished = false;
+  let doneReason: Extract<LoopEvent, { type: "done" }>["reason"] | undefined;
   try {
     for await (const event of runLoopFn({
       model,
@@ -540,7 +540,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
           );
         }
       }
-      if (event.type === "done") finished = true;
+      if (event.type === "done") doneReason = event.reason;
       printEvent(event);
     }
   } finally {
@@ -559,14 +559,18 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (cancelledBy !== undefined) raiseSignal(cancelledBy);
 
   // Not "an error event was seen": loop.ts yields `error` and carries on at three sites, and a run
-  // that recovered from a failed tool call and then answered the user did not fail. Of the exits
-  // that reach this line, loop.ts's two stream-error returns are the only ones that end the
-  // generator with no `done` — a throw escaping runLoop outright (`approvalPrompt` rejecting, or
-  // findSafeEvictionBoundary, neither of which is inside a try) ends it with no `done` too, but it
-  // comes out of the `for await` above and never gets here. So a run that used to exit 0 and let
-  // `seri "…" && next` run next now exits 1. A cap is not one of those: `max-iterations` and
-  // `token-budget` yield `done`, so a run that burned the cap without answering exits 0.
-  return finished ? 0 : 1;
+  // that recovered from a failed tool call and then answered the user did not fail. The status
+  // answers one question — did the turn finish? — and `no-tool-call` is the only reason that means
+  // it did. A cap is not a finish: `max-iterations` and `token-budget` yield `done` having stopped
+  // with the user's task unanswered, and `seri "big task" && deploy` must not deploy. loop.ts's two
+  // stream-error returns end the generator with no `done` at all and land on the same 1 — a throw
+  // escaping runLoop outright (`approvalPrompt` rejecting, or findSafeEvictionBoundary, neither of
+  // which is inside a try) ends it with no `done` too, but it comes out of the `for await` above and
+  // never gets here. All of these used to exit 0 and let `seri "…" && next` run next.
+  //
+  // `aborted` cannot reach this line: it is yielded only because the handler above aborted the
+  // controller, and that handler sets cancelledBy first, so raiseSignal ran and did not return.
+  return doneReason === "no-tool-call" ? 0 : 1;
 }
 
 if (import.meta.main) {

@@ -439,6 +439,28 @@ describe("run (task invocation)", () => {
     expect(code).toBe(1);
   });
 
+  // A cap is not a finish: the run stopped because it ran out of iterations or tokens, with the
+  // user's task unanswered, so `seri "big task" && deploy` must not deploy. Both reasons yield
+  // `done`, so "the generator ended with no done event" alone would have exited 0 here.
+  test.each(["max-iterations", "token-budget"] as const)("a run that stopped at %s exits non-zero", async (reason) => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    async function* runLoopFake(): AsyncGenerator<LoopEvent> {
+      yield { type: "done", reason };
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    let code: number;
+    try {
+      code = await run(["say", "hi"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(code).toBe(1);
+  });
+
   // Green before and after, deliberately: this is the negative control that the exit code is not
   // "any error event ⇒ 1". loop.ts yields `error` and carries on at three sites, and a run that
   // recovered from a failed tool call and then answered the user did not fail — observed live, a
