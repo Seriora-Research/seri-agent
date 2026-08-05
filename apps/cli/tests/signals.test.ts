@@ -70,6 +70,24 @@ describe.skipIf(process.platform === "win32")("signal handling", () => {
     }
   }, 30_000);
 
+  test("a SIGTERM terminates instead of cancelling, even with a cancel registered", async () => {
+    // The senders that matter here never press twice: `timeout 30 seri …`, systemd's stop, a CI
+    // job canceller. Asserting that the cancel callback did NOT run is the whole point — the same
+    // registration that makes SIGINT non-fatal must leave SIGTERM alone.
+    const { child, exited, sawLine } = startChild();
+    try {
+      await sawLine("ready");
+      child.kill("SIGTERM");
+
+      const exit = await exited;
+      expect(exit.stdout).not.toContain("cancelled");
+      expect(exit.signal).toBe("SIGTERM");
+      expect(exit.code).toBeNull();
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 30_000);
+
   test("a second press skips the unwind and still exits by signal", async () => {
     const { child, exited, sawLine } = startChild();
     try {

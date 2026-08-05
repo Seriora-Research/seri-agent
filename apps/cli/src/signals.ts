@@ -64,7 +64,16 @@ export function deliverSignal(signal: NodeJS.Signals): void {
   //
   // The first press is not survival, it is an orderly death: cli.ts cancels the turn, lets it
   // unwind far enough to leave a resumable session, and then calls raiseSignal itself.
-  if (cancel !== undefined) {
+  //
+  // SIGINT only, decided rather than inherited. Both signals reach this function, and letting a
+  // SIGTERM take the cancel branch would silently change what `timeout 30 seri …`, a systemd stop
+  // and a CI job canceller all get: they send SIGTERM once, expecting termination, and there is no
+  // second press coming to convert into the fatal path. The unwind is bounded but not free — it
+  // waits on whatever the in-flight tool does with its abort — so they would get a slower death and
+  // nothing they can observe in exchange, since the resumable session an unwind leaves behind is a
+  // Ctrl-C affordance for a human who intends to come back with --resume. So SIGTERM keeps the
+  // behaviour it had before cancellation existed: cleanups, then die by signal.
+  if (signal === "SIGINT" && cancel !== undefined) {
     const fn = cancel;
     cancel = undefined;
     fn(signal);
