@@ -5,12 +5,28 @@ Guidance for AI agents working in this repository.
 ## What this is
 
 seri is a cross-platform coding-agent CLI (ships as the `seri` binary), written in
-TypeScript on Bun. It's currently mid-build against `build-plan.md` (Stage 3 of a
-staged plan; Stage 4 "Checkpoints" is next). `definitive-harness.md` and `research.md`
-are the design spec and research this plan is built from. A separate, parallel track
-(not a `build-plan.md` stage) adds optional hosted accounts/billing on top of the
-BYOK-only core — Phase A (WorkOS AuthKit device-flow auth) has shipped; see
+TypeScript on Bun. It's currently mid-build against `build-plan.md` (Stage 4
+"Checkpoints" landed 2026-08-04 and completes v1; abort/cancellation and prompt tiers
+come next, then Stage 5). `definitive-harness.md` and `research.md` are the design spec
+and research this plan is built from. A separate, parallel track (not a `build-plan.md`
+stage) adds optional hosted accounts/billing on top of the BYOK-only core — Phase A
+(WorkOS AuthKit device-flow auth) has shipped; see
 `.claude/loops/hosted-accounts-billing-gateway/` for the full spec and phased plan.
+
+## Scope: code-first, not code-only
+
+Coding is the primary use and the only one this release ships for, but it is not the
+boundary of the product — seri is intended to extend into general assistant work. This
+is locked as constraint #3 in `definitive-harness.md`, and it constrains what you may
+assume, not what you may build:
+
+- **Don't reject a design for being assistant-shaped.** Reject on principle or on
+  redundancy instead. Designs that are only coherent inside a repository are the ones
+  ruled out — outside a repo there is no `AGENTS.md`, and the agent still has to work.
+- **Don't broaden v1 either.** Assistant surfaces start at Stage 8 (the daemon), which
+  is post-release. Everything before Stage 11 stays a coding agent.
+- **Sequence early only what gets expensive later.** Profiles and the global instruction
+  file are in Stage B on that argument alone; they ship no feature.
 
 ## Commands
 
