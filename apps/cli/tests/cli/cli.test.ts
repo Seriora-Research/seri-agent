@@ -293,6 +293,58 @@ describe("run (task invocation)", () => {
     expect(answer).toBe(false);
   }, 10_000);
 
+  // A provider failure exited 0, so `seri "…" && next-thing` ran next-thing on a turn that never
+  // happened. The discriminator is the generator ending with no `done` event, which loop.ts's two
+  // stream-error returns are the only exits to do.
+  test("a run that ends without a done event exits non-zero", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    async function* runLoopFake(): AsyncGenerator<LoopEvent> {
+      yield { type: "error", error: "AI_APICallError: Invalid API Key" };
+    }
+
+    const originalLog = console.log;
+    const originalError = console.error;
+    console.log = () => {};
+    console.error = () => {};
+    let code: number;
+    try {
+      code = await run(["say", "hi"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+
+    expect(code).toBe(1);
+  });
+
+  // Green before and after, deliberately: this is the negative control that the exit code is not
+  // "any error event ⇒ 1". loop.ts yields `error` and carries on at three sites, and a run that
+  // recovered from a failed tool call and then answered the user did not fail — observed live, a
+  // session printed a read_file ENOENT and completed normally.
+  test("a run that recovered from a tool error still exits 0", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    async function* runLoopFake(): AsyncGenerator<LoopEvent> {
+      yield { type: "error", error: 'Tool "read_file" threw during execution: Error: ENOENT' };
+      yield { type: "done", reason: "no-tool-call" };
+    }
+
+    const originalLog = console.log;
+    const originalError = console.error;
+    console.log = () => {};
+    console.error = () => {};
+    let code: number;
+    try {
+      code = await run(["say", "hi"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+
+    expect(code).toBe(0);
+  });
+
   // A task whose first word happens to name an Object.prototype member is an ordinary task, and it
   // has to reach the model. Looked up on an object literal, `SLASH_COMMANDS["toString"]` returned
   // Object.prototype.toString — a function, so it passed the dispatch guard, was called against the

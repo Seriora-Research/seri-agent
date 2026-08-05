@@ -472,6 +472,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     controller.abort();
   });
 
+  let finished = false;
   try {
     for await (const event of runLoopFn({
       model,
@@ -507,6 +508,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
           );
         }
       }
+      if (event.type === "done") finished = true;
       printEvent(event);
     }
   } finally {
@@ -524,7 +526,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // return, so the 0 below is for every other way this function ends.
   if (cancelledBy !== undefined) raiseSignal(cancelledBy);
 
-  return 0;
+  // Not "an error event was seen": loop.ts yields `error` and carries on at three sites, and a run
+  // that recovered from a failed tool call and then answered the user did not fail. Its two
+  // stream-error returns are the only exits that end the generator with no `done`, so "no done" is
+  // exactly "the turn never finished" — which used to exit 0 and let `seri "…" && next` run next.
+  return finished ? 0 : 1;
 }
 
 if (import.meta.main) {
