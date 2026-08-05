@@ -122,6 +122,52 @@ describe("run (task invocation)", () => {
     expect(errors.length).toBeGreaterThan(0);
   });
 
+  // `--help` matched nothing in cli.ts, so it fell through to the task path and was sent to the
+  // model as the user message: a session file on disk and a full turn burned (5 tool calls,
+  // observed live) to answer a request for the usage text. The key has to be set, or getGroqModel
+  // throws before saveSession and the last two assertions would pass for the wrong reason.
+  test.each(["--help", "-h"])("%p prints usage without creating a session or calling the model", async (flag) => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    let code: number;
+    try {
+      code = await run([flag], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("Usage:");
+    expect(called).toBe(false);
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
+  test("bare seri prints usage instead of exiting silently", async () => {
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    let code: number;
+    try {
+      code = await run([], { sessionsDir, loadAgentsFile: () => "" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("Usage:");
+  });
+
   test("constructs runLoop with the expected messages, permissionMode, and tools", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 

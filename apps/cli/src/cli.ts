@@ -319,9 +319,30 @@ function printEvent(event: LoopEvent): void {
   }
 }
 
+// stdout and exit 0, deliberately unlike config/commands.ts, which prints its usage to stderr and
+// returns 1: that is for a bad invocation, where the shell should see a failure. `--help` is a
+// request that was served, and it is routinely piped, so the text belongs on stdout.
+// `--selftest` is left out on purpose — cli.ts calls it an undocumented build-verification flag.
+const USAGE = `Usage:
+  seri <task>                     send a task to the model
+  seri --resume [id] [task]       continue the most recent (or named) session
+  seri [--resume <id>] /mode      cycle the permission mode
+  seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha>
+  seri login | signup | logout
+  seri config set|list|unset
+  seri --version | --help`;
+
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
-  if (argv.length === 0 || argv.includes("--version") || argv.includes("-v")) {
-    if (argv.includes("--version") || argv.includes("-v")) console.log(`seri ${pkg.version}`);
+  // Bare `seri` is Stage 11's slot: build-plan.md gives it an interactive Ink TUI as the v0.1.0
+  // release gate. Until then it prints the same usage as --help rather than exiting silently. This
+  // is a placeholder the TUI entry point replaces, not a decision that bare `seri` means "print
+  // usage". Like --version below, `includes` matches the flag anywhere in an unquoted argv.
+  if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) {
+    console.log(USAGE);
+    return 0;
+  }
+  if (argv.includes("--version") || argv.includes("-v")) {
+    console.log(`seri ${pkg.version}`);
     return 0;
   }
 
