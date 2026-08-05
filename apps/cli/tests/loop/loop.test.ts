@@ -530,6 +530,46 @@ describe("runLoop", () => {
       expect(events).toEqual([{ type: "done", reason: "aborted" }]);
     });
 
+    test("an abort landing after a completed tool phase opens no further turn", async () => {
+      // The top-of-iteration check's other window, and the one that only the call count can see:
+      // the tool ran and answered, so no abort check downstream of it fires, and without the check
+      // at the top the loop opens a second streamText with a signal that is already spent — which
+      // the SDK aborts, so the catch around the stream yields the very same done: aborted. Measured
+      // with the check deleted: doStreamCalls goes to 2 and every other assertion here still
+      // passes, which is why the count is not decoration.
+      const controller = new AbortController();
+      const executed: string[] = [];
+      const tools = makeTools(async (input) => {
+        executed.push(input.path);
+        return "ok";
+      });
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+
+      const events: LoopEvent[] = [];
+      for await (const event of runLoop({
+        model,
+        tools,
+        messages: baseMessages,
+        permissionMode: "auto",
+        signal: controller.signal,
+      })) {
+        events.push(event);
+        if (event.type === "tool-result") controller.abort();
+      }
+
+      expect(executed).toEqual(["a.txt"]);
+      expect(model.doStreamCalls).toHaveLength(1);
+      // The completed call was answered normally, so this is not the unanswered-row path yielding
+      // done: aborted — that path writes execution-denied.
+      expect(toolRowOf(events).outputs.map((output) => output.type)).toEqual(["json"]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    });
+
     test("a cancel during compaction ends the turn instead of starting another", async () => {
       const controller = new AbortController();
       const tools = makeTools(async () => "ok");
