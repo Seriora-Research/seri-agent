@@ -317,6 +317,19 @@ describe("runLoop", () => {
     const errorEvent = events.find((e) => e.type === "error");
     expect(errorEvent?.error).toContain("tool call validation failed");
     expect(errorEvent?.error).not.toBe("[object Object]");
+
+    // A bare string is the other non-Error shape in reach, and JSON.stringify wraps it in quotes:
+    // a rejection of "ENOENT: no such file" rendered as `"ENOENT: no such file"`, quotes included,
+    // both to the user and into the model's context.
+    const stringModel = new MockLanguageModelV4({
+      doStream: async () => {
+        throw "ENOENT: no such file";
+      },
+    });
+    const stringEvents = await collect(
+      runLoop({ model: stringModel, tools: {}, messages: baseMessages, permissionMode: "auto" }),
+    );
+    expect(stringEvents.find((e) => e.type === "error")?.error).toBe("ENOENT: no such file");
   });
 
   // JSON.stringify throws on a cyclic value, and the site that renders a thrown tool failure is not

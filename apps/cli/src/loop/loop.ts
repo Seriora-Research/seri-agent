@@ -47,6 +47,9 @@ const DEFAULT_PRESERVE_RECENT_MESSAGES = 20;
 // is padding for a case nothing here can reach.
 function errorText(err: unknown): string {
   if (err instanceof Error) return String(err);
+  // Already the message. JSON.stringify would hand the user and the model `"ENOENT: no such file"`,
+  // quotes included, for a tool that rejected with a bare string.
+  if (typeof err === "string") return err;
   try {
     return JSON.stringify(err) ?? String(err);
   } catch {
