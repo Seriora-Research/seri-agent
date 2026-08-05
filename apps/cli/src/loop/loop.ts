@@ -157,18 +157,12 @@ export async function* runLoop(opts: {
     yield { type: "messages-updated", messages: [...messages] };
 
     const toolResults: ToolContent = [];
-    // The index of the call the cancel interrupted, so every call from there on gets a row below.
-    // -1 while the turn is still running.
-    let cancelledFrom = -1;
-    for (const [index, call] of toolCalls.entries()) {
+    for (const call of toolCalls) {
       // Before the call, therefore upstream of the checkpoint snapshot taken inside the wrapper at
       // toolDef.execute — and this is the only point that sees all seven tools, since wrapTools
       // returns the four non-mutating ones by reference. A tool that has not started cannot leave
       // a half-written file behind.
-      if (opts.signal?.aborted) {
-        cancelledFrom = index;
-        break;
-      }
+      if (opts.signal?.aborted) break;
 
       const permission = checkPermission(call.toolName, opts.permissionMode);
       const approved =
@@ -185,10 +179,7 @@ export async function* runLoop(opts: {
       // believing its own tool call had been refused rather than interrupted. Only an await can let
       // an abort in, so this is the one place a second check is needed: the guard above already
       // covers the case where the signal was aborted before the call.
-      if (opts.signal?.aborted) {
-        cancelledFrom = index;
-        break;
-      }
+      if (opts.signal?.aborted) break;
 
       if (!approved) {
         yield { type: "permission-denied", name: call.toolName };
@@ -226,13 +217,9 @@ export async function* runLoop(opts: {
       } catch (err) {
         // A cancelled tool rejects — spawnCollect and runRipgrep both do, and bash, powershell,
         // grep and glob all hand them the signal, which is every tool that spawns anything at all.
-        // Without this the
-        // cancel would be recorded as a tool that failed and the loop would go on to run the next
-        // one — which is precisely what the user pressed Ctrl-C to stop.
-        if (opts.signal?.aborted) {
-          cancelledFrom = index;
-          break;
-        }
+        // Without this the cancel would be recorded as a tool that failed and the loop would go on
+        // to run the next one — which is precisely what the user pressed Ctrl-C to stop.
+        if (opts.signal?.aborted) break;
         const error = `Tool "${call.toolName}" threw during execution: ${String(err)}`;
         yield { type: "error", error };
         toolResults.push({
@@ -252,6 +239,13 @@ export async function* runLoop(opts: {
       });
     }
 
+    // Every path through the body above either pushes exactly one row and carries on, or breaks, so
+    // rows and calls stay index-aligned and whatever is past the end of toolResults was never
+    // answered. Derived rather than recorded: an index assigned at each of the three break sites
+    // would make the guarantee below depend on three assignments each being right, where this
+    // depends on the rows the loop actually pushed.
+    const unanswered = toolCalls.slice(toolResults.length);
+
     // A cancelled call still gets a row, and so does every call after it. The assistant message
     // carrying the tool calls was already pushed and already persisted by cli.ts, so leaving any
     // of them without a matching tool-result is AI_MissingToolResultsError on the next --resume —
@@ -263,21 +257,21 @@ export async function* runLoop(opts: {
     // execution-denied, the same output type used for a blocked call above, because it is the same
     // category — this call did not run, and it was the human's doing — and this provider already
     // round-trips it.
-    if (cancelledFrom >= 0) {
-      for (const call of toolCalls.slice(cancelledFrom)) {
-        toolResults.push({
-          type: "tool-result",
-          toolCallId: call.toolCallId,
-          toolName: call.toolName,
-          output: { type: "execution-denied", reason: `Tool "${call.toolName}" was cancelled by the user before it completed.` },
-        });
-      }
+    for (const call of unanswered) {
+      toolResults.push({
+        type: "tool-result",
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        output: { type: "execution-denied", reason: `Tool "${call.toolName}" was cancelled by the user before it completed.` },
+      });
     }
 
     messages.push({ role: "tool", content: toolResults });
     yield { type: "messages-updated", messages: [...messages] };
 
-    if (cancelledFrom >= 0) {
+    // A break is the only way to leave a call unanswered, so a non-empty `unanswered` is exactly
+    // "the turn was cancelled" — the same condition the deleted `cancelledFrom >= 0` tested.
+    if (unanswered.length > 0) {
       yield { type: "done", reason: "aborted" };
       return;
     }
