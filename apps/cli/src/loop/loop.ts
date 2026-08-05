@@ -269,8 +269,10 @@ export async function* runLoop(opts: {
     messages.push({ role: "tool", content: toolResults });
     yield { type: "messages-updated", messages: [...messages] };
 
-    // A break is the only way to leave a call unanswered, so a non-empty `unanswered` is exactly
-    // "the turn was cancelled" — the same condition the deleted `cancelledFrom >= 0` tested.
+    // A break is the only way to leave a call unanswered, and all three break sites are the abort
+    // checks above, so a non-empty `unanswered` is exactly "the turn was cancelled". Read off the
+    // rows the loop actually pushed rather than off a flag, which is one more thing each of those
+    // three sites could be written without.
     if (unanswered.length > 0) {
       yield { type: "done", reason: "aborted" };
       return;
