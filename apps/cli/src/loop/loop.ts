@@ -224,7 +224,9 @@ export async function* runLoop(opts: {
           abortSignal: opts.signal,
         });
       } catch (err) {
-        // A cancelled tool rejects (spawnCollect and runRipgrep both do), and without this the
+        // A cancelled tool rejects — spawnCollect and runRipgrep both do, and bash, powershell,
+        // grep and glob all hand them the signal, which is every tool that spawns anything at all.
+        // Without this the
         // cancel would be recorded as a tool that failed and the loop would go on to run the next
         // one — which is precisely what the user pressed Ctrl-C to stop.
         if (opts.signal?.aborted) {

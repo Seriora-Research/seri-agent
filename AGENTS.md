@@ -34,12 +34,15 @@ daemon/transport layer is expected to consume the same generator.
 
 **Cancellation belongs to the consumer.** `runLoop` accepts an optional `AbortSignal` and never
 constructs one — `apps/cli/src/cli.ts` owns an `AbortController` per run, because only the consumer
-knows what a Ctrl-C means. The signal reaches all three model round-trips (`streamText`,
-`compactMessages`, and every tool through `ToolExecutionOptions.abortSignal`, which rides through
-`withCheckpoints` untouched), and the turn ends as `done.reason: "aborted"` rather than as an
-`error`: a user-initiated cancel is not a failure. The **first** press cancels the in-flight turn —
-`apps/cli/src/signals.ts` holds a single-slot `onSignalCancel` callback and returns from the handler
-*before* the fatal body, so no cleanups run and the listener survives for the next press — and the
+knows what a Ctrl-C means. The signal reaches all three of `streamText`, `compactMessages`, and
+every tool through `ToolExecutionOptions.abortSignal` (which rides through `withCheckpoints`
+untouched, and which `bash`/`powershell`/`grep`/`glob` each forward to the process they spawn —
+`read_file`/`write_file`/`edit` take it and have nothing to interrupt), and the turn ends as
+`done.reason: "aborted"` rather than as an `error`: a user-initiated cancel is not a failure. The
+**first** press cancels the in-flight turn — `apps/cli/src/signals.ts` holds a single-slot
+`onSignalCancel` callback and, **on SIGINT only**, returns from the handler *before* the fatal body,
+so no cleanups run and the listener survives for the next press; a SIGTERM is not a press and still
+terminates, because nothing that sends one is going to send a second — and the
 loop unwinds far enough to write one `execution-denied` tool-result row for the interrupted call and
 for every call after it, which is what leaves the session resumable (an unanswered tool call is
 `AI_MissingToolResultsError` on the next `--resume`). When the loop returns, `cli.ts` calls
