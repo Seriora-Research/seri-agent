@@ -153,6 +153,34 @@ describe("run (task invocation)", () => {
     expect(readdirSync(sessionsDir)).toEqual([]);
   });
 
+  // Measured on the compiled binary: `seri fix the --help output` printed usage and exited 0 with
+  // the task never sent, because `includes` matched the flag anywhere in argv. An unquoted
+  // multi-word task is a supported form — parseTaskArgs joins argv, and this file's other tests
+  // invoke run(["do", "a", "task"]) — so the flag only counts when it is the whole invocation.
+  test.each(["--help", "-h"])("a task containing %p is still sent to the model", async (flag) => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    try {
+      await run(["fix", "the", flag, "output"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(called).toBe(true);
+    expect(logs.join("\n")).not.toContain("Usage:");
+  });
+
   test("bare seri prints usage instead of exiting silently", async () => {
     const logs: string[] = [];
     const originalLog = console.log;

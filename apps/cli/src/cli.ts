@@ -342,12 +342,18 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // Bare `seri` is Stage 11's slot: build-plan.md gives it an interactive Ink TUI as the v0.1.0
   // release gate. Until then it prints the same usage as --help rather than exiting silently. This
   // is a placeholder the TUI entry point replaces, not a decision that bare `seri` means "print
-  // usage". Like --version below, `includes` matches the flag anywhere in an unquoted argv.
-  if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) {
+  // usage".
+  //
+  // The flag counts only as the whole invocation, here and for --version below: `includes` matched
+  // it anywhere in argv, so `seri fix the --help output` printed usage and exited 0 with the task
+  // never sent — measured on the compiled binary. An unquoted multi-word task is a supported form,
+  // since parseTaskArgs joins argv.
+  const helpOnly = argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h");
+  if (argv.length === 0 || helpOnly) {
     console.log(USAGE);
     return 0;
   }
-  if (argv.includes("--version") || argv.includes("-v")) {
+  if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v")) {
     console.log(`seri ${pkg.version}`);
     return 0;
   }
