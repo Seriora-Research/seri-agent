@@ -259,8 +259,8 @@ describe("runRipgrep", () => {
     // test can afford to write makes a search long enough to time; and a FIFO does not block rg at
     // all — it opens it, searches 0 bytes and returns, so "the search is still running" was true in
     // one probe and false in the next. ftruncate costs 0 ms and allocates 0 blocks, and -a stops rg
-    // skipping it as binary, which buys a search measured at ~7.7 s per GiB — long enough that
-    // "still searching" below is an assertion rather than a race.
+    // skipping it as binary, which buys a search measured at ~7.7 s per GiB — long enough that rg
+    // is observably alive below rather than already finished.
     const dir = mkdtempSync(join(tmpdir(), "seri-rg-cancel-"));
     const big = join(dir, "big.bin");
     writeFileSync(big, "");
@@ -279,8 +279,20 @@ describe("runRipgrep", () => {
     try {
       // Interrupting a live search, not tidying up a finished one — asserted on the promise and on
       // the process, since clause (c) is explicitly not satisfied by the call merely returning.
-      expect(await settledWithin(500)).toBe("still searching");
+      //
+      // Waited on the process table rather than on a fixed slice of wall clock. This used to assert
+      // "still searching" after a flat 500 ms, which reads the filesystem's throughput as though it
+      // were a constant of the code. Measured on WSL Ubuntu-24.04 with the same 2 GiB of holes:
+      // 5641 ms on ext4, 3196 ms on tmpfs (/dev/shm) — so a RAM-backed /tmp is only ~1.8x, not the
+      // order of magnitude that would have made 500 ms a live flake, and the old form did pass
+      // there. But 6x of margin is the machine's property, not the assertion's, and it is spent for
+      // nothing: waiting until rg is observed alive and only then checking the promise has not
+      // settled leaves a window of one pgrep instead of a window of one filesystem, and the case
+      // drops from 548 ms to 54 ms.
+      const alive = Date.now() + 20_000;
+      while (survivors() === "" && Date.now() < alive) await new Promise((r) => setTimeout(r, 10));
       expect(survivors()).not.toBe("");
+      expect(await settledWithin(0)).toBe("still searching");
 
       controller.abort();
 
