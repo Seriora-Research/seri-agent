@@ -59,13 +59,23 @@ function startChild(scriptPath: string, cwd: string): {
     stdout += chunk;
   });
 
+  // A runner without `script` reports it as an 'error' event, not as a throw. Unhandled, that takes
+  // the whole test process down instead of failing this test; and 'exit' never fires after it, so
+  // both waits below would otherwise sit out their full deadlines and blame the prompt for a
+  // missing pty allocator.
+  let spawnError: Error | undefined;
   const exited = new Promise<Exit>((resolve) => {
     child.once("exit", (code, signal) => resolve({ code, signal, stdout }));
+    child.once("error", (err) => {
+      spawnError = err;
+      resolve({ code: null, signal: null, stdout: `could not spawn script: ${err.message}` });
+    });
   });
 
   const sawLine = async (line: string): Promise<void> => {
     const deadline = Date.now() + 20_000;
-    while (!stdout.includes(line) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    while (!stdout.includes(line) && spawnError === undefined && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    if (spawnError !== undefined) throw new Error(`could not spawn script: ${spawnError.message}`);
     if (!stdout.includes(line)) throw new Error(`child never printed ${JSON.stringify(line)}; got ${JSON.stringify(stdout)}`);
   };
 
@@ -101,11 +111,19 @@ describe.skipIf(process.platform === "win32")("approval prompt on a real termina
       // stdin is deliberately left open: an EOF on the pty master is its own way to close readline,
       // and it would end this run without the press ever being interpreted.
 
-      const exit = await exited;
+      // Raced against a named sentinel rather than plainly awaited, the same shape
+      // tests/cli/cli.test.ts uses one file over. A regression here leaves the prompt parked
+      // forever, and a bare await turns that into 60 s of CI, a leaked inner bun process behind
+      // `script`, and a red that says "timeout" rather than what actually broke.
+      const settled = await Promise.race([
+        exited,
+        new Promise<"the prompt never settled">((r) => setTimeout(() => r("the prompt never settled"), 15_000)),
+      ]);
+
       // Asserted on stdout rather than on the exit disposition, because `script` reports its own
       // status rather than the child's uniformly across flavours. Clause (b)'s by-signal death has
       // its own test in tests/signals.test.ts.
-      expect(exit.stdout).toContain("answer=false aborted=true");
+      expect(settled === "the prompt never settled" ? settled : settled.stdout).toContain("answer=false aborted=true");
     } finally {
       child.kill("SIGKILL");
     }
