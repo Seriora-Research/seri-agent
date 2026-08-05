@@ -68,7 +68,7 @@ const bashTool = tool({
   // and comes back as an ordinary successful ProcessResult. Measured before this line existed —
   // `sleep 4; echo FINISHED-ANYWAY` with an already-aborted signal took 4072 ms and returned
   // exitCode 0.
-  execute: async ({ command, timeoutMs }, { abortSignal }) => runBash(command, undefined, timeoutMs, abortSignal),
+  execute: async ({ command, timeoutMs }, { abortSignal }) => runBash(command, timeoutMs, abortSignal),
 });
 
 const powershellTool = tool({

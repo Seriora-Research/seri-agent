@@ -17,7 +17,7 @@ describe("runBash", () => {
   }, 15000);
 
   test("rejects before spawning when bash is unavailable", () => {
-    expect(runBash("echo hi", () => false)).rejects.toThrow();
+    expect(runBash("echo hi", undefined, undefined, () => false)).rejects.toThrow();
   });
 });
 
@@ -28,7 +28,7 @@ describe.skipIf(process.platform !== "win32" || !isBashAvailable())("runBash (ti
   test("kills what the shell started, not just the shell", async () => {
     const before = countSleepProcesses();
 
-    const result = await runBash("sleep 45", undefined, 1500);
+    const result = await runBash("sleep 45", 1500);
     expect(result.timedOut).toBe(true);
 
     // taskkill is synchronous but the process table takes a moment to settle.

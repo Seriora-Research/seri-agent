@@ -25,11 +25,14 @@ function resolveBashCommand(): string {
   return findOnPath("bash") ?? WIN32_GIT_BASH_PATHS.find(existsSync) ?? "bash";
 }
 
+// isAvailable last, after the two parameters production actually passes, so that production reads
+// runBash(command, timeoutMs, signal) — the same shape as runPowerShell — rather than threading an
+// `undefined` past a test seam. The seam's cost belongs to the one test that overrides it.
 export async function runBash(
   command: string,
-  isAvailable: () => boolean = isBashAvailable,
   timeoutMs?: number,
   signal?: AbortSignal,
+  isAvailable: () => boolean = isBashAvailable,
 ): Promise<ProcessResult> {
   if (!isAvailable()) {
     throw new Error("bash is not available on this system");
