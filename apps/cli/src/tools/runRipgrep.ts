@@ -6,6 +6,7 @@ import pkg from "../../package.json";
 import { onAbort } from "../abort";
 import { getConfigDir } from "../config/paths";
 import rgAsset from "./rg-vendored.bin" with { type: "file" };
+import { killOnFatalSignal } from "./spawnCollect";
 
 // A wedged rg is killed rather than left hanging the session. 30 s, not the 10 s Claude Code
 // passes: the --sort note further down records a legitimate 9 s search of a large tree, which
@@ -154,11 +155,11 @@ export function rgVersion(command: string): string {
 // far below this, so a full buffer only ever means "more than we were going to return anyway",
 // which is truncation and not a failure.
 //
-// The name still says BYTES and the accumulation is now a JS string, so the unit is really UTF-16
-// units — 8 M characters rather than 8 MB. Deliberately not renamed: shadowGit.ts:8
-// cross-references this constant by name and 8 M units is the same order of magnitude for any
-// input, which is all this number was ever chosen to be.
-const MAX_BUFFER_BYTES = 8 * 1024 * 1024;
+// CHARS, not BYTES: the accumulation is a JS string, so the unit is UTF-16 units — 8 M characters
+// rather than 8 MB, which is the same order of magnitude for any input and is all this number was
+// ever chosen to be. shadowGit.ts cites the figure in prose and declares its own, genuinely
+// byte-valued constant for spawnSync's maxBuffer, so the two share the number and nothing else.
+const MAX_BUFFER_CHARS = 8 * 1024 * 1024;
 
 // How many results grep and glob hand back. A model searching a real repo gains nothing from
 // thousands of hits — they bury the useful ones and burn context — so both tools return a
@@ -214,7 +215,7 @@ export function runRipgrep(args: string[], signal?: AbortSignal): Promise<{ stdo
     child.stdout.on("data", (chunk: string) => {
       if (truncated) return;
       stdout += chunk;
-      if (stdout.length >= MAX_BUFFER_BYTES) {
+      if (stdout.length >= MAX_BUFFER_CHARS) {
         truncated = true;
         child.kill("SIGKILL");
       }
@@ -232,9 +233,18 @@ export function runRipgrep(args: string[], signal?: AbortSignal): Promise<{ stdo
 
     const abort = onAbort(signal, () => child.kill("SIGKILL"));
 
+    // The same registry spawnCollect's children join, and reached from here rather than duplicated:
+    // a SIGTERM aimed at seri's pid alone — systemd stop, `timeout 30 seri`, a CI job canceller —
+    // is delivered to this process and not to rg, and it takes the timer above with it, so the
+    // search would carry on with nothing left that could end it. A tty Ctrl-C is not the gap: rg
+    // is in this process's group, so the terminal signals it too. Impossible before this file
+    // stopped using spawnSync, which cannot leave a child in flight to begin with.
+    const untrack = killOnFatalSignal(() => child.kill("SIGKILL"));
+
     const settled = (): void => {
       clearTimeout(timer);
       abort.dispose();
+      untrack();
     };
 
     child.on("error", (error) => {

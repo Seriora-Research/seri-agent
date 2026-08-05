@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import pkg from "../../package.json";
-import { resolveRg, runRipgrep } from "../../src/tools/runRipgrep";
+import { runRipgrep } from "../../src/tools/runRipgrep";
 
 const MODULE = pathToFileURL(join(import.meta.dir, "../../src/tools/runRipgrep.ts")).href;
 const ASSET = join(import.meta.dir, "../../src/tools/rg-vendored.bin");
@@ -36,6 +36,52 @@ function cacheEnv(root: string): NodeJS.ProcessEnv {
 function configDirIn(root: string): string {
   return join(root, process.platform === "win32" ? "seri" : ".seri");
 }
+
+// The search directory, not the rg binary: `pgrep -f <rgPath>` matches ANY rg on the box, so a
+// concurrently running test file's own search reads as this one's — either as a live search that
+// never started or as a survivor that was never killed. A fresh mkdtemp name appears on exactly one
+// command line, and the cases below keep it off their own by passing it through the environment.
+function rgPidFor(dir: string): number | undefined {
+  const line = spawnSync("pgrep", ["-f", dir], { encoding: "utf8" }).stdout.trim().split("\n")[0] ?? "";
+  const pid = Number.parseInt(line, 10);
+  return Number.isInteger(pid) ? pid : undefined;
+}
+
+async function waitForRgPid(dir: string, budgetMs: number): Promise<number> {
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    const pid = rgPidFor(dir);
+    if (pid !== undefined) return pid;
+    if (Date.now() >= deadline) throw new Error(`no rg was searching ${dir} within ${budgetMs}ms`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// A 2 GiB sparse file, not a large tree, and not a timing margin. Both obvious fixtures were
+// measured and rejected on this box: rg scans 200 MB across 180 files in 152 ms, so no tree a test
+// can afford to write makes a search long enough to time; and a FIFO does not block rg at all — it
+// opens it, searches 0 bytes and returns, so "the search is still running" was true in one probe
+// and false in the next. ftruncate costs 0 ms and allocates 0 blocks, and -a stops rg skipping it as
+// binary, which buys a search measured at ~7.7 s per GiB — long enough that rg is observably alive
+// below rather than already finished.
+function slowSearchDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const big = join(dir, "big.bin");
+  writeFileSync(big, "");
+  truncateSync(big, 2 * 1024 * 1024 * 1024);
+  return dir;
+}
+
+const SLOW_SEARCH_ARGS = ["-a", "--files-with-matches", "--", "needle"];
 
 function runChild(script: string[], env: NodeJS.ProcessEnv): string[] {
   const child = spawnSync(process.execPath, ["-e", script.join("\n")], { encoding: "utf8", env });
@@ -254,27 +300,15 @@ describe("runRipgrep", () => {
   });
 
   test.skipIf(process.platform === "win32")("a cancelled search is killed rather than run to completion", async () => {
-    // A 2 GiB sparse file, not a large tree, and not a timing margin. Both obvious fixtures were
-    // measured and rejected on this box: rg scans 200 MB across 180 files in 152 ms, so no tree a
-    // test can afford to write makes a search long enough to time; and a FIFO does not block rg at
-    // all — it opens it, searches 0 bytes and returns, so "the search is still running" was true in
-    // one probe and false in the next. ftruncate costs 0 ms and allocates 0 blocks, and -a stops rg
-    // skipping it as binary, which buys a search measured at ~7.7 s per GiB — long enough that rg
-    // is observably alive below rather than already finished.
-    const dir = mkdtempSync(join(tmpdir(), "seri-rg-cancel-"));
-    const big = join(dir, "big.bin");
-    writeFileSync(big, "");
-    truncateSync(big, 2 * 1024 * 1024 * 1024);
+    const dir = slowSearchDir("seri-rg-cancel-");
 
     const controller = new AbortController();
-    const search = runRipgrep(["-a", "--files-with-matches", "--", "needle", dir], controller.signal);
+    const search = runRipgrep([...SLOW_SEARCH_ARGS, dir], controller.signal);
     // Attached now, not after the abort: a rejection observed by nothing in between would surface
     // as an unhandled rejection rather than as this test's own result.
     const outcome = search.then(() => "resolved", (err: Error) => `rejected: ${err.message}`);
     const settledWithin = (ms: number): Promise<string> =>
       Promise.race([outcome, new Promise<string>((r) => setTimeout(() => r("still searching"), ms))]);
-    const rgPath = resolveRg();
-    const survivors = (): string => spawnSync("pgrep", ["-f", rgPath], { encoding: "utf8" }).stdout.trim();
 
     try {
       // Interrupting a live search, not tidying up a finished one — asserted on the promise and on
@@ -289,9 +323,7 @@ describe("runRipgrep", () => {
       // nothing: waiting until rg is observed alive and only then checking the promise has not
       // settled leaves a window of one pgrep instead of a window of one filesystem, and the case
       // drops from 548 ms to 54 ms.
-      const alive = Date.now() + 20_000;
-      while (survivors() === "" && Date.now() < alive) await new Promise((r) => setTimeout(r, 10));
-      expect(survivors()).not.toBe("");
+      const rgPid = await waitForRgPid(dir, 20_000);
       expect(await settledWithin(0)).toBe("still searching");
 
       controller.abort();
@@ -300,11 +332,54 @@ describe("runRipgrep", () => {
       // with "still searching" instead of hanging for the rest of the 2 GiB.
       expect(await settledWithin(5_000)).toBe("rejected: cancelled");
 
-      // Polled: a just-killed process is briefly a zombie and pgrep still lists it.
+      // Polled: a just-killed process is briefly a zombie and still answers kill(pid, 0).
       const deadline = Date.now() + 5_000;
-      while (survivors() !== "" && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
-      expect(survivors()).toBe("");
+      while (isAlive(rgPid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+      expect(isAlive(rgPid) ? `rg ${rgPid} survived the cancel` : "killed").toBe("killed");
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 45_000);
+
+  test.skipIf(process.platform === "win32")("kills an in-flight search when a signal ends the run", async () => {
+    // The gap spawnSync could not have: it blocks until rg is done, so there was never an in-flight
+    // rg for a fatal signal to strand. Now there is, and the timer that would eventually kill it
+    // dies with this process — so rg has to be on the same cleanup list spawnCollect's children are.
+    const dir = slowSearchDir("seri-rg-signal-");
+    // Through the environment, not argv, so the directory names rg's command line and nothing else
+    // — the seri-side process would otherwise carry it too and rgPidFor could return either.
+    const script =
+      `const m = await import(${JSON.stringify(MODULE)});` +
+      `m.runRipgrep([${SLOW_SEARCH_ARGS.map((a) => JSON.stringify(a)).join(", ")}, process.env.SERI_TEST_DIR]).catch(() => {});`;
+    const child = spawn(process.execPath, ["-e", script], {
+      stdio: "ignore",
+      env: { ...process.env, SERI_TEST_DIR: dir },
+    });
+
+    try {
+      // rg being observed alive is the readiness handshake: it cannot be listed until the module was
+      // imported (which is what installs the signal handler) AND the spawn actually happened.
+      const rgPid = await waitForRgPid(dir, 20_000);
+
+      child.kill("SIGTERM");
+      await new Promise((resolve) => child.once("exit", resolve));
+
+      // Polled: rg is briefly a zombie of the process just killed, and kill(pid, 0) succeeds on a
+      // zombie until init reaps it.
+      const deadline = Date.now() + 5_000;
+      while (isAlive(rgPid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+      expect(isAlive(rgPid) ? `rg ${rgPid} survived SIGTERM` : "killed").toBe("killed");
+    } finally {
+      child.kill("SIGKILL");
+      // A failing run must not leave 2 GiB of searching to burn through the rest of the suite.
+      // Racy by nature — the survivor can be reaped between the two calls — so a throw here is the
+      // process already being gone, not a second failure worth reporting over the real one.
+      const survivor = rgPidFor(dir);
+      if (survivor !== undefined) {
+        try {
+          process.kill(survivor, "SIGKILL");
+        } catch {}
+      }
       rmSync(dir, { recursive: true, force: true });
     }
   }, 45_000);
