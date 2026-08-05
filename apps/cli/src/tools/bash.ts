@@ -29,10 +29,11 @@ export async function runBash(
   command: string,
   isAvailable: () => boolean = isBashAvailable,
   timeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<ProcessResult> {
   if (!isAvailable()) {
     throw new Error("bash is not available on this system");
   }
 
-  return spawnCollect(resolveBashCommand(), ["-c", command], timeoutMs);
+  return spawnCollect(resolveBashCommand(), ["-c", command], timeoutMs, signal);
 }

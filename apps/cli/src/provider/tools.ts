@@ -63,14 +63,19 @@ const bashTool = tool({
   description:
     "Run a shell command via bash. Each stream is capped at 30000 characters; `stdoutTruncated` and `stderrTruncated` say which one was cut, and a cut drops the middle and keeps both ends, so redirect that stream to a file and read the part you need rather than assuming it is the whole output. Commands are killed after 2 minutes and `timedOut` is set, with whatever they printed first; pass timeoutMs (up to 600000) for a command you expect to take longer.",
   inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
-  execute: async ({ command, timeoutMs }) => runBash(command, undefined, timeoutMs),
+  // Same reason as grep/glob above, and one more: spawnCollect only rejects a killed child when it
+  // was handed the signal, so without this argument a command the user cancelled runs to completion
+  // and comes back as an ordinary successful ProcessResult. Measured before this line existed —
+  // `sleep 4; echo FINISHED-ANYWAY` with an already-aborted signal took 4072 ms and returned
+  // exitCode 0.
+  execute: async ({ command, timeoutMs }, { abortSignal }) => runBash(command, undefined, timeoutMs, abortSignal),
 });
 
 const powershellTool = tool({
   description:
     "Run a shell command via PowerShell. Each stream is capped at 30000 characters; `stdoutTruncated` and `stderrTruncated` say which one was cut, and a cut drops the middle and keeps both ends, so redirect that stream to a file and read the part you need rather than assuming it is the whole output. Commands are killed after 2 minutes and `timedOut` is set, with whatever they printed first; pass timeoutMs (up to 600000) for a command you expect to take longer.",
   inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
-  execute: async ({ command, timeoutMs }) => runPowerShell(command, timeoutMs),
+  execute: async ({ command, timeoutMs }, { abortSignal }) => runPowerShell(command, timeoutMs, abortSignal),
 });
 
 export const toolDefinitions = {

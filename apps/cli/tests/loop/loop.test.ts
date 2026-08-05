@@ -4,6 +4,8 @@ import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { MockLanguageModelV4 } from "ai/test";
 import { z } from "zod";
 import { runLoop, type LoopEvent } from "../../src/loop/loop";
+import { toolDefinitions } from "../../src/provider/tools";
+import { isBashAvailable } from "../../src/tools/bash";
 
 function usage(inputTotal: number, outputTotal: number) {
   return {
@@ -554,6 +556,50 @@ describe("runLoop", () => {
       expect(events.find((e) => e.type === "error")).toBeUndefined();
       expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
     });
+
+    // The real bash tool, not a fake, because the defect this covers was entirely in the wiring:
+    // every loop test above hands `execute` a signal that a hand-written fake reads, while
+    // provider/tools.ts's bashTool discarded its second argument, so spawnCollect's `signal`
+    // parameter had no production call site at all. `sleep` ignores the abort the way any real
+    // command does — nothing inside it cooperates — so the only thing that can stop it is the kill
+    // spawnCollect performs on being handed the signal. Guarded on bash's availability the same way
+    // tests/tools/bash.test.ts's tree-kill case is.
+    test.skipIf(!isBashAvailable())("a cancel does not wait for a bash command that ignores it", async () => {
+      const controller = new AbortController();
+      const model = new MockLanguageModelV4({
+        doStream: async () =>
+          streamResult([
+            { type: "tool-call", toolCallId: "call-1", toolName: "bash", input: JSON.stringify({ command: "sleep 30" }) },
+            { type: "finish", finishReason: { unified: "tool-calls", raw: undefined }, usage: usage(5, 5) },
+          ]),
+      });
+
+      const started = Date.now();
+      const events: LoopEvent[] = [];
+      for await (const event of runLoop({
+        model,
+        tools: { bash: toolDefinitions.bash },
+        messages: baseMessages,
+        permissionMode: "auto",
+        signal: controller.signal,
+      })) {
+        events.push(event);
+        if (event.type === "tool-call") controller.abort();
+      }
+      const elapsed = Date.now() - started;
+
+      // Two assertions, because each fails on its own half of the bug. Unplumbed, the command ran
+      // the full 30 s AND came back as an ordinary success — measured at 4072 ms and
+      // `{"exitCode":0,"timedOut":false}` for a 4 s command with an already-aborted signal. The
+      // margin is wide enough for a cold Windows shell spawn (tests/tools/bash.test.ts allows 15 s
+      // for `echo hi`) and still an order of magnitude under 30 s.
+      expect(elapsed).toBeLessThan(10_000);
+      expect(events.find((e) => e.type === "tool-result")).toBeUndefined();
+      expect(toolRowOf(events).outputs).toEqual([
+        { type: "execution-denied", reason: 'Tool "bash" was cancelled by the user before it completed.' },
+      ]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    }, 60_000);
 
     test("a cancel at the approval prompt is recorded as a cancel, not as a denial", async () => {
       const controller = new AbortController();
