@@ -21,7 +21,14 @@ export type LoopEvent =
 export type ApprovalPrompt = (toolName: string, args: unknown, signal?: AbortSignal) => Promise<boolean>;
 
 const DEFAULT_MAX_ITERATIONS = 50;
-const DEFAULT_TOKEN_BUDGET = 100_000;
+// A cumulative spend guard over BILLED tokens, not a context limit — `contextWindowSize` and
+// compaction are what bound the context. `totalTokens` sums each step's own input+output, and
+// every step's input re-counts the whole conversation prefix, so a session parked just under the
+// compaction threshold (~65k input on a 131k window) adds ~65k per step: at 100_000 two steps
+// exhausted it. Since a cap now means "the turn did not finish" (exit 1, see cli.ts), that made
+// exit 1 the ordinary outcome of a multi-turn session. Hence a number far above the context
+// window rather than a fraction of it.
+const DEFAULT_TOKEN_BUDGET = 1_000_000;
 // llama-3.3-70b-versatile's (the current default model, src/provider/groq.ts) context
 // window; confirmed via console.groq.com/docs/models, 2026-08-02. Fully overridable via
 // opts.contextWindowSize.
