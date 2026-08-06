@@ -370,7 +370,7 @@ describe("run (task invocation)", () => {
     );
 
     expect(code).toBe(0);
-    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["(tokens: 320 in, 75 out)"]);
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["\n(tokens: 320 in, 75 out)"]);
   });
 
   // "0 out" is a measurement, and there was no measurement: a provider that reports input tokens
@@ -386,7 +386,7 @@ describe("run (task invocation)", () => {
       run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
     );
 
-    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["(tokens: 320 in)"]);
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["\n(tokens: 320 in)"]);
   });
 
   // The other side of that line, and the reason it is keyed on undefined rather than on 0: a call
@@ -400,7 +400,7 @@ describe("run (task invocation)", () => {
       run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
     );
 
-    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["(tokens: 320 in, 0 out)"]);
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["\n(tokens: 320 in, 0 out)"]);
   });
 
   // The reason the summary is conditional. Every other test in this file drives a fake that emits no
@@ -439,7 +439,56 @@ describe("run (task invocation)", () => {
     );
 
     expect(code).toBe(1);
-    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["(tokens: 120 in, 30 out)"]);
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["\n(tokens: 120 in, 30 out)"]);
+  });
+
+  // captureLogs collects console.log's arguments, and a defect that is precisely a missing line
+  // boundary cannot fail such an assertion: capturing per call, or trimming, or splitting on "\n"
+  // all re-insert the boundary being asserted about. This reconstructs the byte stream instead —
+  // console.log's newline included, and the model's own text, which goes out through
+  // process.stdout.write and never reaches console.log at all.
+  async function captureStdout(invoke: () => Promise<number>): Promise<{ code: number; stdout: string }> {
+    let stdout = "";
+    const originalLog = console.log;
+    const originalWrite = process.stdout.write;
+    const originalError = console.error;
+    console.log = (msg: string) => {
+      stdout += `${String(msg)}\n`;
+    };
+    process.stdout.write = ((chunk: string) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    console.error = () => {};
+    try {
+      return { code: await invoke(), stdout };
+    } finally {
+      console.log = originalLog;
+      process.stdout.write = originalWrite;
+      console.error = originalError;
+    }
+  }
+
+  // The path the end-of-run summary was built for is the one where nothing else ends the line: a
+  // call that streamed text and then failed prints its partial text with no trailing newline, the
+  // error goes to stderr, and there is no `done` event to carry printEvent's leading "\n". Measured
+  // before the fix, on raw stdout: "partial answer(tokens: 900 in, 7 out)\n" — a consumer piping
+  // stdout for the model's answer got the token count welded onto its last line.
+  test("the token summary starts on its own line when a mid-stream failure left stdout mid-line", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      { type: "text-delta", text: "partial answer" },
+      usageEvent(900, 7),
+      { type: "error", error: "AI_APICallError: upstream connection reset" },
+    ]);
+
+    const { code, stdout } = await captureStdout(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(1);
+    expect(stdout).toContain("partial answer\n(tokens: 900 in, 7 out)\n");
   });
 
   // A provider failure exited 0, so `seri "…" && next-thing` ran next-thing on a turn that never

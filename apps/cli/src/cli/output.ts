@@ -138,10 +138,19 @@ export type RunUsage = { inputTokens: number | undefined; outputTokens: number |
 // measurement and there was no measurement: a provider omitting the field and a call that genuinely
 // produced nothing are not the same fact, and the summary is the wrong place to guess which. A
 // reported 0 still prints — that one IS a measurement.
+//
+// Leading "\n" for the same reason printEvent's terminal `done` line carries one: the model's text
+// arrives through process.stdout.write with no trailing newline, and on the path this summary was
+// built for — a call that streamed text and then failed — there is no `done` event to end that
+// line, because the error goes to stderr. Measured without it, on raw stdout:
+// "partial answer(tokens: 900 in, 7 out)\n", i.e. a consumer piping stdout for the answer got the
+// token count welded onto its last line. Unconditional rather than only on that path: every other
+// exit ends with the `done` line, whose own leading "\n" already puts a blank line before it, so
+// this is the spacing the rest of the run's output already has.
 export function printUsage(usage: RunUsage): void {
   const parts: string[] = [];
   if (usage.inputTokens !== undefined) parts.push(`${usage.inputTokens} in`);
   if (usage.outputTokens !== undefined) parts.push(`${usage.outputTokens} out`);
   if (parts.length === 0) return;
-  console.log(`(tokens: ${parts.join(", ")})`);
+  console.log(`\n(tokens: ${parts.join(", ")})`);
 }
