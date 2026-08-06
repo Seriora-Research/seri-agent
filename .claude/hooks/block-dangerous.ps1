@@ -1,4 +1,4 @@
-# PreToolUse hook (PowerShell variant) — blocks destructive commands.
+# PreToolUse hook (PowerShell variant) - blocks destructive commands.
 $cmd = $env:CLAUDE_TOOL_INPUT_COMMAND
 if (-not $cmd) { exit 0 }
 

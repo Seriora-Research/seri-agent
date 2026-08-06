@@ -1,12 +1,37 @@
-# Stop hook (PowerShell variant) — exit 2 forces Claude to keep working.
+# Stop hook (PowerShell variant) - exit 2 forces Claude to keep working.
 # Guards against: firing outside EXECUTE/VERIFY, research mode, infinite retry.
+#
+# CHANGED 2026-08-06: both STATE.md and environment.md used to resolve to whichever loop
+# the filesystem yielded first rather than this session's, so the gate read another run's
+# Mode/Status and another machine's package manager. See verify-gate.sh.
+
+$payload = [Console]::In.ReadToEnd()
+$sid = $null
+try { $sid = ($payload | ConvertFrom-Json).session_id } catch {}
+
+# --- Resolve THIS session's loop ---
+$loopDir = $null
+if ($sid) {
+  foreach ($s in Get-ChildItem -Path ".claude/loops" -Depth 1 -Filter "SESSION" `
+      -File -ErrorAction SilentlyContinue) {
+    if ((Get-Content $s.FullName -Raw).Trim() -eq $sid) { $loopDir = $s.DirectoryName; break }
+  }
+}
+
+# Backward compatibility until every loop writes SESSION. -Depth 1 excludes archived loops.
+# On ambiguity this gate exits 0 rather than guessing - the direction that matters here is
+# never forcing a session to keep working against another run's state.
+if (-not $loopDir) {
+  $all = @(Get-ChildItem -Path ".claude/loops" -Depth 1 -Filter "STATE.md" `
+    -File -ErrorAction SilentlyContinue)
+  if ($all.Count -eq 1) { $loopDir = $all[0].DirectoryName } else { exit 0 }
+}
 
 # --- Guard: only run when an engineering-loop EXECUTE/VERIFY phase is active ---
-$stateFile = Get-ChildItem -Path ".claude/loops" -Recurse -Filter "STATE.md" `
-  -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $stateFile) { exit 0 }
+$statePath = Join-Path $loopDir "STATE.md"
+if (-not (Test-Path $statePath)) { exit 0 }
 
-$stateContent = Get-Content $stateFile.FullName -Raw
+$stateContent = Get-Content $statePath -Raw
 $modeMatch   = [regex]::Match($stateContent, '^- Mode:\s*(\S+)', 'Multiline')
 $statusMatch = [regex]::Match($stateContent, '^- Status:\s*(\S+)', 'Multiline')
 $mode   = if ($modeMatch.Success)   { $modeMatch.Groups[1].Value }   else { "" }
@@ -16,8 +41,7 @@ if ($mode -eq "research") { exit 0 }
 if ($status -ne "EXECUTE" -and $status -ne "VERIFY") { exit 0 }
 
 # --- Iteration ceiling ---
-$slugDir       = $stateFile.DirectoryName
-$failCountFile = Join-Path $slugDir ".gate-fail-count"
+$failCountFile = Join-Path $loopDir ".gate-fail-count"
 $maxFailures   = 5
 $failCount     = 0
 if (Test-Path $failCountFile) {
@@ -25,12 +49,11 @@ if (Test-Path $failCountFile) {
   if ($raw -match '^\d+$') { $failCount = [int]$raw }
 }
 
-# --- Detect package manager ---
-$envFile = Get-ChildItem -Path ".claude/loops" -Recurse -Filter "environment.md" `
-  -ErrorAction SilentlyContinue | Select-Object -First 1
+# --- Detect package manager from THIS loop's environment.md ---
+$envFile = Join-Path $loopDir "environment.md"
 $pkgMgr = "npm"
-if ($envFile) {
-  $envContent = Get-Content $envFile.FullName -Raw
+if (Test-Path $envFile) {
+  $envContent = Get-Content $envFile -Raw
   if ($envContent -match "pnpm") { $pkgMgr = "pnpm" }
   if ($envContent -match "\bbun\b") { $pkgMgr = "bun" }
 }
@@ -60,7 +83,7 @@ if ((Get-Command pytest -ErrorAction SilentlyContinue) -and $hasPyProject) {
 }
 
 if (-not $gatesRan) {
-  Write-Warning "No recognised test stack found — skipping gate"
+  Write-Warning "No recognised test stack found - skipping gate"
   exit 0
 }
 
@@ -74,9 +97,9 @@ $failCount++
 Set-Content $failCountFile "$failCount"
 
 if ($failCount -ge $maxFailures) {
-  Write-Error "Gate failed $failCount consecutive times — marking BLOCKED and halting continuation."
+  Write-Error "Gate failed $failCount consecutive times - marking BLOCKED and halting continuation."
   $updated = $stateContent -replace '(?m)^- Status: .*', '- Status: BLOCKED'
-  Set-Content $stateFile.FullName $updated
+  Set-Content $statePath $updated
   if (Test-Path $failCountFile) { Remove-Item $failCountFile -Force }
   exit 0
 }

@@ -1,4 +1,4 @@
-# PostToolUse hook (PowerShell variant) — auto-format the file just written/edited.
+# PostToolUse hook (PowerShell variant) - auto-format the file just written/edited.
 $file = $env:CLAUDE_TOOL_INPUT_FILE_PATH
 if (-not $file) { exit 0 }
 
