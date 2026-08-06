@@ -1,3 +1,5 @@
+import { describeNearMiss } from "../verify/nearMiss";
+
 // Ratio is a judgment call: the source docs (docs/ARCHITECTURE.md) describe the
 // disproportionate-match guard but don't specify an exact threshold. 5x trades off
 // rejecting legitimate large replacements against accepting a match that grew far
@@ -101,7 +103,12 @@ export function edit(content: string, oldString: string, newString: string): str
   const match = tryExactMatch(content, oldString) ?? tryLineTrimmedMatch(content, oldString) ?? tryWhitespaceNormalizedMatch(content, oldString);
 
   if (match === null) {
-    throw new Error("Could not find the specified text to replace (tried exact, line-trimmed, and whitespace-normalized matching)");
+    // The near-miss report is appended, never substituted: when no line is close enough
+    // describeNearMiss returns null and the message is byte-identical to what it always was, so a
+    // caller matching on the old wording (tests/tools/edit.test.ts) keeps matching.
+    const nearMiss = describeNearMiss(content, oldString);
+    const base = "Could not find the specified text to replace (tried exact, line-trimmed, and whitespace-normalized matching)";
+    throw new Error(nearMiss === null ? base : `${base}\n${nearMiss}`);
   }
 
   assertNotDisproportionate(oldString, match.end - match.start);

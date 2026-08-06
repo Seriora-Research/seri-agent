@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { edit } from "../../src/tools/edit";
 import { describeNearMiss } from "../../src/verify/nearMiss";
 
 describe("describeNearMiss", () => {
@@ -38,5 +39,30 @@ describe("describeNearMiss", () => {
 
   test("an all-blank oldString yields null rather than matching a blank line", () => {
     expect(describeNearMiss("const a = 1;\n", "   \n\n")).toBeNull();
+  });
+});
+
+// The tool-result half of the same behaviour. `edit` throws, the loop turns the throw into an
+// `error-text` tool result (loop.ts:339-346), so what the model reads is exactly this message.
+describe("edit's no-match failure message", () => {
+  test("carries the near-miss report: the candidate's line number, its actual text, and the searched text", () => {
+    const content = "function total(a, b) {\n  const sum = a + b;\n  return sum;\n}\n";
+
+    expect(() => edit(content, "  const sum = a - b;", "  const sum = a * b;")).toThrow(/line 2/);
+    expect(() => edit(content, "  const sum = a - b;", "  const sum = a * b;")).toThrow(/const sum = a \+ b;/);
+    expect(() => edit(content, "  const sum = a - b;", "  const sum = a * b;")).toThrow(/const sum = a - b;/);
+  });
+
+  test("degrades to today's bare wording when no line is close enough to name", () => {
+    let message = "";
+    try {
+      edit("const a = 1;\n", "export default function Widget(props) {", "x");
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message).toBe(
+      "Could not find the specified text to replace (tried exact, line-trimmed, and whitespace-normalized matching)",
+    );
   });
 });
