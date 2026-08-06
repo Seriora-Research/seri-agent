@@ -729,8 +729,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are
   // billed for the calls they did make, and those are precisely the runs whose cost is otherwise
-  // unaccounted for. The one exit this does not cover is a throw escaping driveLoop's `for await`
-  // (approvalPrompt rejecting), which already skips the exit code below too.
+  // unaccounted for. The mid-stream failure reaches here because loop.ts reads that call's usage
+  // before it returns — 907 tokens, measured, that this line would otherwise print without. The
+  // one call nobody can report is an aborted one: the SDK rejects its usage promise with
+  // AbortError, so a cancelled run reports every completed call before it and not that one. The
+  // one exit this does not cover is a throw escaping driveLoop's `for await` (approvalPrompt
+  // rejecting), which already skips the exit code below too.
   printUsage(usage);
 
   // The turn was cancelled, so the process still dies the way Ctrl-C makes a process die. Not

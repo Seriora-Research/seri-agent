@@ -406,6 +406,9 @@ describe("run (task invocation)", () => {
 
   // Tokens spent before a failure are billed exactly like tokens spent before an answer, so the
   // summary belongs on the way out of every run that made a call — not inside the success branch.
+  // The usage-then-error sequence below is one the real loop emits, not one only a fake can
+  // produce: loop.ts reads the usage of a call that streamed and then failed before it returns
+  // (loop.test.ts, "emits the usage of a call that streamed text and then failed mid-stream").
   // The cancelled run is the same decision and cannot be tested here: it ends in raiseSignal, which
   // would kill the test runner.
   test("still prints the summary for a run that ended in an error", async () => {

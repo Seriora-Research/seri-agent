@@ -208,6 +208,23 @@ export async function* runLoop(opts: {
           toolCalls.push({ toolCallId: part.toolCallId, toolName: part.toolName, input: part.input });
         } else if (part.type === "error") {
           yield { type: "error", error: errorText(part.error) };
+          // A call that streamed text and then failed was billed for the text it streamed, and
+          // this is the exit that used to drop it. Measured against ai@7.0.48: consuming this
+          // part and then awaiting result.usage resolves — with the provider's real numbers
+          // ({"inputTokens":900,"outputTokens":7,"totalTokens":907}) when the stream still carried
+          // a `finish`, and with an all-undefined usage when the failure cut the stream short. The
+          // await does not deadlock on the undrained stream: the `finish` is already through the
+          // transform by the time the `error` part reaches this consumer.
+          //
+          // Caught rather than awaited bare, for the third sub-path: when the failure IS the call
+          // — doStream rejecting with its retries exhausted, nothing streamed — result.usage
+          // REJECTS with AI_NoOutputGeneratedError. This await is inside the try below, so an
+          // uncaught rejection would not escape, it would do something worse: yield a second
+          // `error` naming "No output generated" as the failure, on top of the provider's real one.
+          // Through Promise.resolve because the SDK types this as a PromiseLike, which has no
+          // .catch — it is a real Promise at runtime, but the declared type is what tsc checks.
+          const failedUsage = await Promise.resolve(result.usage).catch(() => undefined);
+          if (failedUsage !== undefined) yield { type: "usage", usage: failedUsage };
           return;
         }
       }

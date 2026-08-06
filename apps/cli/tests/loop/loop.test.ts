@@ -478,6 +478,51 @@ describe("runLoop", () => {
     expect(usageEvents[1]?.usage.outputTokens).toBe(5);
   });
 
+  // The exit that dropped 907 billed tokens. A call that streams text and then fails is charged
+  // for the text it streamed, and this path returned before the usage was ever read — on the one
+  // kind of turn whose cost is otherwise completely unaccounted for. Measured against ai@7.0.48:
+  // consuming the `error` part and then awaiting result.usage resolves with the provider's own
+  // numbers, so this is recoverable and was simply being discarded.
+  test("emits the usage of a call that streamed text and then failed mid-stream", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () =>
+        streamResult([
+          { type: "text-start", id: "1" },
+          { type: "text-delta", id: "1", delta: "partial answer" },
+          { type: "error", error: new Error("upstream connection reset") },
+          { type: "finish", finishReason: { unified: "error", raw: undefined }, usage: usage(900, 7) },
+        ]),
+    });
+
+    const events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+
+    expect(events.find((e) => e.type === "error")?.error).toContain("upstream connection reset");
+    const usageEvents = events.filter((e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage");
+    expect(usageEvents).toHaveLength(1);
+    expect(usageEvents[0]?.usage.inputTokens).toBe(900);
+    expect(usageEvents[0]?.usage.outputTokens).toBe(7);
+  });
+
+  // The other half of that exit, and the reason the await is caught rather than bare: when the
+  // failure IS the call — doStream rejecting, nothing streamed — result.usage rejects with
+  // AI_NoOutputGeneratedError instead of resolving. That rejection lands in the same try that
+  // wraps the stream, so an uncaught await would report a SECOND, invented error on top of the
+  // provider's real one and hand the user "No output generated" as the cause of their failure.
+  test("a call that produced no output reports the provider's error once and nothing else", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new Error("connection refused");
+      },
+    });
+
+    const events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+
+    const errors = events.filter((e): e is Extract<LoopEvent, { type: "error" }> => e.type === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("connection refused");
+    expect(events.filter((e) => e.type === "usage")).toHaveLength(0);
+  });
+
   test("compacts history once lastInputTokens crosses the threshold across a ~25-turn run, and a pre-compaction fact survives via the summary", async () => {
     const marker = "MARKER_FACT_777";
     const tools = makeTools(async (input: { path: string }) => (input.path === "marker.txt" ? marker : "ok"));
