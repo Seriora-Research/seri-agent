@@ -52,8 +52,10 @@ daemon/transport layer is expected to consume the same generator.
 Flags are flags in any position and remaining positionals are the task; `--` is the documented
 escape for a task that contains what looks like a flag (`seri -- fix the --help output`). Exit
 codes: **0** a request was served or the turn finished, **1** the turn did not finish, **2** a bad
-invocation (parseArgs rejected it, or no task was given). `--max-turns <n>` is the only `runLoop`
-option the CLI sets, default 500.
+invocation (parseArgs rejected it, or no task was given; `config`'s own invocation errors also
+exit 2). `--max-turns <n>` is the only `runLoop` option the CLI sets, default 500. `--help`/
+`--version`/`--selftest` are checked before any subcommand dispatch, so `seri login --help` (and
+`signup`/`logout`) prints seri's own usage rather than reaching the subcommand.
 
 **Cancellation belongs to the consumer.** `runLoop` accepts an optional `AbortSignal` and never
 constructs one — `apps/cli/src/cli.ts` owns an `AbortController` per run, because only the consumer

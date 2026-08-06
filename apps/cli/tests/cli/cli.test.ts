@@ -857,6 +857,30 @@ describe("run (login/signup/logout)", () => {
     expect(code).toBe(2);
     expect(errors.join("\n")).toContain("--max-turns");
   });
+
+  // "Flags are flags anywhere" means --help never reaches these subcommands: seri's own USAGE wins
+  // instead of the subcommand ever running. A real behaviour change from `main`, and the approved
+  // design (not a defect) — pinned so it stays intentional.
+  test.each(["login", "signup", "logout"])("`seri %s --help` prints seri's usage, not the subcommand", async (subcommand) => {
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    let code: number;
+    try {
+      code = await run([subcommand, "--help"], {
+        login: failIfCalled("login"),
+        logout: failIfCalled("logout"),
+        authConfigDir: "fake-config-dir",
+        getGroqModel: failIfCalled("getGroqModel"),
+        loadAgentsFile: failIfCalled("loadAgentsFile"),
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("Usage:");
+  });
 });
 
 describe("run (/mode)", () => {
