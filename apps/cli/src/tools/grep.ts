@@ -35,7 +35,7 @@ export async function grep(
   opts: { path: string; glob?: string; mode?: GrepMode },
   signal?: AbortSignal,
 ): Promise<GrepResult> {
-  assertSearchPath(opts.path);
+  await assertSearchPath(opts.path);
 
   // Defaults to file names for the same reason Claude Code does: it answers "where does this
   // live" — most of what a search is actually for — at a fraction of the tokens, and a list

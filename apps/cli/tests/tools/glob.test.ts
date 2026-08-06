@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { glob } from "../../src/tools/glob";
@@ -59,6 +59,29 @@ describe("glob", () => {
     expect(error.message).not.toContain("rg exited with code");
     expect(error.message).not.toContain("IO error for operation");
   });
+
+  // The path exists; only the traversal through its parent is denied — which existsSync could not
+  // tell apart from the case above, so both arrived as "Path not found" and sent the model looking
+  // somewhere else instead of at the permissions. Guarded like config/commands.test.ts's 0600 case:
+  // chmod does not deny access this way on Windows, and root ignores the mode bits outright.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "an unreadable path is reported as a permission problem, not as a missing path",
+    async () => {
+      const parent = join(tmpDir, "locked");
+      const target = join(parent, "inner");
+      mkdirSync(target, { recursive: true });
+      chmodSync(parent, 0o000);
+
+      try {
+        const error = (await glob("*.txt", { path: target }).catch((e: Error) => e)) as Error;
+
+        expect(error.message).toBe(`Permission denied: ${target}`);
+      } finally {
+        // Restored before afterEach, which cannot remove a directory it cannot enter.
+        chmodSync(parent, 0o755);
+      }
+    },
+  );
 
   test("caps the results and flags truncation when more files match than the cap", async () => {
     for (let i = 0; i < MAX_FILE_RESULTS + 50; i++) writeFileSync(join(tmpDir, `f${i}.md`), "x");

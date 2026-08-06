@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import pkg from "../../package.json";
@@ -191,8 +192,23 @@ export function outputLines(stdout: string, truncated: boolean): string[] {
 // matching a string that moves. Checked before the spawn instead, at the one point that still knows
 // the path is a path. TOCTOU is not a concern: a path removed in the window between this and rg
 // falls back to exactly the message this replaces.
-export function assertSearchPath(path: string): void {
-  if (!existsSync(path)) throw new Error(`Path not found: ${path}`);
+//
+// stat, not existsSync, for the two things existsSync loses. It is synchronous, so an unreachable
+// UNC share or a stale NFS mount blocks the event loop for the whole mount timeout — the same hole
+// runRipgrep below stopped using spawnSync to close, and a SIGINT arriving in that window reaches no
+// JS handler, so the cancel is lost. And it collapses every failure into false, so a directory whose
+// parent lacks +x reads as missing and sends the model looking elsewhere instead of at the
+// permissions. Any other errno rethrows unchanged: naming ENOTDIR or ELOOP ourselves would be the
+// same lossy classification, and a path we could not stat has to fail rather than be searched.
+export async function assertSearchPath(path: string): Promise<void> {
+  try {
+    await stat(path);
+  } catch (error) {
+    const { code } = error as NodeJS.ErrnoException;
+    if (code === "ENOENT") throw new Error(`Path not found: ${path}`);
+    if (code === "EACCES" || code === "EPERM") throw new Error(`Permission denied: ${path}`);
+    throw error;
+  }
 }
 
 // spawn, not spawnSync, and the reason is not only the abort: spawnSync blocks the event loop for
