@@ -413,8 +413,9 @@ describe("run (task invocation)", () => {
 
     const originalLog = console.log;
     console.log = () => {};
+    let code: number;
     try {
-      await run(["write", "hello.txt"], {
+      code = await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
         sessionsDir,
@@ -432,6 +433,12 @@ describe("run (task invocation)", () => {
 
     expect(cancelledBy).toBe("SIGINT");
     expect(answer).toBe(false);
+    // The status of the one shape that reaches cli.ts's `return` with done: "aborted" — an abort
+    // that did not come through cli.ts's own cancel slot, so raiseSignal never ran. Here that is
+    // this fake displacing the slot; in production it would be a second caller of
+    // controller.abort(), which signals.ts already anticipates in Stage 6's subagents. Pinned so
+    // that turning a user-visible cancel into exit 1 is a failing test and not a silent change.
+    expect(code).toBe(1);
   }, 10_000);
 
   // `✓ edit done` read as a completed file edit for a tool that returns text and writes nothing.

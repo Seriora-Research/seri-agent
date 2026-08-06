@@ -572,8 +572,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // which is inside a try) ends it with no `done` too, but it comes out of the `for await` above and
   // never gets here. All of these used to exit 0 and let `seri "…" && next` run next.
   //
-  // `aborted` cannot reach this line: it is yielded only because the handler above aborted the
-  // controller, and that handler sets cancelledBy first, so raiseSignal ran and did not return.
+  // `aborted` does not reach this line today, and that rests on `controller.abort()` having
+  // exactly one caller: the handler above, which sets cancelledBy first, so raiseSignal ran and
+  // did not return. Nothing enforces it — signals.ts names Stage 6's subagents as a second
+  // aborter — and a cancel arriving any other way lands on the 1 below rather than dying by
+  // signal. tests/cli/cli.test.ts pins that status so the change would be visible.
   return doneReason === "no-tool-call" ? 0 : 1;
 }
 
