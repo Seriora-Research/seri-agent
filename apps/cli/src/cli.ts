@@ -522,7 +522,6 @@ type RunContext = CommandDirs & {
   resuming: boolean;
   resumeId: string | undefined;
   taskText: string;
-  maxTurns: number | undefined;
 };
 
 function dirs(ctx: RunContext): CommandDirs {
@@ -560,7 +559,6 @@ type PreparedRun = {
   storeDir: string;
   tools: ToolSet;
   model: LanguageModel;
-  runLoopFn: typeof runLoopReal;
 };
 
 function prepareSession(ctx: RunContext, deps: CliDeps): PreparedRun | number {
@@ -614,9 +612,7 @@ function prepareSession(ctx: RunContext, deps: CliDeps): PreparedRun | number {
     createCheckpointer({ storeDir, worktree, sessionId: session.id, onWarning: printWarning }),
   );
 
-  const runLoopFn = deps.runLoop ?? runLoopReal;
-
-  return { session, storeDir, tools, model, runLoopFn };
+  return { session, storeDir, tools, model };
 }
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
@@ -637,12 +633,16 @@ function addTokens(total: number | undefined, reported: number | undefined): num
   return reported === undefined ? total : (total ?? 0) + reported;
 }
 
+// `maxTurns` is an argument rather than a field of ctx: it is neither the resume target nor where
+// its state lives, and this is the only place that reads it.
 async function driveLoop(
   prepared: PreparedRun,
   ctx: RunContext,
   deps: CliDeps,
+  maxTurns: number | undefined,
 ): Promise<{ doneReason: DoneReason | undefined; cancelledBy: NodeJS.Signals | undefined; usage: RunUsage }> {
-  const { session, storeDir, tools, model, runLoopFn } = prepared;
+  const { session, storeDir, tools, model } = prepared;
+  const runLoopFn = deps.runLoop ?? runLoopReal;
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
   // the consumer is the only thing that knows what a Ctrl-C means. The first press lands in
@@ -667,7 +667,7 @@ async function driveLoop(
       approvalPrompt: makeApprovalPrompt(deps.createInterface),
       system: session.systemPrompt,
       signal: controller.signal,
-      maxIterations: ctx.maxTurns,
+      maxIterations: maxTurns,
     })) {
       if (event.type === "messages-updated") {
         saveSession({ ...session, messages: event.messages }, ctx.sessionsDir);
@@ -766,7 +766,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     taskText: positionals.join(" "),
     sessionsDir: deps.sessionsDir ?? join(getConfigDir(), "sessions"),
     checkpointsDir: deps.checkpointsDir ?? join(getConfigDir(), "checkpoints"),
-    maxTurns,
   };
 
   // Before prepareSession, never after: a bare `/undo` must act on the resume target rather than
@@ -777,7 +776,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const prepared = prepareSession(ctx, deps);
   if (typeof prepared === "number") return prepared;
 
-  const { doneReason, cancelledBy, usage } = await driveLoop(prepared, ctx, deps);
+  const { doneReason, cancelledBy, usage } = await driveLoop(prepared, ctx, deps, maxTurns);
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are
