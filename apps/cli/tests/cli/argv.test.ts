@@ -4,24 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../../package.json";
 import { run, SLASH_COMMANDS } from "../../src/cli";
-import type { LoopEvent, runLoop } from "../../src/loop/loop";
-
-type RunLoopOpts = Parameters<typeof runLoop>[0];
-
-// The ~5-line async generator every fake in this file rebuilt by hand: capture what cli.ts passed
-// runLoop, yield the given events (default: a single "no-tool-call" done), and return
-// opts.messages the way the real generator does. `capture()` reads back what was captured —
-// undefined if runLoop was never called — so a test that only needs "was it called" and one that
-// needs the actual opts share the same fake instead of each hand-rolling their own.
-function fakeRunLoop(events: LoopEvent[] = [{ type: "done", reason: "no-tool-call" }]) {
-  let captured: RunLoopOpts | undefined;
-  async function* fake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
-    captured = opts;
-    for (const event of events) yield event;
-    return opts.messages;
-  }
-  return { fake, capture: () => captured };
-}
+import { fakeRunLoop } from "./fakeRunLoop";
 
 describe("run", () => {
   test("--version prints the package.json version and returns 0", async () => {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
-import type { ModelMessage } from "ai";
+import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
@@ -15,13 +15,21 @@ import {
   checkpointStoreDir,
   createCheckpointer,
   restoreCommit,
-  type RestorePlan,
-  type RestoreResult,
   rewindConversation,
   undoFiles,
 } from "./checkpoint/checkpoint";
 import { projectRoot } from "./checkpoint/shadowGit";
 import { withCheckpoints } from "./checkpoint/wrapTools";
+import {
+  printEvent,
+  printRecovery,
+  printUndoPlan,
+  printUsage,
+  printWarning,
+  type RunUsage,
+  USAGE,
+  usageError,
+} from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
 import { getConfigDir } from "./config/paths";
 import { cycleMode } from "./gate/gate";
@@ -153,12 +161,6 @@ function restoreCommand(session: SessionState<ModelMessage>, args: string[], dir
   printRecovery(result);
 }
 
-// Restoring is never the operation that loses work: the state it just replaced was committed first.
-function printRecovery(result: RestoreResult): void {
-  console.log(`The state this replaced is commit ${result.preUndoCommit}. To get it back:`);
-  console.log(`  ${result.recoverCommand}`);
-}
-
 function rewindCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
   const { storeDir } = checkpointTarget(session, dirs);
   const { rewindTo } = rewindConversation({ storeDir, sessionId: session.id, steps: steps(args) });
@@ -260,56 +262,6 @@ function makeApprovalPrompt(
     });
 }
 
-// stderr, not stdout: stdout carries the model's own output and is routinely piped, and a warning
-// that a file will not be recoverable must not end up inside whatever consumed that pipe.
-function printWarning(message: string): void {
-  console.error(`⚠ ${message}`);
-}
-
-// Printed before the restore happens, not after. Every path here comes from git's own output, so
-// an ignored file can never appear under "restored" or "deleted"; the ones that were written and
-// skipped are listed separately rather than left for the user to notice was missing. The deletion
-// list matters most: the removal pass takes every untracked, non-ignored file, including ones a
-// human made by hand in another terminal.
-function printUndoPlan(plan: RestorePlan): void {
-  if (plan.diff) console.log(plan.diff);
-  for (const path of plan.restored) console.log(`restored ${path}`);
-  for (const path of plan.deleted) console.log(`deleted  ${path}`);
-  if (plan.ignored.length > 0) console.log(`not restored (gitignored): ${plan.ignored.join(", ")}`);
-}
-
-function printEvent(event: LoopEvent): void {
-  switch (event.type) {
-    case "text-delta":
-      process.stdout.write(event.text);
-      break;
-    case "tool-call":
-      console.log(`\n→ ${event.name}(${JSON.stringify(event.args)})`);
-      break;
-    case "tool-result":
-      // `edit` returns the edited text and writes nothing (provider/tools.ts's
-      // FS_MUTATING_TOOL_NAMES comment), so a bare "done" reads as a file that changed — observed
-      // live, with the model moving on as though it had. Named here rather than in the loop, which
-      // knows no tool names by design.
-      console.log(
-        event.name === "edit" ? "✓ edit done (text returned, nothing written)" : `✓ ${event.name} done`,
-      );
-      break;
-    case "permission-denied":
-      console.log(`✗ ${event.name} blocked`);
-      break;
-    case "compacted":
-      console.log(`\n⚙ compacted ${event.evictedCount} messages`);
-      break;
-    case "done":
-      console.log(`\n(done: ${event.reason})`);
-      break;
-    case "error":
-      console.error(event.error);
-      break;
-  }
-}
-
 const PARSE_OPTIONS = {
   help: { type: "boolean", short: "h" },
   version: { type: "boolean", short: "v" },
@@ -319,39 +271,8 @@ const PARSE_OPTIONS = {
   "max-turns": { type: "string" },
 } as const;
 
-// stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
-// parseArgs rejects, or no task given — is a usage error: printed to stderr, exit 2.
-// config/commands.ts's own usage error also exits 2, keeping the convention uniform across every
-// subcommand rather than half-adopted on just this one.
-// `--selftest` is left out on purpose — cli.ts calls it an undocumented build-verification flag.
-const USAGE = `Usage:
-  seri <task>                     send a task to the model
-  seri --continue [task]          continue the most recent session
-  seri --resume <id> [task]       continue that session
-  seri [--resume <id>] /mode      cycle the permission mode
-  seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha>
-  seri login | signup | logout
-  seri config set|list|unset
-  seri --version | --help
-
-Options:
-  --max-turns <n>                 stop after n model turns (default 500)
-  --                              everything after this is the task, flags included:
-                                    seri -- fix the --help output`;
-
-// console.error(message), console.error(USAGE), return 2 — one helper because every usage error
-// takes the same three steps, and USAGE is what names the -- escape: parseArgs' own message does,
-// for an unknown option, but not for the "argument missing"/"argument is ambiguous" messages an
-// optional value or a required-value option without one produce (measured) — so USAGE is appended
-// unconditionally rather than only on the option that happens to name it already.
-function usageError(message: string): number {
-  console.error(message);
-  console.error(USAGE);
-  return 2;
-}
-
-export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
-  let values: {
+type ParsedArgs = {
+  values: {
     help?: boolean;
     version?: boolean;
     selftest?: boolean;
@@ -359,6 +280,16 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     continue?: boolean;
     "max-turns"?: string;
   };
+  positionals: string[];
+  maxTurns: number | undefined;
+};
+
+// One convention across every handler below, so `run` reads as the sequence it is: a `number` is
+// "handled, and this is seri's exit code", `undefined` is "not mine, carry on". The order they are
+// called in is the behaviour — each was a guard clause inside one function before, and the three
+// orderings that are load-bearing are named at their call sites.
+function parseCliArgs(argv: string[]): ParsedArgs | number {
+  let values: ParsedArgs["values"];
   let positionals: string[];
   try {
     ({ values, positionals } = parseArgs({ args: argv, strict: true, allowPositionals: true, options: PARSE_OPTIONS }));
@@ -385,6 +316,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     return usageError(`--resume ${values.resume} looks for a session named "${values.resume}". Did you mean: seri --continue ${values.resume}`);
   }
 
+  return { values, positionals, maxTurns };
+}
+
+function handleInfoFlags(values: ParsedArgs["values"]): number | undefined {
   if (values.help === true) {
     console.log(USAGE);
     return 0;
@@ -393,46 +328,36 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     console.log(`seri ${pkg.version}`);
     return 0;
   }
+  return undefined;
+}
 
-  // Undocumented build-verification flag: the embedded ripgrep is vendored for the build
-  // host, so a cross-compiled binary can ship one that cannot run on the target. Spawning
-  // it for real is the only way to catch that from a shipped artifact; the release workflow
-  // runs this on every platform. Greps a throwaway file rather than the cwd so the result
-  // never depends on what happens to be in the directory seri was launched from.
-  if (values.selftest === true) {
-    const grepFn = deps.grep ?? grepReal;
+// Undocumented build-verification flag: the embedded ripgrep is vendored for the build
+// host, so a cross-compiled binary can ship one that cannot run on the target. Spawning
+// it for real is the only way to catch that from a shipped artifact; the release workflow
+// runs this on every platform. Greps a throwaway file rather than the cwd so the result
+// never depends on what happens to be in the directory seri was launched from.
+async function runSelftest(deps: CliDeps): Promise<number> {
+  const grepFn = deps.grep ?? grepReal;
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "seri-selftest-"));
     try {
-      const dir = mkdtempSync(join(tmpdir(), "seri-selftest-"));
-      try {
-        writeFileSync(join(dir, "probe.txt"), "seri selftest probe\n");
-        const { matches = [] } = await grepFn("selftest probe", { path: dir, mode: "content" });
-        if (matches.length !== 1) throw new Error(`ripgrep returned ${matches.length} matches, expected 1`);
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
-      // Names the version, because "it worked" leaves the one thing a cross-compiled artifact can
-      // get wrong — which rg was actually vendored for this target — unsaid.
-      console.log(`selftest ok: ripgrep ${rgVersion(resolveRg())}`);
-      return 0;
-    } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
-      return 1;
+      writeFileSync(join(dir, "probe.txt"), "seri selftest probe\n");
+      const { matches = [] } = await grepFn("selftest probe", { path: dir, mode: "content" });
+      if (matches.length !== 1) throw new Error(`ripgrep returned ${matches.length} matches, expected 1`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
+    // Names the version, because "it worked" leaves the one thing a cross-compiled artifact can
+    // get wrong — which rg was actually vendored for this target — unsaid.
+    console.log(`selftest ok: ripgrep ${rgVersion(resolveRg())}`);
+    return 0;
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return 1;
   }
+}
 
-  // Bare `seri` is a placeholder for the interactive TUI that gates the v0.1.0 release. Until then
-  // it prints the same usage as --help rather than exiting silently — a line the TUI entry point
-  // replaces, not a decision that bare `seri` means "print usage". Any other flags-but-no-task
-  // invocation (`seri --max-turns 5`) is a usage error instead: unlike bare `seri`, it named an
-  // intention and cannot be silently taken as "show usage".
-  if (positionals.length === 0 && values.continue !== true && values.resume === undefined) {
-    if (argv.length === 0) {
-      console.log(USAGE);
-      return 0;
-    }
-    return usageError("No task given.");
-  }
-
+async function handleAuthCommand(positionals: string[], deps: CliDeps): Promise<number | undefined> {
   if (positionals[0] === "login" || positionals[0] === "signup") {
     const loginFn = deps.login ?? loginReal;
     try {
@@ -454,58 +379,95 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
     return 0;
   }
+  return undefined;
+}
 
-  if (positionals[0] === "config") {
-    const configCommandFn = deps.configCommand ?? configCommandReal;
-    try {
-      return configCommandFn(positionals.slice(1), deps.authConfigDir ?? getConfigDir());
-    } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
-      return 1;
-    }
+function handleConfigCommand(positionals: string[], deps: CliDeps): number | undefined {
+  if (positionals[0] !== "config") return undefined;
+  const configCommandFn = deps.configCommand ?? configCommandReal;
+  try {
+    // Annotated and returned through a local, not `return configCommandFn(...)` directly. This
+    // function's own return type has to admit `undefined` — that is how the dispatch in run() says
+    // "not mine, carry on" — which means the compiler would accept an `undefined` arriving from
+    // configCommand too, and run() would read it as "not handled". Before the decomposition this
+    // call sat in `run(): Promise<number>` and widening it was a tsc error; the annotation is what
+    // puts that error back. What it costs to lose is measured, not imagined: with a bare `return;`
+    // added here, `seri config set GROQ_API_KEY gsk_live_…` falls through to the task path, mints a
+    // session and writes `{"role":"user","content":"config set GROQ_API_KEY gsk_live_…"}` into the
+    // session JSON — the key in full, on disk, and tsc stays green.
+    const code: number = configCommandFn(positionals.slice(1), deps.authConfigDir ?? getConfigDir());
+    return code;
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return 1;
   }
+}
 
-  const resuming = values.continue === true || values.resume !== undefined;
-  const resumeId = values.resume;
-  const taskText = positionals.join(" ");
-  const sessionsDir = deps.sessionsDir ?? join(getConfigDir(), "sessions");
-  const checkpointsDir = deps.checkpointsDir ?? join(getConfigDir(), "checkpoints");
-  const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
+// What the task path needs after the subcommands have had their say. It extends CommandDirs, so it
+// satisfies the two callees that take one structurally — but it is not handed to them whole:
+// `dirs(ctx)` below narrows it back down at each call. Structural typing makes passing the whole
+// thing legal and silent, so a slash command handler that asks for two directories would in fact
+// receive the resume target and the task text as well — and whatever it grew to read from them
+// would still typecheck against a signature saying it needs neither. Narrowing at the call site is
+// what keeps the callee's declared contract the true one.
+type RunContext = CommandDirs & {
+  resuming: boolean;
+  resumeId: string | undefined;
+  taskText: string;
+};
 
-  // A slash command always operates on the resume target — an explicit --resume id, or the most
-  // recent session — and never creates a session just to act on it, so this is checked before
-  // loadOrCreateSession and a bare `/undo` (no --resume) does not fall into the new-session path
-  // below. `/undo` and `/rewind` are keyed on the session's own `cwd`, not the current one, so
-  // running them from a different directory still finds the store the edits were recorded in.
-  const [name = "", ...commandArgs] = taskText.split(/\s+/).filter(Boolean);
+function dirs(ctx: RunContext): CommandDirs {
+  return { sessionsDir: ctx.sessionsDir, checkpointsDir: ctx.checkpointsDir };
+}
+
+// A slash command always operates on the resume target — an explicit --resume id, or the most
+// recent session — and never creates a session just to act on it, so this is called before
+// prepareSession and a bare `/undo` (no --resume) does not fall into the new-session path. `/undo`
+// and `/rewind` are keyed on the session's own `cwd`, not the current one, so running them from a
+// different directory still finds the store the edits were recorded in.
+function handleSlashCommand(ctx: RunContext): number | undefined {
+  const [name = "", ...commandArgs] = ctx.taskText.split(/\s+/).filter(Boolean);
   const command = SLASH_COMMANDS.get(name);
-  if (command !== undefined && command.accepts(commandArgs)) {
-    const id = resumeId ?? findMostRecentSession(sessionsDir);
-    if (!id) {
-      console.error(`No session to run ${name} against.`);
-      return 1;
-    }
-    try {
-      command.run(loadSession<ModelMessage>(id, sessionsDir), commandArgs, { sessionsDir, checkpointsDir });
-      return 0;
-    } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
-      return 1;
-    }
+  if (command === undefined || !command.accepts(commandArgs)) return undefined;
+
+  const id = ctx.resumeId ?? findMostRecentSession(ctx.sessionsDir);
+  if (!id) {
+    console.error(`No session to run ${name} against.`);
+    return 1;
   }
+  try {
+    command.run(loadSession<ModelMessage>(id, ctx.sessionsDir), commandArgs, dirs(ctx));
+    return 0;
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+}
+
+// Everything the loop is driven with, resolved before the first model call so a failure to build
+// any of it is an exit code rather than a half-started turn.
+type PreparedRun = {
+  session: SessionState<ModelMessage>;
+  storeDir: string;
+  tools: ToolSet;
+  model: LanguageModel;
+};
+
+function prepareSession(ctx: RunContext, deps: CliDeps): PreparedRun | number {
+  const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
 
   let session: SessionState<ModelMessage>;
   try {
-    session = loadOrCreateSession(resuming, resumeId, sessionsDir, loadAgentsFileFn);
+    session = loadOrCreateSession(ctx.resuming, ctx.resumeId, ctx.sessionsDir, loadAgentsFileFn);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   }
 
-  if (!resuming) console.log(`Session ${session.id} created.`);
+  if (!ctx.resuming) console.log(`Session ${session.id} created.`);
 
-  if (!resuming || taskText) {
-    session.messages.push({ role: "user", content: taskText });
+  if (!ctx.resuming || ctx.taskText) {
+    session.messages.push({ role: "user", content: ctx.taskText });
   }
 
   const getGroqModelFn = deps.getGroqModel ?? getGroqModelReal;
@@ -517,12 +479,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     return 1;
   }
 
-  saveSession(session, sessionsDir);
+  saveSession(session, ctx.sessionsDir);
 
   // Checkpointing is enabled by exactly this call, which is also why rolling it back is a one-line
   // revert: `runLoop`, the session store, the gate and every tool are unmodified, and the store
   // lives entirely outside the user's repository.
-  const { storeDir, worktree } = checkpointTarget(session, { sessionsDir, checkpointsDir });
+  const { storeDir, worktree } = checkpointTarget(session, dirs(ctx));
 
   // `write_file`, `bash` and `powershell` write relative to process.cwd(), while the snapshot
   // covers the project root. Anywhere inside the project is fine — that is the whole point of
@@ -542,6 +504,26 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     createCheckpointer({ storeDir, worktree, sessionId: session.id, onWarning: printWarning }),
   );
 
+  return { session, storeDir, tools, model };
+}
+
+type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
+
+// undefined + n is n, not NaN, and undefined + undefined stays undefined: a run's total is the sum
+// of the calls that reported, and stays unreported if none did.
+function addTokens(total: number | undefined, reported: number | undefined): number | undefined {
+  return reported === undefined ? total : (total ?? 0) + reported;
+}
+
+// `maxTurns` is an argument rather than a field of ctx: it is neither the resume target nor where
+// its state lives, and this is the only place that reads it.
+async function driveLoop(
+  prepared: PreparedRun,
+  ctx: RunContext,
+  deps: CliDeps,
+  maxTurns: number | undefined,
+): Promise<{ doneReason: DoneReason | undefined; cancelledBy: NodeJS.Signals | undefined; usage: RunUsage }> {
+  const { session, storeDir, tools, model } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
@@ -556,7 +538,8 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     controller.abort();
   });
 
-  let doneReason: Extract<LoopEvent, { type: "done" }>["reason"] | undefined;
+  let doneReason: DoneReason | undefined;
+  const usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
   try {
     for await (const event of runLoopFn({
       model,
@@ -569,7 +552,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       maxIterations: maxTurns,
     })) {
       if (event.type === "messages-updated") {
-        saveSession({ ...session, messages: event.messages }, sessionsDir);
+        saveSession({ ...session, messages: event.messages }, ctx.sessionsDir);
         continue;
       }
       // Compaction splices the whole message array, so every rewind anchor recorded before this
@@ -593,6 +576,15 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
           );
         }
       }
+      // `compacted` alongside `usage` because the summariser's own round-trip is billed like any
+      // other call and was invisible to every caller until loop.ts stopped dropping it — a total
+      // that left it out would under-report exactly the calls the user never asked for. Both
+      // fields are `number | undefined` (the provider may report either, neither or both), which is
+      // what addTokens carries through to the summary instead of flattening it to a zero.
+      if (event.type === "usage" || event.type === "compacted") {
+        usage.inputTokens = addTokens(usage.inputTokens, event.usage.inputTokens);
+        usage.outputTokens = addTokens(usage.outputTokens, event.usage.outputTokens);
+      }
       if (event.type === "done") doneReason = event.reason;
       printEvent(event);
     }
@@ -602,6 +594,67 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // turn that is no longer running instead of killing the process.
     unregisterCancel();
   }
+
+  return { doneReason, cancelledBy, usage };
+}
+
+export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
+  const parsed = parseCliArgs(argv);
+  if (typeof parsed === "number") return parsed;
+  const { values, positionals, maxTurns } = parsed;
+
+  const info = handleInfoFlags(values);
+  if (info !== undefined) return info;
+
+  if (values.selftest === true) return runSelftest(deps);
+
+  // Bare `seri` is a placeholder for the interactive TUI that gates the v0.1.0 release. Until then
+  // it prints the same usage as --help rather than exiting silently — a line the TUI entry point
+  // replaces, not a decision that bare `seri` means "print usage". Any other flags-but-no-task
+  // invocation (`seri --max-turns 5`) is a usage error instead: unlike bare `seri`, it named an
+  // intention and cannot be silently taken as "show usage".
+  if (positionals.length === 0 && values.continue !== true && values.resume === undefined) {
+    if (argv.length === 0) {
+      console.log(USAGE);
+      return 0;
+    }
+    return usageError("No task given.");
+  }
+
+  const auth = await handleAuthCommand(positionals, deps);
+  if (auth !== undefined) return auth;
+
+  const config = handleConfigCommand(positionals, deps);
+  if (config !== undefined) return config;
+
+  const ctx: RunContext = {
+    resuming: values.continue === true || values.resume !== undefined,
+    resumeId: values.resume,
+    taskText: positionals.join(" "),
+    sessionsDir: deps.sessionsDir ?? join(getConfigDir(), "sessions"),
+    checkpointsDir: deps.checkpointsDir ?? join(getConfigDir(), "checkpoints"),
+  };
+
+  // Before prepareSession, never after: a bare `/undo` must act on the resume target rather than
+  // mint a session to act on.
+  const slash = handleSlashCommand(ctx);
+  if (slash !== undefined) return slash;
+
+  const prepared = prepareSession(ctx, deps);
+  if (typeof prepared === "number") return prepared;
+
+  const { doneReason, cancelledBy, usage } = await driveLoop(prepared, ctx, deps, maxTurns);
+
+  // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
+  // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are
+  // billed for the calls they did make, and those are precisely the runs whose cost is otherwise
+  // unaccounted for. The mid-stream failure reaches here because loop.ts reads that call's usage
+  // before it returns — 907 tokens, measured, that this line would otherwise print without. The
+  // one call nobody can report is an aborted one: the SDK rejects its usage promise with
+  // AbortError, so a cancelled run reports every completed call before it and not that one. The
+  // one exit this does not cover is a throw escaping driveLoop's `for await` (approvalPrompt
+  // rejecting), which already skips the exit code below too.
+  printUsage(usage);
 
   // The turn was cancelled, so the process still dies the way Ctrl-C makes a process die. Not
   // process.exit: a status is not a death by signal, and `for f in a b c; do seri "$f"; done` only
@@ -618,12 +671,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // with the user's task unanswered, and `seri "big task" && deploy` must not deploy. loop.ts's two
   // stream-error returns end the generator with no `done` at all and land on the same 1 — a throw
   // escaping runLoop outright (`approvalPrompt` rejecting, or findSafeEvictionBoundary, neither of
-  // which is inside a try) ends it with no `done` too, but it comes out of the `for await` above and
-  // never gets here. All of these used to exit 0 and let `seri "…" && next` run next.
+  // which is inside a try) ends it with no `done` too, but it comes out of driveLoop's `for await`
+  // and never gets here. All of these used to exit 0 and let `seri "…" && next` run next.
   //
   // `aborted` does not reach this line today, and that rests on `controller.abort()` having
-  // exactly one caller: the handler above, which sets cancelledBy first, so raiseSignal ran and
-  // did not return. Nothing enforces it — signals.ts names Stage 6's subagents as a second
+  // exactly one caller: driveLoop's cancel handler, which sets cancelledBy first, so raiseSignal
+  // ran and did not return. Nothing enforces it — signals.ts names Stage 6's subagents as a second
   // aborter — and a cancel arriving any other way lands on the 1 below rather than dying by
   // signal. tests/cli/cli.test.ts records that status for the displaced-slot case, but it asserts
   // the same 1 a second aborter would produce, so it will not go red when one is added: revisiting

@@ -12,23 +12,9 @@ import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { toolDefinitions } from "../../src/provider/tools";
 import { onSignalCancel } from "../../src/signals";
 import { loadSession, saveSession, type SessionState } from "../../src/session/session";
+import { fakeRunLoop } from "./fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
-
-// The ~5-line async generator every fake in this file rebuilt by hand: capture what cli.ts passed
-// runLoop, yield the given events (default: a single "no-tool-call" done), and return
-// opts.messages the way the real generator does. `capture()` reads back what was captured —
-// undefined if runLoop was never called — so a test that only needs "was it called" and one that
-// needs the actual opts share the same fake instead of each hand-rolling their own.
-function fakeRunLoop(events: LoopEvent[] = [{ type: "done", reason: "no-tool-call" }]) {
-  let captured: RunLoopOpts | undefined;
-  async function* fake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
-    captured = opts;
-    for (const event of events) yield event;
-    return opts.messages;
-  }
-  return { fake, capture: () => captured };
-}
 
 describe("run (task invocation)", () => {
   const originalKey = process.env.GROQ_API_KEY;
@@ -324,6 +310,187 @@ describe("run (task invocation)", () => {
     expect(logs.join("\n")).toContain("✓ write_file done");
   });
 
+  // The other half of "a new event member must not fall through printEvent silently": the SDK has
+  // been retrying a rejected call twice, 2 s apart, for as long as this repo has called it, and the
+  // user saw a turn that had simply stopped. The attempt number is the whole payload — loop.ts's
+  // event carries no error and no delay because the SDK's only per-attempt hook carries neither —
+  // so it is the one thing this line has to get onto the screen.
+  test("a retry is announced with its attempt number instead of looking like a hung turn", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      { type: "retry", attempt: 1 },
+      { type: "retry", attempt: 2 },
+      { type: "done", reason: "no-tool-call" },
+    ]);
+
+    const { logs } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.filter((line) => line.includes("retrying"))).toEqual([
+      "\n↻ rate-limited or unavailable; retrying (attempt 1)",
+      "\n↻ rate-limited or unavailable; retrying (attempt 2)",
+    ]);
+  });
+
+  // Every field of LanguageModelUsage spelled out because the type requires all five, and only the
+  // two the summary sums are given values: a helper that filled in the details would be asserting
+  // on fields no line of cli.ts reads. Both are `number | undefined` in the SDK's own type — the
+  // undefined case is a provider that did not report that half, and it is a case the summary has
+  // to be able to say nothing about.
+  function usageEvent(inputTokens: number | undefined, outputTokens: number | undefined): LoopEvent {
+    return {
+      type: "usage",
+      usage: {
+        inputTokens,
+        inputTokenDetails: { noCacheTokens: undefined, cacheReadTokens: undefined, cacheWriteTokens: undefined },
+        outputTokens,
+        outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+        totalTokens: (inputTokens ?? 0) + (outputTokens ?? 0),
+      },
+    };
+  }
+
+  // One line for the whole run, not one per turn: the loop emits usage per completed model call by
+  // design, and a twenty-turn task would otherwise print twenty rows nobody can add up. The
+  // compacted event's usage is in the same total because the summariser's round-trip is billed like
+  // any other — that is why loop.ts stopped dropping it.
+  test("sums the run's usage events into one end-of-run summary line", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      usageEvent(120, 30),
+      usageEvent(200, 45),
+      { type: "done", reason: "no-tool-call" },
+    ]);
+
+    const { code, logs } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(0);
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["\n(tokens: 320 in, 75 out)"]);
+  });
+
+  // "0 out" is a measurement, and there was no measurement: a provider that reports input tokens
+  // and omits output ones is not a provider that measured zero output. The half that was reported
+  // is still worth printing — dropping the whole line would throw away a real number to avoid an
+  // invented one.
+  test("prints only the half a provider reported when it reported one and not the other", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([usageEvent(320, undefined), { type: "done", reason: "no-tool-call" }]);
+
+    const { logs } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["\n(tokens: 320 in)"]);
+  });
+
+  // The other side of that line, and the reason it is keyed on undefined rather than on 0: a call
+  // that really did report zero output tokens reported something, and the summary says so.
+  test("prints a reported zero, which is a measurement rather than a missing field", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([usageEvent(320, 0), { type: "done", reason: "no-tool-call" }]);
+
+    const { logs } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["\n(tokens: 320 in, 0 out)"]);
+  });
+
+  // The reason the summary is conditional. Every other test in this file drives a fake that emits no
+  // usage at all, and a run that made no model call has no spend to report — a "(tokens: 0 in, 0
+  // out)" on the end of a run whose provider failed before the first request would be a number the
+  // user could not act on and a new line on paths that never call the model.
+  test("prints no token summary for a run that reported no usage", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop();
+
+    const { logs } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual([]);
+  });
+
+  // Tokens spent before a failure are billed exactly like tokens spent before an answer, so the
+  // summary belongs on the way out of every run that made a call — not inside the success branch.
+  // The usage-then-error sequence below is one the real loop emits, not one only a fake can
+  // produce: loop.ts reads the usage of a call that streamed and then failed before it returns
+  // (loop.test.ts, "emits the usage of a call that streamed text and then failed mid-stream").
+  // The cancelled run is the same decision and cannot be tested here: it ends in raiseSignal, which
+  // would kill the test runner.
+  test("still prints the summary for a run that ended in an error", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      usageEvent(120, 30),
+      { type: "error", error: "AI_APICallError: Invalid API Key" },
+    ]);
+
+    const { code, logs } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(1);
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["\n(tokens: 120 in, 30 out)"]);
+  });
+
+  // captureLogs collects console.log's arguments, and a defect that is precisely a missing line
+  // boundary cannot fail such an assertion: capturing per call, or trimming, or splitting on "\n"
+  // all re-insert the boundary being asserted about. This reconstructs the byte stream instead —
+  // console.log's newline included, and the model's own text, which goes out through
+  // process.stdout.write and never reaches console.log at all.
+  async function captureStdout(invoke: () => Promise<number>): Promise<{ code: number; stdout: string }> {
+    let stdout = "";
+    const originalLog = console.log;
+    const originalWrite = process.stdout.write;
+    const originalError = console.error;
+    console.log = (msg: string) => {
+      stdout += `${String(msg)}\n`;
+    };
+    process.stdout.write = ((chunk: string) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    console.error = () => {};
+    try {
+      return { code: await invoke(), stdout };
+    } finally {
+      console.log = originalLog;
+      process.stdout.write = originalWrite;
+      console.error = originalError;
+    }
+  }
+
+  // The path the end-of-run summary was built for is the one where nothing else ends the line: a
+  // call that streamed text and then failed prints its partial text with no trailing newline, the
+  // error goes to stderr, and there is no `done` event to carry printEvent's leading "\n". Measured
+  // before the fix, on raw stdout: "partial answer(tokens: 900 in, 7 out)\n" — a consumer piping
+  // stdout for the model's answer got the token count welded onto its last line.
+  test("the token summary starts on its own line when a mid-stream failure left stdout mid-line", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      { type: "text-delta", text: "partial answer" },
+      usageEvent(900, 7),
+      { type: "error", error: "AI_APICallError: upstream connection reset" },
+    ]);
+
+    const { code, stdout } = await captureStdout(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(1);
+    expect(stdout).toContain("partial answer\n(tokens: 900 in, 7 out)\n");
+  });
+
   // A provider failure exited 0, so `seri "…" && next-thing` ran next-thing on a turn that never
   // happened. The discriminator is the generator ending with no `done` event, which loop.ts's two
   // stream-error returns are the only exits to do.
@@ -371,6 +538,38 @@ describe("run (task invocation)", () => {
     );
 
     expect(code).toBe(0);
+  });
+
+  // `run(["config", …])` had no test at all, on the one path that carries a secret. What a
+  // fall-through here costs is not an unhandled subcommand: `config` reaching the task path mints a
+  // session and persists `set GROQ_API_KEY gsk_live_…` — the user's key, in full — as the task text
+  // in the session JSON. So the empty sessions dir is asserted alongside the exit code, which on
+  // its own cannot tell "config list succeeded" from "config was never handled".
+  test("a config subcommand returns configCommand's exit code and never reaches the task path", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const calls: { args: string[]; configDir: string }[] = [];
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["config", "set", "GROQ_API_KEY", "gsk_live_secret"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        authConfigDir: tmpConfigRoot,
+        configCommand: (args, configDir) => {
+          calls.push({ args, configDir });
+          // Not 0: the task path exits 0 too, so only a code no other path produces distinguishes
+          // "configCommand's answer was returned" from "something else answered".
+          return 2;
+        },
+      }),
+    );
+
+    expect(code).toBe(2);
+    expect(calls).toEqual([{ args: ["set", "GROQ_API_KEY", "gsk_live_secret"], configDir: tmpConfigRoot }]);
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
   });
 
   // A task whose first word happens to name an Object.prototype member is an ordinary task, and it
