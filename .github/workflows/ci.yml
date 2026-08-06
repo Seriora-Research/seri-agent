@@ -1,17 +1,35 @@
 name: CI
 
+# `push` is restricted to main on purpose. With a bare `push:` alongside `pull_request:`,
+# every commit on a branch with an open PR ran the whole three-OS matrix twice — six jobs
+# per SHA, two of every result. A branch without a PR now gets no CI until the PR opens,
+# which is the deliberate trade: the PR is where the result is read anyway.
 on:
   push:
+    branches: [main]
   pull_request:
+
+# Supersede a run when its ref gets another push, except on main, where every commit keeps
+# its own recorded build rather than being cancelled by the next merge.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build:
     strategy:
+      # Matches release.yml, which already sets this. Without it one runner failing takes the
+      # other two down with it, so a single failure — including a GitHub-side one that hits
+      # before any step runs — is reported as three, pointing at platforms that were fine.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Comfortably above the slowest real run measured on this matrix (windows, ~11 min). The
+    # default is 360, so a hung job otherwise holds a runner for six hours.
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
