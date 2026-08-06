@@ -54,7 +54,7 @@ describe("configCommand", () => {
   test("set without a value returns non-zero and writes nothing", () => {
     const code = configCommand(["set", "GROQ_API_KEY"], configDir);
 
-    expect(code).toBe(1);
+    expect(code).toBe(2);
     expect(errors.length).toBeGreaterThan(0);
     expect(loadConfig(configDir)).toEqual({});
   });
@@ -62,7 +62,7 @@ describe("configCommand", () => {
   test("set rejects an empty value rather than storing a key readers treat as unset", () => {
     const code = configCommand(["set", "GROQ_API_KEY", ""], configDir);
 
-    expect(code).toBe(1);
+    expect(code).toBe(2);
     expect(loadConfig(configDir)).toEqual({});
   });
 
@@ -121,7 +121,7 @@ describe("configCommand", () => {
   test("an unknown subcommand prints usage and returns non-zero", () => {
     const code = configCommand(["bogus"], configDir);
 
-    expect(code).toBe(1);
+    expect(code).toBe(2);
     expect(errors.join("\n")).toContain("Usage:");
   });
 });

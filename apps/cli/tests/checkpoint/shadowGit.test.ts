@@ -256,7 +256,7 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
       };
       userGit(["init", "-q"]);
       userGit(["-c", "user.name=u", "-c", "user.email=u@e", "add", "-A"]);
-      userGit(["-c", "user.name=u", "-c", "user.email=u@e", "commit", "-q", "-m", "initial"]);
+      userGit(["-c", "user.name=u", "-c", "user.email=u@e", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "initial"]);
 
       const captured = [
         userGit(["status", "--porcelain"]),

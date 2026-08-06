@@ -15,20 +15,14 @@ export type LoopEvent =
   // "the generator finished, why?" should not have to handle two shapes to answer it. It is
   // deliberately not an `error` either — a user-initiated cancel is not a failure, and printEvent
   // routes error to stderr, which would put "AbortError" inside whatever consumed the user's pipe.
-  | { type: "done"; reason: "no-tool-call" | "max-iterations" | "token-budget" | "aborted" }
+  | { type: "done"; reason: "no-tool-call" | "max-iterations" | "aborted" }
   | { type: "error"; error: string };
 
 export type ApprovalPrompt = (toolName: string, args: unknown, signal?: AbortSignal) => Promise<boolean>;
 
-const DEFAULT_MAX_ITERATIONS = 50;
-// A cumulative spend guard over BILLED tokens, not a context limit — `contextWindowSize` and
-// compaction are what bound the context. `totalTokens` sums each step's own input+output, and
-// every step's input re-counts the whole conversation prefix, so a session parked just under the
-// compaction threshold (~65k input on a 131k window) adds ~65k per step: at 100_000 two steps
-// exhausted it. Since a cap now means "the turn did not finish" (exit 1, see cli.ts), that made
-// exit 1 the ordinary outcome of a multi-turn session. Hence a number far above the context
-// window rather than a fraction of it.
-const DEFAULT_TOKEN_BUDGET = 1_000_000;
+// Hermes' documented default (see docs-tmp research); now reachable from the CLI via
+// --max-turns, where it was previously hardcoded and unconfigurable.
+const DEFAULT_MAX_ITERATIONS = 500;
 // llama-3.3-70b-versatile's (the current default model, src/provider/groq.ts) context
 // window; confirmed via console.groq.com/docs/models, 2026-08-02. Fully overridable via
 // opts.contextWindowSize.
@@ -81,7 +75,6 @@ export async function* runLoop(opts: {
   permissionMode: PermissionMode;
   approvalPrompt?: ApprovalPrompt;
   maxIterations?: number;
-  tokenBudget?: number;
   system?: string;
   contextWindowSize?: number;
   compactionThreshold?: number;
@@ -89,7 +82,6 @@ export async function* runLoop(opts: {
   signal?: AbortSignal;
 }): AsyncGenerator<LoopEvent> {
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
-  const tokenBudget = opts.tokenBudget ?? DEFAULT_TOKEN_BUDGET;
   const contextWindowSize = opts.contextWindowSize ?? DEFAULT_CONTEXT_WINDOW_SIZE;
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
   const preserveRecentMessages = opts.preserveRecentMessages ?? DEFAULT_PRESERVE_RECENT_MESSAGES;
@@ -104,7 +96,6 @@ export async function* runLoop(opts: {
     }),
   ) as ToolSet;
 
-  let totalTokens = 0;
   let lastInputTokens = 0;
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
@@ -125,7 +116,6 @@ export async function* runLoop(opts: {
         try {
           const compacted = await compactMessages(messages, opts.model, evictBoundary, opts.signal);
           messages.splice(0, messages.length, ...compacted.messages);
-          totalTokens += compacted.usage.totalTokens ?? 0;
           yield { type: "compacted", summary: compacted.summary, evictedCount: compacted.evictedCount };
           yield { type: "messages-updated", messages: [...messages] };
         } catch (err) {
@@ -171,7 +161,6 @@ export async function* runLoop(opts: {
         }
       }
       const resultUsage = await result.usage;
-      totalTokens += resultUsage.totalTokens ?? 0;
       lastInputTokens = resultUsage.inputTokens ?? 0;
     } catch (err) {
       // This is the path a mid-stream cancel actually takes, measured against ai@7.0.48: the
@@ -327,11 +316,6 @@ export async function* runLoop(opts: {
     // three sites could be written without.
     if (unanswered.length > 0) {
       yield { type: "done", reason: "aborted" };
-      return;
-    }
-
-    if (totalTokens > tokenBudget) {
-      yield { type: "done", reason: "token-budget" };
       return;
     }
   }

@@ -289,10 +289,14 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       spawnSync("git", ["init", "-q"], { cwd: nested, windowsHide: true });
       writeFileSync(join(nested, "a.txt"), "v1\n");
       spawnSync("git", ["add", "-A"], { cwd: nested, windowsHide: true });
-      spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"], {
-        cwd: nested,
-        windowsHide: true,
-      });
+      spawnSync(
+        "git",
+        ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "x"],
+        {
+          cwd: nested,
+          windowsHide: true,
+        },
+      );
 
       const snapshot = checkpointer();
       snapshot(mutation({ toolCallId: "c1" }));

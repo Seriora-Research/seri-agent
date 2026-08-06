@@ -21,7 +21,7 @@ export function configCommand(args: string[], configDir: string): number {
     // reader treats as unset — reject it rather than storing that contradiction.
     if (!key || !value) {
       console.error(USAGE);
-      return 1;
+      return 2;
     }
     setConfigValue(key, value, configDir);
     console.log(`Saved ${key} to ${join(configDir, "config.json")}`);
@@ -47,12 +47,12 @@ export function configCommand(args: string[], configDir: string): number {
   if (subcommand === "unset") {
     if (!key) {
       console.error(USAGE);
-      return 1;
+      return 2;
     }
     console.log(unsetConfigValue(key, configDir) ? `Removed ${key}` : `${key} was not set`);
     return 0;
   }
 
   console.error(USAGE);
-  return 1;
+  return 2;
 }
