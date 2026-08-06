@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -212,13 +213,20 @@ describe("withVerification (consecutive edit failures)", () => {
 // The only test in this feature that spawns a real process, so it carries both guards the repo
 // already needed for the same symptom (tests/tools/bash.test.ts:17,27,37,
 // tests/tools/powershell.test.ts:4,9, tests/provider/tools.test.ts:90,92,95): a skipIf on the
-// thing it needs, and a 15000 ms margin for a cold start.
+// things it needs, probed by actually running them, and a 15000 ms margin for a cold start.
 //
 // It runs the repo's own installed tsc rather than a stand-in, so the diagnostic that reaches the
 // tool result is one a real compiler emitted, in a real spawned process, parsed by the real parser.
+//
+// The `bun` half of the guard is not hypothetical and was not derived from the others: this test
+// failed under WSL, where bun is installed at ~/.bun/bin/bun but is NOT on a non-interactive
+// shell's PATH, so `spawnCollect("bun", ...)` came back "Executable not found in $PATH". The
+// production path degrades correctly there — the write stands and the outcome says exactly that —
+// but the assertion below needs a real check to have run, so it is skipped instead.
 const TSC = join(import.meta.dir, "..", "..", "node_modules", "typescript", "lib", "tsc.js");
+const BUN_ON_PATH = spawnSync("bun", ["--version"], { encoding: "utf8" }).status === 0;
 
-describe.skipIf(!existsSync(TSC))("withVerification (end to end, real check process)", () => {
+describe.skipIf(!existsSync(TSC) || !BUN_ON_PATH)("withVerification (end to end, real check process)", () => {
   let project: string;
 
   beforeEach(() => {
