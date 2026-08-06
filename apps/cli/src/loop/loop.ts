@@ -21,13 +21,58 @@ export type LoopEvent =
 export type ApprovalPrompt = (toolName: string, args: unknown, signal?: AbortSignal) => Promise<boolean>;
 
 const DEFAULT_MAX_ITERATIONS = 50;
-const DEFAULT_TOKEN_BUDGET = 100_000;
+// A cumulative spend guard over BILLED tokens, not a context limit — `contextWindowSize` and
+// compaction are what bound the context. `totalTokens` sums each step's own input+output, and
+// every step's input re-counts the whole conversation prefix, so a session parked just under the
+// compaction threshold (~65k input on a 131k window) adds ~65k per step: at 100_000 two steps
+// exhausted it. Since a cap now means "the turn did not finish" (exit 1, see cli.ts), that made
+// exit 1 the ordinary outcome of a multi-turn session. Hence a number far above the context
+// window rather than a fraction of it.
+const DEFAULT_TOKEN_BUDGET = 1_000_000;
 // llama-3.3-70b-versatile's (the current default model, src/provider/groq.ts) context
 // window; confirmed via console.groq.com/docs/models, 2026-08-02. Fully overridable via
 // opts.contextWindowSize.
 const DEFAULT_CONTEXT_WINDOW_SIZE = 131_072;
 const DEFAULT_COMPACTION_THRESHOLD = 0.5;
 const DEFAULT_PRESERVE_RECENT_MESSAGES = 20;
+
+const MAX_SERIALISED_ERROR_LENGTH = 500;
+
+// String() of an Error is `${name}: ${message}` — one line, and exactly what the four sites below
+// already produced, so nothing changes for an Error. What changes is the other branch: a provider
+// that hands over a plain object (Groq rejects with {"error":{"message":…,"type":…}}) stringified
+// to the literal "[object Object]", which names neither the failure nor its origin. JSON.stringify
+// rather than plucking `.message`: the payload shape is the provider's, not ours, and guessing at
+// one field is how the next provider gets "[object Object]" back.
+//
+// The try is not padding: JSON.stringify throws on a cyclic value, and the site that renders a
+// thrown tool failure (below, in the template literal) is not inside any try — measured, a tool
+// rejecting with a self-referencing object took `TypeError: JSON.stringify cannot serialize cyclic
+// structures.` straight out of the generator and into cli.ts as an unhandled rejection, turning one
+// reportable tool error into a dead process. The fallback is the "[object Object]" this function
+// exists to avoid, which is still strictly better than not returning at all — for every value whose
+// `String()` is defined, which is every value a provider or an in-repo tool produces. A value that
+// defeats JSON.stringify AND String() (a null-prototype cyclic object) still escapes; guarding that
+// is padding for a case nothing here can reach.
+function errorText(err: unknown): string {
+  if (err instanceof Error) return String(err);
+  // Already the message. JSON.stringify would hand the user and the model `"ENOENT: no such file"`,
+  // quotes included, for a tool that rejected with a bare string.
+  if (typeof err === "string") return err;
+  try {
+    const serialised = JSON.stringify(err) ?? String(err);
+    // Nothing in reach produces this today — every AI SDK provider error is an Error subclass and
+    // every in-repo tool throws Error — so this fixes no live bug. It caps a payload whose size is
+    // the provider's to choose, at a site that puts the result on stderr AND into the model's billed
+    // context as the tool result, which is the shape of the 66-line blob onError was silenced for
+    // above. Here so the branch cannot become that defect if it ever is reached.
+    return serialised.length > MAX_SERIALISED_ERROR_LENGTH
+      ? `${serialised.slice(0, MAX_SERIALISED_ERROR_LENGTH)}… (truncated from ${serialised.length} characters)`
+      : serialised;
+  } catch {
+    return String(err);
+  }
+}
 
 export async function* runLoop(opts: {
   model: LanguageModel;
@@ -91,7 +136,7 @@ export async function* runLoop(opts: {
             yield { type: "done", reason: "aborted" };
             return;
           }
-          yield { type: "error", error: String(err) };
+          yield { type: "error", error: errorText(err) };
         }
       }
     }
@@ -106,6 +151,13 @@ export async function* runLoop(opts: {
         messages,
         system: opts.system,
         abortSignal: opts.signal,
+        // ai@7.0.48 defaults this to `({ error }) => console.error(error)` (dist/index.js:8792),
+        // which put 66 lines of raw APICallError — request body, every response header including
+        // set-cookie, a node_modules stack — on stderr from inside a generator this repo
+        // documents as never touching stdout/stdin. Measured for a doStream that rejects — the case
+        // the blob came from: the same error also arrives on fullStream as an `error` part and is
+        // yielded below, so nothing was silenced there that the consumer does not still get.
+        onError: () => {},
       });
       for await (const part of result.fullStream) {
         if (part.type === "text-delta") {
@@ -114,7 +166,7 @@ export async function* runLoop(opts: {
         } else if (part.type === "tool-call") {
           toolCalls.push({ toolCallId: part.toolCallId, toolName: part.toolName, input: part.input });
         } else if (part.type === "error") {
-          yield { type: "error", error: String(part.error) };
+          yield { type: "error", error: errorText(part.error) };
           return;
         }
       }
@@ -135,7 +187,7 @@ export async function* runLoop(opts: {
         yield { type: "done", reason: "aborted" };
         return;
       }
-      yield { type: "error", error: String(err) };
+      yield { type: "error", error: errorText(err) };
       return;
     }
 
@@ -220,7 +272,7 @@ export async function* runLoop(opts: {
         // Without this the cancel would be recorded as a tool that failed and the loop would go on
         // to run the next one — which is precisely what the user pressed Ctrl-C to stop.
         if (opts.signal?.aborted) break;
-        const error = `Tool "${call.toolName}" threw during execution: ${String(err)}`;
+        const error = `Tool "${call.toolName}" threw during execution: ${errorText(err)}`;
         yield { type: "error", error };
         toolResults.push({
           type: "tool-result",

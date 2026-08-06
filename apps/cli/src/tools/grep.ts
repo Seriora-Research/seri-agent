@@ -1,4 +1,4 @@
-import { MAX_FILE_RESULTS, MAX_RESULTS, outputLines, runRipgrep } from "./runRipgrep";
+import { assertSearchPath, MAX_FILE_RESULTS, MAX_RESULTS, outputLines, runRipgrep } from "./runRipgrep";
 
 // rg emits `text` when a value is valid UTF-8 and falls back to base64 `bytes` when it is
 // not, for both matched lines and file paths.
@@ -35,6 +35,8 @@ export async function grep(
   opts: { path: string; glob?: string; mode?: GrepMode },
   signal?: AbortSignal,
 ): Promise<GrepResult> {
+  await assertSearchPath(opts.path);
+
   // Defaults to file names for the same reason Claude Code does: it answers "where does this
   // live" — most of what a search is actually for — at a fraction of the tokens, and a list
   // of paths fits under the cap far more often than a list of matched lines does.

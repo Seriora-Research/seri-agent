@@ -55,7 +55,7 @@ seri config set GROQ_API_KEY <your-key>
 seri "explain what this repo does"
 ```
 
-`seri --version` prints the installed version.
+`seri --help` prints the usage text, and `seri --version` the installed version.
 
 The first search of each release unpacks its bundled ripgrep to `%LOCALAPPDATA%\seri\rg\<key>\`
 on Windows, or `~/.seri/rg/<key>/` elsewhere. Deleting that directory is safe — the next search

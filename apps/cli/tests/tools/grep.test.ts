@@ -32,6 +32,18 @@ describe("grep (default mode)", () => {
     expect(result.truncated).toBe(false);
   });
 
+  // Mirrors glob.test.ts: the guard has two call sites, and a test covering one of them would let
+  // the other regress silently.
+  test("a missing path is reported as a missing path, not as a ripgrep exit code", async () => {
+    const missing = join(tmpDir, "does-not-exist");
+
+    const error = (await grep("needle", { path: missing }).catch((e: Error) => e)) as Error;
+
+    expect(error.message).toBe(`Path not found: ${missing}`);
+    expect(error.message).not.toContain("rg exited with code");
+    expect(error.message).not.toContain("IO error for operation");
+  });
+
   test("returns no files when nothing matches", async () => {
     const result = await grep("nomatchxyz", { path: tmpDir });
 

@@ -82,7 +82,7 @@ function steps(args: string[]): number {
 // `valueOf`, `hasOwnProperty` and `isPrototypeOf` did the same, and `__proto__` resolved to an
 // object and crashed with "command is not a function". A Map has no prototype chain to walk, so
 // the hazard is gone from every call site rather than from the ones that remember Object.hasOwn.
-const SLASH_COMMANDS = new Map<string, SlashCommand>([
+export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   ["/mode", { accepts: (args) => args.length === 0, run: cycleModeCommand }],
   ["/undo", { accepts: isStepCount, run: undoCommand }],
   // A sha and nothing else. `seri "/restore the header spacing"` is a task.
@@ -302,7 +302,13 @@ function printEvent(event: LoopEvent): void {
       console.log(`\n→ ${event.name}(${JSON.stringify(event.args)})`);
       break;
     case "tool-result":
-      console.log(`✓ ${event.name} done`);
+      // `edit` returns the edited text and writes nothing (provider/tools.ts's
+      // FS_MUTATING_TOOL_NAMES comment), so a bare "done" reads as a file that changed — observed
+      // live, with the model moving on as though it had. Named here rather than in the loop, which
+      // knows no tool names by design.
+      console.log(
+        event.name === "edit" ? "✓ edit done (text returned, nothing written)" : `✓ ${event.name} done`,
+      );
       break;
     case "permission-denied":
       console.log(`✗ ${event.name} blocked`);
@@ -319,9 +325,43 @@ function printEvent(event: LoopEvent): void {
   }
 }
 
+// stdout and exit 0, deliberately unlike config/commands.ts, which prints its usage to stderr and
+// returns 1: that is for a bad invocation, where the shell should see a failure. `--help` is a
+// request that was served, and it is routinely piped, so the text belongs on stdout.
+// `--selftest` is left out on purpose — cli.ts calls it an undocumented build-verification flag.
+const USAGE = `Usage:
+  seri <task>                     send a task to the model
+  seri --resume [id] [task]       continue the most recent (or named) session
+  seri [--resume <id>] /mode      cycle the permission mode
+  seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha>
+  seri login | signup | logout
+  seri config set|list|unset
+  seri --version | --help`;
+
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
-  if (argv.length === 0 || argv.includes("--version") || argv.includes("-v")) {
-    if (argv.includes("--version") || argv.includes("-v")) console.log(`seri ${pkg.version}`);
+  // Bare `seri` is a placeholder for the interactive TUI that gates the v0.1.0 release. Until then
+  // it prints the same usage as --help rather than exiting silently — a line the TUI entry point
+  // replaces, not a decision that bare `seri` means "print usage".
+  //
+  // The flag counts only in first position, here and for --version and --selftest below.
+  // `includes` matched it anywhere in argv, so `seri fix the --help output` printed usage and
+  // exited 0 with the task never sent — measured on the compiled binary, and an unquoted
+  // multi-word task is a supported form since parseTaskArgs joins argv. Requiring the flag to be
+  // the whole invocation fixed that and reopened it one argument away: `seri -h config`,
+  // `seri --help --resume` and `seri --version --quiet` all failed the length check, fell through
+  // to the task path, and wrote a session file and billed a turn to answer a request for the usage
+  // text. Position separates the two for a flag in first position — a task never starts with one.
+  // It does not separate them for a flag behind another: `seri --resume --help` is a documented
+  // form (USAGE above), argv[0] is `--resume` so this gate misses, and parseTaskArgs rejects
+  // `--help` as a session id for its leading dash and joins it into the task — the most recent
+  // session resumes and a turn is billed. Deliberately not gated a fourth time here; the per-flag
+  // checks are the structural problem .claude/loops/cli-command-table/PROBLEM.md exists to fix.
+  if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
+    console.log(USAGE);
+    return 0;
+  }
+  if (argv[0] === "--version" || argv[0] === "-v") {
+    console.log(`seri ${pkg.version}`);
     return 0;
   }
 
@@ -330,7 +370,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // it for real is the only way to catch that from a shipped artifact; the release workflow
   // runs this on every platform. Greps a throwaway file rather than the cwd so the result
   // never depends on what happens to be in the directory seri was launched from.
-  if (argv.includes("--selftest")) {
+  if (argv[0] === "--selftest") {
     const grepFn = deps.grep ?? grepReal;
     try {
       const dir = mkdtempSync(join(tmpdir(), "seri-selftest-"));
@@ -472,6 +512,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     controller.abort();
   });
 
+  let doneReason: Extract<LoopEvent, { type: "done" }>["reason"] | undefined;
   try {
     for await (const event of runLoopFn({
       model,
@@ -507,6 +548,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
           );
         }
       }
+      if (event.type === "done") doneReason = event.reason;
       printEvent(event);
     }
   } finally {
@@ -521,10 +563,27 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // breaks out of the loop when the child was killed BY SIGINT — exiting 0 here would turn one
   // Ctrl-C into one press per iteration, the exact regression signals.ts's re-raise exists to
   // prevent. raiseSignal is that same re-raise, shared rather than re-implemented, and it does not
-  // return, so the 0 below is for every other way this function ends.
+  // return, so the status below is for every other way this function ends.
   if (cancelledBy !== undefined) raiseSignal(cancelledBy);
 
-  return 0;
+  // Not "an error event was seen": loop.ts yields `error` and carries on at three sites, and a run
+  // that recovered from a failed tool call and then answered the user did not fail. The status
+  // answers one question — did the turn finish? — and `no-tool-call` is the only reason that means
+  // it did. A cap is not a finish: `max-iterations` and `token-budget` yield `done` having stopped
+  // with the user's task unanswered, and `seri "big task" && deploy` must not deploy. loop.ts's two
+  // stream-error returns end the generator with no `done` at all and land on the same 1 — a throw
+  // escaping runLoop outright (`approvalPrompt` rejecting, or findSafeEvictionBoundary, neither of
+  // which is inside a try) ends it with no `done` too, but it comes out of the `for await` above and
+  // never gets here. All of these used to exit 0 and let `seri "…" && next` run next.
+  //
+  // `aborted` does not reach this line today, and that rests on `controller.abort()` having
+  // exactly one caller: the handler above, which sets cancelledBy first, so raiseSignal ran and
+  // did not return. Nothing enforces it — signals.ts names Stage 6's subagents as a second
+  // aborter — and a cancel arriving any other way lands on the 1 below rather than dying by
+  // signal. tests/cli/cli.test.ts records that status for the displaced-slot case, but it asserts
+  // the same 1 a second aborter would produce, so it will not go red when one is added: revisiting
+  // this line is on whoever adds it.
+  return doneReason === "no-tool-call" ? 0 : 1;
 }
 
 if (import.meta.main) {

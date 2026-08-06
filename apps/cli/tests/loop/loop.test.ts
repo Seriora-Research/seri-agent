@@ -204,6 +204,34 @@ describe("runLoop", () => {
     expect(events.at(-1)).toEqual({ type: "done", reason: "token-budget" });
   });
 
+  // Every other test here hands runLoop its own `tokenBudget`, so nothing observed DEFAULT_TOKEN_BUDGET
+  // and a typo or a revert of it was invisible to the suite. Asserted through the loop rather than by
+  // exporting the number: the two runs below straddle 1_000_000 exactly — 1_000_001 of mocked usage
+  // must stop the run, 1_000_000 must not — so a smaller default goes red on the second and a larger
+  // one on the first. Mocked usage totals, not a real 1M-token fixture; the loop only ever reads the
+  // provider's reported numbers.
+  test("with no tokenBudget option the run stops at the 1_000_000-token default", async () => {
+    const tools = makeTools(async () => "ok");
+    const overModel = new MockLanguageModelV4({
+      doStream: async () => streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" }, usage(500_000, 500_001))),
+    });
+    const over = await collect(runLoop({ model: overModel, tools, messages: baseMessages, permissionMode: "auto" }));
+
+    expect(overModel.doStreamCalls).toHaveLength(1);
+    expect(over.at(-1)).toEqual({ type: "done", reason: "token-budget" });
+
+    // Exactly at the budget is not over it, so this run is allowed to end the other way. maxIterations
+    // caps it at one step, which is also what keeps a default lower than 1_000_000 from passing here.
+    const atModel = new MockLanguageModelV4({
+      doStream: async () => streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" }, usage(500_000, 500_000))),
+    });
+    const at = await collect(
+      runLoop({ model: atModel, tools, messages: baseMessages, permissionMode: "auto", maxIterations: 1 }),
+    );
+
+    expect(at.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
+  });
+
   test("yields messages-updated after appending the assistant message and after appending tool results", async () => {
     const tools = makeTools(async () => "ok");
     const model = new MockLanguageModelV4({
@@ -271,6 +299,122 @@ describe("runLoop", () => {
 
     expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
     expect(model.doStreamCalls).toHaveLength(2);
+  });
+
+  // ai@7.0.48 defaults streamText's onError to `({ error }) => console.error(error)`
+  // (dist/index.js:8792), so every provider failure put Bun's inspection of the whole error object
+  // — request body, every response header including set-cookie, a node_modules stack — on stderr
+  // from inside the generator AGENTS.md documents as never touching stdout/stdin. The same error
+  // arrives on fullStream and is yielded below, so that print was a duplicate, not the only report.
+  test("a provider error is surfaced as an event and never printed by the loop", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new Error("boom from provider");
+      },
+    });
+    const printed: unknown[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      printed.push(args[0]);
+    };
+    let events: LoopEvent[];
+    try {
+      events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(printed).toEqual([]);
+    // Proves the loop really ran and really reported the failure, so a green `printed` can only
+    // mean the print was suppressed rather than that nothing happened.
+    expect(events).toEqual([{ type: "error", error: "Error: boom from provider" }]);
+    expect(events.find((e) => e.type === "done")).toBeUndefined();
+  });
+
+  // The payload is verbatim the `responseBody` of a live Groq 401 — a provider is free to reject
+  // with a plain object, and String() of one is "[object Object]", which names neither the failure
+  // nor its origin.
+  test("a non-Error provider error renders its payload instead of [object Object]", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw { error: { message: "tool call validation failed", type: "invalid_request_error" } };
+      },
+    });
+    const events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent?.error).toContain("tool call validation failed");
+    expect(errorEvent?.error).not.toBe("[object Object]");
+
+    // A bare string is the other non-Error shape in reach, and JSON.stringify wraps it in quotes:
+    // a rejection of "ENOENT: no such file" rendered as `"ENOENT: no such file"`, quotes included,
+    // both to the user and into the model's context.
+    const stringModel = new MockLanguageModelV4({
+      doStream: async () => {
+        throw "ENOENT: no such file";
+      },
+    });
+    const stringEvents = await collect(
+      runLoop({ model: stringModel, tools: {}, messages: baseMessages, permissionMode: "auto" }),
+    );
+    expect(stringEvents.find((e) => e.type === "error")?.error).toBe("ENOENT: no such file");
+  });
+
+  // JSON.stringify throws on a cyclic value, and the site that renders a thrown tool failure is not
+  // inside any try — a TypeError there escapes the generator and reaches cli.ts as an unhandled
+  // rejection instead of as one error event. Measured against errorText written as a bare
+  // JSON.stringify: this test failed with `TypeError: JSON.stringify cannot serialize cyclic
+  // structures.` thrown out of collect(), with no `done` event at all.
+  test("a tool that throws a circular non-Error value is reported instead of crashing the loop", async () => {
+    const circular: { message: string; self?: unknown } = { message: "tool call validation failed" };
+    circular.self = circular;
+    const tools = makeTools(async () => {
+      throw circular;
+    });
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    const events = await collect(runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }));
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent?.error).toContain('Tool "write_file" threw during execution');
+    expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+  });
+
+  // The tool-failure site puts errorText's output on stderr AND into the model's context as the
+  // tool result, so an uncapped JSON.stringify of an arbitrary payload is the same shape as the
+  // 66-line APICallError blob onError was silenced for. Nothing in reach throws a non-Error today
+  // (see the cap's comment in loop.ts), so this pins the cap itself rather than a live failure.
+  test("an oversized non-Error tool failure is truncated instead of serialised whole", async () => {
+    const payload = { detail: "x".repeat(5_000) };
+    const tools = makeTools(async () => {
+      throw payload;
+    });
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    const events = await collect(runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }));
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent?.error).toContain('Tool "write_file" threw during execution');
+    expect(errorEvent?.error).toContain("truncated");
+    expect(errorEvent?.error?.length).toBeLessThan(700);
+    // The head of the payload survives, so the cap shortens the report rather than replacing it.
+    expect(errorEvent?.error).toContain('{"detail":"xxx');
+
+    // The same string is what the model is billed to read on its next turn, which is the half the
+    // stderr line above does not cover.
+    const update = events.find(
+      (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
+        e.type === "messages-updated" && e.messages.at(-1)?.role === "tool",
+    );
+    expect(JSON.stringify(update?.messages.at(-1)).length).toBeLessThan(1_000);
   });
 
   test("compacts history once lastInputTokens crosses the threshold across a ~25-turn run, and a pre-compaction fact survives via the summary", async () => {

@@ -8,7 +8,7 @@ import type { ModelMessage } from "ai";
 import pkg from "../../package.json";
 import { checkpointStoreDir, createCheckpointer } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable } from "../../src/checkpoint/shadowGit";
-import { run } from "../../src/cli";
+import { run, SLASH_COMMANDS } from "../../src/cli";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { toolDefinitions } from "../../src/provider/tools";
 import { onSignalCancel } from "../../src/signals";
@@ -88,6 +88,24 @@ describe("run (task invocation)", () => {
     else process.env[key] = original;
   }
 
+  // The save/stub/try/finally/restore block the tests below repeated verbatim. `console.error` is
+  // silenced rather than collected because none of them asserts on it — the ones that reach it (a
+  // provider error, a run stopped at a cap) only ever needed it kept out of the test output. A
+  // test that wants to assert on stderr stubs it itself, as the two that do already have.
+  async function captureLogs(invoke: () => Promise<number>): Promise<{ code: number; logs: string[] }> {
+    const logs: string[] = [];
+    const originalLog = console.log;
+    const originalError = console.error;
+    console.log = (msg: string) => logs.push(String(msg));
+    console.error = () => {};
+    try {
+      return { code: await invoke(), logs };
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+  }
+
   beforeEach(() => {
     sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-sessions-"));
     // Redirect the config dir to an empty temp dir so a real config.json on this machine
@@ -120,6 +138,129 @@ describe("run (task invocation)", () => {
 
     expect(code).not.toBe(0);
     expect(errors.length).toBeGreaterThan(0);
+  });
+
+  // `--help` matched nothing in cli.ts, so it fell through to the task path and was sent to the
+  // model as the user message: a session file on disk and a full turn burned (5 tool calls,
+  // observed live) to answer a request for the usage text. The key has to be set, or getGroqModel
+  // throws before saveSession and the last two assertions would pass for the wrong reason.
+  test.each(["--help", "-h"])("%p prints usage without creating a session or calling the model", async (flag) => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const { code, logs } = await captureLogs(() =>
+      run([flag], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(0);
+    const usage = logs.join("\n");
+    expect(usage).toContain("Usage:");
+    // The usage text restates the SLASH_COMMANDS table, whose whole point is that a command is
+    // defined in one place. `toContain("Usage:")` alone let every advertised line be deleted, so
+    // the half of the text that has a table behind it is checked against the table.
+    for (const name of SLASH_COMMANDS.keys()) expect(usage).toContain(name);
+    expect(called).toBe(false);
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
+  // The defect above, one argument away: gating on argv.length meant `seri -h config` — and
+  // `seri --help --resume`, and `seri --version --quiet` — was not "the whole invocation", so it
+  // fell through to the task path and wrote a session file and billed a real turn to answer a
+  // request for the usage text. Position is what the flag actually is, so the gate reads argv[0].
+  test.each(["--help", "-h"])("%p followed by another argument still prints usage", async (flag) => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const { code, logs } = await captureLogs(() =>
+      run([flag, "config"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("Usage:");
+    expect(called).toBe(false);
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
+  // Measured on the compiled binary: `seri fix the --help output` printed usage and exited 0 with
+  // the task never sent, because `includes` matched the flag anywhere in argv. An unquoted
+  // multi-word task is a supported form — parseTaskArgs joins argv, and this file's other tests
+  // invoke run(["do", "a", "task"]) — so the flag only counts when it is the whole invocation.
+  test.each(["--help", "-h"])("a task containing %p is still sent to the model", async (flag) => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const { logs } = await captureLogs(() =>
+      run(["fix", "the", flag, "output"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(called).toBe(true);
+    expect(logs.join("\n")).not.toContain("Usage:");
+  });
+
+  // The same defect in the third flag: `seri fix the --selftest flag` ran the build-verification
+  // selftest and exited before the task was ever sent. The key has to be set here too, or
+  // getGroqModel throws before runLoop and `called` would stay false for the wrong reason.
+  test("a task containing --selftest is still sent to the model", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const { logs } = await captureLogs(() =>
+      run(["fix", "the", "--selftest", "flag"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(called).toBe(true);
+    expect(logs.join("\n")).not.toContain("selftest ok");
+  });
+
+  test("bare seri prints usage instead of exiting silently", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const { code, logs } = await captureLogs(() =>
+      run([], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("Usage:");
+    // Same two guards as the --help case above: with the key set, a fall-through to the task path
+    // would call the model and write a session file rather than failing at getGroqModel.
+    expect(called).toBe(false);
+    expect(readdirSync(sessionsDir)).toEqual([]);
   });
 
   test("constructs runLoop with the expected messages, permissionMode, and tools", async () => {
@@ -272,8 +413,9 @@ describe("run (task invocation)", () => {
 
     const originalLog = console.log;
     console.log = () => {};
+    let code: number;
     try {
-      await run(["write", "hello.txt"], {
+      code = await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
         sessionsDir,
@@ -291,7 +433,95 @@ describe("run (task invocation)", () => {
 
     expect(cancelledBy).toBe("SIGINT");
     expect(answer).toBe(false);
+    // `done: "aborted"` reaching cli.ts's final `return` at all means the abort did not come
+    // through cli.ts's own cancel slot, so raiseSignal never ran and the status below is what the
+    // shell sees. Here that shape exists because this fake displaces the slot; in production it
+    // would take a second caller of controller.abort(). Exit 1 is what that shape gets today, and
+    // that is the whole of what this line records.
+    //
+    // It is NOT a guard against that second caller appearing — when Stage 6's subagents add one,
+    // `done: "aborted"` becomes reachable there for real and this test stays green through the
+    // change, because the value asserted here is the value such a change would have to alter to be
+    // caught. Whoever adds an aborter has to decide for themselves whether a non-Ctrl-C abort
+    // should still exit 1 and revisit this assertion; the suite will not raise it for them.
+    expect(code).toBe(1);
   }, 10_000);
+
+  // `✓ edit done` read as a completed file edit for a tool that returns text and writes nothing.
+  // The write_file assertion is the control in the other direction: it goes red if the shared line
+  // is changed instead of branched, which would make every tool claim it wrote nothing. Nothing
+  // else in the suite pins the `✓ <tool> done` format, so this test becomes that pin.
+  test("an edit result is reported as text returned, not as a file written", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      yield { type: "tool-result", name: "edit", result: "edited text" };
+      yield { type: "tool-result", name: "write_file", result: "ok" };
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const { logs } = await captureLogs(() =>
+      run(["edit", "a.txt"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.join("\n")).toContain("nothing written");
+    expect(logs.join("\n")).toContain("✓ write_file done");
+  });
+
+  // A provider failure exited 0, so `seri "…" && next-thing` ran next-thing on a turn that never
+  // happened. The discriminator is the generator ending with no `done` event, which loop.ts's two
+  // stream-error returns are the only exits to do.
+  test("a run that ends without a done event exits non-zero", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    async function* runLoopFake(): AsyncGenerator<LoopEvent> {
+      yield { type: "error", error: "AI_APICallError: Invalid API Key" };
+    }
+
+    const { code } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(1);
+  });
+
+  // A cap is not a finish: the run stopped because it ran out of iterations or tokens, with the
+  // user's task unanswered, so `seri "big task" && deploy` must not deploy. Both reasons yield
+  // `done`, so "the generator ended with no done event" alone would have exited 0 here.
+  test.each(["max-iterations", "token-budget"] as const)("a run that stopped at %s exits non-zero", async (reason) => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    async function* runLoopFake(): AsyncGenerator<LoopEvent> {
+      yield { type: "done", reason };
+    }
+
+    const { code } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(1);
+  });
+
+  // Green before and after, deliberately: this is the negative control that the exit code is not
+  // "any error event ⇒ 1". loop.ts yields `error` and carries on at three sites, and a run that
+  // recovered from a failed tool call and then answered the user did not fail — observed live, a
+  // session printed a read_file ENOENT and completed normally.
+  test("a run that recovered from a tool error still exits 0", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    async function* runLoopFake(): AsyncGenerator<LoopEvent> {
+      yield { type: "error", error: 'Tool "read_file" threw during execution: Error: ENOENT' };
+      yield { type: "done", reason: "no-tool-call" };
+    }
+
+    const { code } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(0);
+  });
 
   // A task whose first word happens to name an Object.prototype member is an ordinary task, and it
   // has to reach the model. Looked up on an object literal, `SLASH_COMMANDS["toString"]` returned
