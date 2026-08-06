@@ -60,6 +60,7 @@
         "tailwindcss": "^4",
       },
       "devDependencies": {
+        "@seri/copy-policy": "workspace:*",
         "@types/node": "^26.0.0",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
