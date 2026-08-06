@@ -422,8 +422,8 @@ describe("run (task invocation)", () => {
 
   // The reason the summary is conditional. Every other test in this file drives a fake that emits no
   // usage at all, and a run that made no model call has no spend to report — a "(tokens: 0 in, 0
-  // out)" on the end of `--continue` with no task would be a number the user could not act on and a
-  // new line on paths that never call the model.
+  // out)" on the end of a run whose provider failed before the first request would be a number the
+  // user could not act on and a new line on paths that never call the model.
   test("prints no token summary for a run that reported no usage", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 

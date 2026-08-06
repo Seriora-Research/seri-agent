@@ -325,9 +325,9 @@ function printEvent(event: LoopEvent): void {
     case "error":
       console.error(event.error);
       break;
-    // All nine LoopEvent members are handled above, so nothing reaches this at runtime. Eight were
-    // before this line was written — adding it is what showed that `messages-updated` had no case
-    // at all. It exists for the tenth: `usage` and `retry` were both added to the union here and both
+    // Every LoopEvent member is handled above, so nothing reaches this at runtime. Not all of them
+    // were before this line was written — adding it is what showed that `messages-updated` had no case
+    // at all. It exists for the next one: `usage` and `retry` were both added to the union here and both
     // would have fallen through this switch in silence, which for a user-facing event means it was
     // simply never printed. `never` is what makes tsc say so at the point the member is added
     // rather than leaving it to be noticed in a session. Compile-time only, with no throw: nothing
@@ -514,9 +514,10 @@ function handleConfigCommand(positionals: string[], deps: CliDeps): number | und
 // What the task path needs after the subcommands have had their say. It extends CommandDirs, so it
 // satisfies the two callees that take one structurally — but it is not handed to them whole:
 // `dirs(ctx)` below narrows it back down at each call. Structural typing makes passing the whole
-// thing legal and silent, and what would ride along is `taskText`, which for `seri config …` is the
-// user's API key. Nothing today spreads or serialises a CommandDirs; the point is that a callee
-// that starts to should not find a secret in it.
+// thing legal and silent, so a slash command handler that asks for two directories would in fact
+// receive the resume target and the task text as well — and whatever it grew to read from them
+// would still typecheck against a signature saying it needs neither. Narrowing at the call site is
+// what keeps the callee's declared contract the true one.
 type RunContext = CommandDirs & {
   resuming: boolean;
   resumeId: string | undefined;
@@ -715,8 +716,8 @@ async function driveLoop(
   return { doneReason, cancelledBy, usage };
 }
 
-// Only what was actually reported. A run that made no model call — `--continue` with no task, a
-// provider that failed before the first request — has no spend, and "(tokens: 0 in, 0 out)" is a
+// Only what was actually reported. A run that made no model call — a provider that failed before
+// the first request — has no spend, and "(tokens: 0 in, 0 out)" is a
 // number the user cannot act on printed on paths that never called anything; that run prints no
 // line at all. A provider that reports input tokens and not output ones prints only the half it
 // gave, because "0 out" reads as a measurement and there was no measurement: a provider omitting
