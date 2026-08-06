@@ -13,6 +13,12 @@ export type CompactionSummary = z.infer<typeof CompactionSummarySchema>;
 
 const DEFAULT_MIN_EVICTABLE = 4;
 
+// Same value and same reason as loop.ts's MAX_RETRIES: it is the SDK's own default (ai@7.0.48
+// dist/index.js:2789), so stating it changes nothing except that it is now stated. Restated here
+// rather than imported because loop.ts already imports this module and the reverse would make the
+// two files a cycle.
+const MAX_RETRIES = 2;
+
 // A cut is only safe immediately before a "user"/"assistant" message, never before a
 // "tool" message — a `role:"tool"` message is always the second half of an adjacent
 // {assistant tool-call, tool result} pair pushed by loop.ts, and evicting one half while
@@ -44,6 +50,8 @@ export async function compactMessages(
   const { text, usage } = await generateText({
     model,
     abortSignal: signal,
+    // Stated rather than defaulted: this round-trip can cost three model calls, and nothing said so.
+    maxRetries: MAX_RETRIES,
     system:
       "You are summarizing the older portion of an in-progress coding agent session so it can be replaced with a compact recap. Where the transcript contains specific concrete data — exact file contents, literal strings, filenames, paths, numbers, identifiers, secrets, URLs, or any other specific values — quote them verbatim in the relevant field rather than paraphrasing or describing them generically. Losing a literal value is a real failure; a slightly longer summary is not.",
     prompt: `Summarize this JSON-encoded transcript of earlier conversation turns into a structured recap with four fields: goal, progress, blockers, nextSteps.\n\nFor the progress field in particular: if any concrete artifacts or discoveries appear in the transcript (e.g. text written to a file, a value returned by a command, a specific name or number), quote them verbatim rather than just describing the action taken.\n\nRespond with ONLY a JSON object with exactly those four string fields — no markdown code fences, no explanation before or after.\n\nTranscript:\n${JSON.stringify(evicted)}`,

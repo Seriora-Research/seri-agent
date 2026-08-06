@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { simulateReadableStream, tool, type ModelMessage, type ToolSet } from "ai";
-import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
+import { APICallError, type LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { MockLanguageModelV4 } from "ai/test";
 import { z } from "zod";
 import { runLoop, type LoopEvent } from "../../src/loop/loop";
@@ -392,6 +392,92 @@ describe("runLoop", () => {
     expect(JSON.stringify(update?.messages.at(-1)).length).toBeLessThan(1_000);
   });
 
+  // ai@7.0.48 already retries a failed model call before the failure ever surfaces: streamText
+  // issues every call inside prepareRetries' wrapper (dist/index.js:9684) and that wrapper's
+  // default is 2 retries (dist/index.js:2789). Nothing in this repo passed maxRetries, so the
+  // retrying below was happening unstated and unobserved — this pins existing behaviour, it does
+  // not introduce it. onLanguageModelCallStart is the only per-attempt hook the SDK exposes:
+  // streamLanguageModelCall notifies it immediately before doStream (dist/index.js:8320) and the
+  // whole of that function runs inside the retry closure, so a second notification within one
+  // streamText call IS a retry. It carries neither the error nor the delay, which is why the event
+  // carries neither.
+  test("a retryable 429 is retried and reported as a retry event", async () => {
+    let attempts = 0;
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        attempts++;
+        if (attempts === 1) {
+          throw new APICallError({
+            message: "rate limit exceeded",
+            url: "https://api.groq.com/openai/v1/chat/completions",
+            requestBodyValues: {},
+            statusCode: 429,
+            // The SDK's first backoff is 2000 ms (dist/index.js:2747); getRetryDelayInMs replaces
+            // it with a `retry-after-ms`/`retry-after` header when that is shorter
+            // (dist/index.js:2718). The elapsed assertion below is what makes that honouring
+            // visible rather than assumed: measured, this test runs in 79 ms with the header and
+            // 2084 ms with it renamed away, which is also the margin the 1 s bound sits in.
+            responseHeaders: { "retry-after-ms": "10" },
+          });
+        }
+        return streamResult(textOnlyChunks("Hello"));
+      },
+    });
+
+    const started = Date.now();
+    const events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+    const elapsed = Date.now() - started;
+
+    expect(attempts).toBe(2);
+    expect(events).toContainEqual({ type: "retry", attempt: 1 });
+    expect(events).toContainEqual({ type: "text-delta", text: "Hello" });
+    expect(events.find((e) => e.type === "error")).toBeUndefined();
+    expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+    expect(elapsed).toBeLessThan(1_000);
+  });
+
+  // The negative control for the test above: a `retry` event that appeared here would mean the
+  // loop was announcing retries the SDK never performed.
+  test("a non-retryable provider error is not retried and emits no retry event", async () => {
+    let attempts = 0;
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        attempts++;
+        throw new APICallError({
+          message: "invalid request",
+          url: "https://api.groq.com/openai/v1/chat/completions",
+          requestBodyValues: {},
+          statusCode: 400,
+        });
+      },
+    });
+
+    const events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+
+    expect(attempts).toBe(1);
+    expect(events.find((e) => e.type === "retry")).toBeUndefined();
+    expect(events.find((e) => e.type === "error")?.error).toContain("invalid request");
+  });
+
+  test("emits the token usage of each completed model call", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" }, usage(120, 30))),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    const events = await collect(
+      runLoop({ model, tools: makeTools(async () => "ok"), messages: baseMessages, permissionMode: "auto" }),
+    );
+
+    const usageEvents = events.filter((e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage");
+    expect(usageEvents).toHaveLength(2);
+    expect(usageEvents[0]?.usage.inputTokens).toBe(120);
+    expect(usageEvents[0]?.usage.outputTokens).toBe(30);
+    expect(usageEvents[1]?.usage.inputTokens).toBe(5);
+    expect(usageEvents[1]?.usage.outputTokens).toBe(5);
+  });
+
   test("compacts history once lastInputTokens crosses the threshold across a ~25-turn run, and a pre-compaction fact survives via the summary", async () => {
     const marker = "MARKER_FACT_777";
     const tools = makeTools(async (input: { path: string }) => (input.path === "marker.txt" ? marker : "ok"));
@@ -437,6 +523,11 @@ describe("runLoop", () => {
     const compactedEvents = events.filter((e): e is Extract<LoopEvent, { type: "compacted" }> => e.type === "compacted");
     expect(compactedEvents).toHaveLength(1);
     expect(compactedEvents[0]?.evictedCount).toBeGreaterThan(0);
+    // The summariser's own round-trip is billed like any other, and compactMessages has always
+    // returned its usage — the loop dropped it, so no caller could see it. These are doGenerate's
+    // usage(20, 10) above, which is the only place they can have come from.
+    expect(compactedEvents[0]?.usage.inputTokens).toBe(20);
+    expect(compactedEvents[0]?.usage.outputTokens).toBe(10);
     expect(model.doGenerateCalls).toHaveLength(1);
 
     expect(model.doStreamCalls).toHaveLength(totalIterations);

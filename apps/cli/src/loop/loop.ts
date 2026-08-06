@@ -1,5 +1,13 @@
 import { streamText } from "ai";
-import type { AssistantContent, JSONValue, LanguageModel, ModelMessage, ToolContent, ToolSet } from "ai";
+import type {
+  AssistantContent,
+  JSONValue,
+  LanguageModel,
+  LanguageModelUsage,
+  ModelMessage,
+  ToolContent,
+  ToolSet,
+} from "ai";
 import { checkPermission, type PermissionMode } from "../gate/gate";
 import { compactMessages, findSafeEvictionBoundary, type CompactionSummary } from "./compaction";
 
@@ -9,7 +17,15 @@ export type LoopEvent =
   | { type: "tool-result"; name: string; result: unknown }
   | { type: "permission-denied"; name: string }
   | { type: "messages-updated"; messages: ModelMessage[] }
-  | { type: "compacted"; summary: CompactionSummary; evictedCount: number }
+  | { type: "compacted"; summary: CompactionSummary; evictedCount: number; usage: LanguageModelUsage }
+  // Per completed model call, not a running total: the loop is stateless by design and summing
+  // across turns is the consumer's business. `usage` on `compacted` is the same quantity for the
+  // summariser's own round-trip, which is billed like any other and was invisible until now.
+  | { type: "usage"; usage: LanguageModelUsage }
+  // The SDK's retry, not one of ours — see MAX_RETRIES. `attempt` counts retries of the current
+  // model call, so the first re-issue is 1. There is no error and no delay here because the only
+  // per-attempt hook ai@7.0.48 exposes (onLanguageModelCallStart) carries neither.
+  | { type: "retry"; attempt: number }
   // "aborted" is a member of the existing termination event rather than a `cancelled` event of its
   // own: the turn IS done, and the reason it is done is that it was aborted. A consumer asking
   // "the generator finished, why?" should not have to handle two shapes to answer it. It is
@@ -31,6 +47,15 @@ const DEFAULT_COMPACTION_THRESHOLD = 0.5;
 const DEFAULT_PRESERVE_RECENT_MESSAGES = 20;
 
 const MAX_SERIALISED_ERROR_LENGTH = 500;
+
+// Deliberately the same 2 the SDK already applies when nothing passes it (ai@7.0.48
+// dist/index.js:2789), so this changes no behaviour: every streamText and generateText call in
+// this repo has been retrying a 429 or a 5xx twice, with a 2 s first backoff, before the failure
+// ever reached the user. Stated here because a spend question ("why three calls for one turn?")
+// cannot be answered from a default that no line of this repo mentions. The delay is the SDK's and
+// is not configurable through streamText: it honours a `retry-after-ms`/`retry-after` response
+// header when that is shorter than its own backoff (dist/index.js:2718).
+const MAX_RETRIES = 2;
 
 // String() of an Error is `${name}: ${message}` — one line, and exactly what the four sites below
 // already produced, so nothing changes for an Error. What changes is the other branch: a provider
@@ -116,7 +141,12 @@ export async function* runLoop(opts: {
         try {
           const compacted = await compactMessages(messages, opts.model, evictBoundary, opts.signal);
           messages.splice(0, messages.length, ...compacted.messages);
-          yield { type: "compacted", summary: compacted.summary, evictedCount: compacted.evictedCount };
+          yield {
+            type: "compacted",
+            summary: compacted.summary,
+            evictedCount: compacted.evictedCount,
+            usage: compacted.usage,
+          };
           yield { type: "messages-updated", messages: [...messages] };
         } catch (err) {
           // A cancel lands here as an AbortError, and this catch otherwise reports it and falls
@@ -134,6 +164,19 @@ export async function* runLoop(opts: {
     let text = "";
     const toolCalls: { toolCallId: string; toolName: string; input: unknown }[] = [];
 
+    // streamText runs each attempt inside its retry wrapper (ai@7.0.48 dist/index.js:9684) and
+    // notifies onLanguageModelCallStart from inside that closure, immediately before doStream
+    // (dist/index.js:8320) — so a second start within one streamText call is a retry, and counting
+    // starts is the only way to see one. There is no onRetry, and the callback is handed neither
+    // the error that caused the retry nor the delay before it. The count is drained into events in
+    // the stream loop below because a callback cannot yield: every attempt finishes before the
+    // first part arrives, so the drain is never late. A call that exhausts its retries reaches the
+    // drain too, because that failure arrives as an `error` part rather than as a rejection —
+    // measured with a doStream that always 429s: three attempts, then `retry` 1, `retry` 2 and
+    // `error: AI_RetryError: Failed after 3 attempts`, in that order.
+    let modelCallStarts = 0;
+    let reportedRetries = 0;
+
     try {
       const result = streamText({
         model: opts.model,
@@ -141,6 +184,10 @@ export async function* runLoop(opts: {
         messages,
         system: opts.system,
         abortSignal: opts.signal,
+        maxRetries: MAX_RETRIES,
+        onLanguageModelCallStart: () => {
+          modelCallStarts++;
+        },
         // ai@7.0.48 defaults this to `({ error }) => console.error(error)` (dist/index.js:8792),
         // which put 66 lines of raw APICallError — request body, every response header including
         // set-cookie, a node_modules stack — on stderr from inside a generator this repo
@@ -150,6 +197,10 @@ export async function* runLoop(opts: {
         onError: () => {},
       });
       for await (const part of result.fullStream) {
+        while (reportedRetries < modelCallStarts - 1) {
+          reportedRetries++;
+          yield { type: "retry", attempt: reportedRetries };
+        }
         if (part.type === "text-delta") {
           text += part.text;
           yield { type: "text-delta", text: part.text };
@@ -162,6 +213,9 @@ export async function* runLoop(opts: {
       }
       const resultUsage = await result.usage;
       lastInputTokens = resultUsage.inputTokens ?? 0;
+      // The whole of it, not the one field the compaction trigger above needs: what the call cost
+      // is the consumer's question to answer, and narrowing it here is what made it unanswerable.
+      yield { type: "usage", usage: resultUsage };
     } catch (err) {
       // This is the path a mid-stream cancel actually takes, measured against ai@7.0.48: the
       // fullStream yields an `abort` part and closes cleanly — the `for await` above does NOT
