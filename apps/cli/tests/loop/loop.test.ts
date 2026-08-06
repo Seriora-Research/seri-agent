@@ -191,46 +191,21 @@ describe("runLoop", () => {
     expect(events.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
   });
 
-  test("token-budget backstop trips once cumulative usage exceeds the configured budget", async () => {
+  // Nothing else in this file omits maxIterations, so nothing else observed DEFAULT_MAX_ITERATIONS
+  // and a revert of it was invisible to the suite. 500 mocked rounds rather than a smaller stand-in,
+  // because a stand-in only pins the wiring and not the pinned number itself.
+  test("with no maxIterations option the run stops at the 500-turn default", async () => {
     const tools = makeTools(async () => "ok");
     const model = new MockLanguageModelV4({
-      doStream: async () => streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" }, usage(60_000, 60_000))),
+      doStream: async () => streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
     });
     const events = await collect(
-      runLoop({ model, tools, messages: baseMessages, permissionMode: "auto", tokenBudget: 100_000 }),
+      runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }),
     );
 
-    expect(model.doStreamCalls).toHaveLength(1);
-    expect(events.at(-1)).toEqual({ type: "done", reason: "token-budget" });
-  });
-
-  // Every other test here hands runLoop its own `tokenBudget`, so nothing observed DEFAULT_TOKEN_BUDGET
-  // and a typo or a revert of it was invisible to the suite. Asserted through the loop rather than by
-  // exporting the number: the two runs below straddle 1_000_000 exactly — 1_000_001 of mocked usage
-  // must stop the run, 1_000_000 must not — so a smaller default goes red on the second and a larger
-  // one on the first. Mocked usage totals, not a real 1M-token fixture; the loop only ever reads the
-  // provider's reported numbers.
-  test("with no tokenBudget option the run stops at the 1_000_000-token default", async () => {
-    const tools = makeTools(async () => "ok");
-    const overModel = new MockLanguageModelV4({
-      doStream: async () => streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" }, usage(500_000, 500_001))),
-    });
-    const over = await collect(runLoop({ model: overModel, tools, messages: baseMessages, permissionMode: "auto" }));
-
-    expect(overModel.doStreamCalls).toHaveLength(1);
-    expect(over.at(-1)).toEqual({ type: "done", reason: "token-budget" });
-
-    // Exactly at the budget is not over it, so this run is allowed to end the other way. maxIterations
-    // caps it at one step, which is also what keeps a default lower than 1_000_000 from passing here.
-    const atModel = new MockLanguageModelV4({
-      doStream: async () => streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" }, usage(500_000, 500_000))),
-    });
-    const at = await collect(
-      runLoop({ model: atModel, tools, messages: baseMessages, permissionMode: "auto", maxIterations: 1 }),
-    );
-
-    expect(at.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
-  });
+    expect(model.doStreamCalls).toHaveLength(500);
+    expect(events.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
+  }, 30_000);
 
   test("yields messages-updated after appending the assistant message and after appending tool results", async () => {
     const tools = makeTools(async () => "ok");

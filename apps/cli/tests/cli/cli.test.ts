@@ -487,14 +487,14 @@ describe("run (task invocation)", () => {
     expect(code).toBe(1);
   });
 
-  // A cap is not a finish: the run stopped because it ran out of iterations or tokens, with the
-  // user's task unanswered, so `seri "big task" && deploy` must not deploy. Both reasons yield
-  // `done`, so "the generator ended with no done event" alone would have exited 0 here.
-  test.each(["max-iterations", "token-budget"] as const)("a run that stopped at %s exits non-zero", async (reason) => {
+  // A cap is not a finish: the run stopped because it ran out of iterations, with the user's task
+  // unanswered, so `seri "big task" && deploy` must not deploy. `max-iterations` yields `done`, so
+  // "the generator ended with no done event" alone would have exited 0 here.
+  test("a run that stopped at max-iterations exits non-zero", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
     async function* runLoopFake(): AsyncGenerator<LoopEvent> {
-      yield { type: "done", reason };
+      yield { type: "done", reason: "max-iterations" };
     }
 
     const { code } = await captureLogs(() =>

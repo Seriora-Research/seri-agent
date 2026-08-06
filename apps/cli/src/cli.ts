@@ -569,7 +569,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // Not "an error event was seen": loop.ts yields `error` and carries on at three sites, and a run
   // that recovered from a failed tool call and then answered the user did not fail. The status
   // answers one question — did the turn finish? — and `no-tool-call` is the only reason that means
-  // it did. A cap is not a finish: `max-iterations` and `token-budget` yield `done` having stopped
+  // it did. A cap is not a finish: `max-iterations` yields `done` having stopped
   // with the user's task unanswered, and `seri "big task" && deploy` must not deploy. loop.ts's two
   // stream-error returns end the generator with no `done` at all and land on the same 1 — a throw
   // escaping runLoop outright (`approvalPrompt` rejecting, or findSafeEvictionBoundary, neither of
