@@ -1,0 +1,9 @@
+# Shell scripts must stay LF in the working tree, on every platform. This repo runs with
+# core.autocrlf=true, which rewrites checked-out text to CRLF on Windows — and a hook whose
+# shebang reads `#!/usr/bin/env bash\r` dies with "bad interpreter", which is how the failure
+# presents: not as a syntax error, as a file that cannot be executed at all.
+#
+# This became load-bearing when .claude/hooks/ started being tracked: those seven scripts are
+# LF on disk today, and without this line the first fresh checkout or worktree would receive
+# them as CRLF and every hook would silently stop running.
+*.sh text eol=lf

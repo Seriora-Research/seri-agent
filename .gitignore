@@ -7,7 +7,19 @@ apps/cli/src/tools/rg-vendored.bin
 *.log
 .env
 .env.*
-.claude/
+# .claude/ is tracked, because it *is* how this project works: the rules an implementer writes
+# code against, the agent and skill definitions, the hooks that gate a run, and the templates
+# every loop fills in. While the whole directory was ignored, none of it reached a
+# worktree-isolated agent — the same failure that made the design docs unreadable until they
+# moved to docs/. Three things under it stay out:
+#
+#   loops/               per-run state, plans and trajectories. Local to whoever ran the loop,
+#                        regenerated every time, and of no use to anyone else's checkout.
+#   worktrees/           agent worktrees — each one a near-full checkout of this repository.
+#   settings.local.json  personal permission overrides, not shared configuration.
+.claude/loops/
+.claude/worktrees/
+.claude/settings.local.json
 
 # docs-tmp/ is the private half of the documentation: operational runbooks that name real
 # infrastructure (organization ids, the Supabase project ref, WorkOS ids) and the two files

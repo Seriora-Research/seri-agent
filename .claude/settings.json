@@ -1,0 +1,73 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/format-and-typecheck.sh 2>&1 || pwsh -NonInteractive -File .claude/hooks/format-and-typecheck.ps1 2>&1"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/verify-gate.sh 2>&1 || pwsh -NonInteractive -File .claude/hooks/verify-gate.ps1 2>&1"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/log-trajectory.sh 2>&1 || pwsh -NonInteractive -File .claude/hooks/log-trajectory.ps1 2>&1"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if command -v bash >/dev/null 2>&1; then bash .claude/hooks/protect-loop-core.sh 2>&1; else pwsh -NonInteractive -File .claude/hooks/protect-loop-core.ps1 2>&1; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/block-dangerous.sh 2>&1 || pwsh -NonInteractive -File .claude/hooks/block-dangerous.ps1 2>&1"
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/block-env-read.sh 2>&1 || pwsh -NonInteractive -File .claude/hooks/block-env-read.ps1 2>&1"
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if command -v bash >/dev/null 2>&1; then bash .claude/hooks/goal-audit-gate.sh 2>&1; else pwsh -NonInteractive -File .claude/hooks/goal-audit-gate.ps1 2>&1; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
