@@ -170,6 +170,31 @@ describe("run (task invocation)", () => {
     expect(readdirSync(sessionsDir)).toEqual([]);
   });
 
+  // The defect above, one argument away: gating on argv.length meant `seri -h config` — and
+  // `seri --help --resume`, and `seri --version --quiet` — was not "the whole invocation", so it
+  // fell through to the task path and wrote a session file and billed a real turn to answer a
+  // request for the usage text. Position is what the flag actually is, so the gate reads argv[0].
+  test.each(["--help", "-h"])("%p followed by another argument still prints usage", async (flag) => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const { code, logs } = await captureLogs(() =>
+      run([flag, "config"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("Usage:");
+    expect(called).toBe(false);
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
   // Measured on the compiled binary: `seri fix the --help output` printed usage and exited 0 with
   // the task never sent, because `includes` matched the flag anywhere in argv. An unquoted
   // multi-word task is a supported form — parseTaskArgs joins argv, and this file's other tests

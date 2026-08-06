@@ -343,16 +343,20 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // it prints the same usage as --help rather than exiting silently — a line the TUI entry point
   // replaces, not a decision that bare `seri` means "print usage".
   //
-  // The flag counts only as the whole invocation, here and for --version and --selftest below:
+  // The flag counts only in first position, here and for --version and --selftest below.
   // `includes` matched it anywhere in argv, so `seri fix the --help output` printed usage and
-  // exited 0 with the task never sent — measured on the compiled binary. An unquoted multi-word
-  // task is a supported form, since parseTaskArgs joins argv.
-  const helpOnly = argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h");
-  if (argv.length === 0 || helpOnly) {
+  // exited 0 with the task never sent — measured on the compiled binary, and an unquoted
+  // multi-word task is a supported form since parseTaskArgs joins argv. Requiring the flag to be
+  // the whole invocation fixed that and reopened it one argument away: `seri -h config`,
+  // `seri --help --resume` and `seri --version --quiet` all failed the length check, fell through
+  // to the task path, and wrote a session file and billed a turn to answer a request for the usage
+  // text. Position is the property that actually separates the two — a task never starts with the
+  // flag, an invocation of the flag always does.
+  if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
     console.log(USAGE);
     return 0;
   }
-  if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v")) {
+  if (argv[0] === "--version" || argv[0] === "-v") {
     console.log(`seri ${pkg.version}`);
     return 0;
   }
@@ -362,7 +366,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // it for real is the only way to catch that from a shipped artifact; the release workflow
   // runs this on every platform. Greps a throwaway file rather than the cwd so the result
   // never depends on what happens to be in the directory seri was launched from.
-  if (argv.length === 1 && argv[0] === "--selftest") {
+  if (argv[0] === "--selftest") {
     const grepFn = deps.grep ?? grepReal;
     try {
       const dir = mkdtempSync(join(tmpdir(), "seri-selftest-"));
