@@ -477,7 +477,17 @@ function handleConfigCommand(positionals: string[], deps: CliDeps): number | und
   if (positionals[0] !== "config") return undefined;
   const configCommandFn = deps.configCommand ?? configCommandReal;
   try {
-    return configCommandFn(positionals.slice(1), deps.authConfigDir ?? getConfigDir());
+    // Annotated and returned through a local, not `return configCommandFn(...)` directly. This
+    // function's own return type has to admit `undefined` — that is how the dispatch in run() says
+    // "not mine, carry on" — which means the compiler would accept an `undefined` arriving from
+    // configCommand too, and run() would read it as "not handled". Before the decomposition this
+    // call sat in `run(): Promise<number>` and widening it was a tsc error; the annotation is what
+    // puts that error back. What it costs to lose is measured, not imagined: with a bare `return;`
+    // added here, `seri config set GROQ_API_KEY gsk_live_…` falls through to the task path, mints a
+    // session and writes `{"role":"user","content":"config set GROQ_API_KEY gsk_live_…"}` into the
+    // session JSON — the key in full, on disk, and tsc stays green.
+    const code: number = configCommandFn(positionals.slice(1), deps.authConfigDir ?? getConfigDir());
+    return code;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return 1;

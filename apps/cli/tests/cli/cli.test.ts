@@ -476,6 +476,38 @@ describe("run (task invocation)", () => {
     expect(code).toBe(0);
   });
 
+  // `run(["config", …])` had no test at all, on the one path that carries a secret. What a
+  // fall-through here costs is not an unhandled subcommand: `config` reaching the task path mints a
+  // session and persists `set GROQ_API_KEY gsk_live_…` — the user's key, in full — as the task text
+  // in the session JSON. So the empty sessions dir is asserted alongside the exit code, which on
+  // its own cannot tell "config list succeeded" from "config was never handled".
+  test("a config subcommand returns configCommand's exit code and never reaches the task path", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const calls: { args: string[]; configDir: string }[] = [];
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["config", "set", "GROQ_API_KEY", "gsk_live_secret"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        authConfigDir: tmpConfigRoot,
+        configCommand: (args, configDir) => {
+          calls.push({ args, configDir });
+          // Not 0: the task path exits 0 too, so only a code no other path produces distinguishes
+          // "configCommand's answer was returned" from "something else answered".
+          return 2;
+        },
+      }),
+    );
+
+    expect(code).toBe(2);
+    expect(calls).toEqual([{ args: ["set", "GROQ_API_KEY", "gsk_live_secret"], configDir: tmpConfigRoot }]);
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
   // A task whose first word happens to name an Object.prototype member is an ordinary task, and it
   // has to reach the model. Looked up on an object literal, `SLASH_COMMANDS["toString"]` returned
   // Object.prototype.toString — a function, so it passed the dispatch guard, was called against the
