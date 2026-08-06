@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
+import { parseArgs } from "node:util";
 import type { ModelMessage } from "ai";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
@@ -70,8 +71,7 @@ function steps(args: string[]): number {
 }
 
 // Commands that operate on the resume target rather than being a task for the model. One table,
-// so a new one is added in exactly one place: `parseTaskArgs` derives the names it must not
-// mistake for a session id from these keys, and the dispatch in `run()` shares the resume-target
+// so a new one is added in exactly one place: the dispatch in `run()` shares the resume-target
 // resolution and the error reporting. Handlers throw to report a failure; the caller turns that
 // into a message and a non-zero exit.
 //
@@ -89,21 +89,6 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   ["/restore", { accepts: (args) => args.length === 1 && /^[0-9a-f]{4,40}$/.test(args[0] ?? ""), run: restoreCommand }],
   ["/rewind", { accepts: isStepCount, run: rewindCommand }],
 ]);
-
-function parseTaskArgs(argv: string[]): { resuming: boolean; resumeId: string | undefined; taskText: string } {
-  const args = [...argv];
-  const resumeIndex = args.indexOf("--resume");
-  if (resumeIndex === -1) return { resuming: false, resumeId: undefined, taskText: args.join(" ").trim() };
-
-  args.splice(resumeIndex, 1);
-  const next = args[resumeIndex];
-  // A slash command is never a session id, even though none of them starts with "-": it has to
-  // fall through to the taskText below instead of being looked up and throwing "session not found".
-  const resumeId = next !== undefined && !SLASH_COMMANDS.has(next) && !next.startsWith("-") ? next : undefined;
-  if (resumeId !== undefined) args.splice(resumeIndex, 1);
-
-  return { resuming: true, resumeId, taskText: args.join(" ").trim() };
-}
 
 function cycleModeCommand(session: SessionState<ModelMessage>, _args: string[], dirs: CommandDirs): void {
   session.permissionMode = cycleMode(session.permissionMode);
@@ -325,42 +310,75 @@ function printEvent(event: LoopEvent): void {
   }
 }
 
-// stdout and exit 0, deliberately unlike config/commands.ts, which prints its usage to stderr and
-// returns 1: that is for a bad invocation, where the shell should see a failure. `--help` is a
-// request that was served, and it is routinely piped, so the text belongs on stdout.
+// stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
+// parseArgs rejects, or no task given — is a usage error: printed to stderr, exit 2.
+// config/commands.ts's own usage error also exits 2, keeping the convention uniform across every
+// subcommand rather than half-adopted on just this one.
 // `--selftest` is left out on purpose — cli.ts calls it an undocumented build-verification flag.
 const USAGE = `Usage:
   seri <task>                     send a task to the model
-  seri --resume [id] [task]       continue the most recent (or named) session
+  seri --continue [task]          continue the most recent session
+  seri --resume <id> [task]       continue that session
   seri [--resume <id>] /mode      cycle the permission mode
   seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha>
   seri login | signup | logout
   seri config set|list|unset
-  seri --version | --help`;
+  seri --version | --help
+
+Options:
+  --max-turns <n>                 stop after n model turns (default 500)
+  --                              everything after this is the task, flags included:
+                                    seri -- fix the --help output`;
+
+// console.error(message), console.error(USAGE), return 2 — one helper because every usage error
+// takes the same three steps, and USAGE is what names the -- escape: parseArgs' own message does,
+// for an unknown option, but not for the "argument missing"/"argument is ambiguous" messages an
+// optional value or a required-value option without one produce (measured) — so USAGE is appended
+// unconditionally rather than only on the option that happens to name it already.
+function usageError(message: string): number {
+  console.error(message);
+  console.error(USAGE);
+  return 2;
+}
 
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
-  // Bare `seri` is a placeholder for the interactive TUI that gates the v0.1.0 release. Until then
-  // it prints the same usage as --help rather than exiting silently — a line the TUI entry point
-  // replaces, not a decision that bare `seri` means "print usage".
-  //
-  // The flag counts only in first position, here and for --version and --selftest below.
-  // `includes` matched it anywhere in argv, so `seri fix the --help output` printed usage and
-  // exited 0 with the task never sent — measured on the compiled binary, and an unquoted
-  // multi-word task is a supported form since parseTaskArgs joins argv. Requiring the flag to be
-  // the whole invocation fixed that and reopened it one argument away: `seri -h config`,
-  // `seri --help --resume` and `seri --version --quiet` all failed the length check, fell through
-  // to the task path, and wrote a session file and billed a turn to answer a request for the usage
-  // text. Position separates the two for a flag in first position — a task never starts with one.
-  // It does not separate them for a flag behind another: `seri --resume --help` is a documented
-  // form (USAGE above), argv[0] is `--resume` so this gate misses, and parseTaskArgs rejects
-  // `--help` as a session id for its leading dash and joins it into the task — the most recent
-  // session resumes and a turn is billed. Deliberately not gated a fourth time here; the per-flag
-  // checks are the structural problem .claude/loops/cli-command-table/PROBLEM.md exists to fix.
-  if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
+  let values: {
+    help?: boolean;
+    version?: boolean;
+    selftest?: boolean;
+    resume?: string;
+    continue?: boolean;
+    "max-turns"?: string;
+  };
+  let positionals: string[];
+  try {
+    // Written inline rather than hoisted to a module const: hoisted without `as const`, tsc widens
+    // `values.resume` to `string | boolean | (string | boolean)[] | undefined` and the object
+    // itself fails ParseArgsOptionsConfig, producing two TS2322s at the assignments below. Measured
+    // against this repo's tsc. Inline, `values.resume` and `values["max-turns"]` are
+    // `string | undefined` and `positionals` is `string[]`, with no cast anywhere.
+    ({ values, positionals } = parseArgs({
+      args: argv,
+      strict: true,
+      allowPositionals: true,
+      options: {
+        help: { type: "boolean", short: "h" },
+        version: { type: "boolean", short: "v" },
+        selftest: { type: "boolean" },
+        resume: { type: "string" },
+        continue: { type: "boolean" },
+        "max-turns": { type: "string" },
+      },
+    }));
+  } catch (err) {
+    return usageError(err instanceof Error ? err.message : String(err));
+  }
+
+  if (values.help === true) {
     console.log(USAGE);
     return 0;
   }
-  if (argv[0] === "--version" || argv[0] === "-v") {
+  if (values.version === true) {
     console.log(`seri ${pkg.version}`);
     return 0;
   }
@@ -370,7 +388,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // it for real is the only way to catch that from a shipped artifact; the release workflow
   // runs this on every platform. Greps a throwaway file rather than the cwd so the result
   // never depends on what happens to be in the directory seri was launched from.
-  if (argv[0] === "--selftest") {
+  if (values.selftest === true) {
     const grepFn = deps.grep ?? grepReal;
     try {
       const dir = mkdtempSync(join(tmpdir(), "seri-selftest-"));
@@ -391,18 +409,31 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
   }
 
-  if (argv[0] === "login" || argv[0] === "signup") {
+  // Bare `seri` is a placeholder for the interactive TUI that gates the v0.1.0 release. Until then
+  // it prints the same usage as --help rather than exiting silently — a line the TUI entry point
+  // replaces, not a decision that bare `seri` means "print usage". Any other flags-but-no-task
+  // invocation (`seri --max-turns 5`) is a usage error instead: unlike bare `seri`, it named an
+  // intention and cannot be silently taken as "show usage".
+  if (positionals.length === 0 && values.continue !== true && values.resume === undefined) {
+    if (argv.length === 0) {
+      console.log(USAGE);
+      return 0;
+    }
+    return usageError("No task given.");
+  }
+
+  if (positionals[0] === "login" || positionals[0] === "signup") {
     const loginFn = deps.login ?? loginReal;
     try {
       const configDir = deps.authConfigDir ?? getConfigDir();
-      await loginFn(argv[0], getWorkosClientId(configDir), configDir);
+      await loginFn(positionals[0], getWorkosClientId(configDir), configDir);
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       return 1;
     }
     return 0;
   }
-  if (argv[0] === "logout") {
+  if (positionals[0] === "logout") {
     const logoutFn = deps.logout ?? logoutReal;
     try {
       logoutFn(deps.authConfigDir ?? getConfigDir());
@@ -413,17 +444,28 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     return 0;
   }
 
-  if (argv[0] === "config") {
+  if (positionals[0] === "config") {
     const configCommandFn = deps.configCommand ?? configCommandReal;
     try {
-      return configCommandFn(argv.slice(1), deps.authConfigDir ?? getConfigDir());
+      return configCommandFn(positionals.slice(1), deps.authConfigDir ?? getConfigDir());
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       return 1;
     }
   }
 
-  const { resuming, resumeId, taskText } = parseTaskArgs(argv);
+  const maxTurnsRaw = values["max-turns"];
+  let maxTurns: number | undefined;
+  if (maxTurnsRaw !== undefined) {
+    // parseArgs accepts --max-turns abc happily (measured) — it has no numeric option type — so
+    // this check is not redundant. Same shape as isStepCount above.
+    if (!/^[1-9]\d*$/.test(maxTurnsRaw)) return usageError(`Invalid --max-turns value: ${maxTurnsRaw}`);
+    maxTurns = Number(maxTurnsRaw);
+  }
+
+  const resuming = values.continue === true || values.resume !== undefined;
+  const resumeId = values.resume;
+  const taskText = positionals.join(" ");
   const sessionsDir = deps.sessionsDir ?? join(getConfigDir(), "sessions");
   const checkpointsDir = deps.checkpointsDir ?? join(getConfigDir(), "checkpoints");
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
@@ -522,6 +564,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       approvalPrompt: makeApprovalPrompt(deps.createInterface),
       system: session.systemPrompt,
       signal: controller.signal,
+      maxIterations: maxTurns,
     })) {
       if (event.type === "messages-updated") {
         saveSession({ ...session, messages: event.messages }, sessionsDir);

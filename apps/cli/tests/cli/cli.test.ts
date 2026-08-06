@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
@@ -170,10 +170,12 @@ describe("run (task invocation)", () => {
     expect(readdirSync(sessionsDir)).toEqual([]);
   });
 
-  // The defect above, one argument away: gating on argv.length meant `seri -h config` — and
-  // `seri --help --resume`, and `seri --version --quiet` — was not "the whole invocation", so it
-  // fell through to the task path and wrote a session file and billed a real turn to answer a
-  // request for the usage text. Position is what the flag actually is, so the gate reads argv[0].
+  // The defect above, one argument away: gating on argv.length meant `seri -h config` was not "the
+  // whole invocation", so it fell through to the task path and wrote a session file and billed a
+  // real turn to answer a request for the usage text. Under parseArgs a flag is a flag in any
+  // position, so this form prints usage without ever reaching the task path — and so do `seri
+  // --help --resume` and `seri --version --quiet`, both usage errors now rather than a route to
+  // the task path at all.
   test.each(["--help", "-h"])("%p followed by another argument still prints usage", async (flag) => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
@@ -195,49 +197,79 @@ describe("run (task invocation)", () => {
     expect(readdirSync(sessionsDir)).toEqual([]);
   });
 
-  // Measured on the compiled binary: `seri fix the --help output` printed usage and exited 0 with
-  // the task never sent, because `includes` matched the flag anywhere in argv. An unquoted
-  // multi-word task is a supported form — parseTaskArgs joins argv, and this file's other tests
-  // invoke run(["do", "a", "task"]) — so the flag only counts when it is the whole invocation.
-  test.each(["--help", "-h"])("a task containing %p is still sent to the model", async (flag) => {
+  // Inverts the pre-parseArgs behaviour: under parseArgs a flag anywhere in argv is a flag, so
+  // `seri fix the --help output` now prints usage and never reaches the model — measured on the
+  // compiled binary that `claude fix the --help output` behaves the same way. `--` is the
+  // documented escape for a task that contains what looks like a flag, exercised in the same test
+  // so it never needs a third copy of this fake.
+  test.each(["--help", "-h"])("a task containing %p prints usage instead of reaching the model; -- escapes it", async (flag) => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
     type RunLoopOpts = Parameters<typeof runLoop>[0];
     let called = false;
+    let captured: RunLoopOpts | undefined;
     async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
       called = true;
+      captured = opts;
       yield { type: "done", reason: "no-tool-call" };
       return opts.messages;
     }
 
-    const { logs } = await captureLogs(() =>
+    const { code, logs } = await captureLogs(() =>
       run(["fix", "the", flag, "output"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
     );
 
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("Usage:");
+    expect(called).toBe(false);
+    expect(readdirSync(sessionsDir)).toEqual([]);
+
+    await captureLogs(() =>
+      run(["--", "fix", "the", flag, "output"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
     expect(called).toBe(true);
-    expect(logs.join("\n")).not.toContain("Usage:");
+    expect(captured?.messages.at(-1)).toEqual({ role: "user", content: `fix the ${flag} output` });
   });
 
-  // The same defect in the third flag: `seri fix the --selftest flag` ran the build-verification
-  // selftest and exited before the task was ever sent. The key has to be set here too, or
-  // getGroqModel throws before runLoop and `called` would stay false for the wrong reason.
-  test("a task containing --selftest is still sent to the model", async () => {
+  // The same inversion for the third flag: `seri fix the --selftest flag` now runs the
+  // build-verification selftest and never reaches the model; `--` escapes it the same way.
+  test("a task containing --selftest runs the selftest instead of reaching the model; -- escapes it", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
     type RunLoopOpts = Parameters<typeof runLoop>[0];
     let called = false;
+    let captured: RunLoopOpts | undefined;
     async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
       called = true;
+      captured = opts;
       yield { type: "done", reason: "no-tool-call" };
       return opts.messages;
     }
+    const grepFn = async () => ({
+      mode: "content" as const,
+      matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+      truncated: false,
+    });
 
     const { logs } = await captureLogs(() =>
-      run(["fix", "the", "--selftest", "flag"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+      run(["fix", "the", "--selftest", "flag"], {
+        runLoop: runLoopFake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        grep: grepFn,
+      }),
+    );
+
+    expect(called).toBe(false);
+    expect(logs.join("\n")).toContain("selftest ok");
+
+    await captureLogs(() =>
+      run(["--", "fix", "the", "--selftest", "flag"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir, grep: grepFn }),
     );
 
     expect(called).toBe(true);
-    expect(logs.join("\n")).not.toContain("selftest ok");
+    expect(captured?.messages.at(-1)).toEqual({ role: "user", content: "fix the --selftest flag" });
   });
 
   test("bare seri prints usage instead of exiting silently", async () => {
@@ -259,6 +291,178 @@ describe("run (task invocation)", () => {
     expect(logs.join("\n")).toContain("Usage:");
     // Same two guards as the --help case above: with the key set, a fall-through to the task path
     // would call the model and write a session file rather than failing at getGroqModel.
+    expect(called).toBe(false);
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
+  // The hole PR #27 left open: `--resume` used to take an optional value, so `--help` after it was
+  // rejected as a session id (leading dash) and joined into the task instead — the most recent
+  // session resumed and a turn was billed to answer a request for the usage text. `--resume` now
+  // takes a mandatory value, and parseArgs itself throws on this shape (measured) before any of our
+  // code runs, so no case here is written for it beyond routing the throw to exit 2.
+  test("`--resume --help` is a usage error, not a resumed session and a billed turn", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["--resume", "--help"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(code).toBe(2);
+    expect(called).toBe(false);
+    expect(readdirSync(sessionsDir)).toEqual([]);
+    expect(errors.join("\n")).toContain("--");
+  });
+
+  test("`--bogus` names the -- escape and exits 2", async () => {
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["--bogus"], { loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(code).toBe(2);
+    const stderr = errors.join("\n");
+    expect(stderr).toContain("Unknown option");
+    expect(stderr).toMatch(/--/);
+  });
+
+  test("`--continue` with no task resumes the most recent session without appending a message", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const older: SessionState = { id: "older", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [{ role: "user", content: "old task" }] };
+    const newer: SessionState = { id: "newer", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [{ role: "user", content: "new task" }] };
+    saveSession(older, sessionsDir);
+    saveSession(newer, sessionsDir);
+    const base = new Date("2026-01-01T00:00:00Z");
+    utimesSync(join(sessionsDir, "older.json"), base, base);
+    utimesSync(join(sessionsDir, "newer.json"), new Date(base.getTime() + 60_000), new Date(base.getTime() + 60_000));
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let captured: RunLoopOpts | undefined;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      captured = opts;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    await captureLogs(() => run(["--continue"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }));
+
+    expect(captured?.messages).toEqual([{ role: "user", content: "new task" }]);
+    expect(readdirSync(sessionsDir)).toHaveLength(2);
+  });
+
+  // The negative control that splitting --resume into --resume <id> / --continue did not break the
+  // surviving half: this passes on `main` too.
+  test("`--resume <id>` resumes that session, not the most recent one", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const older: SessionState = { id: "older", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [{ role: "user", content: "old task" }] };
+    const newer: SessionState = { id: "newer", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [{ role: "user", content: "new task" }] };
+    saveSession(older, sessionsDir);
+    saveSession(newer, sessionsDir);
+    const base = new Date("2026-01-01T00:00:00Z");
+    utimesSync(join(sessionsDir, "older.json"), base, base);
+    utimesSync(join(sessionsDir, "newer.json"), new Date(base.getTime() + 60_000), new Date(base.getTime() + 60_000));
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let captured: RunLoopOpts | undefined;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      captured = opts;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    await captureLogs(() =>
+      run(["--resume", "older"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(captured?.messages).toEqual([{ role: "user", content: "old task" }]);
+  });
+
+  test("`--max-turns 3` reaches runLoop as maxIterations", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let captured: RunLoopOpts | undefined;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      captured = opts;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    await captureLogs(() =>
+      run(["--max-turns", "3", "do", "a", "task"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(captured?.maxIterations).toBe(3);
+  });
+
+  // parseArgs accepts `--max-turns abc` happily (measured) — it has no numeric option type — so
+  // this validation is not redundant with the parser's own checks.
+  test.each(["0", "abc"])("`--max-turns %s` is a usage error", async (value) => {
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const { code } = await captureLogs(() =>
+      run(["--max-turns", value, "do", "a", "task"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(2);
+    expect(called).toBe(false);
+  });
+
+  test("`--max-turns` with no value is a usage error", async () => {
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const { code } = await captureLogs(() =>
+      run(["--max-turns"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(2);
+    expect(called).toBe(false);
+  });
+
+  test("flags but no task is a usage error", async () => {
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const { code } = await captureLogs(() =>
+      run(["--max-turns", "5"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(2);
     expect(called).toBe(false);
     expect(readdirSync(sessionsDir)).toEqual([]);
   });
@@ -643,15 +847,37 @@ describe("run (/mode)", () => {
     rmSync(sessionsDir, { recursive: true, force: true });
   });
 
-  test("`--resume /mode` cycles the most-recent session's mode instead of misparsing /mode as a session id", async () => {
+  test("`--continue /mode` cycles the most-recent session's mode", async () => {
     const existing: SessionState = { id: "abc", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
     saveSession(existing, sessionsDir);
 
-    const code = await run(["--resume", "/mode"], { sessionsDir });
+    const code = await run(["--continue", "/mode"], { sessionsDir });
 
     expect(code).toBe(0);
     expect(readdirSync(sessionsDir)).toHaveLength(1);
     expect(loadSession("abc", sessionsDir).permissionMode).toBe("approve-each");
+  });
+
+  // Pins the hazard the --resume/--continue split introduces in place of the misparse defect the
+  // test above used to guard: --resume now takes a session id, so `--resume /mode` looks for a
+  // session literally named "/mode" instead of cycling the most recent one.
+  test("`--resume /mode` looks for a session literally named /mode instead of cycling the most recent one", async () => {
+    const existing: SessionState = { id: "abc", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
+    saveSession(existing, sessionsDir);
+
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["--resume", "/mode"], { sessionsDir });
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("/mode");
+    expect(loadSession("abc", sessionsDir).permissionMode).toBe("read-only");
   });
 
   test("`/mode is broken, fix it` stays a task and does not cycle the mode", async () => {
@@ -757,20 +983,20 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test("`--resume /undo` is not misparsed as a session id", async () => {
+  test("`--continue /undo` dispatches against the most-recent session", async () => {
     seed();
 
-    const code = await run(["--resume", "/undo", "2"], { sessionsDir, checkpointsDir });
+    const code = await run(["--continue", "/undo", "2"], { sessionsDir, checkpointsDir });
 
     expect(errors).toEqual([]);
     expect(code).toBe(0);
     expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
   }, 15_000);
 
-  test("`--resume /rewind` is not misparsed as a session id", async () => {
+  test("`--continue /rewind` dispatches against the most-recent session", async () => {
     seed();
 
-    const code = await run(["--resume", "/rewind"], { sessionsDir, checkpointsDir });
+    const code = await run(["--continue", "/rewind"], { sessionsDir, checkpointsDir });
 
     expect(errors).toEqual([]);
     expect(code).toBe(0);
@@ -816,12 +1042,12 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     expect(readFileSync(join(workTree, "new.ts"), "utf8")).toBe("new\n");
   }, 20_000);
 
-  test("`--resume /restore <sha>` is not misparsed as a session id", async () => {
+  test("`--continue /restore <sha>` dispatches against the most-recent session", async () => {
     seed();
 
     // Resolving to the most recent session and failing on the sha is the proof: taken as a session
     // id, "/restore" would have failed to load a session instead.
-    const code = await run(["--resume", "/restore", "deadbeef"], { sessionsDir, checkpointsDir });
+    const code = await run(["--continue", "/restore", "deadbeef"], { sessionsDir, checkpointsDir });
 
     expect(code).toBe(1);
     expect(errors.join("\n")).toContain("deadbeef is not a checkpoint");
