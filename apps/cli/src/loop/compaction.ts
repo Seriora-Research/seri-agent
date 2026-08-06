@@ -1,4 +1,4 @@
-import { generateText } from "ai";
+import { generateText, wrapLanguageModel } from "ai";
 import type { LanguageModel, LanguageModelUsage, ModelMessage } from "ai";
 import { z } from "zod";
 
@@ -50,13 +50,48 @@ export async function compactMessages(
   model: LanguageModel,
   evictBoundary: number,
   signal?: AbortSignal,
-): Promise<{ messages: ModelMessage[]; summary: CompactionSummary; evictedCount: number; usage: LanguageModelUsage }> {
+): Promise<{
+  messages: ModelMessage[];
+  summary: CompactionSummary;
+  evictedCount: number;
+  usage: LanguageModelUsage;
+  retries: number;
+}> {
   const evicted = messages.slice(0, evictBoundary);
+
+  // Counted through a middleware, not through onLanguageModelCallStart the way loop.ts counts the
+  // main call's retries: generateText notifies that callback ONCE per step, before it enters the
+  // retry wrapper (ai@7.0.48 dist/index.js:5599, with the `retry(...)` at 5607), where streamText
+  // notifies from inside it. Measured with a doGenerate that 429s once then succeeds: two
+  // doGenerate calls, one callback notification, two wrapGenerate invocations — the retry wrapper
+  // re-invokes the model, so the wrapper around the model is the only place an attempt is visible.
+  // Returned rather than printed, and rather than taking a callback, because this module does no
+  // I/O and its caller is a generator that cannot yield from a callback: the count travels out the
+  // same way `usage` already does. A compaction that exhausts its retries throws instead of
+  // returning, so those attempts are not reported — that path reports the error itself.
+  //
+  // A string `model` is a model id the SDK resolves through its own registry and there is nothing
+  // to wrap; nothing in this repo passes one (cli.ts hands over getGroqModel's instance), so it
+  // reports no retries rather than growing a resolver for a caller that does not exist.
+  let attempts = 0;
+  const countedModel =
+    typeof model === "string"
+      ? model
+      : wrapLanguageModel({
+          model,
+          middleware: {
+            wrapGenerate: async ({ doGenerate }) => {
+              attempts++;
+              return await doGenerate();
+            },
+          },
+        });
+
   // Summarizing is a full model round-trip that can run for seconds. Leaving it un-abortable
   // would make "Ctrl-C cancels the turn" conditionally false in a way the user cannot predict:
   // the same keypress would do nothing at all if it landed here.
   const { text, usage } = await generateText({
-    model,
+    model: countedModel,
     abortSignal: signal,
     // Stated rather than defaulted: this round-trip can cost three model calls, and nothing said so.
     maxRetries: MAX_RETRIES,
@@ -77,5 +112,6 @@ export async function compactMessages(
     summary,
     evictedCount: evictBoundary,
     usage,
+    retries: Math.max(attempts - 1, 0),
   };
 }

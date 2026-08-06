@@ -329,6 +329,119 @@ describe("runLoop", () => {
     expect(JSON.stringify(finalPrompt)).toContain(marker);
   });
 
+  // The compaction round-trip was the one model call in the repo whose retries were unobservable:
+  // maxRetries was stated on it, so a 429'd summariser was already being re-issued ~2 s and ~4 s
+  // apart, and the user saw nothing at all until `⚙ compacted` arrived — the "looks hung" symptom
+  // the retry event exists to remove, on a call they never asked for.
+  //
+  // onLanguageModelCallStart is NOT the hook here, unlike the streamText case above. Measured
+  // against ai@7.0.48 with a doGenerate that 429s once: doGenerate ran twice and the callback fired
+  // ONCE, because generateText notifies it before entering the retry wrapper (dist/index.js:5599,
+  // with the `retry(...)` at 5607) where streamText notifies from inside it. A middleware's
+  // wrapGenerate is what the retry wrapper re-invokes, and it ran twice — which is why
+  // compactMessages counts there.
+  test("a retried compaction round-trip is reported as a retry event before the compacted event", async () => {
+    const summaryObj = { goal: "g", progress: "p", blockers: "none", nextSteps: "continue" };
+
+    const totalIterations = 25;
+    const compactAtIteration = 11; // the doStream call whose usage crosses the threshold
+    const doStream = Array.from({ length: totalIterations }, (_, i) =>
+      streamResult(
+        toolCallChunks(`call-${i}`, "write_file", { path: "a.txt" }, usage(i === compactAtIteration ? 6000 : 100, 10)),
+      ),
+    );
+
+    let generateAttempts = 0;
+    const model = new MockLanguageModelV4({
+      doStream,
+      doGenerate: async () => {
+        generateAttempts++;
+        if (generateAttempts === 1) {
+          throw new APICallError({
+            message: "rate limit exceeded",
+            url: "https://api.groq.com/openai/v1/chat/completions",
+            requestBodyValues: {},
+            statusCode: 429,
+            // Same 10 ms as the streamText retry test above, for the same reason: without the
+            // header this waits out the SDK's own 2000 ms first backoff.
+            responseHeaders: { "retry-after-ms": "10" },
+          });
+        }
+        return {
+          content: [{ type: "text", text: JSON.stringify(summaryObj) }],
+          finishReason: { unified: "stop", raw: undefined },
+          usage: usage(20, 10),
+          warnings: [],
+        };
+      },
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools: makeTools(async () => "ok"),
+        messages: baseMessages,
+        permissionMode: "auto",
+        maxIterations: totalIterations,
+        contextWindowSize: 10_000,
+        compactionThreshold: 0.5,
+        preserveRecentMessages: 6,
+      }),
+    );
+
+    // Proves the SDK really retried, so the assertion below cannot go green on a run where there
+    // was no retry to report.
+    expect(generateAttempts).toBe(2);
+    // Exactly one, and it can only be the summariser's: every streamText call in this run succeeds
+    // on its first attempt.
+    expect(events.filter((e) => e.type === "retry")).toEqual([{ type: "retry", attempt: 1 }]);
+    expect(events.findIndex((e) => e.type === "retry")).toBeLessThan(
+      events.findIndex((e) => e.type === "compacted"),
+    );
+    expect(events.filter((e) => e.type === "compacted")).toHaveLength(1);
+  });
+
+  // The negative control for the test above: a compaction whose first attempt succeeds is not a
+  // retry, and announcing one would tell the user the provider is rate-limiting them when it is not.
+  test("a compaction that succeeds first time reports no retry", async () => {
+    const summaryObj = { goal: "g", progress: "p", blockers: "none", nextSteps: "continue" };
+
+    const totalIterations = 25;
+    const compactAtIteration = 11;
+    const doStream = Array.from({ length: totalIterations }, (_, i) =>
+      streamResult(
+        toolCallChunks(`call-${i}`, "write_file", { path: "a.txt" }, usage(i === compactAtIteration ? 6000 : 100, 10)),
+      ),
+    );
+
+    const model = new MockLanguageModelV4({
+      doStream,
+      doGenerate: async () => ({
+        content: [{ type: "text", text: JSON.stringify(summaryObj) }],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: usage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools: makeTools(async () => "ok"),
+        messages: baseMessages,
+        permissionMode: "auto",
+        maxIterations: totalIterations,
+        contextWindowSize: 10_000,
+        compactionThreshold: 0.5,
+        preserveRecentMessages: 6,
+      }),
+    );
+
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(events.filter((e) => e.type === "compacted")).toHaveLength(1);
+    expect(events.find((e) => e.type === "retry")).toBeUndefined();
+  });
+
   test("yields an error and keeps running uncompacted when compactMessages throws", async () => {
     const marker = "MARKER_FACT_777";
     const tools = makeTools(async (input: { path: string }) => (input.path === "marker.txt" ? marker : "ok"));

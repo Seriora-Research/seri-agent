@@ -23,8 +23,13 @@ export type LoopEvent =
   // summariser's own round-trip, which is billed like any other and was invisible until now.
   | { type: "usage"; usage: LanguageModelUsage }
   // The SDK's retry, not one of ours — see MAX_RETRIES in compaction.ts. `attempt` counts retries of the current
-  // model call, so the first re-issue is 1. There is no error and no delay here because the only
-  // per-attempt hook ai@7.0.48 exposes (onLanguageModelCallStart) carries neither.
+  // model call, so the first re-issue is 1. There is no error and no delay here because nothing
+  // ai@7.0.48 hands out per attempt carries either — streamText's onLanguageModelCallStart for the
+  // main call, a middleware's wrapGenerate for compaction's (compaction.ts says why the callback is
+  // not usable there). Which of the two was retried is deliberately not a field: the event says the
+  // provider is rate-limiting or down and the wait is the SDK's, which is the same fact and the same
+  // (absence of an) action for the user either way, and the two cannot interleave — compaction runs
+  // to completion before the turn's streamText call starts.
   | { type: "retry"; attempt: number }
   // "aborted" is a member of the existing termination event rather than a `cancelled` event of its
   // own: the turn IS done, and the reason it is done is that it was aborted. A consumer asking
@@ -132,6 +137,14 @@ export async function* runLoop(opts: {
         try {
           const compacted = await compactMessages(messages, opts.model, evictBoundary, opts.signal);
           messages.splice(0, messages.length, ...compacted.messages);
+          // Drained here for the same reason the stream's retries are drained below: compaction is
+          // a model call the user never asked for, and until now a 429'd summariser was ~6 s of
+          // silence before `⚙ compacted`. compactMessages cannot yield and does no I/O, so its
+          // count comes back as a return value and becomes events here — one per retry, before the
+          // `compacted` event, because that is the order they happened in.
+          for (let attempt = 1; attempt <= compacted.retries; attempt++) {
+            yield { type: "retry", attempt };
+          }
           yield {
             type: "compacted",
             summary: compacted.summary,
