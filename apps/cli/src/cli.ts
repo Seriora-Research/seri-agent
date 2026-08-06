@@ -201,8 +201,8 @@ function loadOrCreateSession(
     id: randomUUID(),
     cwd: process.cwd(),
     systemPrompt,
-    // Read-only is the safest default for a brand-new session: nothing in build-plan.md/
-    // definitive-harness.md states an explicit default, so this errs on the side of never
+    // Read-only is the safest default for a brand-new session: nothing in docs/BUILD-PLAN.md /
+    // docs/ARCHITECTURE.md states an explicit default, so this errs on the side of never
     // writing/executing without the user opting in via --resume onto an existing session
     // or cycling the mode themselves.
     permissionMode: "read-only",

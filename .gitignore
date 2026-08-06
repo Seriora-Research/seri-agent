@@ -7,10 +7,14 @@ apps/cli/src/tools/rg-vendored.bin
 *.log
 .env
 .env.*
-build-plan.md
-definitive-harness.md
-research.md
 .claude/
+
+# docs-tmp/ is the private half of the documentation: operational runbooks that name real
+# infrastructure (organization ids, the Supabase project ref, WorkOS ids) and the two files
+# that hold live credentials. The design docs that used to live here — the architecture spec,
+# the build plan, the research survey and the design system — are tracked under docs/ now,
+# because AGENTS.md and several source comments cite them as the project's contract and a
+# fresh clone did not have them.
 docs-tmp/
 supabase-pass.md
 
