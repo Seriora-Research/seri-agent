@@ -160,7 +160,7 @@ describe("runCheck", () => {
     expect(outcome.reason).toContain("timed out");
   });
 
-  // A cancelled check rejects (spawnCollect.ts:201). The write itself already succeeded, so this
+  // A cancelled check rejects (spawnCollect.ts:201-202). The write itself already succeeded, so this
   // must not be re-thrown: that would replace the record of a completed write with a tool error.
   test("a rejecting runner becomes a failed outcome rather than a thrown write", async () => {
     const outcome = await runCheck("/project/a.ts", undefined, {

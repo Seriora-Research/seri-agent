@@ -97,7 +97,7 @@ export const WRITE_TOOL_NAMES: (keyof typeof toolDefinitions)[] = ["write_file",
 
 // Tools that can change the contents of the filesystem, which is what a checkpoint has to be
 // taken in front of. Deliberately NOT WRITE_TOOL_NAMES: that set is the *permission*
-// classification and contains `edit`, but `edit()` (tools/edit.ts:100) is
+// classification and contains `edit`, but `edit()` (tools/edit.ts:102) is
 // `(content: string, oldString, newString) => string` — a pure string transform whose schema
 // takes the content itself, not a path. It never touches disk; the model has to follow up with
 // `write_file`. Snapshotting on it would only ever produce a checkpoint identical to its
