@@ -310,6 +310,15 @@ function printEvent(event: LoopEvent): void {
   }
 }
 
+const PARSE_OPTIONS = {
+  help: { type: "boolean", short: "h" },
+  version: { type: "boolean", short: "v" },
+  selftest: { type: "boolean" },
+  resume: { type: "string" },
+  continue: { type: "boolean" },
+  "max-turns": { type: "string" },
+} as const;
+
 // stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
 // parseArgs rejects, or no task given — is a usage error: printed to stderr, exit 2.
 // config/commands.ts's own usage error also exits 2, keeping the convention uniform across every
@@ -352,24 +361,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   };
   let positionals: string[];
   try {
-    // Written inline rather than hoisted to a module const: hoisted without `as const`, tsc widens
-    // `values.resume` to `string | boolean | (string | boolean)[] | undefined` and the object
-    // itself fails ParseArgsOptionsConfig, producing two TS2322s at the assignments below. Measured
-    // against this repo's tsc. Inline, `values.resume` and `values["max-turns"]` are
-    // `string | undefined` and `positionals` is `string[]`, with no cast anywhere.
-    ({ values, positionals } = parseArgs({
-      args: argv,
-      strict: true,
-      allowPositionals: true,
-      options: {
-        help: { type: "boolean", short: "h" },
-        version: { type: "boolean", short: "v" },
-        selftest: { type: "boolean" },
-        resume: { type: "string" },
-        continue: { type: "boolean" },
-        "max-turns": { type: "string" },
-      },
-    }));
+    ({ values, positionals } = parseArgs({ args: argv, strict: true, allowPositionals: true, options: PARSE_OPTIONS }));
   } catch (err) {
     return usageError(err instanceof Error ? err.message : String(err));
   }
