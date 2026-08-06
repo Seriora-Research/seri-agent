@@ -17,7 +17,7 @@
     "build:darwin-arm64": "bun run --cwd apps/cli build:darwin-arm64",
     "build:windows-x64": "bun run --cwd apps/cli build:windows-x64",
     "build:all": "bun run --cwd apps/cli build:all",
-    "test": "bun run --cwd packages/plans test && bun run --cwd apps/cli test && bun run --cwd apps/server test && bun run --cwd apps/web test && bun run --cwd apps/lab test && bun run --cwd apps/portal test",
+    "test": "bun run --cwd packages/plans test && bun run --cwd packages/copy-policy test && bun run --cwd apps/cli test && bun run --cwd apps/server test && bun run --cwd apps/web test && bun run --cwd apps/lab test && bun run --cwd apps/portal test",
     "typecheck": "bun run --cwd apps/cli typecheck && bun run --cwd apps/server typecheck && bun run --cwd packages/plans typecheck && bun run --cwd packages/ui typecheck && bun run --cwd packages/copy-policy typecheck && bun run --cwd apps/web typecheck && bun run --cwd apps/lab typecheck && bun run --cwd apps/portal typecheck",
     "lint": "bun run --cwd apps/cli lint"
   }
