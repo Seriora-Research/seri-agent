@@ -834,6 +834,29 @@ describe("run (login/signup/logout)", () => {
     expect(code).toBe(0);
     expect(capturedConfigDir).toBe("fake-config-dir");
   });
+
+  // Validated right after the parse (cli.ts), before any subcommand dispatch: `--max-turns garbage
+  // login` used to reach login with the malformed flag silently ignored, while the same flag on a
+  // task correctly exited 2.
+  test("`seri --max-turns garbage login` is a usage error; login is never reached", async () => {
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["--max-turns", "garbage", "login"], {
+        login: failIfCalled("login"),
+        authConfigDir: "fake-config-dir",
+        getGroqModel: failIfCalled("getGroqModel"),
+        loadAgentsFile: failIfCalled("loadAgentsFile"),
+      });
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(code).toBe(2);
+    expect(errors.join("\n")).toContain("--max-turns");
+  });
 });
 
 describe("run (/mode)", () => {
@@ -859,9 +882,11 @@ describe("run (/mode)", () => {
   });
 
   // Pins the hazard the --resume/--continue split introduces in place of the misparse defect the
-  // test above used to guard: --resume now takes a session id, so `--resume /mode` looks for a
-  // session literally named "/mode" instead of cycling the most recent one.
-  test("`--resume /mode` looks for a session literally named /mode instead of cycling the most recent one", async () => {
+  // test above used to guard: --resume now takes a session id, so `--resume /mode` would look for
+  // a session literally named "/mode" instead of cycling the most recent one. Guarded rather than
+  // left to fail as "session not found": a slash-command name after --resume is a usage error that
+  // names --continue as the fix.
+  test("`--resume /mode` is a usage error naming --continue, not a session-not-found lookup", async () => {
     const existing: SessionState = { id: "abc", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
     saveSession(existing, sessionsDir);
 
@@ -875,8 +900,8 @@ describe("run (/mode)", () => {
       console.error = originalError;
     }
 
-    expect(code).toBe(1);
-    expect(errors.join("\n")).toContain("/mode");
+    expect(code).toBe(2);
+    expect(errors.join("\n")).toContain("--continue");
     expect(loadSession("abc", sessionsDir).permissionMode).toBe("read-only");
   });
 

@@ -366,6 +366,25 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     return usageError(err instanceof Error ? err.message : String(err));
   }
 
+  const maxTurnsRaw = values["max-turns"];
+  let maxTurns: number | undefined;
+  if (maxTurnsRaw !== undefined) {
+    // parseArgs accepts --max-turns abc happily (measured) — it has no numeric option type — so
+    // this check is not redundant. Same shape as isStepCount above. Validated here, right after the
+    // parse, so a malformed value is a usage error regardless of which subcommand follows it —
+    // `seri --max-turns garbage login` used to reach login with the bad flag silently ignored.
+    if (!/^[1-9]\d*$/.test(maxTurnsRaw)) return usageError(`Invalid --max-turns value: ${maxTurnsRaw}`);
+    maxTurns = Number(maxTurnsRaw);
+  }
+
+  // `--resume` now takes a mandatory value, so a slash command after it (`seri --resume /mode`,
+  // the form `--resume`'s old optional-value parsing used to cycle the most recent session's mode)
+  // looks for a session literally named "/mode" and fails with "session not found" instead — a
+  // silent behaviour change rather than a loud one. Caught here as a usage error naming the fix.
+  if (values.resume !== undefined && SLASH_COMMANDS.has(values.resume)) {
+    return usageError(`--resume ${values.resume} looks for a session named "${values.resume}". Did you mean: seri --continue ${values.resume}`);
+  }
+
   if (values.help === true) {
     console.log(USAGE);
     return 0;
@@ -444,15 +463,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       console.error(err instanceof Error ? err.message : String(err));
       return 1;
     }
-  }
-
-  const maxTurnsRaw = values["max-turns"];
-  let maxTurns: number | undefined;
-  if (maxTurnsRaw !== undefined) {
-    // parseArgs accepts --max-turns abc happily (measured) — it has no numeric option type — so
-    // this check is not redundant. Same shape as isStepCount above.
-    if (!/^[1-9]\d*$/.test(maxTurnsRaw)) return usageError(`Invalid --max-turns value: ${maxTurnsRaw}`);
-    maxTurns = Number(maxTurnsRaw);
   }
 
   const resuming = values.continue === true || values.resume !== undefined;
