@@ -301,6 +301,18 @@ function printEvent(event: LoopEvent): void {
     case "compacted":
       console.log(`\n⚙ compacted ${event.evictedCount} messages`);
       break;
+    // A rate limit or a 5xx, and there is no telling which from here: the SDK hands its retry
+    // callback neither the error nor the delay (loop.ts's MAX_RETRIES comment), so naming one of
+    // the two would be a guess printed as a fact. Worth a line at all because the wait is the SDK's
+    // — 2 s before the first re-issue — and until now a rate-limited turn simply looked hung.
+    case "retry":
+      console.log(`\n↻ rate-limited or unavailable; retrying (attempt ${event.attempt})`);
+      break;
+    // Deliberately silent per event: the loop emits one of these per completed model call, so
+    // printing here would put a token count between every turn and its successor. driveLoop sums
+    // them instead and run() prints the one line at the end.
+    case "usage":
+      break;
     case "done":
       console.log(`\n(done: ${event.reason})`);
       break;
@@ -573,11 +585,15 @@ function prepareSession(ctx: RunContext, deps: CliDeps): PreparedRun | number {
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
 
+// What the run cost, summed here rather than in runLoop: the loop is stateless by design and emits
+// one usage event per completed model call, so the running total is the consumer's to keep.
+type RunUsage = { inputTokens: number; outputTokens: number };
+
 async function driveLoop(
   prepared: PreparedRun,
   ctx: RunContext,
   deps: CliDeps,
-): Promise<{ doneReason: DoneReason | undefined; cancelledBy: NodeJS.Signals | undefined }> {
+): Promise<{ doneReason: DoneReason | undefined; cancelledBy: NodeJS.Signals | undefined; usage: RunUsage }> {
   const { session, storeDir, tools, model, runLoopFn } = prepared;
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
@@ -593,6 +609,7 @@ async function driveLoop(
   });
 
   let doneReason: DoneReason | undefined;
+  const usage: RunUsage = { inputTokens: 0, outputTokens: 0 };
   try {
     for await (const event of runLoopFn({
       model,
@@ -629,6 +646,15 @@ async function driveLoop(
           );
         }
       }
+      // `compacted` alongside `usage` because the summariser's own round-trip is billed like any
+      // other call and was invisible to every caller until loop.ts stopped dropping it — a total
+      // that left it out would under-report exactly the calls the user never asked for. Both
+      // fields are `number | undefined` (the provider may report neither), and a call that
+      // reported nothing contributes nothing rather than NaN.
+      if (event.type === "usage" || event.type === "compacted") {
+        usage.inputTokens += event.usage.inputTokens ?? 0;
+        usage.outputTokens += event.usage.outputTokens ?? 0;
+      }
       if (event.type === "done") doneReason = event.reason;
       printEvent(event);
     }
@@ -639,7 +665,17 @@ async function driveLoop(
     unregisterCancel();
   }
 
-  return { doneReason, cancelledBy };
+  return { doneReason, cancelledBy, usage };
+}
+
+// Only when there is something to report. A run that made no model call — `--continue` with no
+// task and a fake that yields nothing, a provider that failed before the first request — has no
+// spend, and "(tokens: 0 in, 0 out)" is a number the user cannot act on printed on paths that
+// never called anything. The same guard covers a call the provider reported no usage for, where
+// the zeros would be a claim about spend rather than a measurement of it.
+function printUsage(usage: RunUsage): void {
+  if (usage.inputTokens === 0 && usage.outputTokens === 0) return;
+  console.log(`(tokens: ${usage.inputTokens} in, ${usage.outputTokens} out)`);
 }
 
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
@@ -688,7 +724,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const prepared = prepareSession(ctx, deps);
   if (typeof prepared === "number") return prepared;
 
-  const { doneReason, cancelledBy } = await driveLoop(prepared, ctx, deps);
+  const { doneReason, cancelledBy, usage } = await driveLoop(prepared, ctx, deps);
+
+  // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
+  // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are
+  // billed for the calls they did make, and those are precisely the runs whose cost is otherwise
+  // unaccounted for. The one exit this does not cover is a throw escaping driveLoop's `for await`
+  // (approvalPrompt rejecting), which already skips the exit code below too.
+  printUsage(usage);
 
   // The turn was cancelled, so the process still dies the way Ctrl-C makes a process die. Not
   // process.exit: a status is not a death by signal, and `for f in a b c; do seri "$f"; done` only

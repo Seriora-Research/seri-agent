@@ -10,7 +10,10 @@ type RunLoopOpts = Parameters<typeof runLoop>[0];
 
 // The ~5-line async generator every fake in this file rebuilt by hand: capture what cli.ts passed
 // runLoop, yield the given events (default: a single "no-tool-call" done), and return
-// opts.messages the way the real generator does. `capture()` reads back what was captured —
+// opts.messages — which is NOT what the real generator does and which nothing reads: every
+// `return` in loop.ts is bare, and cli.ts drives it with `for await`, which discards a generator's
+// return value either way. Usage and every other result travel as events, not as a return value.
+// `capture()` reads back what was captured —
 // undefined if runLoop was never called — so a test that only needs "was it called" and one that
 // needs the actual opts share the same fake instead of each hand-rolling their own.
 function fakeRunLoop(events: LoopEvent[] = [{ type: "done", reason: "no-tool-call" }]) {

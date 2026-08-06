@@ -17,7 +17,10 @@ type RunLoopOpts = Parameters<typeof runLoop>[0];
 
 // The ~5-line async generator every fake in this file rebuilt by hand: capture what cli.ts passed
 // runLoop, yield the given events (default: a single "no-tool-call" done), and return
-// opts.messages the way the real generator does. `capture()` reads back what was captured —
+// opts.messages — which is NOT what the real generator does and which nothing reads: every
+// `return` in loop.ts is bare, and cli.ts drives it with `for await`, which discards a generator's
+// return value either way. Usage and every other result travel as events, not as a return value.
+// `capture()` reads back what was captured —
 // undefined if runLoop was never called — so a test that only needs "was it called" and one that
 // needs the actual opts share the same fake instead of each hand-rolling their own.
 function fakeRunLoop(events: LoopEvent[] = [{ type: "done", reason: "no-tool-call" }]) {
@@ -322,6 +325,103 @@ describe("run (task invocation)", () => {
 
     expect(logs.join("\n")).toContain("nothing written");
     expect(logs.join("\n")).toContain("✓ write_file done");
+  });
+
+  // The other half of "a new event member must not fall through printEvent silently": the SDK has
+  // been retrying a rejected call twice, 2 s apart, for as long as this repo has called it, and the
+  // user saw a turn that had simply stopped. The attempt number is the whole payload — loop.ts's
+  // event carries no error and no delay because the SDK's only per-attempt hook carries neither —
+  // so it is the one thing this line has to get onto the screen.
+  test("a retry is announced with its attempt number instead of looking like a hung turn", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      { type: "retry", attempt: 1 },
+      { type: "retry", attempt: 2 },
+      { type: "done", reason: "no-tool-call" },
+    ]);
+
+    const { logs } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.filter((line) => line.includes("retrying"))).toEqual([
+      "\n↻ rate-limited or unavailable; retrying (attempt 1)",
+      "\n↻ rate-limited or unavailable; retrying (attempt 2)",
+    ]);
+  });
+
+  // Every field of LanguageModelUsage spelled out because the type requires all five, and only the
+  // two the summary sums are given values: a helper that filled in the details would be asserting
+  // on fields no line of cli.ts reads.
+  function usageEvent(inputTokens: number, outputTokens: number): LoopEvent {
+    return {
+      type: "usage",
+      usage: {
+        inputTokens,
+        inputTokenDetails: { noCacheTokens: undefined, cacheReadTokens: undefined, cacheWriteTokens: undefined },
+        outputTokens,
+        outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+        totalTokens: inputTokens + outputTokens,
+      },
+    };
+  }
+
+  // One line for the whole run, not one per turn: the loop emits usage per completed model call by
+  // design, and a twenty-turn task would otherwise print twenty rows nobody can add up. The
+  // compacted event's usage is in the same total because the summariser's round-trip is billed like
+  // any other — that is why loop.ts stopped dropping it.
+  test("sums the run's usage events into one end-of-run summary line", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      usageEvent(120, 30),
+      usageEvent(200, 45),
+      { type: "done", reason: "no-tool-call" },
+    ]);
+
+    const { code, logs } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(0);
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["(tokens: 320 in, 75 out)"]);
+  });
+
+  // The reason the summary is conditional. Every other test in this file drives a fake that emits no
+  // usage at all, and a run that made no model call has no spend to report — a "(tokens: 0 in, 0
+  // out)" on the end of `--continue` with no task would be a number the user could not act on and a
+  // new line on paths that never call the model.
+  test("prints no token summary for a run that reported no usage", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop();
+
+    const { logs } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual([]);
+  });
+
+  // Tokens spent before a failure are billed exactly like tokens spent before an answer, so the
+  // summary belongs on the way out of every run that made a call — not inside the success branch.
+  // The cancelled run is the same decision and cannot be tested here: it ends in raiseSignal, which
+  // would kill the test runner.
+  test("still prints the summary for a run that ended in an error", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      usageEvent(120, 30),
+      { type: "error", error: "AI_APICallError: Invalid API Key" },
+    ]);
+
+    const { code, logs } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(1);
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["(tokens: 120 in, 30 out)"]);
   });
 
   // A provider failure exited 0, so `seri "…" && next-thing` ran next-thing on a turn that never
