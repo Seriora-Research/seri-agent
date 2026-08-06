@@ -56,6 +56,8 @@ seri "explain what this repo does"
 ```
 
 `seri --help` prints the usage text, and `seri --version` the installed version.
+`seri --continue` resumes the most recent session, and `seri --resume <id>` a named one; a task
+containing a flag goes after `--` (`seri -- fix the --help output`).
 
 The first search of each release unpacks its bundled ripgrep to `%LOCALAPPDATA%\seri\rg\<key>\`
 on Windows, or `~/.seri/rg/<key>/` elsewhere. Deleting that directory is safe — the next search

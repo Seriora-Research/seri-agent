@@ -48,6 +48,13 @@ never touches stdout/stdin directly. `apps/cli/src/cli.ts` is a thin consumer th
 and prompts for approval. This boundary is deliberate and load-bearing — a future
 daemon/transport layer is expected to consume the same generator.
 
+**argv is parsed once, in `cli.ts`, with `node:util`'s `parseArgs`** — the loop never sees argv.
+Flags are flags in any position and remaining positionals are the task; `--` is the documented
+escape for a task that contains what looks like a flag (`seri -- fix the --help output`). Exit
+codes: **0** a request was served or the turn finished, **1** the turn did not finish, **2** a bad
+invocation (parseArgs rejected it, or no task was given). `--max-turns <n>` is the only `runLoop`
+option the CLI sets, default 500.
+
 **Cancellation belongs to the consumer.** `runLoop` accepts an optional `AbortSignal` and never
 constructs one — `apps/cli/src/cli.ts` owns an `AbortController` per run, because only the consumer
 knows what a Ctrl-C means. The signal reaches all three of `streamText`, `compactMessages`, and
@@ -66,7 +73,7 @@ for every call after it, which is what leaves the session resumable (an unanswer
 death and turn one Ctrl-C into one press per iteration of `for f in a b c; do seri "$f"; done`. The
 **second** press finds the slot empty and takes the untouched fatal path. When the turn was not
 cancelled the status instead says whether it finished: only `done.reason: "no-tool-call"` exits 0,
-while a stream error (no `done` at all) and a run stopped by the iteration or token cap both exit 1,
+while a stream error (no `done` at all) and a run stopped by the iteration cap both exit 1,
 so `seri "…" && next` stops rather than chaining onto an unfinished turn. Making any of this
 reachable is why `runRipgrep` — and therefore `grep`/`glob` — is async: `spawnSync` blocks the event
 loop, so a SIGINT during a search was not delivered to any handler until rg finished on its own.
@@ -99,8 +106,8 @@ would break every later command's `loadConfig`. `list` masks values and flags an
 shadowed by an env var, because `getApiKey` prefers `process.env`.
 
 **Sessions** (`apps/cli/src/session/session.ts`) persist as one JSON file per session under
-`<configDir>/sessions/`; `--resume [id]` reloads the most recent (or named) session.
-SQLite was considered and deferred in favor of this for v0/v1.
+`<configDir>/sessions/`; `--resume <id>` reloads that session, `--continue` reloads the most
+recent one. SQLite was considered and deferred in favor of this for v0/v1.
 
 **Compaction** (`apps/cli/src/loop/compaction.ts`) triggers once input tokens cross a threshold
 of the model's context window. It summarizes evicted messages into a structured
