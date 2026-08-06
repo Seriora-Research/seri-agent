@@ -433,11 +433,17 @@ describe("run (task invocation)", () => {
 
     expect(cancelledBy).toBe("SIGINT");
     expect(answer).toBe(false);
-    // The status of the one shape that reaches cli.ts's `return` with done: "aborted" — an abort
-    // that did not come through cli.ts's own cancel slot, so raiseSignal never ran. Here that is
-    // this fake displacing the slot; in production it would be a second caller of
-    // controller.abort(), which signals.ts already anticipates in Stage 6's subagents. Pinned so
-    // that turning a user-visible cancel into exit 1 is a failing test and not a silent change.
+    // `done: "aborted"` reaching cli.ts's final `return` at all means the abort did not come
+    // through cli.ts's own cancel slot, so raiseSignal never ran and the status below is what the
+    // shell sees. Here that shape exists because this fake displaces the slot; in production it
+    // would take a second caller of controller.abort(). Exit 1 is what that shape gets today, and
+    // that is the whole of what this line records.
+    //
+    // It is NOT a guard against that second caller appearing — when Stage 6's subagents add one,
+    // `done: "aborted"` becomes reachable there for real and this test stays green through the
+    // change, because the value asserted here is the value such a change would have to alter to be
+    // caught. Whoever adds an aborter has to decide for themselves whether a non-Ctrl-C abort
+    // should still exit 1 and revisit this assertion; the suite will not raise it for them.
     expect(code).toBe(1);
   }, 10_000);
 

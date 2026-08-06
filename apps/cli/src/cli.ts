@@ -350,8 +350,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // the whole invocation fixed that and reopened it one argument away: `seri -h config`,
   // `seri --help --resume` and `seri --version --quiet` all failed the length check, fell through
   // to the task path, and wrote a session file and billed a turn to answer a request for the usage
-  // text. Position is the property that actually separates the two — a task never starts with the
-  // flag, an invocation of the flag always does.
+  // text. Position separates the two for a flag in first position — a task never starts with one.
+  // It does not separate them for a flag behind another: `seri --resume --help` is a documented
+  // form (USAGE above), argv[0] is `--resume` so this gate misses, and parseTaskArgs rejects
+  // `--help` as a session id for its leading dash and joins it into the task — the most recent
+  // session resumes and a turn is billed. Deliberately not gated a fourth time here; the per-flag
+  // checks are the structural problem .claude/loops/cli-command-table/PROBLEM.md exists to fix.
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
     console.log(USAGE);
     return 0;
@@ -576,7 +580,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // exactly one caller: the handler above, which sets cancelledBy first, so raiseSignal ran and
   // did not return. Nothing enforces it — signals.ts names Stage 6's subagents as a second
   // aborter — and a cancel arriving any other way lands on the 1 below rather than dying by
-  // signal. tests/cli/cli.test.ts pins that status so the change would be visible.
+  // signal. tests/cli/cli.test.ts records that status for the displaced-slot case, but it asserts
+  // the same 1 a second aborter would produce, so it will not go red when one is added: revisiting
+  // this line is on whoever adds it.
   return doneReason === "no-tool-call" ? 0 : 1;
 }
 
