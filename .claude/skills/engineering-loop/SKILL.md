@@ -22,6 +22,15 @@ $1
 2. Create `.claude/loops/<slug>/` if missing. Write/append:
    - `STATE.md` filled from `.claude/templates/state.md`
    - `trajectory.md` (append a timestamped INIT entry: mode, prompt, current branch)
+   - `SESSION` — the value of `$CLAUDE_CODE_SESSION_ID`, and nothing else:
+     ```bash
+     printf '%s' "$CLAUDE_CODE_SESSION_ID" > .claude/loops/<slug>/SESSION
+     ```
+     **Do not skip this.** It is how `log-trajectory`, `goal-audit-gate` and `verify-gate`
+     tell this loop's files from every other loop's. Without it they fall back to
+     "the only loop on disk", and the moment a second loop exists they stop logging
+     and the Goal Audit gate blocks. Verified 2026-08-06: the env var is identical to
+     the `session_id` every hook receives on stdin.
 3. **Resolve model config** (override order — last wins):
    a. Built-in defaults: every role defaults to `inherit` — the runner's active
       model is used unless explicitly overridden.
