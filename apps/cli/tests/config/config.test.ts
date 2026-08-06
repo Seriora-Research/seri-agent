@@ -64,11 +64,20 @@ describe("getApiKey", () => {
 describe("loadVerifyConfig", () => {
   afterEach(() => {
     delete process.env.SERI_VERIFY_ENABLED;
-    delete process.env.SERI_VERIFY_TIMEOUT_MS;
+    delete process.env.SERI_VERIFY_COMMAND;
   });
 
-  test("enabled with no timeout override when nothing is configured", () => {
-    expect(loadVerifyConfig()).toEqual({ enabled: true, timeoutMs: undefined });
+  // The default for every user: on, but with nothing to run, so nothing is ever spawned.
+  test("enabled with no command when nothing is configured", () => {
+    expect(loadVerifyConfig()).toEqual({ enabled: true, command: undefined });
+  });
+
+  test("reads the command from config.json, and lets the environment override it", () => {
+    writeFileSync(join(configDir, "config.json"), JSON.stringify({ SERI_VERIFY_COMMAND: "bun run typecheck" }));
+    expect(loadVerifyConfig().command).toBe("bun run typecheck");
+
+    process.env.SERI_VERIFY_COMMAND = "tsc --noEmit";
+    expect(loadVerifyConfig().command).toBe("tsc --noEmit");
   });
 
   test("turns off on exactly \"false\", from config.json or from the environment", () => {
@@ -83,16 +92,5 @@ describe("loadVerifyConfig", () => {
   test("any other value leaves it on, so a typo cannot silently disable the check", () => {
     process.env.SERI_VERIFY_ENABLED = "no";
     expect(loadVerifyConfig().enabled).toBe(true);
-  });
-
-  test("reads a positive timeout and ignores an unparseable or zero one", () => {
-    process.env.SERI_VERIFY_TIMEOUT_MS = "45000";
-    expect(loadVerifyConfig().timeoutMs).toBe(45000);
-
-    process.env.SERI_VERIFY_TIMEOUT_MS = "soon";
-    expect(loadVerifyConfig().timeoutMs).toBeUndefined();
-
-    process.env.SERI_VERIFY_TIMEOUT_MS = "0";
-    expect(loadVerifyConfig().timeoutMs).toBeUndefined();
   });
 });

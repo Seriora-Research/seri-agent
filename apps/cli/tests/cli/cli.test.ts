@@ -12,6 +12,7 @@ import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { toolDefinitions } from "../../src/provider/tools";
 import { onSignalCancel } from "../../src/signals";
 import { loadSession, saveSession, type SessionState } from "../../src/session/session";
+import type { CheckOutcome } from "../../src/verify/run";
 import { fakeRunLoop } from "./fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
@@ -142,15 +143,12 @@ describe("run (task invocation)", () => {
     expect(code).toBe(0);
     expect(capture()).toBeDefined();
     expect(capture()?.permissionMode).toBe("read-only");
-    // The same tool set, with only the tools the two wrappers have a reason to touch rebuilt:
-    // the filesystem-mutating ones for checkpointing (checkpoint/wrapTools.ts), and `edit` on top
-    // of that for the consecutive-failure counter (verify/wrapTools.ts). Everything else is still
-    // the identical object, so the wrappers cannot change what a read or a search does.
+    // The same tool set, with only the filesystem-mutating tools wrapped for checkpointing.
     expect(Object.keys(capture()?.tools ?? {})).toEqual(Object.keys(toolDefinitions));
     expect(capture()?.tools.read_file).toBe(toolDefinitions.read_file);
     expect(capture()?.tools.grep).toBe(toolDefinitions.grep);
     expect(capture()?.tools.glob).toBe(toolDefinitions.glob);
-    expect(capture()?.tools.edit).not.toBe(toolDefinitions.edit);
+    expect(capture()?.tools.edit).toBe(toolDefinitions.edit);
     expect(capture()?.tools.write_file).not.toBe(toolDefinitions.write_file);
     expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "write hello.txt" });
     expect(capture()?.messages).toHaveLength(1);
@@ -325,17 +323,19 @@ describe("run (task invocation)", () => {
       {
         type: "tool-result",
         name: "write_file",
+        // `satisfies CheckOutcome` is load-bearing: LoopEvent.result is `unknown` (loop.ts:17), so
+        // without it this literal is checked against nothing and would keep passing against a
+        // contract that had already changed underneath it.
         result: {
           written: true,
           verification: {
             status: "diagnostics",
-            command: "bun run --cwd . typecheck",
+            command: "tsc --noEmit",
             elapsedMs: 3600,
             diagnostics: [{ file: "a.ts", line: 1, column: 1, message: "error TS2322: nope" }],
             truncated: false,
-            shown: 1,
             total: 1,
-          },
+          } satisfies CheckOutcome,
         },
       },
       { type: "done", reason: "no-tool-call" },

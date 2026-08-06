@@ -1,4 +1,4 @@
-import { describeNearMiss } from "../verify/nearMiss";
+import { describeNearMiss } from "./nearMiss";
 
 // Ratio is a judgment call: the source docs (docs/ARCHITECTURE.md) describe the
 // disproportionate-match guard but don't specify an exact threshold. 5x trades off

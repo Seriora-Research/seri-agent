@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tool, type ModelMessage, type ToolExecutionOptions, type ToolSet } from "ai";
@@ -8,7 +8,7 @@ import { z } from "zod";
 import { edit } from "../../src/tools/edit";
 import { writeFile } from "../../src/tools/writeFile";
 import type { CheckOutcome } from "../../src/verify/run";
-import { MAX_CONSECUTIVE_EDIT_FAILURES, withVerification } from "../../src/verify/wrapTools";
+import { withVerification, writeFileDiagnosticCount } from "../../src/verify/wrapTools";
 
 const messages: ModelMessage[] = [
   { role: "user", content: "do the task" },
@@ -47,13 +47,12 @@ function realishTools(): ToolSet {
 
 const DIAGNOSTIC_OUTCOME: CheckOutcome = {
   status: "diagnostics",
-  command: "bun run --cwd /project typecheck",
+  command: "tsc --noEmit",
   elapsedMs: 3600,
   diagnostics: [
     { file: "src/a.ts", line: 12, column: 7, message: "error TS2322: Type 'number' is not assignable to type 'string'." },
   ],
   truncated: false,
-  shown: 1,
   total: 1,
 };
 
@@ -71,7 +70,7 @@ describe("withVerification", () => {
   // Acceptance criterion 2. Asserted on JSON.stringify because that is literally what the model
   // receives: loop.ts:354 puts the tool's return value into `{type:"json", value}`.
   test("a diagnostic from the check reaches the tool result the model reads", async () => {
-    const wrapped = withVerification(realishTools(), { runCheck: async () => DIAGNOSTIC_OUTCOME });
+    const wrapped = withVerification(realishTools(), { command: "tsc --noEmit", runCheck: async () => DIAGNOSTIC_OUTCOME });
 
     const result = await wrapped.write_file?.execute?.({ path: join(root, "a.ts"), content: "x" }, execOpts());
     const asModelSeesIt = JSON.stringify(result);
@@ -83,7 +82,11 @@ describe("withVerification", () => {
 
   // The negative control for the test above: the same call, the same fake check, feedback off.
   test("negative control: with verification disabled the same call carries no diagnostic", async () => {
-    const wrapped = withVerification(realishTools(), { enabled: false, runCheck: async () => DIAGNOSTIC_OUTCOME });
+    const wrapped = withVerification(realishTools(), {
+      enabled: false,
+      command: "tsc --noEmit",
+      runCheck: async () => DIAGNOSTIC_OUTCOME,
+    });
 
     const result = await wrapped.write_file?.execute?.({ path: join(root, "a.ts"), content: "x" }, execOpts());
     const asModelSeesIt = JSON.stringify(result);
@@ -94,7 +97,7 @@ describe("withVerification", () => {
   });
 
   test("the write still happens, and is reported, whatever the check says", async () => {
-    const wrapped = withVerification(realishTools(), { runCheck: async () => DIAGNOSTIC_OUTCOME });
+    const wrapped = withVerification(realishTools(), { command: "tsc --noEmit", runCheck: async () => DIAGNOSTIC_OUTCOME });
 
     const result = await wrapped.write_file?.execute?.({ path: join(root, "a.ts"), content: "hello" }, execOpts());
 
@@ -102,12 +105,10 @@ describe("withVerification", () => {
     expect(readFileSync(join(root, "a.ts"), "utf8")).toBe("hello");
   });
 
-  // Acceptance criterion 4, with its negative control inline: the fixture is asserted to genuinely
-  // have no package.json — and therefore no check script — so "returns normally" is a real result
-  // and not a check that would pass against any fixture at all. No runCheck is injected here: the
-  // real one runs, detects nothing, and spawns nothing.
-  test("a project with no check script writes and returns normally", async () => {
-    expect(existsSync(join(root, "package.json"))).toBe(false);
+  // Acceptance criterion 4, and now the default for every user rather than a fallback: no command
+  // is configured, so the real runCheck runs, spawns nothing, and the write returns normally. No
+  // runCheck is injected — the check that nothing is spawned is the real one.
+  test("with no command configured the write succeeds and returns normally", async () => {
     const wrapped = withVerification(realishTools(), {});
 
     const result = await wrapped.write_file?.execute?.({ path: join(root, "a.ts"), content: "hello" }, execOpts());
@@ -119,6 +120,7 @@ describe("withVerification", () => {
   test("a failed write throws as it always did, and runs no check", async () => {
     let checks = 0;
     const wrapped = withVerification(realishTools(), {
+      command: "tsc --noEmit",
       runCheck: async () => {
         checks++;
         return DIAGNOSTIC_OUTCOME;
@@ -131,17 +133,17 @@ describe("withVerification", () => {
     expect(checks).toBe(0);
   });
 
-  // Mirrors tests/checkpoint/wrapTools.test.ts:59 — a wrapper that rebuilt every entry would
-  // change the identity of tools it has no business touching.
-  test("tools other than write_file and edit come back identical by reference", () => {
+  // Mirrors tests/checkpoint/wrapTools.test.ts:59. `edit` is in this list deliberately: this
+  // wrapper touches write_file and nothing else, so edit's identity is preserved here exactly as
+  // checkpoint/wrapTools.ts:35-36 already promises for its own pass.
+  test("every tool but write_file comes back identical by reference", () => {
     const tools = realishTools();
-    const wrapped = withVerification(tools, {});
+    const wrapped = withVerification(tools, { command: "tsc --noEmit" });
 
-    for (const name of ["read_file", "grep", "glob", "bash", "powershell"]) {
+    for (const name of ["read_file", "edit", "grep", "glob", "bash", "powershell"]) {
       expect(wrapped[name]).toBe(tools[name]);
     }
     expect(wrapped.write_file).not.toBe(tools.write_file);
-    expect(wrapped.edit).not.toBe(tools.edit);
   });
 
   // Asserted on the signal the RUNNER RECEIVED, not on the wrapper accepting one: a signal
@@ -150,7 +152,8 @@ describe("withVerification", () => {
     const controller = new AbortController();
     let received: AbortSignal | undefined;
     const wrapped = withVerification(realishTools(), {
-      runCheck: async (_path, signal) => {
+      command: "tsc --noEmit",
+      runCheck: async (_command, signal) => {
         received = signal;
         return DIAGNOSTIC_OUTCOME;
       },
@@ -161,56 +164,36 @@ describe("withVerification", () => {
     expect(received).toBe(controller.signal);
   });
 
-  test("passes the written path to the check", async () => {
-    let received = "";
+  test("passes the configured command to the check", async () => {
+    let received: string | undefined;
     const wrapped = withVerification(realishTools(), {
-      runCheck: async (path) => {
-        received = path;
+      command: "bun run typecheck",
+      runCheck: async (command) => {
+        received = command;
         return DIAGNOSTIC_OUTCOME;
       },
     });
 
-    await wrapped.write_file?.execute?.({ path: join(root, "nested", "a.ts"), content: "x" }, execOpts());
+    await wrapped.write_file?.execute?.({ path: join(root, "a.ts"), content: "x" }, execOpts());
 
-    expect(received).toBe(join(root, "nested", "a.ts"));
+    expect(received).toBe("bun run typecheck");
   });
 });
 
-describe("withVerification (consecutive edit failures)", () => {
-  const content = "const alpha = 1;\n";
-
-  function failingEdit(wrapped: ToolSet): Promise<unknown> {
-    return Promise.resolve(
-      wrapped.edit?.execute?.({ content, oldString: "export default class Widget {}", newString: "x" }, execOpts()),
-    );
-  }
-
-  test("the first failures throw the ordinary message, the third adds the escalation", async () => {
-    const wrapped = withVerification(realishTools(), {});
-
-    expect(MAX_CONSECUTIVE_EDIT_FAILURES).toBe(3);
-    await expect(failingEdit(wrapped)).rejects.toThrow(/Could not find the specified text/);
-    await expect(failingEdit(wrapped)).rejects.not.toThrow(/ask the user/);
-    await expect(failingEdit(wrapped)).rejects.toThrow(/ask the user/);
+describe("writeFileDiagnosticCount", () => {
+  test("counts the diagnostics on a result this module produced", () => {
+    expect(writeFileDiagnosticCount({ written: true, verification: DIAGNOSTIC_OUTCOME })).toBe(1);
   });
 
-  test("a successful edit in between resets the count", async () => {
-    const wrapped = withVerification(realishTools(), {});
-
-    await expect(failingEdit(wrapped)).rejects.toThrow();
-    await expect(failingEdit(wrapped)).rejects.toThrow();
-
-    const ok = await wrapped.edit?.execute?.(
-      { content, oldString: "const alpha = 1;", newString: "const alpha = 2;" },
-      execOpts(),
-    );
-    expect(ok).toBe("const alpha = 2;\n");
-
-    await expect(failingEdit(wrapped)).rejects.not.toThrow(/ask the user/);
+  test("is undefined for every other outcome and for results this module did not produce", () => {
+    expect(writeFileDiagnosticCount({ written: true, verification: { status: "ok", command: "x", elapsedMs: 1 } })).toBeUndefined();
+    expect(writeFileDiagnosticCount("edited text")).toBeUndefined();
+    expect(writeFileDiagnosticCount(null)).toBeUndefined();
+    expect(writeFileDiagnosticCount(undefined)).toBeUndefined();
   });
 });
 
-// The only test in this feature that spawns a real process, so it carries both guards the repo
+// The only test in this feature that spawns a real process, so it carries the guards the repo
 // already needed for the same symptom (tests/tools/bash.test.ts:17,27,37,
 // tests/tools/powershell.test.ts:4,9, tests/provider/tools.test.ts:90,92,95): a skipIf on the
 // things it needs, probed by actually running them, and a 15000 ms margin for a cold start.
@@ -225,37 +208,42 @@ describe("withVerification (consecutive edit failures)", () => {
 // but the assertion below needs a real check to have run, so it is skipped instead.
 const TSC = join(import.meta.dir, "..", "..", "node_modules", "typescript", "lib", "tsc.js");
 const BUN_ON_PATH = spawnSync("bun", ["--version"], { encoding: "utf8" }).status === 0;
+// runCheck splits the command on whitespace and cannot quote, so a path with a space in it would
+// be split in the middle. Skipped rather than left to fail as though the feature were broken.
+const PATHS_ARE_SPACE_FREE = !TSC.includes(" ") && !tmpdir().includes(" ");
 
-describe.skipIf(!existsSync(TSC) || !BUN_ON_PATH)("withVerification (end to end, real check process)", () => {
-  let project: string;
+describe.skipIf(!existsSync(TSC) || !BUN_ON_PATH || !PATHS_ARE_SPACE_FREE)(
+  "withVerification (end to end, real check process)",
+  () => {
+    let project: string;
 
-  beforeEach(() => {
-    project = mkdtempSync(join(tmpdir(), "seri-verify-e2e-"));
-    writeFileSync(
-      join(project, "package.json"),
-      JSON.stringify({ name: "fixture", scripts: { typecheck: `bun ${JSON.stringify(TSC)} --noEmit --strict a.ts` } }),
+    beforeEach(() => {
+      project = mkdtempSync(join(tmpdir(), "seri-verify-e2e-"));
+    });
+
+    afterEach(() => {
+      rmSync(project, { recursive: true, force: true });
+    });
+
+    test(
+      "writing a file with a type error puts the real compiler's diagnostic in the tool result",
+      async () => {
+        const target = join(project, "a.ts");
+        // Exactly what a user would put in SERI_VERIFY_COMMAND: their own toolchain, named
+        // explicitly. Nothing here is discovered from the fixture.
+        const wrapped = withVerification(realishTools(), { command: `bun ${TSC} --noEmit --strict ${target}` });
+
+        const result = await wrapped.write_file?.execute?.(
+          { path: target, content: "export const greeting: string = 42;\n" },
+          execOpts(),
+        );
+        const asModelSeesIt = JSON.stringify(result);
+
+        expect(asModelSeesIt).toContain("a.ts");
+        expect(asModelSeesIt).toContain("is not assignable to type 'string'");
+        expect(result).toMatchObject({ written: true, verification: { status: "diagnostics" } });
+      },
+      15000,
     );
-  });
-
-  afterEach(() => {
-    rmSync(project, { recursive: true, force: true });
-  });
-
-  test(
-    "writing a file with a type error puts the real compiler's diagnostic in the tool result",
-    async () => {
-      const wrapped = withVerification(realishTools(), {});
-
-      const result = await wrapped.write_file?.execute?.(
-        { path: join(project, "a.ts"), content: "export const greeting: string = 42;\n" },
-        execOpts(),
-      );
-      const asModelSeesIt = JSON.stringify(result);
-
-      expect(asModelSeesIt).toContain("a.ts");
-      expect(asModelSeesIt).toContain("is not assignable to type 'string'");
-      expect(result).toMatchObject({ written: true, verification: { status: "diagnostics" } });
-    },
-    15000,
-  );
-});
+  },
+);

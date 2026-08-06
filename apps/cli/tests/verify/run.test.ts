@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import type { ProcessResult } from "../../src/tools/spawnCollect";
-import type { CheckCommand } from "../../src/verify/detect";
 import { MAX_DIAGNOSTICS, runCheck } from "../../src/verify/run";
 
 const OK: ProcessResult = {
@@ -26,29 +25,24 @@ function fakeSpawn(result: Partial<ProcessResult>, calls: SpawnCall[] = []) {
   };
 }
 
-const detect = (command: CheckCommand | null) => () => command;
-
 describe("runCheck", () => {
-  test("reports unavailable, and spawns nothing at all, when no check command is detected", async () => {
+  // The default for every user, and the reason there is no auto-discovery left: with nothing
+  // configured, seri does not go looking for a command to run.
+  test("reports unavailable, and spawns nothing at all, when no command is configured", async () => {
     const runner = fakeSpawn({});
-    const outcome = await runCheck("/project/src/a.ts", undefined, { spawn: runner.spawn, detect: detect(null) });
+    const outcome = await runCheck(undefined, undefined, { spawn: runner.spawn });
 
-    expect(outcome.status).toBe("unavailable");
+    expect(outcome).toMatchObject({ status: "unavailable" });
     expect(runner.calls).toEqual([]);
   });
 
-  test("runs the detected script in the detected directory", async () => {
+  test("splits the configured command into an executable and its arguments", async () => {
     const runner = fakeSpawn({});
-    await runCheck("/project/apps/cli/src/a.ts", undefined, {
-      spawn: runner.spawn,
-      detect: detect({ cwd: "/project/apps/cli", script: "typecheck" }),
-      timeoutMs: 4321,
-    });
+    await runCheck("bun run typecheck", undefined, { spawn: runner.spawn });
 
     expect(runner.calls).toHaveLength(1);
     expect(runner.calls[0].executable).toBe("bun");
-    expect(runner.calls[0].args).toEqual(["run", "--cwd", "/project/apps/cli", "typecheck"]);
-    expect(runner.calls[0].timeoutMs).toBe(4321);
+    expect(runner.calls[0].args).toEqual(["run", "typecheck"]);
   });
 
   // The signal is asserted on the value the RUNNER RECEIVED, not on runCheck accepting a
@@ -58,24 +52,18 @@ describe("runCheck", () => {
   test("threads the caller's AbortSignal through to the process runner", async () => {
     const controller = new AbortController();
     const runner = fakeSpawn({});
-    await runCheck("/project/a.ts", controller.signal, {
-      spawn: runner.spawn,
-      detect: detect({ cwd: "/project", script: "typecheck" }),
-    });
+    await runCheck("tsc --noEmit", controller.signal, { spawn: runner.spawn });
 
     expect(runner.calls[0].signal).toBe(controller.signal);
   });
 
   test("exit 0 with nothing parseable is ok, and reports what ran and what it cost", async () => {
     const runner = fakeSpawn({ stdout: "$ tsc --noEmit\n" });
-    const outcome = await runCheck("/project/a.ts", undefined, {
-      spawn: runner.spawn,
-      detect: detect({ cwd: "/project", script: "typecheck" }),
-    });
+    const outcome = await runCheck("tsc --noEmit", undefined, { spawn: runner.spawn });
 
     expect(outcome.status).toBe("ok");
     if (outcome.status !== "ok") throw new Error("unreachable");
-    expect(outcome.command).toBe("bun run --cwd /project typecheck");
+    expect(outcome.command).toBe("tsc --noEmit");
     expect(outcome.elapsedMs).toBeGreaterThanOrEqual(0);
   });
 
@@ -84,14 +72,10 @@ describe("runCheck", () => {
       stdout: "src/a.ts(12,7): error TS2322: Type 'number' is not assignable to type 'string'.\n",
       exitCode: 1,
     });
-    const outcome = await runCheck("/project/a.ts", undefined, {
-      spawn: runner.spawn,
-      detect: detect({ cwd: "/project", script: "typecheck" }),
-    });
+    const outcome = await runCheck("tsc --noEmit", undefined, { spawn: runner.spawn });
 
     expect(outcome).toMatchObject({
       status: "diagnostics",
-      shown: 1,
       total: 1,
       truncated: false,
       diagnostics: [
@@ -108,15 +92,11 @@ describe("runCheck", () => {
   test("caps the diagnostics fed back, and still reports the true total", async () => {
     const flood = Array.from({ length: 57 }, (_, i) => `src/a.ts(${i + 1},1): error TS2304: Cannot find name 'x'.`).join("\n");
     const runner = fakeSpawn({ stdout: flood, exitCode: 1 });
-    const outcome = await runCheck("/project/a.ts", undefined, {
-      spawn: runner.spawn,
-      detect: detect({ cwd: "/project", script: "typecheck" }),
-    });
+    const outcome = await runCheck("tsc --noEmit", undefined, { spawn: runner.spawn });
 
     if (outcome.status !== "diagnostics") throw new Error("unreachable");
     expect(MAX_DIAGNOSTICS).toBe(20);
     expect(outcome.diagnostics).toHaveLength(20);
-    expect(outcome.shown).toBe(20);
     expect(outcome.total).toBe(57);
   });
 
@@ -126,10 +106,7 @@ describe("runCheck", () => {
       exitCode: 1,
       stdoutTruncated: true,
     });
-    const outcome = await runCheck("/project/a.ts", undefined, {
-      spawn: runner.spawn,
-      detect: detect({ cwd: "/project", script: "typecheck" }),
-    });
+    const outcome = await runCheck("tsc --noEmit", undefined, { spawn: runner.spawn });
 
     expect(outcome).toMatchObject({ status: "diagnostics", truncated: true });
   });
@@ -138,10 +115,7 @@ describe("runCheck", () => {
   // parser cannot read must not come back as a green build.
   test("a non-zero exit with nothing parseable is failed, not ok, and carries the raw tail", async () => {
     const runner = fakeSpawn({ stderr: "cargo: no such subcommand `typecheck`", exitCode: 101 });
-    const outcome = await runCheck("/project/a.ts", undefined, {
-      spawn: runner.spawn,
-      detect: detect({ cwd: "/project", script: "typecheck" }),
-    });
+    const outcome = await runCheck("cargo typecheck", undefined, { spawn: runner.spawn });
 
     expect(outcome.status).toBe("failed");
     if (outcome.status !== "failed") throw new Error("unreachable");
@@ -150,23 +124,17 @@ describe("runCheck", () => {
 
   test("a timed-out check is failed and says so", async () => {
     const runner = fakeSpawn({ exitCode: 1, timedOut: true });
-    const outcome = await runCheck("/project/a.ts", undefined, {
-      spawn: runner.spawn,
-      detect: detect({ cwd: "/project", script: "typecheck" }),
-    });
+    const outcome = await runCheck("tsc --noEmit", undefined, { spawn: runner.spawn });
 
     expect(outcome).toMatchObject({ status: "failed" });
     if (outcome.status !== "failed") throw new Error("unreachable");
     expect(outcome.reason).toContain("timed out");
   });
 
-  // A cancelled check rejects (spawnCollect.ts:201-202). The write itself already succeeded, so this
-  // must not be re-thrown: that would replace the record of a completed write with a tool error.
+  // A cancelled check rejects (spawnCollect.ts:201-202). The write itself already succeeded, so
+  // this must not be re-thrown: that would replace the record of a completed write with a tool error.
   test("a rejecting runner becomes a failed outcome rather than a thrown write", async () => {
-    const outcome = await runCheck("/project/a.ts", undefined, {
-      spawn: () => Promise.reject(new Error("cancelled")),
-      detect: detect({ cwd: "/project", script: "typecheck" }),
-    });
+    const outcome = await runCheck("tsc --noEmit", undefined, { spawn: () => Promise.reject(new Error("cancelled")) });
 
     expect(outcome).toMatchObject({ status: "failed" });
     if (outcome.status !== "failed") throw new Error("unreachable");

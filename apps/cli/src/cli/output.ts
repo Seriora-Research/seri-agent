@@ -4,6 +4,7 @@
 // file's compile-time contract with LoopEvent.
 import type { RestorePlan, RestoreResult } from "../checkpoint/checkpoint";
 import type { LoopEvent } from "../loop/loop";
+import { writeFileDiagnosticCount } from "../verify/wrapTools";
 
 // stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
 // parseArgs rejects, or no task given — is a usage error: printed to stderr, exit 2.
@@ -60,16 +61,6 @@ export function printRecovery(result: RestoreResult): void {
   console.log(`  ${result.recoverCommand}`);
 }
 
-// How many diagnostics a tool result is carrying, or undefined if it is carrying none. Read
-// structurally rather than by tool name because the shape is what decides it: verify/wrapTools.ts
-// is the only thing that produces it, and if the composition at cli.ts is removed, every result
-// goes back to being unrecognised here and the plain "done" line returns with it.
-function diagnosticsShown(result: unknown): number | undefined {
-  const verification = (result as { verification?: { status?: unknown; shown?: unknown } } | null | undefined)?.verification;
-  if (verification?.status !== "diagnostics" || typeof verification.shown !== "number") return undefined;
-  return verification.shown;
-}
-
 export function printEvent(event: LoopEvent): void {
   switch (event.type) {
     case "text-delta":
@@ -84,15 +75,16 @@ export function printEvent(event: LoopEvent): void {
       // live, with the model moving on as though it had. Named here rather than in the loop, which
       // knows no tool names by design.
       //
-      // The diagnostic count is NOT named that way: it is read off the result's shape, so this
-      // stays true of `edit` alone and no second tool name enters this file.
-      const shown = diagnosticsShown(event.result);
+      // The diagnostic count is NOT named that way: the narrowing belongs to the module that
+      // produces the shape, so this file asks it rather than re-deriving it, and `edit` stays the
+      // only tool name here.
+      const count = writeFileDiagnosticCount(event.result);
       console.log(
         event.name === "edit"
           ? "✓ edit done (text returned, nothing written)"
-          : shown === undefined
+          : count === undefined
             ? `✓ ${event.name} done`
-            : `✓ ${event.name} done (${shown} diagnostics)`,
+            : `✓ ${event.name} done (${count} diagnostics)`,
       );
       break;
     }
