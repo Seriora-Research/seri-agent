@@ -11,9 +11,8 @@
 // same string as both `actual` and `searched`.
 //
 // Stage 2 runs ONLY when stage 1 found no window with even one matching line, and scores a single
-// probe line by character similarity instead. It exists because two real shapes cannot score in a
-// window at all — see the comment at that branch — and because being scoped to zero-score is what
-// stops it from undoing stage 1.
+// probe line by character similarity instead. Why it exists and why that scoping is load-bearing
+// are argued at the branch itself.
 //
 // Pure, and deliberately so: it is called from `edit`, which takes the content as an argument and
 // touches no disk (provider/tools.ts:98-106). At the failure site there is no path to read — the
