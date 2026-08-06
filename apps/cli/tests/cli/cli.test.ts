@@ -88,6 +88,24 @@ describe("run (task invocation)", () => {
     else process.env[key] = original;
   }
 
+  // The save/stub/try/finally/restore block the tests below repeated verbatim. `console.error` is
+  // silenced rather than collected because none of them asserts on it — the ones that reach it (a
+  // provider error, a run stopped at a cap) only ever needed it kept out of the test output. A
+  // test that wants to assert on stderr stubs it itself, as the two that do already have.
+  async function captureLogs(invoke: () => Promise<number>): Promise<{ code: number; logs: string[] }> {
+    const logs: string[] = [];
+    const originalLog = console.log;
+    const originalError = console.error;
+    console.log = (msg: string) => logs.push(String(msg));
+    console.error = () => {};
+    try {
+      return { code: await invoke(), logs };
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+  }
+
   beforeEach(() => {
     sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-sessions-"));
     // Redirect the config dir to an empty temp dir so a real config.json on this machine
@@ -137,15 +155,9 @@ describe("run (task invocation)", () => {
       return opts.messages;
     }
 
-    const logs: string[] = [];
-    const originalLog = console.log;
-    console.log = (msg: string) => logs.push(String(msg));
-    let code: number;
-    try {
-      code = await run([flag], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
-    } finally {
-      console.log = originalLog;
-    }
+    const { code, logs } = await captureLogs(() =>
+      run([flag], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(code).toBe(0);
     const usage = logs.join("\n");
@@ -173,14 +185,9 @@ describe("run (task invocation)", () => {
       return opts.messages;
     }
 
-    const logs: string[] = [];
-    const originalLog = console.log;
-    console.log = (msg: string) => logs.push(String(msg));
-    try {
-      await run(["fix", "the", flag, "output"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
-    } finally {
-      console.log = originalLog;
-    }
+    const { logs } = await captureLogs(() =>
+      run(["fix", "the", flag, "output"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(called).toBe(true);
     expect(logs.join("\n")).not.toContain("Usage:");
@@ -200,14 +207,9 @@ describe("run (task invocation)", () => {
       return opts.messages;
     }
 
-    const logs: string[] = [];
-    const originalLog = console.log;
-    console.log = (msg: string) => logs.push(String(msg));
-    try {
-      await run(["fix", "the", "--selftest", "flag"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
-    } finally {
-      console.log = originalLog;
-    }
+    const { logs } = await captureLogs(() =>
+      run(["fix", "the", "--selftest", "flag"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(called).toBe(true);
     expect(logs.join("\n")).not.toContain("selftest ok");
@@ -224,15 +226,9 @@ describe("run (task invocation)", () => {
       return opts.messages;
     }
 
-    const logs: string[] = [];
-    const originalLog = console.log;
-    console.log = (msg: string) => logs.push(String(msg));
-    let code: number;
-    try {
-      code = await run([], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
-    } finally {
-      console.log = originalLog;
-    }
+    const { code, logs } = await captureLogs(() =>
+      run([], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(code).toBe(0);
     expect(logs.join("\n")).toContain("Usage:");
@@ -428,14 +424,9 @@ describe("run (task invocation)", () => {
       return opts.messages;
     }
 
-    const logs: string[] = [];
-    const originalLog = console.log;
-    console.log = (msg: string) => logs.push(String(msg));
-    try {
-      await run(["edit", "a.txt"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
-    } finally {
-      console.log = originalLog;
-    }
+    const { logs } = await captureLogs(() =>
+      run(["edit", "a.txt"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(logs.join("\n")).toContain("nothing written");
     expect(logs.join("\n")).toContain("✓ write_file done");
@@ -451,17 +442,9 @@ describe("run (task invocation)", () => {
       yield { type: "error", error: "AI_APICallError: Invalid API Key" };
     }
 
-    const originalLog = console.log;
-    const originalError = console.error;
-    console.log = () => {};
-    console.error = () => {};
-    let code: number;
-    try {
-      code = await run(["say", "hi"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
-    } finally {
-      console.log = originalLog;
-      console.error = originalError;
-    }
+    const { code } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(code).toBe(1);
   });
@@ -476,14 +459,9 @@ describe("run (task invocation)", () => {
       yield { type: "done", reason };
     }
 
-    const originalLog = console.log;
-    console.log = () => {};
-    let code: number;
-    try {
-      code = await run(["say", "hi"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
-    } finally {
-      console.log = originalLog;
-    }
+    const { code } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(code).toBe(1);
   });
@@ -500,17 +478,9 @@ describe("run (task invocation)", () => {
       yield { type: "done", reason: "no-tool-call" };
     }
 
-    const originalLog = console.log;
-    const originalError = console.error;
-    console.log = () => {};
-    console.error = () => {};
-    let code: number;
-    try {
-      code = await run(["say", "hi"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
-    } finally {
-      console.log = originalLog;
-      console.error = originalError;
-    }
+    const { code } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(code).toBe(0);
   });
