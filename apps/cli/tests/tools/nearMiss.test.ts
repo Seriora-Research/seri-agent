@@ -46,12 +46,30 @@ describe("describeNearMiss", () => {
     expect(describeNearMiss(content, "export default function Widget(props) {\n  return null;\n}")).toBeNull();
   });
 
-  // The narrowing this design accepts, pinned so it is a decision rather than a surprise: one
-  // content line trim-matching a one-line oldString is exactly what tier 1 replaces, so `edit`
-  // never reaches this function with a single-line near miss to describe.
-  test("a single-line oldString yields null, because no single-line window can score", () => {
+  // The case window scoring alone cannot serve, and the most common edit shape there is. A
+  // one-line oldString can never score in a window: if a content line trim-matched it, tier 1
+  // would have replaced it, so `edit` never reaches here with one. The character-similarity
+  // fallback is what covers it — and knowing what you searched for is not knowing what is
+  // actually there, which is the whole point of the report.
+  test("a single-line oldString off by one character names the right line and shows both texts", () => {
     const content = "function total(a, b) {\n  const sum = a + b;\n  return sum;\n}\n";
-    expect(describeNearMiss(content, "  const sum = a - b;")).toBeNull();
+    const report = describeNearMiss(content, "  const sum = a - b;");
+
+    expect(report).not.toBeNull();
+    expect(report).toContain("line 2");
+    expect(report).toContain("const sum = a + b;");
+    expect(report).toContain("const sum = a - b;");
+  });
+
+  // The same fallback, reached from a MULTI-line oldString where no line trim-matches anywhere.
+  // Window scoring alone returns null here even though line 2 is one character away.
+  test("a multi-line oldString with nothing trim-matching still names the closest line", () => {
+    const content = "function total(a, b) {\n  const sum = a + b;\n  return sum;\n}\n";
+    const report = describeNearMiss(content, "  const sum = a - b;\n  return total;");
+
+    expect(report).not.toBeNull();
+    expect(report).toContain("line 2");
+    expect(report).toContain("const sum = a + b;");
   });
 
   test("an oldString longer than the content yields null rather than reading past the end", () => {
