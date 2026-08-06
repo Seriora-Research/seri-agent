@@ -21,6 +21,14 @@ apps/cli/src/tools/rg-vendored.bin
 .claude/worktrees/
 .claude/settings.local.json
 
+# Proposed lessons are a retro's *output awaiting a human decision*, not project knowledge.
+# `.claude/rules/retro.md` requires every proposal to pass a promotion gate before it means
+# anything; an unpromoted file in a shared checkout reads like a rule that was adopted, which is
+# the opposite of what it is. Once promoted, a lesson lives in CLAUDE.md or .claude/rules/ and is
+# tracked there. The directory itself stays, via .gitkeep, because retro.md writes into it by path.
+.claude/lessons/proposed/*
+!.claude/lessons/proposed/.gitkeep
+
 # docs-tmp/ is the private half of the documentation, and it holds three different kinds of
 # thing — worth naming, because only the last one is a security boundary:
 #   - operational runbooks that name real infrastructure: polar-e2e.md, DEPLOY.md and
