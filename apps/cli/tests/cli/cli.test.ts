@@ -186,6 +186,33 @@ describe("run (task invocation)", () => {
     expect(logs.join("\n")).not.toContain("Usage:");
   });
 
+  // The same defect in the third flag: `seri fix the --selftest flag` ran the build-verification
+  // selftest and exited before the task was ever sent. The key has to be set here too, or
+  // getGroqModel throws before runLoop and `called` would stay false for the wrong reason.
+  test("a task containing --selftest is still sent to the model", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    type RunLoopOpts = Parameters<typeof runLoop>[0];
+    let called = false;
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      called = true;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    try {
+      await run(["fix", "the", "--selftest", "flag"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(called).toBe(true);
+    expect(logs.join("\n")).not.toContain("selftest ok");
+  });
+
   test("bare seri prints usage instead of exiting silently", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 

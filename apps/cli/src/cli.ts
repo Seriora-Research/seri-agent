@@ -343,10 +343,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // it prints the same usage as --help rather than exiting silently — a line the TUI entry point
   // replaces, not a decision that bare `seri` means "print usage".
   //
-  // The flag counts only as the whole invocation, here and for --version below: `includes` matched
-  // it anywhere in argv, so `seri fix the --help output` printed usage and exited 0 with the task
-  // never sent — measured on the compiled binary. An unquoted multi-word task is a supported form,
-  // since parseTaskArgs joins argv.
+  // The flag counts only as the whole invocation, here and for --version and --selftest below:
+  // `includes` matched it anywhere in argv, so `seri fix the --help output` printed usage and
+  // exited 0 with the task never sent — measured on the compiled binary. An unquoted multi-word
+  // task is a supported form, since parseTaskArgs joins argv.
   const helpOnly = argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h");
   if (argv.length === 0 || helpOnly) {
     console.log(USAGE);
@@ -362,7 +362,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // it for real is the only way to catch that from a shipped artifact; the release workflow
   // runs this on every platform. Greps a throwaway file rather than the cwd so the result
   // never depends on what happens to be in the directory seri was launched from.
-  if (argv.includes("--selftest")) {
+  if (argv.length === 1 && argv[0] === "--selftest") {
     const grepFn = deps.grep ?? grepReal;
     try {
       const dir = mkdtempSync(join(tmpdir(), "seri-selftest-"));
