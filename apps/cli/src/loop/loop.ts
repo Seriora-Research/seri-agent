@@ -36,6 +36,8 @@ const DEFAULT_CONTEXT_WINDOW_SIZE = 131_072;
 const DEFAULT_COMPACTION_THRESHOLD = 0.5;
 const DEFAULT_PRESERVE_RECENT_MESSAGES = 20;
 
+const MAX_SERIALISED_ERROR_LENGTH = 500;
+
 // String() of an Error is `${name}: ${message}` — one line, and exactly what the four sites below
 // already produced, so nothing changes for an Error. What changes is the other branch: a provider
 // that hands over a plain object (Groq rejects with {"error":{"message":…,"type":…}}) stringified
@@ -58,7 +60,15 @@ function errorText(err: unknown): string {
   // quotes included, for a tool that rejected with a bare string.
   if (typeof err === "string") return err;
   try {
-    return JSON.stringify(err) ?? String(err);
+    const serialised = JSON.stringify(err) ?? String(err);
+    // Nothing in reach produces this today — every AI SDK provider error is an Error subclass and
+    // every in-repo tool throws Error — so this fixes no live bug. It caps a payload whose size is
+    // the provider's to choose, at a site that puts the result on stderr AND into the model's billed
+    // context as the tool result, which is the shape of the 66-line blob onError was silenced for
+    // above. Here so the branch cannot become that defect if it ever is reached.
+    return serialised.length > MAX_SERIALISED_ERROR_LENGTH
+      ? `${serialised.slice(0, MAX_SERIALISED_ERROR_LENGTH)}… (truncated from ${serialised.length} characters)`
+      : serialised;
   } catch {
     return String(err);
   }
