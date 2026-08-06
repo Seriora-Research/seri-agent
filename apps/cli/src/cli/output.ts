@@ -60,6 +60,16 @@ export function printRecovery(result: RestoreResult): void {
   console.log(`  ${result.recoverCommand}`);
 }
 
+// How many diagnostics a tool result is carrying, or undefined if it is carrying none. Read
+// structurally rather than by tool name because the shape is what decides it: verify/wrapTools.ts
+// is the only thing that produces it, and if the composition at cli.ts is removed, every result
+// goes back to being unrecognised here and the plain "done" line returns with it.
+function diagnosticsShown(result: unknown): number | undefined {
+  const verification = (result as { verification?: { status?: unknown; shown?: unknown } } | null | undefined)?.verification;
+  if (verification?.status !== "diagnostics" || typeof verification.shown !== "number") return undefined;
+  return verification.shown;
+}
+
 export function printEvent(event: LoopEvent): void {
   switch (event.type) {
     case "text-delta":
@@ -68,15 +78,24 @@ export function printEvent(event: LoopEvent): void {
     case "tool-call":
       console.log(`\n→ ${event.name}(${JSON.stringify(event.args)})`);
       break;
-    case "tool-result":
+    case "tool-result": {
       // `edit` returns the edited text and writes nothing (provider/tools.ts's
       // FS_MUTATING_TOOL_NAMES comment), so a bare "done" reads as a file that changed — observed
       // live, with the model moving on as though it had. Named here rather than in the loop, which
       // knows no tool names by design.
+      //
+      // The diagnostic count is NOT named that way: it is read off the result's shape, so this
+      // stays true of `edit` alone and no second tool name enters this file.
+      const shown = diagnosticsShown(event.result);
       console.log(
-        event.name === "edit" ? "✓ edit done (text returned, nothing written)" : `✓ ${event.name} done`,
+        event.name === "edit"
+          ? "✓ edit done (text returned, nothing written)"
+          : shown === undefined
+            ? `✓ ${event.name} done`
+            : `✓ ${event.name} done (${shown} diagnostics)`,
       );
       break;
+    }
     case "permission-denied":
       console.log(`✗ ${event.name} blocked`);
       break;

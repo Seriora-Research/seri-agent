@@ -142,10 +142,15 @@ describe("run (task invocation)", () => {
     expect(code).toBe(0);
     expect(capture()).toBeDefined();
     expect(capture()?.permissionMode).toBe("read-only");
-    // The same tool set, with only the filesystem-mutating tools wrapped for checkpointing.
+    // The same tool set, with only the tools the two wrappers have a reason to touch rebuilt:
+    // the filesystem-mutating ones for checkpointing (checkpoint/wrapTools.ts), and `edit` on top
+    // of that for the consecutive-failure counter (verify/wrapTools.ts). Everything else is still
+    // the identical object, so the wrappers cannot change what a read or a search does.
     expect(Object.keys(capture()?.tools ?? {})).toEqual(Object.keys(toolDefinitions));
     expect(capture()?.tools.read_file).toBe(toolDefinitions.read_file);
-    expect(capture()?.tools.edit).toBe(toolDefinitions.edit);
+    expect(capture()?.tools.grep).toBe(toolDefinitions.grep);
+    expect(capture()?.tools.glob).toBe(toolDefinitions.glob);
+    expect(capture()?.tools.edit).not.toBe(toolDefinitions.edit);
     expect(capture()?.tools.write_file).not.toBe(toolDefinitions.write_file);
     expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "write hello.txt" });
     expect(capture()?.messages).toHaveLength(1);
@@ -308,6 +313,39 @@ describe("run (task invocation)", () => {
 
     expect(logs.join("\n")).toContain("nothing written");
     expect(logs.join("\n")).toContain("✓ write_file done");
+  });
+
+  // The diagnostics half of the same line, and the reason the test above still passes: the count is
+  // read off the RESULT'S SHAPE, not off the tool's name, so a result without one is unchanged.
+  // The result here is what verify/wrapTools.ts actually returns.
+  test("a write_file result carrying diagnostics says how many were fed back", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      {
+        type: "tool-result",
+        name: "write_file",
+        result: {
+          written: true,
+          verification: {
+            status: "diagnostics",
+            command: "bun run --cwd . typecheck",
+            elapsedMs: 3600,
+            diagnostics: [{ file: "a.ts", line: 1, column: 1, message: "error TS2322: nope" }],
+            truncated: false,
+            shown: 1,
+            total: 1,
+          },
+        },
+      },
+      { type: "done", reason: "no-tool-call" },
+    ]);
+
+    const { logs } = await captureLogs(() =>
+      run(["write", "a.ts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.join("\n")).toContain("✓ write_file done (1 diagnostics)");
   });
 
   // The other half of "a new event member must not fall through printEvent silently": the SDK has

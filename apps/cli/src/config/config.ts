@@ -53,6 +53,29 @@ export function unsetConfigValue(key: string, configDir: string = getConfigDir()
   return true;
 }
 
+// Post-write verification (verify/wrapTools.ts) costs a real check run per write — 3.6 s for this
+// repo's own `apps/cli` typecheck, and unbounded for a target project whose check is slower. That
+// makes an off switch the one setting it needs, and a timeout the one number worth overriding.
+//
+// Flat string keys rather than the nested `verify: {...}` object the plan named: config.json is a
+// Record<string, string> here, `config list` masks every value it holds, and nesting one object
+// inside it would change both. The env-var-shaped names are deliberate — they get the same
+// env-then-file precedence getApiKey has, for free.
+export type VerifyConfig = { enabled: boolean; timeoutMs: number | undefined };
+
+export function loadVerifyConfig(configDir?: string): VerifyConfig {
+  const config = loadConfig(configDir);
+  const read = (name: string): string | undefined => process.env[name] || config[name] || undefined;
+  const timeoutMs = Number(read("SERI_VERIFY_TIMEOUT_MS"));
+  return {
+    // On unless explicitly turned off: a mistyped value must not silently disable the feature.
+    enabled: read("SERI_VERIFY_ENABLED") !== "false",
+    // Number(undefined) is NaN, which is not finite, so an unset or unparseable value falls back
+    // to spawnCollect's own default rather than to a zero timeout that kills every check.
+    timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined,
+  };
+}
+
 // configDir is threaded through rather than always resolved internally so that a caller
 // which writes with an explicit dir (`seri config set`) reads back from that same dir.
 export function getApiKey(name: string, configDir?: string): string | undefined {
