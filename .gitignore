@@ -9,12 +9,18 @@ apps/cli/src/tools/rg-vendored.bin
 .env.*
 .claude/
 
-# docs-tmp/ is the private half of the documentation: operational runbooks that name real
-# infrastructure (organization ids, the Supabase project ref, WorkOS ids) and the two files
-# that hold live credentials. The design docs that used to live here — the architecture spec,
-# the build plan, the research survey and the design system — are tracked under docs/ now,
-# because AGENTS.md and several source comments cite them as the project's contract and a
-# fresh clone did not have them.
+# docs-tmp/ is the private half of the documentation, and it holds three different kinds of
+# thing — worth naming, because only the last one is a security boundary:
+#   - operational runbooks that name real infrastructure: polar-e2e.md, DEPLOY.md and
+#     WORKOS-PRODUCTION.md carry organization ids, the Supabase project ref and WorkOS ids;
+#   - pricing-tiers.md, kept private by decision rather than by necessity — it carries Polar
+#     product ids, which are not secrets (they appear in checkout URLs) but are per-environment
+#     configuration nobody outside this project needs;
+#   - PORTAL-ENV.md and supabase-pass.md, which hold live credentials.
+#
+# The design docs that used to live here — the architecture spec, the build plan, the research
+# survey and the design system — are tracked under docs/ now, because AGENTS.md and several
+# source comments cite them as the project's contract and a fresh clone did not have them.
 docs-tmp/
 supabase-pass.md
 
