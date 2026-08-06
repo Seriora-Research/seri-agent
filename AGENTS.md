@@ -5,10 +5,10 @@ Guidance for AI agents working in this repository.
 ## What this is
 
 seri is a cross-platform coding-agent CLI (ships as the `seri` binary), written in
-TypeScript on Bun. It's currently mid-build against `build-plan.md` (Stage 4
+TypeScript on Bun. It's currently mid-build against `docs/BUILD-PLAN.md` (Stage 4
 "Checkpoints" landed 2026-08-04 and completes v1; abort/cancellation and prompt tiers
-come next, then Stage 5). `definitive-harness.md` and `research.md` are the design spec
-and research this plan is built from. A separate, parallel track (not a `build-plan.md`
+come next, then Stage 5). `docs/ARCHITECTURE.md` and `docs/RESEARCH.md` are the design spec
+and research this plan is built from. A separate, parallel track (not a `docs/BUILD-PLAN.md`
 stage) adds optional hosted accounts/billing on top of the BYOK-only core — Phase A
 (WorkOS AuthKit device-flow auth) has shipped; see
 `.claude/loops/hosted-accounts-billing-gateway/` for the full spec and phased plan.
@@ -17,7 +17,7 @@ stage) adds optional hosted accounts/billing on top of the BYOK-only core — Ph
 
 Coding is the primary use and the only one this release ships for, but it is not the
 boundary of the product — seri is intended to extend into general assistant work. This
-is locked as constraint #3 in `definitive-harness.md`, and it constrains what you may
+is locked as constraint #3 in `docs/ARCHITECTURE.md`, and it constrains what you may
 assume, not what you may build:
 
 - **Don't reject a design for being assistant-shaped.** Reject on principle or on

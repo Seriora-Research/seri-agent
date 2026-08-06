@@ -1,4 +1,4 @@
-// Ratio is a judgment call: the source docs (definitive-harness.md) describe the
+// Ratio is a judgment call: the source docs (docs/ARCHITECTURE.md) describe the
 // disproportionate-match guard but don't specify an exact threshold. 5x trades off
 // rejecting legitimate large replacements against accepting a match that grew far
 // beyond oldString due to fuzzy (line-trim/whitespace-normalize) matching.
