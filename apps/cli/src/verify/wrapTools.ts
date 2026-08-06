@@ -37,7 +37,7 @@ export function writeFileDiagnosticCount(result: unknown): number | undefined {
 }
 
 // A pure function over a ToolSet, in the shape checkpoint/wrapTools.ts:29 already established for
-// the same situation: runLoop is not touched, loop.ts still knows no tool names (output.ts:84-85),
+// the same situation: runLoop is not touched, loop.ts still knows no tool names (output.ts:75-76),
 // and verification stays a consumer policy. The index-alignment invariant at loop.ts:358-363 is
 // then satisfied structurally — a wrapper returns one value from one `execute`, so the loop still
 // pushes exactly one row per call and there is no way for this design to push a second.

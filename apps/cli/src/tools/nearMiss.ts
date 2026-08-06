@@ -1,5 +1,5 @@
 // Explains a failed `edit` by reusing the cascade's OWN matching model rather than a second,
-// bespoke one: `tryLineTrimmedMatch` (edit.ts:26-58) slides a window of oldString's length over the
+// bespoke one: `tryLineTrimmedMatch` (edit.ts:28-60) slides a window of oldString's length over the
 // content and requires EVERY line to trim-match, so the natural way to describe a near miss is the
 // window that came closest — the one where the most lines trim-matched — and the first line inside
 // it that did not.

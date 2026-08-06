@@ -3,7 +3,7 @@ import { edit } from "../../src/tools/edit";
 import { describeNearMiss } from "../../src/tools/nearMiss";
 
 describe("describeNearMiss", () => {
-  // The case whose absence hid the defect this reframe fixes. `tryLineTrimmedMatch` (edit.ts:26-58)
+  // The case whose absence hid the defect this reframe fixes. `tryLineTrimmedMatch` (edit.ts:28-60)
   // already trim-matches EVERY line, so a failure that survives the cascade with a correct first
   // line means a LATER line differs — the dominant real case. Naming line 1 here would name the one
   // line the model got right; measured on the first implementation, it did exactly that and printed
@@ -21,8 +21,9 @@ describe("describeNearMiss", () => {
     expect(report).not.toContain("line 1");
   });
 
-  // Window selection, not first-hit: the window at line 5 scores 2 trim-matching lines, the one at
-  // line 2 scores 1. Picking the first window with any match at all would name line 4.
+  // Window selection, not first-hit: the window starting at line 5 scores 2 trim-matching lines
+  // ("if (y) {" and "}"), while the earlier one starting at line 2 scores 1 (its "}" alone).
+  // Taking the first window that matched anything at all would name line 2.
   test("picks the window with the most matching lines, not the first window that matches at all", () => {
     const content = ["const a = 1;", "if (x) {", "  go();", "}", "if (y) {", "  stop();", "}"].join("\n");
     const report = describeNearMiss(content, ["if (y) {", "  halt();", "}"].join("\n"));
