@@ -1,0 +1,18 @@
+{
+  "_tiers": "fastest=cheap high-volume work | balanced=code gen, research | capable=hard reasoning, judgment",
+  "_values": "any model ID your runner accepts, e.g. 'kimi-2.6', 'gpt-4o', 'gemini-2.5-pro', 'o3', 'claude-sonnet-4-6', or 'inherit' to use the runner's active model",
+  "_examples": {
+    "opencode+kimi":   "{ orchestrator: kimi-2.6, reviewer-verifier: kimi-2.6 }",
+    "cursor+gpt":      "{ orchestrator: gpt-4o, reviewer-verifier: o3, explorer: gpt-4o-mini }",
+    "claude-code":     "{ orchestrator: claude-opus-4-8, reviewer-verifier: claude-opus-4-8 }"
+  },
+  "orchestrator":    "inherit",
+  "env-detector":    "inherit",
+  "explorer":        "inherit",
+  "researcher":      "inherit",
+  "planner":         "inherit",
+  "implementer":     "inherit",
+  "reviewer-verifier": "inherit",
+  "test-runner":     "inherit",
+  "retro":           "inherit"
+}
