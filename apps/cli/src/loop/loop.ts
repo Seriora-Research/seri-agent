@@ -9,7 +9,7 @@ import type {
   ToolSet,
 } from "ai";
 import { checkPermission, type PermissionMode } from "../gate/gate";
-import { compactMessages, findSafeEvictionBoundary, type CompactionSummary } from "./compaction";
+import { compactMessages, findSafeEvictionBoundary, MAX_RETRIES, type CompactionSummary } from "./compaction";
 
 export type LoopEvent =
   | { type: "text-delta"; text: string }
@@ -22,7 +22,7 @@ export type LoopEvent =
   // across turns is the consumer's business. `usage` on `compacted` is the same quantity for the
   // summariser's own round-trip, which is billed like any other and was invisible until now.
   | { type: "usage"; usage: LanguageModelUsage }
-  // The SDK's retry, not one of ours — see MAX_RETRIES. `attempt` counts retries of the current
+  // The SDK's retry, not one of ours — see MAX_RETRIES in compaction.ts. `attempt` counts retries of the current
   // model call, so the first re-issue is 1. There is no error and no delay here because the only
   // per-attempt hook ai@7.0.48 exposes (onLanguageModelCallStart) carries neither.
   | { type: "retry"; attempt: number }
@@ -47,15 +47,6 @@ const DEFAULT_COMPACTION_THRESHOLD = 0.5;
 const DEFAULT_PRESERVE_RECENT_MESSAGES = 20;
 
 const MAX_SERIALISED_ERROR_LENGTH = 500;
-
-// Deliberately the same 2 the SDK already applies when nothing passes it (ai@7.0.48
-// dist/index.js:2789), so this changes no behaviour: every streamText and generateText call in
-// this repo has been retrying a 429 or a 5xx twice, with a 2 s first backoff, before the failure
-// ever reached the user. Stated here because a spend question ("why three calls for one turn?")
-// cannot be answered from a default that no line of this repo mentions. The delay is the SDK's and
-// is not configurable through streamText: it honours a `retry-after-ms`/`retry-after` response
-// header when that is shorter than its own backoff (dist/index.js:2718).
-const MAX_RETRIES = 2;
 
 // String() of an Error is `${name}: ${message}` — one line, and exactly what the four sites below
 // already produced, so nothing changes for an Error. What changes is the other branch: a provider

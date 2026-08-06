@@ -353,8 +353,10 @@ describe("run (task invocation)", () => {
 
   // Every field of LanguageModelUsage spelled out because the type requires all five, and only the
   // two the summary sums are given values: a helper that filled in the details would be asserting
-  // on fields no line of cli.ts reads.
-  function usageEvent(inputTokens: number, outputTokens: number): LoopEvent {
+  // on fields no line of cli.ts reads. Both are `number | undefined` in the SDK's own type — the
+  // undefined case is a provider that did not report that half, and it is a case the summary has
+  // to be able to say nothing about.
+  function usageEvent(inputTokens: number | undefined, outputTokens: number | undefined): LoopEvent {
     return {
       type: "usage",
       usage: {
@@ -362,7 +364,7 @@ describe("run (task invocation)", () => {
         inputTokenDetails: { noCacheTokens: undefined, cacheReadTokens: undefined, cacheWriteTokens: undefined },
         outputTokens,
         outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
-        totalTokens: inputTokens + outputTokens,
+        totalTokens: (inputTokens ?? 0) + (outputTokens ?? 0),
       },
     };
   }
@@ -386,6 +388,36 @@ describe("run (task invocation)", () => {
 
     expect(code).toBe(0);
     expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["(tokens: 320 in, 75 out)"]);
+  });
+
+  // "0 out" is a measurement, and there was no measurement: a provider that reports input tokens
+  // and omits output ones is not a provider that measured zero output. The half that was reported
+  // is still worth printing — dropping the whole line would throw away a real number to avoid an
+  // invented one.
+  test("prints only the half a provider reported when it reported one and not the other", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([usageEvent(320, undefined), { type: "done", reason: "no-tool-call" }]);
+
+    const { logs } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["(tokens: 320 in)"]);
+  });
+
+  // The other side of that line, and the reason it is keyed on undefined rather than on 0: a call
+  // that really did report zero output tokens reported something, and the summary says so.
+  test("prints a reported zero, which is a measurement rather than a missing field", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([usageEvent(320, 0), { type: "done", reason: "no-tool-call" }]);
+
+    const { logs } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["(tokens: 320 in, 0 out)"]);
   });
 
   // The reason the summary is conditional. Every other test in this file drives a fake that emits no

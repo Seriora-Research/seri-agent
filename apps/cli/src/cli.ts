@@ -302,7 +302,7 @@ function printEvent(event: LoopEvent): void {
       console.log(`\n⚙ compacted ${event.evictedCount} messages`);
       break;
     // A rate limit or a 5xx, and there is no telling which from here: the SDK hands its retry
-    // callback neither the error nor the delay (loop.ts's MAX_RETRIES comment), so naming one of
+    // callback neither the error nor the delay (compaction.ts's MAX_RETRIES comment), so naming one of
     // the two would be a guess printed as a fact. Worth a line at all because the wait is the SDK's
     // — 2 s before the first re-issue — and until now a rate-limited turn simply looked hung.
     case "retry":
@@ -313,12 +313,29 @@ function printEvent(event: LoopEvent): void {
     // them instead and run() prints the one line at the end.
     case "usage":
       break;
+    // Never actually reaches here — driveLoop persists the session and `continue`s on it — and it
+    // has no rendering if it ever does: the message array is the session's business, not the
+    // screen's. Spelled out rather than left to the default below, because "this event prints
+    // nothing" is a decision and the default is where an undecided one gets caught.
+    case "messages-updated":
+      break;
     case "done":
       console.log(`\n(done: ${event.reason})`);
       break;
     case "error":
       console.error(event.error);
       break;
+    // All nine LoopEvent members are handled above, so nothing reaches this at runtime. Eight were
+    // before this line was written — adding it is what showed that `messages-updated` had no case
+    // at all. It exists for the tenth: `usage` and `retry` were both added to the union here and both
+    // would have fallen through this switch in silence, which for a user-facing event means it was
+    // simply never printed. `never` is what makes tsc say so at the point the member is added
+    // rather than leaving it to be noticed in a session. Compile-time only, with no throw: nothing
+    // can reach this at runtime, and a printer is the last thing that should be able to end a run.
+    default: {
+      const _unhandled: never = event;
+      break;
+    }
   }
 }
 
@@ -494,14 +511,22 @@ function handleConfigCommand(positionals: string[], deps: CliDeps): number | und
   }
 }
 
-// What the task path needs after the subcommands have had their say. It satisfies CommandDirs
-// structurally, so checkpointTarget and a slash command's own `run` take it as they are.
+// What the task path needs after the subcommands have had their say. It extends CommandDirs, so it
+// satisfies the two callees that take one structurally — but it is not handed to them whole:
+// `dirs(ctx)` below narrows it back down at each call. Structural typing makes passing the whole
+// thing legal and silent, and what would ride along is `taskText`, which for `seri config …` is the
+// user's API key. Nothing today spreads or serialises a CommandDirs; the point is that a callee
+// that starts to should not find a secret in it.
 type RunContext = CommandDirs & {
   resuming: boolean;
   resumeId: string | undefined;
   taskText: string;
   maxTurns: number | undefined;
 };
+
+function dirs(ctx: RunContext): CommandDirs {
+  return { sessionsDir: ctx.sessionsDir, checkpointsDir: ctx.checkpointsDir };
+}
 
 // A slash command always operates on the resume target — an explicit --resume id, or the most
 // recent session — and never creates a session just to act on it, so this is called before
@@ -519,7 +544,7 @@ function handleSlashCommand(ctx: RunContext): number | undefined {
     return 1;
   }
   try {
-    command.run(loadSession<ModelMessage>(id, ctx.sessionsDir), commandArgs, ctx);
+    command.run(loadSession<ModelMessage>(id, ctx.sessionsDir), commandArgs, dirs(ctx));
     return 0;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -568,7 +593,7 @@ function prepareSession(ctx: RunContext, deps: CliDeps): PreparedRun | number {
   // Checkpointing is enabled by exactly this call, which is also why rolling it back is a one-line
   // revert: `runLoop`, the session store, the gate and every tool are unmodified, and the store
   // lives entirely outside the user's repository.
-  const { storeDir, worktree } = checkpointTarget(session, ctx);
+  const { storeDir, worktree } = checkpointTarget(session, dirs(ctx));
 
   // `write_file`, `bash` and `powershell` write relative to process.cwd(), while the snapshot
   // covers the project root. Anywhere inside the project is fine — that is the whole point of
@@ -597,7 +622,19 @@ type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
 
 // What the run cost, summed here rather than in runLoop: the loop is stateless by design and emits
 // one usage event per completed model call, so the running total is the consumer's to keep.
-type RunUsage = { inputTokens: number; outputTokens: number };
+//
+// `undefined` rather than 0 for "the provider never told us", and the two halves are tracked
+// separately because a provider can report one and not the other: LanguageModelUsage types both as
+// optional, and `?? 0` turned a missing outputTokens into the printed claim "0 out" — a
+// measurement of a number nobody measured. 0 stays available for the other meaning, a call that
+// really did report zero.
+type RunUsage = { inputTokens: number | undefined; outputTokens: number | undefined };
+
+// undefined + n is n, not NaN, and undefined + undefined stays undefined: a run's total is the sum
+// of the calls that reported, and stays unreported if none did.
+function addTokens(total: number | undefined, reported: number | undefined): number | undefined {
+  return reported === undefined ? total : (total ?? 0) + reported;
+}
 
 async function driveLoop(
   prepared: PreparedRun,
@@ -619,7 +656,7 @@ async function driveLoop(
   });
 
   let doneReason: DoneReason | undefined;
-  const usage: RunUsage = { inputTokens: 0, outputTokens: 0 };
+  const usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
   try {
     for await (const event of runLoopFn({
       model,
@@ -659,11 +696,11 @@ async function driveLoop(
       // `compacted` alongside `usage` because the summariser's own round-trip is billed like any
       // other call and was invisible to every caller until loop.ts stopped dropping it — a total
       // that left it out would under-report exactly the calls the user never asked for. Both
-      // fields are `number | undefined` (the provider may report neither), and a call that
-      // reported nothing contributes nothing rather than NaN.
+      // fields are `number | undefined` (the provider may report either, neither or both), which is
+      // what addTokens carries through to the summary instead of flattening it to a zero.
       if (event.type === "usage" || event.type === "compacted") {
-        usage.inputTokens += event.usage.inputTokens ?? 0;
-        usage.outputTokens += event.usage.outputTokens ?? 0;
+        usage.inputTokens = addTokens(usage.inputTokens, event.usage.inputTokens);
+        usage.outputTokens = addTokens(usage.outputTokens, event.usage.outputTokens);
       }
       if (event.type === "done") doneReason = event.reason;
       printEvent(event);
@@ -678,14 +715,19 @@ async function driveLoop(
   return { doneReason, cancelledBy, usage };
 }
 
-// Only when there is something to report. A run that made no model call — `--continue` with no
-// task and a fake that yields nothing, a provider that failed before the first request — has no
-// spend, and "(tokens: 0 in, 0 out)" is a number the user cannot act on printed on paths that
-// never called anything. The same guard covers a call the provider reported no usage for, where
-// the zeros would be a claim about spend rather than a measurement of it.
+// Only what was actually reported. A run that made no model call — `--continue` with no task, a
+// provider that failed before the first request — has no spend, and "(tokens: 0 in, 0 out)" is a
+// number the user cannot act on printed on paths that never called anything; that run prints no
+// line at all. A provider that reports input tokens and not output ones prints only the half it
+// gave, because "0 out" reads as a measurement and there was no measurement: a provider omitting
+// the field and a call that genuinely produced nothing are not the same fact, and the summary is
+// the wrong place to guess which. A reported 0 still prints — that one IS a measurement.
 function printUsage(usage: RunUsage): void {
-  if (usage.inputTokens === 0 && usage.outputTokens === 0) return;
-  console.log(`(tokens: ${usage.inputTokens} in, ${usage.outputTokens} out)`);
+  const parts: string[] = [];
+  if (usage.inputTokens !== undefined) parts.push(`${usage.inputTokens} in`);
+  if (usage.outputTokens !== undefined) parts.push(`${usage.outputTokens} out`);
+  if (parts.length === 0) return;
+  console.log(`(tokens: ${parts.join(", ")})`);
 }
 
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {

@@ -13,11 +13,19 @@ export type CompactionSummary = z.infer<typeof CompactionSummarySchema>;
 
 const DEFAULT_MIN_EVICTABLE = 4;
 
-// Same value and same reason as loop.ts's MAX_RETRIES: it is the SDK's own default (ai@7.0.48
-// dist/index.js:2789), so stating it changes nothing except that it is now stated. Restated here
-// rather than imported because loop.ts already imports this module and the reverse would make the
-// two files a cycle.
-const MAX_RETRIES = 2;
+// Deliberately the same 2 the SDK already applies when nothing passes it (ai@7.0.48
+// dist/index.js:2789), so this changes no behaviour: every streamText and generateText call in
+// this repo has been retrying a 429 or a 5xx twice, with a 2 s first backoff, before the failure
+// ever reached the user. Stated here because a spend question ("why three calls for one turn?")
+// cannot be answered from a default that no line of this repo mentions. The delay is the SDK's and
+// is not configurable through streamText: it honours a `retry-after-ms`/`retry-after` response
+// header when that is shorter than its own backoff (dist/index.js:2718).
+//
+// It lives in this module, which is the lower of the two — loop.ts already imports compaction.ts,
+// so the import goes the way that exists and no cycle is created. One constant rather than two
+// equal literals in two files: what the number means is "the SDK's default, restated", and two
+// copies of that can drift into disagreeing about a shared claim.
+export const MAX_RETRIES = 2;
 
 // A cut is only safe immediately before a "user"/"assistant" message, never before a
 // "tool" message — a `role:"tool"` message is always the second half of an adjacent

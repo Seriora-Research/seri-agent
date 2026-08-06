@@ -416,7 +416,9 @@ describe("runLoop", () => {
             // it with a `retry-after-ms`/`retry-after` header when that is shorter
             // (dist/index.js:2718). The elapsed assertion below is what makes that honouring
             // visible rather than assumed: measured, this test runs in 79 ms with the header and
-            // 2084 ms with it renamed away, which is also the margin the 1 s bound sits in.
+            // 2084 ms with it renamed away. The bound sits at 1500 ms rather than nearer the
+            // measurement because this is a wall clock in CI: it only has to separate 79 from
+            // 2084, and every ms of headroom below 2084 is free.
             responseHeaders: { "retry-after-ms": "10" },
           });
         }
@@ -433,7 +435,7 @@ describe("runLoop", () => {
     expect(events).toContainEqual({ type: "text-delta", text: "Hello" });
     expect(events.find((e) => e.type === "error")).toBeUndefined();
     expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
-    expect(elapsed).toBeLessThan(1_000);
+    expect(elapsed).toBeLessThan(1_500);
   });
 
   // The negative control for the test above: a `retry` event that appeared here would mean the
