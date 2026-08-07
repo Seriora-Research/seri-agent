@@ -10,19 +10,32 @@
 // did that: for a four-line oldString differing only on line 2, it named line 1 and printed the
 // same string as both `actual` and `searched`.
 //
-// Stage 2 runs ONLY when stage 1 found no window with even one matching line, and scores a single
-// probe line by character similarity instead. Why it exists and why that scoping is load-bearing
-// are argued at the branch itself.
+// Stage 2 runs when no window qualified, and scores a single probe line by character similarity
+// instead. Why it exists is argued at the branch itself.
+//
+// The two stages are floored DIFFERENTLY, and that asymmetry is the design rather than an
+// oversight, because they rest on different kinds of evidence:
+//
+//   - Stage 1's evidence is POSITIONAL. The line it reports is corroborated by its neighbours
+//     inside the window having matched. Character similarity is the wrong question to ask of it:
+//     `stop();` vs `halt();` scores 0.429 as strings, but what makes it a near miss is that
+//     `if (y) {` and `}` around it matched. Measured — flooring stage 1 on similarity rejected
+//     that case and `log(err);` vs `report(err);` (0.500), both legitimate.
+//   - Stage 2's evidence is ONLY the string. No neighbours, no corroboration, so a high character
+//     floor is the entire thing keeping it honest.
 //
 // Pure, and deliberately so: it is called from `edit`, which takes the content as an argument and
 // touches no disk (provider/tools.ts:98-106). At the failure site there is no path to read — the
 // content came from the model's own tool-call arguments.
 
-// Only used when NO window scored at all. Below this, no line is reported: without a floor the
-// fallback would always name some line as "the closest", and a confident wrong answer is worse
-// than the bare failure it replaces. It is also what stops a degenerate probe — a block whose
-// first line is `}` — from scoring 1.0 against an arbitrary closing brace somewhere in the file.
+// Stage 2 only. See the asymmetry above for why stage 1 is not floored on this.
 const MIN_SIMILARITY = 0.7;
+
+// A line this short carries no evidence about WHERE it is: `}`, `{`, `)`, `};`, `),` occur all over
+// a source file, so a window whose only agreement with oldString is one of them has not been
+// located, it has been guessed at. Covers every such line at 2 characters, which is what separates
+// them from the shortest lines that do identify a position (`ok`, `[]`, `if (x) {`).
+const TRIVIAL_LINE_LENGTH = 2;
 
 // Common prefix plus common suffix, over the longer line. Chosen over an edit distance because
 // the failures it exists to explain are one substitution, one missing space, or a renamed
@@ -44,6 +57,9 @@ function similarity(a: string, b: string): number {
   return Math.min(prefix + suffix, shorter) / Math.max(a.length, b.length);
 }
 
+// Formatting only — each stage has already decided this pair is worth printing, by its own
+// standard. Shared so the two reports cannot drift into different formats, NOT so they can share
+// a quality bar; they do not have one.
 function report(lineIndex: number, actual: string, searched: string): string {
   // Both sides are shown TRIMMED, because trimming is exactly the comparison that rejected them.
   // Printing the raw lines would put an indentation difference in front of the model as though it
@@ -62,49 +78,61 @@ export function describeNearMiss(content: string, oldString: string): string | n
 
   const trimmedOld = oldLines.map((line) => line.trim());
 
-  // Stage 1: the best window, where "best" is the most lines that trim-matched. Starts at 0, so a
-  // window is only chosen when at least ONE line matched — which is what keeps this stage from
-  // inventing a "closest" out of a file with nothing relevant in it.
+  // Stage 1: the best window, where "best" is the most lines that trim-matched — but only among
+  // windows that QUALIFY. Qualifying means at least one matching line is non-trivial, and that is
+  // the whole quality bar for this stage. It is applied at selection, not at report time, because
+  // what can be wrong here is which window was chosen, never whether the line inside it is worth
+  // naming: once neighbours have located the window, the first line that differs IS the answer.
+  //
+  // Measured before the qualification test existed: a three-line oldString whose only agreement
+  // with the content was a closing brace selected that window and reported
+  // `if (!token) return unauthorized();` as the near miss for
+  // `const session = await loadSession(req);` — two unrelated lines asserted as a near miss.
   let bestStart = -1;
   let bestScore = 0;
   for (let i = 0; i + oldLines.length <= contentLines.length; i++) {
     let score = 0;
+    let qualifies = false;
     for (let j = 0; j < oldLines.length; j++) {
-      if (contentLines[i + j].trim() === trimmedOld[j]) score++;
+      if (contentLines[i + j].trim() !== trimmedOld[j]) continue;
+      score++;
+      if (trimmedOld[j].length > TRIVIAL_LINE_LENGTH) qualifies = true;
     }
-    if (score > bestScore) {
+    if (qualifies && score > bestScore) {
       bestScore = score;
       bestStart = i;
     }
   }
 
   if (bestStart !== -1) {
-    for (let j = 0; j < oldLines.length; j++) {
-      if (contentLines[bestStart + j].trim() === trimmedOld[j]) continue;
-      return report(bestStart + j, contentLines[bestStart + j].trim(), trimmedOld[j]);
-    }
+    const differing = trimmedOld.findIndex((line, j) => contentLines[bestStart + j].trim() !== line);
     // Every line of the best window matched. Unreachable from `edit` — tier 1 would have replaced
     // it — but this is an exported pure function and "nothing differs" has no line to name.
-    return null;
+    if (differing === -1) return null;
+    return report(bestStart + differing, contentLines[bestStart + differing].trim(), trimmedOld[differing]);
   }
 
-  // Stage 2, reached ONLY when no window scored at all. Two shapes land here and window scoring
-  // cannot serve either: a single-line oldString, which can never score (a content line that
-  // trim-matched it is exactly what tier 1 replaces, so `edit` would not have reached this
-  // function); and a multi-line oldString where every line differs. Both are real — a one-line
-  // edit is the most common shape there is.
+  // Stage 2, reached when no window qualified. Three shapes land here and stage 1 serves none of
+  // them: a single-line oldString, which can never qualify (a content line that trim-matched it is
+  // exactly what tier 1 replaces, so `edit` would not have reached this function); a multi-line
+  // oldString where every line differs; and a window carried only by a trivial line. All three are
+  // real, and a one-line edit is the most common shape there is.
   //
-  // Scoping it to score 0 is what keeps stage 1's fix intact. The failure this function exists to
-  // get right — first line correct, a later line wrong — scores at least 1 and therefore never
-  // reaches here, so the fallback cannot pull the report back onto the line the model got right.
-  // And when nothing trim-matched anywhere, there is no such line to be misdirected toward.
+  // With no neighbours to corroborate it, the character floor below is the only evidence this
+  // stage has, which is why it keeps one where stage 1 does not.
   const probe = trimmedOld.find((line) => line !== "");
   if (probe === undefined) return null;
 
   let bestIndex = -1;
   let bestSimilarity = 0;
   for (let i = 0; i < contentLines.length; i++) {
-    const score = similarity(contentLines[i].trim(), probe);
+    const candidate = contentLines[i].trim();
+    // An exact match is not a near miss, and naming one prints identical `actual` and `searched`
+    // — the same symptom stage 1 exists to prevent, arriving from the other side. It bites when
+    // oldString starts with `}`: the probe is `}`, some `}` in the file scores 1.0, and the report
+    // points at a line the model got right.
+    if (candidate === probe) continue;
+    const score = similarity(candidate, probe);
     if (score > bestSimilarity) {
       bestSimilarity = score;
       bestIndex = i;

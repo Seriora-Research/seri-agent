@@ -41,6 +41,37 @@ describe("describeNearMiss", () => {
     expect(report).toContain("log(err);");
   });
 
+  // A window is selected on "at least one line trim-matched", and a lone `}` clears that. Without
+  // a quality floor on the pair actually printed, the report then asserts two entirely unrelated
+  // lines as a near miss — the same degenerate-probe class the similarity floor exists to stop,
+  // just reached through stage 1 instead of stage 2. Realistic: a model misremembering a block it
+  // is editing lines up the closing brace and nothing else.
+  test("a window carried by a lone closing brace is refused, not reported as a near miss", () => {
+    const content = [
+      "export function handler(req: Request) {",
+      "  const token = req.headers.get('authorization');",
+      "  if (!token) return unauthorized();",
+      "  return ok(token);",
+      "}",
+    ].join("\n");
+    const report = describeNearMiss(
+      content,
+      ["  const session = await loadSession(req);", "  if (!session) return redirect('/login');", "}"].join("\n"),
+    );
+
+    expect(report).toBeNull();
+  });
+
+  // Stage 2 scores oldString's first non-blank line against every content line, so when that probe
+  // is a lone `}` some brace in the file scores 1.0 and the report prints identical `actual` and
+  // `searched` — the H2 symptom arriving from the other side. An exact match is not a near miss.
+  test("stage 2 never names a line that exactly matches the probe", () => {
+    const content = ["function a() {", "  return 1;", "}", "", "function b() {", "  return 2;", "}"].join("\n");
+    const report = describeNearMiss(content, ["}", "const totallyUnrelated = 9;"].join("\n"));
+
+    expect(report).toBeNull();
+  });
+
   test("nothing in the content trim-matches any line, so no line is named", () => {
     const content = "const a = 1;\nconst b = 2;\n";
     expect(describeNearMiss(content, "export default function Widget(props) {\n  return null;\n}")).toBeNull();
