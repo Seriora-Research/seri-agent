@@ -16,7 +16,15 @@ const readFileTool = tool({
 });
 
 const writeFileTool = tool({
-  description: "Write text content to a file, atomically.",
+  description:
+    "Write text content to a file, atomically. If the user has configured a check command, it runs " +
+    "after a successful write and the result carries its diagnostics. They are ADVISORY — the write " +
+    "already happened and is not rolled back. The check covers whatever the configured command " +
+    "covers, usually the whole project, so diagnostics may be PRE-EXISTING and in files you never " +
+    "touched: `inWrittenFile` says how many of the returned diagnostics are in the file you just " +
+    "wrote, and those are listed first. `total` is how many the check reported, which is more than " +
+    "the list when it was capped. Fix what you caused; do not start editing unrelated files because " +
+    "the project already had errors in them.",
   inputSchema: z.object({
     path: z.string(),
     content: z.string(),

@@ -7,8 +7,8 @@ import { tool, type ModelMessage, type ToolExecutionOptions, type ToolSet } from
 import { z } from "zod";
 import { edit } from "../../src/tools/edit";
 import { writeFile } from "../../src/tools/writeFile";
-import type { CheckOutcome } from "../../src/verify/run";
-import { withVerification, writeFileDiagnosticCount } from "../../src/verify/wrapTools";
+import { writeFileVerification, type CheckOutcome } from "../../src/verify/outcome";
+import { withVerification } from "../../src/verify/wrapTools";
 
 const messages: ModelMessage[] = [
   { role: "user", content: "do the task" },
@@ -52,6 +52,7 @@ const DIAGNOSTIC_OUTCOME: CheckOutcome = {
   diagnostics: [
     { file: "src/a.ts", line: 12, column: 7, message: "error TS2322: Type 'number' is not assignable to type 'string'." },
   ],
+  inWrittenFile: 1,
   truncated: false,
   total: 1,
 };
@@ -153,7 +154,7 @@ describe("withVerification", () => {
     let received: AbortSignal | undefined;
     const wrapped = withVerification(realishTools(), {
       command: "tsc --noEmit",
-      runCheck: async (_command, signal) => {
+      runCheck: async (_command, _writtenPath, signal) => {
         received = signal;
         return DIAGNOSTIC_OUTCOME;
       },
@@ -164,32 +165,37 @@ describe("withVerification", () => {
     expect(received).toBe(controller.signal);
   });
 
-  test("passes the configured command to the check", async () => {
-    let received: string | undefined;
+  test("passes the configured command and the written path to the check", async () => {
+    let receivedCommand: string | undefined;
+    let receivedPath: string | undefined;
+    const target = join(root, "a.ts");
     const wrapped = withVerification(realishTools(), {
       command: "bun run typecheck",
-      runCheck: async (command) => {
-        received = command;
+      runCheck: async (command, writtenPath) => {
+        receivedCommand = command;
+        receivedPath = writtenPath;
         return DIAGNOSTIC_OUTCOME;
       },
     });
 
-    await wrapped.write_file?.execute?.({ path: join(root, "a.ts"), content: "x" }, execOpts());
+    await wrapped.write_file?.execute?.({ path: target, content: "x" }, execOpts());
 
-    expect(received).toBe("bun run typecheck");
+    expect(receivedCommand).toBe("bun run typecheck");
+    // The path is what orders the diagnostics; it never decides what runs.
+    expect(receivedPath).toBe(target);
   });
 });
 
-describe("writeFileDiagnosticCount", () => {
-  test("counts the diagnostics on a result this module produced", () => {
-    expect(writeFileDiagnosticCount({ written: true, verification: DIAGNOSTIC_OUTCOME })).toBe(1);
+describe("writeFileVerification", () => {
+  test("narrows a result this module produced", () => {
+    expect(writeFileVerification({ written: true, verification: DIAGNOSTIC_OUTCOME })).toEqual(DIAGNOSTIC_OUTCOME);
   });
 
-  test("is undefined for every other outcome and for results this module did not produce", () => {
-    expect(writeFileDiagnosticCount({ written: true, verification: { status: "ok", command: "x", elapsedMs: 1 } })).toBeUndefined();
-    expect(writeFileDiagnosticCount("edited text")).toBeUndefined();
-    expect(writeFileDiagnosticCount(null)).toBeUndefined();
-    expect(writeFileDiagnosticCount(undefined)).toBeUndefined();
+  test("is undefined for results this module did not produce", () => {
+    expect(writeFileVerification("edited text")).toBeUndefined();
+    expect(writeFileVerification(null)).toBeUndefined();
+    expect(writeFileVerification(undefined)).toBeUndefined();
+    expect(writeFileVerification({ written: true })).toBeUndefined();
   });
 });
 

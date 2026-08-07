@@ -72,6 +72,37 @@ describe("describeNearMiss", () => {
     expect(report).toBeNull();
   });
 
+  // The same class as the lone `}` above, and the reason the test is "no alphanumeric character"
+  // rather than a length: `});` is three characters and the most common closer in JS/TS, so any
+  // length cut that admits it admits the hole, and any cut that excludes it moves the hole to
+  // `}));` and `],`. What disqualifies all of them is that they are pure punctuation — they occur
+  // everywhere and identify no position.
+  test("a window carried only by `});` is refused, exactly as a lone brace is", () => {
+    const content = [
+      "app.get('/session', async (req: Request) => {",
+      "  const token = req.headers.get('authorization');",
+      "  if (!token) return unauthorized();",
+      "  return ok(token);",
+      "});",
+    ].join("\n");
+    const report = describeNearMiss(
+      content,
+      ["  const session = await loadSession(req);", "  if (!session) return redirect('/login');", "});"].join("\n"),
+    );
+
+    expect(report).toBeNull();
+  });
+
+  // The other half of patience diff's rule, and the half a punctuation test cannot express:
+  // `return;` has identifiers, but occurring three times it says nothing about WHICH window is the
+  // right one. Frequency, not character class, is what makes a line a usable anchor.
+  test("a line that repeats in the content cannot qualify a window on its own", () => {
+    const content = ["const a = 1;", "return;", "const b = 2;", "return;", "const c = 3;", "return;"].join("\n");
+    const report = describeNearMiss(content, ["totallyDifferentThing();", "return;"].join("\n"));
+
+    expect(report).toBeNull();
+  });
+
   test("nothing in the content trim-matches any line, so no line is named", () => {
     const content = "const a = 1;\nconst b = 2;\n";
     expect(describeNearMiss(content, "export default function Widget(props) {\n  return null;\n}")).toBeNull();

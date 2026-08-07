@@ -25,17 +25,37 @@
 //     floor is the entire thing keeping it honest.
 //
 // Pure, and deliberately so: it is called from `edit`, which takes the content as an argument and
-// touches no disk (provider/tools.ts:98-106). At the failure site there is no path to read — the
+// touches no disk (provider/tools.ts:106-114). At the failure site there is no path to read — the
 // content came from the model's own tool-call arguments.
 
 // Stage 2 only. See the asymmetry above for why stage 1 is not floored on this.
 const MIN_SIMILARITY = 0.7;
 
-// A line this short carries no evidence about WHERE it is: `}`, `{`, `)`, `};`, `),` occur all over
-// a source file, so a window whose only agreement with oldString is one of them has not been
-// located, it has been guessed at. Covers every such line at 2 characters, which is what separates
-// them from the shortest lines that do identify a position (`ok`, `[]`, `if (x) {`).
-const TRIVIAL_LINE_LENGTH = 2;
+// Whether a matched line is good enough evidence that THIS window is the right one. This is a
+// solved problem in exactly this shape: it is the motivating example for **patience diff**, whose
+// literature describes Myers diff aligning "any matching line, including very common ones, so
+// moving a function in C can produce a noisy diff in which the closing brace of the moved function
+// aligns with the closing brace of an unrelated function". That is our failure precisely.
+//
+// Patience's answer is UNIQUENESS — it anchors only on lines occurring exactly once — and both
+// conditions below come from its own phrasing, "lines that are frequently non-unique, such as those
+// containing a single brace":
+//
+//   1. Unique in the content. A line appearing many times is no evidence for any particular
+//      window. This is the real rule, and it is the one a character test cannot express: `return;`
+//      has identifiers and is worthless at 40 occurrences, while a `});` appearing exactly once is
+//      genuinely informative.
+//   2. Not punctuation-only. Uniqueness alone is not sufficient HERE, because patience compares two
+//      files and needs a line unique in both, where we compare a short oldString against one file.
+//      In small content the frequency statistic is meaningless — in the five-line case that
+//      produced this bug, `}` occurs exactly once and would pass condition 1 on its own.
+//
+// Measured with condition 2 alone (a punctuation test, no uniqueness): a window anchored on a
+// thrice-repeated `return;` reported `const a = 1;` as the near miss for
+// `totallyDifferentThing();`. With condition 1 alone: the `});` repro returns.
+function isUsableAnchor(trimmedLine: string, occurrences: number): boolean {
+  return occurrences === 1 && /[A-Za-z0-9_]/.test(trimmedLine);
+}
 
 // Common prefix plus common suffix, over the longer line. Chosen over an edit distance because
 // the failures it exists to explain are one substitution, one missing space, or a renamed
@@ -78,9 +98,17 @@ export function describeNearMiss(content: string, oldString: string): string | n
 
   const trimmedOld = oldLines.map((line) => line.trim());
 
+  // Occurrence counts for the uniqueness half of `isUsableAnchor`. Built once rather than
+  // re-counted per window: the scan is already O(windows * oldLines), and this keeps it there.
+  const occurrences = new Map<string, number>();
+  for (const line of contentLines) {
+    const trimmed = line.trim();
+    occurrences.set(trimmed, (occurrences.get(trimmed) ?? 0) + 1);
+  }
+
   // Stage 1: the best window, where "best" is the most lines that trim-matched — but only among
-  // windows that QUALIFY. Qualifying means at least one matching line is non-trivial, and that is
-  // the whole quality bar for this stage. It is applied at selection, not at report time, because
+  // windows that QUALIFY. Qualifying means at least one matching line is a usable anchor, and that
+  // is the whole quality bar for this stage. It is applied at selection, not at report time, because
   // what can be wrong here is which window was chosen, never whether the line inside it is worth
   // naming: once neighbours have located the window, the first line that differs IS the answer.
   //
@@ -96,7 +124,7 @@ export function describeNearMiss(content: string, oldString: string): string | n
     for (let j = 0; j < oldLines.length; j++) {
       if (contentLines[i + j].trim() !== trimmedOld[j]) continue;
       score++;
-      if (trimmedOld[j].length > TRIVIAL_LINE_LENGTH) qualifies = true;
+      if (isUsableAnchor(trimmedOld[j], occurrences.get(trimmedOld[j]) ?? 0)) qualifies = true;
     }
     if (qualifies && score > bestScore) {
       bestScore = score;

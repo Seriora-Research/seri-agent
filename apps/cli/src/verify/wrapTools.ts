@@ -1,5 +1,6 @@
 import type { ToolExecutionOptions, ToolSet } from "ai";
-import { runCheck as runCheckReal, type CheckOutcome } from "./run";
+import type { CheckOutcome, WriteFileResult } from "./outcome";
+import { runCheck as runCheckReal } from "./run";
 
 // The one tool wrapped, named directly rather than taken from provider/tools.ts's
 // FS_MUTATING_TOOL_NAMES. That list is write_file, bash and powershell — the set a checkpoint has
@@ -21,23 +22,8 @@ export type VerifyDeps = {
   runCheck?: typeof runCheckReal;
 };
 
-// write_file's tool result changes shape. It used to be `void`, which loop.ts:354 turned into
-// `{type:"json", value:null}` — nothing in the codebase read it, so there is no consumer to break,
-// and `written` is here so the model can still tell a completed write from a failed one now that
-// the interesting half of the result is about something else entirely.
-export type WriteFileResult = { written: true; verification: CheckOutcome };
-
-// How many diagnostics a tool result is carrying, or undefined if it is not one of ours. It lives
-// HERE, beside the code that produces the shape, because loop.ts types a tool result as `unknown`
-// (loop.ts:17) so the narrowing has to happen somewhere — and doing it in the printer would make
-// output.ts an independent second guess at what this module returns, free to drift from it.
-export function writeFileDiagnosticCount(result: unknown): number | undefined {
-  const verification = (result as Partial<WriteFileResult> | null | undefined)?.verification;
-  return verification?.status === "diagnostics" ? verification.diagnostics.length : undefined;
-}
-
 // A pure function over a ToolSet, in the shape checkpoint/wrapTools.ts:29 already established for
-// the same situation: runLoop is not touched, loop.ts still knows no tool names (output.ts:75-76),
+// the same situation: runLoop is not touched, loop.ts still knows no tool names (output.ts:116-117),
 // and verification stays a consumer policy. The index-alignment invariant at loop.ts:358-363 is
 // then satisfied structurally — a wrapper returns one value from one `execute`, so the loop still
 // pushes exactly one row per call and there is no way for this design to push a second.
@@ -63,11 +49,15 @@ export function withVerification(tools: ToolSet, deps: VerifyDeps = {}): ToolSet
             // Awaited first, and not caught: a write that threw wrote nothing, so there is
             // nothing to check and the throw is the model's answer.
             await execute(args, options);
+            // Validated against write_file's zod schema (provider/tools.ts:28-32) before execute is
+            // reached, so `path` is a string by construction. It only ORDERS the diagnostics — what
+            // runs is the user's configured command and nothing here can change that.
+            const { path } = args as { path: string };
             // Advisory, never blocking: the write stands whatever comes back. A multi-file
             // refactor is type-incorrect between its own steps — writing a file that imports a
             // not-yet-written one produces a real error — and blocking would make that
             // impossible to work through. Stage 4's checkpoints are the undo path.
-            const verification = enabled ? await runCheck(deps.command, options.abortSignal) : DISABLED;
+            const verification = enabled ? await runCheck(deps.command, path, options.abortSignal) : DISABLED;
             return { written: true, verification } satisfies WriteFileResult;
           },
         },
