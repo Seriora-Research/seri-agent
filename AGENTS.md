@@ -62,7 +62,8 @@ constructs one — `apps/cli/src/cli.ts` owns an `AbortController` per run, beca
 knows what a Ctrl-C means. The signal reaches all three of `streamText`, `compactMessages`, and
 every tool through `ToolExecutionOptions.abortSignal` (which rides through `withCheckpoints`
 untouched, and which `bash`/`powershell`/`grep`/`glob` each forward to the process they spawn —
-`read_file`/`write_file`/`edit` take it and have nothing to interrupt), and the turn ends as
+`read_file`/`edit` take it and have nothing to interrupt, and `write_file` forwards it to the
+verification check it runs after the write — `verify/wrapTools.ts`), and the turn ends as
 `done.reason: "aborted"` rather than as an `error`: a user-initiated cancel is not a failure. The
 **first** press cancels the in-flight turn — `apps/cli/src/signals.ts` holds a single-slot
 `onSignalCancel` callback and, **on SIGINT only**, returns from the handler *before* the fatal body,
