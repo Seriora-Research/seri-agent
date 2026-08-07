@@ -629,8 +629,10 @@ async function driveLoop(
   doneReason: DoneReason | undefined;
   cancelledBy: NodeJS.Signals | undefined;
   usage: RunUsage;
-  hadDenial: boolean;
-  ranTool: boolean;
+  // The one fact `run()`'s exit code actually needs, not the two inputs it would otherwise have
+  // to reassemble itself: "refused at least once AND executed nothing at all" — see the tracking
+  // below for what each half means and why.
+  refusedWithoutRunning: boolean;
 }> {
   const { session, storeDir, tools, model, permissionMode } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
@@ -717,7 +719,7 @@ async function driveLoop(
     unregisterCancel();
   }
 
-  return { doneReason, cancelledBy, usage, hadDenial, ranTool };
+  return { doneReason, cancelledBy, usage, refusedWithoutRunning: hadDenial && !ranTool };
 }
 
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
@@ -765,7 +767,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const prepared = prepareSession(ctx, deps, skipPermissions);
   if (typeof prepared === "number") return prepared;
 
-  const { doneReason, cancelledBy, usage, hadDenial, ranTool } = await driveLoop(prepared, ctx, deps, maxTurns);
+  const { doneReason, cancelledBy, usage, refusedWithoutRunning } = await driveLoop(prepared, ctx, deps, maxTurns);
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are
@@ -793,7 +795,8 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // a fresh session with no human present now reaches the approval prompt on its very first write,
   // EOF resolves "no", the model gives up and answers with text, and that used to exit 0 — asked
   // for permission, nobody was there, did nothing, reported success. `seri "…" && deploy` would
-  // deploy. So within `no-tool-call`, `hadDenial && !ranTool` — refused at least once AND executed
+  // deploy. So within `no-tool-call`, `refusedWithoutRunning` — driveLoop's own conclusion from
+  // "was anything refused" and "did anything actually run", refused at least once AND executed
   // nothing at all — is exit 1 too; a run with no tools and no denials (`seri "explain this
   // repo"`) and a run where one call was denied but a later one ran (the user said no to one
   // thing, the model did something else) both still exit 0, because both are a completed,
@@ -803,9 +806,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // unanswered, and `seri "big task" && deploy` must not deploy. `repeated-denials` is the same
   // fact by the same reasoning — the run stopped itself after MAX_CONSECUTIVE_DENIALS refused tool
   // calls, the task is exactly as unanswered as it would be at the iteration cap, and `&& deploy`
-  // must not run off the back of it either — both stay unconditionally 1, `hadDenial`/`ranTool` or
-  // not. loop.ts's two stream-error returns end the generator with no `done` at all and land on
-  // the same 1 — a throw escaping runLoop outright (`approvalPrompt` rejecting, or
+  // must not run off the back of it either — both stay unconditionally 1, regardless of
+  // `refusedWithoutRunning`. loop.ts's two stream-error returns end the generator with no `done`
+  // at all and land on the same 1 — a throw escaping runLoop outright (`approvalPrompt` rejecting, or
   // findSafeEvictionBoundary, neither of which is inside a try) ends it with no `done` too, but it
   // comes out of driveLoop's `for await` and never gets here. All of these used to exit 0 and let
   // `seri "…" && next` run next.
@@ -817,7 +820,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // signal. tests/cli/cli.test.ts records that status for the displaced-slot case, but it asserts
   // the same 1 a second aborter would produce, so it will not go red when one is added: revisiting
   // this line is on whoever adds it.
-  if (doneReason === "no-tool-call") return hadDenial && !ranTool ? 1 : 0;
+  if (doneReason === "no-tool-call") return refusedWithoutRunning ? 1 : 0;
   return 1;
 }
 
