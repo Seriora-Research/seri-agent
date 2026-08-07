@@ -165,6 +165,90 @@ describe("run (task invocation)", () => {
     expect(capture()?.system).toBe(buildSystemPrompt(""));
   });
 
+  // Two assertions, because the one at :153 above would pass if the mode reached the loop but
+  // never made it to the session file on disk.
+  test("a new session is created in approve-each, and the file on disk says so too", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop();
+
+    await captureLogs(() => run(["write", "hello.txt"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+
+    expect(capture()?.permissionMode).toBe("approve-each");
+    const createdId = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
+    expect(loadSession(createdId, sessionsDir).permissionMode).toBe("approve-each");
+  });
+
+  test("--dangerously-skip-permissions reaches runLoop as auto", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop();
+
+    await captureLogs(() =>
+      run(["--dangerously-skip-permissions", "write", "hello.txt"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(capture()?.permissionMode).toBe("auto");
+  });
+
+  // Landmine 2's test: the flag overrides the loop's live view without ever reaching disk.
+  // Negative control: assigning session.permissionMode = "auto" in driveLoop instead of using the
+  // local override at cli.ts's opts literal turns this red.
+  test("--dangerously-skip-permissions is not persisted to the session file", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake } = fakeRunLoop(answeredTurn);
+
+    await captureLogs(() =>
+      run(["--dangerously-skip-permissions", "write", "hello.txt"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    const createdId = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
+    expect(loadSession(createdId, sessionsDir).permissionMode).toBe("approve-each");
+  });
+
+  test("the tool-allowed event prints which tool was approved for the rest of the run", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake } = fakeRunLoop([{ type: "tool-allowed", name: "bash" }, { type: "done", reason: "no-tool-call" }]);
+
+    const { logs } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+
+    expect(logs.some((line) => line.includes("bash"))).toBe(true);
+  });
+
+  // Success check 4's exit-code half: a run stopped by repeated denials leaves the user's task as
+  // unanswered as one that hit the iteration cap, so it gets the same non-zero exit.
+  test("repeated-denials exits 1 and prints the /mode follow-up", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake } = fakeRunLoop([{ type: "done", reason: "repeated-denials" }]);
+
+    const { code, logs } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+
+    expect(code).toBe(1);
+    expect(logs.some((line) => line.includes("/mode"))).toBe(true);
+  });
+
+  // Option B: the allowlist is process-lifetime only, so a run that emits tool-allowed leaves no
+  // trace of it in the session file, and a later --continue passes no seed at all.
+  test("tool-allowed leaves no allowedTools field on the session file, and --continue seeds nothing", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    // tool-allowed comes AFTER messages-updated so it is the run's last write to disk — if a
+    // future change persisted it, this ordering is what would catch a write that only looks
+    // absent because a later messages-updated overwrote it back out.
+    const { fake: firstRun } = fakeRunLoop([
+      ...answeredTurn,
+      { type: "tool-allowed", name: "bash" },
+    ]);
+
+    await captureLogs(() => run(["do", "a", "task"], { runLoop: firstRun, loadAgentsFile: () => "", sessionsDir }));
+
+    const createdId = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
+    const onDisk = JSON.parse(readFileSync(join(sessionsDir, `${createdId}.json`), "utf8"));
+    expect("allowedTools" in onDisk).toBe(false);
+
+    const { fake: secondRun, capture } = fakeRunLoop();
+    await captureLogs(() => run(["--continue"], { runLoop: secondRun, loadAgentsFile: () => "", sessionsDir }));
+
+    expect(capture()?.allowedTools).toBeUndefined();
+  });
+
   // A turn the provider answered, which is what makes the model worth recording. The bare `done`
   // the other tests use is a run that reached the model and got nothing back, and it deliberately
   // records no model — see the two tests after this one.
