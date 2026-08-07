@@ -10,6 +10,7 @@ import { checkpointStoreDir, createCheckpointer } from "../../src/checkpoint/che
 import { isGitAvailable } from "../../src/checkpoint/shadowGit";
 import { run } from "../../src/cli";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
+import { getGroqModel } from "../../src/provider/groq";
 import { toolDefinitions } from "../../src/provider/tools";
 import { onSignalCancel } from "../../src/signals";
 import { loadSession, saveSession, type SessionState } from "../../src/session/session";
@@ -156,6 +157,41 @@ describe("run (task invocation)", () => {
     // The assembled prompt, not the bare identity line: with no AGENTS.md this used to be 29
     // characters of identity and no tool guidance at all.
     expect(capture()?.system).toBe(buildSystemPrompt(""));
+  });
+
+  // The model is resolved once and recorded on the session, which is what a later /model has to
+  // change. Without the record, `--continue` would silently re-resolve from the environment and
+  // undo the switch on the next turn.
+  test("records the resolved model on a new session and keeps a resumed session's own", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_MODEL = "model-from-env";
+    const asked: (string | undefined)[] = [];
+    const deps = {
+      runLoop: fakeRunLoop().fake,
+      loadAgentsFile: () => "",
+      sessionsDir,
+      getGroqModel: (id?: string) => {
+        asked.push(id);
+        return getGroqModel("openai/gpt-oss-120b");
+      },
+    };
+
+    try {
+      const fresh = await captureLogs(() => run(["a", "task"], deps));
+      expect(fresh.code).toBe(0);
+      const created = loadSession(readdirSync(sessionsDir)[0]!.replace(/\.json$/, ""), sessionsDir);
+      expect(created.model).toBe("model-from-env");
+      expect(asked).toEqual(["model-from-env"]);
+
+      const pinned: SessionState = { id: "pinned", cwd: ".", systemPrompt: "", permissionMode: "read-only", model: "model-on-session", messages: [] };
+      saveSession(pinned, sessionsDir);
+      const resumed = await captureLogs(() => run(["--resume", "pinned", "another", "task"], deps));
+      expect(resumed.code).toBe(0);
+      expect(asked.at(-1)).toBe("model-on-session");
+      expect(loadSession("pinned", sessionsDir).model).toBe("model-on-session");
+    } finally {
+      delete process.env.SERI_MODEL;
+    }
   });
 
   // cli.ts is the only thing that constructs the controller — runLoop is a library that is handed a

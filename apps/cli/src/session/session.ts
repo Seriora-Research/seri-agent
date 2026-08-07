@@ -7,6 +7,11 @@ export type SessionState<TMessage = unknown> = {
   cwd: string;
   systemPrompt: string;
   permissionMode: PermissionMode;
+  // Optional so every session written before the model was recorded still loads. Beside
+  // permissionMode because it is the same kind of thing: a per-session setting, resolved once at
+  // creation and then owned by the session rather than re-read from the environment on every
+  // resume — which is what lets a future /model change stick.
+  model?: string;
   messages: TMessage[];
 };
 

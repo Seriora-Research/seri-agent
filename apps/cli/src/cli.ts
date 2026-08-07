@@ -36,7 +36,7 @@ import { loadVerifyConfig } from "./config/config";
 import { getConfigDir } from "./config/paths";
 import { cycleMode } from "./gate/gate";
 import { type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "./loop/loop";
-import { getGroqModel as getGroqModelReal } from "./provider/groq";
+import { getGroqModel as getGroqModelReal, resolveModelId } from "./provider/groq";
 import { toolDefinitions } from "./provider/tools";
 import { findMostRecentSession, loadSession, saveSession, type SessionState } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
@@ -471,10 +471,16 @@ function prepareSession(ctx: RunContext, deps: CliDeps): PreparedRun | number {
     session.messages.push({ role: "user", content: ctx.taskText });
   }
 
+  // `??=`, so this covers all three cases in one line: a new session resolves SERI_MODEL, a resumed
+  // session keeps the model it was created with, and a session written before this field existed
+  // resolves one on its next run. Resolving only when unset is the point — a session that has
+  // recorded a model must not have it silently changed underneath it by the environment.
+  session.model ??= resolveModelId();
+
   const getGroqModelFn = deps.getGroqModel ?? getGroqModelReal;
   let model;
   try {
-    model = getGroqModelFn();
+    model = getGroqModelFn(session.model);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return 1;

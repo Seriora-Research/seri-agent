@@ -19,6 +19,19 @@ import { getApiKey } from "../config/config";
 // is this product's core operation. gpt-oss-120b is free on the same provider.
 export const DEFAULT_MODEL = "openai/gpt-oss-120b";
 
+// `SERI_MODEL`, with the env-then-config precedence loadVerifyConfig already established
+// (config/config.ts:56-79). getApiKey despite the name: it is exactly `env || config || undefined`,
+// including the deliberate `||` that lets an empty env var fall through, and duplicating that here
+// would mean duplicating the reasoning behind it too.
+//
+// The escape hatch matters because the default is a judgement about which model calls tools
+// reliably today, and a user who disagrees — or whose account cannot reach it — should not have to
+// recompile. Before this, changing model meant editing a constant and rebuilding, which measurably
+// slowed the diagnosis that produced this file's default.
+export function resolveModelId(configDir?: string): string {
+  return getApiKey("SERI_MODEL", configDir) ?? DEFAULT_MODEL;
+}
+
 export function getGroqModel(modelId: string = DEFAULT_MODEL): LanguageModel {
   const apiKey = getApiKey("GROQ_API_KEY");
   if (!apiKey) {
