@@ -42,6 +42,30 @@ describe("checkPermission", () => {
       });
     }
   });
+
+  describe("allowedTools", () => {
+    test("approve-each allows only the granted tool, not every write tool", () => {
+      const allowed = new Set(["bash"]);
+      expect(checkPermission("bash", "approve-each", allowed)).toBe("allow");
+      for (const name of WRITE_TOOL_NAMES.filter((n) => n !== "bash")) {
+        expect(checkPermission(name, "approve-each", allowed)).toBe("needs-approval");
+      }
+    });
+
+    test("a grant does not survive a cycle to read-only", () => {
+      expect(checkPermission("bash", "read-only", new Set(["bash"]))).toBe("block");
+    });
+
+    test("the allowlist does not widen or narrow auto", () => {
+      for (const name of [...WRITE_TOOL_NAMES, ...READ_TOOL_NAMES]) {
+        expect(checkPermission(name, "auto", new Set())).toBe("allow");
+      }
+    });
+
+    test("the allowlist does not make a read tool need approval", () => {
+      expect(checkPermission("read_file", "approve-each", new Set(["read_file"]))).toBe("allow");
+    });
+  });
 });
 
 describe("cycleMode", () => {
