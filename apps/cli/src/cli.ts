@@ -34,7 +34,7 @@ import {
 import { configCommand as configCommandReal } from "./config/commands";
 import { loadVerifyConfig } from "./config/config";
 import { getConfigDir } from "./config/paths";
-import { cycleMode } from "./gate/gate";
+import { cycleMode, type PermissionMode } from "./gate/gate";
 import { type ApprovalAnswer, type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "./loop/loop";
 import { getGroqModel as getGroqModelReal, resolveModelId } from "./provider/groq";
 import { toolDefinitions } from "./provider/tools";
@@ -533,9 +533,16 @@ type PreparedRun = {
   storeDir: string;
   tools: ToolSet;
   model: LanguageModel;
+  // Resolved here, the same way `model` is: a per-run fact the loop is driven with, carried
+  // beside the session rather than assumed equal to `session.permissionMode`. `--dangerously-
+  // skip-permissions` is the one thing that can make the two differ, and now that the value the
+  // loop actually reads lives on this object instead of being re-derived at the call site, there
+  // is no `session.permissionMode` assignment for a future edit to reach for by mistake — the
+  // session this run started from is untouched, and driveLoop never sees anything else to assign.
+  permissionMode: PermissionMode;
 };
 
-function prepareSession(ctx: RunContext, deps: CliDeps): PreparedRun | number {
+function prepareSession(ctx: RunContext, deps: CliDeps, skipPermissions: boolean): PreparedRun | number {
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
 
   let session: RunSession;
@@ -611,7 +618,7 @@ function prepareSession(ctx: RunContext, deps: CliDeps): PreparedRun | number {
     loadVerifyConfig(),
   );
 
-  return { session, storeDir, tools, model };
+  return { session, storeDir, tools, model, permissionMode: skipPermissions ? "auto" : session.permissionMode };
 }
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
@@ -629,7 +636,6 @@ async function driveLoop(
   ctx: RunContext,
   deps: CliDeps,
   maxTurns: number | undefined,
-  skipPermissions: boolean,
 ): Promise<{
   doneReason: DoneReason | undefined;
   cancelledBy: NodeJS.Signals | undefined;
@@ -637,7 +643,7 @@ async function driveLoop(
   hadDenial: boolean;
   ranTool: boolean;
 }> {
-  const { session, storeDir, tools, model } = prepared;
+  const { session, storeDir, tools, model, permissionMode } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
@@ -667,12 +673,10 @@ async function driveLoop(
       model,
       tools,
       messages: session.messages,
-      // The flag overrides the mode for THIS RUN and is deliberately never written back to
-      // `session`. This function persists `{...session, messages}` on every tool round-trip, so
-      // assigning session.permissionMode = "auto" here would silently make a one-off
-      // --dangerously-skip-permissions the session's standing mode, inherited by every later
-      // --continue with no flag on the command line and nothing on screen saying so.
-      permissionMode: skipPermissions ? "auto" : session.permissionMode,
+      // Resolved once, in prepareSession, and carried on `prepared` the same way `model` is —
+      // see PreparedRun's own comment. Reading it from there rather than re-deriving it here means
+      // there is nothing this call site could assign into `session` even by accident.
+      permissionMode,
       approvalPrompt: makeApprovalPrompt(deps.createInterface),
       system: session.systemPrompt,
       signal: controller.signal,
@@ -769,10 +773,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const slash = handleSlashCommand(ctx);
   if (slash !== undefined) return slash;
 
-  const prepared = prepareSession(ctx, deps);
+  const prepared = prepareSession(ctx, deps, skipPermissions);
   if (typeof prepared === "number") return prepared;
 
-  const { doneReason, cancelledBy, usage, hadDenial, ranTool } = await driveLoop(prepared, ctx, deps, maxTurns, skipPermissions);
+  const { doneReason, cancelledBy, usage, hadDenial, ranTool } = await driveLoop(prepared, ctx, deps, maxTurns);
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are
