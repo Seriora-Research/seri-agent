@@ -9,7 +9,7 @@ const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
 // The real cli.ts, because makeApprovalPrompt is not exported and the wiring is half of what is
 // being asserted, with a fake runLoop standing in for the model round-trip so the only thing this
-// pty exercises is the approval prompt. It reports the answer AND the run's own signal: `false`
+// pty exercises is the approval prompt. It reports the answer AND the run's own signal: `"no"`
 // alone is indistinguishable from a typed "n", and `aborted=true` is what says the press travelled
 // interface -> deliverSignal -> signals.ts's cancel slot -> cli.ts's controller. run() then ends in
 // raiseSignal, so the child dies by SIGINT exactly as it does in production.
@@ -21,6 +21,35 @@ function childScript(dir: string): string {
     `  const answer = await opts.approvalPrompt("write_file", { path: "a.txt" }, opts.signal);`,
     `  console.log("\\nPROMPT answer=" + answer + " aborted=" + opts.signal.aborted);`,
     `  yield { type: "done", reason: "aborted" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["write", "hello.txt"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// Three sequential prompts in one child, reusing the same runLoopFake shape as childScript above
+// but never aborting: this is the three-way parse's own test, not the cancel path's. Each call
+// asks about a differently-named file so `sawLine` can tell one prompt's readiness from the next
+// (the rendered line embeds the JSON args), and each answer is logged distinctly so `sawLine` can
+// tell one resolved answer from the next.
+function childScriptThreeAnswers(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  const a = await opts.approvalPrompt("write_file", { path: "a.txt" }, opts.signal);`,
+    `  console.log("\\nPROMPT answer=" + a);`,
+    `  const b = await opts.approvalPrompt("write_file", { path: "b.txt" }, opts.signal);`,
+    `  console.log("\\nPROMPT answer=" + b);`,
+    `  const c = await opts.approvalPrompt("write_file", { path: "c.txt" }, opts.signal);`,
+    `  console.log("\\nPROMPT answer=" + c);`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
     `}`,
     `await cli.run(["write", "hello.txt"], {`,
@@ -106,7 +135,7 @@ describe.skipIf(process.platform === "win32")("approval prompt on a real termina
       // The prompt itself is the readiness marker, and waiting for it is also what keeps the byte
       // out of the window before readline sets raw mode — while the pty is still canonical, 0x03
       // WOULD raise a real SIGINT and the test would pass for the wrong reason.
-      await sawLine("[y/N]");
+      await sawLine("[a]lways");
       child.stdin?.write("\x03");
       // stdin is deliberately left open: an EOF on the pty master is its own way to close readline,
       // and it would end this run without the press ever being interpreted.
@@ -124,7 +153,40 @@ describe.skipIf(process.platform === "win32")("approval prompt on a real termina
       // own status and not the child's: pty.spawn's return value is discarded here, so python3
       // exits 0 however the inner bun died. Clause (b)'s by-signal death has its own test in
       // tests/signals.test.ts.
-      expect(settled === "the prompt never settled" ? settled : settled.stdout).toContain("answer=false aborted=true");
+      expect(settled === "the prompt never settled" ? settled : settled.stdout).toContain("answer=no aborted=true");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // The only proof that the three-way parse works through a real tty in raw mode; a mocked
+  // Interface cannot show it, because raw mode and readline's own line-editing are exactly what a
+  // mock stands in for. One child for all three answers rather than three tests, because the pty
+  // allocator spawn is the expensive part of every test in this file.
+  test("typing a, n, and y at the prompt answers always, no, and once", async () => {
+    const scriptPath = join(dir, "child-three.mjs");
+    writeFileSync(scriptPath, childScriptThreeAnswers(dir));
+
+    const { child, exited, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("[a]lways");
+      await sawLine('"path":"a.txt"');
+      child.stdin?.write("a\n");
+      await sawLine("PROMPT answer=always");
+
+      await sawLine('"path":"b.txt"');
+      child.stdin?.write("n\n");
+      await sawLine("PROMPT answer=no");
+
+      await sawLine('"path":"c.txt"');
+      child.stdin?.write("y\n");
+      await sawLine("PROMPT answer=once");
+
+      const settled = await Promise.race([
+        exited,
+        new Promise<"the prompt never settled">((r) => setTimeout(() => r("the prompt never settled"), 15_000)),
+      ]);
+      expect(settled === "the prompt never settled" ? settled : settled.code).toBe(0);
     } finally {
       child.kill("SIGKILL");
     }

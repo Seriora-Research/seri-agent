@@ -521,10 +521,10 @@ describe("runLoop", () => {
           messages: baseMessages,
           permissionMode: "approve-each",
           // Exactly what cli.ts's prompt does when Ctrl-C arrives while it is parked: it closes the
-          // readline and resolves false, which on its own is indistinguishable from a typed "n".
+          // readline and resolves "no", which on its own is indistinguishable from a typed "n".
           approvalPrompt: async () => {
             controller.abort();
-            return false;
+            return "no";
           },
           signal: controller.signal,
         }),
@@ -564,7 +564,7 @@ describe("runLoop", () => {
           tools,
           messages: baseMessages,
           permissionMode: "approve-each",
-          approvalPrompt: async () => true,
+          approvalPrompt: async () => "once",
         }),
       );
 
@@ -590,7 +590,7 @@ describe("runLoop", () => {
           tools,
           messages: baseMessages,
           permissionMode: "approve-each",
-          approvalPrompt: async () => false,
+          approvalPrompt: async () => "no",
         }),
       );
 

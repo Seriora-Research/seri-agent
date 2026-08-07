@@ -9,7 +9,7 @@ import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { checkpointStoreDir, createCheckpointer } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable } from "../../src/checkpoint/shadowGit";
 import { run } from "../../src/cli";
-import type { LoopEvent, runLoop } from "../../src/loop/loop";
+import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
 import { getGroqModel } from "../../src/provider/groq";
 import { toolDefinitions } from "../../src/provider/tools";
 import { onSignalCancel } from "../../src/signals";
@@ -150,7 +150,7 @@ describe("run (task invocation)", () => {
 
     expect(code).toBe(0);
     expect(capture()).toBeDefined();
-    expect(capture()?.permissionMode).toBe("read-only");
+    expect(capture()?.permissionMode).toBe("approve-each");
     // The same tool set, with only the filesystem-mutating tools wrapped for checkpointing.
     expect(Object.keys(capture()?.tools ?? {})).toEqual(Object.keys(toolDefinitions));
     expect(capture()?.tools.read_file).toBe(toolDefinitions.read_file);
@@ -345,10 +345,10 @@ describe("run (task invocation)", () => {
   // pressed again — which kills the process before the tool row is written and leaves the session
   // unresumable. Exercised through the prompt runLoop is actually given, because makeApprovalPrompt
   // is not exported and the wiring is half of what is being asserted.
-  test("the approval prompt it gives runLoop resolves false on abort instead of hanging", async () => {
+  test("the approval prompt it gives runLoop resolves no on abort instead of hanging", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
-    const answers: (boolean | undefined)[] = [];
+    const answers: (ApprovalAnswer | undefined)[] = [];
     async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
       // Aborted while the prompt is already open, which is the real sequence, and then aborted
       // before it is opened at all — an already-aborted signal fires no abort event, so a listener
@@ -371,7 +371,7 @@ describe("run (task invocation)", () => {
       console.log = originalLog;
     }
 
-    expect(answers).toEqual([false, false]);
+    expect(answers).toEqual(["no", "no"]);
   }, 10_000);
 
   // The press this prompt has to catch never arrives as a process signal. Measured on a real pty
@@ -383,13 +383,13 @@ describe("run (task invocation)", () => {
   // process outright and left the session unresumable.
   //
   // "Cancelled" rather than "denied" is asserted as the cancel slot being spent, because both
-  // answers are `false` — that is exactly how the loop tells them apart, by re-checking the signal.
+  // answers are `"no"` — that is exactly how the loop tells them apart, by re-checking the signal.
   test("a SIGINT on the readline interface cancels through signals.ts instead of denying", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
     let rl: Interface | undefined;
 
-    let answer: boolean | "unsettled" | undefined;
+    let answer: ApprovalAnswer | "unsettled" | undefined;
     let cancelledBy: NodeJS.Signals | undefined;
     async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
       // The run's own cancel is displaced for the duration of the turn, deliberately: signals.ts
@@ -441,7 +441,7 @@ describe("run (task invocation)", () => {
     }
 
     expect(cancelledBy).toBe("SIGINT");
-    expect(answer).toBe(false);
+    expect(answer).toBe("no");
     // `done: "aborted"` reaching cli.ts's final `return` at all means the abort did not come
     // through cli.ts's own cancel slot, so raiseSignal never ran and the status below is what the
     // shell sees. Here that shape exists because this fake displaces the slot; in production it
