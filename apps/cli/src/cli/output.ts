@@ -44,16 +44,18 @@ export function usageError(message: string): number {
   return 2;
 }
 
-// A tool name is the model's, not ours, and this file renders it at two sites — the approval
-// prompt (cli.ts, before the opts.tools[call.toolName] lookup that would reject an unknown one)
-// and the tool-allowed line below (event.name is the same call.toolName, printed after the fact)
-// — so an invented name reaches the terminal raw at both unless escaped here, in the module that
-// owns every user-facing string. Only control characters and DEL are escaped, not the whole name
-// the way a prompt's `args` are already wrapped in JSON.stringify: a legitimate name is always a
-// plain identifier (write_file, bash, …), and stringifying it would put visible quotes on every
-// single render to guard against a case that does not happen in the common path. A newline or an
-// ANSI escape sequence in an invented name could otherwise scroll real output off-screen or paint
-// a fake line — this stops that without changing how an ordinary name reads.
+// Defence-in-depth, not a live threat today: this file renders a tool name at two sites — the
+// approval prompt (cli.ts) and the tool-allowed line below — and both are reached only when
+// `checkPermission` returns `needs-approval`/`allow-new`, which requires `WRITE_TOOLS.has(name)`
+// (gate.ts). That means the name at both sites is always one of the fixed `WRITE_TOOL_NAMES`
+// strings today, never model-invented — a model that names a tool anything else takes the early
+// "allow" return in checkPermission and never reaches either render site. Kept anyway, cheaply,
+// for the day `WRITE_TOOL_NAMES` grows a name that is not a compile-time constant (an MCP-provided
+// write tool, say): a newline or an ANSI escape sequence in THAT name could scroll real output
+// off-screen or paint a fake line, and this is what would stop it. Only control characters and DEL
+// are escaped, not the whole name the way a prompt's `args` are already wrapped in JSON.stringify:
+// a legitimate name is always a plain identifier (write_file, bash, …), and stringifying it would
+// put visible quotes on every single render for a case that, today, cannot happen at all.
 export function escapeControlChars(text: string): string {
   return text.replace(/[\x00-\x1f\x7f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
 }
