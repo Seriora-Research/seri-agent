@@ -197,6 +197,41 @@ describe("run (task invocation)", () => {
     }
   });
 
+  // The case `loaded.model ?? resolveModelId()` exists for, and the only one the two tests above
+  // do not reach: a session file written before `model` was a field. It must still load, and it
+  // must acquire a model rather than resuming with none.
+  test("a session saved without a model backfills one on resume and persists it", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const originalModel = process.env.SERI_MODEL;
+    process.env.SERI_MODEL = "model-from-env";
+    const asked: string[] = [];
+
+    try {
+      // Written the way a pre-`model` seri wrote it: the field is absent, not undefined.
+      const legacy = { id: "legacy", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
+      writeFileSync(join(sessionsDir, "legacy.json"), JSON.stringify(legacy));
+      expect("model" in JSON.parse(readFileSync(join(sessionsDir, "legacy.json"), "utf8"))).toBe(false);
+
+      const { code } = await captureLogs(() =>
+        run(["--resume", "legacy", "another", "task"], {
+          runLoop: fakeRunLoop().fake,
+          loadAgentsFile: () => "",
+          sessionsDir,
+          getGroqModel: (id: string) => {
+            asked.push(id);
+            return getGroqModel("openai/gpt-oss-120b");
+          },
+        }),
+      );
+
+      expect(code).toBe(0);
+      expect(asked).toEqual(["model-from-env"]);
+      expect(loadSession("legacy", sessionsDir).model).toBe("model-from-env");
+    } finally {
+      restoreEnv("SERI_MODEL", originalModel);
+    }
+  });
+
   // cli.ts is the only thing that constructs the controller — runLoop is a library that is handed a
   // signal and never makes one — so if this stops arriving, every abort check downstream (the
   // streamText round-trip, the compaction round-trip, the per-tool guard, spawnCollect, runRipgrep)
