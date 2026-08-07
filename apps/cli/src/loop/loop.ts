@@ -387,12 +387,6 @@ export async function* runLoop(opts: {
         });
         continue;
       }
-      // Only a write resets the streak. An approved READ (glob, read_file, grep — never blocked by
-      // checkPermission) is not progress toward the thing the model was denied; it is exactly what
-      // a model padding its retries between denied writes looks like, and counting it as progress
-      // would let that padding run the counter down to zero forever. See MAX_CONSECUTIVE_DENIALS.
-      if (WRITE_TOOLS.has(call.toolName)) consecutiveDenials = 0;
-
       const toolDef = opts.tools[call.toolName];
       if (!toolDef?.execute) {
         const error = `Unknown tool "${call.toolName}": no matching tool definition.`;
@@ -405,6 +399,18 @@ export async function* runLoop(opts: {
         });
         continue;
       }
+
+      // Only a write resets the streak, and only below the guard above: an approved call that
+      // turns out to have no matching tool definition made no progress, so resetting before that
+      // guard would count a call that never actually ran as the reason to keep trying — reachable
+      // only if WRITE_TOOL_NAMES and the tools this run was actually given diverge (in production
+      // the two are the same list; provider/tools.ts's own comment is what keeps them that way),
+      // but the reset should mean what it says regardless. A read is not progress either, for a
+      // different reason: reads (glob, read_file, grep) are never blocked by checkPermission, so a
+      // model padding its retries between denied writes with one is exactly the pattern this
+      // streak exists to catch, and counting it as progress would let that padding run the counter
+      // down to zero forever. See MAX_CONSECUTIVE_DENIALS.
+      if (WRITE_TOOLS.has(call.toolName)) consecutiveDenials = 0;
 
       yield { type: "tool-call", name: call.toolName, args: call.input };
       let toolResult: unknown;
