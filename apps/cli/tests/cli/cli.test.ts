@@ -197,6 +197,42 @@ describe("run (task invocation)", () => {
     }
   });
 
+  // The prompt is derived from this binary plus AGENTS.md, not carried as conversation state. A
+  // session created before src/agents/systemPrompt.ts existed has the 29-character identity line
+  // frozen into its JSON, and resuming it used to hand that straight to the model — no tool
+  // guidance, on exactly the sessions a user upgrading has.
+  test("a resumed session is run with the rebuilt prompt, not the one frozen into its file", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    // A cwd that is deliberately not the process's, to pin which one the AGENTS.md lookup uses.
+    const sessionCwd = mkdtempSync(join(tmpdir(), "seri-cli-test-cwd-"));
+    const stale: SessionState = {
+      id: "stale-prompt",
+      cwd: sessionCwd,
+      systemPrompt: "You are seri, a coding agent.",
+      permissionMode: "read-only",
+      model: "model-on-session",
+      messages: [],
+    };
+    saveSession(stale, sessionsDir);
+
+    const askedFor: string[] = [];
+    const { fake, capture } = fakeRunLoop();
+    const { code } = await captureLogs(() =>
+      run(["--resume", "stale-prompt", "another", "task"], {
+        runLoop: fake,
+        loadAgentsFile: (dir: string) => {
+          askedFor.push(dir);
+          return "";
+        },
+        sessionsDir,
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(capture()?.system).toBe(buildSystemPrompt(""));
+    expect(askedFor).toEqual([sessionCwd]);
+  });
+
   // The case `loaded.model ?? resolveModelId()` exists for, and the only one the two tests above
   // do not reach: a session file written before `model` was a field. It must still load, and it
   // must acquire a model rather than resuming with none.

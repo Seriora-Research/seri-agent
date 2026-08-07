@@ -203,10 +203,27 @@ function loadOrCreateSession(
     const id = resumeId ?? findMostRecentSession(sessionsDir);
     if (!id) throw new Error("No session to resume.");
     const loaded = loadSession<ModelMessage>(id, sessionsDir);
-    // Only when absent: a session that already recorded a model keeps it, so the environment cannot
-    // silently switch models under a conversation that is already running on one. A session written
-    // before this field existed backfills here instead.
-    return { ...loaded, model: loaded.model ?? resolveModelId() };
+    // The two stored fields are treated differently on purpose.
+    //
+    // `systemPrompt` is rebuilt every time, never replayed: it is a product of this binary's
+    // SYSTEM_PROMPT and the project's AGENTS.md, not something the conversation decided. A session
+    // created before src/agents/systemPrompt.ts existed has the old 29-character identity line
+    // frozen into its JSON, and honouring it would resume with no tool guidance at all — the exact
+    // failure that module exists to fix, on precisely the sessions a user upgrading already has.
+    // Rebuilding also means an AGENTS.md edited since is picked up. It reads from the session's own
+    // cwd rather than the process's, so a resume launched from elsewhere still gets the project's
+    // file — the same reasoning as projectRoot(session.cwd) above.
+    //
+    // `model` is backfilled only when absent, so a session that recorded one keeps it and the
+    // environment cannot switch models under a conversation already running on one. Note what that
+    // does NOT protect: a session written before the field existed was really running
+    // llama-3.3-70b-versatile, nothing records that, and this first resume moves it to whatever
+    // resolveModelId returns — which prepareSession's saveSession then pins for good.
+    return {
+      ...loaded,
+      systemPrompt: buildSystemPrompt(loadAgentsFileFn(loaded.cwd)),
+      model: loaded.model ?? resolveModelId(),
+    };
   }
 
   return {
