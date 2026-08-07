@@ -290,12 +290,41 @@ function loadOrCreateSession(
 // interface is opened — onAbort would catch that case too, that being the whole point of it, but a
 // turn that has already been cancelled should not touch stdin to find out.
 
+// write_file's input carries the whole file body, so an uncapped JSON.stringify can render
+// hundreds of lines on one prompt line and scroll the question itself out of scrollback before the
+// user can even see it, let alone answer it. Capped, not omitted: the prompt's job is still to
+// show what is about to happen, just not all of it when "all of it" is unreadable anyway.
+const MAX_PROMPT_ARGS_LENGTH = 200;
+function truncateArgsDisplay(args: unknown): string {
+  const json = JSON.stringify(args);
+  return json.length > MAX_PROMPT_ARGS_LENGTH ? `${json.slice(0, MAX_PROMPT_ARGS_LENGTH)}…` : json;
+}
+
 function makeApprovalPrompt(
-  openInterface: () => Interface = () => createInterface({ input: process.stdin, output: process.stdout }),
+  // stderr, not stdout: stdout carries the model's own output and is routinely piped
+  // (`seri "…" | tee log`) — see printWarning's own comment in cli/output.ts, the same rule.
+  // Under the old read-only default the prompt was almost never reached; approve-each is the
+  // default now, so a piped run hits this on its very first write, and the question must not be
+  // swallowed into whatever consumed that pipe. Reads only from `input`, unchanged.
+  openInterface: () => Interface = () => createInterface({ input: process.stdin, output: process.stderr }),
 ): ApprovalPrompt {
+  // Once true, no further prompt in this run touches stdin at all. `process.stdin` is a single
+  // shared stream that only ever emits 'end' once: the FIRST prompt's Interface is what actually
+  // starts consuming it and discovers EOF, so its 'close' listener is the only one that will ever
+  // fire. A second Interface opened on the same, already-ended stream attaches its own listeners
+  // AFTER 'end' already happened — EventEmitters do not replay past events to a late listener — so
+  // its 'close' never fires and its question's callback never runs: the promise hangs forever.
+  // Measured live: prompt 1 resolves "no" correctly, prompts 2 and beyond hang. Denying every
+  // prompt after the first EOF, without opening a doomed second Interface to rediscover that, is
+  // Hermes' own rule for this applied at the point where it costs nothing extra to check first —
+  // "on timeout or error, the approval bridge denies the request." Deliberately not a TTY check:
+  // that would also kill `seri "explain this repo" | tee log`, a non-interactive run that only
+  // reads and needs no approval at all; this only engages once stdin has actually ended.
+  let ended = false;
+
   return (toolName, args, signal) =>
     new Promise<ApprovalAnswer>((resolve) => {
-      if (signal?.aborted === true) {
+      if (signal?.aborted === true || ended) {
         resolve("no");
         return;
       }
@@ -310,23 +339,35 @@ function makeApprovalPrompt(
       // without rl.question's callback ever firing: readline emits 'close' and nothing else, so an
       // unguarded promise here hangs forever while signals.ts's process-level listeners keep the
       // event loop alive. An approval nobody can give is not an approval, so this resolves "no",
-      // the same answer unrecognised input gets below. Guarded by `answered`, set before rl.close()
-      // runs in every other exit: rl.close() emits 'close' SYNCHRONOUSLY, before the callback that
-      // called it goes on to resolve, so an unguarded listener here would win that race and turn
-      // every real "y"/"a" into "no" instead of only an actual close-with-no-answer.
+      // the same answer unrecognised input gets below — and marks the run as ended, so every later
+      // prompt takes the guard above instead of opening a second Interface doomed the same way.
+      // Guarded by `answered`, set before rl.close() runs in every other exit: rl.close() emits
+      // 'close' SYNCHRONOUSLY, before the callback that called it goes on to resolve, so an
+      // unguarded listener here would win that race and turn every real "y"/"a" into "no" instead
+      // of only an actual close-with-no-answer. `abort.dispose()` here too — every other exit
+      // either disposes it or is itself the abort, and this is the one path that used to leave the
+      // listener attached to a long-lived AbortSignal for the rest of the run.
       rl.on("close", () => {
-        if (!answered) resolve("no");
+        if (!answered) {
+          answered = true;
+          ended = true;
+          abort.dispose();
+          resolve("no");
+        }
       });
       rl.on("SIGINT", () => deliverSignal("SIGINT"));
-      rl.question(`Approve ${escapeControlChars(toolName)}(${JSON.stringify(args)})? [y]es / [a]lways / [N]o `, (answer) => {
-        answered = true;
-        abort.dispose();
-        rl.close();
-        const typed = answer.trim().toLowerCase();
-        // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
-        // user did not clearly give is not an approval.
-        resolve(typed === "y" || typed === "yes" ? "once" : typed === "a" || typed === "always" ? "always" : "no");
-      });
+      rl.question(
+        `Approve ${escapeControlChars(toolName)}(${truncateArgsDisplay(args)})? [y]es / [a]lways / [N]o `,
+        (answer) => {
+          answered = true;
+          abort.dispose();
+          rl.close();
+          const typed = answer.trim().toLowerCase();
+          // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
+          // user did not clearly give is not an approval.
+          resolve(typed === "y" || typed === "yes" ? "once" : typed === "a" || typed === "always" ? "always" : "no");
+        },
+      );
     });
 }
 

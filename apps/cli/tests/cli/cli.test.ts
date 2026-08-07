@@ -530,30 +530,72 @@ describe("run (task invocation)", () => {
     expect(answers).toEqual(["no", "no"]);
   }, 10_000);
 
-  // The regression this guards: approve-each is now the default, so a run with no human at the
-  // terminal at all — CI, a cron job, `seri "..." < /dev/null` — reaches this prompt on its first
-  // write. Readline emits 'close' on stdin EOF with rl.question's callback never called, so an
-  // unguarded promise hangs forever while signals.ts's process-level listeners keep the process
-  // alive. Raced against a timeout so a regression here fails as "unsettled" instead of wedging
-  // this test (and, in production, the run) indefinitely. The first prompt is answered normally in
-  // the same test, not a separate one: rl.close() inside the real answer path emits 'close'
-  // SYNCHRONOUSLY before that path's own resolve() runs, so a close listener that does not guard
-  // against an answer already in flight would swallow every real "y"/"a" — this is the case that
-  // catches that ordering trap.
-  test("stdin closing with no answer resolves no instead of hanging, and a real answer still resolves", async () => {
+  // The ordering trap this guards: rl.close() inside the question-answered path (makeApprovalPrompt)
+  // emits 'close' SYNCHRONOUSLY, before that path's own resolve() runs, so a close listener that
+  // does not check `answered` first would resolve "no" before the real answer ever gets a chance —
+  // turning every real "y"/"a" into "no". "once" vs "no" is what makes this a real negative
+  // control: an unguarded listener produces "no" here too, so a test whose expected answer is also
+  // "no" could not tell the two apart.
+  test("a real answer during the prompt is not swallowed by the close listener", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
     let input: PassThrough | undefined;
+    const answers: (ApprovalAnswer | undefined)[] = [];
+
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      const pending = opts.approvalPrompt?.("write_file", { path: "a.txt" }, opts.signal);
+      input?.write("y\n");
+      answers.push(await pending);
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["write", "hello.txt"], {
+        runLoop: runLoopFake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        createInterface: () => {
+          input = new PassThrough();
+          return createInterface({ input, output: new PassThrough() });
+        },
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(answers).toEqual(["once"]);
+  }, 10_000);
+
+  // The regression this guards: approve-each is now the default, so a run with no human at the
+  // terminal at all — CI, a cron job, `seri "..." < /dev/null` — reaches this prompt on its first
+  // write. ONE stream for the whole run, ended ONCE before any prompt opens — this is what makes
+  // it faithful to production: `process.stdin` is a single shared stream, and a `< /dev/null`
+  // launch is already fully at EOF before the first prompt ever reads it. The first Interface
+  // created is what actually starts consuming it and discovers that, so its own 'close' fires
+  // correctly (`answers[0]` is "no"). A SECOND Interface, opened on the same stream after the
+  // first has already drained it to 'end', attaches its listeners AFTER that event already
+  // happened — EventEmitters do not replay past events to a late listener — so its 'close' never
+  // fires and its question's callback never runs: the promise hangs forever. A fresh PassThrough
+  // per prompt (what this test used to do, and why it stayed green while this was broken) gives
+  // each prompt its own independent EOF and hides exactly this failure. Raced against a timeout so
+  // a regression here fails as "unsettled" instead of wedging this test (and, in production, the
+  // run) indefinitely.
+  test("stdin closing resolves no for every prompt, not just the first", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const input = new PassThrough();
+    input.end();
     const answers: (ApprovalAnswer | "unsettled")[] = [];
     const unsettledAfter = (ms: number): Promise<"unsettled"> => new Promise((r) => setTimeout(() => r("unsettled"), ms));
 
     async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
       const first = opts.approvalPrompt?.("write_file", { path: "a.txt" }, opts.signal);
-      input?.write("y\n");
       answers.push((await Promise.race([first, unsettledAfter(2000)])) as ApprovalAnswer | "unsettled");
 
       const second = opts.approvalPrompt?.("write_file", { path: "b.txt" }, opts.signal);
-      input?.end();
       answers.push((await Promise.race([second, unsettledAfter(2000)])) as ApprovalAnswer | "unsettled");
 
       yield { type: "done", reason: "no-tool-call" };
@@ -567,24 +609,23 @@ describe("run (task invocation)", () => {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
         sessionsDir,
-        // A fresh PassThrough per prompt, matching production: makeApprovalPrompt calls
-        // openInterface() once per approval, not once per run.
-        createInterface: () => {
-          input = new PassThrough();
-          return createInterface({ input, output: new PassThrough() });
-        },
+        // The SAME stream returned to every call, matching production's shared process.stdin —
+        // NOT a fresh PassThrough per prompt, which is the divergence that hid this bug before.
+        createInterface: () => createInterface({ input, output: new PassThrough() }),
       });
     } finally {
       console.log = originalLog;
     }
 
-    expect(answers).toEqual(["once", "no"]);
+    expect(answers).toEqual(["no", "no"]);
   }, 10_000);
 
-  // The prompt runs BEFORE the opts.tools[call.toolName] lookup that would reject an unknown
-  // name, so a model-invented toolName reaches the terminal raw unless this escapes it. A control
-  // character (here, ESC — the start of an ANSI sequence) could otherwise paint over the real
-  // prompt or scroll it off-screen; escaped, it is inert text a user can read.
+  // Exercises makeApprovalPrompt directly (via the fake runLoop below), bypassing the real gate —
+  // in production the gate means this toolName is always one of the fixed WRITE_TOOL_NAMES, never
+  // model-invented (see escapeControlChars's own comment in output.ts for why). This pins the
+  // escaping mechanism itself, kept as defence-in-depth for a future non-fixed write tool name: a
+  // control character (here, ESC — the start of an ANSI sequence) could otherwise paint over the
+  // real prompt or scroll it off-screen; escaped, it is inert text a user can read.
   test("a control character in the tool name is escaped before it reaches the terminal", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
@@ -621,6 +662,48 @@ describe("run (task invocation)", () => {
 
     expect(rendered).toContain("write\\x1bfile");
     expect(rendered).not.toContain("write\x1bfile");
+  }, 10_000);
+
+  // write_file's input carries the whole file body: an uncapped JSON.stringify would render a
+  // 500-line generated module on one prompt line and scroll the question itself out of
+  // scrollback before the user could even see it, let alone answer it.
+  test("a long write_file body is truncated on the approval prompt line", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    let input: PassThrough | undefined;
+    let rendered = "";
+    const longContent = "x".repeat(2000);
+
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      const pending = opts.approvalPrompt?.("write_file", { path: "a.txt", content: longContent }, opts.signal);
+      input?.write("n\n");
+      await pending;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["write", "hello.txt"], {
+        runLoop: runLoopFake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        createInterface: () => {
+          input = new PassThrough();
+          const output = new PassThrough();
+          output.on("data", (chunk: Buffer) => {
+            rendered += chunk.toString();
+          });
+          return createInterface({ input, output });
+        },
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(rendered).not.toContain(longContent);
+    expect(rendered).toContain("…");
   }, 10_000);
 
   // The press this prompt has to catch never arrives as a process signal. Measured on a real pty
