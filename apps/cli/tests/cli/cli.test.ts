@@ -25,6 +25,8 @@ describe("run (task invocation)", () => {
   const originalHome = process.env.HOME;
   let sessionsDir: string;
   let tmpConfigRoot: string;
+  // Temp dirs a single test needs, torn down by the shared afterEach below.
+  const extraTmpDirs: string[] = [];
 
   function restoreEnv(key: string, original: string | undefined): void {
     if (original === undefined) delete process.env[key];
@@ -64,6 +66,10 @@ describe("run (task invocation)", () => {
     restoreEnv("HOME", originalHome);
     rmSync(sessionsDir, { recursive: true, force: true });
     rmSync(tmpConfigRoot, { recursive: true, force: true });
+    // Cleaned here rather than at the end of the test that made it, so a failing assertion leaks
+    // nothing either.
+    for (const dir of extraTmpDirs) rmSync(dir, { recursive: true, force: true });
+    extraTmpDirs.length = 0;
   });
 
   test("missing GROQ_API_KEY returns a non-zero exit code instead of crashing", async () => {
@@ -159,6 +165,14 @@ describe("run (task invocation)", () => {
     expect(capture()?.system).toBe(buildSystemPrompt(""));
   });
 
+  // A turn the provider answered, which is what makes the model worth recording. The bare `done`
+  // the other tests use is a run that reached the model and got nothing back, and it deliberately
+  // records no model — see the two tests after this one.
+  const answeredTurn: LoopEvent[] = [
+    { type: "messages-updated", messages: [{ role: "assistant", content: "ok" }] },
+    { type: "done", reason: "no-tool-call" },
+  ];
+
   // The model is resolved once and recorded on the session, which is what a later /model has to
   // change. Without the record, `--continue` would silently re-resolve from the environment and
   // undo the switch on the next turn.
@@ -170,7 +184,7 @@ describe("run (task invocation)", () => {
     process.env.SERI_MODEL = "model-from-env";
     const asked: (string | undefined)[] = [];
     const deps = {
-      runLoop: fakeRunLoop().fake,
+      runLoop: fakeRunLoop(answeredTurn).fake,
       loadAgentsFile: () => "",
       sessionsDir,
       getGroqModel: (id: string) => {
@@ -205,6 +219,7 @@ describe("run (task invocation)", () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     // A cwd that is deliberately not the process's, to pin which one the AGENTS.md lookup uses.
     const sessionCwd = mkdtempSync(join(tmpdir(), "seri-cli-test-cwd-"));
+    extraTmpDirs.push(sessionCwd);
     const stale: SessionState = {
       id: "stale-prompt",
       cwd: sessionCwd,
@@ -250,7 +265,7 @@ describe("run (task invocation)", () => {
 
       const { code } = await captureLogs(() =>
         run(["--resume", "legacy", "another", "task"], {
-          runLoop: fakeRunLoop().fake,
+          runLoop: fakeRunLoop(answeredTurn).fake,
           loadAgentsFile: () => "",
           sessionsDir,
           getGroqModel: (id: string) => {
@@ -263,6 +278,42 @@ describe("run (task invocation)", () => {
       expect(code).toBe(0);
       expect(asked).toEqual(["model-from-env"]);
       expect(loadSession("legacy", sessionsDir).model).toBe("model-from-env");
+    } finally {
+      restoreEnv("SERI_MODEL", originalModel);
+    }
+  });
+
+  // getGroqModel takes any string, so a typo only surfaces as a provider 404 once the run is under
+  // way. Recording it at creation would mint a session pinned to an id that cannot work, and
+  // `--continue` — the obvious retry — would re-read it and fail the same way with a corrected
+  // SERI_MODEL sitting right there in the environment. Nothing answered, so nothing is pinned.
+  test("a model that never produced a turn is not recorded, so a corrected SERI_MODEL takes effect", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const originalModel = process.env.SERI_MODEL;
+    process.env.SERI_MODEL = "openai/gpt-os-120b"; // the typo: one 's'
+    const asked: string[] = [];
+    const deps = (events: LoopEvent[]) => ({
+      runLoop: fakeRunLoop(events).fake,
+      loadAgentsFile: () => "",
+      sessionsDir,
+      getGroqModel: (id: string) => {
+        asked.push(id);
+        return getGroqModel("openai/gpt-oss-120b");
+      },
+    });
+
+    try {
+      await captureLogs(() => run(["a", "task"], deps([{ type: "error", error: "model_not_found" }])));
+      const id = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
+      expect(asked).toEqual(["openai/gpt-os-120b"]);
+      expect("model" in JSON.parse(readFileSync(join(sessionsDir, `${id}.json`), "utf8"))).toBe(false);
+
+      // The correction the user makes next, and the resume that has to honour it.
+      process.env.SERI_MODEL = "openai/gpt-oss-120b";
+      const { code } = await captureLogs(() => run(["--resume", id, "again"], deps(answeredTurn)));
+      expect(code).toBe(0);
+      expect(asked.at(-1)).toBe("openai/gpt-oss-120b");
+      expect(loadSession(id, sessionsDir).model).toBe("openai/gpt-oss-120b");
     } finally {
       restoreEnv("SERI_MODEL", originalModel);
     }

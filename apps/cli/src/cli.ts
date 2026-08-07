@@ -193,12 +193,15 @@ function rewindCommand(session: SessionState<ModelMessage>, args: string[], dirs
 // asking, and getGroqModel drop its default parameter.
 type RunSession = SessionState<ModelMessage> & { model: string };
 
+// `modelRecorded` says where the model came from: true if the session file already had one, false
+// if it was just resolved from the environment and no provider call has confirmed it exists.
+// prepareSession uses it to decide whether the creation-time save may persist it — see there.
 function loadOrCreateSession(
   resuming: boolean,
   resumeId: string | undefined,
   sessionsDir: string,
   loadAgentsFileFn: typeof loadAgentsFileReal,
-): RunSession {
+): { session: RunSession; modelRecorded: boolean } {
   if (resuming) {
     const id = resumeId ?? findMostRecentSession(sessionsDir);
     if (!id) throw new Error("No session to resume.");
@@ -214,29 +217,43 @@ function loadOrCreateSession(
     // cwd rather than the process's, so a resume launched from elsewhere still gets the project's
     // file — the same reasoning as projectRoot(session.cwd) above.
     //
+    // Two costs of rebuilding, neither of which the old replay-the-stored-string path had, both
+    // accepted rather than guarded: this puts a readFileSync on the resume path, so an AGENTS.md
+    // that exists but cannot be read (EACCES) now fails a resume that used to run; and if the
+    // session's cwd has since been DELETED, findAgentsFile walks up from a missing directory and
+    // adopts the nearest ancestor's AGENTS.md, which may belong to an unrelated project. Falling
+    // back to the stored prompt on either is not an option worth having — the stored prompt is
+    // exactly the 29-character string this rebuild exists to stop serving.
+    //
     // `model` is backfilled only when absent, so a session that recorded one keeps it and the
     // environment cannot switch models under a conversation already running on one. Note what that
     // does NOT protect: a session written before the field existed was really running
     // llama-3.3-70b-versatile, nothing records that, and this first resume moves it to whatever
-    // resolveModelId returns — which prepareSession's saveSession then pins for good.
+    // resolveModelId returns.
     return {
-      ...loaded,
-      systemPrompt: buildSystemPrompt(loadAgentsFileFn(loaded.cwd)),
-      model: loaded.model ?? resolveModelId(),
+      session: {
+        ...loaded,
+        systemPrompt: buildSystemPrompt(loadAgentsFileFn(loaded.cwd)),
+        model: loaded.model ?? resolveModelId(),
+      },
+      modelRecorded: loaded.model !== undefined,
     };
   }
 
   return {
-    id: randomUUID(),
-    cwd: process.cwd(),
-    systemPrompt: buildSystemPrompt(loadAgentsFileFn(process.cwd())),
-    // Read-only is the safest default for a brand-new session: nothing in docs/BUILD-PLAN.md /
-    // docs/ARCHITECTURE.md states an explicit default, so this errs on the side of never
-    // writing/executing without the user opting in via --resume onto an existing session
-    // or cycling the mode themselves.
-    permissionMode: "read-only",
-    model: resolveModelId(),
-    messages: [],
+    session: {
+      id: randomUUID(),
+      cwd: process.cwd(),
+      systemPrompt: buildSystemPrompt(loadAgentsFileFn(process.cwd())),
+      // Read-only is the safest default for a brand-new session: nothing in docs/BUILD-PLAN.md /
+      // docs/ARCHITECTURE.md states an explicit default, so this errs on the side of never
+      // writing/executing without the user opting in via --resume onto an existing session
+      // or cycling the mode themselves.
+      permissionMode: "read-only",
+      model: resolveModelId(),
+      messages: [],
+    },
+    modelRecorded: false,
   };
 }
 
@@ -485,8 +502,9 @@ function prepareSession(ctx: RunContext, deps: CliDeps): PreparedRun | number {
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
 
   let session: RunSession;
+  let modelRecorded: boolean;
   try {
-    session = loadOrCreateSession(ctx.resuming, ctx.resumeId, ctx.sessionsDir, loadAgentsFileFn);
+    ({ session, modelRecorded } = loadOrCreateSession(ctx.resuming, ctx.resumeId, ctx.sessionsDir, loadAgentsFileFn));
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
@@ -507,7 +525,19 @@ function prepareSession(ctx: RunContext, deps: CliDeps): PreparedRun | number {
     return 1;
   }
 
-  saveSession(session, ctx.sessionsDir);
+  // A model this run merely RESOLVED is deliberately left out of the file. getGroqModel accepts any
+  // string — an unknown id is not rejected here, it comes back as a provider 404 mid-run — so
+  // pinning at creation mints a session that can never succeed, and `--continue`, the obvious retry,
+  // re-reads the bad id and fails identically while a corrected SERI_MODEL is ignored. driveLoop's
+  // messages-updated save records it instead, which loop.ts only emits after a turn the provider
+  // actually answered (loop.ts:264 for text, :276 for tool calls; a failure yields `error` and no
+  // messages-updated at all), so what gets pinned is a model that demonstrably worked.
+  //
+  // opencode solves this upstream of the call, looking the id up in a provider catalog and failing
+  // with `ModelNotFoundError` plus did-you-mean suggestions before anything is stored. seri has no
+  // catalog until Stage 7a, so "pin only what answered" is the catalog-free half of that guarantee.
+  // A model the session already recorded is untouched: it earned its place the same way.
+  saveSession(modelRecorded ? session : { ...session, model: undefined }, ctx.sessionsDir);
 
   // Checkpointing is enabled by exactly this call, which is also why rolling it back is a one-line
   // revert: `runLoop`, the session store, the gate and every tool are unmodified, and the store
