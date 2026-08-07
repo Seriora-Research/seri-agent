@@ -8,7 +8,7 @@ import type {
   ToolContent,
   ToolSet,
 } from "ai";
-import { checkPermission, WRITE_TOOLS, type PermissionMode } from "../gate/gate";
+import { checkPermission, type PermissionMode } from "../gate/gate";
 import { compactMessages, findSafeEvictionBoundary, MAX_RETRIES, type CompactionSummary } from "./compaction";
 
 export type LoopEvent =
@@ -62,18 +62,22 @@ export type ApprovalPrompt = (toolName: string, args: unknown, signal?: AbortSig
 // Hermes' documented default (see docs-tmp research); now reachable from the CLI via
 // --max-turns, where it was previously hardcoded and unconfigurable.
 const DEFAULT_MAX_ITERATIONS = 500;
-// Consecutive denied WRITE-tool calls — reset only by an approved write, never by an approved
-// read — after which the run stops instead of continuing to the iteration cap. Reset on a read
-// would defeat the whole mechanism: reads are always permitted (checkPermission never blocks
-// them), so a model padding its retries with a `glob` or `read_file` between denied writes is
-// exactly the pattern this is meant to catch, and resetting on that read would let it keep doing
-// so forever. tests/loop/loop.tools.test.ts's "an allowed read between denied writes does not
-// reset the streak" pins this directly, with a reset-on-any-approval rule as its own negative
-// control. Counted in CALLS, not turns: a turn that emits three write calls and has all three
-// refused is the same fact as three refused turns, and counting turns would let that turn repeat
-// 500 times. Three rather than one because a single denial is normal
-// (the user says no to one thing and the model does something else) and because the model is now
-// told the mode and told not to retry, so three is "it was told twice and did it again".
+// Consecutive denied calls — reset by ANY approved call, not just a write — after which the run
+// stops instead of continuing to the iteration cap. Write-only reset was tried and reverted: in
+// read-only mode checkPermission blocks every write, so no write is EVER approved there, and the
+// counter could never reset — it became "denied write attempts this run", not "denied calls in a
+// row", and a long read-heavy session that merely probed a write a few times, turns apart, would
+// die here having done nothing wrong. The trade this accepts instead: a model COULD pad denied
+// retries with an approved read to keep resetting the counter and never trip this stop. That
+// evasion is theoretical, not measured — nothing has observed a real model doing it — and two
+// things already sit under it if it ever happens: the iteration cap is the backstop that still
+// ends the run, and the denial text (below) now tells the model the permission mode and tells it
+// not to retry, so a model that pads anyway is ignoring an instruction, not exploiting a gap
+// nobody warned it about. Counted in CALLS, not turns: a turn that emits three write calls and has
+// all three refused is the same fact as three refused turns, and counting turns would let that
+// turn repeat 500 times. Three rather than one because a single denial is normal (the user says no
+// to one thing and the model does something else) and because the model is now told the mode and
+// told not to retry, so three is "it was told twice and did it again".
 // Not configurable: nothing has asked for it and a flag would be one more thing to get wrong.
 const MAX_CONSECUTIVE_DENIALS = 3;
 // openai/gpt-oss-120b's (DEFAULT_MODEL in src/provider/groq.ts) context window; confirmed via
@@ -400,17 +404,16 @@ export async function* runLoop(opts: {
         continue;
       }
 
-      // Only a write resets the streak, and only below the guard above: an approved call that
+      // Any approved call resets the streak, and only below the guard above: an approved call that
       // turns out to have no matching tool definition made no progress, so resetting before that
-      // guard would count a call that never actually ran as the reason to keep trying — reachable
-      // only if WRITE_TOOL_NAMES and the tools this run was actually given diverge (in production
-      // the two are the same list; provider/tools.ts's own comment is what keeps them that way),
-      // but the reset should mean what it says regardless. A read is not progress either, for a
-      // different reason: reads (glob, read_file, grep) are never blocked by checkPermission, so a
-      // model padding its retries between denied writes with one is exactly the pattern this
-      // streak exists to catch, and counting it as progress would let that padding run the counter
-      // down to zero forever. See MAX_CONSECUTIVE_DENIALS.
-      if (WRITE_TOOLS.has(call.toolName)) consecutiveDenials = 0;
+      // guard would count a call that never actually ran as the reason to keep trying. Not
+      // write-only: in read-only mode checkPermission blocks every write, so no write is EVER
+      // approved there, and a write-only reset would mean consecutiveDenials counts "denied write
+      // attempts this run" instead of "denied calls in a row" — a long, productive read-heavy
+      // session (`seri --continue "review this repo and tell me what to change"`) that happens to
+      // probe a write three times, scattered turns apart, would die at repeated-denials having
+      // done nothing wrong. See MAX_CONSECUTIVE_DENIALS for the padding risk this accepts instead.
+      consecutiveDenials = 0;
 
       yield { type: "tool-call", name: call.toolName, args: call.input };
       let toolResult: unknown;

@@ -779,14 +779,16 @@ describe("runLoop", () => {
       expect((lastMessage?.content as unknown[]).length).toBe(assistantCalls);
     });
 
-    // A constructed case for the pattern reads make possible: a model padding its denied retries
-    // with an allowed, never-blocked read tool (checkPermission never blocks a read, in any mode).
-    // Negative control: a "reset the streak on ANY approved call" rule — the design this repo's
-    // own plan started from — would let the allowed glob zero the counter between the two denials
-    // that need to add up, and this run would reach `done: no-tool-call` instead of stopping.
-    // Restoring that rule here (deleting the `WRITE_TOOLS.has` guard on the reset in loop.ts) is
-    // exactly what must turn this red — confirmed live before this test was accepted.
-    test("an allowed read between denied writes does not reset the streak", async () => {
+    // Reverted (round 5): the write-only reset this test used to pin was itself reverted, because
+    // in read-only mode no write is ever approved, so a write-only reset could never fire and the
+    // counter became "denied write attempts this run" instead of "denied calls in a row" — a long,
+    // productive read-heavy session that merely probed a write a few times, turns apart, would die
+    // here having done nothing wrong. An approved read now resets the streak the same as any other
+    // approved call; see MAX_CONSECUTIVE_DENIALS for the (theoretical, unmeasured) padding risk
+    // this accepts instead. Negative control: a "reset only on an approved WRITE" rule (restore
+    // the `WRITE_TOOLS.has` guard around the reset in loop.ts) would let the two writes after the
+    // glob add straight onto the two before it and trip `repeated-denials` here instead.
+    test("an allowed read resets the streak the same as any other approved call", async () => {
       const model = new MockLanguageModelV4({
         doStream: [
           streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
@@ -804,7 +806,7 @@ describe("runLoop", () => {
         runLoop({ model, tools, messages: baseMessages, permissionMode: "read-only" }),
       );
 
-      expect(events.at(-1)).toEqual({ type: "done", reason: "repeated-denials" });
+      expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
       expect(events.filter((e) => e.type === "permission-denied")).toHaveLength(3);
       // The glob itself still ran — an always-permitted read tool is not blocked by the streak.
       expect(events).toContainEqual({ type: "tool-result", name: "glob", result: [] });
