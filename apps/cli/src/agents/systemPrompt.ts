@@ -12,7 +12,15 @@
 //   - "# Changing a file" — `edit` (tools/edit.ts) is a pure string transform that takes `content`
 //     as an argument and writes nothing, which no other harness ships and no model can guess. A
 //     model that invents `content` gets `✓ edit done` and leaves the file untouched
-//     (.claude/loops/_archive/cli-manual-test-defects/).
+//     (.claude/loops/_archive/cli-manual-test-defects/) — and then write_file, step 3 of the very
+//     sequence this section teaches, puts the invention on disk over the real file.
+//
+//     This is prompt text doing a job the tool cannot: opencode and Claude Code both enforce
+//     read-before-modify in the tool itself ("This tool will error if you attempt an edit without
+//     reading the file"), which is strictly stronger than asking. seri's `edit` is handed `content`
+//     rather than a path, so it has nothing to check against; `write_file` does, and enforcing it
+//     there is the real fix. Filed as follow-up, not done here — it changes tool behaviour, and
+//     this branch is a prompt change.
 //
 // "# Tone" and "# Verifying" are structural, not measurement-driven: identity and tone are what the
 // product's owner asked the agent to have, and verification is ordinary agent hygiene. No live
@@ -38,7 +46,7 @@ Prefer the dedicated tools over a shell for file work: \`read_file\` instead of 
 
 \`oldString\` must appear exactly once in \`content\`. Include enough surrounding lines to make it unique: \`edit\` errors rather than guessing which occurrence you meant.
 
-If you pass \`edit\` content you did not just read, it may still succeed — and the file on disk still does not change.
+Never pass \`edit\` content you did not just read from the file. \`edit\` cannot tell invented content from real content: it transforms whatever you give it and returns that, and step 3 then writes the result over the real file. Inventing the content of a 500-line file to change one line destroys the other 499.
 
 # Verifying
 After you change code, run the project's own checks — its tests, typecheck or build — where you reasonably can, and fix what you broke.`;
