@@ -7,16 +7,20 @@ import { getApiKey } from "../config/config";
 // per run, in a scratch directory with no AGENTS.md in any ancestor.
 //
 //   openai/gpt-oss-120b       20/20 real read_file calls   (5/5 on the old 29-char prompt)
-//   llama-3.3-70b-versatile    5/10 real read_file calls   (3/5 on the old 29-char prompt)
+//   llama-3.3-70b-versatile    5/11 real read_file calls   (3/5 on the old 29-char prompt)
 //
-// The other 10 llama runs never reached the model — Groq's tokens-per-day cap for that model was
-// exhausted mid-measurement — so they are excluded rather than scored as failures. Every one of the
-// 5 llama failures was Groq's `Failed to call a function. Please adjust your prompt.`
+// 20 runs were planned for each. llama got 11: Groq's tokens-per-day cap for that model was
+// exhausted partway through, after which the budget refilled at roughly the cost of one run every
+// twenty minutes. Runs that never reached the model are excluded rather than scored as failures —
+// they say nothing about tool calling. All 6 real llama failures were Groq's own
+// `Failed to call a function. Please adjust your prompt.`
 //
 // The order of that experiment is the point: the prompt was written and measured FIRST, so this
 // constant is changed on evidence that the prompt is not what was wrong. Tool guidance did not move
-// llama (60% → 50%, inside the noise of ten runs); it is simply a weak tool-caller, and tool calling
-// is this product's core operation. gpt-oss-120b is free on the same provider.
+// llama (60% → 45%, and the two samples are small enough to be the same number); it is simply a weak
+// tool-caller, and tool calling is this product's core operation. gpt-oss-120b is free on the same
+// provider, and the 9 llama runs that could not be obtained cannot change the decision: even if all
+// nine had succeeded, 14/20 is not 20/20.
 export const DEFAULT_MODEL = "openai/gpt-oss-120b";
 
 // `SERI_MODEL`, with the env-then-config precedence loadVerifyConfig already established

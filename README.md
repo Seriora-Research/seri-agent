@@ -57,7 +57,7 @@ seri "explain what this repo does"
 
 The default model is `openai/gpt-oss-120b`, chosen by measurement: on the same task, the same
 prompt and a fresh session each run, it made a real tool call in 20 of 20 runs where
-`llama-3.3-70b-versatile` managed 5 of 10. Set `SERI_MODEL` (env var, or
+`llama-3.3-70b-versatile` managed 5 of 11. Set `SERI_MODEL` (env var, or
 `seri config set SERI_MODEL <id>`, env winning) for any other Groq model id. The model is recorded
 on the session when it is created, so `--continue` keeps using the one that session started with.
 
