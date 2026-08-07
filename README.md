@@ -57,12 +57,17 @@ seri "explain what this repo does"
 
 The default model is `openai/gpt-oss-120b`, chosen by measurement: on the same task, the same
 prompt and a fresh session each run, it made a real tool call in 20 of 20 runs where
-`llama-3.3-70b-versatile` managed 5 of 11. Set `SERI_MODEL` (env var, or
-`seri config set SERI_MODEL <id>`, env winning) for any other Groq model id. The model is recorded
-on the session when it is created, so `--continue` keeps using the one that session started with —
-which also means a mistyped id sticks to that session. Correct `SERI_MODEL` and start a new session
-(any plain `seri "task"` does); the typo only follows you if you keep resuming the session it was
-recorded on.
+`llama-3.3-70b-versatile` managed 5 of 11. Set the `SERI_MODEL` env var for any other Groq model
+id. `seri config set SERI_MODEL <id>` works too, with the env var winning, but `seri config list`
+masks every value it prints — it is built for API keys — so an id stored that way reads back as
+asterisks. The model is recorded on the session when it is created, so `--continue` keeps using the
+one that session started with — which also means a mistyped id sticks to that session. Correct
+`SERI_MODEL` and start a new session (any plain `seri "task"` does); the typo only follows you if
+you keep resuming the session it was recorded on.
+
+Sessions from before seri recorded the model at all are the one exception: they ran
+`llama-3.3-70b-versatile`, nothing in the file says so, and the first `--continue` after upgrading
+moves them onto whatever `SERI_MODEL` resolves to and records that from then on.
 
 `seri --help` prints the usage text, and `seri --version` the installed version.
 `seri --continue` resumes the most recent session, and `seri --resume <id>` a named one; a task

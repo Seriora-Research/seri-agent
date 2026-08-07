@@ -100,7 +100,8 @@ match cascade (exact → line-trimmed → whitespace-normalized) with a
 disproportionate-match guard against replacing far more than was asked for.
 
 **Provider**: Vercel AI SDK, currently Groq only (`apps/cli/src/provider/groq.ts`,
-`llama-3.3-70b-versatile` default). API keys resolve from env var first, then
+`openai/gpt-oss-120b` default, any Groq model id via `SERI_MODEL`; the measurement
+behind that default is in `docs/PROMPT-ROUTING.md`). API keys resolve from env var first, then
 `~/.seri/config.json` (`%LOCALAPPDATA%\seri\` on Windows) — see
 `apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`. `seri config
 set|list|unset` (`apps/cli/src/config/commands.ts`) manages that file; it's written

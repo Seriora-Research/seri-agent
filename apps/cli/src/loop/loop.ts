@@ -44,9 +44,12 @@ export type ApprovalPrompt = (toolName: string, args: unknown, signal?: AbortSig
 // Hermes' documented default (see docs-tmp research); now reachable from the CLI via
 // --max-turns, where it was previously hardcoded and unconfigurable.
 const DEFAULT_MAX_ITERATIONS = 500;
-// llama-3.3-70b-versatile's (the current default model, src/provider/groq.ts) context
-// window; confirmed via console.groq.com/docs/models, 2026-08-02. Fully overridable via
-// opts.contextWindowSize.
+// openai/gpt-oss-120b's (DEFAULT_MODEL in src/provider/groq.ts) context window; confirmed via
+// console.groq.com/docs/models, 2026-08-07, when the default moved off llama-3.3-70b-versatile —
+// both list 131,072, which is why the switch needed no change here. One number for every model, not
+// a per-model lookup: SERI_MODEL can now point at a model with a smaller window and this constant
+// will not follow it, so re-check the new model here before changing DEFAULT_MODEL again. Fully
+// overridable via opts.contextWindowSize.
 const DEFAULT_CONTEXT_WINDOW_SIZE = 131_072;
 const DEFAULT_COMPACTION_THRESHOLD = 0.5;
 const DEFAULT_PRESERVE_RECENT_MESSAGES = 20;
