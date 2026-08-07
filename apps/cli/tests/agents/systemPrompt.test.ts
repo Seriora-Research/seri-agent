@@ -15,15 +15,21 @@ describe("buildSystemPrompt", () => {
   test("the assembled system prompt teaches the read_file -> edit -> write_file sequence", () => {
     const prompt = buildSystemPrompt("");
 
-    // The order matters more than the names: `edit` writes nothing, so an `edit` that is not
-    // preceded by a `read_file` and followed by a `write_file` reports success and changes nothing.
-    const readIndex = prompt.indexOf("read_file");
-    const editIndex = prompt.indexOf("edit", readIndex);
-    const writeIndex = prompt.indexOf("write_file", editIndex);
-    expect(readIndex).toBeGreaterThanOrEqual(0);
-    expect(editIndex).toBeGreaterThan(readIndex);
-    expect(writeIndex).toBeGreaterThan(editIndex);
+    // The numbered steps, not the section heading. The heading itself reads "Changing a file:
+    // read_file, then edit, then write_file", so an ordering assertion over bare `indexOf` matches
+    // grew green on the heading alone and stayed green with the entire body deleted — and
+    // `indexOf("edit")` matched `credit` or `editor` anywhere earlier in the prompt just as well.
+    const one = prompt.indexOf("1. `read_file`");
+    const two = prompt.indexOf("2. `edit`");
+    const three = prompt.indexOf("3. `write_file`");
+    expect(one).toBeGreaterThanOrEqual(0);
+    expect(two).toBeGreaterThan(one);
+    expect(three).toBeGreaterThan(two);
+
     expect(prompt).toMatch(/writes nothing|nothing (is )?written/i);
+    // The other half of the same trap: `edit` throws on a non-unique oldString rather than taking
+    // the first match, so the prompt has to ask for a unique one.
+    expect(prompt).toMatch(/exactly once/i);
   });
 
   // The case the old assembly collapsed to 29 characters: outside a repo with an AGENTS.md,
