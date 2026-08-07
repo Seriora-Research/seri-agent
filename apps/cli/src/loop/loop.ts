@@ -126,6 +126,36 @@ function errorText(err: unknown): string {
   }
 }
 
+// "allow-new" rather than a boolean-plus-flag: a fresh grant needs to reach the loop as a single
+// fact ("this call is allowed, AND it is the first time"), and this is the one place that fact is
+// produced, so it owns the gate check, the prompt call and the allowedTools.add together instead
+// of the caller reassembling them from two mutable locals. Deliberately does NOT own the
+// signal?.aborted re-check after the prompt: that has to sit in the loop body, between this
+// function's return and the branch that reads it, because it is what tells a cancel-while-parked
+// apart from a typed "n" — moving it in here would put it before the loop's own read of the
+// verdict, which is exactly the reordering that guarantee depends on not happening.
+async function decidePermission(
+  toolName: string,
+  input: unknown,
+  mode: PermissionMode,
+  allowedTools: Set<string>,
+  approvalPrompt: ApprovalPrompt | undefined,
+  signal: AbortSignal | undefined,
+): Promise<"allow" | "allow-new" | "deny"> {
+  const permission = checkPermission(toolName, mode, allowedTools);
+  if (permission === "allow") return "allow";
+  if (permission === "block") return "deny";
+  // needs-approval with no approvalPrompt supplied stays denied — the same as `block`, just
+  // arrived at differently — because there is no one to ask.
+  if (approvalPrompt === undefined) return "deny";
+  const answer = await approvalPrompt(toolName, input, signal);
+  if (answer === "always") {
+    allowedTools.add(toolName);
+    return "allow-new";
+  }
+  return answer === "no" ? "deny" : "allow";
+}
+
 export async function* runLoop(opts: {
   model: LanguageModel;
   tools: ToolSet;
@@ -326,19 +356,7 @@ export async function* runLoop(opts: {
       // a half-written file behind.
       if (opts.signal?.aborted) break;
 
-      const permission = checkPermission(call.toolName, opts.permissionMode, allowedTools);
-      let approved = permission === "allow";
-      let allowedNow = false;
-      if (permission === "needs-approval" && opts.approvalPrompt !== undefined) {
-        const answer = await opts.approvalPrompt(call.toolName, call.input, opts.signal);
-        if (answer === "always") {
-          allowedTools.add(call.toolName);
-          allowedNow = true;
-        }
-        approved = answer !== "no";
-      }
-      // `needs-approval` with no approvalPrompt supplied stays denied, and `block` never reaches the
-      // prompt at all — both are what the boolean short-circuit this replaced already did.
+      const verdict = await decidePermission(call.toolName, call.input, opts.permissionMode, allowedTools, opts.approvalPrompt, opts.signal);
 
       // Re-checked after the prompt, because a cancel that lands while the user is being asked
       // resolves it "no" (cli.ts closes the readline to unpark the turn) and "no" is otherwise
@@ -346,12 +364,13 @@ export async function* runLoop(opts: {
       // call "was not permitted to run" — a denial the user never made — and the model would resume
       // believing its own tool call had been refused rather than interrupted. Only an await can let
       // an abort in, so this is the one place a second check is needed: the guard above already
-      // covers the case where the signal was aborted before the call.
+      // covers the case where the signal was aborted before the call. Stays here rather than
+      // inside decidePermission on purpose — see that function's own comment.
       if (opts.signal?.aborted) break;
 
-      if (allowedNow) yield { type: "tool-allowed", name: call.toolName };
+      if (verdict === "allow-new") yield { type: "tool-allowed", name: call.toolName };
 
-      if (!approved) {
+      if (verdict === "deny") {
         consecutiveDenials++;
         yield { type: "permission-denied", name: call.toolName };
         toolResults.push({
