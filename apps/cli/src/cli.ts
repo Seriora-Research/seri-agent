@@ -188,16 +188,25 @@ function rewindCommand(session: SessionState<ModelMessage>, args: string[], dirs
   console.log(`Session ${session.id}: dropped ${dropped} message(s), ${kept} remain. No file was touched.`);
 }
 
+// `model` is optional on SessionState so that sessions written before the field existed still load,
+// but every session this function hands back has one — which is what lets the rest of the run stop
+// asking, and getGroqModel drop its default parameter.
+type RunSession = SessionState<ModelMessage> & { model: string };
+
 function loadOrCreateSession(
   resuming: boolean,
   resumeId: string | undefined,
   sessionsDir: string,
   loadAgentsFileFn: typeof loadAgentsFileReal,
-): SessionState<ModelMessage> {
+): RunSession {
   if (resuming) {
     const id = resumeId ?? findMostRecentSession(sessionsDir);
     if (!id) throw new Error("No session to resume.");
-    return loadSession<ModelMessage>(id, sessionsDir);
+    const loaded = loadSession<ModelMessage>(id, sessionsDir);
+    // Only when absent: a session that already recorded a model keeps it, so the environment cannot
+    // silently switch models under a conversation that is already running on one. A session written
+    // before this field existed backfills here instead.
+    return { ...loaded, model: loaded.model ?? resolveModelId() };
   }
 
   return {
@@ -209,6 +218,7 @@ function loadOrCreateSession(
     // writing/executing without the user opting in via --resume onto an existing session
     // or cycling the mode themselves.
     permissionMode: "read-only",
+    model: resolveModelId(),
     messages: [],
   };
 }
@@ -457,7 +467,7 @@ type PreparedRun = {
 function prepareSession(ctx: RunContext, deps: CliDeps): PreparedRun | number {
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
 
-  let session: SessionState<ModelMessage>;
+  let session: RunSession;
   try {
     session = loadOrCreateSession(ctx.resuming, ctx.resumeId, ctx.sessionsDir, loadAgentsFileFn);
   } catch (err) {
@@ -470,12 +480,6 @@ function prepareSession(ctx: RunContext, deps: CliDeps): PreparedRun | number {
   if (!ctx.resuming || ctx.taskText) {
     session.messages.push({ role: "user", content: ctx.taskText });
   }
-
-  // `??=`, so this covers all three cases in one line: a new session resolves SERI_MODEL, a resumed
-  // session keeps the model it was created with, and a session written before this field existed
-  // resolves one on its next run. Resolving only when unset is the point — a session that has
-  // recorded a model must not have it silently changed underneath it by the environment.
-  session.model ??= resolveModelId();
 
   const getGroqModelFn = deps.getGroqModel ?? getGroqModelReal;
   let model;

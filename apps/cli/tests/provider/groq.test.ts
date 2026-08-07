@@ -37,12 +37,12 @@ afterEach(() => {
 
 describe("getGroqModel", () => {
   test("throws a clear error when GROQ_API_KEY is unset", () => {
-    expect(() => getGroqModel()).toThrow("GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>");
+    expect(() => getGroqModel(DEFAULT_MODEL)).toThrow("GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>");
   });
 
   test("returns a model object without a network call when GROQ_API_KEY is set", () => {
     process.env.GROQ_API_KEY = "fake-test-key";
-    const model = getGroqModel();
+    const model = getGroqModel(DEFAULT_MODEL);
     expect(model).toBeDefined();
   });
 });

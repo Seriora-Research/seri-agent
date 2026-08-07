@@ -173,7 +173,7 @@ describe("run (task invocation)", () => {
       runLoop: fakeRunLoop().fake,
       loadAgentsFile: () => "",
       sessionsDir,
-      getGroqModel: (id?: string) => {
+      getGroqModel: (id: string) => {
         asked.push(id);
         return getGroqModel("openai/gpt-oss-120b");
       },
