@@ -59,7 +59,10 @@ The default model is `openai/gpt-oss-120b`, chosen by measurement: on the same t
 prompt and a fresh session each run, it made a real tool call in 20 of 20 runs where
 `llama-3.3-70b-versatile` managed 5 of 11. Set `SERI_MODEL` (env var, or
 `seri config set SERI_MODEL <id>`, env winning) for any other Groq model id. The model is recorded
-on the session when it is created, so `--continue` keeps using the one that session started with.
+on the session when it is created, so `--continue` keeps using the one that session started with —
+which also means a mistyped id sticks to that session. Correct `SERI_MODEL` and start a new session
+(any plain `seri "task"` does); the typo only follows you if you keep resuming the session it was
+recorded on.
 
 `seri --help` prints the usage text, and `seri --version` the installed version.
 `seri --continue` resumes the most recent session, and `seri --resume <id>` a named one; a task
