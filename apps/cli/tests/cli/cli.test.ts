@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { PassThrough } from "node:stream";
 import type { ModelMessage } from "ai";
+import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { checkpointStoreDir, createCheckpointer } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable } from "../../src/checkpoint/shadowGit";
 import { run } from "../../src/cli";
@@ -152,7 +153,9 @@ describe("run (task invocation)", () => {
     expect(capture()?.tools.write_file).not.toBe(toolDefinitions.write_file);
     expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "write hello.txt" });
     expect(capture()?.messages).toHaveLength(1);
-    expect(capture()?.system).toBe("You are seri, a coding agent.");
+    // The assembled prompt, not the bare identity line: with no AGENTS.md this used to be 29
+    // characters of identity and no tool guidance at all.
+    expect(capture()?.system).toBe(buildSystemPrompt(""));
   });
 
   // cli.ts is the only thing that constructs the controller — runLoop is a library that is handed a

@@ -8,6 +8,7 @@ import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
+import { buildSystemPrompt } from "./agents/systemPrompt";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
 import { getWorkosClientId } from "./auth/deviceFlow";
 import {
@@ -199,12 +200,10 @@ function loadOrCreateSession(
     return loadSession<ModelMessage>(id, sessionsDir);
   }
 
-  const agentsContent = loadAgentsFileFn(process.cwd());
-  const systemPrompt = agentsContent ? `You are seri, a coding agent.\n\n${agentsContent}` : "You are seri, a coding agent.";
   return {
     id: randomUUID(),
     cwd: process.cwd(),
-    systemPrompt,
+    systemPrompt: buildSystemPrompt(loadAgentsFileFn(process.cwd())),
     // Read-only is the safest default for a brand-new session: nothing in docs/BUILD-PLAN.md /
     // docs/ARCHITECTURE.md states an explicit default, so this errs on the side of never
     // writing/executing without the user opting in via --resume onto an existing session
