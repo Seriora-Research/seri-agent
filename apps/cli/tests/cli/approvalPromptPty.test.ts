@@ -62,6 +62,32 @@ function childScriptThreeAnswers(dir: string): string {
   ].join("\n");
 }
 
+// Two sequential prompts, reusing the shape above: the first is answered with Ctrl-D, the second
+// must still render and be answerable normally. This is what proves the `ended` latch is keyed on
+// the input stream actually ending, not on this Interface having closed — readline's tty path
+// also calls close() on Ctrl-D at an empty line, WITHOUT the underlying stream ending.
+function childScriptCtrlD(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  const a = await opts.approvalPrompt("write_file", { path: "a.txt" }, opts.signal);`,
+    `  console.log("\\nPROMPT answer=" + a);`,
+    `  const b = await opts.approvalPrompt("write_file", { path: "b.txt" }, opts.signal);`,
+    `  console.log("\\nPROMPT answer=" + b);`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["write", "hello.txt"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `});`,
+  ].join("\n");
+}
+
 type Exit = { code: number | null; signal: NodeJS.Signals | null; stdout: string };
 
 // Shaped after tests/signals.test.ts's harness — same accumulate-and-poll, same reason: the press
@@ -179,6 +205,35 @@ describe.skipIf(process.platform === "win32")("approval prompt on a real termina
       await sawLine("PROMPT answer=no");
 
       await sawLine('"path":"c.txt"');
+      child.stdin?.write("y\n");
+      await sawLine("PROMPT answer=once");
+
+      const settled = await Promise.race([
+        exited,
+        new Promise<"the prompt never settled">((r) => setTimeout(() => r("the prompt never settled"), 15_000)),
+      ]);
+      expect(settled === "the prompt never settled" ? settled : settled.code).toBe(0);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // The only real-tty proof of the Ctrl-D fix: a mocked Interface cannot show it, because raw
+  // mode's own interpretation of 0x04 as "close, but the stream did not end" is exactly the
+  // mechanism a mock stands in for. Ctrl-D on the FIRST prompt still resolves "no" — that part
+  // was always correct — the regression this guards is the SECOND prompt silently denying itself
+  // with nothing rendered, which `sawLine('"path":"b.txt"')` below would time out on if it did.
+  test("Ctrl-D at one prompt does not deny every prompt after it", async () => {
+    const scriptPath = join(dir, "child-ctrl-d.mjs");
+    writeFileSync(scriptPath, childScriptCtrlD(dir));
+
+    const { child, exited, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine('"path":"a.txt"');
+      child.stdin?.write("\x04");
+      await sawLine("PROMPT answer=no");
+
+      await sawLine('"path":"b.txt"');
       child.stdin?.write("y\n");
       await sawLine("PROMPT answer=once");
 
