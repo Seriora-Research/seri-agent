@@ -35,8 +35,10 @@ const writeFileTool = tool({
 
 const editTool = tool({
   description:
-    "Replace the first occurrence of oldString with newString in the given content and return the " +
-    "result. Nothing is written to disk: pass the returned text to write_file to persist it.",
+    "Replace oldString with newString in the given content and return the result. oldString must " +
+    "appear exactly once in content: include enough surrounding lines to make it unique, because " +
+    "this errors rather than guessing which occurrence you meant. Nothing is written to disk: pass " +
+    "the returned text to write_file to persist it.",
   inputSchema: z.object({
     content: z.string(),
     oldString: z.string(),
