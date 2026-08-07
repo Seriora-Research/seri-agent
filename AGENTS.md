@@ -75,9 +75,12 @@ for every call after it, which is what leaves the session resumable (an unanswer
 `raiseSignal`, so the process still dies **by** signal; `exit(0)` would report a status instead of a
 death and turn one Ctrl-C into one press per iteration of `for f in a b c; do seri "$f"; done`. The
 **second** press finds the slot empty and takes the untouched fatal path. When the turn was not
-cancelled the status instead says whether it finished: only `done.reason: "no-tool-call"` exits 0,
-while a stream error (no `done` at all) and a run stopped by the iteration cap both exit 1,
-so `seri "…" && next` stops rather than chaining onto an unfinished turn. Making any of this
+cancelled the status instead says whether it finished and accomplished anything: `done.reason:
+"no-tool-call"` exits 0 unless the run was refused at least once AND executed no tool at all, in
+which case it exits 1 too — asking for permission, getting no one, and doing nothing is not
+success, even though the turn technically finished. A stream error (no `done` at all) and a run
+stopped by the iteration cap or by repeated denials both exit 1 unconditionally, so `seri "…" &&
+next` stops rather than chaining onto an unfinished turn. Making any of this
 reachable is why `runRipgrep` — and therefore `grep`/`glob` — is async: `spawnSync` blocks the event
 loop, so a SIGINT during a search was not delivered to any handler until rg finished on its own.
 `spawnCollect` and `runRipgrep` **reject** when their child was killed by a cancel rather than

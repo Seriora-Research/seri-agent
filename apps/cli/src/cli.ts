@@ -630,7 +630,13 @@ async function driveLoop(
   deps: CliDeps,
   maxTurns: number | undefined,
   skipPermissions: boolean,
-): Promise<{ doneReason: DoneReason | undefined; cancelledBy: NodeJS.Signals | undefined; usage: RunUsage }> {
+): Promise<{
+  doneReason: DoneReason | undefined;
+  cancelledBy: NodeJS.Signals | undefined;
+  usage: RunUsage;
+  hadDenial: boolean;
+  ranTool: boolean;
+}> {
   const { session, storeDir, tools, model } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
@@ -648,6 +654,14 @@ async function driveLoop(
 
   let doneReason: DoneReason | undefined;
   const usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
+  // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
+  // what an exit code promises a shell, which is this consumer's business, not the loop's. A
+  // `permission-denied` fires only on the `!approved` branch, which `continue`s past the tool-call
+  // yield below it; `tool-call` fires only for a call that both passed the gate and had a real
+  // tool definition (the unknown-tool branch also `continue`s past it) — so `hadDenial` and
+  // `ranTool` are exactly "was anything refused" and "did anything actually run".
+  let hadDenial = false;
+  let ranTool = false;
   try {
     for await (const event of runLoopFn({
       model,
@@ -668,6 +682,8 @@ async function driveLoop(
         saveSession({ ...session, messages: event.messages }, ctx.sessionsDir);
         continue;
       }
+      if (event.type === "permission-denied") hadDenial = true;
+      if (event.type === "tool-call") ranTool = true;
       // Compaction splices the whole message array, so every rewind anchor recorded before this
       // point indexes into an array that no longer exists. The barrier is what lets `/rewind` say
       // so instead of silently slicing garbage. A session that never checkpointed has no log, and
@@ -708,7 +724,7 @@ async function driveLoop(
     unregisterCancel();
   }
 
-  return { doneReason, cancelledBy, usage };
+  return { doneReason, cancelledBy, usage, hadDenial, ranTool };
 }
 
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
@@ -756,7 +772,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const prepared = prepareSession(ctx, deps);
   if (typeof prepared === "number") return prepared;
 
-  const { doneReason, cancelledBy, usage } = await driveLoop(prepared, ctx, deps, maxTurns, skipPermissions);
+  const { doneReason, cancelledBy, usage, hadDenial, ranTool } = await driveLoop(prepared, ctx, deps, maxTurns, skipPermissions);
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are
@@ -779,16 +795,27 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   // Not "an error event was seen": loop.ts yields `error` and carries on at three sites, and a run
   // that recovered from a failed tool call and then answered the user did not fail. The status
-  // answers one question — did the turn finish? — and `no-tool-call` is the only reason that means
-  // it did. A cap is not a finish: `max-iterations` yields `done` having stopped
-  // with the user's task unanswered, and `seri "big task" && deploy` must not deploy.
-  // `repeated-denials` is the same fact by the same reasoning — the run stopped itself after
-  // MAX_CONSECUTIVE_DENIALS refused tool calls, the task is exactly as unanswered as it would be
-  // at the iteration cap, and `&& deploy` must not run off the back of it either. loop.ts's two
-  // stream-error returns end the generator with no `done` at all and land on the same 1 — a throw
-  // escaping runLoop outright (`approvalPrompt` rejecting, or findSafeEvictionBoundary, neither of
-  // which is inside a try) ends it with no `done` too, but it comes out of driveLoop's `for await`
-  // and never gets here. All of these used to exit 0 and let `seri "…" && next` run next.
+  // answers one question — did the turn finish, and did it get anything past the gate? — and
+  // `no-tool-call` is necessary but, since approve-each became the default, no longer sufficient:
+  // a fresh session with no human present now reaches the approval prompt on its very first write,
+  // EOF resolves "no", the model gives up and answers with text, and that used to exit 0 — asked
+  // for permission, nobody was there, did nothing, reported success. `seri "…" && deploy` would
+  // deploy. So within `no-tool-call`, `hadDenial && !ranTool` — refused at least once AND executed
+  // nothing at all — is exit 1 too; a run with no tools and no denials (`seri "explain this
+  // repo"`) and a run where one call was denied but a later one ran (the user said no to one
+  // thing, the model did something else) both still exit 0, because both are a completed,
+  // accomplished turn, not a refusal the caller should treat as failure.
+  //
+  // A cap is not a finish: `max-iterations` yields `done` having stopped with the user's task
+  // unanswered, and `seri "big task" && deploy` must not deploy. `repeated-denials` is the same
+  // fact by the same reasoning — the run stopped itself after MAX_CONSECUTIVE_DENIALS refused tool
+  // calls, the task is exactly as unanswered as it would be at the iteration cap, and `&& deploy`
+  // must not run off the back of it either — both stay unconditionally 1, `hadDenial`/`ranTool` or
+  // not. loop.ts's two stream-error returns end the generator with no `done` at all and land on
+  // the same 1 — a throw escaping runLoop outright (`approvalPrompt` rejecting, or
+  // findSafeEvictionBoundary, neither of which is inside a try) ends it with no `done` too, but it
+  // comes out of driveLoop's `for await` and never gets here. All of these used to exit 0 and let
+  // `seri "…" && next` run next.
   //
   // `aborted` does not reach this line today, and that rests on `controller.abort()` having
   // exactly one caller: driveLoop's cancel handler, which sets cancelledBy first, so raiseSignal
@@ -797,7 +824,8 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // signal. tests/cli/cli.test.ts records that status for the displaced-slot case, but it asserts
   // the same 1 a second aborter would produce, so it will not go red when one is added: revisiting
   // this line is on whoever adds it.
-  return doneReason === "no-tool-call" ? 0 : 1;
+  if (doneReason === "no-tool-call") return hadDenial && !ranTool ? 1 : 0;
+  return 1;
 }
 
 if (import.meta.main) {

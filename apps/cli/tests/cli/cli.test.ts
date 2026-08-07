@@ -225,6 +225,64 @@ describe("run (task invocation)", () => {
     expect(logs.some((line) => line.includes("/mode"))).toBe(true);
   });
 
+  // The regression this closes: approve-each is now the default and EOF resolves "no" (this PR's
+  // own earlier fix), so a run with no human present — CI, a cron job, `< /dev/null` — now reaches
+  // exactly this path on its first write: asked for permission, nobody was there, did nothing, and
+  // used to report success. Measured on the compiled binary before this fix: exit 0, no file.
+  test("no-tool-call with a denial and nothing executed exits 1", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake } = fakeRunLoop([{ type: "permission-denied", name: "write_file" }, { type: "done", reason: "no-tool-call" }]);
+
+    const { code } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+
+    expect(code).toBe(1);
+  });
+
+  // The regression guard for the fix above: `seri "explain this repo"` calls nothing, is refused
+  // nothing, and answers with text — the most common invocation there is. If the exit-1 condition
+  // is too broad this goes red instead of the case it is meant to catch.
+  test("no-tool-call with no tools and no denials still exits 0", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake } = fakeRunLoop();
+
+    const { code } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+
+    expect(code).toBe(0);
+  });
+
+  // The other half of getting the boundary right: the user said no to one thing, the model did
+  // something else, and the turn finished having accomplished it. That is a normal, successful
+  // session, not a refusal — only "denied AND accomplished nothing" is exit 1, not "denied at all".
+  test("a denial followed by a tool that executes still exits 0", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake } = fakeRunLoop([
+      { type: "permission-denied", name: "write_file" },
+      { type: "tool-call", name: "bash", args: { command: "echo hi" } },
+      { type: "done", reason: "no-tool-call" },
+    ]);
+
+    const { code } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+
+    expect(code).toBe(0);
+  });
+
+  // repeated-denials is unconditionally 1 already (doneReason !== "no-tool-call" falls straight to
+  // the final `return 1`) — this pins that the new no-tool-call-only check does not creep onto it.
+  // A tool DID run here (ranTool: true) precisely so the check would wrongly flip this to 0 if it
+  // were ever applied outside the `no-tool-call` branch.
+  test("repeated-denials still exits 1 regardless of hadDenial/ranTool", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake } = fakeRunLoop([
+      { type: "tool-call", name: "write_file", args: { path: "a.txt" } },
+      { type: "permission-denied", name: "write_file" },
+      { type: "done", reason: "repeated-denials" },
+    ]);
+
+    const { code } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+
+    expect(code).toBe(1);
+  });
+
   // Option B: the allowlist is process-lifetime only, so a run that emits tool-allowed leaves no
   // trace of it in the session file, and a later --continue passes no seed at all.
   test("tool-allowed leaves no allowedTools field on the session file, and --continue seeds nothing", async () => {
