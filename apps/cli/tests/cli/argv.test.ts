@@ -324,6 +324,39 @@ describe("run (argv and usage errors)", () => {
     expect(capture()).toBeUndefined();
     expect(readdirSync(sessionsDir)).toEqual([]);
   });
+
+  test("`--dangerously-skip-permissions` is accepted and reaches runLoop", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["--dangerously-skip-permissions", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).not.toBe(2);
+    expect(capture()?.permissionMode).toBe("auto");
+  });
+
+  // Same shape as "flags but no task is a usage error" above: proves the flag did not accidentally
+  // become the task itself.
+  test("`--dangerously-skip-permissions` with no task is a usage error, and creates no session", async () => {
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["--dangerously-skip-permissions"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(2);
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
+  test("`--help` output documents `--dangerously-skip-permissions`", async () => {
+    const { logs } = await captureLogs(() => run(["--help"], { sessionsDir }));
+
+    expect(logs.join("\n")).toContain("--dangerously-skip-permissions");
+  });
 });
 
 describe("run (login/signup/logout)", () => {
