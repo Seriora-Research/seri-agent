@@ -288,6 +288,19 @@ function loadOrCreateSession(
 // call was cancelled rather than denied. A signal that is already aborted returns before the
 // interface is opened — onAbort would catch that case too, that being the whole point of it, but a
 // turn that has already been cancelled should not touch stdin to find out.
+
+// `toolName` is the model's, not ours, and this prompt runs BEFORE the opts.tools[call.toolName]
+// lookup that would reject an unknown one (loop.ts) — an invented name reaches here raw. Only
+// control characters and DEL are escaped, not the whole name the way `args` is already wrapped in
+// JSON.stringify below: a legitimate name is always a plain identifier (write_file, bash, …), and
+// stringifying it would put visible quotes on every single prompt to guard against a case that
+// does not happen in the common path. A newline or an ANSI escape sequence in an invented name
+// could otherwise scroll the real prompt off-screen or paint a fake "auto-approved" line — this
+// stops that without changing how an ordinary call reads.
+function escapeControlChars(text: string): string {
+  return text.replace(/[\x00-\x1f\x7f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
+}
+
 function makeApprovalPrompt(
   openInterface: () => Interface = () => createInterface({ input: process.stdin, output: process.stdout }),
 ): ApprovalPrompt {
@@ -297,13 +310,27 @@ function makeApprovalPrompt(
         resolve("no");
         return;
       }
+      let answered = false;
       const rl = openInterface();
       const abort = onAbort(signal, () => {
+        answered = true;
         rl.close();
         resolve("no");
       });
+      // EOF on stdin — no tty, no data, `< /dev/null`, CI, a cron job — closes the interface
+      // without rl.question's callback ever firing: readline emits 'close' and nothing else, so an
+      // unguarded promise here hangs forever while signals.ts's process-level listeners keep the
+      // event loop alive. An approval nobody can give is not an approval, so this resolves "no",
+      // the same answer unrecognised input gets below. Guarded by `answered`, set before rl.close()
+      // runs in every other exit: rl.close() emits 'close' SYNCHRONOUSLY, before the callback that
+      // called it goes on to resolve, so an unguarded listener here would win that race and turn
+      // every real "y"/"a" into "no" instead of only an actual close-with-no-answer.
+      rl.on("close", () => {
+        if (!answered) resolve("no");
+      });
       rl.on("SIGINT", () => deliverSignal("SIGINT"));
-      rl.question(`Approve ${toolName}(${JSON.stringify(args)})? [y]es / [a]lways / [N]o `, (answer) => {
+      rl.question(`Approve ${escapeControlChars(toolName)}(${JSON.stringify(args)})? [y]es / [a]lways / [N]o `, (answer) => {
+        answered = true;
         abort.dispose();
         rl.close();
         const typed = answer.trim().toLowerCase();

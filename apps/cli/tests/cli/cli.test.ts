@@ -458,6 +458,99 @@ describe("run (task invocation)", () => {
     expect(answers).toEqual(["no", "no"]);
   }, 10_000);
 
+  // The regression this guards: approve-each is now the default, so a run with no human at the
+  // terminal at all — CI, a cron job, `seri "..." < /dev/null` — reaches this prompt on its first
+  // write. Readline emits 'close' on stdin EOF with rl.question's callback never called, so an
+  // unguarded promise hangs forever while signals.ts's process-level listeners keep the process
+  // alive. Raced against a timeout so a regression here fails as "unsettled" instead of wedging
+  // this test (and, in production, the run) indefinitely. The first prompt is answered normally in
+  // the same test, not a separate one: rl.close() inside the real answer path emits 'close'
+  // SYNCHRONOUSLY before that path's own resolve() runs, so a close listener that does not guard
+  // against an answer already in flight would swallow every real "y"/"a" — this is the case that
+  // catches that ordering trap.
+  test("stdin closing with no answer resolves no instead of hanging, and a real answer still resolves", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    let input: PassThrough | undefined;
+    const answers: (ApprovalAnswer | "unsettled")[] = [];
+    const unsettledAfter = (ms: number): Promise<"unsettled"> => new Promise((r) => setTimeout(() => r("unsettled"), ms));
+
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      const first = opts.approvalPrompt?.("write_file", { path: "a.txt" }, opts.signal);
+      input?.write("y\n");
+      answers.push((await Promise.race([first, unsettledAfter(2000)])) as ApprovalAnswer | "unsettled");
+
+      const second = opts.approvalPrompt?.("write_file", { path: "b.txt" }, opts.signal);
+      input?.end();
+      answers.push((await Promise.race([second, unsettledAfter(2000)])) as ApprovalAnswer | "unsettled");
+
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["write", "hello.txt"], {
+        runLoop: runLoopFake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        // A fresh PassThrough per prompt, matching production: makeApprovalPrompt calls
+        // openInterface() once per approval, not once per run.
+        createInterface: () => {
+          input = new PassThrough();
+          return createInterface({ input, output: new PassThrough() });
+        },
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(answers).toEqual(["once", "no"]);
+  }, 10_000);
+
+  // The prompt runs BEFORE the opts.tools[call.toolName] lookup that would reject an unknown
+  // name, so a model-invented toolName reaches the terminal raw unless this escapes it. A control
+  // character (here, ESC — the start of an ANSI sequence) could otherwise paint over the real
+  // prompt or scroll it off-screen; escaped, it is inert text a user can read.
+  test("a control character in the tool name is escaped before it reaches the terminal", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    let input: PassThrough | undefined;
+    let rendered = "";
+
+    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      const pending = opts.approvalPrompt?.("write\x1bfile", { path: "a.txt" }, opts.signal);
+      input?.write("n\n");
+      await pending;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["write", "hello.txt"], {
+        runLoop: runLoopFake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        createInterface: () => {
+          input = new PassThrough();
+          const output = new PassThrough();
+          output.on("data", (chunk: Buffer) => {
+            rendered += chunk.toString();
+          });
+          return createInterface({ input, output });
+        },
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(rendered).toContain("write\\x1bfile");
+    expect(rendered).not.toContain("write\x1bfile");
+  }, 10_000);
+
   // The press this prompt has to catch never arrives as a process signal. Measured on a real pty
   // with all three candidate handlers registered while rl.question was up and one real 0x03 sent:
   // rl's SIGINT and close fired, process.on("SIGINT") did not — readline's raw mode stops the tty
