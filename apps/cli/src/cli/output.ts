@@ -180,12 +180,13 @@ export function printEvent(event: LoopEvent): void {
       // The one reason whose fix is a command the user has to type. `max-iterations` and
       // `no-tool-call` need no follow-up and `aborted` was the user's own doing.
       if (event.reason === "repeated-denials") {
-        // Neither half of this can name a single fix: the streak can span different tools
-        // (write_file, edit, bash), not just one, and "answer 'a' at the prompt" is only true in
-        // approve-each — read-only never prompts at all, and read-only is the mode most likely to
-        // have produced this stop.
-        console.log("Several write calls were refused in a row, so the run stopped. Run /mode to");
-        console.log("change the permission mode (or, in approve-each, answer 'a' at the prompt).");
+        // Reachable only in approve-each: a read-only block is never a decline (see the
+        // permission-denied event's `reason`, and MAX_CONSECUTIVE_DENIALS in loop.ts), so getting
+        // here means a live "no" three times in a row. "Answer 'a'" is not always the fix even so —
+        // bash and powershell never offer it (the one-rule allowlist: always-allow is scoped to
+        // write_file/edit, never a shell), so a streak of shell calls needs /mode instead.
+        console.log("Several tool calls were refused in a row, so the run stopped. Run /mode to");
+        console.log("switch to auto, or answer 'a' at the next write_file/edit prompt to allow it.");
       }
       break;
     case "error":

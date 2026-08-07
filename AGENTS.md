@@ -76,11 +76,14 @@ for every call after it, which is what leaves the session resumable (an unanswer
 death and turn one Ctrl-C into one press per iteration of `for f in a b c; do seri "$f"; done`. The
 **second** press finds the slot empty and takes the untouched fatal path. When the turn was not
 cancelled the status instead says whether it finished and accomplished anything: `done.reason:
-"no-tool-call"` exits 0 unless the run was refused at least once AND executed no tool at all, in
+"no-tool-call"` exits 0 unless the run was DECLINED at least once AND executed no tool at all, in
 which case it exits 1 too — asking for permission, getting no one, and doing nothing is not
-success, even though the turn technically finished. A stream error (no `done` at all) and a run
-stopped by the iteration cap or by repeated denials both exit 1 unconditionally, so `seri "…" &&
-next` stops rather than chaining onto an unfinished turn. Making any of this
+success, even though the turn technically finished. A mode BLOCK does not count — a `read-only`
+session that correctly refuses a write is the mode working as selected, not a failure, so it still
+exits 0. A stream error (no `done` at all) and a run stopped by the iteration cap or by repeated
+denials both exit 1 unconditionally; repeated-denials is itself reachable only in `approve-each`,
+since nothing is ever declined in `read-only`. `seri "…" && next` stops rather than chaining onto
+an unfinished turn. Making any of this
 reachable is why `runRipgrep` — and therefore `grep`/`glob` — is async: `spawnSync` blocks the event
 loop, so a SIGINT during a search was not delivered to any handler until rg finished on its own.
 `spawnCollect` and `runRipgrep` **reject** when their child was killed by a cancel rather than
@@ -97,10 +100,11 @@ run-local allowlist `checkPermission` consults on later calls — this is what k
 `read-only`: `checkPermission` checks `read-only` before consulting it, so a grant does not
 survive a cycle into that mode. `seri --dangerously-skip-permissions` maps the mode to
 `auto` for that run only and is never written back to the session, so a later `--continue`
-still prompts. A run whose denied tool calls hit `MAX_CONSECUTIVE_DENIALS` (3) in a row
-stops with `done: repeated-denials` instead of continuing to the turn cap — reset by ANY approved
-call, not just a write, because in `read-only` no write is ever approved and a write-only reset
-would count "denied write attempts this run" instead of a genuine streak.
+still prompts. A run whose DECLINED tool calls (a live "no" at the prompt, never a mode block —
+see the "permission-denied" event's `reason`) hit `MAX_CONSECUTIVE_DENIALS` (3) in a row stops
+with `done: repeated-denials` instead of continuing to the turn cap — reset by ANY approved call,
+not just a write. Reachable only in `approve-each`: `read-only` blocks every write outright, so
+nothing is ever declined there and this stop can never fire, however many times a write is probed.
 Whether a tool needs permission is derived from `WRITE_TOOL_NAMES` in
 `apps/cli/src/provider/tools.ts` (single source of truth — a new write-capable tool must be
 added there or it silently bypasses the gate). The AI SDK's automatic tool execution

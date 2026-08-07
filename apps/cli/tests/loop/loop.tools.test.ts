@@ -115,7 +115,7 @@ describe("runLoop", () => {
       runLoop({ model, tools, messages: baseMessages, permissionMode: "read-only" }),
     );
 
-    expect(events).toContainEqual({ type: "permission-denied", name: "write_file" });
+    expect(events).toContainEqual({ type: "permission-denied", name: "write_file", reason: "blocked" });
     expect(events.find((e) => e.type === "tool-result")).toBeUndefined();
     expect(executed).toEqual([]);
     expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
@@ -603,9 +603,10 @@ describe("runLoop", () => {
         }),
       );
 
-      expect(events).toContainEqual({ type: "permission-denied", name: "write_file" });
+      expect(events).toContainEqual({ type: "permission-denied", name: "write_file", reason: "declined" });
       expect(events.find((e) => e.type === "tool-result")).toBeUndefined();
       expect(executed).toEqual([]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
     });
 
     test("treats approve-each with no approvalPrompt as denied", async () => {
@@ -624,7 +625,7 @@ describe("runLoop", () => {
         runLoop({ model, tools, messages: baseMessages, permissionMode: "approve-each" }),
       );
 
-      expect(events).toContainEqual({ type: "permission-denied", name: "write_file" });
+      expect(events).toContainEqual({ type: "permission-denied", name: "write_file", reason: "blocked" });
       expect(executed).toEqual([]);
     });
 
@@ -748,6 +749,10 @@ describe("runLoop", () => {
       expect(events.find((e) => e.type === "tool-allowed")).toBeUndefined();
     });
 
+    // approve-each, not read-only: a read-only block is now `reason: "blocked"` (the mode doing
+    // its job) and never touches consecutiveDenials at all — see MAX_CONSECUTIVE_DENIALS. Only a
+    // live "no" at the prompt is `reason: "declined"` and counts, so that is what this test needs
+    // to produce repeatedly.
     test("repeated denials stop the run in materially fewer turns than the cap", async () => {
       const model = new MockLanguageModelV4({ doStream: repeatedWriteCalls(50) });
       const events = await collect(
@@ -755,7 +760,8 @@ describe("runLoop", () => {
           model,
           tools: makeTools(async () => "ok"),
           messages: baseMessages,
-          permissionMode: "read-only",
+          permissionMode: "approve-each",
+          approvalPrompt: async () => "no",
           maxIterations: 50,
         }),
       );
@@ -779,15 +785,44 @@ describe("runLoop", () => {
       expect((lastMessage?.content as unknown[]).length).toBe(assistantCalls);
     });
 
-    // Reverted (round 5): the write-only reset this test used to pin was itself reverted, because
-    // in read-only mode no write is ever approved, so a write-only reset could never fire and the
-    // counter became "denied write attempts this run" instead of "denied calls in a row" — a long,
-    // productive read-heavy session that merely probed a write a few times, turns apart, would die
-    // here having done nothing wrong. An approved read now resets the streak the same as any other
-    // approved call; see MAX_CONSECUTIVE_DENIALS for the (theoretical, unmeasured) padding risk
-    // this accepts instead. Negative control: a "reset only on an approved WRITE" rule (restore
-    // the `WRITE_TOOLS.has` guard around the reset in loop.ts) would let the two writes after the
-    // glob add straight onto the two before it and trip `repeated-denials` here instead.
+    // Symptom B from round 6's review: repeated-denials used to be reachable in read-only, where
+    // NOTHING can ever be approved — three probes, cheap for a model to produce even three turns
+    // apart, killed the run with the user's actual question unanswered. A read-only block is now
+    // `reason: "blocked"`, never `"declined"`, so it never touches consecutiveDenials at all — this
+    // run gets FIVE blocks in a row (more than MAX_CONSECUTIVE_DENIALS) and still runs to the
+    // iteration cap rather than stopping early, proving the mode alone cannot trip the stop no
+    // matter how many times it fires.
+    test("read-only blocks never trip repeated-denials, however many times they happen", async () => {
+      const model = new MockLanguageModelV4({ doStream: repeatedWriteCalls(5) });
+      const events = await collect(
+        runLoop({
+          model,
+          tools: makeTools(async () => "ok"),
+          messages: baseMessages,
+          permissionMode: "read-only",
+          maxIterations: 5,
+        }),
+      );
+
+      expect(events.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
+      expect(events.filter((e) => e.type === "permission-denied")).toHaveLength(5);
+      expect(events.filter((e) => e.type === "permission-denied").every((e) => e.type === "permission-denied" && e.reason === "blocked")).toBe(true);
+      expect(model.doStreamCalls).toHaveLength(5);
+    });
+
+    // approve-each, not read-only: since round 6, a read-only block is `reason: "blocked"` and
+    // never touches consecutiveDenials at all, so read-only could no longer demonstrate a reset
+    // mattering — every denial in this test must be a live DECLINE to be a fact this counter
+    // tracks in the first place. Reverted (round 5): the write-only reset this test used to pin
+    // was itself reverted, because in read-only mode no write is ever approved, so a write-only
+    // reset could never fire and the counter became "denied write attempts this run" instead of
+    // "denied calls in a row" — a long, productive read-heavy session that merely probed a write a
+    // few times, turns apart, would die here having done nothing wrong. An approved read now
+    // resets the streak the same as any other approved call; see MAX_CONSECUTIVE_DENIALS for the
+    // (theoretical, unmeasured) padding risk this accepts instead. Negative control: a "reset only
+    // on an approved WRITE" rule (restore the `WRITE_TOOLS.has` guard around the reset in loop.ts)
+    // would let the two declined writes after the glob add straight onto the two before it and
+    // trip `repeated-denials` here instead.
     test("an allowed read resets the streak the same as any other approved call", async () => {
       const model = new MockLanguageModelV4({
         doStream: [
@@ -803,7 +838,13 @@ describe("runLoop", () => {
         glob: tool({ description: "list files", inputSchema: z.object({ pattern: z.string() }), execute: async () => [] }),
       };
       const events = await collect(
-        runLoop({ model, tools, messages: baseMessages, permissionMode: "read-only" }),
+        runLoop({
+          model,
+          tools,
+          messages: baseMessages,
+          permissionMode: "approve-each",
+          approvalPrompt: async () => "no",
+        }),
       );
 
       expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
@@ -812,12 +853,13 @@ describe("runLoop", () => {
       expect(events).toContainEqual({ type: "tool-result", name: "glob", result: [] });
     });
 
-    // The guard that the threshold is not 1: "read-only mode blocks a write tool instead of
-    // executing it" above (a single denial, then a text turn) already asserts
-    // `done: no-tool-call` — mutating MAX_CONSECUTIVE_DENIALS to 1 turns that assertion red —
-    // without this test needing to duplicate it. (Not "treats approve-each with no approvalPrompt
-    // as denied" below: that test asserts no `done` reason at all, so it would stay green either
-    // way.)
+    // The guard that the threshold is not 1: "denies the tool when the approval prompt rejects"
+    // above (a single DECLINED denial, then a text turn) already asserts `done: no-tool-call` —
+    // mutating MAX_CONSECUTIVE_DENIALS to 1 turns that assertion red — without this test needing
+    // to duplicate it. Not "read-only mode blocks a write tool instead of executing it": that
+    // denial is `reason: "blocked"`, which never touches consecutiveDenials at all, so it would
+    // stay green regardless of the threshold. Not "treats approve-each with no approvalPrompt as
+    // denied" either: that one is ALSO `reason: "blocked"`, and asserts no `done` reason besides.
 
     test("an approval resets the consecutive-denial counter", async () => {
       const model = new MockLanguageModelV4({
