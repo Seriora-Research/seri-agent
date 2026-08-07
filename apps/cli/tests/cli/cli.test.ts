@@ -164,6 +164,9 @@ describe("run (task invocation)", () => {
   // undo the switch on the next turn.
   test("records the resolved model on a new session and keeps a resumed session's own", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
+    // Captured rather than deleted afterwards: this box may legitimately have SERI_MODEL set, and
+    // reassigning a captured undefined would leave the literal string "undefined" behind.
+    const originalModel = process.env.SERI_MODEL;
     process.env.SERI_MODEL = "model-from-env";
     const asked: (string | undefined)[] = [];
     const deps = {
@@ -190,7 +193,7 @@ describe("run (task invocation)", () => {
       expect(asked.at(-1)).toBe("model-on-session");
       expect(loadSession("pinned", sessionsDir).model).toBe("model-on-session");
     } finally {
-      delete process.env.SERI_MODEL;
+      restoreEnv("SERI_MODEL", originalModel);
     }
   });
 
