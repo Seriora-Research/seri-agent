@@ -48,8 +48,10 @@ const DEFAULT_MAX_ITERATIONS = 500;
 // console.groq.com/docs/models, 2026-08-07, when the default moved off llama-3.3-70b-versatile —
 // both list 131,072, which is why the switch needed no change here. One number for every model, not
 // a per-model lookup: SERI_MODEL can now point at a model with a smaller window and this constant
-// will not follow it, so re-check the new model here before changing DEFAULT_MODEL again. Fully
-// overridable via opts.contextWindowSize.
+// will not follow it, so re-check the new model here before changing DEFAULT_MODEL again. What that
+// costs a user who points SERI_MODEL at a smaller window — compaction never fires, then every call
+// 400s — and why the fix waits for Stage 7a's catalog is written up in docs/PROMPT-ROUTING.md.
+// Fully overridable via opts.contextWindowSize.
 const DEFAULT_CONTEXT_WINDOW_SIZE = 131_072;
 const DEFAULT_COMPACTION_THRESHOLD = 0.5;
 const DEFAULT_PRESERVE_RECENT_MESSAGES = 20;
