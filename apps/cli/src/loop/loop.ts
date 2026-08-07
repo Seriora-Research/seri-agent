@@ -31,19 +31,45 @@ export type LoopEvent =
   // (absence of an) action for the user either way, and the two cannot interleave — compaction runs
   // to completion before the turn's streamText call starts.
   | { type: "retry"; attempt: number }
+  // Emitted the moment an "always" answer lands, before the tool it unblocked runs. The loop keeps
+  // its own live Set — that is what the gate reads on the next call — and this event is how the
+  // effect leaves the loop, the same way messages, usage and retries do (see the `usage` comment
+  // above: the loop is stateless by design and what to do with a per-turn fact is the consumer's
+  // business). A consumer that persists the grant and the Set the gate reads are therefore updated
+  // from ONE event in ONE direction, which is what stops the live view and the stored view drifting
+  // apart the way session.permissionMode and the opts literal in cli.ts can.
+  | { type: "tool-allowed"; name: string }
   // "aborted" is a member of the existing termination event rather than a `cancelled` event of its
   // own: the turn IS done, and the reason it is done is that it was aborted. A consumer asking
   // "the generator finished, why?" should not have to handle two shapes to answer it. It is
   // deliberately not an `error` either — a user-initiated cancel is not a failure, and printEvent
   // routes error to stderr, which would put "AbortError" inside whatever consumed the user's pipe.
-  | { type: "done"; reason: "no-tool-call" | "max-iterations" | "aborted" }
+  | { type: "done"; reason: "no-tool-call" | "max-iterations" | "aborted" | "repeated-denials" }
   | { type: "error"; error: string };
 
-export type ApprovalPrompt = (toolName: string, args: unknown, signal?: AbortSignal) => Promise<boolean>;
+// Three answers, not a boolean, because "yes" and "yes, and stop asking" are different
+// instructions and only the caller can act on the second. Deliberately NOT four: there is no
+// "cancelled" member. A cancel still arrives as "no" and is still told apart from a typed "n" by
+// re-checking opts.signal below — see the comment at the re-check. Adding a member for it would
+// create a second, competing way to detect a cancel that the prompt cannot answer honestly
+// (cli.ts's onAbort fires for ANY abort, not only a Ctrl-C at this prompt), and would silently
+// invalidate the negative control in tests/loop/loop.tools.test.ts that proves a cancel is not
+// recorded as a denial.
+export type ApprovalAnswer = "once" | "always" | "no";
+
+export type ApprovalPrompt = (toolName: string, args: unknown, signal?: AbortSignal) => Promise<ApprovalAnswer>;
 
 // Hermes' documented default (see docs-tmp research); now reachable from the CLI via
 // --max-turns, where it was previously hardcoded and unconfigurable.
 const DEFAULT_MAX_ITERATIONS = 500;
+// Consecutive denied tool calls — reset by any call that is approved — after which the run stops
+// instead of continuing to the iteration cap. Counted in CALLS, not turns: a turn that emits three
+// write calls and has all three refused is the same fact as three refused turns, and counting turns
+// would let that turn repeat 500 times. Three rather than one because a single denial is normal
+// (the user says no to one thing and the model does something else) and because the model is now
+// told the mode and told not to retry, so three is "it was told twice and did it again".
+// Not configurable: nothing has asked for it and a flag would be one more thing to get wrong.
+const MAX_CONSECUTIVE_DENIALS = 3;
 // openai/gpt-oss-120b's (DEFAULT_MODEL in src/provider/groq.ts) context window; confirmed via
 // console.groq.com/docs/models, 2026-08-07, when the default moved off llama-3.3-70b-versatile —
 // both list 131,072, which is why the switch needed no change here. One number for every model, not
@@ -100,6 +126,10 @@ export async function* runLoop(opts: {
   messages: ModelMessage[];
   permissionMode: PermissionMode;
   approvalPrompt?: ApprovalPrompt;
+  // The tools already approved with "always" before this run started, or nothing. A seed, not a
+  // handle: the loop copies it into its own Set and never writes back through this reference, so a
+  // caller cannot be surprised by a mutation it did not ask for. Growth leaves as `tool-allowed`.
+  allowedTools?: readonly string[];
   maxIterations?: number;
   system?: string;
   contextWindowSize?: number;
@@ -123,6 +153,11 @@ export async function* runLoop(opts: {
   ) as ToolSet;
 
   let lastInputTokens = 0;
+  // Copied, not aliased: opts.allowedTools is a seed the caller owns. Run-local and read on every
+  // gate check, so an "always" answer takes effect on the very next call in the same turn — which
+  // is the whole point, and is why this cannot live in the caller's copy of anything.
+  const allowedTools = new Set<string>(opts.allowedTools ?? []);
+  let consecutiveDenials = 0;
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     // What this actually stops, measured rather than assumed: a second streamText setup when the
@@ -285,16 +320,22 @@ export async function* runLoop(opts: {
       // a half-written file behind.
       if (opts.signal?.aborted) break;
 
-      const permission = checkPermission(call.toolName, opts.permissionMode);
-      const approved =
-        permission === "allow" ||
-        (permission === "needs-approval" &&
-          opts.approvalPrompt !== undefined &&
-          (await opts.approvalPrompt(call.toolName, call.input, opts.signal)));
-      // approve-each with no approvalPrompt given, or an explicit denial, is treated as blocked.
+      const permission = checkPermission(call.toolName, opts.permissionMode, allowedTools);
+      let approved = permission === "allow";
+      let allowedNow = false;
+      if (permission === "needs-approval" && opts.approvalPrompt !== undefined) {
+        const answer = await opts.approvalPrompt(call.toolName, call.input, opts.signal);
+        if (answer === "always") {
+          allowedTools.add(call.toolName);
+          allowedNow = true;
+        }
+        approved = answer !== "no";
+      }
+      // `needs-approval` with no approvalPrompt supplied stays denied, and `block` never reaches the
+      // prompt at all — both are what the boolean short-circuit this replaced already did.
 
       // Re-checked after the prompt, because a cancel that lands while the user is being asked
-      // resolves it false (cli.ts closes the readline to unpark the turn) and false is otherwise
+      // resolves it "no" (cli.ts closes the readline to unpark the turn) and "no" is otherwise
       // indistinguishable from a typed "n". Without this the row below would tell the model the
       // call "was not permitted to run" — a denial the user never made — and the model would resume
       // believing its own tool call had been refused rather than interrupted. Only an await can let
@@ -302,16 +343,26 @@ export async function* runLoop(opts: {
       // covers the case where the signal was aborted before the call.
       if (opts.signal?.aborted) break;
 
+      if (allowedNow) yield { type: "tool-allowed", name: call.toolName };
+
       if (!approved) {
+        consecutiveDenials++;
         yield { type: "permission-denied", name: call.toolName };
         toolResults.push({
           type: "tool-result",
           toolCallId: call.toolCallId,
           toolName: call.toolName,
-          output: { type: "execution-denied", reason: `Tool "${call.toolName}" was not permitted to run.` },
+          output: {
+            type: "execution-denied",
+            reason:
+              `Tool "${call.toolName}" was not permitted to run (permission mode: ${opts.permissionMode}). ` +
+              `Do not retry this call. Either use a tool that does not write, or tell the user to run ` +
+              `/mode to change the permission mode.`,
+          },
         });
         continue;
       }
+      consecutiveDenials = 0;
 
       const toolDef = opts.tools[call.toolName];
       if (!toolDef?.execute) {
@@ -396,6 +447,15 @@ export async function* runLoop(opts: {
     // three sites could be written without.
     if (unanswered.length > 0) {
       yield { type: "done", reason: "aborted" };
+      return;
+    }
+
+    // After the rows are pushed and yielded, never before: a run that stops here must still be
+    // resumable, and a turn whose assistant message carries tool calls with no matching tool
+    // results is AI_MissingToolResultsError on the next --resume. After the abort return above, so
+    // a cancelled turn is reported as cancelled rather than as a denial spiral.
+    if (consecutiveDenials >= MAX_CONSECUTIVE_DENIALS) {
+      yield { type: "done", reason: "repeated-denials" };
       return;
     }
   }
