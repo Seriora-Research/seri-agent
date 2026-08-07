@@ -779,13 +779,13 @@ describe("runLoop", () => {
       expect((lastMessage?.content as unknown[]).length).toBe(assistantCalls);
     });
 
-    // Reproduces the exact interleaving measured live (tui-ready-permissions step 0,
-    // openai/gpt-oss-120b): a model padding its denied retries with an allowed, never-blocked
-    // read tool. Negative control: a "reset the streak on ANY approved call" rule — the design
-    // this repo's own plan started from, before that measurement showed it — would let the
-    // allowed glob zero the counter between the two denials that need to add up, and this run
-    // would run to `done: no-tool-call` instead of stopping. Restoring that rule here (deleting
-    // the `WRITE_TOOLS.has` guard on the reset in loop.ts) is exactly what must turn this red.
+    // A constructed case for the pattern reads make possible: a model padding its denied retries
+    // with an allowed, never-blocked read tool (checkPermission never blocks a read, in any mode).
+    // Negative control: a "reset the streak on ANY approved call" rule — the design this repo's
+    // own plan started from — would let the allowed glob zero the counter between the two denials
+    // that need to add up, and this run would reach `done: no-tool-call` instead of stopping.
+    // Restoring that rule here (deleting the `WRITE_TOOLS.has` guard on the reset in loop.ts) is
+    // exactly what must turn this red — confirmed live before this test was accepted.
     test("an allowed read between denied writes does not reset the streak", async () => {
       const model = new MockLanguageModelV4({
         doStream: [
@@ -810,9 +810,12 @@ describe("runLoop", () => {
       expect(events).toContainEqual({ type: "tool-result", name: "glob", result: [] });
     });
 
-    // The guard that the threshold is not 1: a single denial followed by a text turn already
-    // reaches `done: no-tool-call` at line 611 above ("treats approve-each with no approvalPrompt
-    // as denied") without this test needing to duplicate it.
+    // The guard that the threshold is not 1: "read-only mode blocks a write tool instead of
+    // executing it" above (a single denial, then a text turn) already asserts
+    // `done: no-tool-call` — mutating MAX_CONSECUTIVE_DENIALS to 1 turns that assertion red —
+    // without this test needing to duplicate it. (Not "treats approve-each with no approvalPrompt
+    // as denied" below: that test asserts no `done` reason at all, so it would stay green either
+    // way.)
 
     test("an approval resets the consecutive-denial counter", async () => {
       const model = new MockLanguageModelV4({

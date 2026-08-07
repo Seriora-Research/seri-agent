@@ -95,7 +95,8 @@ run-local allowlist `checkPermission` consults on later calls — this is what k
 survive a cycle into that mode. `seri --dangerously-skip-permissions` maps the mode to
 `auto` for that run only and is never written back to the session, so a later `--continue`
 still prompts. A run whose denied tool calls hit `MAX_CONSECUTIVE_DENIALS` (3) in a row
-stops with `done: repeated-denials` instead of continuing to the turn cap.
+stops with `done: repeated-denials` instead of continuing to the turn cap — "in a row" counts
+write calls only; an approved read (never blocked, in any mode) in between does not break it.
 Whether a tool needs permission is derived from `WRITE_TOOL_NAMES` in
 `apps/cli/src/provider/tools.ts` (single source of truth — a new write-capable tool must be
 added there or it silently bypasses the gate). The AI SDK's automatic tool execution

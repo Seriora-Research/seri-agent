@@ -67,11 +67,11 @@ const DEFAULT_MAX_ITERATIONS = 500;
 // would defeat the whole mechanism: reads are always permitted (checkPermission never blocks
 // them), so a model padding its retries with a `glob` or `read_file` between denied writes is
 // exactly the pattern this is meant to catch, and resetting on that read would let it keep doing
-// so forever. Measured live (tui-ready-permissions step 0, openai/gpt-oss-120b): the exact
-// interleaving — denied write, denied write, allowed glob, denied write — that a reset-on-any-
-// approval rule would never have stopped. Counted in CALLS, not turns: a turn that emits three
-// write calls and has all three refused is the same fact as three refused turns, and counting turns
-// would let that turn repeat 500 times. Three rather than one because a single denial is normal
+// so forever. tests/loop/loop.tools.test.ts's "an allowed read between denied writes does not
+// reset the streak" pins this directly, with a reset-on-any-approval rule as its own negative
+// control. Counted in CALLS, not turns: a turn that emits three write calls and has all three
+// refused is the same fact as three refused turns, and counting turns would let that turn repeat
+// 500 times. Three rather than one because a single denial is normal
 // (the user says no to one thing and the model does something else) and because the model is now
 // told the mode and told not to retry, so three is "it was told twice and did it again".
 // Not configurable: nothing has asked for it and a flag would be one more thing to get wrong.

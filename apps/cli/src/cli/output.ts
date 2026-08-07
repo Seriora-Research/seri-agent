@@ -162,8 +162,12 @@ export function printEvent(event: LoopEvent): void {
       // The one reason whose fix is a command the user has to type. `max-iterations` and
       // `no-tool-call` need no follow-up and `aborted` was the user's own doing.
       if (event.reason === "repeated-denials") {
-        console.log("The same tool was refused repeatedly, so the run stopped. Run /mode to change");
-        console.log("the permission mode, or answer 'a' at the prompt to allow that tool.");
+        // Neither half of this can name a single fix: the streak can span different tools
+        // (write_file, edit, bash), not just one, and "answer 'a' at the prompt" is only true in
+        // approve-each — read-only never prompts at all, and read-only is the mode most likely to
+        // have produced this stop.
+        console.log("Several write calls were refused in a row, so the run stopped. Run /mode to");
+        console.log("change the permission mode (or, in approve-each, answer 'a' at the prompt).");
       }
       break;
     case "error":
