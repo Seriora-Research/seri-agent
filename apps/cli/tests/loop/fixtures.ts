@@ -39,6 +39,15 @@ export function streamResult(chunks: LanguageModelV4StreamPart[], chunkDelayInMs
   return { stream: simulateReadableStream({ chunks, chunkDelayInMs }) };
 }
 
+// A model that calls write_file on every one of `turns` turns and never answers with text. What a
+// model stuck retrying a denied call actually looks like, without depending on a real one to be
+// stubborn.
+export function repeatedWriteCalls(turns: number) {
+  return Array.from({ length: turns }, (_, i) =>
+    streamResult(toolCallChunks(`call-${i}`, "write_file", { path: `a${i}.txt` })),
+  );
+}
+
 export async function collect(events: AsyncGenerator<LoopEvent>): Promise<LoopEvent[]> {
   const out: LoopEvent[] = [];
   for await (const event of events) out.push(event);
