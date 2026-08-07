@@ -53,6 +53,31 @@ export function unsetConfigValue(key: string, configDir: string = getConfigDir()
   return true;
 }
 
+// The check command post-write verification runs (verify/wrapTools.ts). There is no auto-discovery
+// behind this: with no `SERI_VERIFY_COMMAND` set, nothing is ever spawned. A harness must not find
+// a command inside the repository it is editing and execute it — Aider ships its own linters and
+// requires an explicit `--lint-cmd` for a project's own, and OpenCode runs a language server and
+// never executes project scripts. Reading `scripts.typecheck` out of whatever `package.json`
+// happens to be nearest and running it is what neither of them does.
+//
+// Flat string keys rather than a nested `verify: {...}` object: config.json is a
+// Record<string, string> here, `config list` masks every value it holds, and nesting one object
+// inside it would change both. The env-var-shaped names are deliberate — they get the same
+// env-then-file precedence getApiKey has, for free.
+export type VerifyConfig = { enabled: boolean; command: string | undefined };
+
+export function loadVerifyConfig(configDir?: string): VerifyConfig {
+  const config = loadConfig(configDir);
+  const read = (name: string): string | undefined => process.env[name] || config[name] || undefined;
+  return {
+    // On unless explicitly turned off: a mistyped value must not silently disable the feature.
+    // Separate from `command` being unset, because this is the named mitigation for the per-write
+    // cost — a user who configured a command needs a way to suspend it without losing it.
+    enabled: read("SERI_VERIFY_ENABLED") !== "false",
+    command: read("SERI_VERIFY_COMMAND"),
+  };
+}
+
 // configDir is threaded through rather than always resolved internally so that a caller
 // which writes with an explicit dir (`seri config set`) reads back from that same dir.
 export function getApiKey(name: string, configDir?: string): string | undefined {

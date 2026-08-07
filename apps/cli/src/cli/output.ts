@@ -2,8 +2,15 @@
 // argument, so none of them can reach a session, a checkpoint store or the loop. That is what makes
 // them testable without building a run — printEvent's `never` guard in particular, which is the
 // file's compile-time contract with LoopEvent.
+//
+// The one value import is held to the same standard. `verify/outcome` exists precisely so this file
+// can narrow a verified write_file result without reaching `verify/run` and, through it,
+// `spawnCollect` — which imports `node:child_process` and registers a process-global signal handler
+// at module load. Importing the printer must not do that, so keep any new import here dependency-
+// free or the sentence above stops being true.
 import type { RestorePlan, RestoreResult } from "../checkpoint/checkpoint";
 import type { LoopEvent } from "../loop/loop";
+import { writeFileVerification, type CheckOutcome } from "../verify/outcome";
 
 // stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
 // parseArgs rejects, or no task given — is a usage error: printed to stderr, exit 2.
@@ -60,6 +67,41 @@ export function printRecovery(result: RestoreResult): void {
   console.log(`  ${result.recoverCommand}`);
 }
 
+// The per-write cost is the whole reason `verify.enabled` exists, and a user deciding whether to
+// turn the feature off cannot weigh a number they were never shown.
+function seconds(elapsedMs: number): string {
+  return `${(elapsedMs / 1000).toFixed(1)}s`;
+}
+
+// What a verified write_file adds to its "done" line, or "" when there is nothing to say.
+//
+// `unavailable` deliberately prints nothing: no command configured is the default for every user
+// and disabling it is an explicit choice, so neither is news, and a line on every single write
+// would be pure noise. `failed` is the opposite — a check that RAN and broke, most often a typo in
+// SERI_VERIFY_COMMAND, which otherwise costs a spawn per write and reports itself only to the
+// model. It is the one case that must not read as a clean run.
+//
+// The count is `total`, never `diagnostics.length`: the list is capped at MAX_DIAGNOSTICS, so the
+// length is what survived the cap and the total is what the check actually found. When they differ
+// the cap is stated outright rather than left to be inferred from a suspiciously round number.
+function verificationSuffix(verification: CheckOutcome): string {
+  switch (verification.status) {
+    case "ok":
+      return ` (checked in ${seconds(verification.elapsedMs)}, no diagnostics)`;
+    case "diagnostics": {
+      const shown = verification.diagnostics.length;
+      const count = shown < verification.total ? `${shown} of ${verification.total}` : `${verification.total}`;
+      const noun = verification.total === 1 ? "diagnostic" : "diagnostics";
+      const incomplete = verification.truncated ? ", list incomplete" : "";
+      return ` (${count} ${noun} in ${seconds(verification.elapsedMs)}${incomplete})`;
+    }
+    case "failed":
+      return ` — check failed: ${verification.reason}`;
+    case "unavailable":
+      return "";
+  }
+}
+
 export function printEvent(event: LoopEvent): void {
   switch (event.type) {
     case "text-delta":
@@ -68,15 +110,23 @@ export function printEvent(event: LoopEvent): void {
     case "tool-call":
       console.log(`\n→ ${event.name}(${JSON.stringify(event.args)})`);
       break;
-    case "tool-result":
+    case "tool-result": {
       // `edit` returns the edited text and writes nothing (provider/tools.ts's
       // FS_MUTATING_TOOL_NAMES comment), so a bare "done" reads as a file that changed — observed
       // live, with the model moving on as though it had. Named here rather than in the loop, which
       // knows no tool names by design.
+      //
+      // The verification suffix is NOT named that way: the narrowing belongs to the module that
+      // produces the shape, so this file asks it rather than re-deriving it, and `edit` stays the
+      // only tool name here.
+      const verification = writeFileVerification(event.result);
       console.log(
-        event.name === "edit" ? "✓ edit done (text returned, nothing written)" : `✓ ${event.name} done`,
+        event.name === "edit"
+          ? "✓ edit done (text returned, nothing written)"
+          : `✓ ${event.name} done${verification === undefined ? "" : verificationSuffix(verification)}`,
       );
       break;
+    }
     case "permission-denied":
       console.log(`✗ ${event.name} blocked`);
       break;

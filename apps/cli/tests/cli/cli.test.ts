@@ -12,6 +12,7 @@ import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { toolDefinitions } from "../../src/provider/tools";
 import { onSignalCancel } from "../../src/signals";
 import { loadSession, saveSession, type SessionState } from "../../src/session/session";
+import type { CheckOutcome } from "../../src/verify/run";
 import { fakeRunLoop } from "./fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
@@ -145,6 +146,8 @@ describe("run (task invocation)", () => {
     // The same tool set, with only the filesystem-mutating tools wrapped for checkpointing.
     expect(Object.keys(capture()?.tools ?? {})).toEqual(Object.keys(toolDefinitions));
     expect(capture()?.tools.read_file).toBe(toolDefinitions.read_file);
+    expect(capture()?.tools.grep).toBe(toolDefinitions.grep);
+    expect(capture()?.tools.glob).toBe(toolDefinitions.glob);
     expect(capture()?.tools.edit).toBe(toolDefinitions.edit);
     expect(capture()?.tools.write_file).not.toBe(toolDefinitions.write_file);
     expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "write hello.txt" });
@@ -308,6 +311,129 @@ describe("run (task invocation)", () => {
 
     expect(logs.join("\n")).toContain("nothing written");
     expect(logs.join("\n")).toContain("✓ write_file done");
+  });
+
+  // The diagnostics half of the same line, and the reason the test above still passes: the count is
+  // read off the RESULT'S SHAPE, not off the tool's name, so a result without one is unchanged.
+  // The result here is what verify/wrapTools.ts actually returns.
+  test("a write_file result carrying diagnostics says how many were fed back", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      {
+        type: "tool-result",
+        name: "write_file",
+        // `satisfies CheckOutcome` is load-bearing: LoopEvent.result is `unknown` (loop.ts:17), so
+        // without it this literal is checked against nothing and would keep passing against a
+        // contract that had already changed underneath it.
+        result: {
+          written: true,
+          verification: {
+            status: "diagnostics",
+            command: "tsc --noEmit",
+            elapsedMs: 3600,
+            diagnostics: [{ file: "a.ts", line: 1, column: 1, message: "error TS2322: nope" }],
+            truncated: false,
+            inWrittenFile: 1,
+            total: 1,
+          } satisfies CheckOutcome,
+        },
+      },
+      { type: "done", reason: "no-tool-call" },
+    ]);
+
+    const { logs } = await captureLogs(() =>
+      run(["write", "a.ts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.join("\n")).toContain("✓ write_file done (1 diagnostic");
+  });
+
+  // The count a human reads must be the one the check reported, not the one that survived the
+  // 20-diagnostic cap. Printing "20" for a 300-error build is the exact confusion `total` exists
+  // to prevent, in the one place a person actually looks.
+  test("a capped diagnostic list shows the true total, not the capped length", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      {
+        type: "tool-result",
+        name: "write_file",
+        result: {
+          written: true,
+          verification: {
+            status: "diagnostics",
+            command: "tsc --noEmit",
+            elapsedMs: 3600,
+            diagnostics: Array.from({ length: 20 }, () => ({ file: "a.ts", line: 1, column: 1, message: "error TS2322: nope" })),
+            truncated: false,
+            inWrittenFile: 1,
+            total: 300,
+          } satisfies CheckOutcome,
+        },
+      },
+      { type: "done", reason: "no-tool-call" },
+    ]);
+
+    const { logs } = await captureLogs(() =>
+      run(["write", "a.ts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.join("\n")).toContain("20 of 300 diagnostics");
+  });
+
+  // A broken check command — a typo in SERI_VERIFY_COMMAND — spawns a process on every write and
+  // reports nothing to the user, who is paying for it. `failed` means the CHECK is broken, not
+  // that the code is clean, so it must not be indistinguishable from a clean run.
+  test("a failed check is surfaced instead of printing a bare green checkmark", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      {
+        type: "tool-result",
+        name: "write_file",
+        result: {
+          written: true,
+          verification: {
+            status: "failed",
+            reason: "bun run typechek could not be run: script not found",
+          } satisfies CheckOutcome,
+        },
+      },
+      { type: "done", reason: "no-tool-call" },
+    ]);
+
+    const { logs } = await captureLogs(() =>
+      run(["write", "a.ts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    const printed = logs.join("\n");
+    expect(printed).toContain("check failed");
+    expect(printed).toContain("typechek");
+  });
+
+  // The per-write cost is this feature's headline risk, and the person deciding whether to turn it
+  // off cannot see it otherwise.
+  test("a clean check reports what it cost", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      {
+        type: "tool-result",
+        name: "write_file",
+        result: {
+          written: true,
+          verification: { status: "ok", command: "tsc --noEmit", elapsedMs: 3600 } satisfies CheckOutcome,
+        },
+      },
+      { type: "done", reason: "no-tool-call" },
+    ]);
+
+    const { logs } = await captureLogs(() =>
+      run(["write", "a.ts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.join("\n")).toContain("3.6s");
   });
 
   // The other half of "a new event member must not fall through printEvent silently": the SDK has

@@ -63,6 +63,37 @@ The first search of each release unpacks its bundled ripgrep to `%LOCALAPPDATA%\
 on Windows, or `~/.seri/rg/<key>/` elsewhere. Deleting that directory is safe — the next search
 writes it again — and a run that cannot write there falls back to a temporary copy.
 
+## Checking your code after a write
+
+seri can run your project's own check command after every successful `write_file` and hand the
+diagnostics back to the model in the same turn, so a type error it just introduced is visible
+while it is still working on that file.
+
+This is **off until you set a command**. seri does not look inside your repository for one.
+
+```sh
+seri config set SERI_VERIFY_COMMAND "bun run typecheck"
+```
+
+Both keys can also be set as environment variables, which take precedence over `config set`:
+
+| key | meaning |
+| --- | --- |
+| `SERI_VERIFY_COMMAND` | the command to run. Unset means no checking, and nothing is spawned. |
+| `SERI_VERIFY_ENABLED` | set to `false` to suspend checking without unsetting the command. |
+
+What to expect before you turn it on:
+
+- **It runs after every successful write**, so the cost is per write, not per session. Measured on
+  this repo, `bun run --cwd apps/cli typecheck` takes about 3.6 s — that is 3.6 s added to every
+  file the model writes. A slower project check costs proportionally more.
+- **It runs in the directory you started seri in**, and the command is split on whitespace, so
+  quoted arguments and paths containing spaces are not supported.
+- **Diagnostics are advisory.** The write is not rolled back. Use `seri /undo` for that.
+- **It reports whatever your command reports**, usually the whole project — including errors that
+  were already there before seri touched anything. Diagnostics in the file just written are listed
+  first, and at most 20 are sent to the model, with the true total alongside.
+
 ## License
 
 [Apache License 2.0](./LICENSE). Copyright 2026 Seriora Research.

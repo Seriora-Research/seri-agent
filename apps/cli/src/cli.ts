@@ -31,6 +31,7 @@ import {
   usageError,
 } from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
+import { loadVerifyConfig } from "./config/config";
 import { getConfigDir } from "./config/paths";
 import { cycleMode } from "./gate/gate";
 import { type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "./loop/loop";
@@ -40,6 +41,7 @@ import { findMostRecentSession, loadSession, saveSession, type SessionState } fr
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
+import { withVerification } from "./verify/wrapTools";
 
 type CliDeps = {
   runLoop?: typeof runLoopReal;
@@ -499,9 +501,21 @@ function prepareSession(ctx: RunContext, deps: CliDeps): PreparedRun | number {
     );
   }
 
-  const tools = withCheckpoints(
-    toolDefinitions,
-    createCheckpointer({ storeDir, worktree, sessionId: session.id, onWarning: printWarning }),
+  // Verification is enabled by exactly this composition, and rolling it back is deleting the outer
+  // call: `runLoop`, the gate, the session store and every tool are unmodified, and `verify/`
+  // becomes dead code rather than something that has to be unpicked.
+  //
+  // Outside withCheckpoints, not inside: the checkpoint has to be taken BEFORE the write
+  // (checkpoint/wrapTools.ts:18-22) and the check has to run AFTER it, so this is the order that
+  // puts each on the correct side. The AbortSignal the check is run with is the one runLoop hands
+  // `execute` (loop.ts:331), which is driveLoop's controller — the same Ctrl-C that stops a bash
+  // command stops a check.
+  const tools = withVerification(
+    withCheckpoints(
+      toolDefinitions,
+      createCheckpointer({ storeDir, worktree, sessionId: session.id, onWarning: printWarning }),
+    ),
+    loadVerifyConfig(),
   );
 
   return { session, storeDir, tools, model };

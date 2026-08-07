@@ -52,7 +52,14 @@ describe("runLoop", () => {
 
     expect(model.doStreamCalls).toHaveLength(500);
     expect(events.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
-  }, 30_000);
+    // 60s, not 30s: measured on native Windows (bun 1.3.14), these 500 mocked rounds complete
+    // correctly in 33730 ms — 67.46 ms/round — so the old cap failed here while passing on Linux CI,
+    // which is the one platform combination nobody watching CI would ever see. Not a hang: the run
+    // finished with 500 rounds and `done: max-iterations`, measured with the cap lifted. The margin
+    // is ~1.8x rather than generous, because this test's cost is proportional to
+    // DEFAULT_MAX_ITERATIONS and a cap far above the real number would stop reporting a regression
+    // in per-round cost as anything but a slow suite.
+  }, 60_000);
 
   test("yields messages-updated after appending the assistant message and after appending tool results", async () => {
     const tools = makeTools(async () => "ok");

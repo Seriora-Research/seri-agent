@@ -16,7 +16,15 @@ const readFileTool = tool({
 });
 
 const writeFileTool = tool({
-  description: "Write text content to a file, atomically.",
+  description:
+    "Write text content to a file, atomically. If the user has configured a check command, it runs " +
+    "after a successful write and the result carries its diagnostics. They are ADVISORY — the write " +
+    "already happened and is not rolled back. The check covers whatever the configured command " +
+    "covers, usually the whole project, so diagnostics may be PRE-EXISTING and in files you never " +
+    "touched: `inWrittenFile` says how many of the returned diagnostics are in the file you just " +
+    "wrote, and those are listed first. `total` is how many the check reported, which is more than " +
+    "the list when it was capped. Fix what you caused; do not start editing unrelated files because " +
+    "the project already had errors in them.",
   inputSchema: z.object({
     path: z.string(),
     content: z.string(),
@@ -97,7 +105,7 @@ export const WRITE_TOOL_NAMES: (keyof typeof toolDefinitions)[] = ["write_file",
 
 // Tools that can change the contents of the filesystem, which is what a checkpoint has to be
 // taken in front of. Deliberately NOT WRITE_TOOL_NAMES: that set is the *permission*
-// classification and contains `edit`, but `edit()` (tools/edit.ts:100) is
+// classification and contains `edit`, but `edit()` (tools/edit.ts:102) is
 // `(content: string, oldString, newString) => string` — a pure string transform whose schema
 // takes the content itself, not a path. It never touches disk; the model has to follow up with
 // `write_file`. Snapshotting on it would only ever produce a checkpoint identical to its
