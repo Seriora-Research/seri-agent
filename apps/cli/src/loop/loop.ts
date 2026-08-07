@@ -8,7 +8,7 @@ import type {
   ToolContent,
   ToolSet,
 } from "ai";
-import { checkPermission, type PermissionMode } from "../gate/gate";
+import { checkPermission, WRITE_TOOLS, type PermissionMode } from "../gate/gate";
 import { compactMessages, findSafeEvictionBoundary, MAX_RETRIES, type CompactionSummary } from "./compaction";
 
 export type LoopEvent =
@@ -62,8 +62,14 @@ export type ApprovalPrompt = (toolName: string, args: unknown, signal?: AbortSig
 // Hermes' documented default (see docs-tmp research); now reachable from the CLI via
 // --max-turns, where it was previously hardcoded and unconfigurable.
 const DEFAULT_MAX_ITERATIONS = 500;
-// Consecutive denied tool calls — reset by any call that is approved — after which the run stops
-// instead of continuing to the iteration cap. Counted in CALLS, not turns: a turn that emits three
+// Consecutive denied WRITE-tool calls — reset only by an approved write, never by an approved
+// read — after which the run stops instead of continuing to the iteration cap. Reset on a read
+// would defeat the whole mechanism: reads are always permitted (checkPermission never blocks
+// them), so a model padding its retries with a `glob` or `read_file` between denied writes is
+// exactly the pattern this is meant to catch, and resetting on that read would let it keep doing
+// so forever. Measured live (tui-ready-permissions step 0, openai/gpt-oss-120b): the exact
+// interleaving — denied write, denied write, allowed glob, denied write — that a reset-on-any-
+// approval rule would never have stopped. Counted in CALLS, not turns: a turn that emits three
 // write calls and has all three refused is the same fact as three refused turns, and counting turns
 // would let that turn repeat 500 times. Three rather than one because a single denial is normal
 // (the user says no to one thing and the model does something else) and because the model is now
@@ -362,7 +368,11 @@ export async function* runLoop(opts: {
         });
         continue;
       }
-      consecutiveDenials = 0;
+      // Only a write resets the streak. An approved READ (glob, read_file, grep — never blocked by
+      // checkPermission) is not progress toward the thing the model was denied; it is exactly what
+      // a model padding its retries between denied writes looks like, and counting it as progress
+      // would let that padding run the counter down to zero forever. See MAX_CONSECUTIVE_DENIALS.
+      if (WRITE_TOOLS.has(call.toolName)) consecutiveDenials = 0;
 
       const toolDef = opts.tools[call.toolName];
       if (!toolDef?.execute) {

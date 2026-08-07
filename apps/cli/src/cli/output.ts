@@ -29,6 +29,7 @@ export const USAGE = `Usage:
 
 Options:
   --max-turns <n>                 stop after n model turns (default 500)
+  --dangerously-skip-permissions  run every tool with no approval prompt (attended use only)
   --                              everything after this is the task, flags included:
                                     seri -- fix the --help output`;
 
@@ -130,6 +131,11 @@ export function printEvent(event: LoopEvent): void {
     case "permission-denied":
       console.log(`✗ ${event.name} blocked`);
       break;
+    // Printed because a grant the user cannot see is a grant they cannot revoke. "for this run" is
+    // the persistence decision — keep this string matching what actually happens.
+    case "tool-allowed":
+      console.log(`✓ ${event.name} approved for the rest of this run`);
+      break;
     case "compacted":
       console.log(`\n⚙ compacted ${event.evictedCount} messages`);
       break;
@@ -153,6 +159,12 @@ export function printEvent(event: LoopEvent): void {
       break;
     case "done":
       console.log(`\n(done: ${event.reason})`);
+      // The one reason whose fix is a command the user has to type. `max-iterations` and
+      // `no-tool-call` need no follow-up and `aborted` was the user's own doing.
+      if (event.reason === "repeated-denials") {
+        console.log("The same tool was refused repeatedly, so the run stopped. Run /mode to change");
+        console.log("the permission mode, or answer 'a' at the prompt to allow that tool.");
+      }
       break;
     case "error":
       console.error(event.error);

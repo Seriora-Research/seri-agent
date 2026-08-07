@@ -35,7 +35,7 @@ import { configCommand as configCommandReal } from "./config/commands";
 import { loadVerifyConfig } from "./config/config";
 import { getConfigDir } from "./config/paths";
 import { cycleMode } from "./gate/gate";
-import { type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "./loop/loop";
+import { type ApprovalAnswer, type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "./loop/loop";
 import { getGroqModel as getGroqModelReal, resolveModelId } from "./provider/groq";
 import { toolDefinitions } from "./provider/tools";
 import { findMostRecentSession, loadSession, saveSession, type SessionState } from "./session/session";
@@ -245,11 +245,15 @@ function loadOrCreateSession(
       id: randomUUID(),
       cwd: process.cwd(),
       systemPrompt: buildSystemPrompt(loadAgentsFileFn(process.cwd())),
-      // Read-only is the safest default for a brand-new session: nothing in docs/BUILD-PLAN.md /
-      // docs/ARCHITECTURE.md states an explicit default, so this errs on the side of never
-      // writing/executing without the user opting in via --resume onto an existing session
-      // or cycling the mode themselves.
-      permissionMode: "read-only",
+      // approve-each, not read-only: on native Windows the OS sandbox is not enforced
+      // (docs/ARCHITECTURE.md:417), so the permission gate is the whole Base layer and a default
+      // that does not ask is a default that writes unattended. read-only was tried and measured —
+      // a fresh session given a write task was blocked repeatedly and produced nothing (step 0 of
+      // the tui-ready-permissions loop: 5 denials, done: no-tool-call, no file created). This
+      // reverses docs/ARCHITECTURE.md:93's rejection of "approval for every edit" as a default;
+      // the per-run allowlist ("always allow this tool", below) is what keeps this from being
+      // that rejected every-call mode.
+      permissionMode: "approve-each",
       model: resolveModelId(),
       messages: [],
     },
@@ -279,8 +283,8 @@ function loadOrCreateSession(
 // SIGINT again.
 //
 // The onAbort registration is the other direction: a cancel that originated elsewhere while the
-// prompt is up. Closing the interface and resolving false is what unparks the turn. The loop tells
-// that false apart from a typed "n" by re-checking the signal, so the row the model sees says the
+// prompt is up. Closing the interface and resolving "no" is what unparks the turn. The loop tells
+// that "no" apart from a typed "n" by re-checking the signal, so the row the model sees says the
 // call was cancelled rather than denied. A signal that is already aborted returns before the
 // interface is opened — onAbort would catch that case too, that being the whole point of it, but a
 // turn that has already been cancelled should not touch stdin to find out.
@@ -288,21 +292,24 @@ function makeApprovalPrompt(
   openInterface: () => Interface = () => createInterface({ input: process.stdin, output: process.stdout }),
 ): ApprovalPrompt {
   return (toolName, args, signal) =>
-    new Promise<boolean>((resolve) => {
+    new Promise<ApprovalAnswer>((resolve) => {
       if (signal?.aborted === true) {
-        resolve(false);
+        resolve("no");
         return;
       }
       const rl = openInterface();
       const abort = onAbort(signal, () => {
         rl.close();
-        resolve(false);
+        resolve("no");
       });
       rl.on("SIGINT", () => deliverSignal("SIGINT"));
-      rl.question(`Approve ${toolName}(${JSON.stringify(args)})? [y/N] `, (answer) => {
+      rl.question(`Approve ${toolName}(${JSON.stringify(args)})? [y]es / [a]lways / [N]o `, (answer) => {
         abort.dispose();
         rl.close();
-        resolve(answer.trim().toLowerCase() === "y");
+        const typed = answer.trim().toLowerCase();
+        // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
+        // user did not clearly give is not an approval.
+        resolve(typed === "y" || typed === "yes" ? "once" : typed === "a" || typed === "always" ? "always" : "no");
       });
     });
 }
@@ -314,6 +321,7 @@ const PARSE_OPTIONS = {
   resume: { type: "string" },
   continue: { type: "boolean" },
   "max-turns": { type: "string" },
+  "dangerously-skip-permissions": { type: "boolean" },
 } as const;
 
 type ParsedArgs = {
@@ -324,9 +332,11 @@ type ParsedArgs = {
     resume?: string;
     continue?: boolean;
     "max-turns"?: string;
+    "dangerously-skip-permissions"?: boolean;
   };
   positionals: string[];
   maxTurns: number | undefined;
+  skipPermissions: boolean;
 };
 
 // One convention across every handler below, so `run` reads as the sequence it is: a `number` is
@@ -361,7 +371,7 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     return usageError(`--resume ${values.resume} looks for a session named "${values.resume}". Did you mean: seri --continue ${values.resume}`);
   }
 
-  return { values, positionals, maxTurns };
+  return { values, positionals, maxTurns, skipPermissions: values["dangerously-skip-permissions"] === true };
 }
 
 function handleInfoFlags(values: ParsedArgs["values"]): number | undefined {
@@ -592,6 +602,7 @@ async function driveLoop(
   ctx: RunContext,
   deps: CliDeps,
   maxTurns: number | undefined,
+  skipPermissions: boolean,
 ): Promise<{ doneReason: DoneReason | undefined; cancelledBy: NodeJS.Signals | undefined; usage: RunUsage }> {
   const { session, storeDir, tools, model } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
@@ -615,7 +626,12 @@ async function driveLoop(
       model,
       tools,
       messages: session.messages,
-      permissionMode: session.permissionMode,
+      // The flag overrides the mode for THIS RUN and is deliberately never written back to
+      // `session`. This function persists `{...session, messages}` on every tool round-trip, so
+      // assigning session.permissionMode = "auto" here would silently make a one-off
+      // --dangerously-skip-permissions the session's standing mode, inherited by every later
+      // --continue with no flag on the command line and nothing on screen saying so.
+      permissionMode: skipPermissions ? "auto" : session.permissionMode,
       approvalPrompt: makeApprovalPrompt(deps.createInterface),
       system: session.systemPrompt,
       signal: controller.signal,
@@ -671,7 +687,7 @@ async function driveLoop(
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const parsed = parseCliArgs(argv);
   if (typeof parsed === "number") return parsed;
-  const { values, positionals, maxTurns } = parsed;
+  const { values, positionals, maxTurns, skipPermissions } = parsed;
 
   const info = handleInfoFlags(values);
   if (info !== undefined) return info;
@@ -713,7 +729,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const prepared = prepareSession(ctx, deps);
   if (typeof prepared === "number") return prepared;
 
-  const { doneReason, cancelledBy, usage } = await driveLoop(prepared, ctx, deps, maxTurns);
+  const { doneReason, cancelledBy, usage } = await driveLoop(prepared, ctx, deps, maxTurns, skipPermissions);
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are
@@ -738,7 +754,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // that recovered from a failed tool call and then answered the user did not fail. The status
   // answers one question — did the turn finish? — and `no-tool-call` is the only reason that means
   // it did. A cap is not a finish: `max-iterations` yields `done` having stopped
-  // with the user's task unanswered, and `seri "big task" && deploy` must not deploy. loop.ts's two
+  // with the user's task unanswered, and `seri "big task" && deploy` must not deploy.
+  // `repeated-denials` is the same fact by the same reasoning — the run stopped itself after
+  // MAX_CONSECUTIVE_DENIALS refused tool calls, the task is exactly as unanswered as it would be
+  // at the iteration cap, and `&& deploy` must not run off the back of it either. loop.ts's two
   // stream-error returns end the generator with no `done` at all and land on the same 1 — a throw
   // escaping runLoop outright (`approvalPrompt` rejecting, or findSafeEvictionBoundary, neither of
   // which is inside a try) ends it with no `done` too, but it comes out of driveLoop's `for await`
