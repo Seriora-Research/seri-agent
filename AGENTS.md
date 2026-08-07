@@ -85,7 +85,17 @@ resolving with a normal-looking result, at the source rather than in the loop, b
 caller is inside the loop.
 
 **Gate-first permissions**, not sandboxing. `apps/cli/src/gate/gate.ts` defines three
-`PermissionMode`s (`read-only` / `approve-each` / `auto`) that cycle via `/mode`.
+`PermissionMode`s (`read-only` / `approve-each` / `auto`) that cycle via `/mode`. A new
+session starts in `approve-each`, not `read-only`: native Windows does not enforce the OS
+sandbox, so the gate is the whole Base layer and a default that does not ask is a default
+that writes unattended. Answering `a`/always at the approval prompt adds that tool to a
+run-local allowlist `checkPermission` consults on later calls — this is what keeps
+`approve-each` from being an approve-*every*-call mode — but the allowlist never overrides
+`read-only`: `checkPermission` checks `read-only` before consulting it, so a grant does not
+survive a cycle into that mode. `seri --dangerously-skip-permissions` maps the mode to
+`auto` for that run only and is never written back to the session, so a later `--continue`
+still prompts. A run whose denied tool calls hit `MAX_CONSECUTIVE_DENIALS` (3) in a row
+stops with `done: repeated-denials` instead of continuing to the turn cap.
 Whether a tool needs permission is derived from `WRITE_TOOL_NAMES` in
 `apps/cli/src/provider/tools.ts` (single source of truth — a new write-capable tool must be
 added there or it silently bypasses the gate). The AI SDK's automatic tool execution
