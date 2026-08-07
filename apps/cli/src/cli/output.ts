@@ -44,6 +44,20 @@ export function usageError(message: string): number {
   return 2;
 }
 
+// A tool name is the model's, not ours, and this file renders it at two sites — the approval
+// prompt (cli.ts, before the opts.tools[call.toolName] lookup that would reject an unknown one)
+// and the tool-allowed line below (event.name is the same call.toolName, printed after the fact)
+// — so an invented name reaches the terminal raw at both unless escaped here, in the module that
+// owns every user-facing string. Only control characters and DEL are escaped, not the whole name
+// the way a prompt's `args` are already wrapped in JSON.stringify: a legitimate name is always a
+// plain identifier (write_file, bash, …), and stringifying it would put visible quotes on every
+// single render to guard against a case that does not happen in the common path. A newline or an
+// ANSI escape sequence in an invented name could otherwise scroll real output off-screen or paint
+// a fake line — this stops that without changing how an ordinary name reads.
+export function escapeControlChars(text: string): string {
+  return text.replace(/[\x00-\x1f\x7f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
+}
+
 // stderr, not stdout: stdout carries the model's own output and is routinely piped, and a warning
 // that a file will not be recoverable must not end up inside whatever consumed that pipe.
 export function printWarning(message: string): void {
@@ -132,9 +146,11 @@ export function printEvent(event: LoopEvent): void {
       console.log(`✗ ${event.name} blocked`);
       break;
     // Printed because a grant the user cannot see is a grant they cannot revoke. "for this run" is
-    // the persistence decision — keep this string matching what actually happens.
+    // the persistence decision — keep this string matching what actually happens. event.name is
+    // the same model-supplied call.toolName the approval prompt renders, so it gets the same
+    // escaping — see escapeControlChars above.
     case "tool-allowed":
-      console.log(`✓ ${event.name} approved for the rest of this run`);
+      console.log(`✓ ${escapeControlChars(event.name)} approved for the rest of this run`);
       break;
     case "compacted":
       console.log(`\n⚙ compacted ${event.evictedCount} messages`);

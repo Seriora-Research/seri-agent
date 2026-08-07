@@ -213,6 +213,20 @@ describe("run (task invocation)", () => {
     expect(logs.some((line) => line.includes("bash"))).toBe(true);
   });
 
+  // The second of the two sites output.ts's escapeControlChars covers: event.name here is the
+  // same model-supplied call.toolName the approval prompt renders (pinned separately in the
+  // "control character in the tool name" test), reached after the fact rather than at a prompt.
+  test("the tool-allowed event escapes a control character in the tool name", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake } = fakeRunLoop([{ type: "tool-allowed", name: "write\x1bfile" }, { type: "done", reason: "no-tool-call" }]);
+
+    const { logs } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+
+    const rendered = logs.join("\n");
+    expect(rendered).toContain("write\\x1bfile");
+    expect(rendered).not.toContain("write\x1bfile");
+  });
+
   // Success check 4's exit-code half: a run stopped by repeated denials leaves the user's task as
   // unanswered as one that hit the iteration cap, so it gets the same non-zero exit.
   test("repeated-denials exits 1 and prints the /mode follow-up", async () => {
