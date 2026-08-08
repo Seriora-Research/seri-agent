@@ -37,6 +37,8 @@ afterEach(() => {
 });
 
 describe("getBaseConfigDir", () => {
+  // getBaseConfigDir() has no win32 branch — these pin platform-*independence* (win32 must
+  // resolve identically to posix), not a Windows-specific code path.
   test("win32 with HOME set returns joined path", () => {
     setPlatform("win32");
     process.env.HOME = "C:\\Users\\test";

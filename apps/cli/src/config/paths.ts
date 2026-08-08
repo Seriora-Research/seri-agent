@@ -5,8 +5,8 @@ import { foldsCase } from "../caseFold";
 import { PERMISSIONS_FILENAME } from "../permissions/store";
 import { CONFIG_FILENAME } from "./config";
 
-// Unprofiled: the vendored-rg cache and nothing else lives here. Both platforms resolve
-// identically via HOME/homedir() — no throw path.
+// Unprofiled: the vendored-rg cache and nothing else lives here. Platform-independent by
+// design: no win32 branch, no throw path.
 export function getBaseConfigDir(): string {
   return join(process.env.HOME || homedir(), ".seri");
 }
@@ -18,7 +18,10 @@ export const DEFAULT_PROFILE = "default";
 // permissions.yaml), so this set cannot drift out of sync with the literal each of those modules
 // actually writes. sessions/, checkpoints/, rg/ (the shared vendored-rg cache) and bin/
 // (install.ps1 installs the Windows binary to ~\.seri\bin) have no single file that
-// already owns them, so they stay literals here.
+// already owns them, so they stay literals here. Caveat: install.ps1 resolves that path from
+// $env:USERPROFILE, not $HOME, so a user with HOME set to something other than USERPROFILE on
+// Windows gets two different roots — the binary under %USERPROFILE%\.seri\bin, config/sessions
+// under $HOME\.seri.
 //
 // Built lazily, on first use, rather than as a module-top-level constant: config.ts imports
 // getConfigDir from THIS module (its loadConfig/setConfigValue/unsetConfigValue defaults), so
