@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import pkg from "../../package.json";
+import { getBaseConfigDir } from "../../src/config/paths";
 import { runRipgrep } from "../../src/tools/runRipgrep";
 
 const MODULE = pathToFileURL(join(import.meta.dir, "../../src/tools/runRipgrep.ts")).href;
@@ -24,7 +25,7 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-// getConfigDir() reads LOCALAPPDATA on Windows and HOME everywhere else, and it checks the
+// getBaseConfigDir() reads LOCALAPPDATA on Windows and HOME everywhere else, and it checks the
 // environment before falling back to homedir(), so setting one variable redirects the whole cache.
 // It has to be set at spawn time on a child rather than mutated in process: resolveRg() memoizes,
 // so any one process can only ever observe a single cache.
@@ -33,8 +34,18 @@ function cacheEnv(root: string): NodeJS.ProcessEnv {
   return { ...process.env, ...home };
 }
 
+// Asks the module rather than restating it, so a change to getBaseConfigDir()'s own layout cannot
+// silently desync this file's expectations from it.
 function configDirIn(root: string): string {
-  return join(root, process.platform === "win32" ? "seri" : ".seri");
+  const key = process.platform === "win32" ? "LOCALAPPDATA" : "HOME";
+  const original = process.env[key];
+  process.env[key] = root;
+  try {
+    return getBaseConfigDir();
+  } finally {
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
 }
 
 // The search directory, not the rg binary: `pgrep -f <rgPath>` matches ANY rg on the box, so a
@@ -202,9 +213,20 @@ describe("rg resolution", () => {
     expect(statSync(join(foreign, "rg")).size).toBe("another seri's rg".length);
   }, 30_000);
 
+  test("SERI_PROFILE does not change where the shared rg cache lives", () => {
+    // The executable form of the audit's decision that rg/ stays shared: a profiled run resolves
+    // the exact same cache path as an unprofiled one, and never creates a per-profile subdirectory
+    // for a binary cache.
+    const [withoutProfile] = runChild(RESOLVE, cacheEnv(cacheRoot));
+    const [withProfile] = runChild(RESOLVE, { ...cacheEnv(cacheRoot), SERI_PROFILE: "work" });
+
+    expect(withProfile).toBe(withoutProfile);
+    expect(() => readdirSync(join(configDirIn(cacheRoot), "work"))).toThrow();
+  }, 30_000);
+
   test("falls back to a temp copy of its own rg when the cache cannot be written", () => {
     // Every container and CI with a read-only or absent home takes this path — and LOCALAPPDATA
-    // simply being unset is enough, since getConfigDir() throws on it outright. Pointed at a
+    // simply being unset is enough, since getBaseConfigDir() throws on it outright. Pointed at a
     // regular file so the config dir is genuinely unusable rather than merely missing. seri keeps
     // searching, and keeps searching with the rg it vendored rather than an untested one off PATH.
     const root = join(tmpDir, "unwritable-file");
