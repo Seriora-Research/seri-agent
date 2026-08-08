@@ -111,6 +111,21 @@ describe("getConfigDir default-profile identity", () => {
     process.env.SERI_PROFILE = "default";
     expect(getConfigDir()).toBe(base);
   });
+
+  // A differently-cased "default" must resolve identically to profileNameError's own fold —
+  // otherwise it passes validation (DEFAULT_PROFILE is never reserved) and then silently creates a
+  // real, separate "Default/" directory instead of being treated as the default profile.
+  test("a differently-cased default profile folds on win32, stays distinct on linux", () => {
+    setPlatform("win32");
+    process.env.LOCALAPPDATA = "C:\\Users\\test\\AppData\\Local";
+    setProfileOverride("Default");
+    expect(getConfigDir()).toBe(getBaseConfigDir());
+
+    setPlatform("linux");
+    process.env.HOME = "/home/test";
+    setProfileOverride("Default");
+    expect(getConfigDir()).toBe(join(getBaseConfigDir(), "Default"));
+  });
 });
 
 describe("getConfigDir disjointness", () => {

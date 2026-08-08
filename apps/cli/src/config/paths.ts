@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AUTH_FILENAME } from "../auth/authStore";
+import { foldsCase } from "../caseFold";
 import { PERMISSIONS_FILENAME } from "../permissions/store";
 import { CONFIG_FILENAME } from "./config";
 
@@ -85,13 +86,10 @@ export function profileNameError(name: string): string | undefined {
   // join() below.
   if (!/^[A-Za-z0-9._-]+$/.test(name)) return `"${name}" may only contain letters, numbers, ".", "_" and "-"`;
   if (name === "." || name === "..") return `"${name}" is not a valid profile name`;
-  // Case-folded only on win32/darwin, matching the one existing precedent for this exact
-  // decision (permissions/store.ts's projectKey, checkpoint.ts's foldsCase): NTFS and APFS are
-  // case-insensitive by default, so --profile Sessions would collide with sessions/ there, but
-  // ext4 is case-sensitive and folding unconditionally would reject a name that is genuinely
-  // distinct on Linux.
-  const foldsCase = process.platform === "win32" || process.platform === "darwin";
-  if (getReservedProfileNames().has(foldsCase ? name.toLowerCase() : name)) return `"${name}" is reserved (it collides with a file or directory under every profile root)`;
+  // Case-folded only on win32/darwin — see caseFold.ts. NTFS and APFS are case-insensitive by
+  // default, so --profile Sessions would collide with sessions/ there, but ext4 is case-sensitive
+  // and folding unconditionally would reject a name that is genuinely distinct on Linux.
+  if (getReservedProfileNames().has(foldsCase() ? name.toLowerCase() : name)) return `"${name}" is reserved (it collides with a file or directory under every profile root)`;
   return undefined;
 }
 
@@ -100,5 +98,10 @@ export function profileNameError(name: string): string | undefined {
 export function getConfigDir(): string {
   const profile = activeProfile();
   const base = getBaseConfigDir();
-  return profile === DEFAULT_PROFILE ? base : join(base, profile);
+  // Same fold as profileNameError above: --profile Default must resolve to the base root on
+  // win32/darwin exactly like --profile default does, not silently create a separate `Default/`
+  // directory because this comparison forgot the case-insensitivity the reserved-name check
+  // already accounts for.
+  const isDefault = foldsCase() ? profile.toLowerCase() === DEFAULT_PROFILE : profile === DEFAULT_PROFILE;
+  return isDefault ? base : join(base, profile);
 }

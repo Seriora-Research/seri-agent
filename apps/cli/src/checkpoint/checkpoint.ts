@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { foldsCase } from "../caseFold";
 import {
   applyRestore,
   commitTree,
@@ -83,9 +84,8 @@ function anchored(log: CheckpointRecord[]): AnchoredRecord[] {
 // cache on every store lookup, to separate two projects that differ only in capitalisation.
 export function checkpointStoreDir(checkpointsDir: string, worktree: string): string {
   const resolved = resolve(worktree);
-  const foldsCase = process.platform === "win32" || process.platform === "darwin";
   const key = createHash("sha256")
-    .update(foldsCase ? resolved.toLowerCase() : resolved)
+    .update(foldsCase() ? resolved.toLowerCase() : resolved)
     .digest("hex")
     .slice(0, 16);
   return join(checkpointsDir, key);
