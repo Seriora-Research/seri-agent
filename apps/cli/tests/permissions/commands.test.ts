@@ -92,6 +92,18 @@ describe("permissionsCommand", () => {
     expect(logs.join("\n")).toContain("write_file was not permanently approved.");
   });
 
+  // Bug 1: forgetGrant must warn when the store cannot be read, not silently report "was not
+  // permanently approved" indistinguishably from a genuinely empty store. Negative control (the
+  // reviewer's own repro): before the fix this prints zero warnings for this exact case.
+  test("remove on an unreadable store warns instead of silently saying nothing was approved", () => {
+    mkdirSync(permissionsPath(configDir));
+
+    const code = permissionsCommand(["remove", "write_file"], configDir, worktree);
+
+    expect(code).toBe(0);
+    expect(errors.some((line) => line.includes("⚠"))).toBe(true);
+  });
+
   // 17. remove bash.
   test("remove bash says it can never be permanently approved", () => {
     const code = permissionsCommand(["remove", "bash"], configDir, worktree);

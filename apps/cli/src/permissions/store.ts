@@ -217,9 +217,19 @@ export function rememberGrant(configDir: string, worktree: string, tool: string,
   return true;
 }
 
-export function forgetGrant(configDir: string, worktree: string, tool: string): { global: boolean; project: boolean } {
+export function forgetGrant(
+  configDir: string,
+  worktree: string,
+  tool: string,
+  onWarning?: (message: string) => void,
+): { global: boolean; project: boolean } {
+  const path = permissionsPath(configDir);
   const state = readStore(configDir);
-  if (state.status !== "ok") return { global: false, project: false };
+  if (state.status === "missing") return { global: false, project: false };
+  if (state.status === "malformed") {
+    onWarning?.(`could not parse ${path}, so nothing could be removed; fix or delete that file`);
+    return { global: false, project: false };
+  }
 
   const { doc } = state;
   const key = projectKey(worktree);

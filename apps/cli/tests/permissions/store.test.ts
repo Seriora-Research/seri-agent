@@ -112,6 +112,16 @@ describe("permissions store", () => {
     expect(loadGrants(dir, "/w")).toEqual({ global: [], project: [], otherProjects: 0 });
   });
 
+  // Bug 1: forgetGrant must warn on a malformed/unreadable store instead of silently reporting
+  // "nothing removed" indistinguishably from a genuinely empty store.
+  test("forgetGrant warns on a malformed store instead of silently reporting nothing removed", () => {
+    writeFileSync(permissionsPath(dir), ":::not yaml:::");
+
+    const warnings: string[] = [];
+    expect(forgetGrant(dir, "/w", "write_file", (m) => warnings.push(m))).toEqual({ global: false, project: false });
+    expect(warnings).toHaveLength(1);
+  });
+
   // 11. Malformed YAML degrades, and is not overwritten.
   test("malformed content degrades to empty, warns, and rememberGrant leaves the bytes untouched", () => {
     writeFileSync(permissionsPath(dir), ":::not yaml:::");

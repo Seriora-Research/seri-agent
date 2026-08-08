@@ -54,7 +54,10 @@ function removeCommand(configDir: string, worktree: string, tool: string): numbe
     return 0;
   }
 
-  const result = forgetGrant(configDir, worktree, tool);
+  // Same reason listCommand passes one: forgetGrant degrading a malformed/unreadable store to
+  // "nothing removed" must not be silent, or `remove` would print the same false "was not
+  // permanently approved" a genuinely-empty store gets.
+  const result = forgetGrant(configDir, worktree, tool, (m) => console.error(`⚠ ${m}`));
   // Both sections are reported when both held it: the user's intent typing "remove <tool>" is "stop
   // auto-approving <tool>", and a command that printed "Removed" while a global entry survived would
   // contradict the very next run.
