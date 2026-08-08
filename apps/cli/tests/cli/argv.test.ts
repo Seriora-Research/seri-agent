@@ -71,7 +71,6 @@ describe("run (--selftest)", () => {
 
 describe("run (argv and usage errors)", () => {
   const originalKey = process.env.GROQ_API_KEY;
-  const originalLocalAppData = process.env.LOCALAPPDATA;
   const originalHome = process.env.HOME;
   let sessionsDir: string;
   let tmpConfigRoot: string;
@@ -104,13 +103,11 @@ describe("run (argv and usage errors)", () => {
     // Redirect the config dir to an empty temp dir so a real config.json on this machine
     // can never supply GROQ_API_KEY and mask the "unset" case (same guard as groq.test.ts).
     tmpConfigRoot = mkdtempSync(join(tmpdir(), "seri-cli-test-config-"));
-    if (process.platform === "win32") process.env.LOCALAPPDATA = tmpConfigRoot;
-    else process.env.HOME = tmpConfigRoot;
+    process.env.HOME = tmpConfigRoot;
   });
 
   afterEach(() => {
     restoreEnv("GROQ_API_KEY", originalKey);
-    restoreEnv("LOCALAPPDATA", originalLocalAppData);
     restoreEnv("HOME", originalHome);
     rmSync(sessionsDir, { recursive: true, force: true });
     rmSync(tmpConfigRoot, { recursive: true, force: true });
@@ -401,7 +398,7 @@ describe("run (argv and usage errors)", () => {
 
   // End-to-end --profile behaviour through run() itself. Deliberately does NOT pass
   // deps.sessionsDir, so the session lands wherever the path layer actually resolves against the
-  // beforeEach-redirected LOCALAPPDATA/HOME above — that is the whole point.
+  // beforeEach-redirected HOME above — that is the whole point.
   describe("run (--profile)", () => {
     const originalSeriProfile = process.env.SERI_PROFILE;
 

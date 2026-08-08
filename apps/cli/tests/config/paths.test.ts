@@ -15,7 +15,6 @@ import {
 import { PERMISSIONS_FILENAME } from "../../src/permissions/store";
 
 const originalPlatform = process.platform;
-const originalLocalAppData = process.env.LOCALAPPDATA;
 const originalHome = process.env.HOME;
 const originalSeriProfile = process.env.SERI_PROFILE;
 
@@ -32,25 +31,27 @@ function restoreEnv(key: string, original: string | undefined): void {
 // same rule as the cross-platform env-var-dependent code guidance in code-quality.md.
 afterEach(() => {
   setPlatform(originalPlatform);
-  restoreEnv("LOCALAPPDATA", originalLocalAppData);
   restoreEnv("HOME", originalHome);
   restoreEnv("SERI_PROFILE", originalSeriProfile);
   setProfileOverride(undefined);
 });
 
 describe("getBaseConfigDir", () => {
-  test("win32 with LOCALAPPDATA set returns joined path", () => {
+  // getBaseConfigDir() has no win32 branch — these pin platform-*independence* (win32 must
+  // resolve identically to posix), not a Windows-specific code path.
+  test("win32 with HOME set returns joined path", () => {
     setPlatform("win32");
-    process.env.LOCALAPPDATA = "C:\\Users\\test\\AppData\\Local";
-    expect(getBaseConfigDir()).toBe(join("C:\\Users\\test\\AppData\\Local", "seri"));
+    process.env.HOME = "C:\\Users\\test";
+    expect(getBaseConfigDir()).toBe(join("C:\\Users\\test", ".seri"));
   });
 
-  // The documented fallback (D2): getConfigDir() delegates, so it throws too.
-  test("win32 without LOCALAPPDATA throws", () => {
+  // homedir() is read here, after HOME is deleted, not captured beforehand: Bun/Node's os.homedir()
+  // consults $HOME first on POSIX, so a value captured before the delete would not reflect the
+  // fallback this asserts.
+  test("win32 without HOME falls back to homedir()", () => {
     setPlatform("win32");
-    delete process.env.LOCALAPPDATA;
-    expect(() => getBaseConfigDir()).toThrow();
-    expect(() => getConfigDir()).toThrow();
+    delete process.env.HOME;
+    expect(getBaseConfigDir()).toBe(join(homedir(), ".seri"));
   });
 
   test("posix with HOME set returns joined path", () => {
@@ -117,7 +118,7 @@ describe("getConfigDir default-profile identity", () => {
   // real, separate "Default/" directory instead of being treated as the default profile.
   test("a differently-cased default profile folds on win32, stays distinct on linux", () => {
     setPlatform("win32");
-    process.env.LOCALAPPDATA = "C:\\Users\\test\\AppData\\Local";
+    process.env.HOME = "C:\\Users\\test";
     setProfileOverride("Default");
     expect(getConfigDir()).toBe(getBaseConfigDir());
 

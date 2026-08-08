@@ -30,13 +30,13 @@ function detectRg(): string {
     if (!isCachedRg(cached)) populateCache(cached);
     return cached;
   } catch {
-    // getBaseConfigDir() throws outright when LOCALAPPDATA is unset, and the directory it names can
-    // be read-only or full. Not noexec: that fails at exec time, which happens outside this try, so
-    // the fallback never sees it — and tmpdir() is itself sometimes mounted noexec, so falling
-    // back would not help if it did. Falling back to a temp copy keeps the invariant that matters:
-    // seri always searches with the rg it vendored, on every machine. Borrowing an rg off PATH
-    // would need a version floor and a capability probe to defend, and would still leave the user
-    // with different ignore, hidden-file and binary-detection defaults than this suite ever runs.
+    // The directory getBaseConfigDir() names can be read-only or full. Not noexec: that fails at
+    // exec time, which happens outside this try, so the fallback never sees it — and tmpdir() is
+    // itself sometimes mounted noexec, so falling back would not help if it did. Falling back to a
+    // temp copy keeps the invariant that matters: seri always searches with the rg it vendored, on
+    // every machine. Borrowing an rg off PATH would need a version floor and a capability probe to
+    // defend, and would still leave the user with different ignore, hidden-file and
+    // binary-detection defaults than this suite ever runs.
     return extractToTemp();
   }
 }

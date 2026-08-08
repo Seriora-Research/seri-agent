@@ -94,7 +94,7 @@ disproportionate-match guard against replacing far more than was asked for.
 **Provider**: Vercel AI SDK, currently Groq only (`apps/cli/src/provider/groq.ts`,
 `openai/gpt-oss-120b` default, any Groq model id via `SERI_MODEL`; the measurement
 behind that default is in `docs/PROMPT-ROUTING.md`). API keys resolve from env var first, then
-`~/.seri/config.json` (`%LOCALAPPDATA%\seri\` on Windows) — see
+`~/.seri/config.json` — see
 `apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`. A non-default profile
 (`--profile <name>` or `SERI_PROFILE`, the flag wins) puts config.json, auth.json,
 permissions.yaml, sessions/ and checkpoints/ under `<root>/<profile>/` instead; the vendored

@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { getConfigDir, setProfileOverride } from "../../src/config/paths";
 import { getApiKey, loadConfig, loadVerifyConfig } from "../../src/config/config";
 
-const originalLocalAppData = process.env.LOCALAPPDATA;
 const originalHome = process.env.HOME;
 
 let tmpRoot: string;
@@ -18,8 +17,7 @@ function restoreEnv(key: string, original: string | undefined): void {
 
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "seri-config-test-"));
-  if (process.platform === "win32") process.env.LOCALAPPDATA = tmpRoot;
-  else process.env.HOME = tmpRoot;
+  process.env.HOME = tmpRoot;
   configDir = getConfigDir();
   mkdirSync(configDir, { recursive: true });
 });
@@ -29,7 +27,6 @@ afterEach(() => {
   // here is profile-aware, so a leaked override would resolve the wrong directory with nothing in
   // this file catching it.
   setProfileOverride(undefined);
-  restoreEnv("LOCALAPPDATA", originalLocalAppData);
   restoreEnv("HOME", originalHome);
   rmSync(tmpRoot, { recursive: true, force: true });
 });
