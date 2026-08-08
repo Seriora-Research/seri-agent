@@ -30,6 +30,8 @@ export const USAGE = `Usage:
 
 Options:
   --max-turns <n>                 stop after n model turns (default 500)
+  --profile <name>                use the named profile's config, sessions and checkpoints
+                                    (or SERI_PROFILE; the flag wins)
   --dangerously-skip-permissions  run every tool with no approval prompt (attended use only)
   --                              everything after this is the task, flags included:
                                     seri -- fix the --help output`;
