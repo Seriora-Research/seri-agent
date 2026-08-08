@@ -444,6 +444,13 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     return usageError(err instanceof Error ? err.message : String(err));
   }
 
+  // Set here, before any validation below that can return a usage error early: every call to
+  // parseCliArgs must reset the override to what THIS invocation's flag says (undefined if none),
+  // so a usage error from an unrelated flag (e.g. a malformed --max-turns) can never leave a
+  // PREVIOUS successful run()'s --profile leaked into the next in-process run() call — bun test
+  // runs many run() calls in a single process, and a future fixed-process TUI/REPL loop will too.
+  setProfileOverride(values.profile);
+
   const maxTurnsRaw = values["max-turns"];
   let maxTurns: number | undefined;
   if (maxTurnsRaw !== undefined) {
@@ -875,11 +882,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const parsed = parseCliArgs(argv);
   if (typeof parsed === "number") return parsed;
   const { values, positionals, maxTurns, skipPermissions } = parsed;
-  // Earliest possible point, before handleInfoFlags, runSelftest and all seven getConfigDir()
-  // consumers, so there is no ordering hazard to re-derive later. Unconditional, including with
-  // undefined: that is what stops one in-process run() with --profile leaking into the next one —
-  // bun test runs many run() calls in a single process.
-  setProfileOverride(values.profile);
+  // The override is already set — parseCliArgs does it before any of its own validation can
+  // short-circuit with a usage error (see the comment there). Nothing to do here except rely on
+  // it having happened before handleInfoFlags, runSelftest and all seven getConfigDir() consumers.
 
   const info = handleInfoFlags(values);
   if (info !== undefined) return info;

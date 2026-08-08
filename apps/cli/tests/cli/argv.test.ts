@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../../package.json";
 import { run, SLASH_COMMANDS } from "../../src/cli";
-import { getBaseConfigDir, setProfileOverride } from "../../src/config/paths";
+import { getBaseConfigDir, getConfigDir, setProfileOverride } from "../../src/config/paths";
 import { fakeRunLoop } from "./fakeRunLoop";
 
 describe("run", () => {
@@ -480,6 +480,22 @@ describe("run (argv and usage errors)", () => {
       const { logs } = await captureLogs(() => run(["--help"]));
 
       expect(logs.join("\n")).toContain("--profile");
+    });
+
+    // A usage error from an UNRELATED flag used to be returned before setProfileOverride ran (it
+    // lived in run(), after parseCliArgs), so a previous successful run()'s --profile leaked into
+    // this failed call and would have stayed set for whatever run() came after it. Moved into
+    // parseCliArgs itself, before any validation that can short-circuit, so every call resets it.
+    test("a later run() with an unrelated usage error does not leak a prior --profile override", async () => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+      const { fake } = fakeRunLoop();
+
+      await captureLogs(() => run(["--profile", "work", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }));
+
+      const { code } = await captureLogs(() => run(["--max-turns", "garbage", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }));
+
+      expect(code).toBe(2);
+      expect(getConfigDir()).toBe(getBaseConfigDir());
     });
   });
 });
