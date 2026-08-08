@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -134,6 +134,21 @@ describe("permissions store", () => {
     // replace the malformed `projects: "hello"` with a fresh map instead of refusing to touch it.
     expect(rememberGrant(dir, "/w", "write_file")).toBe(false);
     expect(readFileSync(permissionsPath(dir), "utf8")).toBe(raw);
+  });
+
+  // A path that exists but cannot be READ, not merely parsed — existsSync is true for both a
+  // permission-denied file and a directory sitting at the same path, so it cannot be relied on to
+  // predict whether readFileSync will succeed. A directory reproduces this on every platform
+  // (EISDIR on POSIX and on Windows alike), unlike a chmod-based approach, which only works on
+  // POSIX. Not skipIf(win32).
+  test("a directory at the store's path degrades to empty instead of throwing", () => {
+    mkdirSync(permissionsPath(dir));
+
+    const warnings: string[] = [];
+    expect(loadGrants(dir, "/w", (m) => warnings.push(m))).toEqual({ global: [], project: [], otherProjects: 0 });
+    expect(warnings).toHaveLength(1);
+
+    expect(rememberGrant(dir, "/w", "write_file", (m) => warnings.push(m))).toBe(false);
   });
 
   // 12. Permissions and the constant.

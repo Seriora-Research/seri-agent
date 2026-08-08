@@ -68,16 +68,24 @@ type StoreState = { status: "missing" } | { status: "malformed" } | { status: "o
 // A file is "malformed" for this store's purposes whenever it cannot be trusted as the shape this
 // module writes — a real YAML syntax error, a well-formed document missing the `global`/`projects`
 // keys entirely (a plain-scalar document like `:::not yaml:::` parses without error but is neither),
-// or one whose keys are present with the wrong collection type (`projects: "hello"`, say). All three
-// degrade the same way: loadGrants returns empty and warns, rememberGrant refuses to touch the file
-// rather than risk overwriting content it could not make sense of. Both keys are required rather
-// than optional because this store's own writer never produces a file missing either — a file
-// lacking one was not written by seri, and guessing at its shape is not worth the risk of a
-// rememberGrant mutating content it does not understand.
+// one whose keys are present with the wrong collection type (`projects: "hello"`, say), or the read
+// itself failing (EACCES, or EISDIR when the path is a directory — `existsSync` is true for both,
+// so it cannot be relied on to predict whether the read will succeed). All four degrade the same
+// way: loadGrants returns empty and warns, rememberGrant refuses to touch the file rather than risk
+// overwriting content it could not make sense of — or, for the I/O case, content it could not even
+// read. Both keys are required rather than optional because this store's own writer never produces
+// a file missing either — a file lacking one was not written by seri, and guessing at its shape is
+// not worth the risk of a rememberGrant mutating content it does not understand.
 function readStore(configDir: string): StoreState {
   const path = permissionsPath(configDir);
   if (!existsSync(path)) return { status: "missing" };
-  const doc = parseDocument(readFileSync(path, "utf8"));
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return { status: "malformed" };
+  }
+  const doc = parseDocument(text);
   if (doc.errors.length > 0) return { status: "malformed" };
   const global = doc.get("global");
   const projects = doc.get("projects");
