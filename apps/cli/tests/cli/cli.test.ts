@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
@@ -1519,21 +1519,22 @@ describe("run (permanent permissions)", () => {
   });
 
   // 25. A store write failure warns and does not kill the run — mirrors the appendBarrier
-  // degrade-never-fail policy at cli.ts's compaction-barrier call.
+  // degrade-never-fail policy at cli.ts's compaction-barrier call. A chmod on permissionsDir
+  // itself does NOT reach this: writeDocument's own chmodSync(configDir, 0o700) (store.ts,
+  // copying config.ts's upgrade-path behaviour) resets it before ever attempting the write — so
+  // the failure is forced by colliding the path with a plain file instead, which makes
+  // mkdirSync(configDir) fail with ENOTDIR regardless of ownership or mode.
   test.skipIf(process.platform === "win32")("a store write failure warns instead of killing the run", async () => {
-    chmodSync(permissionsDir, 0o500);
-    try {
-      const { fake } = fakeRunLoop([{ type: "tool-allowed", name: "write_file" }, { type: "done", reason: "no-tool-call" }]);
+    rmSync(permissionsDir, { recursive: true, force: true });
+    writeFileSync(permissionsDir, "not a directory");
+    const { fake } = fakeRunLoop([{ type: "tool-allowed", name: "write_file" }, { type: "done", reason: "no-tool-call" }]);
 
-      const { code, logs } = await captureLogs(() =>
-        run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
-      );
+    const { code, logs } = await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
+    );
 
-      expect(code).toBe(0);
-      expect(logs.some((line) => line.includes("⚠"))).toBe(true);
-    } finally {
-      chmodSync(permissionsDir, 0o700);
-    }
+    expect(code).toBe(0);
+    expect(logs.some((line) => line.includes("⚠"))).toBe(true);
   });
 });
 
