@@ -357,6 +357,46 @@ describe("run (argv and usage errors)", () => {
 
     expect(logs.join("\n")).toContain("--dangerously-skip-permissions");
   });
+
+  // 26. seri permissions list dispatches to permissionsCommand and never falls through to the task
+  // path — the same shape as the config-subcommand test, and for the same reason: a fall-through
+  // would mint a session whose first message is the command text.
+  test("`permissions list` dispatches to permissionsCommand and never reaches the task path", async () => {
+    const calls: string[][] = [];
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["permissions", "list"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        permissionsCommand: (args) => {
+          calls.push(args);
+          return 3;
+        },
+      }),
+    );
+
+    expect(code).toBe(3);
+    expect(calls).toEqual([["list"]]);
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
+  // 27. An unknown permissions subcommand is the real command's own exit code, not a task-path
+  // fall-through.
+  test("`permissions bogus` exits 2", async () => {
+    const { code } = await captureLogs(() => run(["permissions", "bogus"], { sessionsDir }));
+
+    expect(code).toBe(2);
+  });
+
+  // 28. Pins the USAGE edit.
+  test("`--help` output documents `seri permissions`", async () => {
+    const { logs } = await captureLogs(() => run(["--help"], { sessionsDir }));
+
+    expect(logs.join("\n")).toContain("seri permissions");
+  });
 });
 
 describe("run (login/signup/logout)", () => {
