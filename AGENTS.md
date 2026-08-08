@@ -5,28 +5,22 @@ Guidance for AI agents working in this repository.
 ## What this is
 
 seri is a cross-platform coding-agent CLI (ships as the `seri` binary), written in
-TypeScript on Bun. It's currently mid-build against `docs/BUILD-PLAN.md` (Stage 4
-"Checkpoints" landed 2026-08-04 and completes v1; abort/cancellation and prompt tiers
-come next, then Stage 5). `docs/ARCHITECTURE.md` and `docs/RESEARCH.md` are the design spec
-and research this plan is built from. A separate, parallel track (not a `docs/BUILD-PLAN.md`
-stage) adds optional hosted accounts/billing on top of the BYOK-only core — Phase A
-(WorkOS AuthKit device-flow auth) has shipped; see
+TypeScript on Bun. Current build stage and what's next: `docs/ROADMAP.md` (source of
+truth for status; `docs/BUILD-PLAN.md` has the reasoning behind it). `docs/ARCHITECTURE.md`
+and `docs/RESEARCH.md` are the design spec and research this plan is built from. A separate,
+parallel track (not a `docs/BUILD-PLAN.md` stage) adds optional hosted accounts/billing
+on top of the BYOK-only core — Phase A (WorkOS AuthKit device-flow auth) has shipped; see
 `.claude/loops/hosted-accounts-billing-gateway/` for the full spec and phased plan.
 
 ## Scope: code-first, not code-only
 
 Coding is the primary use and the only one this release ships for, but it is not the
-boundary of the product — seri is intended to extend into general assistant work. This
-is locked as constraint #3 in `docs/ARCHITECTURE.md`, and it constrains what you may
-assume, not what you may build:
-
-- **Don't reject a design for being assistant-shaped.** Reject on principle or on
-  redundancy instead. Designs that are only coherent inside a repository are the ones
-  ruled out — outside a repo there is no `AGENTS.md`, and the agent still has to work.
-- **Don't broaden v1 either.** Assistant surfaces start at Stage 8 (the daemon), which
-  is post-release. Everything before Stage 11 stays a coding agent.
-- **Sequence early only what gets expensive later.** Profiles and the global instruction
-  file are in Stage B on that argument alone; they ship no feature.
+boundary of the product — seri is intended to extend into general assistant work
+(constraint #3, `docs/ARCHITECTURE.md`). It constrains what you may assume, not what
+you may build: don't reject a design for being assistant-shaped (a design only
+coherent inside a repository is what's actually ruled out — there's no `AGENTS.md`
+outside one). Don't broaden v1 either — assistant surfaces start at Stage 8
+(post-release); everything before Stage 11 stays a coding agent.
 
 ## Commands
 
@@ -58,65 +52,37 @@ exit 2). `--max-turns <n>` is the only `runLoop` option the CLI sets, default 50
 `signup`/`logout`) prints seri's own usage rather than reaching the subcommand.
 
 **Cancellation belongs to the consumer.** `runLoop` accepts an optional `AbortSignal` and never
-constructs one — `apps/cli/src/cli.ts` owns an `AbortController` per run, because only the consumer
-knows what a Ctrl-C means. The signal reaches all three of `streamText`, `compactMessages`, and
-every tool through `ToolExecutionOptions.abortSignal` (which rides through `withCheckpoints`
-untouched, and which `bash`/`powershell`/`grep`/`glob` each forward to the process they spawn —
-`read_file`/`edit` take it and have nothing to interrupt, and `write_file` forwards it to the
-verification check it runs after the write — `verify/wrapTools.ts`), and the turn ends as
-`done.reason: "aborted"` rather than as an `error`: a user-initiated cancel is not a failure. The
-**first** press cancels the in-flight turn — `apps/cli/src/signals.ts` holds a single-slot
-`onSignalCancel` callback and, **on SIGINT only**, returns from the handler *before* the fatal body,
-so no cleanups run and the listener survives for the next press; a SIGTERM is not a press and still
-terminates, because nothing that sends one is going to send a second — and the
-loop unwinds far enough to write one `execution-denied` tool-result row for the interrupted call and
-for every call after it, which is what leaves the session resumable (an unanswered tool call is
-`AI_MissingToolResultsError` on the next `--resume`). When the loop returns, `cli.ts` calls
-`raiseSignal`, so the process still dies **by** signal; `exit(0)` would report a status instead of a
-death and turn one Ctrl-C into one press per iteration of `for f in a b c; do seri "$f"; done`. The
-**second** press finds the slot empty and takes the untouched fatal path. When the turn was not
-cancelled the status instead says whether it finished and accomplished anything: `done.reason:
-"no-tool-call"` exits 0 unless the run was DECLINED at least once AND executed no tool at all, in
-which case it exits 1 too — asking for permission, getting no one, and doing nothing is not
-success, even though the turn technically finished. A mode BLOCK does not count — a `read-only`
-session that correctly refuses a write is the mode working as selected, not a failure, so it still
-exits 0. A stream error (no `done` at all) and a run stopped by the iteration cap or by repeated
-denials both exit 1 unconditionally; repeated-denials is itself reachable only in `approve-each`,
-since nothing is ever declined in `read-only`. `seri "…" && next` stops rather than chaining onto
-an unfinished turn. Making any of this
-reachable is why `runRipgrep` — and therefore `grep`/`glob` — is async: `spawnSync` blocks the event
-loop, so a SIGINT during a search was not delivered to any handler until rg finished on its own.
-`spawnCollect` and `runRipgrep` **reject** when their child was killed by a cancel rather than
-resolving with a normal-looking result, at the source rather than in the loop, because not every
-caller is inside the loop.
+constructs one — `apps/cli/src/cli.ts` owns an `AbortController` per run. The signal reaches
+`streamText`, `compactMessages`, and every tool via `ToolExecutionOptions.abortSignal`. The
+**first** Ctrl-C cancels the in-flight turn (`done.reason: "aborted"`, not an `error` — a
+user-initiated cancel isn't a failure) and leaves the session resumable; the **second** is fatal.
+Exit codes otherwise track whether the turn accomplished anything: `no-tool-call` exits 0 unless
+every write attempt was declined and nothing executed (exits 1 too); a mode `read-only` block is
+not a failure (still 0); the iteration cap and `repeated-denials` both exit 1. Mechanism and the
+platform-specific gotchas (SIGINT-vs-SIGTERM, why `runRipgrep` has to be async so a search can be
+interrupted) live in `apps/cli/src/signals.ts` — read its comments before touching signal
+handling, don't re-derive the sequencing from this summary.
 
 **Gate-first permissions**, not sandboxing. `apps/cli/src/gate/gate.ts` defines three
 `PermissionMode`s (`read-only` / `approve-each` / `auto`) that cycle via `/mode`. A new
 session starts in `approve-each`, not `read-only`: native Windows does not enforce the OS
 sandbox, so the gate is the whole Base layer and a default that does not ask is a default
-that writes unattended. Answering `a`/always at the approval prompt adds that tool to an
-allowlist `checkPermission` consults on later calls — this is what keeps `approve-each` from
-being an approve-*every*-call mode. For `write_file` and `edit` the grant is also **written to
-`<configDir>/permissions.yaml`**, scoped to the project root the session's `cwd` resolves to,
-and read back as `runLoop`'s `allowedTools` seed at the start of every later run in that
-project; `seri permissions list` shows what is in effect and `seri permissions remove <tool>`
-revokes it, and a run that starts with a grant in force prints a line saying so. **`bash` and
-`powershell` are never offered "always" and can never appear in that file** — the prompt does
-not offer it and the store refuses the name on read as well as on write, because a grant keyed
-on a tool name says nothing about what a shell command will do. The allowlist still never
-overrides `read-only`: `checkPermission` checks `read-only` before consulting it, so neither a
-run grant nor a stored one survives a cycle into that mode. `seri --dangerously-skip-permissions`
-maps the mode to `auto` for that run only and is never written back to the session, so a later `--continue`
-still prompts. A run whose DECLINED tool calls (a live "no" at the prompt, never a mode block —
-see the "permission-denied" event's `reason`) hit `MAX_CONSECUTIVE_DENIALS` (3) in a row stops
-with `done: repeated-denials` instead of continuing to the turn cap — reset by ANY approved call,
-not just a write. Reachable only in `approve-each`: `read-only` blocks every write outright, so
-nothing is ever declined there and this stop can never fire, however many times a write is probed.
-Whether a tool needs permission is derived from `WRITE_TOOL_NAMES` in
-`apps/cli/src/provider/tools.ts` (single source of truth — a new write-capable tool must be
-added there or it silently bypasses the gate). The AI SDK's automatic tool execution
-is disabled (`execute` stripped before `streamText`); `runLoop` calls each tool's
-`execute` itself, after the gate decides whether it's allowed to run.
+that writes unattended. Answering `a`/always at the prompt adds the tool to an allowlist so
+`approve-each` isn't an approve-*every*-call mode; for `write_file`/`edit` that grant also
+persists across processes (`seri permissions list|remove`, `<configDir>/permissions.yaml`).
+**`bash`/`powershell` never get an "always" option, run-scoped or persisted** — a grant keyed
+on a tool name says nothing about what a shell command will do. Neither tier survives a cycle
+into `read-only`. `seri --dangerously-skip-permissions` maps to `auto` for that run only, never
+written back to the session. Repeated declines (`MAX_CONSECUTIVE_DENIALS`, 3 in a row) stop the
+run early rather than burning to the turn cap — only reachable in `approve-each`, since
+`read-only` blocks outright and nothing is ever "declined" there. Full mechanics of the
+permanent store are in `apps/cli/src/permissions/store.ts`'s own comments.
+
+Whether a tool needs permission at all is derived from `WRITE_TOOL_NAMES` in
+`apps/cli/src/provider/tools.ts` — **single source of truth**; a new write-capable tool must be
+added there or it silently bypasses the gate. The AI SDK's automatic tool execution is disabled
+(`execute` stripped before `streamText`); `runLoop` calls each tool's `execute` itself, after the
+gate decides whether it's allowed to run.
 
 **Tools are pure functions**, independently testable without a model:
 `read_file`/`write_file`/`edit`/`grep`/`glob` (`apps/cli/src/tools/`), plus `bash` and
@@ -146,38 +112,20 @@ recent commit history for why) and never cuts the eviction boundary in the middl
 {assistant tool-call, tool result} pair, since that reproduces
 `AI_MissingToolResultsError`.
 
-**Checkpoints** (`apps/cli/src/checkpoint/`): every call to one of the three tools that
-can change the filesystem — `write_file`, `bash`, `powershell` (`FS_MUTATING_TOOL_NAMES`,
-deliberately not `WRITE_TOOL_NAMES`, which is the permission set and includes `edit`, a
-pure string transform that writes nothing) — snapshots the whole **project** into a bare
-shadow git repo under `<configDir>/checkpoints/<sha256(projectRoot)[0..16]>/git`, keyed so
-the project itself need not be a git repo and nothing is ever written into the user's
-`.git`. The project is `git rev-parse --show-toplevel` from the session's cwd, falling back
-to that cwd outside a repo, and **every** other question is derived from it — the
-`--work-tree`, and therefore which `.gitignore` files are in scope; where the user's
-`info/exclude` lives (`--git-path`, since `.git` is a file in a linked worktree); and the
-store key. Deriving those separately produced the same leak three times in three layouts.
-`seri [--resume <id>] /undo [n]` restores byte-identical prior state with a
-reviewable diff and an explicit removal pass (`checkout-index` alone is additive);
-`/rewind [n]` truncates the conversation to the same anchor and touches no file. Both
-read one append-only JSONL log per session, and a pruned session's log is deleted with its
-ref, so the log never outlives the snapshots it names. Compaction and `/rewind` both write
-a barrier record, because each makes every anchor before it index into an array that no
-longer exists.
-`/undo` commits the state it replaced first and prints `/restore <commit>`, which takes
-the same restore path back — recovery is a command that runs the removal pass, not a git
-incantation pasted into a shell that would leave a state which never existed.
-Two things a snapshot cannot cover, both warned about once per session rather than left
-to be discovered: a **nested git repository** is staged as a gitlink holding only its HEAD
-sha, so edits inside a submodule or vendored clone change the shadow tree not at all and
-`/undo` will not revert them; and a project with **no `.gitignore`** is snapshotted whole
-on every mutating call, with `/undo`'s removal pass reaching all of it. Neither is capped
-— a threshold that silently narrowed the snapshot would be the skipped pre-state the
-design refused. `runLoop` is still stateless and I/O-free: `withCheckpoints` is a pure function over a
-`ToolSet` that `cli.ts` applies before injection, so checkpointing is consumer policy
-and `loop.ts` has zero changes. The snapshot runs inside the wrapped `execute` before
-delegating, and the callback returns `void` rather than `Promise<void>` so no `await`
-can ever be introduced between the snapshot and the write.
+**Checkpoints** (`apps/cli/src/checkpoint/`): every call to a filesystem-mutating tool —
+`write_file`, `bash`, `powershell` (`FS_MUTATING_TOOL_NAMES`, deliberately not
+`WRITE_TOOL_NAMES`, since `edit` is a pure string transform that writes nothing) — snapshots
+the whole **project** into a bare shadow git repo under
+`<configDir>/checkpoints/<sha256(projectRoot)[0..16]>/git`, keyed off `git rev-parse
+--show-toplevel` from the session's cwd (falling back to that cwd outside a repo) so nothing
+is ever written into the user's own `.git`. `seri [--resume <id>] /undo [n]` restores
+byte-identical prior state with a reviewable diff; `/rewind [n]` truncates conversation
+history to the same anchor and touches no file. Two things a snapshot cannot cover, each
+warned about once per session: a **nested git repository** (staged as a gitlink, not
+reverted by `/undo`) and a project with **no `.gitignore`** (snapshotted whole, uncapped).
+`runLoop` stays stateless — `withCheckpoints` wraps the `ToolSet` in `cli.ts`, `loop.ts` has
+zero changes. Staging mechanics, the log/ref pruning invariant, and `/restore` are documented
+in the module's own comments.
 
 **Auth** (`apps/cli/src/auth/`): `seri login`/`signup`/`logout`, backed by WorkOS AuthKit's
 OAuth device-authorization flow (RFC 8628) — purely additive, zero changes to
