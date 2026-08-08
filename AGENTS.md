@@ -94,12 +94,19 @@ caller is inside the loop.
 `PermissionMode`s (`read-only` / `approve-each` / `auto`) that cycle via `/mode`. A new
 session starts in `approve-each`, not `read-only`: native Windows does not enforce the OS
 sandbox, so the gate is the whole Base layer and a default that does not ask is a default
-that writes unattended. Answering `a`/always at the approval prompt adds that tool to a
-run-local allowlist `checkPermission` consults on later calls — this is what keeps
-`approve-each` from being an approve-*every*-call mode — but the allowlist never overrides
-`read-only`: `checkPermission` checks `read-only` before consulting it, so a grant does not
-survive a cycle into that mode. `seri --dangerously-skip-permissions` maps the mode to
-`auto` for that run only and is never written back to the session, so a later `--continue`
+that writes unattended. Answering `a`/always at the approval prompt adds that tool to an
+allowlist `checkPermission` consults on later calls — this is what keeps `approve-each` from
+being an approve-*every*-call mode. For `write_file` and `edit` the grant is also **written to
+`<configDir>/permissions.yaml`**, scoped to the project root the session's `cwd` resolves to,
+and read back as `runLoop`'s `allowedTools` seed at the start of every later run in that
+project; `seri permissions list` shows what is in effect and `seri permissions remove <tool>`
+revokes it, and a run that starts with a grant in force prints a line saying so. **`bash` and
+`powershell` are never offered "always" and can never appear in that file** — the prompt does
+not offer it and the store refuses the name on read as well as on write, because a grant keyed
+on a tool name says nothing about what a shell command will do. The allowlist still never
+overrides `read-only`: `checkPermission` checks `read-only` before consulting it, so neither a
+run grant nor a stored one survives a cycle into that mode. `seri --dangerously-skip-permissions`
+maps the mode to `auto` for that run only and is never written back to the session, so a later `--continue`
 still prompts. A run whose DECLINED tool calls (a live "no" at the prompt, never a mode block —
 see the "permission-denied" event's `reason`) hit `MAX_CONSECUTIVE_DENIALS` (3) in a row stops
 with `done: repeated-denials` instead of continuing to the turn cap — reset by ANY approved call,
