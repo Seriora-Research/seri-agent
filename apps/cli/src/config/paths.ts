@@ -42,8 +42,19 @@ function profileFromEnv(): string | undefined {
   return process.env.SERI_PROFILE || undefined;
 }
 
+// flag > env > default. `source` exists only so the usage error can name what to fix. This is the
+// one place precedence is resolved — activeProfile() below calls it with `override` rather than
+// re-deriving the same ladder, so a change here governs both the usage-error validation in
+// parseCliArgs and the directory actually resolved at runtime.
+export function resolveProfile(flagValue: string | undefined): { profile: string; source: "flag" | "env" | "default" } {
+  if (flagValue !== undefined) return { profile: flagValue, source: "flag" };
+  const envProfile = profileFromEnv();
+  if (envProfile !== undefined) return { profile: envProfile, source: "env" };
+  return { profile: DEFAULT_PROFILE, source: "default" };
+}
+
 function activeProfile(): string {
-  return override ?? profileFromEnv() ?? DEFAULT_PROFILE;
+  return resolveProfile(override).profile;
 }
 
 // Called unconditionally, once, from run() — including with undefined. That is what stops one
@@ -51,14 +62,6 @@ function activeProfile(): string {
 // many run() calls in a single process.
 export function setProfileOverride(profile: string | undefined): void {
   override = profile;
-}
-
-// flag > env > default. `source` exists only so the usage error can name what to fix.
-export function resolveProfile(flagValue: string | undefined): { profile: string; source: "flag" | "env" | "default" } {
-  if (flagValue !== undefined) return { profile: flagValue, source: "flag" };
-  const envProfile = profileFromEnv();
-  if (envProfile !== undefined) return { profile: envProfile, source: "env" };
-  return { profile: DEFAULT_PROFILE, source: "default" };
 }
 
 // undefined = valid. Otherwise the human-readable reason, ready to interpolate into usageError.
