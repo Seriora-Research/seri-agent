@@ -1424,11 +1424,19 @@ describe("run (task invocation)", () => {
 
 describe("run (permanent permissions)", () => {
   const originalKey = process.env.GROQ_API_KEY;
+  const originalLocalAppData = process.env.LOCALAPPDATA;
+  const originalHome = process.env.HOME;
   let sessionsDir: string;
   let permissionsDir: string;
+  let tmpConfigRoot: string;
   // The project key a new session actually runs under: projectRoot(session.cwd), and a new
   // session's cwd is process.cwd() (loadOrCreateSession).
   const key = projectKey(projectRoot(process.cwd()));
+
+  function restoreEnv(key: string, original: string | undefined): void {
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
 
   async function captureLogs(invoke: () => Promise<number>): Promise<{ code: number; logs: string[] }> {
     const logs: string[] = [];
@@ -1448,13 +1456,21 @@ describe("run (permanent permissions)", () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-permissions-sessions-"));
     permissionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-permissions-dir-"));
+    // Redirect the config dir to an empty temp dir, same guard as "run (task invocation)"'s
+    // beforeEach: every run() call below passes permissionsDir explicitly, but checkpointsDir is
+    // not overridden here and would otherwise resolve against this machine's real config dir.
+    tmpConfigRoot = mkdtempSync(join(tmpdir(), "seri-cli-test-permissions-config-"));
+    if (process.platform === "win32") process.env.LOCALAPPDATA = tmpConfigRoot;
+    else process.env.HOME = tmpConfigRoot;
   });
 
   afterEach(() => {
-    if (originalKey === undefined) delete process.env.GROQ_API_KEY;
-    else process.env.GROQ_API_KEY = originalKey;
+    restoreEnv("GROQ_API_KEY", originalKey);
+    restoreEnv("LOCALAPPDATA", originalLocalAppData);
+    restoreEnv("HOME", originalHome);
     rmSync(sessionsDir, { recursive: true, force: true });
     rmSync(permissionsDir, { recursive: true, force: true });
+    rmSync(tmpConfigRoot, { recursive: true, force: true });
   });
 
   // 19. A stored grant reaches runLoop as the seed — the read half of Hermes #4739 at the
