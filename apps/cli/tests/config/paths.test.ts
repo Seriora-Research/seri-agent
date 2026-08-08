@@ -1,15 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { AUTH_FILENAME } from "../../src/auth/authStore";
+import { CONFIG_FILENAME } from "../../src/config/config";
 import {
   DEFAULT_PROFILE,
-  RESERVED_PROFILE_NAMES,
   getBaseConfigDir,
   getConfigDir,
+  getReservedProfileNames,
   profileNameError,
   resolveProfile,
   setProfileOverride,
 } from "../../src/config/paths";
+import { PERMISSIONS_FILENAME } from "../../src/permissions/store";
 
 const originalPlatform = process.platform;
 const originalLocalAppData = process.env.LOCALAPPDATA;
@@ -151,18 +154,22 @@ describe("getConfigDir disjointness", () => {
 });
 
 describe("profileNameError", () => {
-  // Iterating the exported set is what makes this test grow with it, so a name added later needs
-  // no test update. It alone would not catch an existing entry being dropped from the set (the
-  // iteration just shrinks with it), which is what the explicit membership checks below are for —
-  // permissions and bin were the two the call-site sweep could not see on its own (see
-  // feature-plan.md's "why seven, not six").
+  // Iterating the returned set is what makes THIS test grow with it, so a name added later needs
+  // no update here — but it alone would not catch an existing entry being dropped from the set
+  // (the iteration just shrinks with it), which is what the exact-list assertion below is for.
   test("every reserved name is rejected", () => {
-    for (const name of RESERVED_PROFILE_NAMES) expect(profileNameError(name)).toBeDefined();
+    for (const name of getReservedProfileNames()) expect(profileNameError(name)).toBeDefined();
   });
 
-  test("permissions and bin are reserved", () => {
-    expect(RESERVED_PROFILE_NAMES.has("permissions")).toBe(true);
-    expect(RESERVED_PROFILE_NAMES.has("bin")).toBe(true);
+  // Pinned against the literal expected membership, not derived from getReservedProfileNames()
+  // itself: the three file names are read from the module that actually writes each file, so a
+  // real desync between paths.ts's reserved set and what config.ts/authStore.ts/store.ts write
+  // would fail here; the four directory names (no single owning file) are hardcoded literals, so
+  // an accidental deletion from the reserved set — permissions.yaml or bin included — turns this
+  // test red instead of silently shrinking the set the iteration test above checks.
+  test("the reserved set is exactly the file and directory names it collides with", () => {
+    const expected = [CONFIG_FILENAME, AUTH_FILENAME, PERMISSIONS_FILENAME, "sessions", "checkpoints", "rg", "bin"];
+    expect([...getReservedProfileNames()].sort()).toEqual([...expected].sort());
   });
 
   test("reserved names are rejected case-folded", () => {
