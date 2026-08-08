@@ -95,7 +95,10 @@ disproportionate-match guard against replacing far more than was asked for.
 `openai/gpt-oss-120b` default, any Groq model id via `SERI_MODEL`; the measurement
 behind that default is in `docs/PROMPT-ROUTING.md`). API keys resolve from env var first, then
 `~/.seri/config.json` (`%LOCALAPPDATA%\seri\` on Windows) — see
-`apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`. `seri config
+`apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`. A non-default profile
+(`--profile <name>` or `SERI_PROFILE`, the flag wins) puts config.json, auth.json,
+permissions.yaml, sessions/ and checkpoints/ under `<root>/<profile>/` instead; the vendored
+`rg/` cache stays shared across every profile. `seri config
 set|list|unset` (`apps/cli/src/config/commands.ts`) manages that file; it's written
 owner-only and via write-then-rename, since it holds API keys and a partial write
 would break every later command's `loadConfig`. `list` masks values and flags any
