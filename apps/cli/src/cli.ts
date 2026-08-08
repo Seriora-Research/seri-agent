@@ -36,7 +36,7 @@ import {
 } from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
 import { loadVerifyConfig } from "./config/config";
-import { getConfigDir } from "./config/paths";
+import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
 import { cycleMode, type PermissionMode } from "./gate/gate";
 import { type ApprovalAnswer, type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "./loop/loop";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
@@ -412,6 +412,7 @@ const PARSE_OPTIONS = {
   continue: { type: "boolean" },
   "max-turns": { type: "string" },
   "dangerously-skip-permissions": { type: "boolean" },
+  profile: { type: "string" },
 } as const;
 
 type ParsedArgs = {
@@ -423,6 +424,7 @@ type ParsedArgs = {
     continue?: boolean;
     "max-turns"?: string;
     "dangerously-skip-permissions"?: boolean;
+    profile?: string;
   };
   positionals: string[];
   maxTurns: number | undefined;
@@ -451,6 +453,16 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     // `seri --max-turns garbage login` used to reach login with the bad flag silently ignored.
     if (!/^[1-9]\d*$/.test(maxTurnsRaw)) return usageError(`Invalid --max-turns value: ${maxTurnsRaw}`);
     maxTurns = Number(maxTurnsRaw);
+  }
+
+  // Validated here too, right after the parse: an invalid profile from either source is a usage
+  // error, not a silent fallback to "default" — the alternative would write a user's sessions and
+  // auth into the tree they believed they were isolated from.
+  const { profile, source } = resolveProfile(values.profile);
+  const profileError = profileNameError(profile);
+  if (profileError !== undefined) {
+    const named = source === "flag" ? "--profile" : "SERI_PROFILE";
+    return usageError(`Invalid ${named} value: ${profile} — ${profileError}`);
   }
 
   // `--resume` now takes a mandatory value, so a slash command after it (`seri --resume /mode`,
