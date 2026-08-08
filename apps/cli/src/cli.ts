@@ -24,6 +24,8 @@ import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
   escapeControlChars,
   printEvent,
+  printGrantPersisted,
+  printPreApproved,
   printRecovery,
   printUndoPlan,
   printUsage,
@@ -37,6 +39,8 @@ import { loadVerifyConfig } from "./config/config";
 import { getConfigDir } from "./config/paths";
 import { cycleMode, type PermissionMode } from "./gate/gate";
 import { type ApprovalAnswer, type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "./loop/loop";
+import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
+import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
 import { getGroqModel as getGroqModelReal, resolveModelId } from "./provider/groq";
 import { toolDefinitions } from "./provider/tools";
 import { findMostRecentSession, loadSession, saveSession, type SessionState } from "./session/session";
@@ -55,6 +59,11 @@ type CliDeps = {
   login?: typeof loginReal;
   logout?: typeof logoutReal;
   configCommand?: typeof configCommandReal;
+  permissionsCommand?: typeof permissionsCommandReal;
+  // The directory holding permissions.yaml. Deliberately NOT reusing `authConfigDir`: that name is
+  // already stretched across auth AND `seri config`, and a third consumer that is neither would
+  // make it mean nothing. Same shape as sessionsDir/checkpointsDir, defaulting to getConfigDir().
+  permissionsDir?: string;
   grep?: typeof grepReal;
   createInterface?: () => Interface;
 };
@@ -252,8 +261,9 @@ function loadOrCreateSession(
       // a fresh session given a write task was blocked repeatedly and produced nothing (step 0 of
       // the tui-ready-permissions loop: 5 denials, done: no-tool-call, no file created). This
       // reverses docs/ARCHITECTURE.md:93's rejection of "approval for every edit" as a default;
-      // the per-run allowlist ("always allow this tool", below) is what keeps this from being
-      // that rejected every-call mode.
+      // the allowlist ("always allow this tool", below) is what keeps this from being that
+      // rejected every-call mode — permanent for write_file/edit since permanent-permissions-
+      // allowlist, run-scoped for every other write tool the gate ever grows.
       permissionMode: "approve-each",
       model: resolveModelId(),
       messages: [],
@@ -306,16 +316,6 @@ function truncateArgsDisplay(args: unknown): string {
   return json.length > MAX_PROMPT_ARGS_LENGTH ? `${json.slice(0, MAX_PROMPT_ARGS_LENGTH)}…` : json;
 }
 
-// The allowlist is keyed on tool name alone (gate.ts), and tool granularity on a shell is
-// meaningless: approving one `bash` call because it looked like `ls -la` would silently
-// auto-approve `rm -rf ./src` under the same grant, since nothing about WHAT the command does
-// factors into the key. Claude Code scopes always-allow to a command PREFIX
-// (`Bash(npm run test *)`) precisely to avoid this; that is a real feature, scoped to a later PR
-// (PERMISSIONS-ALLOWLIST-DESIGN.md). This is the one-rule version that ships now: the two shells
-// never offer "always" at all, so the allowlist can never hold "bash" or "powershell" — only
-// write_file and edit, where one call's shape says everything about what it will do.
-const SHELL_TOOL_NAMES = new Set(["bash", "powershell"]);
-
 // Whichever of the two is still a terminal. stdout carries the model's own output and is
 // routinely piped (`seri "…" | tee log`) — see printWarning's own comment in cli/output.ts, the
 // same rule — which is why this used to be stderr unconditionally. But stderr redirects just as
@@ -352,7 +352,11 @@ function makeApprovalPrompt(
         resolve("no");
         return;
       }
-      const offersAlways = !SHELL_TOOL_NAMES.has(toolName);
+      // A positive list, where the old bash/powershell exclusion set was a negative one: a write
+      // tool added to the gate must be opted in to permanent approval deliberately. Today the two
+      // sets pick out the same names for every input that can reach here (a read tool never
+      // reaches the prompt at all), so this is a change of source of truth, not of behaviour.
+      const offersAlways = PERSISTABLE_TOOLS.has(toolName);
       let answered = false;
       const rl = openInterface();
       const abort = onAbort(signal, () => {
@@ -377,7 +381,7 @@ function makeApprovalPrompt(
       });
       rl.on("SIGINT", () => deliverSignal("SIGINT"));
       rl.question(
-        `Approve ${escapeControlChars(toolName)}(${truncateArgsDisplay(args)})? ${offersAlways ? "[y]es / [a]lways / [N]o" : "[y]es / [N]o"} `,
+        `Approve ${escapeControlChars(toolName)}(${truncateArgsDisplay(args)})? ${offersAlways ? "[y]es / [a]lways (saved for this project) / [N]o" : "[y]es / [N]o"} `,
         (answer) => {
           answered = true;
           abort.dispose();
@@ -385,7 +389,7 @@ function makeApprovalPrompt(
           const typed = answer.trim().toLowerCase();
           // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
           // user did not clearly give is not an approval. An "a"/"always" typed at a shell prompt
-          // (not offered, see SHELL_TOOL_NAMES) is "unrecognised" by the same rule, not a special case.
+          // (not offered, see PERSISTABLE_TOOLS) is "unrecognised" by the same rule, not a special case.
           const wantsAlways = offersAlways && (typed === "a" || typed === "always");
           resolve(typed === "y" || typed === "yes" ? "once" : wantsAlways ? "always" : "no");
         },
@@ -544,6 +548,22 @@ function handleConfigCommand(positionals: string[], deps: CliDeps): number | und
   }
 }
 
+function handlePermissionsCommand(positionals: string[], deps: CliDeps): number | undefined {
+  if (positionals[0] !== "permissions") return undefined;
+  const fn = deps.permissionsCommand ?? permissionsCommandReal;
+  try {
+    // projectRoot(process.cwd()), not a session's cwd: there is no session here, and "this
+    // project" for a bare command means the one you are standing in. A resumed session started
+    // elsewhere is keyed on ITS cwd (checkpointTarget's own reasoning) — so `list` run from a
+    // different project shows that project's grants, which is what its heading says it shows.
+    const code: number = fn(positionals.slice(1), deps.permissionsDir ?? getConfigDir(), projectRoot(process.cwd()));
+    return code;
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+}
+
 // What the task path needs after the subcommands have had their say. It extends CommandDirs, so it
 // satisfies the two callees that take one structurally — but it is not handed to them whole:
 // `dirs(ctx)` below narrows it back down at each call. Structural typing makes passing the whole
@@ -555,6 +575,7 @@ type RunContext = CommandDirs & {
   resuming: boolean;
   resumeId: string | undefined;
   taskText: string;
+  permissionsDir: string;
 };
 
 function dirs(ctx: RunContext): CommandDirs {
@@ -599,6 +620,14 @@ type PreparedRun = {
   // is no `session.permissionMode` assignment for a future edit to reach for by mistake — the
   // session this run started from is untouched, and driveLoop never sees anything else to assign.
   permissionMode: PermissionMode;
+  // The project checkpoints already resolved this run against — carried here rather than
+  // re-derived in driveLoop, which needs it too (rememberGrant) and would otherwise resolve the
+  // project root a second time.
+  worktree: string;
+  // Resolved once here, exactly like `permissionMode` above and for the same reason: a per-run
+  // fact the loop is driven with, carried on this object so driveLoop has nothing to re-derive and
+  // nothing to assign into `session`.
+  allowedTools: readonly string[];
 };
 
 function prepareSession(ctx: RunContext, deps: CliDeps, skipPermissions: boolean): PreparedRun | number {
@@ -647,6 +676,20 @@ function prepareSession(ctx: RunContext, deps: CliDeps, skipPermissions: boolean
   // lives entirely outside the user's repository.
   const { storeDir, worktree } = checkpointTarget(session, dirs(ctx));
 
+  // Read here and nowhere else. NOTE FOR A FUTURE SCHEDULER (docs/BUILD-PLAN.md:559): an
+  // unattended run must NOT copy this line. Every entry in that file was written by a human
+  // answering a live prompt in a run they were watching; that is consent for that run, not
+  // standing consent for one on a timer. Seeding a scheduled run from here is
+  // docs/ARCHITECTURE.md:202's "base safety layer disabled on a timer" arriving through a file
+  // instead of a flag.
+  const grants = loadGrants(ctx.permissionsDir, worktree, printWarning);
+  const allowedTools = effectiveTools(grants);
+  const permissionMode = skipPermissions ? "auto" : session.permissionMode;
+  // approve-each only: in read-only the gate blocks these tools before it ever consults the
+  // allowlist (gate.ts:14), and in auto everything is allowed anyway — printing "pre-approved" in
+  // either would be a sentence the run does not honour.
+  if (permissionMode === "approve-each" && allowedTools.length > 0) printPreApproved(allowedTools);
+
   // `write_file`, `bash` and `powershell` write relative to process.cwd(), while the snapshot
   // covers the project root. Anywhere inside the project is fine — that is the whole point of
   // resolving the root, and it is why a subdirectory launch no longer trips this. What is left is
@@ -677,7 +720,7 @@ function prepareSession(ctx: RunContext, deps: CliDeps, skipPermissions: boolean
     loadVerifyConfig(),
   );
 
-  return { session, storeDir, tools, model, permissionMode: skipPermissions ? "auto" : session.permissionMode };
+  return { session, storeDir, tools, model, permissionMode, worktree, allowedTools };
 }
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
@@ -704,7 +747,7 @@ async function driveLoop(
   // below for what each half means and why.
   refusedWithoutRunning: boolean;
 }> {
-  const { session, storeDir, tools, model, permissionMode } = prepared;
+  const { session, storeDir, tools, model, permissionMode, worktree, allowedTools } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
@@ -742,6 +785,10 @@ async function driveLoop(
       // see PreparedRun's own comment. Reading it from there rather than re-deriving it here means
       // there is nothing this call site could assign into `session` even by accident.
       permissionMode,
+      // The seed runLoop has accepted since PR #45 and nothing produced until now. A seed, not a
+      // handle: the loop copies it (loop.ts:211) and growth comes back out as `tool-allowed`,
+      // below.
+      allowedTools,
       approvalPrompt: makeApprovalPrompt(deps.createInterface),
       system: session.systemPrompt,
       signal: controller.signal,
@@ -785,6 +832,22 @@ async function driveLoop(
       }
       if (event.type === "done") doneReason = event.reason;
       printEvent(event);
+      // After printEvent, not before: these are two lines of one message and the run-scoped fact
+      // ("approved for the rest of this run") has to come first. Wrapped for the same reason the
+      // appendBarrier call above is (see its comment): an EACCES, a full disk or a config dir
+      // removed mid-session is a failure of the thing that remembers grants, and it must not take
+      // down the user's in-flight run. Losing the grant costs one prompt next time, so it is a
+      // warning, not silence — a grant the user believes was saved and was not is the Hermes #4739
+      // failure.
+      if (event.type === "tool-allowed") {
+        try {
+          if (rememberGrant(ctx.permissionsDir, worktree, event.name, printWarning)) printGrantPersisted(event.name, worktree);
+        } catch (err) {
+          printWarning(
+            `could not save the permanent approval for ${event.name}, so seri will ask again next time: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
     }
   } finally {
     // In a finally, so a run that throws out of the loop does not leave the slot pointing at a
@@ -825,12 +888,16 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const config = handleConfigCommand(positionals, deps);
   if (config !== undefined) return config;
 
+  const permissions = handlePermissionsCommand(positionals, deps);
+  if (permissions !== undefined) return permissions;
+
   const ctx: RunContext = {
     resuming: values.continue === true || values.resume !== undefined,
     resumeId: values.resume,
     taskText: positionals.join(" "),
     sessionsDir: deps.sessionsDir ?? join(getConfigDir(), "sessions"),
     checkpointsDir: deps.checkpointsDir ?? join(getConfigDir(), "checkpoints"),
+    permissionsDir: deps.permissionsDir ?? getConfigDir(),
   };
 
   // Before prepareSession, never after: a bare `/undo` must act on the resume target rather than
