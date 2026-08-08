@@ -122,6 +122,25 @@ describe("permissions store", () => {
     expect(warnings).toHaveLength(1);
   });
 
+  // Bug 2, part 1: an emptied project entry must be pruned, not left as `key: []` — an orphaned
+  // empty list would otherwise count toward otherProjects forever.
+  test("forgetGrant deletes the project's key once its list is empty, instead of leaving []", () => {
+    rememberGrant(dir, "/w", "write_file");
+
+    expect(forgetGrant(dir, "/w", "write_file")).toEqual({ global: false, project: true });
+
+    expect(readFileSync(permissionsPath(dir), "utf8")).not.toContain(projectKey("/w"));
+  });
+
+  // The otherProjects overcount this fixes: grant-then-fully-revoke in project B must not leave
+  // project A seeing a phantom "other project" forever.
+  test("otherProjects does not count a project whose only grant was fully revoked", () => {
+    rememberGrant(dir, "/b", "write_file");
+    forgetGrant(dir, "/b", "write_file");
+
+    expect(loadGrants(dir, "/a").otherProjects).toBe(0);
+  });
+
   // 11. Malformed YAML degrades, and is not overwritten.
   test("malformed content degrades to empty, warns, and rememberGrant leaves the bytes untouched", () => {
     writeFileSync(permissionsPath(dir), ":::not yaml:::");

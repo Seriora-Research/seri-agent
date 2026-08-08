@@ -235,8 +235,15 @@ export function forgetGrant(
   const key = projectKey(worktree);
   const global = doc.get("global");
   const removedGlobal = global instanceof YAMLSeq ? removeFromSeq(global, tool) : false;
+  const projectsNode = doc.get("projects");
   const list = doc.getIn(["projects", key]);
   const removedProject = list instanceof YAMLSeq ? removeFromSeq(list, tool) : false;
+  // Prune the project's key entirely once its list is empty, rather than leaving `key: []`
+  // behind: an orphaned empty list would still count toward loadGrants' otherProjects below
+  // forever, and it clutters the hand-editable file with an entry nobody put there on purpose.
+  if (removedProject && list instanceof YAMLSeq && list.items.length === 0 && projectsNode instanceof YAMLMap) {
+    projectsNode.delete(key);
+  }
 
   if (removedGlobal || removedProject) writeDocument(doc, configDir);
   return { global: removedGlobal, project: removedProject };
