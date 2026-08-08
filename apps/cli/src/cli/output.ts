@@ -165,7 +165,7 @@ export function printEvent(event: LoopEvent): void {
     // Printed because a grant the user cannot see is a grant they cannot revoke. This string is
     // still true — a tool that reaches "allow-new" IS approved for the rest of the run, run-scoped
     // grant included — but it is no longer the whole persistence decision: for write_file/edit,
-    // driveLoop prints a SECOND line (printGrantPersisted, below) naming the permanent half, only
+    // driveLoop prints a SECOND line (printGrantPersisted, above) naming the permanent half, only
     // when a grant was actually written. event.name is the same model-supplied call.toolName the
     // approval prompt renders, so it gets the same escaping — see escapeControlChars above.
     case "tool-allowed":
