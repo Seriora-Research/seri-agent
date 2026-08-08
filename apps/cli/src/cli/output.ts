@@ -25,6 +25,7 @@ export const USAGE = `Usage:
   seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha>
   seri login | signup | logout
   seri config set|list|unset
+  seri permissions list|remove <tool>
   seri --version | --help
 
 Options:
@@ -64,6 +65,20 @@ export function escapeControlChars(text: string): string {
 // that a file will not be recoverable must not end up inside whatever consumed that pipe.
 export function printWarning(message: string): void {
   console.error(`⚠ ${message}`);
+}
+
+// The second half of what an "always" answer now does. Printed only when a grant was actually
+// written — driveLoop calls this on rememberGrant's `true`, never unconditionally — so it can
+// never claim a persistence that the store refused (a non-persistable name, an unparseable file).
+export function printGrantPersisted(name: string, worktree: string): void {
+  console.log(`  saved for ${worktree} — undo with: seri permissions remove ${escapeControlChars(name)}`);
+}
+
+// A grant the user cannot see is a grant they cannot revoke, and a grant made weeks ago in another
+// session is exactly the invisible kind. One line at the start of the run that would otherwise
+// silently skip a prompt.
+export function printPreApproved(tools: readonly string[]): void {
+  console.log(`Pre-approved without asking: ${tools.map(escapeControlChars).join(", ")} — seri permissions list`);
 }
 
 // Printed before the restore happens, not after. Every path here comes from git's own output, so
@@ -147,10 +162,12 @@ export function printEvent(event: LoopEvent): void {
     case "permission-denied":
       console.log(`✗ ${event.name} blocked`);
       break;
-    // Printed because a grant the user cannot see is a grant they cannot revoke. "for this run" is
-    // the persistence decision — keep this string matching what actually happens. event.name is
-    // the same model-supplied call.toolName the approval prompt renders, so it gets the same
-    // escaping — see escapeControlChars above.
+    // Printed because a grant the user cannot see is a grant they cannot revoke. This string is
+    // still true — a tool that reaches "allow-new" IS approved for the rest of the run, run-scoped
+    // grant included — but it is no longer the whole persistence decision: for write_file/edit,
+    // driveLoop prints a SECOND line (printGrantPersisted, below) naming the permanent half, only
+    // when a grant was actually written. event.name is the same model-supplied call.toolName the
+    // approval prompt renders, so it gets the same escaping — see escapeControlChars above.
     case "tool-allowed":
       console.log(`✓ ${escapeControlChars(event.name)} approved for the rest of this run`);
       break;
