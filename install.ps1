@@ -21,7 +21,7 @@ $baseUrl = if ($env:SERI_VERSION) {
     "https://github.com/$repo/releases/latest/download"
 }
 
-$installDir = Join-Path $env:LOCALAPPDATA 'seri\bin'
+$installDir = Join-Path $HOME '.seri\bin'
 $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "seri-install-$([guid]::NewGuid())"
 New-Item -ItemType Directory -Path $tmpDir | Out-Null
 
@@ -45,7 +45,7 @@ try {
     }
 
     # Only now does anything land in the install dir, so an interrupted install leaves
-    # nothing behind. Nothing else under LOCALAPPDATA\seri is touched.
+    # nothing behind. Nothing else under `.seri` is touched.
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
     Move-Item -Path $tmpBinary -Destination (Join-Path $installDir 'seri.exe') -Force
 } finally {
