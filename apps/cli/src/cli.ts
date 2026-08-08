@@ -676,12 +676,12 @@ function prepareSession(ctx: RunContext, deps: CliDeps, skipPermissions: boolean
   // lives entirely outside the user's repository.
   const { storeDir, worktree } = checkpointTarget(session, dirs(ctx));
 
-  // Read here and nowhere else. NOTE FOR A FUTURE SCHEDULER (docs/BUILD-PLAN.md:559): an
-  // unattended run must NOT copy this line. Every entry in that file was written by a human
-  // answering a live prompt in a run they were watching; that is consent for that run, not
-  // standing consent for one on a timer. Seeding a scheduled run from here is
-  // docs/ARCHITECTURE.md:202's "base safety layer disabled on a timer" arriving through a file
-  // instead of a flag.
+  // Read here and nowhere else. NOTE FOR A FUTURE SCHEDULER (docs/BUILD-PLAN.md, "Unattended
+  // permission surface" open item): an unattended run must NOT copy this line. Every entry in
+  // that file was written by a human answering a live prompt in a run they were watching; that
+  // is consent for that run, not standing consent for one on a timer. Seeding a scheduled run
+  // from here is docs/ARCHITECTURE.md:202's "base safety layer disabled on a timer" arriving
+  // through a file instead of a flag.
   const grants = loadGrants(ctx.permissionsDir, worktree, printWarning);
   const allowedTools = effectiveTools(grants);
   const permissionMode = skipPermissions ? "auto" : session.permissionMode;
