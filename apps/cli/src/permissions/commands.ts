@@ -23,10 +23,13 @@ function listCommand(configDir: string, worktree: string): number {
 
   if (effectiveTools(grants).length === 0 && grants.otherProjects === 0) {
     if (warned) {
-      // loadGrants degraded to empty because the file could not be read or parsed (HIGH-1), not
-      // because nothing is stored. "Nothing is stored" would be false here — something is stored,
-      // it just could not be read. The warning above already named what went wrong.
-      console.log(`The permissions store at ${path} could not be read — see the warning above.`);
+      // `warned` covers two different situations, and this line has to be true for both: the file
+      // could not be read/parsed at all (HIGH-1), OR it read and parsed fine but every entry it
+      // held was a non-persistable name (a hand-typed "bash", say) that loadGrants correctly
+      // dropped. "Could not be read" is false in the second case — the file was read fine, one
+      // entry was refused. The warning printed immediately above already names the real, specific
+      // reason either way, so this line only has to say that nothing is currently in effect.
+      console.log("Nothing is currently approved — see the warning above.");
     } else {
       console.log("No tools are permanently approved.");
       console.log(`(nothing is stored at ${path})`);

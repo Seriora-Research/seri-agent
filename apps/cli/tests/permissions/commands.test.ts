@@ -48,14 +48,29 @@ describe("permissionsCommand", () => {
     expect(code).toBe(0);
     expect(logs.join("\n")).not.toContain("No tools are permanently approved");
     expect(logs.join("\n")).not.toContain("nothing is stored");
-    expect(logs.join("\n")).toContain("could not be read");
+    expect(logs.join("\n")).toContain("Nothing is currently approved");
     expect(errors.some((line) => line.includes("⚠"))).toBe(true);
   });
 
+  // The message above must also be true when the store read and parsed FINE but its only entry
+  // was a non-persistable name (a hand-typed "bash") that loadGrants correctly dropped — "could
+  // not be read" would be false there, since the file was read just fine. Live repro: grant
+  // write_file, hand-add bash, then revoke write_file, leaving only the refused bash entry.
+  test("list on a readable store whose only entry is non-persistable does not claim a read failure", () => {
+    writeFileSync(permissionsPath(configDir), `global: []\nprojects:\n  '${projectKey(worktree)}':\n    - bash\n`);
+
+    const code = permissionsCommand(["list"], configDir, worktree);
+
+    expect(code).toBe(0);
+    expect(logs.join("\n")).not.toContain("could not be read");
+    expect(logs.join("\n")).toContain("Nothing is currently approved");
+    expect(errors.some((line) => line.includes("⚠") && line.includes("bash"))).toBe(true);
+  });
+
   // Bug 2, part 2: a legitimately empty store — the only grant just revoked — must read as
-  // "nothing is stored", not as "could not be read". The real fix is basing the branch on whether
-  // loadGrants actually warned, not on inferred emptiness (part 1's pruning alone narrows the
-  // failure window but does not close it).
+  // "nothing is stored", not as the warned-branch message. The real fix is basing the branch on
+  // whether loadGrants actually warned, not on inferred emptiness (part 1's pruning alone narrows
+  // the failure window but does not close it).
   test("list after the only grant is fully revoked says nothing is approved, not unreadable", () => {
     rememberGrant(configDir, worktree, "write_file");
     permissionsCommand(["remove", "write_file"], configDir, worktree);
@@ -66,7 +81,7 @@ describe("permissionsCommand", () => {
 
     expect(code).toBe(0);
     expect(logs.join("\n")).toContain("No tools are permanently approved");
-    expect(logs.join("\n")).not.toContain("could not be read");
+    expect(logs.join("\n")).not.toContain("Nothing is currently approved");
   });
 
   // 14. list with a global entry, a project entry and one other project.
