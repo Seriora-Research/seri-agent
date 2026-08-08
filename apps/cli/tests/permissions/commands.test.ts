@@ -52,6 +52,23 @@ describe("permissionsCommand", () => {
     expect(errors.some((line) => line.includes("⚠"))).toBe(true);
   });
 
+  // Bug 2, part 2: a legitimately empty store — the only grant just revoked — must read as
+  // "nothing is stored", not as "could not be read". The real fix is basing the branch on whether
+  // loadGrants actually warned, not on inferred emptiness (part 1's pruning alone narrows the
+  // failure window but does not close it).
+  test("list after the only grant is fully revoked says nothing is approved, not unreadable", () => {
+    rememberGrant(configDir, worktree, "write_file");
+    permissionsCommand(["remove", "write_file"], configDir, worktree);
+    logs.length = 0;
+    errors.length = 0;
+
+    const code = permissionsCommand(["list"], configDir, worktree);
+
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("No tools are permanently approved");
+    expect(logs.join("\n")).not.toContain("could not be read");
+  });
+
   // 14. list with a global entry, a project entry and one other project.
   test("list shows both sections, both tool names, the worktree, and the other-project count", () => {
     rememberGrant(configDir, "/other", "edit");

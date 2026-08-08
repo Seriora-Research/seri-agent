@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { effectiveTools, forgetGrant, loadGrants, PERSISTABLE_TOOLS, permissionsPath } from "./store";
 
 const USAGE = `Usage:
@@ -9,16 +8,24 @@ function listCommand(configDir: string, worktree: string): number {
   const path = permissionsPath(configDir);
   // Not `printWarning` from cli/output.ts: that import would cross the module boundary the plan
   // draws around this file (permissions/store.ts is the only module cli.ts's printer wiring
-  // touches). Same "⚠ " format, kept local instead of shared — loadGrants degrading a malformed
-  // or unreadable file to empty (HIGH-1) must not be silent here, or `list` would affirmatively
-  // claim nothing is stored when something is, just unreadable.
-  const grants = loadGrants(configDir, worktree, (m) => console.error(`⚠ ${m}`));
+  // touches). Same "⚠ " format, kept local instead of shared.
+  //
+  // `warned` is the actual signal for "could not be read", not `existsSync(path)` combined with
+  // emptiness: a store can be perfectly valid and legitimately empty (nothing granted yet, or the
+  // last grant just revoked — forgetGrant prunes the entry, so that case reaches here as an
+  // ordinary empty result) without ever calling onWarning. Only a real read/parse failure fires
+  // the callback, so that is what decides the branch below.
+  let warned = false;
+  const grants = loadGrants(configDir, worktree, (m) => {
+    warned = true;
+    console.error(`⚠ ${m}`);
+  });
 
   if (effectiveTools(grants).length === 0 && grants.otherProjects === 0) {
-    if (existsSync(path)) {
-      // A file is there but loadGrants came back empty anyway — the degrade path for an
-      // unreadable or malformed store, not an absent one. "Nothing is stored" would be false:
-      // something is stored, it just could not be read. The warning above named what went wrong.
+    if (warned) {
+      // loadGrants degraded to empty because the file could not be read or parsed (HIGH-1), not
+      // because nothing is stored. "Nothing is stored" would be false here — something is stored,
+      // it just could not be read. The warning above already named what went wrong.
       console.log(`The permissions store at ${path} could not be read — see the warning above.`);
     } else {
       console.log("No tools are permanently approved.");
