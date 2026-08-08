@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import pkg from "../../package.json";
 import { onAbort } from "../abort";
-import { getConfigDir } from "../config/paths";
+import { getBaseConfigDir } from "../config/paths";
 import rgAsset from "./rg-vendored.bin" with { type: "file" };
 import { killOnFatalSignal } from "./spawnCollect";
 
@@ -30,8 +30,8 @@ function detectRg(): string {
     if (!isCachedRg(cached)) populateCache(cached);
     return cached;
   } catch {
-    // getConfigDir() throws outright when LOCALAPPDATA is unset, and the directory it names can be
-    // read-only or full. Not noexec: that fails at exec time, which happens outside this try, so
+    // getBaseConfigDir() throws outright when LOCALAPPDATA is unset, and the directory it names can
+    // be read-only or full. Not noexec: that fails at exec time, which happens outside this try, so
     // the fallback never sees it — and tmpdir() is itself sometimes mounted noexec, so falling
     // back would not help if it did. Falling back to a temp copy keeps the invariant that matters:
     // seri always searches with the rg it vendored, on every machine. Borrowing an rg off PATH
@@ -58,9 +58,12 @@ function detectRg(): string {
 // and rejected — SHA-256 over 5.4 MB costs the same order as the 2.80 ms write it would be
 // protecting, so it would defeat the cache on every hit; statSync costs 0.033 ms and returns the
 // real 5 429 760 even for the compiled build's virtual asset path.
+// getBaseConfigDir(), not getConfigDir(): the vendored rg is a cache, not user data, so it lives
+// at the unprofiled base root and is shared across every profile — re-fetching a 5.4 MB binary per
+// profile would be pure waste.
 function rgCachePath(): string {
   const key = `${pkg.version}-${process.platform}-${process.arch}-${statSync(rgAsset).size}`;
-  return join(getConfigDir(), "rg", key, process.platform === "win32" ? "rg.exe" : "rg");
+  return join(getBaseConfigDir(), "rg", key, process.platform === "win32" ? "rg.exe" : "rg");
 }
 
 // Verified, not trusted: two stats cost 0.033 ms against running a 5 MB binary that a full disk or
