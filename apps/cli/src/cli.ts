@@ -875,6 +875,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const parsed = parseCliArgs(argv);
   if (typeof parsed === "number") return parsed;
   const { values, positionals, maxTurns, skipPermissions } = parsed;
+  // Earliest possible point, before handleInfoFlags, runSelftest and all seven getConfigDir()
+  // consumers, so there is no ordering hazard to re-derive later. Unconditional, including with
+  // undefined: that is what stops one in-process run() with --profile leaking into the next one —
+  // bun test runs many run() calls in a single process.
+  setProfileOverride(values.profile);
 
   const info = handleInfoFlags(values);
   if (info !== undefined) return info;
