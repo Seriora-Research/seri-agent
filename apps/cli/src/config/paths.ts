@@ -6,13 +6,10 @@ import { PERMISSIONS_FILENAME } from "../permissions/store";
 import { CONFIG_FILENAME } from "./config";
 
 // Today's whole getConfigDir(), byte-for-byte, renamed. Unprofiled: the vendored-rg cache and
-// nothing else lives here. Throws on win32 when LOCALAPPDATA is unset — this is the documented
-// fallback runRipgrep.ts's detectRg() catches, not an oversight; see paths.test.ts.
+// nothing else lives here. Both platforms resolve identically via HOME/homedir() — no throw path.
 export function getBaseConfigDir(): string {
   if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA;
-    if (!localAppData) throw new Error("LOCALAPPDATA environment variable is not set");
-    return join(localAppData, "seri");
+    return join(process.env.HOME || homedir(), ".seri");
   }
   return join(process.env.HOME || homedir(), ".seri");
 }
@@ -23,7 +20,7 @@ export const DEFAULT_PROFILE = "default";
 // The three file-backed entries are read from the file that owns them (config.json, auth.json,
 // permissions.yaml), so this set cannot drift out of sync with the literal each of those modules
 // actually writes. sessions/, checkpoints/, rg/ (the shared vendored-rg cache) and bin/
-// (install.ps1 installs the Windows binary to %LOCALAPPDATA%\seri\bin) have no single file that
+// (install.ps1 installs the Windows binary to ~\.seri\bin) have no single file that
 // already owns them, so they stay literals here.
 //
 // Built lazily, on first use, rather than as a module-top-level constant: config.ts imports
