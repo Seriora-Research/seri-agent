@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { permissionsCommand } from "../../src/permissions/commands";
@@ -34,6 +34,22 @@ describe("permissionsCommand", () => {
     expect(code).toBe(0);
     expect(logs.join("\n")).toContain("No tools are permanently approved");
     expect(logs.join("\n")).toContain(configDir);
+  });
+
+  // A malformed/unreadable store must not read as "nothing is stored" — HIGH-1's degrade path
+  // makes loadGrants return the same empty shape for "absent" and for "present but unreadable",
+  // and `list` is the one place a user checks that distinction to decide whether to go fix the
+  // file. The directory-collision trick reproduces EISDIR on every platform, including Windows.
+  test("list on an unreadable store warns and does not claim nothing is stored", () => {
+    mkdirSync(permissionsPath(configDir));
+
+    const code = permissionsCommand(["list"], configDir, worktree);
+
+    expect(code).toBe(0);
+    expect(logs.join("\n")).not.toContain("No tools are permanently approved");
+    expect(logs.join("\n")).not.toContain("nothing is stored");
+    expect(logs.join("\n")).toContain("could not be read");
+    expect(errors.some((line) => line.includes("⚠"))).toBe(true);
   });
 
   // 14. list with a global entry, a project entry and one other project.
