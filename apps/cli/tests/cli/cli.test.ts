@@ -839,7 +839,8 @@ describe("run (task invocation)", () => {
 
   // The allowlist is keyed on tool name alone, and approving one bash call because it looked like
   // `ls -la` would silently auto-approve `rm -rf ./src` under the same grant — see
-  // SHELL_TOOL_NAMES's own comment in cli.ts. bash and powershell never offer "always" at all.
+  // PERSISTABLE_TOOL_NAMES's own comment in permissions/store.ts. bash and powershell never offer
+  // "always" at all.
   test("the prompt does not offer always for bash, and typing a resolves no", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
