@@ -1551,7 +1551,7 @@ describe("run (permanent permissions)", () => {
     );
 
     expect(code).toBe(0);
-    expect(logs.some((line) => line.includes("⚠"))).toBe(true);
+    expect(logs.some((line) => line.includes("could not save the permanent approval for write_file"))).toBe(true);
   });
 });
 
