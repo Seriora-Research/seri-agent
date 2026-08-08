@@ -35,7 +35,7 @@ line to add — it never edits your shell config for you.
 irm https://seri-agent.seriora.ai/install.ps1 | iex
 ```
 
-Installs to `%LOCALAPPDATA%\seri\bin` and adds it to your user `PATH`. No admin rights
+Installs to `~\.seri\bin` and adds it to your user `PATH`. No admin rights
 required. Open a new terminal afterwards so the `PATH` change takes effect.
 
 ### Without piping to a shell
@@ -73,7 +73,7 @@ moves them onto whatever `SERI_MODEL` resolves to and records that from then on.
 `seri --continue` resumes the most recent session, and `seri --resume <id>` a named one; a task
 containing a flag goes after `--` (`seri -- fix the --help output`).
 
-The first search of each release unpacks its bundled ripgrep to `%LOCALAPPDATA%\seri\rg\<key>\`
+The first search of each release unpacks its bundled ripgrep to `~\.seri\rg\<key>\`
 on Windows, or `~/.seri/rg/<key>/` elsewhere. Deleting that directory is safe — the next search
 writes it again — and a run that cannot write there falls back to a temporary copy.
 

@@ -22,7 +22,7 @@ seri runs arbitrary shell commands and holds API keys, so the interesting bounda
 - **The permission gate** (`apps/cli/src/gate/`) — anything that makes a write-capable
   tool run without the approval it should have required, including a tool that isn't
   covered by `WRITE_TOOL_NAMES`.
-- **Credential handling** — API keys in `~/.seri/config.json` (`%LOCALAPPDATA%\seri\` on
+- **Credential handling** — API keys in `~/.seri/config.json` (`~\.seri\` on
   Windows) and the auth session in `auth.json`: file permissions, leakage into logs,
   session output, or error messages.
 - **Checkpoints** (`apps/cli/src/checkpoint/`) — anything that writes outside the shadow
