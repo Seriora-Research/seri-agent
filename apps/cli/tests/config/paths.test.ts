@@ -116,7 +116,7 @@ describe("getConfigDir default-profile identity", () => {
   // real, separate "Default/" directory instead of being treated as the default profile.
   test("a differently-cased default profile folds on win32, stays distinct on linux", () => {
     setPlatform("win32");
-    process.env.HOME = "/home/test";
+    process.env.HOME = "C:\\Users\\test";
     setProfileOverride("Default");
     expect(getConfigDir()).toBe(getBaseConfigDir());
 

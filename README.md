@@ -73,9 +73,9 @@ moves them onto whatever `SERI_MODEL` resolves to and records that from then on.
 `seri --continue` resumes the most recent session, and `seri --resume <id>` a named one; a task
 containing a flag goes after `--` (`seri -- fix the --help output`).
 
-The first search of each release unpacks its bundled ripgrep to `~\.seri\rg\<key>\`
-on Windows, or `~/.seri/rg/<key>/` elsewhere. Deleting that directory is safe — the next search
-writes it again — and a run that cannot write there falls back to a temporary copy.
+The first search of each release unpacks its bundled ripgrep to `~/.seri/rg/<key>/`. Deleting that
+directory is safe — the next search writes it again — and a run that cannot write there falls back
+to a temporary copy.
 
 ## Checking your code after a write
 
