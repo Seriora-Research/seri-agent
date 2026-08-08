@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
@@ -7,9 +7,10 @@ import { PassThrough } from "node:stream";
 import type { ModelMessage } from "ai";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { checkpointStoreDir, createCheckpointer } from "../../src/checkpoint/checkpoint";
-import { isGitAvailable } from "../../src/checkpoint/shadowGit";
+import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { chooseInterfaceOutput, run } from "../../src/cli";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
+import { loadGrants, permissionsPath, projectKey } from "../../src/permissions/store";
 import { getGroqModel } from "../../src/provider/groq";
 import { toolDefinitions } from "../../src/provider/tools";
 import { onSignalCancel } from "../../src/signals";
@@ -213,6 +214,23 @@ describe("run (task invocation)", () => {
     expect(logs.some((line) => line.includes("bash"))).toBe(true);
   });
 
+  // 21. The hard constraint, at the integration level: `bash` can never reach the store through
+  // this path, because rememberGrant refuses to persist it (permissions/store.ts). Extends the
+  // test above rather than duplicating its setup.
+  test("a tool-allowed event for bash writes nothing to the permanent store", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const permissionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-permissions-"));
+    extraTmpDirs.push(permissionsDir);
+    const { fake } = fakeRunLoop([{ type: "tool-allowed", name: "bash" }, { type: "done", reason: "no-tool-call" }]);
+
+    const { logs } = await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
+    );
+
+    expect(existsSync(permissionsPath(permissionsDir))).toBe(false);
+    expect(logs.some((line) => line.includes("saved for"))).toBe(false);
+  });
+
   // The second of the two sites output.ts's escapeControlChars covers: event.name here is the
   // same model-supplied call.toolName the approval prompt renders (pinned separately in the
   // "control character in the tool name" test), reached after the fact rather than at a prompt.
@@ -310,9 +328,13 @@ describe("run (task invocation)", () => {
     expect(code).toBe(0);
   });
 
-  // Option B: the allowlist is process-lifetime only, so a run that emits tool-allowed leaves no
-  // trace of it in the session file, and a later --continue passes no seed at all.
-  test("tool-allowed leaves no allowedTools field on the session file, and --continue seeds nothing", async () => {
+  // PR A (session-persisted allowedTools) is still out of scope: the session FILE never carries
+  // this field, on any tool. `bash` specifically leaves the permanent store empty too — it is never
+  // persistable (permissions/store.ts) — so a later --continue's seed is `[]`, not `undefined`:
+  // `allowedTools` is now passed to runLoop on every run (cli.ts's driveLoop), and the store it is
+  // read from is empty. This assertion is a real check, not churn — if it comes back non-empty,
+  // `bash` reached the store.
+  test("tool-allowed leaves no allowedTools field on the session file, and --continue seeds an empty allowlist", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     // tool-allowed comes AFTER messages-updated so it is the run's last write to disk — if a
     // future change persisted it, this ordering is what would catch a write that only looks
@@ -331,7 +353,7 @@ describe("run (task invocation)", () => {
     const { fake: secondRun, capture } = fakeRunLoop();
     await captureLogs(() => run(["--continue"], { runLoop: secondRun, loadAgentsFile: () => "", sessionsDir }));
 
-    expect(capture()?.allowedTools).toBeUndefined();
+    expect(capture()?.allowedTools).toEqual([]);
   });
 
   // A turn the provider answered, which is what makes the model worth recording. The bare `done`
@@ -1397,6 +1419,122 @@ describe("run (task invocation)", () => {
       expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: `${word} is wrong on User` });
     },
   );
+});
+
+describe("run (permanent permissions)", () => {
+  const originalKey = process.env.GROQ_API_KEY;
+  let sessionsDir: string;
+  let permissionsDir: string;
+  // The project key a new session actually runs under: projectRoot(session.cwd), and a new
+  // session's cwd is process.cwd() (loadOrCreateSession).
+  const key = projectKey(projectRoot(process.cwd()));
+
+  async function captureLogs(invoke: () => Promise<number>): Promise<{ code: number; logs: string[] }> {
+    const logs: string[] = [];
+    const originalLog = console.log;
+    const originalError = console.error;
+    console.log = (msg: string) => logs.push(String(msg));
+    console.error = (msg: string) => logs.push(String(msg));
+    try {
+      return { code: await invoke(), logs };
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+  }
+
+  beforeEach(() => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-permissions-sessions-"));
+    permissionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-permissions-dir-"));
+  });
+
+  afterEach(() => {
+    if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = originalKey;
+    rmSync(sessionsDir, { recursive: true, force: true });
+    rmSync(permissionsDir, { recursive: true, force: true });
+  });
+
+  // 19. A stored grant reaches runLoop as the seed — the read half of Hermes #4739 at the
+  // integration level. Negative control: deleting the loadGrants call in prepareSession.
+  test("a stored grant reaches runLoop as the allowedTools seed", async () => {
+    writeFileSync(permissionsPath(permissionsDir), `global: []\nprojects:\n  '${key}':\n    - write_file\n`);
+    const { fake, capture } = fakeRunLoop();
+
+    await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir, permissionsDir }));
+
+    expect(capture()?.allowedTools).toContain("write_file");
+  });
+
+  // 20. tool-allowed for write_file writes the file, and the run prints where it saved it.
+  test("a tool-allowed event for write_file persists the grant and prints where it was saved", async () => {
+    const { fake } = fakeRunLoop([{ type: "tool-allowed", name: "write_file" }, { type: "done", reason: "no-tool-call" }]);
+
+    const { logs } = await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
+    );
+
+    expect(loadGrants(permissionsDir, projectRoot(process.cwd())).project).toContain("write_file");
+    expect(logs.some((line) => line.includes("saved for"))).toBe(true);
+  });
+
+  // 22. A grant survives into a later invocation — the deterministic twin of acceptance criterion
+  // 1, which goes red if either the read or the write half is removed.
+  test("a grant made in one run is seeded into the next", async () => {
+    const { fake: firstRun } = fakeRunLoop([{ type: "tool-allowed", name: "write_file" }, { type: "done", reason: "no-tool-call" }]);
+    await captureLogs(() => run(["do", "a", "task"], { runLoop: firstRun, loadAgentsFile: () => "", sessionsDir, permissionsDir }));
+
+    const { fake: secondRun, capture } = fakeRunLoop();
+    await captureLogs(() => run(["--continue"], { runLoop: secondRun, loadAgentsFile: () => "", sessionsDir, permissionsDir }));
+
+    expect(capture()?.allowedTools).toContain("write_file");
+  });
+
+  // 24. The pre-approved line is printed in approve-each, and in no other mode: read-only never
+  // consults the allowlist (the gate blocks first) and auto allows everything anyway, so printing
+  // "pre-approved" in either would be a sentence the run does not honour.
+  test("the pre-approved line prints only in approve-each", async () => {
+    writeFileSync(permissionsPath(permissionsDir), `global: []\nprojects:\n  '${key}':\n    - write_file\n`);
+
+    const { fake: approveEachFake } = fakeRunLoop();
+    const { logs: approveEachLogs } = await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: approveEachFake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
+    );
+    expect(approveEachLogs.some((line) => line.includes("Pre-approved without asking: write_file"))).toBe(true);
+
+    const readOnlySession: SessionState = { id: "ro", cwd: process.cwd(), systemPrompt: "", permissionMode: "read-only", messages: [] };
+    saveSession(readOnlySession, sessionsDir);
+    const { fake: readOnlyFake } = fakeRunLoop();
+    const { logs: readOnlyLogs } = await captureLogs(() =>
+      run(["--resume", "ro", "do", "a", "task"], { runLoop: readOnlyFake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
+    );
+    expect(readOnlyLogs.some((line) => line.includes("Pre-approved without asking"))).toBe(false);
+
+    const { fake: autoFake } = fakeRunLoop();
+    const { logs: autoLogs } = await captureLogs(() =>
+      run(["--dangerously-skip-permissions", "do", "a", "task"], { runLoop: autoFake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
+    );
+    expect(autoLogs.some((line) => line.includes("Pre-approved without asking"))).toBe(false);
+  });
+
+  // 25. A store write failure warns and does not kill the run — mirrors the appendBarrier
+  // degrade-never-fail policy at cli.ts's compaction-barrier call.
+  test.skipIf(process.platform === "win32")("a store write failure warns instead of killing the run", async () => {
+    chmodSync(permissionsDir, 0o500);
+    try {
+      const { fake } = fakeRunLoop([{ type: "tool-allowed", name: "write_file" }, { type: "done", reason: "no-tool-call" }]);
+
+      const { code, logs } = await captureLogs(() =>
+        run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
+      );
+
+      expect(code).toBe(0);
+      expect(logs.some((line) => line.includes("⚠"))).toBe(true);
+    } finally {
+      chmodSync(permissionsDir, 0o700);
+    }
+  });
 });
 
 describe("run (/mode)", () => {

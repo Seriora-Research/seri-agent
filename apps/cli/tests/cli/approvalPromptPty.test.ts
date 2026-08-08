@@ -29,6 +29,7 @@ function childScript(dir: string): string {
     `  loadAgentsFile: () => "",`,
     `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
     `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
     `});`,
   ].join("\n");
 }
@@ -58,6 +59,7 @@ function childScriptThreeAnswers(dir: string): string {
     `  loadAgentsFile: () => "",`,
     `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
     `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
     `});`,
   ].join("\n");
 }
@@ -84,6 +86,7 @@ function childScriptCtrlD(dir: string): string {
     `  loadAgentsFile: () => "",`,
     `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
     `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
     `});`,
   ].join("\n");
 }
@@ -196,6 +199,9 @@ describe.skipIf(process.platform === "win32")("approval prompt on a real termina
     const { child, exited, sawLine } = startChild(scriptPath, dir);
     try {
       await sawLine("[a]lways");
+      // The only proof that the honesty fix — the label telling the user `a` is permanent — actually
+      // renders through a real tty in raw mode; a mocked Interface cannot show it.
+      await sawLine("saved for this project");
       await sawLine('"path":"a.txt"');
       child.stdin?.write("a\n");
       await sawLine("PROMPT answer=always");
