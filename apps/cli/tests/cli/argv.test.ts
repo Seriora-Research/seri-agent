@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../../package.json";
 import { run, SLASH_COMMANDS } from "../../src/cli";
+import { getBaseConfigDir, setProfileOverride } from "../../src/config/paths";
 import { fakeRunLoop } from "./fakeRunLoop";
 
 describe("run", () => {
@@ -396,6 +397,90 @@ describe("run (argv and usage errors)", () => {
     const { logs } = await captureLogs(() => run(["--help"], { sessionsDir }));
 
     expect(logs.join("\n")).toContain("seri permissions");
+  });
+
+  // End-to-end --profile behaviour through run() itself. Deliberately does NOT pass
+  // deps.sessionsDir, so the session lands wherever the path layer actually resolves against the
+  // beforeEach-redirected LOCALAPPDATA/HOME above — that is the whole point.
+  describe("run (--profile)", () => {
+    const originalSeriProfile = process.env.SERI_PROFILE;
+
+    afterEach(() => {
+      setProfileOverride(undefined);
+      restoreEnv("SERI_PROFILE", originalSeriProfile);
+    });
+
+    test("--profile work routes the session under base/work/sessions, not base/sessions", async () => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+      const { fake, capture } = fakeRunLoop();
+
+      await captureLogs(() => run(["--profile", "work", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }));
+
+      expect(capture()).toBeDefined();
+      const base = getBaseConfigDir();
+      expect(readdirSync(join(base, "work", "sessions"))).toHaveLength(1);
+      expect(existsSync(join(base, "sessions"))).toBe(false);
+    });
+
+    test("SERI_PROFILE=work with no flag routes the same tree", async () => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+      process.env.SERI_PROFILE = "work";
+      const { fake, capture } = fakeRunLoop();
+
+      await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }));
+
+      expect(capture()).toBeDefined();
+      const base = getBaseConfigDir();
+      expect(readdirSync(join(base, "work", "sessions"))).toHaveLength(1);
+      expect(existsSync(join(base, "sessions"))).toBe(false);
+    });
+
+    // The executable form of D1: SERI_PROFILE names one profile, --profile names another, and the
+    // flag wins — no envd/ directory is ever created.
+    test("--profile beats SERI_PROFILE", async () => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+      process.env.SERI_PROFILE = "envd";
+      const { fake, capture } = fakeRunLoop();
+
+      await captureLogs(() => run(["--profile", "work", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }));
+
+      expect(capture()).toBeDefined();
+      const base = getBaseConfigDir();
+      expect(readdirSync(join(base, "work", "sessions"))).toHaveLength(1);
+      expect(existsSync(join(base, "envd"))).toBe(false);
+    });
+
+    test("a reserved --profile value is a usage error; the model is never called", async () => {
+      const { fake, capture } = fakeRunLoop();
+
+      const { code } = await captureLogs(() =>
+        run(["--profile", "sessions", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }),
+      );
+
+      expect(code).toBe(2);
+      expect(capture()).toBeUndefined();
+      // Rejected before any subcommand dispatch, so nothing under the config root exists at all —
+      // not even the base default's own sessions/.
+      expect(existsSync(getBaseConfigDir())).toBe(false);
+    });
+
+    test("--profile default routes to the base sessions/, no default/ directory", async () => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+      const { fake, capture } = fakeRunLoop();
+
+      await captureLogs(() => run(["--profile", "default", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }));
+
+      expect(capture()).toBeDefined();
+      const base = getBaseConfigDir();
+      expect(readdirSync(join(base, "sessions"))).toHaveLength(1);
+      expect(existsSync(join(base, "default"))).toBe(false);
+    });
+
+    test("`--help` output documents `--profile`", async () => {
+      const { logs } = await captureLogs(() => run(["--help"]));
+
+      expect(logs.join("\n")).toContain("--profile");
+    });
   });
 });
 
