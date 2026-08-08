@@ -1,5 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { AUTH_FILENAME } from "../auth/authStore";
+import { PERMISSIONS_FILENAME } from "../permissions/store";
+import { CONFIG_FILENAME } from "./config";
 
 // Today's whole getConfigDir(), byte-for-byte, renamed. Unprofiled: the vendored-rg cache and
 // nothing else lives here. Throws on win32 when LOCALAPPDATA is unset — this is the documented
@@ -15,25 +18,34 @@ export function getBaseConfigDir(): string {
 
 export const DEFAULT_PROFILE = "default";
 
-// By stem for the files, by name for the directories. A profile with one of these names would
-// resolve to a path that already means something else under the default root: config.json,
-// auth.json, permissions.yaml, sessions/, checkpoints/, rg/ (the shared vendored-rg cache), and
-// bin/ (install.ps1 installs the Windows binary to %LOCALAPPDATA%\seri\bin).
-export const RESERVED_PROFILE_NAMES: ReadonlySet<string> = new Set([
-  "config",
-  "auth",
-  "permissions",
-  "sessions",
-  "checkpoints",
-  "rg",
-  "bin",
-]);
+// The full names of every sibling a profile directory would collide with under the default root.
+// The three file-backed entries are read from the file that owns them (config.json, auth.json,
+// permissions.yaml), so this set cannot drift out of sync with the literal each of those modules
+// actually writes. sessions/, checkpoints/, rg/ (the shared vendored-rg cache) and bin/
+// (install.ps1 installs the Windows binary to %LOCALAPPDATA%\seri\bin) have no single file that
+// already owns them, so they stay literals here.
+//
+// Built lazily, on first use, rather than as a module-top-level constant: config.ts imports
+// getConfigDir from THIS module (its loadConfig/setConfigValue/unsetConfigValue defaults), so
+// config.ts and paths.ts form a real load cycle. Reading CONFIG_FILENAME at paths.ts's own
+// top level hits config.ts's binding before config.ts's body has executed and throws — reproduced
+// live, `bun run src/cli.ts --version` crashed at import time with "Cannot access 'CONFIG_FILENAME'
+// before initialization". Deferring the read to first call, well after the whole module graph has
+// finished loading, is the same trick config.ts's own default parameters already rely on for the
+// opposite direction of this cycle.
+let reservedProfileNames: ReadonlySet<string> | undefined;
+export function getReservedProfileNames(): ReadonlySet<string> {
+  reservedProfileNames ??= new Set([CONFIG_FILENAME, AUTH_FILENAME, PERMISSIONS_FILENAME, "sessions", "checkpoints", "rg", "bin"]);
+  return reservedProfileNames;
+}
 
 // Module state, deliberately: getConfigDir() has callers (loadVerifyConfig, getApiKey) that
 // receive no configDir parameter and cannot cheaply be given one, so threading a resolved
 // directory through every call site would be a much larger diff than one indirection. Keeping the
-// active profile here instead of on the argument parser also means SERI_PROFILE works on any path
-// that never went through parseCliArgs (tests today, a future TUI entry point tomorrow).
+// active profile here instead of on the argument parser also means SERI_PROFILE is READ on any
+// path that never went through parseCliArgs (tests today, a future TUI entry point tomorrow) — but
+// not VALIDATED there: profileNameError() only runs from parseCliArgs today, so a non-CLI entry
+// point that wants the same reserved-name/charset guarantees must call it itself before use.
 let override: string | undefined;
 
 // `||`, not `??`, so SERI_PROFILE="" reads as unset — matching config.ts's own deliberate `||`
@@ -73,7 +85,7 @@ export function profileNameError(name: string): string | undefined {
   // Case-folded: NTFS and APFS are case-insensitive by default, so --profile Sessions would
   // collide with sessions/ on the two platforms most users are on (same reasoning as
   // permissions/store.ts's projectKey).
-  if (RESERVED_PROFILE_NAMES.has(name.toLowerCase())) return `"${name}" is reserved (it names a directory under every profile root)`;
+  if (getReservedProfileNames().has(name.toLowerCase())) return `"${name}" is reserved (it collides with a file or directory under every profile root)`;
   return undefined;
 }
 

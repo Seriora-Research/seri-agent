@@ -2,8 +2,10 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { join } from "node:path";
 import { getConfigDir } from "./paths";
 
+export const CONFIG_FILENAME = "config.json";
+
 function configPath(configDir: string): string {
-  return join(configDir, "config.json");
+  return join(configDir, CONFIG_FILENAME);
 }
 
 export function loadConfig(configDir: string = getConfigDir()): Record<string, string> {

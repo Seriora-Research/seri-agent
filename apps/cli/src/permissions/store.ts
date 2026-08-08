@@ -10,8 +10,10 @@ import { Document, parseDocument, Scalar, YAMLMap, YAMLSeq } from "yaml";
 export const PERSISTABLE_TOOL_NAMES = ["write_file", "edit"] as const;
 export const PERSISTABLE_TOOLS: ReadonlySet<string> = new Set(PERSISTABLE_TOOL_NAMES);
 
+export const PERMISSIONS_FILENAME = "permissions.yaml";
+
 export function permissionsPath(configDir: string): string {
-  return join(configDir, "permissions.yaml");
+  return join(configDir, PERMISSIONS_FILENAME);
 }
 
 // Copied from checkpointStoreDir (checkpoint/checkpoint.ts:84-92) with the sha256 deliberately

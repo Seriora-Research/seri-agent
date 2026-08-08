@@ -9,8 +9,10 @@ export type AuthSession = {
   obtainedAt: string;
 };
 
+export const AUTH_FILENAME = "auth.json";
+
 function authPath(configDir: string): string {
-  return join(configDir, "auth.json");
+  return join(configDir, AUTH_FILENAME);
 }
 
 export function saveAuthSession(session: AuthSession, configDir: string): void {
