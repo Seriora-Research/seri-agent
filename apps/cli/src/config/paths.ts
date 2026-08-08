@@ -5,12 +5,9 @@ import { foldsCase } from "../caseFold";
 import { PERMISSIONS_FILENAME } from "../permissions/store";
 import { CONFIG_FILENAME } from "./config";
 
-// Today's whole getConfigDir(), byte-for-byte, renamed. Unprofiled: the vendored-rg cache and
-// nothing else lives here. Both platforms resolve identically via HOME/homedir() — no throw path.
+// Unprofiled: the vendored-rg cache and nothing else lives here. Both platforms resolve
+// identically via HOME/homedir() — no throw path.
 export function getBaseConfigDir(): string {
-  if (process.platform === "win32") {
-    return join(process.env.HOME || homedir(), ".seri");
-  }
   return join(process.env.HOME || homedir(), ".seri");
 }
 
