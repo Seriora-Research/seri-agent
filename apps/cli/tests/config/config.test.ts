@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getConfigDir } from "../../src/config/paths";
+import { getConfigDir, setProfileOverride } from "../../src/config/paths";
 import { getApiKey, loadConfig, loadVerifyConfig } from "../../src/config/config";
 
 const originalLocalAppData = process.env.LOCALAPPDATA;
@@ -25,6 +25,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // This file's own guard, not borrowed from paths.test.ts/argv.test.ts's cleanup: getConfigDir()
+  // here is profile-aware, so a leaked override would resolve the wrong directory with nothing in
+  // this file catching it.
+  setProfileOverride(undefined);
   restoreEnv("LOCALAPPDATA", originalLocalAppData);
   restoreEnv("HOME", originalHome);
   rmSync(tmpRoot, { recursive: true, force: true });

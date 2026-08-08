@@ -59,7 +59,10 @@ function profileFromEnv(): string | undefined {
 // re-deriving the same ladder, so a change here governs both the usage-error validation in
 // parseCliArgs and the directory actually resolved at runtime.
 export function resolveProfile(flagValue: string | undefined): { profile: string; source: "flag" | "env" | "default" } {
-  if (flagValue !== undefined) return { profile: flagValue, source: "flag" };
+  // Truthy, not `!== undefined`: `seri --profile "$UNSET_VAR" …` is a real shell pattern that
+  // expands to an explicit empty string, and it should fall through the same way SERI_PROFILE=""
+  // already does (profileFromEnv's `||`) rather than failing profileNameError's charset check.
+  if (flagValue) return { profile: flagValue, source: "flag" };
   const envProfile = profileFromEnv();
   if (envProfile !== undefined) return { profile: envProfile, source: "env" };
   return { profile: DEFAULT_PROFILE, source: "default" };
@@ -82,10 +85,13 @@ export function profileNameError(name: string): string | undefined {
   // join() below.
   if (!/^[A-Za-z0-9._-]+$/.test(name)) return `"${name}" may only contain letters, numbers, ".", "_" and "-"`;
   if (name === "." || name === "..") return `"${name}" is not a valid profile name`;
-  // Case-folded: NTFS and APFS are case-insensitive by default, so --profile Sessions would
-  // collide with sessions/ on the two platforms most users are on (same reasoning as
-  // permissions/store.ts's projectKey).
-  if (getReservedProfileNames().has(name.toLowerCase())) return `"${name}" is reserved (it collides with a file or directory under every profile root)`;
+  // Case-folded only on win32/darwin, matching the one existing precedent for this exact
+  // decision (permissions/store.ts's projectKey, checkpoint.ts's foldsCase): NTFS and APFS are
+  // case-insensitive by default, so --profile Sessions would collide with sessions/ there, but
+  // ext4 is case-sensitive and folding unconditionally would reject a name that is genuinely
+  // distinct on Linux.
+  const foldsCase = process.platform === "win32" || process.platform === "darwin";
+  if (getReservedProfileNames().has(foldsCase ? name.toLowerCase() : name)) return `"${name}" is reserved (it collides with a file or directory under every profile root)`;
   return undefined;
 }
 

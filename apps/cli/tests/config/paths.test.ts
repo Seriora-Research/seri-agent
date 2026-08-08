@@ -172,8 +172,24 @@ describe("profileNameError", () => {
     expect([...getReservedProfileNames()].sort()).toEqual([...expected].sort());
   });
 
-  test("reserved names are rejected case-folded", () => {
+  // Case-folding is platform-conditional (win32/darwin only), matching the one existing precedent
+  // for this exact decision (permissions/store.ts's projectKey, checkpoint.ts's foldsCase) — not
+  // set via setPlatform, this would silently pass or fail depending on which OS runs the suite.
+  test("reserved names are rejected case-folded on win32", () => {
+    setPlatform("win32");
     expect(profileNameError("Sessions")).toBeDefined();
+  });
+
+  test("reserved names are rejected case-folded on darwin", () => {
+    setPlatform("darwin");
+    expect(profileNameError("Sessions")).toBeDefined();
+  });
+
+  // The negative control for the two tests above: ext4 is case-sensitive, so "Sessions" and
+  // "sessions" are genuinely different directories on Linux and must not both be rejected.
+  test("a differently-cased name is valid on linux", () => {
+    setPlatform("linux");
+    expect(profileNameError("Sessions")).toBeUndefined();
   });
 
   test.each(["../evil", "..", ".", "a/b", "a\\b", ""])("%p is rejected", (name) => {
@@ -205,5 +221,18 @@ describe("resolveProfile precedence (D1)", () => {
   test("no flag and no SERI_PROFILE resolves to default", () => {
     delete process.env.SERI_PROFILE;
     expect(resolveProfile(undefined)).toEqual({ profile: DEFAULT_PROFILE, source: "default" });
+  });
+
+  // `seri --profile "$UNSET_VAR" …` is a real shell pattern that expands to an explicit empty
+  // string. It must fall through the same way SERI_PROFILE="" already does above, not surface as
+  // an explicit flag value that then fails profileNameError's charset check.
+  test("an empty --profile flag reads as unset, same as an empty SERI_PROFILE", () => {
+    delete process.env.SERI_PROFILE;
+    expect(resolveProfile("")).toEqual({ profile: DEFAULT_PROFILE, source: "default" });
+  });
+
+  test("an empty --profile flag still falls through to SERI_PROFILE", () => {
+    process.env.SERI_PROFILE = "envd";
+    expect(resolveProfile("")).toEqual({ profile: "envd", source: "env" });
   });
 });
