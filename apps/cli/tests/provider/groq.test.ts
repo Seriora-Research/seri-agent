@@ -7,7 +7,6 @@ import { DEFAULT_MODEL, getGroqModel, resolveModelId } from "../../src/provider/
 
 const originalKey = process.env.GROQ_API_KEY;
 const originalModel = process.env.SERI_MODEL;
-const originalLocalAppData = process.env.LOCALAPPDATA;
 const originalHome = process.env.HOME;
 
 function restoreEnv(key: string, original: string | undefined): void {
@@ -23,14 +22,12 @@ beforeEach(() => {
   // Point the config dir at an empty temp dir so a real config.json on this
   // machine can never supply GROQ_API_KEY and mask the "unset" case.
   tmpRoot = mkdtempSync(join(tmpdir(), "seri-groq-test-"));
-  if (process.platform === "win32") process.env.LOCALAPPDATA = tmpRoot;
-  else process.env.HOME = tmpRoot;
+  process.env.HOME = tmpRoot;
 });
 
 afterEach(() => {
   restoreEnv("GROQ_API_KEY", originalKey);
   restoreEnv("SERI_MODEL", originalModel);
-  restoreEnv("LOCALAPPDATA", originalLocalAppData);
   restoreEnv("HOME", originalHome);
   rmSync(tmpRoot, { recursive: true, force: true });
 });

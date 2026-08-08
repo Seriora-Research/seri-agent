@@ -25,26 +25,24 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-// getBaseConfigDir() reads LOCALAPPDATA on Windows and HOME everywhere else, and it checks the
-// environment before falling back to homedir(), so setting one variable redirects the whole cache.
-// It has to be set at spawn time on a child rather than mutated in process: resolveRg() memoizes,
-// so any one process can only ever observe a single cache.
+// getBaseConfigDir() reads HOME on every platform, checking the environment before falling back
+// to homedir(), so setting one variable redirects the whole cache. It has to be set at spawn time
+// on a child rather than mutated in process: resolveRg() memoizes, so any one process can only
+// ever observe a single cache.
 function cacheEnv(root: string): NodeJS.ProcessEnv {
-  const home = process.platform === "win32" ? { LOCALAPPDATA: root } : { HOME: root };
-  return { ...process.env, ...home };
+  return { ...process.env, HOME: root };
 }
 
 // Asks the module rather than restating it, so a change to getBaseConfigDir()'s own layout cannot
 // silently desync this file's expectations from it.
 function configDirIn(root: string): string {
-  const key = process.platform === "win32" ? "LOCALAPPDATA" : "HOME";
-  const original = process.env[key];
-  process.env[key] = root;
+  const original = process.env.HOME;
+  process.env.HOME = root;
   try {
     return getBaseConfigDir();
   } finally {
-    if (original === undefined) delete process.env[key];
-    else process.env[key] = original;
+    if (original === undefined) delete process.env.HOME;
+    else process.env.HOME = original;
   }
 }
 
@@ -225,8 +223,7 @@ describe("rg resolution", () => {
   }, 30_000);
 
   test("falls back to a temp copy of its own rg when the cache cannot be written", () => {
-    // Every container and CI with a read-only or absent home takes this path — and LOCALAPPDATA
-    // simply being unset is enough, since getBaseConfigDir() throws on it outright. Pointed at a
+    // Every container and CI with a read-only or absent home takes this path. Pointed at a
     // regular file so the config dir is genuinely unusable rather than merely missing. seri keeps
     // searching, and keeps searching with the rg it vendored rather than an untested one off PATH.
     const root = join(tmpDir, "unwritable-file");

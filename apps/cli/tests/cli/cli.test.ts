@@ -22,7 +22,6 @@ type RunLoopOpts = Parameters<typeof runLoop>[0];
 
 describe("run (task invocation)", () => {
   const originalKey = process.env.GROQ_API_KEY;
-  const originalLocalAppData = process.env.LOCALAPPDATA;
   const originalHome = process.env.HOME;
   let sessionsDir: string;
   let tmpConfigRoot: string;
@@ -57,13 +56,11 @@ describe("run (task invocation)", () => {
     // Redirect the config dir to an empty temp dir so a real config.json on this machine
     // can never supply GROQ_API_KEY and mask the "unset" case (same guard as groq.test.ts).
     tmpConfigRoot = mkdtempSync(join(tmpdir(), "seri-cli-test-config-"));
-    if (process.platform === "win32") process.env.LOCALAPPDATA = tmpConfigRoot;
-    else process.env.HOME = tmpConfigRoot;
+    process.env.HOME = tmpConfigRoot;
   });
 
   afterEach(() => {
     restoreEnv("GROQ_API_KEY", originalKey);
-    restoreEnv("LOCALAPPDATA", originalLocalAppData);
     restoreEnv("HOME", originalHome);
     rmSync(sessionsDir, { recursive: true, force: true });
     rmSync(tmpConfigRoot, { recursive: true, force: true });
@@ -1424,7 +1421,6 @@ describe("run (task invocation)", () => {
 
 describe("run (permanent permissions)", () => {
   const originalKey = process.env.GROQ_API_KEY;
-  const originalLocalAppData = process.env.LOCALAPPDATA;
   const originalHome = process.env.HOME;
   let sessionsDir: string;
   let permissionsDir: string;
@@ -1460,13 +1456,11 @@ describe("run (permanent permissions)", () => {
     // beforeEach: every run() call below passes permissionsDir explicitly, but checkpointsDir is
     // not overridden here and would otherwise resolve against this machine's real config dir.
     tmpConfigRoot = mkdtempSync(join(tmpdir(), "seri-cli-test-permissions-config-"));
-    if (process.platform === "win32") process.env.LOCALAPPDATA = tmpConfigRoot;
-    else process.env.HOME = tmpConfigRoot;
+    process.env.HOME = tmpConfigRoot;
   });
 
   afterEach(() => {
     restoreEnv("GROQ_API_KEY", originalKey);
-    restoreEnv("LOCALAPPDATA", originalLocalAppData);
     restoreEnv("HOME", originalHome);
     rmSync(sessionsDir, { recursive: true, force: true });
     rmSync(permissionsDir, { recursive: true, force: true });
