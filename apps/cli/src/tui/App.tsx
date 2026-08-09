@@ -5,6 +5,7 @@
 // directly. Everything below it is a live region: status/spinner, a pending-write placeholder, the
 // mode indicator, and a basic input box, all re-rendered in place rather than scrolled.
 
+import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import { useEffect, useReducer, useState } from "react";
@@ -59,6 +60,11 @@ export type AppProps = {
   // calling makeApprovalPrompt's readline-based prompt instead: a SECOND stdin consumer and a
   // SECOND SIGINT route racing Ink's own raw-mode ownership and signals.ts's single cancel slot.
   onApprovalAnswer?: (answer: ApprovalAnswer) => void;
+  // /model's own two resolutions, mirroring onApprovalAnswer's shape: called from ModelPicker's own
+  // keypress handler, wired by runTui to dispatch model-picker-resolved (with or without a new
+  // session) into the SAME reducer everything else here already shares.
+  onModelSelected?: (next: SessionState<ModelMessage>) => void;
+  onModelPickerCancel?: () => void;
 };
 
 // approvalPromptText (cli/output.ts), not a hand-copied template: round 7 code review found this
@@ -121,6 +127,122 @@ function ApprovalBox({
   return (
     <Box borderStyle="round" borderColor={theme.warning}>
       <Text color={theme.warning}>{approvalPromptText(toolName, args, offersAlways)}</Text>
+    </Box>
+  );
+}
+
+// The most a picker window ever shows at once, regardless of how many entries match the current
+// filter — the catalog easily runs into the hundreds (models.dev's own OpenRouter listing), and
+// rendering all of them would scroll the picker itself out of view, the same reasoning
+// truncateArgsDisplay already applies to a single long line.
+const MODEL_PICKER_WINDOW = 10;
+
+function matchesFilter(entry: ModelCatalogEntry, query: string): boolean {
+  const needle = query.toLowerCase();
+  return (
+    entry.id.toLowerCase().includes(needle) ||
+    entry.displayName.toLowerCase().includes(needle) ||
+    // `family` is a free-text field lifted verbatim from models.dev (ModelCatalogEntry's own
+    // comment, packages/model-catalog/src/types.ts) — some upstream entries carry `null` there
+    // rather than an empty string, so this cannot assume it is always safe to call
+    // `.toLowerCase()` on directly.
+    (entry.family ?? "").toLowerCase().includes(needle)
+  );
+}
+
+// /model's own live state (tui/reducer.ts's pendingModelPicker) — mirrors ApprovalBox's shape
+// exactly: its own useInput, a round-bordered box, mutually exclusive with InputBox. `filterQuery`
+// and `selectedIndex` are local component state, not reducer state, for the same reason InputBox's
+// own `value` is: this is transient UI data with no reason to survive a resolve/cancel or be
+// visible to anything outside this component.
+function ModelPicker({
+  entries,
+  session,
+  onModelSelected,
+  onModelPickerCancel,
+}: {
+  entries: ModelCatalogEntry[];
+  session: SessionState<ModelMessage>;
+  onModelSelected?: (next: SessionState<ModelMessage>) => void;
+  onModelPickerCancel?: () => void;
+}) {
+  const [filterQuery, setFilterQuery] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(0);
+
+  const filtered =
+    filterQuery.length === 0
+      ? entries
+      : entries.filter((entry) => matchesFilter(entry, filterQuery));
+
+  useInput((input, key) => {
+    // Escape OR Ctrl-D — deliberately NOT ApprovalBox's Ctrl-D (which triggers app quit): this is
+    // "never mind, back to typing", not a graceful-quit sequence.
+    if (key.escape || (key.ctrl && input === "d")) {
+      onModelPickerCancel?.();
+      return;
+    }
+    if (key.upArrow) {
+      setSelectedIndex((index) => Math.max(0, index - 1));
+      return;
+    }
+    if (key.downArrow) {
+      setSelectedIndex((index) => Math.min(filtered.length - 1, index + 1));
+      return;
+    }
+    if (key.return) {
+      const entry = filtered[selectedIndex];
+      if (entry !== undefined) {
+        onModelSelected?.({ ...session, model: entry.id, provider: entry.provider });
+      }
+      return;
+    }
+    if (key.ctrl || key.meta) return;
+    if (key.backspace || key.delete) {
+      setFilterQuery((query) => query.slice(0, -1));
+      setSelectedIndex(0);
+      return;
+    }
+    if (input.length === 0) return;
+    // MEDIUM-E's own finding (InputBox, above), applying here too: a chunk delivered faster than
+    // one keypress per `useInput` call — typed filter text immediately followed by Enter, measured
+    // on a real pty to arrive as ONE combined chunk rather than two separate calls — can embed a
+    // `\r`/`\n` that `key.return` above never sees, since that only fires for a chunk that IS a
+    // bare terminator on its own. Everything up to the first terminator is filter text; the
+    // terminator itself selects the top match against the FULLY updated query, mirroring
+    // `key.return`'s own action (against `selectedIndex 0`, the same reset every other
+    // filter-changing keystroke already applies) rather than silently dropping the keystroke.
+    const terminatorIndex = input.search(/[\r\n]/);
+    const typed = terminatorIndex === -1 ? input : input.slice(0, terminatorIndex);
+    const nextQuery = filterQuery + typed;
+    if (terminatorIndex === -1) {
+      setFilterQuery(nextQuery);
+      setSelectedIndex(0);
+      return;
+    }
+    const nextFiltered =
+      nextQuery.length === 0 ? entries : entries.filter((entry) => matchesFilter(entry, nextQuery));
+    const entry = nextFiltered[0];
+    if (entry !== undefined) {
+      onModelSelected?.({ ...session, model: entry.id, provider: entry.provider });
+    }
+  });
+
+  const visible = filtered.slice(0, MODEL_PICKER_WINDOW);
+  const remaining = filtered.length - visible.length;
+
+  return (
+    <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+      <Text>{filterQuery.length > 0 ? filterQuery : " "}</Text>
+      {visible.map((entry, index) => (
+        <Text
+          key={`${entry.provider}/${entry.id}`}
+          color={index === selectedIndex ? theme.accent : undefined}
+        >
+          {index === selectedIndex ? "> " : "  "}
+          {entry.displayName} ({entry.id})
+        </Text>
+      ))}
+      {remaining > 0 && <Text color={theme.muted}>+{remaining} more — keep typing to narrow</Text>}
     </Box>
   );
 }
@@ -192,6 +314,8 @@ export function App({
   onQuit,
   done,
   onApprovalAnswer,
+  onModelSelected,
+  onModelPickerCancel,
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
   const { exit } = useApp();
@@ -236,12 +360,20 @@ export function App({
       {state.commandError !== undefined && <Text color={theme.error}>{state.commandError}</Text>}
       {/* Findings 1+5: mutually exclusive with InputBox — a pending approval question is the only
       thing this run is waiting on, and answering it (not typing a task or slash command) is the
-      only input that means anything until it clears. */}
+      only input that means anything until it clears. Extended to a third state for /model: a
+      pending model pick is the same kind of "only this input means anything right now" question. */}
       {state.pendingApproval !== undefined ? (
         <ApprovalBox
           pendingApproval={state.pendingApproval}
           onAnswer={onApprovalAnswer}
           onQuit={onQuit}
+        />
+      ) : state.pendingModelPicker !== undefined ? (
+        <ModelPicker
+          entries={state.pendingModelPicker.entries}
+          session={state.session}
+          onModelSelected={onModelSelected}
+          onModelPickerCancel={onModelPickerCancel}
         />
       ) : (
         <InputBox onSubmit={onSubmit} onQuit={onQuit} />

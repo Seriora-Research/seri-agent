@@ -23,6 +23,8 @@ export const USAGE = `Usage:
   seri --continue [task]          continue the most recent session
   seri --resume <id> [task]       continue that session
   seri [--resume <id>] /mode      cycle the permission mode
+  /model (inside the TUI)         open the model picker — not a seri subcommand, same reasoning
+                                    as /exit below: there is no picker to open outside a live TUI
   seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha>
   /exit (inside the TUI)          end the session, or Ctrl-D — not a seri subcommand: it means
                                     nothing outside a live TUI, and "seri /exit" is just a task

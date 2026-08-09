@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ModelCatalog, ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import {
   type CheckpointRecord,
@@ -11,7 +12,13 @@ import {
 } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable } from "../../src/checkpoint/shadowGit";
 import type { SessionState } from "../../src/session/session";
-import { decideModeCycle, decideRestore, decideRewind, decideUndo } from "../../src/tui/commands";
+import {
+  decideModeCycle,
+  decideModelPickerOpen,
+  decideRestore,
+  decideRewind,
+  decideUndo,
+} from "../../src/tui/commands";
 
 let root: string;
 let storeDir: string;
@@ -64,6 +71,36 @@ describe("decideModeCycle", () => {
     expect(before.permissionMode).toBe("read-only");
     expect(next.permissionMode).toBe("approve-each");
     expect(message).toBe(`Session ${SESSION}: permission mode is now approve-each`);
+  });
+});
+
+function catalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+  return {
+    id: "llama-3.3-70b-versatile",
+    provider: "groq",
+    displayName: "Llama 3.3 70B",
+    family: "llama",
+    contextWindow: 131_072,
+    maxOutputTokens: 32_768,
+    toolCall: true,
+    reasoning: false,
+    pricing: undefined,
+    ...overrides,
+  };
+}
+
+describe("decideModelPickerOpen", () => {
+  test("keeps only entries with tool-call support", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "a", toolCall: true }),
+        catalogEntry({ id: "b", toolCall: false }),
+        catalogEntry({ id: "c", toolCall: true }),
+      ],
+    };
+
+    expect(decideModelPickerOpen(catalog).map((entry) => entry.id)).toEqual(["a", "c"]);
   });
 });
 

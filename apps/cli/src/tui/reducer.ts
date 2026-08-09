@@ -1,6 +1,7 @@
 // The shared-state home the research spec's Constraint 4 requires: driveLoop and all four slash
 // commands dispatch into this one reducer rather than each holding a separate copy. Zero Ink/React
 // import — a plain, standalone reducer, testable without a terminal.
+import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { toolAllowedLine, toolResultLine } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
@@ -35,6 +36,13 @@ export type TuiState = {
   // exclusive, matching how the non-interactive CLI already blocks on this same question before
   // reading anything else from stdin.
   pendingApproval: { toolName: string; args: unknown; offersAlways: boolean } | undefined;
+  // /model's own live state, mirroring pendingApproval's shape exactly: set when the picker opens
+  // (decideModelPickerOpen's own result, tui/commands.ts), cleared once resolved. App.tsx renders
+  // its own ModelPicker instead of InputBox whenever this is set — the same three-way mutual
+  // exclusion pendingApproval already establishes for ApprovalBox, extended to a third state
+  // rather than a second independent flag, since a pending approval and a pending model pick can
+  // never both be true at once (the picker is opened from the input box, not mid-turn).
+  pendingModelPicker: { entries: ModelCatalogEntry[] } | undefined;
 };
 
 function modeIndicator(mode: PermissionMode): string {
@@ -51,6 +59,7 @@ export function initialTuiState(session: SessionState<ModelMessage>): TuiState {
     pendingTool: undefined,
     commandError: undefined,
     pendingApproval: undefined,
+    pendingModelPicker: undefined,
   };
 }
 
@@ -63,7 +72,12 @@ export type TuiAction =
   | { type: "loop-event"; event: LoopEvent }
   | { type: "command-error"; message: string }
   | { type: "approval-requested"; toolName: string; args: unknown; offersAlways: boolean }
-  | { type: "approval-resolved" };
+  | { type: "approval-resolved" }
+  | { type: "model-picker-requested"; entries: ModelCatalogEntry[] }
+  // `session`, when present, is the SAME atomic transition as clearing pendingModelPicker — not a
+  // second dispatch — so there is never a one-frame render where the session already switched
+  // models but the picker is still showing, or the picker is gone but the switch hasn't landed.
+  | { type: "model-picker-resolved"; session?: SessionState<ModelMessage> };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -103,6 +117,17 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       };
     case "approval-resolved":
       return { ...state, pendingApproval: undefined };
+    case "model-picker-requested":
+      return { ...state, pendingModelPicker: { entries: action.entries } };
+    case "model-picker-resolved":
+      return action.session === undefined
+        ? { ...state, pendingModelPicker: undefined }
+        : {
+            ...state,
+            pendingModelPicker: undefined,
+            session: action.session,
+            modeIndicator: modeIndicator(action.session.permissionMode),
+          };
   }
 }
 

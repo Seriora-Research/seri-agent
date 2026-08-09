@@ -12,6 +12,10 @@ export type SessionState<TMessage = unknown> = {
   // creation and then owned by the session rather than re-read from the environment on every
   // resume — which is what lets a future /model change stick.
   model?: string;
+  // Same optionality reasoning as `model`, just above: a session written before this field existed
+  // still loads, and absence means "groq" — the only provider that existed before Stage 7a added
+  // OpenRouter, so an old session's absent field and an explicit "groq" mean the same thing.
+  provider?: "groq" | "openrouter";
   messages: TMessage[];
 };
 

@@ -167,6 +167,41 @@ function childScriptMultiTurn(dir: string): string {
   ].join("\n");
 }
 
+// Stage 7a Slice 4: the actual /model bug fix, proven with a real second turn the same way
+// childScriptMultiTurn proves H-3 above — a fake runLoop that reports which model id and how many
+// messages EACH call actually received, so a live /model switch (a real picker, driven by real
+// keystrokes) taking effect on the very next turn is observable from outside the process, not just
+// asserted against the reducer in isolation. `getGroqModel` returns the id itself rather than an
+// opaque `{}` (every OTHER script in this file's own convention) specifically so the fake runLoop
+// can report which one it was actually handed. `SERI_DISABLE_MODELS_FETCH` keeps the catalog load
+// prepareSession now always does (this same Slice) on the CLI's own bundled fallback manifest —
+// deterministic, and no network dependency for a filter query this script needs to stay unique
+// against.
+function childScriptModelSwitch(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " messages=" + opts.messages.length);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: (id) => ({ id }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // HIGH-1: a turn that finishes and reports usage, then the TUI is left awaiting input — proving
 // `run()` actually reaches `printUsage`/the exit-code logic on the TUI path once /exit or Ctrl-D
 // resolves runTui's promise, which nothing did before this fix.
@@ -677,6 +712,59 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // without waiting first can race it on a slow/loaded runner.
       await sawLineTimes("> a second task", 1);
       expect(occurrences("> a second task")).toBe(1);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // Stage 7a Slice 4: the concrete mechanical proof of "context preserved" — a real /model switch,
+  // driven by real keystrokes through the actual picker (not a synthetic reducer dispatch), takes
+  // effect on the very next turn (a different model id is what the SECOND RUNLOOP_CALL reports),
+  // while the message array driveLoop is handed keeps growing exactly as childScriptMultiTurn's own
+  // sibling test above already proves it does without a switch — 3, not reset or corrupted by the
+  // model change in between.
+  test("switching the model via /model re-resolves the model on the very next turn without touching accumulated messages", async () => {
+    const scriptPath = join(dir, "child-model-switch.mjs");
+    writeFileSync(scriptPath, childScriptModelSwitch(dir));
+
+    const { child, sawLine } = startChild(scriptPath, dir);
+    try {
+      // The default model (groq.ts's own DEFAULT_MODEL) — proves the FIRST turn used it, before
+      // any switch.
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1");
+      await sawLine("(done: no-tool-call)");
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      // The picker replaces the input box (App.tsx's own three-way mutual exclusion) — the bundled
+      // fallback manifest's own default model is one of the 6 groq entries, always inside the
+      // picker's default (unfiltered) top-10 window regardless of catalog ordering, so this is a
+      // reliable sync point proving the picker actually mounted before typing a filter.
+      await sawLine("GPT OSS 120B");
+
+      // Narrows to exactly one entry across the WHOLE catalog (groq and openrouter both) — verified
+      // directly against the bundled catalog-manifest.json before writing this string; "3.3-70b"
+      // alone also matches an OpenRouter entry, "70b-versatile" does not.
+      child.stdin?.write("70b-versatile");
+      await sawLine("70b-versatile");
+      child.stdin?.write("\r");
+      // The Enter keypress resolves synchronously (App.tsx's own dispatch wrapper updates
+      // `liveState` in the same tick), but the actual React unmount of ModelPicker and mount of
+      // InputBox — which is what moves the NEXT keystroke's own useInput listener from one
+      // component to the other — commits on a later tick. Measured on a real pty without this
+      // wait: "a second task" arrived before that commit and landed in ModelPicker's still-
+      // mounted filter query instead, rendered as "70b-versatile\ra second task" inside the
+      // picker's own box, with no second RUNLOOP_CALL at all.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      // A different model id, and 3 messages (1 initial + 1 turn-1 assistant reply + 1 new user
+      // message) — the switch changed WHICH model answers, not what it was handed.
+      await sawLine("RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3");
     } finally {
       child.kill("SIGKILL");
     }

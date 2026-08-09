@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { render } from "ink-testing-library";
 import type { ApprovalAnswer } from "../../src/loop/loop";
@@ -338,6 +339,118 @@ describe("App", () => {
       instance.stdin.write("y");
       await flush();
       expect(answers).toEqual(["once"]);
+    });
+  });
+
+  describe("model picker", () => {
+    function entry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+      return {
+        id: "llama-3.3-70b-versatile",
+        provider: "groq",
+        displayName: "Llama 3.3 70B",
+        family: "llama",
+        contextWindow: 131_072,
+        maxOutputTokens: 32_768,
+        toolCall: true,
+        reasoning: false,
+        pricing: undefined,
+        ...overrides,
+      };
+    }
+
+    test("renders in place of the input box once requested", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "model-picker-requested", entries: [entry()] });
+      await flush();
+
+      expect(instance.lastFrame()).toContain("Llama 3.3 70B");
+    });
+
+    // The concrete mechanical proof of "context preserved" (feature-plan.md's own acceptance
+    // criterion): the resolved session carries the picked model/provider, and nothing else —
+    // `messages` in particular is exactly what the session already had, not migrated or dropped.
+    test("typing filters the list, and Enter resolves the highlighted entry — leaving messages untouched", async () => {
+      const selected: SessionState<ModelMessage>[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const startingSession = session({ messages: [{ role: "user", content: "hi" }] });
+      const instance = render(
+        <App
+          session={startingSession}
+          connectDispatch={(d) => (dispatch = d)}
+          onModelSelected={(next) => selected.push(next)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({
+        type: "model-picker-requested",
+        entries: [
+          entry({ id: "llama-3.3-70b-versatile", displayName: "Llama 3.3 70B" }),
+          entry({ id: "llama-3.1-8b-instant", displayName: "Llama 3.1 8B" }),
+        ],
+      });
+      await flush();
+
+      // Narrows to the second entry only — "8b" is not a substring of the first entry's id or
+      // displayName.
+      instance.stdin.write("8b");
+      await flush();
+      expect(instance.lastFrame()).toContain("8b");
+
+      instance.stdin.write("\r");
+      await flush();
+
+      expect(selected).toEqual([
+        { ...startingSession, model: "llama-3.1-8b-instant", provider: "groq" },
+      ]);
+      expect(selected[0]?.messages).toBe(startingSession.messages);
+    });
+
+    test("Escape and Ctrl-D both cancel without resolving a model", async () => {
+      const cancelled: string[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onModelPickerCancel={() => cancelled.push("cancelled")}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "model-picker-requested", entries: [entry()] });
+      await flush();
+      instance.stdin.write("\x1b"); // Escape
+      // A bare Escape byte is ambiguous with the start of a longer ANSI sequence (an arrow key,
+      // say), so Ink's own input parser holds it for a short window (App.js's own
+      // pendingInputFlushDelayMilliseconds, 20ms) before treating it as a standalone Escape
+      // keypress — longer than the plain macrotask tick `flush()` waits everywhere else in this
+      // file.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(cancelled).toEqual(["cancelled"]);
+
+      dispatch({ type: "model-picker-requested", entries: [entry()] });
+      await flush();
+      instance.stdin.write("\x04"); // Ctrl-D
+      await flush();
+      expect(cancelled).toEqual(["cancelled", "cancelled"]);
+    });
+
+    test("shows a +N more hint once the filtered list exceeds the visible window", async () => {
+      const { instance, dispatch } = await connect();
+      const entries = Array.from({ length: 12 }, (_, i) =>
+        entry({ id: `model-${i}`, displayName: `Model ${i}` }),
+      );
+
+      dispatch({ type: "model-picker-requested", entries });
+      await flush();
+
+      expect(instance.lastFrame()).toContain("+2 more — keep typing to narrow");
     });
   });
 });
