@@ -135,10 +135,15 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
     });
 
     const seenDuringOnPlan: string[] = [];
-    decideUndo(session(), ["2"], { sessionsDir: join(root, "sessions"), checkpointsDir }, (plan) => {
-      seenDuringOnPlan.push(readFileSync(join(workTree, "a.txt"), "utf8"));
-      expect(plan.restored).toEqual(["a.txt"]);
-    });
+    decideUndo(
+      session(),
+      ["2"],
+      { sessionsDir: join(root, "sessions"), checkpointsDir },
+      (plan) => {
+        seenDuringOnPlan.push(readFileSync(join(workTree, "a.txt"), "utf8"));
+        expect(plan.restored).toEqual(["a.txt"]);
+      },
+    );
 
     expect(seenDuringOnPlan).toEqual(["after\n"]);
     expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
