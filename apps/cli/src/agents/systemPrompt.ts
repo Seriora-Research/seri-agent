@@ -51,8 +51,26 @@ Never pass \`edit\` content you did not just read from the file. \`edit\` cannot
 # Verifying
 After you change code, run the project's own checks — its tests, typecheck or build — where you reasonably can, and fix what you broke.`;
 
-// AGENTS.md is appended, never a substitute: a project without one used to get a 29-character
-// prompt with no tool guidance at all, which is the failure this module exists to fix.
+// Never within a session: identity, tool guidance, the read->edit->write sequence.
+function buildStableTier(): string {
+  return SYSTEM_PROMPT;
+}
+
+// At session start: AGENTS.md is appended, never a substitute — a project without one used to get
+// a 29-character prompt with no tool guidance at all, which is the failure this module exists to
+// fix. Future hook point: Stage 10 recipe metadata joins this tier alongside AGENTS.md.
+function buildContextTier(agentsContent: string): string {
+  return agentsContent;
+}
+
+// Last, so a change here invalidates the least of a cached prefix. Nothing produces volatile
+// content yet (no memory built this stage) — this is a structural placeholder.
+// Position (last) is not test-asserted while this returns "" — empty content is unobservable in
+// the output. Add a position-pinning test when this tier first returns real content.
+function buildVolatileTier(): string {
+  return "";
+}
+
 export function buildSystemPrompt(agentsContent: string): string {
-  return [SYSTEM_PROMPT, agentsContent].filter(Boolean).join("\n\n");
+  return [buildStableTier(), buildContextTier(agentsContent), buildVolatileTier()].filter(Boolean).join("\n\n");
 }
