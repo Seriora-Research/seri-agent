@@ -483,20 +483,17 @@ function makeApprovalPrompt(
         }
       });
       rl.on("SIGINT", () => deliverSignal("SIGINT"));
-      rl.question(
-        approvalPromptText(toolName, args, offersAlways),
-        (answer) => {
-          answered = true;
-          abort.dispose();
-          rl.close();
-          const typed = answer.trim().toLowerCase();
-          // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
-          // user did not clearly give is not an approval. An "a"/"always" typed at a shell prompt
-          // (not offered, see PERSISTABLE_TOOLS) is "unrecognised" by the same rule, not a special case.
-          const wantsAlways = offersAlways && (typed === "a" || typed === "always");
-          resolve(typed === "y" || typed === "yes" ? "once" : wantsAlways ? "always" : "no");
-        },
-      );
+      rl.question(approvalPromptText(toolName, args, offersAlways), (answer) => {
+        answered = true;
+        abort.dispose();
+        rl.close();
+        const typed = answer.trim().toLowerCase();
+        // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
+        // user did not clearly give is not an approval. An "a"/"always" typed at a shell prompt
+        // (not offered, see PERSISTABLE_TOOLS) is "unrecognised" by the same rule, not a special case.
+        const wantsAlways = offersAlways && (typed === "a" || typed === "always");
+        resolve(typed === "y" || typed === "yes" ? "once" : wantsAlways ? "always" : "no");
+      });
     });
 }
 
@@ -1499,7 +1496,12 @@ async function runTui(
       return;
     }
     try {
-      await command.run(liveState.session, args, dirs(ctx), tuiPresenter(dispatch, awaitNextPersist));
+      await command.run(
+        liveState.session,
+        args,
+        dirs(ctx),
+        tuiPresenter(dispatch, awaitNextPersist),
+      );
     } catch (err) {
       dispatch({
         type: "command-error",
