@@ -6,6 +6,7 @@
     "moduleResolution": "bundler",
     "skipLibCheck": true,
     "resolveJsonModule": true,
+    "jsx": "react-jsx",
     "types": ["bun-types"]
   },
   "include": ["src", "tests"]
