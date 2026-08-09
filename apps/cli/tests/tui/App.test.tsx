@@ -126,6 +126,38 @@ describe("App", () => {
     expect(submitted).toEqual(["first line", "second line"]);
   });
 
+  // Required #4 (thermo-nuclear structural review): the pending-tool live region used a raw
+  // JSON.stringify on `args` with no cap, unlike cli.ts's own approval prompt, which already uses
+  // truncateArgsDisplay for the exact same reason (write_file's args carry a whole file body,
+  // which can otherwise scroll the box itself out of view). pendingTool is set only for
+  // write_file/edit, so those are the only tool-call names that populate it.
+  test("the pending-tool box truncates a long write_file body instead of rendering it in full", async () => {
+    const { instance, dispatch } = await connect();
+
+    dispatch({
+      type: "loop-event",
+      event: {
+        type: "tool-call",
+        name: "write_file",
+        args: { path: "a.txt", content: "x".repeat(300) },
+      },
+    });
+    await flush();
+
+    // "…)" specifically, not a bare "…": the reducer's own status line ("Running write_file…")
+    // already contains an ellipsis unconditionally, on both the truncated and untruncated
+    // renders — that alone doesn't distinguish them, measured by writing this test with a plain
+    // toContain("…") first and watching it pass against the pre-fix raw JSON.stringify too. The
+    // truncated render's own trailing "…)" — the ellipsis immediately followed by the closing
+    // paren truncateArgsDisplay's own output sits inside — only exists once truncation actually
+    // ran; the untruncated version's args string runs to its real, un-ellipsized end instead. Not
+    // trying to assert the FULL args text is absent either: Ink wraps a long line across the
+    // pending-tool box's own bordered rows, breaking up any single long contiguous substring
+    // regardless of whether truncation happened, so `not.toContain(the 300-character body)` is
+    // not a discriminating check on its own — measured the same way.
+    expect(instance.lastFrame()).toContain("…)");
+  });
+
   // HIGH-B/MEDIUM-C: Ctrl-D calls the onQuit prop directly — App.tsx wires it through to
   // InputBox unconditionally, so this is the same trigger runTui's own quit() attaches to.
   test("Ctrl-D calls onQuit", async () => {
