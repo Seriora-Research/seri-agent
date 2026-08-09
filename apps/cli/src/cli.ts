@@ -1454,6 +1454,7 @@ async function runTui(
     if (reactDispatch === undefined) return;
     const trimmed = value.trim();
     if (trimmed.length === 0) return;
+    dispatch({ type: "transcript-append", line: `> ${trimmed}` });
     const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
     if (name === "/exit") {
       if (args.length > 0) {
@@ -1535,6 +1536,8 @@ async function runTui(
       onApprovalAnswer,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
+        if (ctx.taskText.length > 0)
+          dispatch({ type: "transcript-append", line: `> ${ctx.taskText}` });
         currentTurn = runTurn(prepared.session);
       },
     }),
