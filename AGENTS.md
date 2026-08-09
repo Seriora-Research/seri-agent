@@ -77,8 +77,13 @@ every turn the session ran (exit 0, the same as any other completed `no-tool-cal
 turn IS in flight, quitting cancels it first — the same `deliverSignal`/cancel-slot mechanism a
 single Ctrl-C uses — and waits for it to actually unwind before exiting, so a tool mid-write is
 never orphaned and whatever usage that turn had already spent still makes it into the summary;
-the exit code in that case is 1 (an aborted turn, same as every other cancelled-and-not-finished
-run), not 0 — `seri "task" && next` must not run `next` off the back of a task `/exit` cut short.
+the exit code in that case is 1, the same code every other *unaccomplished* run returns
+(`max-iterations`, `repeated-denials`, a declined-and-nothing-ran `no-tool-call`) — not the
+signal-death every OTHER abort path in this file uses, and not 0 either: `seri "task" && next`
+must not run `next` off the back of a task `/exit` cut short. This assumes the cancel slot is
+free; if a Ctrl-C already spent it (the paragraph above), quitting has nothing left to cancel
+with and escalates straight to the fatal path instead, the same as a second Ctrl-C would — no
+summary, no unwind, the process dies by signal.
 
 **Gate-first permissions**, not sandboxing. `apps/cli/src/gate/gate.ts` defines three
 `PermissionMode`s (`read-only` / `approve-each` / `auto`) that cycle via `/mode`. A new
