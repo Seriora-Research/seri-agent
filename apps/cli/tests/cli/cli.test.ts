@@ -15,9 +15,9 @@ import { createInterface, type Interface } from "node:readline";
 import { PassThrough } from "node:stream";
 import type { ModelMessage } from "ai";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
-import { checkpointStoreDir, createCheckpointer } from "../../src/checkpoint/checkpoint";
+import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
-import { chooseInterfaceOutput, run } from "../../src/cli";
+import { chooseInterfaceOutput, run, SLASH_COMMANDS } from "../../src/cli";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
 import { loadGrants, permissionsPath, projectKey } from "../../src/permissions/store";
 import { getGroqModel } from "../../src/provider/groq";
@@ -1603,6 +1603,48 @@ describe("run (task invocation)", () => {
       });
     },
   );
+
+  // MEDIUM-D: a task whose first word happens to be /exit, followed by other words, is a task
+  // regardless of whether /exit is registered in SLASH_COMMANDS at all — its own `accepts()`
+  // (when it existed) already rejected trailing args, so this alone does not exercise MEDIUM-F's
+  // fix. See the bare-word test below for that.
+  test("a task starting with /exit is sent to the model, not treated as a quit command", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop();
+
+    const code = await run(["/exit", "the", "debugger", "and", "retry"], {
+      runLoop: fake,
+      loadAgentsFile: () => "",
+      sessionsDir,
+    });
+
+    expect(code).toBe(0);
+    expect(capture()?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "/exit the debugger and retry",
+    });
+  });
+
+  // MEDIUM-F: /exit is deliberately not in SLASH_COMMANDS (it only means anything to a live TUI —
+  // see the table's own comment in cli.ts) — before that fix, a BARE `seri /exit` (no trailing
+  // args — the previous test's trailing-args case was already routed to the model by the old
+  // entry's own `accepts()`, so it never actually exercised this) matched the table's no-op
+  // entry: with no session (this test's own case, a fresh empty sessionsDir) it printed a
+  // nonsense "No session to run /exit against" and exited 1, the fake runLoop never invoked at
+  // all. Now it reaches the model as an ordinary task like any other.
+  test("a bare /exit with no session is sent to the model, not treated as a quit command", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop();
+
+    const code = await run(["/exit"], {
+      runLoop: fake,
+      loadAgentsFile: () => "",
+      sessionsDir,
+    });
+
+    expect(code).toBe(0);
+    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "/exit" });
+  });
 });
 
 describe("run (permanent permissions)", () => {
@@ -2226,4 +2268,42 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     });
     expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("final\n");
   }, 20_000);
+
+  // Round 7 code review: the finding-9 fix from the previous round did not actually hold on the
+  // TUI path — rewindCommand called recordBarrier() right after presenter.sessionUpdated(next),
+  // on the strength of a comment claiming the truncation was "already persisted by this point,"
+  // true on the non-interactive path (consolePresenter's own sessionUpdated calls saveSession
+  // synchronously) but not on the TUI path (tuiPresenter's own sessionUpdated only dispatches;
+  // the actual write is deferred to App.tsx's async effect). This test exercises rewindCommand
+  // directly, through SLASH_COMMANDS, with a presenter whose sessionUpdated is a promise this
+  // test controls — the same shape tuiPresenter's own now has, minus the reducer/effect
+  // machinery, which is what makes the genuine await-ordering observable without a real TUI.
+  test("rewindCommand does not record the barrier until sessionUpdated's own promise resolves", async () => {
+    seed();
+    const session = loadSession<ModelMessage>(SESSION_ID, sessionsDir);
+    const storeDir = checkpointStoreDir(checkpointsDir, workTree);
+
+    let resolveSessionUpdated: (() => void) | undefined;
+    const fakePresenter = {
+      message: () => {},
+      onPlan: () => {},
+      restore: () => {},
+      sessionUpdated: () =>
+        new Promise<void>((resolve) => {
+          resolveSessionUpdated = resolve;
+        }),
+    };
+
+    const rewind = SLASH_COMMANDS.get("/rewind");
+    if (rewind === undefined) throw new Error("/rewind is not registered");
+    const done = rewind.run(session, [], { sessionsDir, checkpointsDir }, fakePresenter);
+
+    // sessionUpdated's own promise is still pending — recordBarrier must not have run yet.
+    expect(readLog(storeDir, SESSION_ID).some((r) => r.kind === "rewind-barrier")).toBe(false);
+
+    resolveSessionUpdated?.();
+    await done;
+
+    expect(readLog(storeDir, SESSION_ID).some((r) => r.kind === "rewind-barrier")).toBe(true);
+  }, 15_000);
 });

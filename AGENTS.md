@@ -63,6 +63,40 @@ platform-specific gotchas (SIGINT-vs-SIGTERM, why `runRipgrep` has to be async s
 interrupted) live in `apps/cli/src/signals.ts` — read its comments before touching signal
 handling, don't re-derive the sequencing from this summary.
 
+**On a real terminal (the Ink TUI, `apps/cli/src/tui/`), the same first-cancels/second-is-fatal
+rule only holds while a turn is actually in flight** — the cancel slot is registered for the
+duration of one `driveLoop` call, not the process's whole lifetime, so a Ctrl-C pressed while
+nothing is running (between turns) finds the slot already empty and is immediately fatal, not a
+"first press" with a second still to come. The TUI never exits on its own once a turn
+completes — it returns to awaiting input for another task or slash command, indefinitely; the
+only graceful exit is `/exit` (an exact match — trailing words show a command-error instead of
+quitting, the same as every other TUI slash command's own `accepts()` guard failing shows a
+command-error rather than silently falling through to a task; that fallback is the
+NON-INTERACTIVE `handleSlashCommand`'s own behavior for input its table doesn't match at all, a
+different path) or Ctrl-D at the input box. If nothing
+is running, both unmount the TUI immediately and resolve the run with a normal exit code and the
+same final `printUsage` token/cost summary the non-interactive path prints, accumulated across
+every turn the session ran (exit 0, the same as any other completed `no-tool-call` turn). If a
+turn IS in flight, quitting cancels it first — the same `deliverSignal`/cancel-slot mechanism a
+single Ctrl-C uses — and waits for it to actually unwind before exiting, so a tool mid-write is
+never orphaned and whatever usage that turn had already spent still makes it into the summary;
+the exit code in that case is 1, the same code every other *unaccomplished* run returns
+(`max-iterations`, `repeated-denials`, a declined-and-nothing-ran `no-tool-call`) — not the
+signal-death every OTHER abort path in this file uses, and not 0 either: `seri "task" && next`
+must not run `next` off the back of a task `/exit` cut short. This assumes the cancel slot is
+free; if a Ctrl-C already spent it (the paragraph above), quitting has nothing left to cancel
+with and escalates straight to the fatal path instead, the same as a second Ctrl-C would — no
+summary, no unwind, the process dies by signal.
+
+**`--max-turns` means something different in the TUI (finding 8, thermo-nuclear structural
+review, round 6): a per-task budget, not a per-session one.** `driveLoop` is called fresh for
+every submitted task in an interactive session (`runTui`'s own `runTurn`), each call getting the
+same `maxIterations: maxTurns` passed at startup — so a session that submits five tasks gets up to
+`maxTurns` model turns for EACH of them, not `maxTurns` total across the whole session, unlike the
+non-interactive `seri <task>` invocation, where one `driveLoop` call is the whole run. Deliberate,
+not a bug: a hard session-wide cap would make a long interactive session progressively less usable
+the more it was used, which is not what an iteration cap is for.
+
 **Gate-first permissions**, not sandboxing. `apps/cli/src/gate/gate.ts` defines three
 `PermissionMode`s (`read-only` / `approve-each` / `auto`) that cycle via `/mode`. A new
 session starts in `approve-each`, not `read-only`: native Windows does not enforce the OS

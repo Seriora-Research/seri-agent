@@ -10,7 +10,7 @@
 // free or the sentence above stops being true.
 import type { RestorePlan, RestoreResult } from "../checkpoint/checkpoint";
 import type { LoopEvent } from "../loop/loop";
-import { writeFileVerification, type CheckOutcome } from "../verify/outcome";
+import { type CheckOutcome, writeFileVerification } from "../verify/outcome";
 
 // stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
 // parseArgs rejects, or no task given — is a usage error: printed to stderr, exit 2.
@@ -23,6 +23,8 @@ export const USAGE = `Usage:
   seri --resume <id> [task]       continue that session
   seri [--resume <id>] /mode      cycle the permission mode
   seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha>
+  /exit (inside the TUI)          end the session, or Ctrl-D — not a seri subcommand: it means
+                                    nothing outside a live TUI, and "seri /exit" is just a task
   seri login | signup | logout
   seri config set|list|unset
   seri permissions list|remove <tool>
@@ -66,6 +68,35 @@ export function escapeControlChars(text: string): string {
   );
 }
 
+// write_file's input carries the whole file body, so an uncapped JSON.stringify can render
+// hundreds of lines on one prompt line and scroll the question itself out of scrollback before the
+// user can even see it, let alone answer it. Capped, not omitted: the prompt's job is still to
+// show what is about to happen, just not all of it when "all of it" is unreadable anyway. Used by
+// cli.ts's own approval prompt and by App.tsx's live pending-tool box (Ink's TUI) — the two render
+// sites that show `write_file`/`edit`'s own args, whole-file-body carrying tools both.
+const MAX_PROMPT_ARGS_LENGTH = 200;
+export function truncateArgsDisplay(args: unknown): string {
+  // JSON.stringify(undefined) returns `undefined` (the value, not a string), and `.length` on
+  // that throws inside this Promise executor — which rejects approvalPrompt, which nothing in
+  // runLoop wraps, so it would escape driveLoop as an unhandled rejection, skipping printUsage and
+  // the exit-code logic entirely. Unreachable through cli.ts today (call.input is provider-parsed
+  // JSON, never bare undefined), but ApprovalPrompt is an exported seam Stage 11's Ink prompt
+  // re-implements against, and `args: unknown` promises nothing about what a future caller passes.
+  const json = JSON.stringify(args) ?? "undefined";
+  return json.length > MAX_PROMPT_ARGS_LENGTH ? `${json.slice(0, MAX_PROMPT_ARGS_LENGTH)}…` : json;
+}
+
+// Round 7 code review: this line was written out twice — once in makeApprovalPrompt's own
+// rl.question call (cli.ts), once in App.tsx's ApprovalBox — exactly the drift risk
+// toolResultLine/toolAllowedLine (below) already exist to prevent elsewhere. One shared function
+// instead, used by both. `offersAlways` gates the "[a]lways" option — PERSISTABLE_TOOLS decides
+// it at each call site, not here, so this file stays free of a permissions/store.ts import.
+export function approvalPromptText(toolName: string, args: unknown, offersAlways: boolean): string {
+  return `Approve ${escapeControlChars(toolName)}(${truncateArgsDisplay(args)})? ${
+    offersAlways ? "[y]es / [a]lways (saved for this project) / [N]o" : "[y]es / [N]o"
+  } `;
+}
+
 // stderr, not stdout: stdout carries the model's own output and is routinely piped, and a warning
 // that a file will not be recoverable must not end up inside whatever consumed that pipe.
 export function printWarning(message: string): void {
@@ -90,22 +121,31 @@ export function printPreApproved(tools: readonly string[]): void {
   );
 }
 
-// Printed before the restore happens, not after. Every path here comes from git's own output, so
+// One line-shape, one place: cli.ts's consolePresenter and tuiPresenter both call this — the
+// former via its own default `console.log` sink, the latter with a sink that dispatches a
+// transcript-append action per line — instead of each hand-copying the same
+// restored/deleted/ignored template, which can drift out of sync the moment one of them changes
+// and the other does not.
+//
+// Called before the restore happens, not after. Every path here comes from git's own output, so
 // an ignored file can never appear under "restored" or "deleted"; the ones that were written and
 // skipped are listed separately rather than left for the user to notice was missing. The deletion
 // list matters most: the removal pass takes every untracked, non-ignored file, including ones a
 // human made by hand in another terminal.
-export function printUndoPlan(plan: RestorePlan): void {
-  if (plan.diff) console.log(plan.diff);
-  for (const path of plan.restored) console.log(`restored ${path}`);
-  for (const path of plan.deleted) console.log(`deleted  ${path}`);
-  if (plan.ignored.length > 0) console.log(`not restored (gitignored): ${plan.ignored.join(", ")}`);
+export function undoPlanLines(plan: RestorePlan, sink: (line: string) => void = console.log): void {
+  if (plan.diff) sink(plan.diff);
+  for (const path of plan.restored) sink(`restored ${path}`);
+  for (const path of plan.deleted) sink(`deleted  ${path}`);
+  if (plan.ignored.length > 0) sink(`not restored (gitignored): ${plan.ignored.join(", ")}`);
 }
 
 // Restoring is never the operation that loses work: the state it just replaced was committed first.
-export function printRecovery(result: RestoreResult): void {
-  console.log(`The state this replaced is commit ${result.preUndoCommit}. To get it back:`);
-  console.log(`  ${result.recoverCommand}`);
+export function recoveryLines(
+  result: RestoreResult,
+  sink: (line: string) => void = console.log,
+): void {
+  sink(`The state this replaced is commit ${result.preUndoCommit}. To get it back:`);
+  sink(`  ${result.recoverCommand}`);
 }
 
 // The per-write cost is the whole reason `verify.enabled` exists, and a user deciding whether to
@@ -144,6 +184,37 @@ function verificationSuffix(verification: CheckOutcome): string {
   }
 }
 
+// Finding 7 (thermo-nuclear structural review, round 6): reducer.ts's own applyLoopEvent (Ink's
+// TUI transcript) used to reimplement these two line shapes by hand instead of sharing them, and
+// had drifted — missing the `edit`-specific message and the verification suffix on tool-result,
+// missing escapeControlChars on tool-allowed's tool name. Extracted so the two paths render the
+// SAME line, the same way undoPlanLines/recoveryLines already do for /undo and /restore, rather
+// than needing another audit the next time either drifts again.
+//
+// `edit` returns the edited text and writes nothing (provider/tools.ts's FS_MUTATING_TOOL_NAMES
+// comment), so a bare "done" reads as a file that changed — observed live, with the model moving
+// on as though it had. Named here rather than in the loop, which knows no tool names by design.
+//
+// The verification suffix is NOT named that way: the narrowing belongs to the module that
+// produces the shape, so this file asks it rather than re-deriving it, and `edit` stays the only
+// tool name here.
+export function toolResultLine(event: Extract<LoopEvent, { type: "tool-result" }>): string {
+  const verification = writeFileVerification(event.result);
+  return event.name === "edit"
+    ? "✓ edit done (text returned, nothing written)"
+    : `✓ ${event.name} done${verification === undefined ? "" : verificationSuffix(verification)}`;
+}
+
+// Printed because a grant the user cannot see is a grant they cannot revoke. This string is still
+// true — a tool that reaches "allow-new" IS approved for the rest of the run, run-scoped grant
+// included — but it is no longer the whole persistence decision: for write_file/edit, driveLoop
+// prints a SECOND line (printGrantPersisted, above) naming the permanent half, only when a grant
+// was actually written. `name` is the same model-supplied call.toolName the approval prompt
+// renders, so it gets the same escaping — see escapeControlChars above.
+export function toolAllowedLine(name: string): string {
+  return `✓ ${escapeControlChars(name)} approved for the rest of this run`;
+}
+
 export function printEvent(event: LoopEvent): void {
   switch (event.type) {
     case "text-delta":
@@ -152,34 +223,14 @@ export function printEvent(event: LoopEvent): void {
     case "tool-call":
       console.log(`\n→ ${event.name}(${JSON.stringify(event.args)})`);
       break;
-    case "tool-result": {
-      // `edit` returns the edited text and writes nothing (provider/tools.ts's
-      // FS_MUTATING_TOOL_NAMES comment), so a bare "done" reads as a file that changed — observed
-      // live, with the model moving on as though it had. Named here rather than in the loop, which
-      // knows no tool names by design.
-      //
-      // The verification suffix is NOT named that way: the narrowing belongs to the module that
-      // produces the shape, so this file asks it rather than re-deriving it, and `edit` stays the
-      // only tool name here.
-      const verification = writeFileVerification(event.result);
-      console.log(
-        event.name === "edit"
-          ? "✓ edit done (text returned, nothing written)"
-          : `✓ ${event.name} done${verification === undefined ? "" : verificationSuffix(verification)}`,
-      );
+    case "tool-result":
+      console.log(toolResultLine(event));
       break;
-    }
     case "permission-denied":
       console.log(`✗ ${event.name} blocked`);
       break;
-    // Printed because a grant the user cannot see is a grant they cannot revoke. This string is
-    // still true — a tool that reaches "allow-new" IS approved for the rest of the run, run-scoped
-    // grant included — but it is no longer the whole persistence decision: for write_file/edit,
-    // driveLoop prints a SECOND line (printGrantPersisted, above) naming the permanent half, only
-    // when a grant was actually written. event.name is the same model-supplied call.toolName the
-    // approval prompt renders, so it gets the same escaping — see escapeControlChars above.
     case "tool-allowed":
-      console.log(`✓ ${escapeControlChars(event.name)} approved for the rest of this run`);
+      console.log(toolAllowedLine(event.name));
       break;
     case "compacted":
       console.log(`\n⚙ compacted ${event.evictedCount} messages`);

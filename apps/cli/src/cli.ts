@@ -13,31 +13,29 @@ import { login as loginReal, logout as logoutReal } from "./auth/commands";
 import { getWorkosClientId } from "./auth/deviceFlow";
 import {
   appendBarrier,
-  checkpointStoreDir,
   createCheckpointer,
-  restoreCommit,
-  rewindConversation,
-  undoFiles,
+  type RestorePlan,
+  type RestoreResult,
 } from "./checkpoint/checkpoint";
 import { projectRoot } from "./checkpoint/shadowGit";
 import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
-  escapeControlChars,
+  approvalPromptText,
   printEvent,
   printGrantPersisted,
   printPreApproved,
-  printRecovery,
-  printUndoPlan,
   printUsage,
   printWarning,
   type RunUsage,
+  recoveryLines,
   USAGE,
+  undoPlanLines,
   usageError,
 } from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
 import { loadVerifyConfig } from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
-import { cycleMode, type PermissionMode } from "./gate/gate";
+import type { PermissionMode } from "./gate/gate";
 import {
   type ApprovalAnswer,
   type ApprovalPrompt,
@@ -51,12 +49,21 @@ import { toolDefinitions } from "./provider/tools";
 import {
   findMostRecentSession,
   loadSession,
-  saveSession,
   type SessionState,
+  saveSession,
 } from "./session/session";
-import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
+import { deliverSignal, onSignalCancel, onSignalCleanup, raiseSignal } from "./signals";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
+import {
+  type CommandDirs,
+  checkpointTarget,
+  decideModeCycle,
+  decideRestore,
+  decideRewind,
+  decideUndo,
+} from "./tui/commands";
+import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/reducer";
 import { withVerification } from "./verify/wrapTools";
 
 type CliDeps = {
@@ -76,9 +83,60 @@ type CliDeps = {
   permissionsDir?: string;
   grep?: typeof grepReal;
   createInterface?: () => Interface;
+  // Whether to mount the Ink TUI instead of the piped/non-interactive path — read from a real
+  // process.stdout.isTTY in exactly one place, the import.meta.main entrypoint at the bottom of
+  // this file, and threaded in from there. Defaults to false (below), never to a live
+  // process.stdout.isTTY read inside run() itself: cli.test.ts calls run() directly, bypassing
+  // import.meta.main entirely, and a bare process.stdout.isTTY read would fire identically for a
+  // real invocation and a test call — mounting a raw-mode-input Ink app inside a test process
+  // whenever the test runner happens to have a real terminal attached (a human running `bun test`
+  // in an actual terminal window, not CI). The safe default is what makes every existing test
+  // call site (which never passes isTTY) correctly never mount the TUI, regardless of what
+  // terminal the test process happens to run in.
+  isTTY?: boolean;
 };
 
-type CommandDirs = { sessionsDir: string; checkpointsDir: string };
+// The presentation half of the decision/presentation split (research-spec) for /mode, /undo,
+// /restore and /rewind: the DECISION is one of the pure functions in tui/commands.ts (Phase 2) —
+// this is only how the result is shown, with two implementations mirroring ApprovalPrompt's own
+// two-implementation shape. consolePresenter (below) is what every command used, inline, before
+// this refactor — console.log, byte-for-byte unchanged; tuiPresenter (near the TUI entry point
+// further down) dispatches into the live transcript instead. `restore` mirrors what /undo and
+// /restore return (`{plan, message}` — RestoreResult is a RestorePlan plus the recovery commit);
+// `sessionUpdated` is only ever called by /mode and /rewind, the two commands that actually change
+// the session — /undo and /restore never touch it, so they never call it. `onPlan` is /undo and
+// /restore's own pre-mutation report (output.ts's own documented guarantee on undoPlanLines:
+// "before the restore happens, not after") — threaded through to decideUndo/decideRestore
+// (tui/commands.ts) rather than folded into `restore`, which only ever sees the FINAL result.
+//
+// `sessionUpdated` OWNS persistence, not optional: it is the only thing that ever calls
+// saveSession on the non-interactive path (consolePresenter's own implementation) or, on the TUI
+// path, the only thing that dispatches session-updated at all — the reducer's own onSessionChange
+// effect is what actually persists there. Before this, cycleModeCommand/rewindCommand called
+// saveSession directly AND called sessionUpdated, the exact "caller keeps its own copy" shape
+// MEDIUM-1 was opened to eliminate for driveLoop, left standing here — not a live race (nothing
+// else wrote in between on either path), but the same shape as a bug five rounds went into
+// closing does not get to stand next to a comment (driveLoop's own, and this file's) claiming the
+// reducer is the ONLY writer on the TUI path.
+//
+// Returns `Promise<void>`, genuinely awaitable — not just typed that way for form. On the
+// non-interactive path (consolePresenter) the underlying saveSession call is already
+// synchronous, so the promise settles immediately either way. On the TUI path (tuiPresenter) it
+// does NOT settle until the reducer's own onSessionChange effect actually runs and persists that
+// session — the fix for a real gap found by code review: rewindCommand used to call
+// `recordBarrier()` right after `sessionUpdated(next)` on the strength of a comment claiming the
+// truncation was "already persisted by this point," true on the non-interactive path but not on
+// the TUI path, where sessionUpdated only ever dispatched (persistence was, and still is, effect-
+// driven — see onSessionChange's own comment). A crash/kill in that window could leave a barrier
+// durably recorded pointing at a truncation that never reached disk, exactly what finding 9 was
+// supposed to prevent. Making this awaitable — not adding a second writer, the effect is still
+// the only one — is what lets a caller that needs the ordering (rewindCommand) actually get it.
+type CommandPresenter = {
+  message: (text: string) => void;
+  onPlan: (plan: RestorePlan) => void;
+  restore: (result: { plan: RestoreResult; message: string }) => void;
+  sessionUpdated: (next: SessionState<ModelMessage>) => Promise<void>;
+};
 
 type SlashCommand = {
   // Whether these arguments are an invocation of this command at all — checked BEFORE the dispatch
@@ -89,16 +147,36 @@ type SlashCommand = {
   // exact and small, so anything outside them falls through to the model, which is the only
   // direction that cannot silently swallow work.
   accepts: (args: string[]) => boolean;
-  run: (session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs) => void;
+  // `presenter` is optional and defaults to consolePresenter at each command's own definition
+  // (below) — handleSlashCommand's call site (unchanged) never passes one; the TUI entry point's
+  // does. `void | Promise<void>`, not just `void`: cycleModeCommand/rewindCommand are `async` now
+  // (they await presenter.sessionUpdated's own promise — CommandPresenter's own comment), undo/
+  // restoreCommand are not and never need to be. Both call sites await this either way, a no-op
+  // for the ones that were never async.
+  run: (
+    session: SessionState<ModelMessage>,
+    args: string[],
+    dirs: CommandDirs,
+    presenter?: CommandPresenter,
+  ) => void | Promise<void>;
+  // Whether this command mutates the checkpoint store or truncates session.messages, either of
+  // which a still-in-flight turn can silently undo or corrupt (a mid-turn /rewind truncating
+  // messages only for the next messages-updated, from that same in-flight turn, to replace the
+  // whole array wholesale, erasing the truncation; /undo and /restore mutate files on disk while
+  // a tool may be mid-write) — runTui's onSubmit reads this field to gate the command while a
+  // turn is running (MEDIUM-3). Undefined (not `false`) for every command that doesn't need it,
+  // /mode included: /mode never touches a file or the checkpoint store, and live mid-turn gating
+  // (C-1) is the whole point of letting it run while a turn is in flight. A field on the SAME
+  // table a command is already defined in, not a second Set restating the command strings
+  // elsewhere (this table's own comment above: "One table, so a new one is added in exactly one
+  // place") — a future command that mutates run state can't get silently left ungated by being
+  // added here and nowhere else.
+  mutatesRunState?: true;
 };
 
 // A step count, or nothing at all.
 function isStepCount(args: string[]): boolean {
   return args.length === 0 || (args.length === 1 && /^[1-9]\d*$/.test(args[0] ?? ""));
-}
-
-function steps(args: string[]): number {
-  return args[0] === undefined ? 1 : Number(args[0]);
 }
 
 // Commands that operate on the resume target rather than being a task for the model. One table,
@@ -115,67 +193,86 @@ function steps(args: string[]): number {
 // the hazard is gone from every call site rather than from the ones that remember Object.hasOwn.
 export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   ["/mode", { accepts: (args) => args.length === 0, run: cycleModeCommand }],
-  ["/undo", { accepts: isStepCount, run: undoCommand }],
+  ["/undo", { accepts: isStepCount, run: undoCommand, mutatesRunState: true }],
   // A sha and nothing else. `seri "/restore the header spacing"` is a task.
   [
     "/restore",
     {
       accepts: (args) => args.length === 1 && /^[0-9a-f]{4,40}$/.test(args[0] ?? ""),
       run: restoreCommand,
+      mutatesRunState: true,
     },
   ],
-  ["/rewind", { accepts: isStepCount, run: rewindCommand }],
+  ["/rewind", { accepts: isStepCount, run: rewindCommand, mutatesRunState: true }],
 ]);
 
-function cycleModeCommand(
+// MEDIUM-F: /exit is deliberately NOT a SLASH_COMMANDS entry — it used to be, with a no-op `run`
+// for the non-interactive path, but handleSlashCommand (below) resolves a resume target for
+// anything it matches: `seri /exit` with no session printed a nonsense "No session to run /exit
+// against" and exited 1, and with a session it silently ran the no-op and exited 0 — the task
+// never reached the model, exactly the hijack SlashCommand's own comment above says this table
+// exists to prevent. /exit only means anything to a live TUI (there is nothing to "exit" in a
+// process that is about to end anyway), so it is intercepted solely in runTui's own onSubmit,
+// below, and documented in USAGE without a table entry backing it.
+
+// The non-interactive presenter: exactly what every command printed inline before this refactor
+// (console.log, plus undoPlanLines/recoveryLines — via their own default console.log sink — for
+// /undo and /restore) — used by handleSlashCommand, unchanged observable output. A factory, not a
+// plain object, because `sessionUpdated` now owns persistence (CommandPresenter's own comment) and
+// needs `dirs` to call saveSession with — closed over here rather than threaded through a second
+// way. `onPlan` is what makes the console path print the plan BEFORE undoFiles/restoreCommit
+// mutate anything, restoring output.ts's own documented guarantee.
+function consolePresenter(dirs: CommandDirs): CommandPresenter {
+  return {
+    message: (text) => console.log(text),
+    onPlan: (plan) => undoPlanLines(plan),
+    restore: ({ plan, message }) => {
+      console.log(message);
+      if (plan.restored.length > 0 || plan.deleted.length > 0) recoveryLines(plan);
+    },
+    // Trivially awaitable: saveSession is already synchronous, so this settles on the same tick
+    // it is called — `async` only to satisfy CommandPresenter's own contract (its comment).
+    sessionUpdated: async (next) => saveSession(next, dirs.sessionsDir),
+  };
+}
+
+async function cycleModeCommand(
   session: SessionState<ModelMessage>,
   _args: string[],
   dirs: CommandDirs,
-): void {
-  session.permissionMode = cycleMode(session.permissionMode);
-  saveSession(session, dirs.sessionsDir);
-  console.log(`Session ${session.id}: permission mode is now ${session.permissionMode}`);
+  presenter: CommandPresenter = consolePresenter(dirs),
+): Promise<void> {
+  const { next, message } = decideModeCycle(session);
+  // Awaited even though /mode has nothing of its own to sequence after sessionUpdated (unlike
+  // /rewind's recordBarrier): sessionUpdated is `async` now, so a saveSession failure surfaces as
+  // a promise rejection instead of a synchronous throw, and this function's own callers only
+  // catch the latter — awaiting is what keeps that failure reaching them at all, not a change in
+  // when persistence happens.
+  await presenter.sessionUpdated(next);
+  presenter.message(message);
 }
 
-// The tree a session's checkpoints are of, and the store they live in. The session records the
-// directory seri was started in, which is not necessarily the project — resolving the root here
-// rather than at each call site is what keeps the live run and the three restoring commands
-// addressing the same store, since the key is derived from it.
-function checkpointTarget(
+// The step the user asked for, not the record's `seq`. `seq` is the 0-based index of a tool
+// record while `/undo n` is 1-based over DISTINCT trees, so the two only ever agreed by
+// accident: the first checkpoint printed "checkpoint 0", and over records [T0, T1, T1, T2]
+// `/undo 2` printed "checkpoint 2" while restoring the state that preceded tool call 1. A
+// number a user is shown has to be one they can hand back to the command that showed it.
+//
+// A step count is absolute — the n-th most recent distinct checkpoint — not relative to wherever
+// a previous undo left the worktree, so `/undo 1` run three times aims at the same checkpoint
+// three times. Measured before this: each of the three printed that it had undone and minted a
+// fresh recovery commit while the file stayed exactly where the first one put it. Saying so is
+// the same honesty `/rewind`'s "dropped 0 message(s)" already applies.
+//
+// Decision (decideUndo, tui/commands.ts) and presentation (the presenter) are split here per the
+// research spec — the decision function wraps checkpoint.ts's undoFiles unchanged.
+function undoCommand(
   session: SessionState<ModelMessage>,
+  args: string[],
   dirs: CommandDirs,
-): {
-  storeDir: string;
-  worktree: string;
-} {
-  const worktree = projectRoot(session.cwd);
-  return { storeDir: checkpointStoreDir(dirs.checkpointsDir, worktree), worktree };
-}
-
-function undoCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
-  const result = undoFiles({
-    ...checkpointTarget(session, dirs),
-    sessionId: session.id,
-    steps: steps(args),
-    onPlan: printUndoPlan,
-  });
-  // The step the user asked for, not the record's `seq`. `seq` is the 0-based index of a tool
-  // record while `/undo n` is 1-based over DISTINCT trees, so the two only ever agreed by
-  // accident: the first checkpoint printed "checkpoint 0", and over records [T0, T1, T1, T2]
-  // `/undo 2` printed "checkpoint 2" while restoring the state that preceded tool call 1. A
-  // number a user is shown has to be one they can hand back to the command that showed it.
-  //
-  // A step count is absolute — the n-th most recent distinct checkpoint — not relative to wherever
-  // a previous undo left the worktree, so `/undo 1` run three times aims at the same checkpoint
-  // three times. Measured before this: each of the three printed that it had undone and minted a
-  // fresh recovery commit while the file stayed exactly where the first one put it. Saying so is
-  // the same honesty `/rewind`'s "dropped 0 message(s)" already applies.
-  if (result.restored.length === 0 && result.deleted.length === 0) {
-    console.log(`Already at checkpoint ${steps(args)}; no file changed.`);
-    return;
-  }
-  console.log(`Undid to checkpoint ${steps(args)}.`);
-  printRecovery(result);
+  presenter: CommandPresenter = consolePresenter(dirs),
+): void {
+  presenter.restore(decideUndo(session, args, dirs, presenter.onPlan));
 }
 
 // The other end of what /undo and /restore print: put the worktree back to a commit this session
@@ -185,50 +282,34 @@ function restoreCommand(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
+  presenter: CommandPresenter = consolePresenter(dirs),
 ): void {
-  const commit = args[0] ?? "";
-  const result = restoreCommit({
-    ...checkpointTarget(session, dirs),
-    sessionId: session.id,
-    commit,
-    onPlan: printUndoPlan,
-  });
-  if (result.restored.length === 0 && result.deleted.length === 0) {
-    console.log(`Already at ${commit}; no file changed.`);
-    return;
-  }
-  console.log(`Restored ${commit}.`);
-  printRecovery(result);
+  presenter.restore(decideRestore(session, args, dirs, presenter.onPlan));
 }
 
-function rewindCommand(
+async function rewindCommand(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
-): void {
-  const { storeDir } = checkpointTarget(session, dirs);
-  const { rewindTo } = rewindConversation({ storeDir, sessionId: session.id, steps: steps(args) });
-  // Clamped, because an anchor can outlive the array it indexed: a previous /rewind truncated the
-  // session and the messages that followed reused those indices. Slicing past the end is a silent
-  // no-op, and reporting the anchor rather than the count would announce a truncation that never
-  // happened.
-  const kept = Math.min(rewindTo, session.messages.length);
-  const dropped = session.messages.length - kept;
-  session.messages = session.messages.slice(0, kept);
-  saveSession(session, dirs.sessionsDir);
-  // Clamping only catches the anchors that are too LARGE, and those are the harmless ones. An
-  // older anchor small enough to index the rebuilt array points at a DIFFERENT message: with
-  // anchors [1,3,5,7] over nine messages, `/rewind 2` truncates to five, a resume appends five
-  // more and records [6,8], and `/rewind 3` then reaches the stale 7 and slices to 7 — leaving an
-  // assistant tool-call whose tool result was dropped, which is AI_MissingToolResultsError on the
-  // next resume and the exact failure `rewindTo = messages.length - 1` exists to prevent. So a
-  // rewind draws the same kind of line compaction does. Recorded only when something was actually
-  // dropped: a no-op rewind invalidates nothing, and a barrier for it would throw away history
-  // that is still good.
-  if (dropped > 0) appendBarrier(storeDir, session.id, "rewind");
-  console.log(
-    `Session ${session.id}: dropped ${dropped} message(s), ${kept} remain. No file was touched.`,
-  );
+  presenter: CommandPresenter = consolePresenter(dirs),
+): Promise<void> {
+  const { next, message, recordBarrier } = decideRewind(session, args, dirs);
+  // Awaited — genuinely, not just called and moved on from. Code review found the previous
+  // version of this fix was not actually ordered on the TUI path: tuiPresenter's sessionUpdated
+  // only ever dispatched, so "called AFTER sessionUpdated" was not "called after persistence"
+  // there, and a crash in that window could still leave a durably-recorded barrier pointing at a
+  // truncation that never reached disk. sessionUpdated's own promise (CommandPresenter's own
+  // comment) now does not settle until the write actually happens on both paths, so awaiting it
+  // here is what makes this genuinely ordered rather than only appearing to be.
+  await presenter.sessionUpdated(next);
+  // Not wrapped in its own try/catch: a failure here propagates out to the SAME try/catch every
+  // slash command's own `run` already sits inside (onSubmit's, handleSlashCommand's) — the
+  // truncation is already persisted by this point, so surfacing the failure as this command's own
+  // error, rather than silently swallowing it the way driveLoop's compaction-barrier warning
+  // does, is the more honest signal: the barrier itself did not land, and a later /rewind may not
+  // be able to cross this point.
+  recordBarrier();
+  presenter.message(message);
 }
 
 // `model` is optional on SessionState so that sessions written before the field existed still load,
@@ -333,22 +414,6 @@ function loadOrCreateSession(
 // interface is opened — onAbort would catch that case too, that being the whole point of it, but a
 // turn that has already been cancelled should not touch stdin to find out.
 
-// write_file's input carries the whole file body, so an uncapped JSON.stringify can render
-// hundreds of lines on one prompt line and scroll the question itself out of scrollback before the
-// user can even see it, let alone answer it. Capped, not omitted: the prompt's job is still to
-// show what is about to happen, just not all of it when "all of it" is unreadable anyway.
-const MAX_PROMPT_ARGS_LENGTH = 200;
-function truncateArgsDisplay(args: unknown): string {
-  // JSON.stringify(undefined) returns `undefined` (the value, not a string), and `.length` on
-  // that throws inside this Promise executor — which rejects approvalPrompt, which nothing in
-  // runLoop wraps, so it would escape driveLoop as an unhandled rejection, skipping printUsage and
-  // the exit-code logic entirely. Unreachable through cli.ts today (call.input is provider-parsed
-  // JSON, never bare undefined), but ApprovalPrompt is an exported seam Stage 11's Ink prompt
-  // re-implements against, and `args: unknown` promises nothing about what a future caller passes.
-  const json = JSON.stringify(args) ?? "undefined";
-  return json.length > MAX_PROMPT_ARGS_LENGTH ? `${json.slice(0, MAX_PROMPT_ARGS_LENGTH)}…` : json;
-}
-
 // Whichever of the two is still a terminal. stdout carries the model's own output and is
 // routinely piped (`seri "…" | tee log`) — see printWarning's own comment in cli/output.ts, the
 // same rule — which is why this used to be stderr unconditionally. But stderr redirects just as
@@ -418,20 +483,17 @@ function makeApprovalPrompt(
         }
       });
       rl.on("SIGINT", () => deliverSignal("SIGINT"));
-      rl.question(
-        `Approve ${escapeControlChars(toolName)}(${truncateArgsDisplay(args)})? ${offersAlways ? "[y]es / [a]lways (saved for this project) / [N]o" : "[y]es / [N]o"} `,
-        (answer) => {
-          answered = true;
-          abort.dispose();
-          rl.close();
-          const typed = answer.trim().toLowerCase();
-          // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
-          // user did not clearly give is not an approval. An "a"/"always" typed at a shell prompt
-          // (not offered, see PERSISTABLE_TOOLS) is "unrecognised" by the same rule, not a special case.
-          const wantsAlways = offersAlways && (typed === "a" || typed === "always");
-          resolve(typed === "y" || typed === "yes" ? "once" : wantsAlways ? "always" : "no");
-        },
-      );
+      rl.question(approvalPromptText(toolName, args, offersAlways), (answer) => {
+        answered = true;
+        abort.dispose();
+        rl.close();
+        const typed = answer.trim().toLowerCase();
+        // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
+        // user did not clearly give is not an approval. An "a"/"always" typed at a shell prompt
+        // (not offered, see PERSISTABLE_TOOLS) is "unrecognised" by the same rule, not a special case.
+        const wantsAlways = offersAlways && (typed === "a" || typed === "always");
+        resolve(typed === "y" || typed === "yes" ? "once" : wantsAlways ? "always" : "no");
+      });
     });
 }
 
@@ -671,7 +733,7 @@ function dirs(ctx: RunContext): CommandDirs {
 // prepareSession and a bare `/undo` (no --resume) does not fall into the new-session path. `/undo`
 // and `/rewind` are keyed on the session's own `cwd`, not the current one, so running them from a
 // different directory still finds the store the edits were recorded in.
-function handleSlashCommand(ctx: RunContext): number | undefined {
+async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> {
   const [name = "", ...commandArgs] = ctx.taskText.split(/\s+/).filter(Boolean);
   const command = SLASH_COMMANDS.get(name);
   if (command === undefined || !command.accepts(commandArgs)) return undefined;
@@ -682,7 +744,11 @@ function handleSlashCommand(ctx: RunContext): number | undefined {
     return 1;
   }
   try {
-    command.run(loadSession<ModelMessage>(id, ctx.sessionsDir), commandArgs, dirs(ctx));
+    // Awaited: cycleModeCommand/rewindCommand are `async` (SlashCommand.run's own comment) — not
+    // awaiting here would let this function return before their own continuation (recordBarrier,
+    // the final message) ran at all, since nothing else keeps the process alive for a background
+    // continuation to finish in once run() returns and the real binary calls process.exit(code).
+    await command.run(loadSession<ModelMessage>(id, ctx.sessionsDir), commandArgs, dirs(ctx));
     return 0;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -824,14 +890,7 @@ function addTokens(total: number | undefined, reported: number | undefined): num
   return reported === undefined ? total : (total ?? 0) + reported;
 }
 
-// `maxTurns` is an argument rather than a field of ctx: it is neither the resume target nor where
-// its state lives, and this is the only place that reads it.
-async function driveLoop(
-  prepared: PreparedRun,
-  ctx: RunContext,
-  deps: CliDeps,
-  maxTurns: number | undefined,
-): Promise<{
+type DriveLoopResult = {
   doneReason: DoneReason | undefined;
   cancelledBy: NodeJS.Signals | undefined;
   usage: RunUsage;
@@ -839,8 +898,61 @@ async function driveLoop(
   // to reassemble itself: "refused at least once AND executed nothing at all" — see the tracking
   // below for what each half means and why.
   refusedWithoutRunning: boolean;
-}> {
-  const { session, storeDir, tools, model, permissionMode, worktree, allowedTools } = prepared;
+};
+
+// `maxTurns` is an argument rather than a field of ctx: it is neither the resume target nor where
+// its state lives, and this is the only place that reads it. `onEvent` is how it reports events —
+// driveLoop only ever calls it with the raw LoopEvent, never anything TUI-shaped: printEvent
+// directly for the non-interactive path, `(event) => dispatch({type: "loop-event", event})` for
+// the TUI one (runTui, further down), which is the one place that still needs a TuiAction at all.
+// A plain callback rather than driveLoop taking a Dispatch and wrapping every event in a
+// `loop-event` envelope itself (which is all this function ever did with one) — that used to make
+// the non-interactive path build a TUI action just so printDispatch could unwrap it again, and
+// pull TuiAction into a loop-driving path that has no other reason to know a TUI type exists. The
+// loop-driving logic itself (the `for await`, the cancellation/AbortController handling) is
+// unchanged either way.
+//
+// `getPermissionMode` is read fresh on every gate check (via the getter below), not resolved once
+// like `model`/`allowedTools`/`worktree` are — a real bug this fixes (reported live on a pty): the
+// non-interactive path's `getPermissionMode` is just `() => prepared.permissionMode`, frozen for
+// the run's whole duration exactly as before; the TUI path's reads whatever the reducer's CURRENT
+// session says, so a mid-run /mode takes effect on the very next tool call rather than only on the
+// next turn.
+//
+// `persist` is what actually writes a messages-updated session to disk — a callback rather than a
+// hardcoded `saveSession` call, because the TWO callers need different answers to "does driveLoop
+// own persistence for this session." The non-interactive path passes `(s) => saveSession(s,
+// ctx.sessionsDir)`, unchanged. The TUI path passes a no-op: MEDIUM-1 found that even a CORRECT
+// merge dispatched to the reducer still left a ~6ms window where this function's own direct write
+// (using the session the CURRENT turn started with) was the last word on disk, since the reducer's
+// own onSessionChange effect corrects it asynchronously, not synchronously — a crash, a fatal
+// Ctrl-C or a SIGTERM landing in that window still persisted a reverted /mode. A no-op here closes
+// the window entirely rather than narrowing it: the reducer (via App.tsx's onSessionChange) is the
+// ONLY writer on the TUI path, full stop.
+//
+// `approvalPrompt` is the other per-caller swap, findings 1+5 (thermo-nuclear structural review,
+// round 6): this used to be hardcoded to `makeApprovalPrompt(deps.createInterface)` inside this
+// function, called on EVERY path including the TUI one — but makeApprovalPrompt opens its own
+// readline.Interface on process.stdin and has its own `rl.on("SIGINT", ...)`, which on the TUI
+// path fights Ink for stdin ownership (Ink's own useInput already owns raw mode there) and races
+// signals.ts's single cancel slot with a second, independent SIGINT route. The non-interactive
+// path still passes `makeApprovalPrompt(deps.createInterface)`, unchanged; the TUI path
+// (runTui, further down) passes its own tuiApprovalPrompt — the SAME ApprovalPrompt contract
+// (loop.ts), resolved via the reducer's own pendingApproval state and a keypress instead of
+// readline.question, which is what the research spec's own "Command migration" section already
+// said a TUI would supply: "a different function of the identical signature... with zero change
+// to loop.ts/gate.ts."
+async function driveLoop(
+  prepared: PreparedRun,
+  ctx: RunContext,
+  deps: CliDeps,
+  maxTurns: number | undefined,
+  onEvent: (event: LoopEvent) => void,
+  getPermissionMode: () => PermissionMode,
+  persist: (session: SessionState<ModelMessage>) => void,
+  approvalPrompt: ApprovalPrompt,
+): Promise<DriveLoopResult> {
+  const { session, storeDir, tools, model, worktree, allowedTools } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
@@ -874,21 +986,30 @@ async function driveLoop(
       model,
       tools,
       messages: session.messages,
-      // Resolved once, in prepareSession, and carried on `prepared` the same way `model` is —
-      // see PreparedRun's own comment. Reading it from there rather than re-deriving it here means
-      // there is nothing this call site could assign into `session` even by accident.
-      permissionMode,
+      // A getter, not a resolved-once value — see this function's own comment above for why.
+      // loop.ts reads `opts.permissionMode` fresh on every gate check (loop.ts's own
+      // decidePermission call), never caching it into a local at the top of the generator, which
+      // is what makes a getter here actually take effect mid-turn rather than only on the next one.
+      get permissionMode() {
+        return getPermissionMode();
+      },
       // The seed runLoop has accepted since PR #45 and nothing produced until now. A seed, not a
       // handle: the loop copies it (loop.ts:211) and growth comes back out as `tool-allowed`,
       // below.
       allowedTools,
-      approvalPrompt: makeApprovalPrompt(deps.createInterface),
+      approvalPrompt,
       system: session.systemPrompt,
       signal: controller.signal,
       maxIterations: maxTurns,
     })) {
       if (event.type === "messages-updated") {
-        saveSession({ ...session, messages: event.messages }, ctx.sessionsDir);
+        // `persist` (this function's own comment above explains the two callers) is the ONLY
+        // write for this event now — MEDIUM-1: driveLoop used to ALSO call saveSession directly
+        // here, using the session THIS call started with, and rely on the TUI path's reducer to
+        // correct it moments later; that left a real, if narrow, crash/fatal-signal window where
+        // the stale write was the last one on disk. No direct saveSession call here anymore.
+        persist({ ...session, messages: event.messages });
+        onEvent(event);
         continue;
       }
       if (event.type === "permission-denied" && event.reason === "declined") hadDenial = true;
@@ -924,10 +1045,10 @@ async function driveLoop(
         usage.outputTokens = addTokens(usage.outputTokens, event.usage.outputTokens);
       }
       if (event.type === "done") doneReason = event.reason;
-      printEvent(event);
-      // After printEvent, not before: these are two lines of one message and the run-scoped fact
-      // ("approved for the rest of this run") has to come first. Wrapped for the same reason the
-      // appendBarrier call above is (see its comment): an EACCES, a full disk or a config dir
+      onEvent(event);
+      // After the dispatch above, not before: these are two lines of one message and the
+      // run-scoped fact ("approved for the rest of this run") has to come first. Wrapped for the
+      // same reason the appendBarrier call above is (see its comment): an EACCES, a full disk or a config dir
       // removed mid-session is a failure of the thing that remembers grants, and it must not take
       // down the user's in-flight run. Losing the grant costs one prompt next time, so it is a
       // warning, not silence — a grant the user believes was saved and was not is the Hermes #4739
@@ -951,6 +1072,501 @@ async function driveLoop(
   }
 
   return { doneReason, cancelledBy, usage, refusedWithoutRunning: hadDenial && !ranTool };
+}
+
+// The TUI's presenter: the same `{message}`/`{plan, message}` shapes tui/commands.ts's decision
+// functions return, dispatched into the live transcript instead of printed. Calls the SAME
+// undoPlanLines/recoveryLines output.ts uses for the console path (M-6: these used to be a
+// hand-copied duplicate of those two functions' line shapes, which could drift out of sync the
+// moment one changed and the other did not), with a sink that dispatches a transcript-append
+// action per line instead of output.ts's own default console.log.
+// `awaitPersist` is runTui's own awaitNextPersist (its own comment explains the queue) — what
+// makes `sessionUpdated` genuinely await the reducer's own onSessionChange effect actually
+// persisting, not just dispatching, fixing the gap code review found in the previous round's
+// finding-9 fix (this file's own CommandPresenter comment has the full account).
+function tuiPresenter(dispatch: Dispatch, awaitPersist: () => Promise<void>): CommandPresenter {
+  const append = (line: string): void => dispatch({ type: "transcript-append", line });
+  return {
+    message: append,
+    onPlan: (plan) => undoPlanLines(plan, append),
+    restore: ({ plan, message }) => {
+      append(message);
+      if (plan.restored.length > 0 || plan.deleted.length > 0) recoveryLines(plan, append);
+    },
+    sessionUpdated: (next) => {
+      const persisted = awaitPersist();
+      dispatch({ type: "session-updated", session: next });
+      return persisted;
+    },
+  };
+}
+
+// Mounted only when deps.isTTY is true (run()'s own branch, above driveLoop's other call site —
+// see CliDeps.isTTY's own comment for why that reads a passed-in flag, not a live
+// process.stdout.isTTY). Drives the SAME driveLoop the non-interactive path uses for the initial
+// task already appended to `prepared.session.messages` by prepareSession — only how it reports
+// events differs. Slash commands typed into the TUI's input box reuse the exact same command
+// functions (cycleModeCommand etc.) the non-interactive path uses, via tuiPresenter instead of
+// consolePresenter — one decision function, two presentations, per the research spec.
+//
+// `ink` (and everything that transitively pulls it in, tui/App.tsx included) is imported lazily,
+// here, rather than at this file's top level: reconciler.js has a module-load-time check —
+// `if (process.env['DEV'] === 'true') { …; await import('./devtools.js'); }`, unconditional, not
+// gated behind an actual render() call — so a top-level `import … from "ink"` ran that check (and
+// attempted a react-devtools-core connection under DEV=true) on every invocation of this binary,
+// `seri --version` and every piped/non-interactive command included, regardless of whether this
+// function is ever reached. Confirmed both ways: DEV=true seri --version attempting a devtools
+// connection before this fix, and not attempting one after it.
+async function runTui(
+  prepared: PreparedRun,
+  ctx: RunContext,
+  deps: CliDeps,
+  maxTurns: number | undefined,
+  skipPermissions: boolean,
+): Promise<DriveLoopResult> {
+  const { render } = await import("ink");
+  const { createElement } = await import("react");
+  const { App } = await import("./tui/App");
+
+  // Findings 2/3/4/6 (thermo-nuclear structural review, round 6): `liveState` is a SYNCHRONOUS
+  // mirror of the reducer's own state, kept current by running the exact same pure `tuiReducer`
+  // function here, in `dispatch` below, every time ANY caller in this closure dispatches an
+  // action — the identical computation React's own `useReducer` (App.tsx) will ALSO run against
+  // its OWN copy, moments later. Every read in this file that used to go through `liveSession` (a
+  // value only ever refreshed by `onSessionChange`, which only fires from App.tsx's own
+  // `useEffect(() => onSessionChange?.(state.session), [state.session])` — a REACT EFFECT, which
+  // runs asynchronously after a render commits, never synchronously with the dispatch that
+  // triggered it) now reads `liveState.session` instead: the exact "caller keeps a stale copy of
+  // state a pure reducer already owns" shape C-1 took five rounds to eliminate for driveLoop,
+  // left standing here for the TUI's OWN reads building the NEXT action off `liveSession` — a
+  // mid-run /mode's `session-updated` could revert messages the reducer had already merged
+  // (finding 2), /rewind's own clamp could compute against a stale, shorter message array right
+  // after a turn completed (finding 3), submitting a new task right after a turn completes could
+  // silently drop that turn's own tail from what the next one sees (finding 4), and a mid-run
+  // /mode's permission change was not guaranteed to take effect on the very next tool call despite
+  // `getPermissionMode`'s own comment saying so (finding 6). Persistence is NOT part of this fix
+  // and deliberately stays effect-driven — `onSessionChange` below still only fires from React's
+  // own effect, MEDIUM-1's own accepted, documented, narrow trade-off (persistence lagging by a
+  // tick) is unrelated to reads racing ahead of a stale copy, which is what this closes.
+  let liveState: TuiState = initialTuiState(prepared.session);
+  // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
+  // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
+  // what every other function in this closure actually calls now.
+  let reactDispatch: Dispatch | undefined;
+  // The single dispatch funnel every dispatch in this closure now goes through — driveLoop's own
+  // onEvent mapping (runTurn, below), onSubmit, quit(), tuiPresenter, tuiApprovalPrompt. Updates
+  // `liveState` synchronously, in the same tick as the call, BEFORE handing the same action to
+  // React's own dispatch — see this function's own comment above for why that ordering is what
+  // makes `liveState.session` (and, findings 1+5, `liveState.pendingApproval`) trustworthy to read
+  // immediately afterward, unlike anything that waited on `onSessionChange`'s effect.
+  const dispatch: Dispatch = (action) => {
+    liveState = tuiReducer(liveState, action);
+    reactDispatch?.(action);
+  };
+  let turnInFlight = false;
+  // HIGH-B: the currently in-flight turn's own promise (a fresh one assigned at each of the two
+  // call sites that start one, both guarded so a new turn is never started while one is already
+  // running — see runTurn's own comment). quit() awaits this when a turn is in flight instead of
+  // abandoning it, so cancelling on the way out actually unwinds before the quit sequence runs.
+  // The initial value is never awaited for real: quit() only reads it when turnInFlight is true,
+  // which is only ever set by an assignment to this variable first.
+  let currentTurn: Promise<void> = Promise.resolve();
+  // LOW-G: without this, a second /exit or Ctrl-D while quit() is already unwinding a cancelled
+  // turn would re-enter instance.rerender()/waitUntilExit() on an instance already mid-teardown —
+  // Ink's own render() has no guard against that itself.
+  let quitting = false;
+
+  // HIGH-1: accumulated across every turn this TUI session runs (addTokens, the same summing
+  // driveLoop itself does within one turn), not just the last one — a multi-turn session's own
+  // usage/cost summary should total the whole session, not whichever turn happened to be running
+  // when the user quit. `doneReason`/`refusedWithoutRunning` are NOT accumulated — the exit code
+  // they drive (run()'s own logic, unchanged) is about the LAST turn's outcome, the same as it
+  // always answered "did the run just now finish, and how."
+  let usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
+  let doneReason: DoneReason | undefined;
+  let refusedWithoutRunning = false;
+
+  // Resolvers waiting on onSessionChange's OWN NEXT actual persist, not merely the next dispatch
+  // — tuiPresenter's own sessionUpdated (round 7 code review's finding-9 fix) pushes one every
+  // time it dispatches a session-updated action, via awaitNextPersist below, and onSessionChange
+  // resolves and clears the whole queue once its own saveSession call for whatever session
+  // actually landed has returned. This does not add a second writer — onSessionChange is still
+  // the only thing that calls saveSession on the TUI path — it only makes that ONE writer's
+  // completion observable to a caller that needs to sequence after it (rewindCommand's own
+  // recordBarrier).
+  let pendingPersistResolvers: Array<{ resolve: () => void; reject: (err: unknown) => void }> = [];
+  function awaitNextPersist(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      pendingPersistResolvers.push({ resolve, reject });
+    });
+  }
+
+  // The single source of truth for persistence on the TUI path (C-1/MEDIUM-1's fix — see
+  // driveLoop's own comment on its messages-updated case, and tui/reducer.ts's messages-updated
+  // case, for the bug this replaced): App.tsx calls this whenever the reducer's own `state.session`
+  // changes, for any reason — a slash command, or driveLoop's messages-updated. Persistence ONLY,
+  // now — `liveState` (this function's own comment above) is what every READ goes through, kept
+  // current synchronously by `dispatch`, not by this effect-driven callback.
+  //
+  // Round 8 code review, finding 1: saveSession used to be called bare here, with nothing to catch
+  // a throw (ENOSPC, EACCES, the sessions dir removed mid-session). Every structurally equivalent
+  // persistence-adjacent write elsewhere in this file (appendBarrier, rememberGrant) is wrapped in
+  // try/catch + printWarning specifically so a write failure degrades gracefully — this one was
+  // not, and worse: a throw here happened BEFORE the pendingPersistResolvers-draining loop, so any
+  // command awaiting awaitNextPersist() (cycleModeCommand's/rewindCommand's own `await
+  // presenter.sessionUpdated(next)`) hung forever instead of failing. Rejecting those resolvers
+  // (rather than resolving them) also preserves finding 9's own guarantee: rewindCommand's
+  // recordBarrier() is called only after its own await resolves, and a rejection means it never
+  // runs — the barrier must not be recorded pointing at a truncation that never reached disk.
+  function onSessionChange(session: SessionState<ModelMessage>): void {
+    const resolvers = pendingPersistResolvers;
+    pendingPersistResolvers = [];
+    try {
+      saveSession(session, ctx.sessionsDir);
+    } catch (err) {
+      const message = `could not save the session: ${err instanceof Error ? err.message : String(err)}`;
+      printWarning(message);
+      for (const { reject } of resolvers) reject(new Error(message));
+      return;
+    }
+    for (const { resolve } of resolvers) resolve();
+  }
+
+  // Live-read on every gate check (driveLoop's own `get permissionMode()`), not resolved once —
+  // the other half of C-1's fix, and finding 6: reads `liveState.session` (this function's own
+  // comment above), not the old effect-refreshed `liveSession`, so a mid-run /mode is guaranteed
+  // to be visible on the very next gate check rather than only "usually, once the effect catches
+  // up in time." `skipPermissions` still wins unconditionally, matching prepareSession's own
+  // original derivation of `prepared.permissionMode`: a run-scoped
+  // `--dangerously-skip-permissions` override is not something a mid-run /mode should be able to
+  // undo.
+  function getPermissionMode(): PermissionMode {
+    return skipPermissions ? "auto" : liveState.session.permissionMode;
+  }
+
+  // LOW-3: render() now runs before the promise executor (below), not inside it, so `instance` is
+  // a plain `const` fully assigned before any code that reads it (runTurn's catch, quit()) can
+  // possibly run — those are only ever reached from an Ink effect, which cannot fire until this
+  // synchronous render() call has already returned. Previously `instance` was a `let` assigned
+  // inside the executor, safe only because render() happened to complete synchronously before any
+  // microtask could drain — true, but an accident of execution order rather than something the
+  // structure itself guaranteed.
+  let resolveRunTui!: (result: DriveLoopResult) => void;
+  let rejectRunTui!: (err: Error) => void;
+  const settled = new Promise<DriveLoopResult>((resolve, reject) => {
+    resolveRunTui = resolve;
+    rejectRunTui = reject;
+  });
+
+  // Findings 1+5: the TUI's own ApprovalPrompt (loop.ts's contract, unchanged) — resolved via the
+  // reducer's own pendingApproval state and a keypress (App.tsx's ApprovalBox) instead of
+  // readline.question, so the TUI path never opens a second stdin consumer or a second SIGINT
+  // route fighting Ink's own raw-mode ownership and signals.ts's single cancel slot. Only one
+  // approval can ever be pending at a time (loop.ts awaits each one before its next gate check,
+  // and `turnInFlight` already keeps at most one turn running), so a single closure variable is
+  // enough to stash the resolver — the same pattern `resolveRunTui`/`currentTurn` above already
+  // use. Wraps `resolve` (not stored bare) so the normal, keypress-driven resolution path also
+  // disposes the `onAbort` registration below, mirroring makeApprovalPrompt's own
+  // `abort.dispose()` in its `rl.on("close", ...)` handler — otherwise a stale listener would sit
+  // on the turn's own AbortController for the rest of the turn, ready to double-resolve (harmless
+  // but untidy: a Promise settles once, so this would just be a silent no-op) the next time it
+  // aborts for an unrelated reason.
+  let pendingApprovalResolve: ((answer: ApprovalAnswer) => void) | undefined;
+
+  function tuiApprovalPrompt(
+    toolName: string,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<ApprovalAnswer> {
+    return new Promise<ApprovalAnswer>((resolve) => {
+      // Mirrors makeApprovalPrompt's own already-aborted check: a turn already cancelled before
+      // this call must not prompt at all.
+      if (signal?.aborted === true) {
+        resolve("no");
+        return;
+      }
+      const offersAlways = PERSISTABLE_TOOLS.has(toolName);
+      // The other direction, mirroring makeApprovalPrompt's own onAbort wiring: a cancel that
+      // arrives WHILE this prompt is up (a Ctrl-C mid-approval) resolves "no" and clears
+      // pendingApproval, the same as an explicit "n" answer would, instead of leaving the box
+      // rendered with nothing left listening for an answer.
+      const abort = onAbort(signal, () => {
+        pendingApprovalResolve = undefined;
+        dispatch({ type: "approval-resolved" });
+        resolve("no");
+      });
+      pendingApprovalResolve = (answer) => {
+        abort.dispose();
+        resolve(answer);
+      };
+      dispatch({ type: "approval-requested", toolName, args, offersAlways });
+    });
+  }
+
+  // The other end of tuiApprovalPrompt — App.tsx's onApprovalAnswer prop, called from
+  // ApprovalBox's own keypress handler.
+  function onApprovalAnswer(answer: ApprovalAnswer): void {
+    const resolve = pendingApprovalResolve;
+    if (resolve === undefined) return;
+    pendingApprovalResolve = undefined;
+    dispatch({ type: "approval-resolved" });
+    resolve(answer);
+  }
+
+  // Runs one turn against whatever `session` is (the initial task on first call; the live
+  // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
+  // reducer and driveLoop have always shared. Guarded against overlap: a second Enter press
+  // while a turn is still running must not start a competing driveLoop call, which would fight
+  // the first over signals.ts's single cancel slot. MEDIUM-1: the TUI path passes a no-op
+  // `persist` — the reducer (via onSessionChange above) is the only writer now.
+  async function runTurn(session: SessionState<ModelMessage>): Promise<void> {
+    if (reactDispatch === undefined || turnInFlight) return;
+    turnInFlight = true;
+    const turnPrepared: PreparedRun = { ...prepared, session };
+    try {
+      const result = await driveLoop(
+        turnPrepared,
+        ctx,
+        deps,
+        maxTurns,
+        (event) => dispatch({ type: "loop-event", event }),
+        getPermissionMode,
+        () => {},
+        tuiApprovalPrompt,
+      );
+      usage = {
+        inputTokens: addTokens(usage.inputTokens, result.usage.inputTokens),
+        outputTokens: addTokens(usage.outputTokens, result.usage.outputTokens),
+      };
+      doneReason = result.doneReason;
+      refusedWithoutRunning = result.refusedWithoutRunning;
+      // LOW-J: `result.cancelledBy` is deliberately not read here. The TUI never re-raises a
+      // signal on a plain, individually-cancelled turn (H-3 returns it to awaiting input, not to
+      // process death) — only quit()'s own resolve decides `cancelledBy` for the run as a whole,
+      // and it always passes `undefined`, since even a turn quit() itself cancelled first
+      // (HIGH-B) ends the *session* by choice, not by a signal the shell needs to see re-raised.
+    } catch (err) {
+      // H-2: driveLoop rejecting (not just resolving with an aborted/errored `done`) used to
+      // leave this promise — and run()'s own `await runTui(...)` — hanging forever. Unmount
+      // first so raw mode is restored (M-2's own mechanism, mirrored here rather than relying
+      // solely on the fatal-signal cleanup below, since a rejection is not a signal), then
+      // reject, so run() actually settles instead of hanging.
+      instance.unmount();
+      rejectRunTui(err instanceof Error ? err : new Error(String(err)));
+    } finally {
+      turnInFlight = false;
+    }
+  }
+
+  // HIGH-1: the ONLY way this function's outer promise ever resolves (as opposed to rejecting, or
+  // the process dying by signal on the fatal Ctrl-C path — see onCancel below). Before this
+  // existed, runTui's promise only ever rejected, so run()'s printUsage/raiseSignal/exit-code
+  // logic was unreachable dead code for the entire TUI path, even after a turn completed
+  // normally.
+  //
+  // HIGH-B: if a turn is still running, quit() used to abandon it outright — controller.abort()
+  // was never called (so a tool child process kept running after this process was gone),
+  // whatever usage the abandoned turn had already spent was never folded into `usage` below, and
+  // `turnInFlight` never cleared, so runTui's promise never resolved at all and run() hung
+  // forever. Cancelling first, via the exact same deliverSignal("SIGINT") path a single Ctrl-C
+  // already uses, makes the turn unwind the normal way — driveLoop yields whatever final
+  // messages-updated/usage it can on the way out, runTurn's own try folds that into `usage` and
+  // `doneReason` (below, unchanged), and only once `currentTurn` actually settles does this
+  // proceed to the real quit sequence. `doneReason` for a turn ended this way is "aborted", which
+  // (run()'s own exit-code comment, further down, has the full accounting) resolves to exit 1 —
+  // the same code every other *unaccomplished* run returns (`max-iterations`,
+  // `repeated-denials`), not the signal-death every OTHER abort path in this file uses: a
+  // deliberate quit is not the fatal-signal case `raiseSignal` exists for. A task that was cut
+  // off mid-run is still not one `seri "…" && next` should treat as accomplished just because
+  // the user, not the model, was the one who ended it — this all assumes the cancel slot is
+  // still free. If a Ctrl-C already spent it (signals.ts's single slot, cleared the instant a
+  // press is delivered, before the turn it cancelled has even finished unwinding), the
+  // deliverSignal("SIGINT") call below still runs, but finds nothing registered and falls
+  // through to signals.ts's own fatal path instead — no unwind, no summary, the process dies by
+  // signal, the same as a second bare Ctrl-C press (AGENTS.md's own paragraph on the TUI covers
+  // this).
+  function quit(): void {
+    if (reactDispatch === undefined || quitting) return;
+    quitting = true;
+    // Finding 2 (round 7 code review): Ctrl-D used to be silently swallowed while ApprovalBox was
+    // mounted instead of InputBox. Denying the pending approval is folded into the SAME graceful
+    // quit sequence — not a separate "deny just this one prompt" path the way the old
+    // readline-based prompt's own Ctrl-D-at-empty-line handling worked — so Ctrl-D keeps one
+    // consistent meaning everywhere in the TUI. The turn this unblocks is still in flight
+    // afterward (a denied approval is not a finished turn), so the turnInFlight branch below
+    // still runs exactly as it would for any other in-flight-turn quit.
+    if (liveState.pendingApproval !== undefined) onApprovalAnswer("no");
+    const finishQuit = (): void => {
+      instance.rerender(
+        createElement(App, {
+          // LOW-J: inert after mount — App only reads `session` once, via useReducer's lazy
+          // initializer, so this rerender's value is never actually read. Passed anyway because
+          // the prop is required and `liveState.session` is the accurate value if that ever
+          // changes.
+          session: liveState.session,
+          done: true,
+          onSubmit,
+          onCancel: () => deliverSignal("SIGINT"),
+          onSessionChange,
+          onQuit: quit,
+          onApprovalAnswer,
+          connectDispatch: undefined,
+        }),
+      );
+      void instance.waitUntilExit().then(() => {
+        resolveRunTui({ doneReason, cancelledBy: undefined, usage, refusedWithoutRunning });
+      });
+    };
+    if (turnInFlight) {
+      // MEDIUM-5: without this, cancelling a still-running turn on the way out (this whole
+      // branch's own comment above) left the TUI looking frozen for however long the turn took
+      // to unwind, with no indication anything had happened or that Ctrl-C was still available
+      // to force it — dispatched before deliverSignal so it is visible even if the unwind never
+      // completes (a stuck tool ignoring its own abort signal).
+      dispatch({
+        type: "transcript-append",
+        line: "quitting — cancelling the in-flight turn, Ctrl-C to force",
+      });
+      deliverSignal("SIGINT");
+      void currentTurn.then(finishQuit);
+    } else {
+      finishQuit();
+    }
+  }
+
+  // H-1: a decision function throwing (e.g. `/undo 5` with fewer checkpoints than that) used to
+  // escape straight out of Ink's own input handler — mirrors handleSlashCommand's existing
+  // try/catch (the non-interactive path already has one) rather than leaving the TUI path with
+  // none. M-3: input shaped like a slash command that matches nothing, or matches one but fails
+  // its own accepts() guard, gets the same visible feedback instead of silently vanishing —
+  // genuinely free-form text (H-3) is the only thing that becomes a new task, and only when it
+  // is not shaped like a slash command at all. HIGH-1/MEDIUM-F: /exit is intercepted here, before
+  // the generic SLASH_COMMANDS dispatch, since quitting is runTui's own business, not a
+  // session-decision function's — it is not in that table at all (see the table's own comment).
+  // MEDIUM-D: an EXACT match only, `args.length === 0`, the same discipline every SLASH_COMMANDS
+  // entry's own accepts() already applies — `/exit the debugger and retry` is a task whose first
+  // word happens to be /exit, not a request to quit, and used to be hijacked into one.
+  // `async`, not just for `command.run`'s own sake: cycleModeCommand/rewindCommand are `async`
+  // now (SlashCommand.run's own comment), and the try/catch below has to `await` the call to
+  // still catch a later rejection — a bare synchronous call, unawaited, would let a failure past
+  // this function's own return and surface as an unhandled rejection instead of a command-error.
+  async function onSubmit(value: string): Promise<void> {
+    if (reactDispatch === undefined) return;
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return;
+    const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
+    if (name === "/exit") {
+      if (args.length > 0) {
+        dispatch({ type: "command-error", message: "/exit: invalid arguments." });
+        return;
+      }
+      quit();
+      return;
+    }
+    const command = SLASH_COMMANDS.get(name);
+    if (command === undefined) {
+      if (name.startsWith("/")) {
+        dispatch({ type: "command-error", message: `Unrecognized command: ${name}` });
+        return;
+      }
+      if (turnInFlight) {
+        dispatch({
+          type: "command-error",
+          message: "A turn is already running; wait for it to finish before submitting another.",
+        });
+        return;
+      }
+      currentTurn = runTurn({
+        ...liveState.session,
+        messages: [...liveState.session.messages, { role: "user", content: trimmed }],
+      });
+      return;
+    }
+    if (!command.accepts(args)) {
+      dispatch({ type: "command-error", message: `${name}: invalid arguments.` });
+      return;
+    }
+    // MEDIUM-3: gated by the command's own mutatesRunState (SlashCommand's own comment explains
+    // what it means and why /mode never sets it).
+    if (turnInFlight && command.mutatesRunState === true) {
+      dispatch({
+        type: "command-error",
+        message: `${name}: can't run while a turn is in flight.`,
+      });
+      return;
+    }
+    try {
+      await command.run(
+        liveState.session,
+        args,
+        dirs(ctx),
+        tuiPresenter(dispatch, awaitNextPersist),
+      );
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const instance = render(
+    createElement(App, {
+      session: prepared.session,
+      // H-3: multi-turn — the TUI never sets `done` itself here at mount. Exiting is /exit,
+      // Ctrl-D (quit(), above) or Ctrl-C's job (onCancel below and signals.ts), not an implicit
+      // "the last turn finished" one.
+      done: false,
+      onSubmit,
+      // A raw Ctrl-C press is routed into the same cancel slot the readline approval prompt
+      // uses (deliverSignal, cli.ts's own SIGINT-routing comment near makeApprovalPrompt).
+      // While a turn is in flight, the first press aborts it via driveLoop's own
+      // AbortController and returns control here — the promise above resolves, `turnInFlight`
+      // clears, and the TUI is back to awaiting input, exactly per H-3. A second press within
+      // that same turn — or any press while nothing is running at all, since nothing has the
+      // cancel slot registered between turns (an idle first Ctrl-C is immediately fatal) —
+      // finds the slot empty and falls straight through to signals.ts's own fatal path
+      // (raiseSignal), matching non-TUI behavior for the same two situations rather than
+      // inventing new exit semantics for either. Ink's own competing `exitOnCtrlC` default is
+      // turned off below, so this is the only handler.
+      onCancel: () => deliverSignal("SIGINT"),
+      onSessionChange,
+      onQuit: quit,
+      onApprovalAnswer,
+      connectDispatch: (reducerDispatch: Dispatch) => {
+        reactDispatch = reducerDispatch;
+        currentTurn = runTurn(prepared.session);
+      },
+    }),
+    // `interactive: true` — without it, Ink's own auto-detection (`ink.js`'s `resolveInteractiveOption`,
+    // `interactive ?? (!isInCi && stdout.isTTY)`) weighs the `CI` env var over the real terminal:
+    // whenever `CI`/`CONTINUOUS_INTEGRATION` is set (GitHub Actions sets `CI=true` on every job,
+    // unconditionally, even for a job that allocated a real pty), Ink decides it is non-interactive
+    // and stops live-rendering — it batches everything and "writes only the final frame at unmount"
+    // per its own docs — REGARDLESS of `stdout.isTTY`. This is what made every pty test in
+    // tuiPty.test.ts fail on CI's ubuntu-latest/macos-latest runners (reproduced locally by setting
+    // `CI=true` in WSL2, confirmed fixed by this option, confirmed still green without it) while
+    // passing 100% on WSL2, where `CI` is unset: keystrokes reached the process (confirmed with a
+    // raw stdin listener bypassing Ink entirely) but nothing was ever rendered to observe. seri
+    // already does its own, more accurate interactivity check before ever reaching this line —
+    // `runTui` is only called when `deps.isTTY` was true (`run()`'s own `isTTY ? await runTui(...) :
+    // ...`) — so overriding Ink's redundant, CI-env-var-driven second guess with that already-made
+    // decision is correct here, not just a test workaround: a real user running seri interactively
+    // inside any environment that happens to set `CI=true` (some devcontainers and cloud IDEs do,
+    // even for a genuinely interactive session) would hit the identical silent degradation.
+    { exitOnCtrlC: false, interactive: true },
+  );
+
+  // M-2: process.kill(pid, SIGINT) with no listeners left (raiseSignal, signals.ts's fatal
+  // path) terminates before any more JS runs, which would otherwise leave the terminal in raw
+  // mode — mirrors how the readline approval prompt already avoids this (closing the Interface
+  // puts the tty back out of raw mode before a second press re-raises for real,
+  // makeApprovalPrompt's own onAbort wiring). instance.unmount() is Ink's equivalent, and this
+  // runs on every fatal signal death this process can have, not just the ones a turn happens to
+  // be in flight for.
+  onSignalCleanup(() => instance.unmount());
+
+  return settled;
 }
 
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
@@ -999,18 +1615,32 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   // Before prepareSession, never after: a bare `/undo` must act on the resume target rather than
   // mint a session to act on.
-  const slash = handleSlashCommand(ctx);
+  const slash = await handleSlashCommand(ctx);
   if (slash !== undefined) return slash;
 
   const prepared = prepareSession(ctx, deps, skipPermissions);
   if (typeof prepared === "number") return prepared;
 
-  const { doneReason, cancelledBy, usage, refusedWithoutRunning } = await driveLoop(
-    prepared,
-    ctx,
-    deps,
-    maxTurns,
-  );
+  // TTY-inferred, not a flag (plan Decision 2): a real terminal gets the Ink TUI, driving the
+  // exact same driveLoop as the piped/CI path below — only how it reports events differs
+  // (dispatch into App.tsx's reducer vs. printEvent called directly). Falsy — piped, CI, a
+  // redirected file, or (deliberately) any caller that doesn't pass isTTY at all — takes the
+  // untouched path this project has always run: same function, same call order, same output. See
+  // CliDeps.isTTY's own comment for why this reads `deps.isTTY`, never process.stdout.isTTY
+  // directly.
+  const isTTY = deps.isTTY ?? false;
+  const { doneReason, cancelledBy, usage, refusedWithoutRunning } = isTTY
+    ? await runTui(prepared, ctx, deps, maxTurns, skipPermissions)
+    : await driveLoop(
+        prepared,
+        ctx,
+        deps,
+        maxTurns,
+        printEvent,
+        () => prepared.permissionMode,
+        (session) => saveSession(session, ctx.sessionsDir),
+        makeApprovalPrompt(deps.createInterface),
+      );
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are
@@ -1061,17 +1691,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // comes out of driveLoop's `for await` and never gets here. All of these used to exit 0 and let
   // `seri "…" && next` run next.
   //
-  // `aborted` does not reach this line today, and that rests on `controller.abort()` having
-  // exactly one caller: driveLoop's cancel handler, which sets cancelledBy first, so raiseSignal
-  // ran and did not return. Nothing enforces it — signals.ts names Stage 6's subagents as a second
-  // aborter — and a cancel arriving any other way lands on the 1 below rather than dying by
-  // signal. tests/cli/cli.test.ts records that status for the displaced-slot case, but it asserts
-  // the same 1 a second aborter would produce, so it will not go red when one is added: revisiting
-  // this line is on whoever adds it.
+  // `aborted` DOES reach this line now (HIGH-B, runTui's quit()): the TUI's own graceful-quit
+  // cancels an in-flight turn via the exact same controller.abort() driveLoop's cancel handler
+  // always used, but runTui's own resolve always passes `cancelledBy: undefined` for that
+  // path — a deliberate quit is not the signal-death `raiseSignal` exists to re-raise — so it
+  // lands on the `1` below instead of dying by signal, same as the displaced-slot case
+  // tests/cli/cli.test.ts already records. signals.ts still names Stage 6's subagents as a
+  // second aborter this same fallback would also cover, unchanged.
   if (doneReason === "no-tool-call") return refusedWithoutRunning ? 1 : 0;
   return 1;
 }
 
 if (import.meta.main) {
-  run(process.argv.slice(2)).then((code) => process.exit(code));
+  // The one place a real process.stdout.isTTY is read — see CliDeps.isTTY's own comment for why
+  // run() itself never reads it directly.
+  run(process.argv.slice(2), { isTTY: process.stdout.isTTY }).then((code) => process.exit(code));
 }
