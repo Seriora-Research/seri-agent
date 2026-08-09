@@ -63,6 +63,16 @@ platform-specific gotchas (SIGINT-vs-SIGTERM, why `runRipgrep` has to be async s
 interrupted) live in `apps/cli/src/signals.ts` — read its comments before touching signal
 handling, don't re-derive the sequencing from this summary.
 
+**On a real terminal (the Ink TUI, `apps/cli/src/tui/`), the same first-cancels/second-is-fatal
+rule only holds while a turn is actually in flight** — the cancel slot is registered for the
+duration of one `driveLoop` call, not the process's whole lifetime, so a Ctrl-C pressed while
+nothing is running (between turns) finds the slot already empty and is immediately fatal, not a
+"first press" with a second still to come. The TUI never exits on its own once a turn
+completes — it returns to awaiting input for another task or slash command, indefinitely; the
+only graceful exit is `/exit` or Ctrl-D at the input box, both of which unmount the TUI and
+resolve the run with a normal exit code and the same final `printUsage` token/cost summary the
+non-interactive path prints, accumulated across every turn the session ran.
+
 **Gate-first permissions**, not sandboxing. `apps/cli/src/gate/gate.ts` defines three
 `PermissionMode`s (`read-only` / `approve-each` / `auto`) that cycle via `/mode`. A new
 session starts in `approve-each`, not `read-only`: native Windows does not enforce the OS
