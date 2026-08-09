@@ -129,6 +129,14 @@
         "typescript": "^5.7.2",
       },
     },
+    "packages/model-catalog": {
+      "name": "@seri/model-catalog",
+      "version": "0.0.1",
+      "devDependencies": {
+        "bun-types": "^1.3.14",
+        "typescript": "^5.7.2",
+      },
+    },
     "packages/plans": {
       "name": "@seri/plans",
       "version": "0.0.1",
@@ -310,6 +318,8 @@
     "@seri/copy-policy": ["@seri/copy-policy@workspace:packages/copy-policy"],
 
     "@seri/lab": ["@seri/lab@workspace:apps/lab"],
+
+    "@seri/model-catalog": ["@seri/model-catalog@workspace:packages/model-catalog"],
 
     "@seri/plans": ["@seri/plans@workspace:packages/plans"],
 
