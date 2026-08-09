@@ -1083,6 +1083,13 @@ async function driveLoop(
   return { doneReason, cancelledBy, usage, refusedWithoutRunning: hadDenial && !ranTool };
 }
 
+// A plain default-flush transcript-append, shared by tuiPresenter's own `append` below and
+// runTui's quit() — the only two places that dispatch this exact shape rather than something with
+// its own `> `/`flush: false` handling (echoUserInput, a different shape entirely, is not this).
+function pushTranscriptLine(dispatch: Dispatch, line: string): void {
+  dispatch({ type: "transcript-append", line });
+}
+
 // The TUI's presenter: the same `{message}`/`{plan, message}` shapes tui/commands.ts's decision
 // functions return, dispatched into the live transcript instead of printed. Calls the SAME
 // undoPlanLines/recoveryLines output.ts uses for the console path (M-6: these used to be a
@@ -1094,7 +1101,7 @@ async function driveLoop(
 // persisting, not just dispatching, fixing the gap code review found in the previous round's
 // finding-9 fix (this file's own CommandPresenter comment has the full account).
 function tuiPresenter(dispatch: Dispatch, awaitPersist: () => Promise<void>): CommandPresenter {
-  const append = (line: string): void => dispatch({ type: "transcript-append", line });
+  const append = (line: string): void => pushTranscriptLine(dispatch, line);
   return {
     message: append,
     onPlan: (plan) => undoPlanLines(plan, append),
@@ -1441,10 +1448,7 @@ async function runTui(
       // to unwind, with no indication anything had happened or that Ctrl-C was still available
       // to force it — dispatched before deliverSignal so it is visible even if the unwind never
       // completes (a stuck tool ignoring its own abort signal).
-      dispatch({
-        type: "transcript-append",
-        line: "quitting — cancelling the in-flight turn, Ctrl-C to force",
-      });
+      pushTranscriptLine(dispatch, "quitting — cancelling the in-flight turn, Ctrl-C to force");
       deliverSignal("SIGINT");
       void currentTurn.then(finishQuit);
     } else {

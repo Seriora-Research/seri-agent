@@ -524,6 +524,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("permission mode is now auto");
       // The submitted command itself, echoed into the persistent transcript exactly once — not
       // just its result. onSubmit's own transcript-append dispatch, before the command dispatch.
+      // Waited on explicitly before reading occurrences(), same as the argv-task and second-task
+      // echo checks elsewhere in this file: the echo lands via an async <Static> commit, not
+      // synchronously with the dispatch that triggered it.
+      await sawLine("> /mode");
       expect(occurrences("> /mode")).toBe(1);
     } finally {
       child.kill("SIGKILL");
