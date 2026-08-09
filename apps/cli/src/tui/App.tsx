@@ -21,6 +21,15 @@ export type AppProps = {
   // Submitted line from the input box — Phase 5 wires this to the task/slash-command dispatch;
   // Phase 4 has nowhere real to send it yet.
   onSubmit?: (value: string) => void;
+  // Called on a raw Ctrl-C keypress — the TUI's own route into signals.ts's cancel slot, mirroring
+  // cli.ts's readline path (`rl.on("SIGINT", () => deliverSignal("SIGINT"))`). Needed because raw
+  // mode (which both Ink and readline use) never lets the terminal driver turn 0x03 into a real
+  // process SIGINT — the byte arrives as ordinary input instead, so whatever is reading input has
+  // to recognise it explicitly. The caller (runTui's render() call) turns off Ink's own default
+  // `exitOnCtrlC` behavior specifically so this is the only thing a Ctrl-C here does — leaving
+  // Ink's default on would give Ink its own competing exit path that races the one driveLoop's
+  // AbortController expects.
+  onCancel?: () => void;
   // True once the run this TUI is driving has finished. Ink does not auto-exit on its own — Phase
   // 1's own hello-world smoke test hung until an explicit unmount()/exit() call was added — so this
   // effect is what ends the process, rather than relying on implicit auto-exit-on-unmount (also the
@@ -65,7 +74,7 @@ function InputBox({ onSubmit }: { onSubmit?: (value: string) => void }) {
   );
 }
 
-export function App({ session, connectDispatch, onSubmit, done }: AppProps) {
+export function App({ session, connectDispatch, onSubmit, onCancel, done }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
   const { exit } = useApp();
 
@@ -76,6 +85,13 @@ export function App({ session, connectDispatch, onSubmit, done }: AppProps) {
   useEffect(() => {
     if (done) exit();
   }, [done, exit]);
+
+  // A second, independent useInput from InputBox's own — Ink delivers the same keypress to every
+  // registered handler, so this fires regardless of what InputBox does with the same press (today,
+  // nothing: InputBox's own handler skips any key.ctrl input).
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") onCancel?.();
+  });
 
   const pending = pendingChange(state.transcript, state.status);
 

@@ -1055,12 +1055,21 @@ async function runTui(
     }
   }
 
+  // A raw Ctrl-C press is routed into the same cancel slot the readline approval prompt uses
+  // (deliverSignal, cli.ts's own SIGINT-routing comment near makeApprovalPrompt) — the first press
+  // aborts the in-flight turn via driveLoop's own AbortController, a second finds the slot empty
+  // and takes the fatal path, exactly as it does outside the TUI. This is the ONLY way a Ctrl-C
+  // here reaches signals.ts: Ink's own competing exitOnCtrlC default is turned off below, so App's
+  // onCancel is the sole handler for the press.
+  const onCancel = (): void => deliverSignal("SIGINT");
+
   return new Promise<DriveLoopResult>((resolve) => {
     const instance = render(
       createElement(App, {
         session: prepared.session,
         done: false,
         onSubmit,
+        onCancel,
         // The seam App.tsx built for exactly this (tui/App.tsx's own AppProps comment): called
         // once on mount with the reducer's own dispatch. `dispatch` here wraps it so this
         // function's own view of the live session (`liveSession`, what onSubmit's slash commands
@@ -1076,6 +1085,7 @@ async function runTui(
                 session: prepared.session,
                 done: true,
                 onSubmit,
+                onCancel,
                 connectDispatch: undefined,
               }),
             );
@@ -1083,6 +1093,9 @@ async function runTui(
           });
         },
       }),
+      // Ink's own default (exitOnCtrlC: true) would otherwise unmount on the same press App's
+      // onCancel handles, giving Ctrl-C two competing exit paths — see onCancel's own comment.
+      { exitOnCtrlC: false },
     );
   });
 }
