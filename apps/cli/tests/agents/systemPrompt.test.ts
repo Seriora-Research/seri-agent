@@ -45,4 +45,21 @@ describe("buildSystemPrompt", () => {
     expect(withAgents.startsWith(withoutAgents)).toBe(true);
     expect(withAgents).toContain("# Project rules\nUse tabs.");
   });
+
+  // Stage B2: the stable tier (tool guidance) must precede the context tier (AGENTS.md) in the
+  // assembled output, and the join between them must match today's separator shape exactly — a
+  // naive three-operand join can add an extra "\n\n" that today's conditional two-operand join
+  // never produced, since only two operands ever existed before and one was dropped when empty.
+  test("stable tier precedes context tier, with no extra or missing separator", () => {
+    const withoutAgents = buildSystemPrompt("");
+    const agentsFixture = "# Project rules\nUse tabs.";
+    const withAgents = buildSystemPrompt(agentsFixture);
+
+    const toolsIndex = withAgents.indexOf("# Calling tools");
+    const agentsIndex = withAgents.indexOf(agentsFixture);
+    expect(toolsIndex).toBeGreaterThanOrEqual(0);
+    expect(agentsIndex).toBeGreaterThan(toolsIndex);
+
+    expect(withAgents).toBe(`${withoutAgents}\n\n${agentsFixture}`);
+  });
 });
