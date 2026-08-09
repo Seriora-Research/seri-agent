@@ -38,7 +38,11 @@ function steps(args: string[]): number {
   return args[0] === undefined ? 1 : Number(args[0]);
 }
 
-export function applyModeCycle(session: SessionState<ModelMessage>): {
+// "decide", not "apply": named to match undoCommand/restoreCommand/rewindCommand/cycleModeCommand
+// (cli.ts) calling these to DECIDE the outcome, then handing it to a presenter — and to stop
+// colliding with checkpoint/shadowGit.ts's own `applyRestore`, a different function (performs the
+// removal pass) that this file's own former `applyRestore` name was one import away from.
+export function decideModeCycle(session: SessionState<ModelMessage>): {
   next: SessionState<ModelMessage>;
   message: string;
 } {
@@ -51,7 +55,7 @@ export function applyModeCycle(session: SessionState<ModelMessage>): {
 // diff/restored/deleted plan BEFORE the removal pass runs, which is what lets the console path
 // restore output.ts's own documented guarantee ("printed before the restore happens, not after")
 // instead of only being able to report the plan after the fact, from the final result.
-export function applyUndo(
+export function decideUndo(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
@@ -71,7 +75,7 @@ export function applyUndo(
   return { next: session, plan, message };
 }
 
-export function applyRestore(
+export function decideRestore(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
@@ -91,7 +95,7 @@ export function applyRestore(
   return { next: session, plan, message };
 }
 
-export function applyRewind(
+export function decideRewind(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,

@@ -11,7 +11,7 @@ import {
 } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable } from "../../src/checkpoint/shadowGit";
 import type { SessionState } from "../../src/session/session";
-import { applyModeCycle, applyRestore, applyRewind, applyUndo } from "../../src/tui/commands";
+import { decideModeCycle, decideRestore, decideRewind, decideUndo } from "../../src/tui/commands";
 
 let root: string;
 let storeDir: string;
@@ -40,7 +40,7 @@ function checkpointer() {
   });
 }
 
-// applyUndo/applyRestore/applyRewind derive storeDir from `dirs.checkpointsDir` themselves
+// decideUndo/decideRestore/decideRewind derive storeDir from `dirs.checkpointsDir` themselves
 // (checkpointTarget, mirroring cli.ts) rather than taking storeDir directly, so the fixtures below
 // must build their checkpoints under that same derived storeDir for the two to agree.
 beforeEach(() => {
@@ -56,10 +56,10 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-describe("applyModeCycle", () => {
+describe("decideModeCycle", () => {
   test("cycles the mode without mutating the session it was given", () => {
     const before = session({ permissionMode: "read-only" });
-    const { next, message } = applyModeCycle(before);
+    const { next, message } = decideModeCycle(before);
 
     expect(before.permissionMode).toBe("read-only");
     expect(next.permissionMode).toBe("approve-each");
@@ -67,7 +67,7 @@ describe("applyModeCycle", () => {
   });
 });
 
-describe.skipIf(!isGitAvailable())("applyUndo", () => {
+describe.skipIf(!isGitAvailable())("decideUndo", () => {
   test("restores the previous file state and reports what changed", () => {
     const snapshot = checkpointer();
     snapshot({
@@ -84,7 +84,7 @@ describe.skipIf(!isGitAvailable())("applyUndo", () => {
       rewindTo: 2,
     });
 
-    const { next, plan, message } = applyUndo(session(), ["2"], {
+    const { next, plan, message } = decideUndo(session(), ["2"], {
       sessionsDir: join(root, "sessions"),
       checkpointsDir,
     });
@@ -104,7 +104,7 @@ describe.skipIf(!isGitAvailable())("applyUndo", () => {
       rewindTo: 1,
     });
 
-    const { message } = applyUndo(session(), ["1"], {
+    const { message } = decideUndo(session(), ["1"], {
       sessionsDir: join(root, "sessions"),
       checkpointsDir,
     });
@@ -115,7 +115,7 @@ describe.skipIf(!isGitAvailable())("applyUndo", () => {
   // M-5 regression: onPlan (undoFiles' own callback) has to fire BEFORE the restore/removal pass
   // mutates the worktree, matching output.ts's own documented guarantee on undoPlanLines ("before
   // the restore happens, not after") — restoring that for the console path is the whole reason
-  // applyUndo accepts onPlan at all rather than hardcoding a no-op. Checked here by reading the
+  // decideUndo accepts onPlan at all rather than hardcoding a no-op. Checked here by reading the
   // file's content from INSIDE the callback: at that point the file must still read "after", not
   // yet reverted to "before".
   test("onPlan fires with the plan before the restore mutates the worktree", () => {
@@ -135,7 +135,7 @@ describe.skipIf(!isGitAvailable())("applyUndo", () => {
     });
 
     const seenDuringOnPlan: string[] = [];
-    applyUndo(session(), ["2"], { sessionsDir: join(root, "sessions"), checkpointsDir }, (plan) => {
+    decideUndo(session(), ["2"], { sessionsDir: join(root, "sessions"), checkpointsDir }, (plan) => {
       seenDuringOnPlan.push(readFileSync(join(workTree, "a.txt"), "utf8"));
       expect(plan.restored).toEqual(["a.txt"]);
     });
@@ -145,7 +145,7 @@ describe.skipIf(!isGitAvailable())("applyUndo", () => {
   }, 30_000);
 });
 
-describe.skipIf(!isGitAvailable())("applyRestore", () => {
+describe.skipIf(!isGitAvailable())("decideRestore", () => {
   test("restores the named commit and reports it", () => {
     const snapshot = checkpointer();
     snapshot({
@@ -167,7 +167,7 @@ describe.skipIf(!isGitAvailable())("applyRestore", () => {
     );
     const firstCommit = records[0]?.commit ?? "";
 
-    const { plan, message } = applyRestore(session(), [firstCommit], {
+    const { plan, message } = decideRestore(session(), [firstCommit], {
       sessionsDir: join(root, "sessions"),
       checkpointsDir,
     });
@@ -178,7 +178,7 @@ describe.skipIf(!isGitAvailable())("applyRestore", () => {
   }, 30_000);
 });
 
-describe.skipIf(!isGitAvailable())("applyRewind", () => {
+describe.skipIf(!isGitAvailable())("decideRewind", () => {
   test("truncates the session's messages, touches no file, and reports what was dropped", () => {
     checkpointer()({
       tool: "write_file",
@@ -195,7 +195,7 @@ describe.skipIf(!isGitAvailable())("applyRewind", () => {
       ],
     });
 
-    const { next, message } = applyRewind(before, [], {
+    const { next, message } = decideRewind(before, [], {
       sessionsDir: join(root, "sessions"),
       checkpointsDir,
     });

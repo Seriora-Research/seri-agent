@@ -59,7 +59,7 @@ function childScriptInput(dir: string): string {
   ].join("\n");
 }
 
-// H-1/M-3: a session with no checkpoints at all, so `/undo 5` throws inside applyUndo — proving a
+// H-1/M-3: a session with no checkpoints at all, so `/undo 5` throws inside decideUndo — proving a
 // command decision function's own exception is caught, not left to escape Ink's input handler.
 // `/mode` sent afterward is what proves the process is still alive and responsive, not merely
 // that it failed to crash outright. The turn resolves immediately (unlike the sibling scripts
@@ -414,7 +414,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("/mode");
 
       child.stdin?.write("\r");
-      // applyModeCycle (tui/commands.ts, Phase 2) cycling a fresh session's default
+      // decideModeCycle (tui/commands.ts, Phase 2) cycling a fresh session's default
       // permissionMode ("approve-each") one step, dispatched into the transcript by tuiPresenter
       // (Phase 5) rather than console.log'd — this line only appears if that whole chain ran.
       await sawLine("permission mode is now auto");
@@ -436,7 +436,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     try {
       await sawLine("RUNLOOP_READY");
       // Turn resolves right away (this script's own comment explains why) — waited for here so
-      // `/undo 5` below exercises applyUndo's own throw, not MEDIUM-3's turn-in-flight gate.
+      // `/undo 5` below exercises decideUndo's own throw, not MEDIUM-3's turn-in-flight gate.
       await sawLine("(done: no-tool-call)");
 
       // M-3: a typo'd command name matches nothing in SLASH_COMMANDS at all.
