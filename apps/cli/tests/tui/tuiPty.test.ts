@@ -887,6 +887,49 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
+  // Round 8 code review, finding 1: onSessionChange (cli.ts) used to call saveSession bare, with
+  // nothing to catch a throw. The sessions directory is replaced with a regular file AFTER
+  // prepareSession's own initial save has already succeeded (mkdirSync's own `recursive: true`
+  // then throws EEXIST on every later call, since the path exists but is not a directory) —
+  // deterministic and cross-platform, unlike trying to fill a real disk. Mutation-tested live (WSL,
+  // reverting onSessionChange to a bare `saveSession(session, ctx.sessionsDir)`): the throw did NOT
+  // just hang silently — it escaped the React effect entirely and Ink's own renderer caught it and
+  // dumped a raw `EEXIST: file already exists, mkdir '.../sessions'` stack trace across the whole
+  // terminal (twice), which is worse than a bare hang, not better. Either way "could not save the
+  // session" (this fix's own message) never appeared and the pending `/mode` never completed —
+  // sawLine's own 20s deadline is what actually bounds that wait, not a separate race. Confirmed
+  // green again with the fix restored.
+  test("a session-save failure surfaces as a command error instead of hanging forever (finding 1)", async () => {
+    const scriptPath = join(dir, "child-save-failure.mjs");
+    writeFileSync(scriptPath, childScriptInput(dir));
+    const sessionsDir = join(dir, "sessions");
+
+    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+
+      // Sabotage AFTER the initial save succeeds — prepareSession's own unconditional saveSession
+      // call, unrelated to the bug under test, must be given a real chance to land first.
+      rmSync(sessionsDir, { recursive: true, force: true });
+      writeFileSync(sessionsDir, "");
+
+      child.stdin?.write("/mode");
+      await sawLine("/mode");
+      child.stdin?.write("\r");
+      await sawLine("could not save the session");
+
+      // Still alive, not wedged: restore a writable sessions dir and confirm a later command still
+      // completes normally.
+      rmSync(sessionsDir, { force: true });
+      child.stdin?.write("/mode");
+      await sawLineTimes("/mode", 2);
+      child.stdin?.write("\r");
+      await sawLine("permission mode is now");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
   // Findings 1+5: this is the test that would have caught finding 1 existing at all — a real
   // write-tool approval prompt, on a real pty, rendered by the TUI's own ApprovalBox and answered
   // by an actual keypress, confirming the turn unblocks. Before this fix, this same scenario

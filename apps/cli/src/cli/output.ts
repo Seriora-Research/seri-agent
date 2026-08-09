@@ -86,6 +86,17 @@ export function truncateArgsDisplay(args: unknown): string {
   return json.length > MAX_PROMPT_ARGS_LENGTH ? `${json.slice(0, MAX_PROMPT_ARGS_LENGTH)}…` : json;
 }
 
+// Round 7 code review: this line was written out twice — once in makeApprovalPrompt's own
+// rl.question call (cli.ts), once in App.tsx's ApprovalBox — exactly the drift risk
+// toolResultLine/toolAllowedLine (below) already exist to prevent elsewhere. One shared function
+// instead, used by both. `offersAlways` gates the "[a]lways" option — PERSISTABLE_TOOLS decides
+// it at each call site, not here, so this file stays free of a permissions/store.ts import.
+export function approvalPromptText(toolName: string, args: unknown, offersAlways: boolean): string {
+  return `Approve ${escapeControlChars(toolName)}(${truncateArgsDisplay(args)})? ${
+    offersAlways ? "[y]es / [a]lways (saved for this project) / [N]o" : "[y]es / [N]o"
+  } `;
+}
+
 // stderr, not stdout: stdout carries the model's own output and is routinely piped, and a warning
 // that a file will not be recoverable must not end up inside whatever consumed that pipe.
 export function printWarning(message: string): void {

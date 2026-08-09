@@ -297,5 +297,47 @@ describe("App", () => {
       // Not y/a/Enter — resolved "no", confirming the keystroke was consumed by ApprovalBox.
       expect(answers).toEqual(["no"]);
     });
+
+    // Round 8 code review, finding 2: Ink's own parser (parse-keypress.js/use-input.js) reports
+    // `input === ""` for these — the same empty-input shape key.ctrl/key.meta already special-case
+    // below — because they carry no printable text at all, unlike an ordinary "wrong" letter. The
+    // pre-fix code had no guard for that shape and fell straight into the "anything unrecognised is
+    // 'no'" catch-all meant for actual mistyped text, so a user reflexively reaching for Enter with
+    // an arrow key or Backspace silently denied a write they never meant to answer. The readline-
+    // based prompt (makeApprovalPrompt, cli.ts) does not have this problem: those keys only edit or
+    // no-op its line buffer, and nothing submits until Enter.
+    test("navigation and editing keys (arrow, backspace) are ignored rather than treated as an implicit deny", async () => {
+      const answers: ApprovalAnswer[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onApprovalAnswer={(answer) => answers.push(answer)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: {},
+        offersAlways: true,
+      });
+      await flush();
+
+      instance.stdin.write("\x1b[A"); // up arrow
+      await flush();
+      instance.stdin.write("\x7f"); // backspace
+      await flush();
+      expect(answers).toEqual([]);
+
+      // Still live, not wedged: an actual keystroke still resolves it.
+      instance.stdin.write("y");
+      await flush();
+      expect(answers).toEqual(["once"]);
+    });
   });
 });

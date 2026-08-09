@@ -20,7 +20,7 @@ import {
 import { projectRoot } from "./checkpoint/shadowGit";
 import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
-  escapeControlChars,
+  approvalPromptText,
   printEvent,
   printGrantPersisted,
   printPreApproved,
@@ -28,7 +28,6 @@ import {
   printWarning,
   type RunUsage,
   recoveryLines,
-  truncateArgsDisplay,
   USAGE,
   undoPlanLines,
   usageError,
@@ -119,11 +118,24 @@ type CliDeps = {
 // else wrote in between on either path), but the same shape as a bug five rounds went into
 // closing does not get to stand next to a comment (driveLoop's own, and this file's) claiming the
 // reducer is the ONLY writer on the TUI path.
+//
+// Returns `Promise<void>`, genuinely awaitable — not just typed that way for form. On the
+// non-interactive path (consolePresenter) the underlying saveSession call is already
+// synchronous, so the promise settles immediately either way. On the TUI path (tuiPresenter) it
+// does NOT settle until the reducer's own onSessionChange effect actually runs and persists that
+// session — the fix for a real gap found by code review: rewindCommand used to call
+// `recordBarrier()` right after `sessionUpdated(next)` on the strength of a comment claiming the
+// truncation was "already persisted by this point," true on the non-interactive path but not on
+// the TUI path, where sessionUpdated only ever dispatched (persistence was, and still is, effect-
+// driven — see onSessionChange's own comment). A crash/kill in that window could leave a barrier
+// durably recorded pointing at a truncation that never reached disk, exactly what finding 9 was
+// supposed to prevent. Making this awaitable — not adding a second writer, the effect is still
+// the only one — is what lets a caller that needs the ordering (rewindCommand) actually get it.
 type CommandPresenter = {
   message: (text: string) => void;
   onPlan: (plan: RestorePlan) => void;
   restore: (result: { plan: RestoreResult; message: string }) => void;
-  sessionUpdated: (next: SessionState<ModelMessage>) => void;
+  sessionUpdated: (next: SessionState<ModelMessage>) => Promise<void>;
 };
 
 type SlashCommand = {
@@ -137,13 +149,16 @@ type SlashCommand = {
   accepts: (args: string[]) => boolean;
   // `presenter` is optional and defaults to consolePresenter at each command's own definition
   // (below) — handleSlashCommand's call site (unchanged) never passes one; the TUI entry point's
-  // does.
+  // does. `void | Promise<void>`, not just `void`: cycleModeCommand/rewindCommand are `async` now
+  // (they await presenter.sessionUpdated's own promise — CommandPresenter's own comment), undo/
+  // restoreCommand are not and never need to be. Both call sites await this either way, a no-op
+  // for the ones that were never async.
   run: (
     session: SessionState<ModelMessage>,
     args: string[],
     dirs: CommandDirs,
     presenter?: CommandPresenter,
-  ) => void;
+  ) => void | Promise<void>;
   // Whether this command mutates the checkpoint store or truncates session.messages, either of
   // which a still-in-flight turn can silently undo or corrupt (a mid-turn /rewind truncating
   // messages only for the next messages-updated, from that same in-flight turn, to replace the
@@ -215,18 +230,25 @@ function consolePresenter(dirs: CommandDirs): CommandPresenter {
       console.log(message);
       if (plan.restored.length > 0 || plan.deleted.length > 0) recoveryLines(plan);
     },
-    sessionUpdated: (next) => saveSession(next, dirs.sessionsDir),
+    // Trivially awaitable: saveSession is already synchronous, so this settles on the same tick
+    // it is called — `async` only to satisfy CommandPresenter's own contract (its comment).
+    sessionUpdated: async (next) => saveSession(next, dirs.sessionsDir),
   };
 }
 
-function cycleModeCommand(
+async function cycleModeCommand(
   session: SessionState<ModelMessage>,
   _args: string[],
   dirs: CommandDirs,
   presenter: CommandPresenter = consolePresenter(dirs),
-): void {
+): Promise<void> {
   const { next, message } = decideModeCycle(session);
-  presenter.sessionUpdated(next);
+  // Awaited even though /mode has nothing of its own to sequence after sessionUpdated (unlike
+  // /rewind's recordBarrier): sessionUpdated is `async` now, so a saveSession failure surfaces as
+  // a promise rejection instead of a synchronous throw, and this function's own callers only
+  // catch the latter — awaiting is what keeps that failure reaching them at all, not a change in
+  // when persistence happens.
+  await presenter.sessionUpdated(next);
   presenter.message(message);
 }
 
@@ -265,21 +287,27 @@ function restoreCommand(
   presenter.restore(decideRestore(session, args, dirs, presenter.onPlan));
 }
 
-function rewindCommand(
+async function rewindCommand(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
   presenter: CommandPresenter = consolePresenter(dirs),
-): void {
+): Promise<void> {
   const { next, message, recordBarrier } = decideRewind(session, args, dirs);
-  presenter.sessionUpdated(next);
-  // Finding 9: called AFTER sessionUpdated, restoring the original (pre-TUI) ordering — see
-  // decideRewind's own comment for why. Not wrapped in its own try/catch: a failure here
-  // propagates out to the SAME try/catch every slash command's own `run` already sits inside
-  // (onSubmit's, handleSlashCommand's) — the truncation is already persisted by this point, so
-  // surfacing the failure as this command's own error, rather than silently swallowing it the way
-  // driveLoop's compaction-barrier warning does, is the more honest signal: the barrier itself
-  // did not land, and a later /rewind may not be able to cross this point.
+  // Awaited — genuinely, not just called and moved on from. Code review found the previous
+  // version of this fix was not actually ordered on the TUI path: tuiPresenter's sessionUpdated
+  // only ever dispatched, so "called AFTER sessionUpdated" was not "called after persistence"
+  // there, and a crash in that window could still leave a durably-recorded barrier pointing at a
+  // truncation that never reached disk. sessionUpdated's own promise (CommandPresenter's own
+  // comment) now does not settle until the write actually happens on both paths, so awaiting it
+  // here is what makes this genuinely ordered rather than only appearing to be.
+  await presenter.sessionUpdated(next);
+  // Not wrapped in its own try/catch: a failure here propagates out to the SAME try/catch every
+  // slash command's own `run` already sits inside (onSubmit's, handleSlashCommand's) — the
+  // truncation is already persisted by this point, so surfacing the failure as this command's own
+  // error, rather than silently swallowing it the way driveLoop's compaction-barrier warning
+  // does, is the more honest signal: the barrier itself did not land, and a later /rewind may not
+  // be able to cross this point.
   recordBarrier();
   presenter.message(message);
 }
@@ -456,7 +484,7 @@ function makeApprovalPrompt(
       });
       rl.on("SIGINT", () => deliverSignal("SIGINT"));
       rl.question(
-        `Approve ${escapeControlChars(toolName)}(${truncateArgsDisplay(args)})? ${offersAlways ? "[y]es / [a]lways (saved for this project) / [N]o" : "[y]es / [N]o"} `,
+        approvalPromptText(toolName, args, offersAlways),
         (answer) => {
           answered = true;
           abort.dispose();
@@ -708,7 +736,7 @@ function dirs(ctx: RunContext): CommandDirs {
 // prepareSession and a bare `/undo` (no --resume) does not fall into the new-session path. `/undo`
 // and `/rewind` are keyed on the session's own `cwd`, not the current one, so running them from a
 // different directory still finds the store the edits were recorded in.
-function handleSlashCommand(ctx: RunContext): number | undefined {
+async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> {
   const [name = "", ...commandArgs] = ctx.taskText.split(/\s+/).filter(Boolean);
   const command = SLASH_COMMANDS.get(name);
   if (command === undefined || !command.accepts(commandArgs)) return undefined;
@@ -719,7 +747,11 @@ function handleSlashCommand(ctx: RunContext): number | undefined {
     return 1;
   }
   try {
-    command.run(loadSession<ModelMessage>(id, ctx.sessionsDir), commandArgs, dirs(ctx));
+    // Awaited: cycleModeCommand/rewindCommand are `async` (SlashCommand.run's own comment) — not
+    // awaiting here would let this function return before their own continuation (recordBarrier,
+    // the final message) ran at all, since nothing else keeps the process alive for a background
+    // continuation to finish in once run() returns and the real binary calls process.exit(code).
+    await command.run(loadSession<ModelMessage>(id, ctx.sessionsDir), commandArgs, dirs(ctx));
     return 0;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -1051,7 +1083,11 @@ async function driveLoop(
 // hand-copied duplicate of those two functions' line shapes, which could drift out of sync the
 // moment one changed and the other did not), with a sink that dispatches a transcript-append
 // action per line instead of output.ts's own default console.log.
-function tuiPresenter(dispatch: Dispatch): CommandPresenter {
+// `awaitPersist` is runTui's own awaitNextPersist (its own comment explains the queue) — what
+// makes `sessionUpdated` genuinely await the reducer's own onSessionChange effect actually
+// persisting, not just dispatching, fixing the gap code review found in the previous round's
+// finding-9 fix (this file's own CommandPresenter comment has the full account).
+function tuiPresenter(dispatch: Dispatch, awaitPersist: () => Promise<void>): CommandPresenter {
   const append = (line: string): void => dispatch({ type: "transcript-append", line });
   return {
     message: append,
@@ -1060,7 +1096,11 @@ function tuiPresenter(dispatch: Dispatch): CommandPresenter {
       append(message);
       if (plan.restored.length > 0 || plan.deleted.length > 0) recoveryLines(plan, append);
     },
-    sessionUpdated: (next) => dispatch({ type: "session-updated", session: next }),
+    sessionUpdated: (next) => {
+      const persisted = awaitPersist();
+      dispatch({ type: "session-updated", session: next });
+      return persisted;
+    },
   };
 }
 
@@ -1149,14 +1189,50 @@ async function runTui(
   let doneReason: DoneReason | undefined;
   let refusedWithoutRunning = false;
 
+  // Resolvers waiting on onSessionChange's OWN NEXT actual persist, not merely the next dispatch
+  // — tuiPresenter's own sessionUpdated (round 7 code review's finding-9 fix) pushes one every
+  // time it dispatches a session-updated action, via awaitNextPersist below, and onSessionChange
+  // resolves and clears the whole queue once its own saveSession call for whatever session
+  // actually landed has returned. This does not add a second writer — onSessionChange is still
+  // the only thing that calls saveSession on the TUI path — it only makes that ONE writer's
+  // completion observable to a caller that needs to sequence after it (rewindCommand's own
+  // recordBarrier).
+  let pendingPersistResolvers: Array<{ resolve: () => void; reject: (err: unknown) => void }> = [];
+  function awaitNextPersist(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      pendingPersistResolvers.push({ resolve, reject });
+    });
+  }
+
   // The single source of truth for persistence on the TUI path (C-1/MEDIUM-1's fix — see
   // driveLoop's own comment on its messages-updated case, and tui/reducer.ts's messages-updated
   // case, for the bug this replaced): App.tsx calls this whenever the reducer's own `state.session`
   // changes, for any reason — a slash command, or driveLoop's messages-updated. Persistence ONLY,
   // now — `liveState` (this function's own comment above) is what every READ goes through, kept
   // current synchronously by `dispatch`, not by this effect-driven callback.
+  //
+  // Round 8 code review, finding 1: saveSession used to be called bare here, with nothing to catch
+  // a throw (ENOSPC, EACCES, the sessions dir removed mid-session). Every structurally equivalent
+  // persistence-adjacent write elsewhere in this file (appendBarrier, rememberGrant) is wrapped in
+  // try/catch + printWarning specifically so a write failure degrades gracefully — this one was
+  // not, and worse: a throw here happened BEFORE the pendingPersistResolvers-draining loop, so any
+  // command awaiting awaitNextPersist() (cycleModeCommand's/rewindCommand's own `await
+  // presenter.sessionUpdated(next)`) hung forever instead of failing. Rejecting those resolvers
+  // (rather than resolving them) also preserves finding 9's own guarantee: rewindCommand's
+  // recordBarrier() is called only after its own await resolves, and a rejection means it never
+  // runs — the barrier must not be recorded pointing at a truncation that never reached disk.
   function onSessionChange(session: SessionState<ModelMessage>): void {
-    saveSession(session, ctx.sessionsDir);
+    const resolvers = pendingPersistResolvers;
+    pendingPersistResolvers = [];
+    try {
+      saveSession(session, ctx.sessionsDir);
+    } catch (err) {
+      const message = `could not save the session: ${err instanceof Error ? err.message : String(err)}`;
+      printWarning(message);
+      for (const { reject } of resolvers) reject(new Error(message));
+      return;
+    }
+    for (const { resolve } of resolvers) resolve();
   }
 
   // Live-read on every gate check (driveLoop's own `get permissionMode()`), not resolved once —
@@ -1315,6 +1391,14 @@ async function runTui(
   function quit(): void {
     if (reactDispatch === undefined || quitting) return;
     quitting = true;
+    // Finding 2 (round 7 code review): Ctrl-D used to be silently swallowed while ApprovalBox was
+    // mounted instead of InputBox. Denying the pending approval is folded into the SAME graceful
+    // quit sequence — not a separate "deny just this one prompt" path the way the old
+    // readline-based prompt's own Ctrl-D-at-empty-line handling worked — so Ctrl-D keeps one
+    // consistent meaning everywhere in the TUI. The turn this unblocks is still in flight
+    // afterward (a denied approval is not a finished turn), so the turnInFlight branch below
+    // still runs exactly as it would for any other in-flight-turn quit.
+    if (liveState.pendingApproval !== undefined) onApprovalAnswer("no");
     const finishQuit = (): void => {
       instance.rerender(
         createElement(App, {
@@ -1365,7 +1449,11 @@ async function runTui(
   // MEDIUM-D: an EXACT match only, `args.length === 0`, the same discipline every SLASH_COMMANDS
   // entry's own accepts() already applies — `/exit the debugger and retry` is a task whose first
   // word happens to be /exit, not a request to quit, and used to be hijacked into one.
-  function onSubmit(value: string): void {
+  // `async`, not just for `command.run`'s own sake: cycleModeCommand/rewindCommand are `async`
+  // now (SlashCommand.run's own comment), and the try/catch below has to `await` the call to
+  // still catch a later rejection — a bare synchronous call, unawaited, would let a failure past
+  // this function's own return and surface as an unhandled rejection instead of a command-error.
+  async function onSubmit(value: string): Promise<void> {
     if (reactDispatch === undefined) return;
     const trimmed = value.trim();
     if (trimmed.length === 0) return;
@@ -1411,7 +1499,7 @@ async function runTui(
       return;
     }
     try {
-      command.run(liveState.session, args, dirs(ctx), tuiPresenter(dispatch));
+      await command.run(liveState.session, args, dirs(ctx), tuiPresenter(dispatch, awaitNextPersist));
     } catch (err) {
       dispatch({
         type: "command-error",
@@ -1509,7 +1597,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   // Before prepareSession, never after: a bare `/undo` must act on the resume target rather than
   // mint a session to act on.
-  const slash = handleSlashCommand(ctx);
+  const slash = await handleSlashCommand(ctx);
   if (slash !== undefined) return slash;
 
   const prepared = prepareSession(ctx, deps, skipPermissions);
