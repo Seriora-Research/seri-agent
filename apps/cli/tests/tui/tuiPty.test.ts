@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -62,14 +62,18 @@ function childScriptInput(dir: string): string {
 // H-1/M-3: a session with no checkpoints at all, so `/undo 5` throws inside applyUndo — proving a
 // command decision function's own exception is caught, not left to escape Ink's input handler.
 // `/mode` sent afterward is what proves the process is still alive and responsive, not merely
-// that it failed to crash outright.
+// that it failed to crash outright. The turn resolves immediately (unlike the sibling scripts
+// above, which hang on purpose) so `turnInFlight` clears before any command is sent — MEDIUM-3
+// gates `/undo` while a turn is in flight, and this script tests `/undo`'s OWN throw, not that gate
+// (which the dedicated MEDIUM-3 test below covers).
 function childScriptCommandError(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `async function* runLoopFake(opts) {`,
     `  console.log("\\nRUNLOOP_READY");`,
-    `  await new Promise(() => {});`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
     `}`,
     `await cli.run(["do", "a", "task"], {`,
     `  runLoop: runLoopFake,`,
@@ -119,6 +123,69 @@ function childScriptMultiTurn(dir: string): string {
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls + " messages=" + opts.messages.length);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// HIGH-1: a turn that finishes and reports usage, then the TUI is left awaiting input — proving
+// `run()` actually reaches `printUsage`/the exit-code logic on the TUI path once /exit or Ctrl-D
+// resolves runTui's promise, which nothing did before this fix.
+function childScriptQuit(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "usage", usage: { inputTokens: 12, outputTokens: 34 } };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
+// LOW-4/MEDIUM-1: a still-in-flight turn that yields a SECOND messages-updated after a mid-turn
+// /mode change — the exact shape of the regression MEDIUM-1 fixed. Pre-fix, driveLoop's own
+// direct saveSession call on that second event used the turn-start (pre-/mode) session and
+// clobbered the on-disk file back to the old mode; post-fix, driveLoop's persist callback is a
+// no-op on the TUI path, so nothing but the reducer's own effect ever writes here. `flagPath`
+// gates the second yield so the test can assert the on-disk state BEFORE releasing it, precisely
+// isolating the write the old code made from the ones this test doesn't dispute.
+function childScriptModePersistence(dir: string, flagPath: string): string {
+  return [
+    `import { existsSync } from "node:fs";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "messages-updated", messages: opts.messages };`,
+    `  console.log("\\nRUNLOOP_MSG1");`,
+    `  await new Promise((resolve) => {`,
+    `    const check = () => { if (existsSync(${JSON.stringify(flagPath)})) resolve(); else setTimeout(check, 20); };`,
+    `    check();`,
+    `  });`,
+    `  yield { type: "messages-updated", messages: opts.messages };`,
+    `  console.log("\\nRUNLOOP_MSG2");`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
     `}`,
@@ -277,6 +344,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
+      // Turn resolves right away (this script's own comment explains why) — waited for here so
+      // `/undo 5` below exercises applyUndo's own throw, not MEDIUM-3's turn-in-flight gate.
+      await sawLine("(done: no-tool-call)");
 
       // M-3: a typo'd command name matches nothing in SLASH_COMMANDS at all.
       child.stdin?.write("/mdoe");
@@ -407,6 +477,120 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       ]);
 
       expect(settled).not.toBe("the run never settled");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // HIGH-1: before this fix, runTui's own promise only ever rejected — a turn finishing normally
+  // left `run()`'s `await runTui(...)` parked forever, so printUsage/the exit-code logic were dead
+  // code on the TUI path. /exit is the new graceful-quit affordance: submitted once the turn is
+  // done (turnInFlight has cleared), it should unmount Ink, resolve run() with a real exit code
+  // (0, since doneReason is "no-tool-call" and nothing was refused), and print the same
+  // token/cost summary line the non-interactive path prints via printUsage.
+  test("submitting /exit after a turn completes resolves run() with a normal exit code and a final usage summary", async () => {
+    const scriptPath = join(dir, "child-quit.mjs");
+    writeFileSync(scriptPath, childScriptQuit(dir));
+
+    const { child, exited, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+      await sawLine("(done: no-tool-call)");
+
+      child.stdin?.write("/exit");
+      await sawLine("/exit");
+      child.stdin?.write("\r");
+
+      const result = await Promise.race([
+        exited,
+        new Promise<"the run never settled">((r) =>
+          setTimeout(() => r("the run never settled"), 15_000),
+        ),
+      ]);
+
+      expect(result).not.toBe("the run never settled");
+      const { code, stdout } = result as Exit;
+      expect(code).toBe(0);
+      expect(stdout).toContain("EXIT_CODE 0");
+      // printUsage's own line shape (cli/output.ts) — proof it actually ran, not just that the
+      // process happened to exit 0 some other way.
+      expect(stdout).toContain("(tokens: 12 in, 34 out)");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // MEDIUM-3: /undo, /restore and /rewind are gated while a turn is in flight (a mid-turn
+  // /rewind would truncate session.messages only for the still-running turn's own next
+  // messages-updated to replace the whole array wholesale, erasing the truncation) — /mode is
+  // deliberately NOT gated, and this test confirms that difference rather than just the block.
+  test("/rewind is blocked while a turn is in flight, but /mode still works (MEDIUM-3)", async () => {
+    const scriptPath = join(dir, "child-turn-in-flight-gate.mjs");
+    writeFileSync(scriptPath, childScriptInput(dir));
+
+    const { child, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+
+      child.stdin?.write("/rewind 1");
+      await sawLine("/rewind 1");
+      child.stdin?.write("\r");
+      await sawLine("/rewind: can't run while a turn is in flight.");
+
+      // Still alive, and /mode (deliberately ungated) still works — proof the block above is
+      // specific to /rewind, not the input box wedged or the whole command path broken.
+      child.stdin?.write("/mode");
+      await sawLine("/mode");
+      child.stdin?.write("\r");
+      await sawLine("permission mode is now auto");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // LOW-4/MEDIUM-1: the disk-level regression test that should have existed to catch MEDIUM-1 in
+  // the first place — the existing reducer-unit test only checks in-memory state, which the old,
+  // buggy code also got right eventually; the bug was specifically about what landed on disk in
+  // between. Asserts the on-disk session file directly, not the transcript or reducer state.
+  test("a mid-turn /mode change is on disk immediately and a still-running turn's later write does not revert it", async () => {
+    const flagPath = join(dir, "release-turn");
+    const scriptPath = join(dir, "child-mode-persist.mjs");
+    writeFileSync(scriptPath, childScriptModePersistence(dir, flagPath));
+    const sessionsDir = join(dir, "sessions");
+
+    const { child, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+      await sawLine("RUNLOOP_MSG1");
+
+      child.stdin?.write("/mode");
+      await sawLine("/mode");
+      child.stdin?.write("\r");
+      await sawLine("permission mode is now auto");
+
+      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".json"));
+      if (sessionFile === undefined) throw new Error("no session file written yet");
+      const sessionPath = join(sessionsDir, sessionFile);
+
+      // Polled, not asserted immediately: the write happens in App.tsx's own onSessionChange
+      // effect, which fires after the dispatch above, not synchronously with the keypress.
+      const deadline = Date.now() + 5_000;
+      let mode: string;
+      do {
+        mode = JSON.parse(readFileSync(sessionPath, "utf8")).permissionMode;
+      } while (mode !== "auto" && Date.now() < deadline);
+      expect(mode).toBe("auto");
+
+      // Release the still-in-flight turn's second messages-updated. Pre-MEDIUM-1-fix,
+      // driveLoop's own direct saveSession call here used the turn-start (pre-/mode) session and
+      // clobbered the file above back to "approve-each"; post-fix driveLoop's persist callback is
+      // a no-op on the TUI path, so this must not move the file at all.
+      writeFileSync(flagPath, "");
+      await sawLine("RUNLOOP_MSG2");
+      await sawLine("(done: no-tool-call)");
+
+      const modeAfter = JSON.parse(readFileSync(sessionPath, "utf8")).permissionMode;
+      expect(modeAfter).toBe("auto");
     } finally {
       child.kill("SIGKILL");
     }
