@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
+import { findCatalogEntry, type ModelCatalog } from "@seri/model-catalog";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
@@ -44,7 +45,10 @@ import {
 } from "./loop/loop";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
-import { getGroqModel as getGroqModelReal, resolveModelId } from "./provider/groq";
+import { getModelCatalog } from "./provider/catalog";
+import { type getGroqModel as getGroqModelReal, resolveModelId } from "./provider/groq";
+import { getModel } from "./provider/model";
+import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
 import { toolDefinitions } from "./provider/tools";
 import {
   findMostRecentSession,
@@ -59,6 +63,7 @@ import {
   type CommandDirs,
   checkpointTarget,
   decideModeCycle,
+  decideModelPickerOpen,
   decideRestore,
   decideRewind,
   decideUndo,
@@ -69,6 +74,10 @@ import { withVerification } from "./verify/wrapTools";
 type CliDeps = {
   runLoop?: typeof runLoopReal;
   getGroqModel?: typeof getGroqModelReal;
+  // Mirrors getGroqModel exactly — getModel (provider/model.ts) dispatches to whichever of the two
+  // a session's provider names, so a test injecting one but not the other still gets the real
+  // implementation for whichever provider it never exercises.
+  getOpenRouterModel?: typeof getOpenRouterModelReal;
   loadAgentsFile?: typeof loadAgentsFileReal;
   sessionsDir?: string;
   checkpointsDir?: string;
@@ -312,10 +321,10 @@ async function rewindCommand(
   presenter.message(message);
 }
 
-// `model` is optional on SessionState so that sessions written before the field existed still load,
-// but every session this function hands back has one — which is what lets the rest of the run stop
-// asking, and getGroqModel drop its default parameter.
-type RunSession = SessionState<ModelMessage> & { model: string };
+// `model`/`provider` are optional on SessionState so that sessions written before either field
+// existed still load, but every session this function hands back has both — which is what lets the
+// rest of the run stop asking, and getModel drop a default parameter for either.
+type RunSession = SessionState<ModelMessage> & { model: string; provider: "groq" | "openrouter" };
 
 // `modelRecorded` says where the model came from: true if the session file already had one, false
 // if it was just resolved from the environment and no provider call has confirmed it exists.
@@ -354,11 +363,16 @@ function loadOrCreateSession(
     // does NOT protect: a session written before the field existed was really running
     // llama-3.3-70b-versatile, nothing records that, and this first resume moves it to whatever
     // resolveModelId returns.
+    //
+    // `provider` is backfilled the same way, absent meaning "groq" — the only provider that
+    // existed before this field did, so an old session's absence and an explicit "groq" mean the
+    // same thing (SessionState.provider's own comment).
     return {
       session: {
         ...loaded,
         systemPrompt: buildSystemPrompt(loadAgentsFileFn(loaded.cwd)),
         model: loaded.model ?? resolveModelId(),
+        provider: loaded.provider ?? "groq",
       },
       modelRecorded: loaded.model !== undefined,
     };
@@ -380,6 +394,7 @@ function loadOrCreateSession(
       // allowlist, run-scoped for every other write tool the gate ever grows.
       permissionMode: "approve-each",
       model: resolveModelId(),
+      provider: "groq",
       messages: [],
     },
     modelRecorded: false,
@@ -787,13 +802,22 @@ type PreparedRun = {
   // fact the loop is driven with, carried on this object so driveLoop has nothing to re-derive and
   // nothing to assign into `session`.
   allowedTools: readonly string[];
+  // Loaded once here (@seri/model-catalog caches it for the rest of the process anyway) and carried
+  // on this object so runTui's own per-turn model re-resolution (runTurn, below — the /model fix)
+  // has it without loading it again every turn.
+  catalog: ModelCatalog;
+  // The catalog's own `contextWindow` for `model`, above — undefined when the catalog has no entry
+  // for this exact id/provider pair (an id typed straight into SERI_MODEL, say), in which case
+  // runLoop's own DEFAULT_CONTEXT_WINDOW_SIZE applies, matching what every run did before this
+  // field existed.
+  contextWindowSize: number | undefined;
 };
 
-function prepareSession(
+async function prepareSession(
   ctx: RunContext,
   deps: CliDeps,
   skipPermissions: boolean,
-): PreparedRun | number {
+): Promise<PreparedRun | number> {
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
 
   let session: RunSession;
@@ -816,14 +840,25 @@ function prepareSession(
     session.messages.push({ role: "user", content: ctx.taskText.trim() });
   }
 
-  const getGroqModelFn = deps.getGroqModel ?? getGroqModelReal;
-  let model;
+  // Loaded once, here, alongside the model resolution it feeds — /model (runTui's own runTurn)
+  // reuses this SAME catalog on every later turn rather than reloading it, but @seri/model-catalog
+  // caches for the rest of the process either way (catalog.ts's own loadCatalog).
+  const catalog = await getModelCatalog();
+  let model: LanguageModel;
   try {
-    model = getGroqModelFn(session.model);
+    model = getModel(session.model, session.provider, {
+      getGroqModel: deps.getGroqModel,
+      getOpenRouterModel: deps.getOpenRouterModel,
+    });
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   }
+  const contextWindowSize = findCatalogEntry(
+    catalog,
+    session.model,
+    session.provider,
+  )?.contextWindow;
 
   // A model this run merely RESOLVED is deliberately left out of the file. getGroqModel accepts any
   // string — an unknown id is not rejected here, it comes back as a provider 404 mid-run — so
@@ -888,7 +923,17 @@ function prepareSession(
     loadVerifyConfig(),
   );
 
-  return { session, storeDir, tools, model, permissionMode, worktree, allowedTools };
+  return {
+    session,
+    storeDir,
+    tools,
+    model,
+    permissionMode,
+    worktree,
+    allowedTools,
+    catalog,
+    contextWindowSize,
+  };
 }
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
@@ -961,7 +1006,7 @@ async function driveLoop(
   persist: (session: SessionState<ModelMessage>) => void,
   approvalPrompt: ApprovalPrompt,
 ): Promise<DriveLoopResult> {
-  const { session, storeDir, tools, model, worktree, allowedTools } = prepared;
+  const { session, storeDir, tools, model, worktree, allowedTools, contextWindowSize } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
@@ -1010,6 +1055,10 @@ async function driveLoop(
       system: session.systemPrompt,
       signal: controller.signal,
       maxIterations: maxTurns,
+      // The catalog's own contextWindow for whatever model this turn is actually calling — a
+      // /model switch to a provider/model with a different limit must change compaction's own
+      // math, not just which endpoint gets called (PreparedRun.contextWindowSize's own comment).
+      contextWindowSize,
     })) {
       if (event.type === "messages-updated") {
         // `persist` (this function's own comment above explains the two callers) is the ONLY
@@ -1338,6 +1387,18 @@ async function runTui(
     resolve(answer);
   }
 
+  // ModelPicker's own two resolutions (App.tsx's onModelSelected/onModelPickerCancel props) — both
+  // dispatch model-picker-resolved, the one action that clears the picker and (only when a model
+  // was actually picked) replaces `state.session` in the same atomic transition (reducer.ts's own
+  // comment on why that is one dispatch, not two).
+  function onModelSelected(next: SessionState<ModelMessage>): void {
+    dispatch({ type: "model-picker-resolved", session: next });
+  }
+
+  function onModelPickerCancel(): void {
+    dispatch({ type: "model-picker-resolved" });
+  }
+
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
   // reducer and driveLoop have always shared. Guarded against overlap: a second Enter press
@@ -1347,7 +1408,37 @@ async function runTui(
   async function runTurn(session: SessionState<ModelMessage>): Promise<void> {
     if (reactDispatch === undefined || turnInFlight) return;
     turnInFlight = true;
-    const turnPrepared: PreparedRun = { ...prepared, session };
+    // Re-resolved from the CURRENT session on every turn — the actual /model fix. Before this,
+    // every turn reused `prepared.model`, the LanguageModel prepareSession built once from
+    // whatever session.model/provider were at the very start of the run, so a live switch
+    // (ModelPicker's own onModelSelected, dispatched into the reducer) never took effect: the next
+    // turn kept calling the old provider's endpoint no matter what the session said. `session` is
+    // untouched here — this only changes which model answers it, not what it contains.
+    //
+    // Every session reaching here started as a RunSession (loadOrCreateSession's own backfill
+    // guarantee) and stays one: every step along the way (decideModeCycle, decideRewind,
+    // ModelPicker's own onModelSelected) only ever spreads the session it was given, never drops
+    // `model`/`provider`. TypeScript loses that once a session narrows to the reducer's own
+    // `SessionState<ModelMessage>` (tui/reducer.ts), so this is the one place that puts it back —
+    // the same kind of "this file already knows a stronger invariant tsc can't see" gap
+    // `resolveRunTui!`'s own definite-assignment assertion, above, papers over too.
+    const { model: modelId, provider } = session as RunSession;
+    let model: LanguageModel;
+    try {
+      model = getModel(modelId, provider, {
+        getGroqModel: deps.getGroqModel,
+        getOpenRouterModel: deps.getOpenRouterModel,
+      });
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      turnInFlight = false;
+      return;
+    }
+    const contextWindowSize = findCatalogEntry(prepared.catalog, modelId, provider)?.contextWindow;
+    const turnPrepared: PreparedRun = { ...prepared, session, model, contextWindowSize };
     try {
       const result = await driveLoop(
         turnPrepared,
@@ -1435,6 +1526,8 @@ async function runTui(
           onSessionChange,
           onQuit: quit,
           onApprovalAnswer,
+          onModelSelected,
+          onModelPickerCancel,
           connectDispatch: undefined,
         }),
       );
@@ -1489,6 +1582,21 @@ async function runTui(
         return;
       }
       quit();
+      return;
+    }
+    // /model, like /exit just above, is intercepted here rather than added to SLASH_COMMANDS: it
+    // opens a live, selectable picker, which means nothing on the non-interactive path
+    // SLASH_COMMANDS also serves (handleSlashCommand has no screen to render a picker onto), so it
+    // is not in that table at all (mirrors that table's own comment on why /exit isn't either).
+    if (name === "/model") {
+      if (args.length > 0) {
+        dispatch({ type: "command-error", message: "/model: invalid arguments." });
+        return;
+      }
+      dispatch({
+        type: "model-picker-requested",
+        entries: decideModelPickerOpen(prepared.catalog),
+      });
       return;
     }
     const command = SLASH_COMMANDS.get(name);
@@ -1561,6 +1669,8 @@ async function runTui(
       onSessionChange,
       onQuit: quit,
       onApprovalAnswer,
+      onModelSelected,
+      onModelPickerCancel,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
         // hasNewTask — the same predicate prepareSession (above) uses to decide whether it pushed
@@ -1650,7 +1760,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const slash = await handleSlashCommand(ctx);
   if (slash !== undefined) return slash;
 
-  const prepared = prepareSession(ctx, deps, skipPermissions);
+  const prepared = await prepareSession(ctx, deps, skipPermissions);
   if (typeof prepared === "number") return prepared;
 
   // TTY-inferred, not a flag (plan Decision 2): a real terminal gets the Ink TUI, driving the

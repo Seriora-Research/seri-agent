@@ -202,11 +202,28 @@ function ModelPicker({
       setSelectedIndex(0);
       return;
     }
-    // A new filter character narrows (or widens) the match set, so whatever was highlighted before
-    // may no longer exist in it — reset to the top rather than risk an out-of-range index.
-    if (input.length > 0) {
-      setFilterQuery((query) => query + input);
+    if (input.length === 0) return;
+    // MEDIUM-E's own finding (InputBox, above), applying here too: a chunk delivered faster than
+    // one keypress per `useInput` call — typed filter text immediately followed by Enter, measured
+    // on a real pty to arrive as ONE combined chunk rather than two separate calls — can embed a
+    // `\r`/`\n` that `key.return` above never sees, since that only fires for a chunk that IS a
+    // bare terminator on its own. Everything up to the first terminator is filter text; the
+    // terminator itself selects the top match against the FULLY updated query, mirroring
+    // `key.return`'s own action (against `selectedIndex 0`, the same reset every other
+    // filter-changing keystroke already applies) rather than silently dropping the keystroke.
+    const terminatorIndex = input.search(/[\r\n]/);
+    const typed = terminatorIndex === -1 ? input : input.slice(0, terminatorIndex);
+    const nextQuery = filterQuery + typed;
+    if (terminatorIndex === -1) {
+      setFilterQuery(nextQuery);
       setSelectedIndex(0);
+      return;
+    }
+    const nextFiltered =
+      nextQuery.length === 0 ? entries : entries.filter((entry) => matchesFilter(entry, nextQuery));
+    const entry = nextFiltered[0];
+    if (entry !== undefined) {
+      onModelSelected?.({ ...session, model: entry.id, provider: entry.provider });
     }
   });
 
