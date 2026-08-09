@@ -272,6 +272,37 @@ function childScriptModePersistence(dir: string, flagPath: string): string {
   ].join("\n");
 }
 
+// Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
+// research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
+// identical signature... with zero change to loop.ts/gate.ts") that every earlier round of this
+// branch left unbuilt, leaving the TUI path calling makeApprovalPrompt's readline-based prompt
+// instead (a SECOND stdin consumer racing Ink's own raw-mode ownership). Same shape as
+// tests/cli/approvalPromptPty.test.ts's own childScript, calling `opts.approvalPrompt` directly —
+// the fake runLoop stands in for the model round-trip, and the ONLY thing under test is the
+// approval wiring: does it reach the screen, and does a keypress actually unblock the turn.
+function childScriptApproval(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  const answer = await opts.approvalPrompt("write_file", { path: "a.txt", content: "hi" }, opts.signal);`,
+    `  console.log("\\nPROMPT_ANSWER " + answer);`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 type Exit = { code: number | null; signal: NodeJS.Signals | null; stdout: string };
 
 // Identical shape to tests/cli/approvalPromptPty.test.ts's own startChild — duplicated rather than
@@ -851,6 +882,38 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // the transcript, like the old version of this test did, does not.
       writeFileSync(flagPath, "");
       await sawLine("MODE_AT_RESUME auto");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // Findings 1+5: this is the test that would have caught finding 1 existing at all — a real
+  // write-tool approval prompt, on a real pty, rendered by the TUI's own ApprovalBox and answered
+  // by an actual keypress, confirming the turn unblocks. Before this fix, this same scenario
+  // opened a SECOND readline.Interface on process.stdin underneath Ink's own raw-mode ownership —
+  // this test does not directly assert that absence (there is nothing to observe about a
+  // readline.Interface from outside the process), but it does prove the REPLACEMENT mechanism
+  // (dispatch a pendingApproval, render it, answer it via Ink's own input, resolve the promise)
+  // works end to end, which the old readline-based prompt never had a route to at all on this path.
+  test("a write-tool approval prompt renders in the TUI and a keypress unblocks the turn", async () => {
+    const scriptPath = join(dir, "child-approval.mjs");
+    writeFileSync(scriptPath, childScriptApproval(dir));
+
+    const { child, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+      // The TUI's own ApprovalBox rendering the SAME prompt text makeApprovalPrompt uses — split
+      // across two checks, not one long toContain, since Ink wraps this line across the box's own
+      // bordered rows (measured, same as App.test.tsx's own version of this same assertion).
+      await sawLine(`Approve write_file({"path":"a.txt","content":"hi"})? [y]es / [a]lways`);
+      await sawLine("[N]o");
+
+      child.stdin?.write("y");
+      await sawLine("PROMPT_ANSWER once");
+
+      // Still alive and the turn actually finished — proof the answer really unblocked
+      // driveLoop's own await, not that the process just happened to still be running.
+      await sawLine("(done: no-tool-call)");
     } finally {
       child.kill("SIGKILL");
     }

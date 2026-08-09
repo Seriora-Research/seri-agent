@@ -2,6 +2,7 @@
 // commands dispatch into this one reducer rather than each holding a separate copy. Zero Ink/React
 // import — a plain, standalone reducer, testable without a terminal.
 import type { ModelMessage } from "ai";
+import { toolAllowedLine, toolResultLine } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
 import type { SessionState } from "../session/session";
@@ -26,6 +27,14 @@ export type TuiState = {
   // rendered with theme.ts's `error` role rather than left to vanish silently. Not auto-cleared:
   // it stays visible until the next command error replaces it or the session ends.
   commandError: string | undefined;
+  // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native ApprovalPrompt's own
+  // live state — set when runTui's tuiApprovalPrompt is called (a write-tool call reached the
+  // gate), cleared once the user answers. `offersAlways` mirrors makeApprovalPrompt's own
+  // PERSISTABLE_TOOLS check, computed once at request time rather than re-derived at render time.
+  // App.tsx renders its own ApprovalBox instead of InputBox whenever this is set — mutually
+  // exclusive, matching how the non-interactive CLI already blocks on this same question before
+  // reading anything else from stdin.
+  pendingApproval: { toolName: string; args: unknown; offersAlways: boolean } | undefined;
 };
 
 function modeIndicator(mode: PermissionMode): string {
@@ -41,6 +50,7 @@ export function initialTuiState(session: SessionState<ModelMessage>): TuiState {
     modeIndicator: modeIndicator(session.permissionMode),
     pendingTool: undefined,
     commandError: undefined,
+    pendingApproval: undefined,
   };
 }
 
@@ -48,7 +58,9 @@ export type TuiAction =
   | { type: "session-updated"; session: SessionState<ModelMessage> }
   | { type: "transcript-append"; line: string }
   | { type: "loop-event"; event: LoopEvent }
-  | { type: "command-error"; message: string };
+  | { type: "command-error"; message: string }
+  | { type: "approval-requested"; toolName: string; args: unknown; offersAlways: boolean }
+  | { type: "approval-resolved" };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -77,6 +89,17 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return applyLoopEvent(state, action.event);
     case "command-error":
       return { ...state, commandError: action.message };
+    case "approval-requested":
+      return {
+        ...state,
+        pendingApproval: {
+          toolName: action.toolName,
+          args: action.args,
+          offersAlways: action.offersAlways,
+        },
+      };
+    case "approval-resolved":
+      return { ...state, pendingApproval: undefined };
   }
 }
 
@@ -101,13 +124,17 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
             ? { name: event.name, args: event.args }
             : state.pendingTool,
       };
+    // Finding 7: toolResultLine/toolAllowedLine (cli/output.ts), not a hand-copied line shape —
+    // this had drifted from printEvent's own rendering (missing the edit-specific message and the
+    // verification suffix here, missing escapeControlChars on tool-allowed's name) before sharing
+    // the same two functions closed that gap for good.
     case "tool-result":
-      return { ...pushLine(state, `✓ ${event.name} done`), status: "", pendingTool: undefined };
+      return { ...pushLine(state, toolResultLine(event)), status: "", pendingTool: undefined };
     case "permission-denied":
       return { ...pushLine(state, `✗ ${event.name} blocked`), status: "", pendingTool: undefined };
     case "tool-allowed":
       return {
-        ...pushLine(state, `✓ ${event.name} approved for the rest of this run`),
+        ...pushLine(state, toolAllowedLine(event.name)),
         status: "",
       };
     case "compacted":

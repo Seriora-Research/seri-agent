@@ -64,7 +64,7 @@ import {
   decideRewind,
   decideUndo,
 } from "./tui/commands";
-import type { Dispatch } from "./tui/reducer";
+import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/reducer";
 import { withVerification } from "./verify/wrapTools";
 
 type CliDeps = {
@@ -271,8 +271,16 @@ function rewindCommand(
   dirs: CommandDirs,
   presenter: CommandPresenter = consolePresenter(dirs),
 ): void {
-  const { next, message } = decideRewind(session, args, dirs);
+  const { next, message, recordBarrier } = decideRewind(session, args, dirs);
   presenter.sessionUpdated(next);
+  // Finding 9: called AFTER sessionUpdated, restoring the original (pre-TUI) ordering — see
+  // decideRewind's own comment for why. Not wrapped in its own try/catch: a failure here
+  // propagates out to the SAME try/catch every slash command's own `run` already sits inside
+  // (onSubmit's, handleSlashCommand's) — the truncation is already persisted by this point, so
+  // surfacing the failure as this command's own error, rather than silently swallowing it the way
+  // driveLoop's compaction-barrier warning does, is the more honest signal: the barrier itself
+  // did not land, and a later /rewind may not be able to cross this point.
+  recordBarrier();
   presenter.message(message);
 }
 
@@ -892,6 +900,19 @@ type DriveLoopResult = {
 // Ctrl-C or a SIGTERM landing in that window still persisted a reverted /mode. A no-op here closes
 // the window entirely rather than narrowing it: the reducer (via App.tsx's onSessionChange) is the
 // ONLY writer on the TUI path, full stop.
+//
+// `approvalPrompt` is the other per-caller swap, findings 1+5 (thermo-nuclear structural review,
+// round 6): this used to be hardcoded to `makeApprovalPrompt(deps.createInterface)` inside this
+// function, called on EVERY path including the TUI one — but makeApprovalPrompt opens its own
+// readline.Interface on process.stdin and has its own `rl.on("SIGINT", ...)`, which on the TUI
+// path fights Ink for stdin ownership (Ink's own useInput already owns raw mode there) and races
+// signals.ts's single cancel slot with a second, independent SIGINT route. The non-interactive
+// path still passes `makeApprovalPrompt(deps.createInterface)`, unchanged; the TUI path
+// (runTui, further down) passes its own tuiApprovalPrompt — the SAME ApprovalPrompt contract
+// (loop.ts), resolved via the reducer's own pendingApproval state and a keypress instead of
+// readline.question, which is what the research spec's own "Command migration" section already
+// said a TUI would supply: "a different function of the identical signature... with zero change
+// to loop.ts/gate.ts."
 async function driveLoop(
   prepared: PreparedRun,
   ctx: RunContext,
@@ -900,6 +921,7 @@ async function driveLoop(
   onEvent: (event: LoopEvent) => void,
   getPermissionMode: () => PermissionMode,
   persist: (session: SessionState<ModelMessage>) => void,
+  approvalPrompt: ApprovalPrompt,
 ): Promise<DriveLoopResult> {
   const { session, storeDir, tools, model, worktree, allowedTools } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
@@ -946,7 +968,7 @@ async function driveLoop(
       // handle: the loop copies it (loop.ts:211) and growth comes back out as `tool-allowed`,
       // below.
       allowedTools,
-      approvalPrompt: makeApprovalPrompt(deps.createInterface),
+      approvalPrompt,
       system: session.systemPrompt,
       signal: controller.signal,
       maxIterations: maxTurns,
@@ -1069,8 +1091,41 @@ async function runTui(
   const { createElement } = await import("react");
   const { App } = await import("./tui/App");
 
-  let liveSession: SessionState<ModelMessage> = prepared.session;
-  let dispatch: Dispatch | undefined;
+  // Findings 2/3/4/6 (thermo-nuclear structural review, round 6): `liveState` is a SYNCHRONOUS
+  // mirror of the reducer's own state, kept current by running the exact same pure `tuiReducer`
+  // function here, in `dispatch` below, every time ANY caller in this closure dispatches an
+  // action — the identical computation React's own `useReducer` (App.tsx) will ALSO run against
+  // its OWN copy, moments later. Every read in this file that used to go through `liveSession` (a
+  // value only ever refreshed by `onSessionChange`, which only fires from App.tsx's own
+  // `useEffect(() => onSessionChange?.(state.session), [state.session])` — a REACT EFFECT, which
+  // runs asynchronously after a render commits, never synchronously with the dispatch that
+  // triggered it) now reads `liveState.session` instead: the exact "caller keeps a stale copy of
+  // state a pure reducer already owns" shape C-1 took five rounds to eliminate for driveLoop,
+  // left standing here for the TUI's OWN reads building the NEXT action off `liveSession` — a
+  // mid-run /mode's `session-updated` could revert messages the reducer had already merged
+  // (finding 2), /rewind's own clamp could compute against a stale, shorter message array right
+  // after a turn completed (finding 3), submitting a new task right after a turn completes could
+  // silently drop that turn's own tail from what the next one sees (finding 4), and a mid-run
+  // /mode's permission change was not guaranteed to take effect on the very next tool call despite
+  // `getPermissionMode`'s own comment saying so (finding 6). Persistence is NOT part of this fix
+  // and deliberately stays effect-driven — `onSessionChange` below still only fires from React's
+  // own effect, MEDIUM-1's own accepted, documented, narrow trade-off (persistence lagging by a
+  // tick) is unrelated to reads racing ahead of a stale copy, which is what this closes.
+  let liveState: TuiState = initialTuiState(prepared.session);
+  // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
+  // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
+  // what every other function in this closure actually calls now.
+  let reactDispatch: Dispatch | undefined;
+  // The single dispatch funnel every dispatch in this closure now goes through — driveLoop's own
+  // onEvent mapping (runTurn, below), onSubmit, quit(), tuiPresenter, tuiApprovalPrompt. Updates
+  // `liveState` synchronously, in the same tick as the call, BEFORE handing the same action to
+  // React's own dispatch — see this function's own comment above for why that ordering is what
+  // makes `liveState.session` (and, findings 1+5, `liveState.pendingApproval`) trustworthy to read
+  // immediately afterward, unlike anything that waited on `onSessionChange`'s effect.
+  const dispatch: Dispatch = (action) => {
+    liveState = tuiReducer(liveState, action);
+    reactDispatch?.(action);
+  };
   let turnInFlight = false;
   // HIGH-B: the currently in-flight turn's own promise (a fresh one assigned at each of the two
   // call sites that start one, both guarded so a new turn is never started while one is already
@@ -1096,21 +1151,24 @@ async function runTui(
 
   // The single source of truth for persistence on the TUI path (C-1/MEDIUM-1's fix — see
   // driveLoop's own comment on its messages-updated case, and tui/reducer.ts's messages-updated
-  // case, for the bug this replaced) and for what `liveSession` is: App.tsx calls this whenever
-  // the reducer's own `state.session` changes, for any reason — a slash command, or driveLoop's
-  // messages-updated.
+  // case, for the bug this replaced): App.tsx calls this whenever the reducer's own `state.session`
+  // changes, for any reason — a slash command, or driveLoop's messages-updated. Persistence ONLY,
+  // now — `liveState` (this function's own comment above) is what every READ goes through, kept
+  // current synchronously by `dispatch`, not by this effect-driven callback.
   function onSessionChange(session: SessionState<ModelMessage>): void {
-    liveSession = session;
     saveSession(session, ctx.sessionsDir);
   }
 
   // Live-read on every gate check (driveLoop's own `get permissionMode()`), not resolved once —
-  // the other half of C-1's fix. `skipPermissions` still wins unconditionally, matching
-  // prepareSession's own original derivation of `prepared.permissionMode`: a run-scoped
+  // the other half of C-1's fix, and finding 6: reads `liveState.session` (this function's own
+  // comment above), not the old effect-refreshed `liveSession`, so a mid-run /mode is guaranteed
+  // to be visible on the very next gate check rather than only "usually, once the effect catches
+  // up in time." `skipPermissions` still wins unconditionally, matching prepareSession's own
+  // original derivation of `prepared.permissionMode`: a run-scoped
   // `--dangerously-skip-permissions` override is not something a mid-run /mode should be able to
   // undo.
   function getPermissionMode(): PermissionMode {
-    return skipPermissions ? "auto" : liveSession.permissionMode;
+    return skipPermissions ? "auto" : liveState.session.permissionMode;
   }
 
   // LOW-3: render() now runs before the promise executor (below), not inside it, so `instance` is
@@ -1127,6 +1185,61 @@ async function runTui(
     rejectRunTui = reject;
   });
 
+  // Findings 1+5: the TUI's own ApprovalPrompt (loop.ts's contract, unchanged) — resolved via the
+  // reducer's own pendingApproval state and a keypress (App.tsx's ApprovalBox) instead of
+  // readline.question, so the TUI path never opens a second stdin consumer or a second SIGINT
+  // route fighting Ink's own raw-mode ownership and signals.ts's single cancel slot. Only one
+  // approval can ever be pending at a time (loop.ts awaits each one before its next gate check,
+  // and `turnInFlight` already keeps at most one turn running), so a single closure variable is
+  // enough to stash the resolver — the same pattern `resolveRunTui`/`currentTurn` above already
+  // use. Wraps `resolve` (not stored bare) so the normal, keypress-driven resolution path also
+  // disposes the `onAbort` registration below, mirroring makeApprovalPrompt's own
+  // `abort.dispose()` in its `rl.on("close", ...)` handler — otherwise a stale listener would sit
+  // on the turn's own AbortController for the rest of the turn, ready to double-resolve (harmless
+  // but untidy: a Promise settles once, so this would just be a silent no-op) the next time it
+  // aborts for an unrelated reason.
+  let pendingApprovalResolve: ((answer: ApprovalAnswer) => void) | undefined;
+
+  function tuiApprovalPrompt(
+    toolName: string,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<ApprovalAnswer> {
+    return new Promise<ApprovalAnswer>((resolve) => {
+      // Mirrors makeApprovalPrompt's own already-aborted check: a turn already cancelled before
+      // this call must not prompt at all.
+      if (signal?.aborted === true) {
+        resolve("no");
+        return;
+      }
+      const offersAlways = PERSISTABLE_TOOLS.has(toolName);
+      // The other direction, mirroring makeApprovalPrompt's own onAbort wiring: a cancel that
+      // arrives WHILE this prompt is up (a Ctrl-C mid-approval) resolves "no" and clears
+      // pendingApproval, the same as an explicit "n" answer would, instead of leaving the box
+      // rendered with nothing left listening for an answer.
+      const abort = onAbort(signal, () => {
+        pendingApprovalResolve = undefined;
+        dispatch({ type: "approval-resolved" });
+        resolve("no");
+      });
+      pendingApprovalResolve = (answer) => {
+        abort.dispose();
+        resolve(answer);
+      };
+      dispatch({ type: "approval-requested", toolName, args, offersAlways });
+    });
+  }
+
+  // The other end of tuiApprovalPrompt — App.tsx's onApprovalAnswer prop, called from
+  // ApprovalBox's own keypress handler.
+  function onApprovalAnswer(answer: ApprovalAnswer): void {
+    const resolve = pendingApprovalResolve;
+    if (resolve === undefined) return;
+    pendingApprovalResolve = undefined;
+    dispatch({ type: "approval-resolved" });
+    resolve(answer);
+  }
+
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
   // reducer and driveLoop have always shared. Guarded against overlap: a second Enter press
@@ -1134,10 +1247,7 @@ async function runTui(
   // the first over signals.ts's single cancel slot. MEDIUM-1: the TUI path passes a no-op
   // `persist` — the reducer (via onSessionChange above) is the only writer now.
   async function runTurn(session: SessionState<ModelMessage>): Promise<void> {
-    if (dispatch === undefined || turnInFlight) return;
-    // Captured into a local: `dispatch` is a `let` closed over by the onEvent arrow below, so TS
-    // does not carry the non-undefined narrowing from the check above into that nested closure.
-    const dispatchEvent = dispatch;
+    if (reactDispatch === undefined || turnInFlight) return;
     turnInFlight = true;
     const turnPrepared: PreparedRun = { ...prepared, session };
     try {
@@ -1146,9 +1256,10 @@ async function runTui(
         ctx,
         deps,
         maxTurns,
-        (event) => dispatchEvent({ type: "loop-event", event }),
+        (event) => dispatch({ type: "loop-event", event }),
         getPermissionMode,
         () => {},
+        tuiApprovalPrompt,
       );
       usage = {
         inputTokens: addTokens(usage.inputTokens, result.usage.inputTokens),
@@ -1202,20 +1313,22 @@ async function runTui(
   // signal, the same as a second bare Ctrl-C press (AGENTS.md's own paragraph on the TUI covers
   // this).
   function quit(): void {
-    if (dispatch === undefined || quitting) return;
+    if (reactDispatch === undefined || quitting) return;
     quitting = true;
     const finishQuit = (): void => {
       instance.rerender(
         createElement(App, {
           // LOW-J: inert after mount — App only reads `session` once, via useReducer's lazy
           // initializer, so this rerender's value is never actually read. Passed anyway because
-          // the prop is required and `liveSession` is the accurate value if that ever changes.
-          session: liveSession,
+          // the prop is required and `liveState.session` is the accurate value if that ever
+          // changes.
+          session: liveState.session,
           done: true,
           onSubmit,
           onCancel: () => deliverSignal("SIGINT"),
           onSessionChange,
           onQuit: quit,
+          onApprovalAnswer,
           connectDispatch: undefined,
         }),
       );
@@ -1253,7 +1366,7 @@ async function runTui(
   // entry's own accepts() already applies — `/exit the debugger and retry` is a task whose first
   // word happens to be /exit, not a request to quit, and used to be hijacked into one.
   function onSubmit(value: string): void {
-    if (dispatch === undefined) return;
+    if (reactDispatch === undefined) return;
     const trimmed = value.trim();
     if (trimmed.length === 0) return;
     const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
@@ -1279,8 +1392,8 @@ async function runTui(
         return;
       }
       currentTurn = runTurn({
-        ...liveSession,
-        messages: [...liveSession.messages, { role: "user", content: trimmed }],
+        ...liveState.session,
+        messages: [...liveState.session.messages, { role: "user", content: trimmed }],
       });
       return;
     }
@@ -1298,7 +1411,7 @@ async function runTui(
       return;
     }
     try {
-      command.run(liveSession, args, dirs(ctx), tuiPresenter(dispatch));
+      command.run(liveState.session, args, dirs(ctx), tuiPresenter(dispatch));
     } catch (err) {
       dispatch({
         type: "command-error",
@@ -1329,8 +1442,9 @@ async function runTui(
       onCancel: () => deliverSignal("SIGINT"),
       onSessionChange,
       onQuit: quit,
+      onApprovalAnswer,
       connectDispatch: (reducerDispatch: Dispatch) => {
-        dispatch = reducerDispatch;
+        reactDispatch = reducerDispatch;
         currentTurn = runTurn(prepared.session);
       },
     }),
@@ -1419,6 +1533,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         printEvent,
         () => prepared.permissionMode,
         (session) => saveSession(session, ctx.sessionsDir),
+        makeApprovalPrompt(deps.createInterface),
       );
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop

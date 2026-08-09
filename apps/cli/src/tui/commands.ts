@@ -99,7 +99,7 @@ export function decideRewind(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
-): { next: SessionState<ModelMessage>; message: string } {
+): { next: SessionState<ModelMessage>; message: string; recordBarrier: () => void } {
   const { storeDir } = checkpointTarget(session, dirs);
   const { rewindTo } = rewindConversation({ storeDir, sessionId: session.id, steps: steps(args) });
   // Clamped, because an anchor can outlive the array it indexed: a previous /rewind truncated the
@@ -118,9 +118,21 @@ export function decideRewind(
   // rewind draws the same kind of line compaction does. Recorded only when something was actually
   // dropped: a no-op rewind invalidates nothing, and a barrier for it would throw away history
   // that is still good.
-  if (dropped > 0) appendBarrier(storeDir, session.id, "rewind");
+  //
+  // Finding 9 (thermo-nuclear structural review, round 6): NOT called here, unlike before — a
+  // decision function has no persistence to sequence itself against (this file's own header
+  // comment: "no saveSession, no console.log/print*"), and calling it here meant the barrier
+  // could land BEFORE the truncated session was ever persisted, an ordering this file had
+  // reversed from the original (pre-TUI) `rewindCommand`, which called `saveSession` first and
+  // only then `appendBarrier`. Returned as a closure instead, for the caller (cli.ts's
+  // rewindCommand) to call AFTER `presenter.sessionUpdated(next)` — restoring that same order, so
+  // a barrier is never durably recorded while the truncation it describes still isn't.
+  const recordBarrier = (): void => {
+    if (dropped > 0) appendBarrier(storeDir, session.id, "rewind");
+  };
   return {
     next,
     message: `Session ${next.id}: dropped ${dropped} message(s), ${kept} remain. No file was touched.`,
+    recordBarrier,
   };
 }

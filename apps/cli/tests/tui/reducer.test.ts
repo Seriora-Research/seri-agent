@@ -170,3 +170,27 @@ describe("tuiReducer: loop-event", () => {
     expect(state.session.messages).toEqual([{ role: "user", content: "hi" }]);
   });
 });
+
+// Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native ApprovalPrompt's own
+// state, set/cleared by runTui's tuiApprovalPrompt/onApprovalAnswer.
+describe("tuiReducer: approval-requested / approval-resolved", () => {
+  test("approval-requested sets pendingApproval, approval-resolved clears it", () => {
+    let state = initialTuiState(session());
+    expect(state.pendingApproval).toBeUndefined();
+
+    state = tuiReducer(state, {
+      type: "approval-requested",
+      toolName: "write_file",
+      args: { path: "a.txt", content: "x" },
+      offersAlways: true,
+    });
+    expect(state.pendingApproval).toEqual({
+      toolName: "write_file",
+      args: { path: "a.txt", content: "x" },
+      offersAlways: true,
+    });
+
+    state = tuiReducer(state, { type: "approval-resolved" });
+    expect(state.pendingApproval).toBeUndefined();
+  });
+});

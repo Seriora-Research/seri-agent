@@ -8,7 +8,8 @@
 import type { ModelMessage } from "ai";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import { useEffect, useReducer, useState } from "react";
-import { truncateArgsDisplay } from "../cli/output";
+import { escapeControlChars, truncateArgsDisplay } from "../cli/output";
+import type { ApprovalAnswer } from "../loop/loop";
 import type { SessionState } from "../session/session";
 import { type Dispatch, initialTuiState, tuiReducer } from "./reducer";
 import { theme } from "./theme";
@@ -51,7 +52,61 @@ export type AppProps = {
   // is what ends the process, rather than relying on implicit auto-exit-on-unmount (also the
   // documented workaround for a macOS-only Bun/Ink cosmetic issue: cursor invisible after exit).
   done: boolean;
+  // Findings 1+5 (thermo-nuclear structural review, round 6): answers the TUI-native approval
+  // prompt (runTui's own tuiApprovalPrompt, cli.ts) — the ORIGINAL research-spec design ("a TUI
+  // supplies a different function of the identical signature... with zero change to
+  // loop.ts/gate.ts") that every earlier round of this branch left unbuilt, leaving the TUI path
+  // calling makeApprovalPrompt's readline-based prompt instead: a SECOND stdin consumer and a
+  // SECOND SIGINT route racing Ink's own raw-mode ownership and signals.ts's single cancel slot.
+  onApprovalAnswer?: (answer: ApprovalAnswer) => void;
 };
+
+// Renders the exact prompt text makeApprovalPrompt (cli.ts) already uses — same escaping, same
+// PERSISTABLE_TOOLS-gated "always" option, same [N]o-is-the-default framing — so switching between
+// the non-interactive and TUI paths is not also a UX change. Captures a single keypress instead of
+// readline's line-buffered question: y/a/n answer directly, Enter defaults to "no" (the bracketed
+// capital in "[N]o"), and — matching makeApprovalPrompt's own "anything unrecognised is 'no'" rule,
+// applied per-keystroke here instead of per-line — so does everything else, except a bare Ctrl/Meta
+// chord (Ctrl-C included, which App's own useInput below already routes to onCancel/signals.ts;
+// answering "no" here too would just be a redundant second resolution of the same promise, not
+// incorrect, but not this component's concern either).
+function ApprovalBox({
+  pendingApproval,
+  onAnswer,
+}: {
+  pendingApproval: { toolName: string; args: unknown; offersAlways: boolean };
+  onAnswer?: (answer: ApprovalAnswer) => void;
+}) {
+  const { toolName, args, offersAlways } = pendingApproval;
+
+  useInput((input, key) => {
+    if (key.ctrl || key.meta) return;
+    if (key.return) {
+      onAnswer?.("no");
+      return;
+    }
+    const typed = input.toLowerCase();
+    if (typed === "y") {
+      onAnswer?.("once");
+      return;
+    }
+    if (offersAlways && typed === "a") {
+      onAnswer?.("always");
+      return;
+    }
+    onAnswer?.("no");
+  });
+
+  return (
+    <Box borderStyle="round" borderColor={theme.warning}>
+      <Text color={theme.warning}>
+        {`Approve ${escapeControlChars(toolName)}(${truncateArgsDisplay(args)})? ${
+          offersAlways ? "[y]es / [a]lways (saved for this project) / [N]o" : "[y]es / [N]o"
+        } `}
+      </Text>
+    </Box>
+  );
+}
 
 function InputBox({
   onSubmit,
@@ -119,6 +174,7 @@ export function App({
   onSessionChange,
   onQuit,
   done,
+  onApprovalAnswer,
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
   const { exit } = useApp();
@@ -161,7 +217,14 @@ export function App({
         {state.status.length > 0 && <Text color={theme.muted}>{state.status}</Text>}
       </Box>
       {state.commandError !== undefined && <Text color={theme.error}>{state.commandError}</Text>}
-      <InputBox onSubmit={onSubmit} onQuit={onQuit} />
+      {/* Findings 1+5: mutually exclusive with InputBox — a pending approval question is the only
+      thing this run is waiting on, and answering it (not typing a task or slash command) is the
+      only input that means anything until it clears. */}
+      {state.pendingApproval !== undefined ? (
+        <ApprovalBox pendingApproval={state.pendingApproval} onAnswer={onApprovalAnswer} />
+      ) : (
+        <InputBox onSubmit={onSubmit} onQuit={onQuit} />
+      )}
     </Box>
   );
 }

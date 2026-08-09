@@ -173,6 +173,37 @@ function verificationSuffix(verification: CheckOutcome): string {
   }
 }
 
+// Finding 7 (thermo-nuclear structural review, round 6): reducer.ts's own applyLoopEvent (Ink's
+// TUI transcript) used to reimplement these two line shapes by hand instead of sharing them, and
+// had drifted — missing the `edit`-specific message and the verification suffix on tool-result,
+// missing escapeControlChars on tool-allowed's tool name. Extracted so the two paths render the
+// SAME line, the same way undoPlanLines/recoveryLines already do for /undo and /restore, rather
+// than needing another audit the next time either drifts again.
+//
+// `edit` returns the edited text and writes nothing (provider/tools.ts's FS_MUTATING_TOOL_NAMES
+// comment), so a bare "done" reads as a file that changed — observed live, with the model moving
+// on as though it had. Named here rather than in the loop, which knows no tool names by design.
+//
+// The verification suffix is NOT named that way: the narrowing belongs to the module that
+// produces the shape, so this file asks it rather than re-deriving it, and `edit` stays the only
+// tool name here.
+export function toolResultLine(event: Extract<LoopEvent, { type: "tool-result" }>): string {
+  const verification = writeFileVerification(event.result);
+  return event.name === "edit"
+    ? "✓ edit done (text returned, nothing written)"
+    : `✓ ${event.name} done${verification === undefined ? "" : verificationSuffix(verification)}`;
+}
+
+// Printed because a grant the user cannot see is a grant they cannot revoke. This string is still
+// true — a tool that reaches "allow-new" IS approved for the rest of the run, run-scoped grant
+// included — but it is no longer the whole persistence decision: for write_file/edit, driveLoop
+// prints a SECOND line (printGrantPersisted, above) naming the permanent half, only when a grant
+// was actually written. `name` is the same model-supplied call.toolName the approval prompt
+// renders, so it gets the same escaping — see escapeControlChars above.
+export function toolAllowedLine(name: string): string {
+  return `✓ ${escapeControlChars(name)} approved for the rest of this run`;
+}
+
 export function printEvent(event: LoopEvent): void {
   switch (event.type) {
     case "text-delta":
@@ -181,34 +212,14 @@ export function printEvent(event: LoopEvent): void {
     case "tool-call":
       console.log(`\n→ ${event.name}(${JSON.stringify(event.args)})`);
       break;
-    case "tool-result": {
-      // `edit` returns the edited text and writes nothing (provider/tools.ts's
-      // FS_MUTATING_TOOL_NAMES comment), so a bare "done" reads as a file that changed — observed
-      // live, with the model moving on as though it had. Named here rather than in the loop, which
-      // knows no tool names by design.
-      //
-      // The verification suffix is NOT named that way: the narrowing belongs to the module that
-      // produces the shape, so this file asks it rather than re-deriving it, and `edit` stays the
-      // only tool name here.
-      const verification = writeFileVerification(event.result);
-      console.log(
-        event.name === "edit"
-          ? "✓ edit done (text returned, nothing written)"
-          : `✓ ${event.name} done${verification === undefined ? "" : verificationSuffix(verification)}`,
-      );
+    case "tool-result":
+      console.log(toolResultLine(event));
       break;
-    }
     case "permission-denied":
       console.log(`✗ ${event.name} blocked`);
       break;
-    // Printed because a grant the user cannot see is a grant they cannot revoke. This string is
-    // still true — a tool that reaches "allow-new" IS approved for the rest of the run, run-scoped
-    // grant included — but it is no longer the whole persistence decision: for write_file/edit,
-    // driveLoop prints a SECOND line (printGrantPersisted, above) naming the permanent half, only
-    // when a grant was actually written. event.name is the same model-supplied call.toolName the
-    // approval prompt renders, so it gets the same escaping — see escapeControlChars above.
     case "tool-allowed":
-      console.log(`✓ ${escapeControlChars(event.name)} approved for the rest of this run`);
+      console.log(toolAllowedLine(event.name));
       break;
     case "compacted":
       console.log(`\n⚙ compacted ${event.evictedCount} messages`);

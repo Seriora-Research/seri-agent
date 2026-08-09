@@ -213,4 +213,31 @@ describe.skipIf(!isGitAvailable())("decideRewind", () => {
     expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
     expect(existsSync(join(workTree, "a.txt"))).toBe(true);
   }, 30_000);
+
+  // Finding 9 (thermo-nuclear structural review, round 6): decideRewind itself no longer appends
+  // the barrier — it hands back a `recordBarrier` closure for the CALLER to call after persisting
+  // `next`, restoring the original (pre-TUI) saveSession-then-appendBarrier order. This is the
+  // deferred half of that fix: the barrier must not exist in the log until recordBarrier() is
+  // actually called, and must exist once it is.
+  test("does not record the barrier until recordBarrier() is called", () => {
+    checkpointer()({
+      tool: "write_file",
+      toolCallId: "c1",
+      args: { path: join(workTree, "a.txt") },
+      rewindTo: 1,
+    });
+    const before = session({
+      messages: [
+        { role: "user", content: "one" },
+        { role: "assistant", content: "two" },
+      ],
+    });
+    const dirs = { sessionsDir: join(root, "sessions"), checkpointsDir };
+
+    const { recordBarrier } = decideRewind(before, [], dirs);
+
+    expect(readLog(storeDir, SESSION).some((r) => r.kind === "rewind-barrier")).toBe(false);
+    recordBarrier();
+    expect(readLog(storeDir, SESSION).some((r) => r.kind === "rewind-barrier")).toBe(true);
+  }, 30_000);
 });
