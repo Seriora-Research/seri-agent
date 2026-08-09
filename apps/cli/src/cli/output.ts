@@ -23,7 +23,8 @@ export const USAGE = `Usage:
   seri --resume <id> [task]       continue that session
   seri [--resume <id>] /mode      cycle the permission mode
   seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha>
-  seri [--resume <id>] /exit      end an interactive TUI session (or Ctrl-D)
+  /exit (inside the TUI)          end the session, or Ctrl-D — not a seri subcommand: it means
+                                    nothing outside a live TUI, and "seri /exit" is just a task
   seri login | signup | logout
   seri config set|list|unset
   seri permissions list|remove <tool>
