@@ -23,6 +23,9 @@ import type { SessionState } from "../session/session";
 
 export type CommandDirs = { sessionsDir: string; checkpointsDir: string };
 
+// The session records the directory seri was started in, which is not necessarily the project —
+// resolving the root here rather than at each call site is what keeps the live run and the three
+// restoring commands addressing the same store, since the key is derived from it.
 export function checkpointTarget(
   session: SessionState<ModelMessage>,
   dirs: CommandDirs,
