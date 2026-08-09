@@ -59,6 +59,81 @@ function childScriptInput(dir: string): string {
   ].join("\n");
 }
 
+// H-1/M-3: a session with no checkpoints at all, so `/undo 5` throws inside applyUndo — proving a
+// command decision function's own exception is caught, not left to escape Ink's input handler.
+// `/mode` sent afterward is what proves the process is still alive and responsive, not merely
+// that it failed to crash outright.
+function childScriptCommandError(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// H-2: a runLoop that throws on its very first iteration, once Ink has already mounted — proving
+// runTui's driveLoop().catch() path unmounts and rejects rather than leaving run() awaiting a
+// promise that was never going to settle.
+function childScriptRejects(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  throw new Error("boom");`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// H-3: a runLoop that resolves per call, reporting how many times it has been invoked and how
+// many messages it was handed — the two facts that prove a second, free-form task submission
+// actually re-invoked driveLoop against the LIVE (accumulated) session, rather than the TUI
+// exiting after the first turn or a second turn starting from a fresh/stale message list.
+function childScriptMultiTurn(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " messages=" + opts.messages.length);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 type Exit = { code: number | null; signal: NodeJS.Signals | null; stdout: string };
 
 // Identical shape to tests/cli/approvalPromptPty.test.ts's own startChild — duplicated rather than
@@ -187,6 +262,134 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // permissionMode ("approve-each") one step, dispatched into the transcript by tuiPresenter
       // (Phase 5) rather than console.log'd — this line only appears if that whole chain ran.
       await sawLine("permission mode is now auto");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // H-1 + M-3: a command decision function throwing (no checkpoints to /undo to) used to escape
+  // straight out of Ink's own input handler. Confirmed here two ways — the error is shown, not
+  // silently dropped, AND the process is still alive and answers a second, unrelated command
+  // afterward, which a crash would not. M-3's other case — input shaped like a slash command that
+  // matches nothing at all (a typo) — is checked in the same run, since it needs the same fixture.
+  test("a slash command that throws, or one that matches nothing, shows an error line instead of crashing the TUI", async () => {
+    const scriptPath = join(dir, "child-command-error.mjs");
+    writeFileSync(scriptPath, childScriptCommandError(dir));
+
+    const { child, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+
+      // M-3: a typo'd command name matches nothing in SLASH_COMMANDS at all.
+      child.stdin?.write("/mdoe");
+      await sawLine("/mdoe");
+      child.stdin?.write("\r");
+      await sawLine("Unrecognized command: /mdoe");
+
+      // H-1: a name that DOES match, but throws inside its own decision function.
+      child.stdin?.write("/undo 5");
+      await sawLine("/undo 5");
+      child.stdin?.write("\r");
+      await sawLine("checkpoint(s) to undo to; asked for 5");
+
+      // Still alive: an ordinary command sent right after both of the above still works.
+      child.stdin?.write("/mode");
+      await sawLine("/mode");
+      child.stdin?.write("\r");
+      await sawLine("permission mode is now read-only");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // H-2: driveLoop rejecting (a real throw, not just an aborted/errored `done` event) is a
+  // distinct failure mode from every other exit this file tests — runTui's own catch has to
+  // unmount and reject rather than leave run()'s own `await runTui(...)` parked forever. Asserted
+  // by the child process actually exiting within the deadline rather than hanging; run() has no
+  // try/catch of its own around that await (matching the non-interactive path's own documented
+  // behavior for a throw escaping driveLoop's for-await), so this surfaces as the child process
+  // itself ending, one way or another, not as a value run() returns.
+  test("driveLoop rejecting settles run() instead of hanging forever", async () => {
+    const scriptPath = join(dir, "child-rejects.mjs");
+    writeFileSync(scriptPath, childScriptRejects(dir));
+
+    const { exited, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+
+      const settled = await Promise.race([
+        exited,
+        new Promise<"the run never settled">((r) =>
+          setTimeout(() => r("the run never settled"), 15_000),
+        ),
+      ]);
+
+      expect(settled).not.toBe("the run never settled");
+    } finally {
+      // Already exited in the success case; harmless if the process is already gone.
+    }
+  }, 60_000);
+
+  // H-3: submitting free-form text (not a recognised slash command) after the first turn
+  // completes starts a SECOND driveLoop call against the live, accumulated session, and the TUI
+  // does not exit between the two turns — feature-plan.md's own acceptance criterion ("the next
+  // model turn reads" a live-updated session), demonstrated with a real second turn rather than
+  // just the reducer merge C-1 already covers.
+  test("a second, free-form task submission starts another turn against the accumulated session", async () => {
+    const scriptPath = join(dir, "child-multi-turn.mjs");
+    writeFileSync(scriptPath, childScriptMultiTurn(dir));
+
+    const { child, sawLine } = startChild(scriptPath, dir);
+    try {
+      // prepareSession appended the initial task as the session's only message.
+      await sawLine("RUNLOOP_CALL 1 messages=1");
+      // Turn 1's own messages-updated (one assistant reply) landed in the reducer's session.
+      await sawLine("ok 1");
+
+      child.stdin?.write("a second task");
+      child.stdin?.write("\r");
+
+      // 1 initial + 1 turn-1 assistant reply + 1 new user message = 3, and the app is still
+      // running to report it at all — proof it did not exit after the first turn.
+      await sawLine("RUNLOOP_CALL 2 messages=3");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // H-4 (the fatal path M-2's terminal-state fix guards): a second Ctrl-C, once the first has
+  // already spent signals.ts's one cancel slot, is fatal rather than a second cancel — the same
+  // "one slot, second press finds it empty" mechanism as everywhere else in this repo (see
+  // signals.ts's own deliverSignal comment), reached here via App.tsx's onCancel instead of a
+  // readline Interface. Asserted the same way tests/signals.test.ts's own "a second press skips
+  // the unwind and still exits by signal" test is: the process actually terminates rather than
+  // hanging, which is what M-2's onSignalCleanup(() => instance.unmount()) exists to make happen
+  // cleanly (restoring raw mode) rather than leaving the terminal in whatever state a bare
+  // process.kill mid-render left it in — not independently checkable from outside the dying
+  // process on this pty harness, so this is the process-terminates half of that fix; the
+  // terminal's own visual state is Phase 7's to confirm on a real terminal.
+  test("a second Ctrl-C after the first is spent terminates the process instead of hanging", async () => {
+    const scriptPath = join(dir, "child-cancel.mjs");
+    writeFileSync(scriptPath, childScriptCancel(dir));
+
+    const { child, exited, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+      child.stdin?.write("\x03");
+      await sawLine("RUNLOOP_ABORTED aborted=true");
+      // The first press's cancel slot is now spent, and nothing re-registers one between turns
+      // (runTui does not call driveLoop again until another task is submitted) — so this second
+      // press finds the slot empty and falls straight through to signals.ts's fatal path.
+      child.stdin?.write("\x03");
+
+      const settled = await Promise.race([
+        exited,
+        new Promise<"the run never settled">((r) =>
+          setTimeout(() => r("the run never settled"), 15_000),
+        ),
+      ]);
+
+      expect(settled).not.toBe("the run never settled");
     } finally {
       child.kill("SIGKILL");
     }
