@@ -56,7 +56,7 @@ function buildStableTier(): string {
   return SYSTEM_PROMPT;
 }
 
-// At session start: AGENTS.md, appended never as a substitute — a project without one used to get
+// At session start: AGENTS.md is appended, never a substitute — a project without one used to get
 // a 29-character prompt with no tool guidance at all, which is the failure this module exists to
 // fix. Future hook point: Stage 10 recipe metadata joins this tier alongside AGENTS.md.
 function buildContextTier(agentsContent: string): string {
@@ -65,6 +65,8 @@ function buildContextTier(agentsContent: string): string {
 
 // Last, so a change here invalidates the least of a cached prefix. Nothing produces volatile
 // content yet (no memory built this stage) — this is a structural placeholder.
+// Position (last) is not test-asserted while this returns "" — empty content is unobservable in
+// the output. Add a position-pinning test when this tier first returns real content.
 function buildVolatileTier(): string {
   return "";
 }
