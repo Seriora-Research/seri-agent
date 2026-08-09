@@ -59,6 +59,35 @@ function childScriptInput(dir: string): string {
   ].join("\n");
 }
 
+// Pins the `interactive: true` fix (cli.ts's own comment on its render() call): without it, Ink's
+// own CI auto-detection (`is-in-ci`, keyed on the `CI`/`CONTINUOUS_INTEGRATION` env vars) treats a
+// real pty as non-interactive whenever `CI` is set — exactly GitHub Actions' own default for every
+// job — and stops live-rendering, regardless of `stdout.isTTY`. `CI=true` is set on the CHILD
+// process only (this script's own first line), not on the test runner itself, so this reproduces
+// the failure GitHub Actions' ubuntu-latest/macos-latest runners hit (confirmed by reverting
+// `interactive: true` and re-running this exact test locally with `CI=true`: it hung on the
+// `/mode` wait below until sawLine's own timeout, every time) without needing real CI to check it.
+function childScriptCiEnv(dir: string): string {
+  return [
+    `process.env.CI = "true";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // H-1/M-3: a session with no checkpoints at all, so `/undo 5` throws inside decideUndo — proving a
 // command decision function's own exception is caught, not left to escape Ink's input handler.
 // `/mode` sent afterward is what proves the process is still alive and responsive, not merely
@@ -925,6 +954,28 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLineTimes("/mode", 2);
       child.stdin?.write("\r");
       await sawLine("permission mode is now");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // Pins the `interactive: true` fix on cli.ts's own render() call (its own comment there has the
+  // full account) — without it, Ink's CI auto-detection (`is-in-ci`) treats a real pty as
+  // non-interactive whenever `CI` is set, which is GitHub Actions' own default for every job, and
+  // stops live-rendering regardless of `stdout.isTTY`. `CI=true` is set on the CHILD process only
+  // (childScriptCiEnv's own first line) to reproduce that exact condition without needing real CI.
+  test("the TUI still renders and responds to input when CI=true is set (the GitHub Actions default)", async () => {
+    const scriptPath = join(dir, "child-ci-env.mjs");
+    writeFileSync(scriptPath, childScriptCiEnv(dir));
+
+    const { child, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+
+      child.stdin?.write("/mode");
+      await sawLine("/mode");
+      child.stdin?.write("\r");
+      await sawLine("permission mode is now auto");
     } finally {
       child.kill("SIGKILL");
     }
