@@ -5,6 +5,8 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
+import { render } from "ink";
+import { createElement } from "react";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
@@ -15,9 +17,7 @@ import {
   appendBarrier,
   checkpointStoreDir,
   createCheckpointer,
-  restoreCommit,
-  rewindConversation,
-  undoFiles,
+  type RestoreResult,
 } from "./checkpoint/checkpoint";
 import { projectRoot } from "./checkpoint/shadowGit";
 import { withCheckpoints } from "./checkpoint/wrapTools";
@@ -37,7 +37,7 @@ import {
 import { configCommand as configCommandReal } from "./config/commands";
 import { loadVerifyConfig } from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
-import { cycleMode, type PermissionMode } from "./gate/gate";
+import type { PermissionMode } from "./gate/gate";
 import {
   type ApprovalAnswer,
   type ApprovalPrompt,
@@ -51,13 +51,21 @@ import { toolDefinitions } from "./provider/tools";
 import {
   findMostRecentSession,
   loadSession,
-  saveSession,
   type SessionState,
+  saveSession,
 } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
+import { App } from "./tui/App";
+import { applyModeCycle, applyRestore, applyRewind, applyUndo } from "./tui/commands";
+import type { TuiAction } from "./tui/reducer";
 import { withVerification } from "./verify/wrapTools";
+
+// A shorthand used across driveLoop, the slash-command presenters, and the TUI entry point below
+// — every one of them just needs "given this action, do something with it," with the two concrete
+// implementations (printDispatch/tuiPresenter) deciding what.
+type Dispatch = (action: TuiAction) => void;
 
 type CliDeps = {
   runLoop?: typeof runLoopReal;
@@ -80,6 +88,21 @@ type CliDeps = {
 
 type CommandDirs = { sessionsDir: string; checkpointsDir: string };
 
+// The presentation half of the decision/presentation split (research-spec) for /mode, /undo,
+// /restore and /rewind: the DECISION is one of the pure functions in tui/commands.ts (Phase 2) —
+// this is only how the result is shown, with two implementations mirroring ApprovalPrompt's own
+// two-implementation shape. consolePresenter (below) is what every command used, inline, before
+// this refactor — console.log, byte-for-byte unchanged; tuiPresenter (near the TUI entry point
+// further down) dispatches into the live transcript instead. `restore` mirrors what /undo and
+// /restore return (`{plan, message}` — RestoreResult is a RestorePlan plus the recovery commit);
+// `sessionUpdated` is only ever wired by /mode and /rewind, the two commands that actually change
+// the session — /undo and /restore never touch it, so they never call it.
+type CommandPresenter = {
+  message: (text: string) => void;
+  restore: (result: { plan: RestoreResult; message: string }) => void;
+  sessionUpdated?: (next: SessionState<ModelMessage>) => void;
+};
+
 type SlashCommand = {
   // Whether these arguments are an invocation of this command at all — checked BEFORE the dispatch
   // claims the input, because the first word of a task is not a command. The dispatch splits the
@@ -89,16 +112,20 @@ type SlashCommand = {
   // exact and small, so anything outside them falls through to the model, which is the only
   // direction that cannot silently swallow work.
   accepts: (args: string[]) => boolean;
-  run: (session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs) => void;
+  // `presenter` is optional and defaults to consolePresenter at each command's own definition
+  // (below) — handleSlashCommand's call site (unchanged) never passes one; the TUI entry point's
+  // does.
+  run: (
+    session: SessionState<ModelMessage>,
+    args: string[],
+    dirs: CommandDirs,
+    presenter?: CommandPresenter,
+  ) => void;
 };
 
 // A step count, or nothing at all.
 function isStepCount(args: string[]): boolean {
   return args.length === 0 || (args.length === 1 && /^[1-9]\d*$/.test(args[0] ?? ""));
-}
-
-function steps(args: string[]): number {
-  return args[0] === undefined ? 1 : Number(args[0]);
 }
 
 // Commands that operate on the resume target rather than being a task for the model. One table,
@@ -127,14 +154,29 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   ["/rewind", { accepts: isStepCount, run: rewindCommand }],
 ]);
 
+// The non-interactive presenter: exactly what every command printed inline before this refactor
+// (console.log, plus printUndoPlan/printRecovery for /undo and /restore) — used by
+// handleSlashCommand, unchanged observable output. `sessionUpdated` is omitted: this path has no
+// live reducer to keep in sync, saveSession alone is what it always did.
+const consolePresenter: CommandPresenter = {
+  message: (text) => console.log(text),
+  restore: ({ plan, message }) => {
+    printUndoPlan(plan);
+    console.log(message);
+    if (plan.restored.length > 0 || plan.deleted.length > 0) printRecovery(plan);
+  },
+};
+
 function cycleModeCommand(
   session: SessionState<ModelMessage>,
   _args: string[],
   dirs: CommandDirs,
+  presenter: CommandPresenter = consolePresenter,
 ): void {
-  session.permissionMode = cycleMode(session.permissionMode);
-  saveSession(session, dirs.sessionsDir);
-  console.log(`Session ${session.id}: permission mode is now ${session.permissionMode}`);
+  const { next, message } = applyModeCycle(session);
+  saveSession(next, dirs.sessionsDir);
+  presenter.sessionUpdated?.(next);
+  presenter.message(message);
 }
 
 // The tree a session's checkpoints are of, and the store they live in. The session records the
@@ -152,30 +194,27 @@ function checkpointTarget(
   return { storeDir: checkpointStoreDir(dirs.checkpointsDir, worktree), worktree };
 }
 
-function undoCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
-  const result = undoFiles({
-    ...checkpointTarget(session, dirs),
-    sessionId: session.id,
-    steps: steps(args),
-    onPlan: printUndoPlan,
-  });
-  // The step the user asked for, not the record's `seq`. `seq` is the 0-based index of a tool
-  // record while `/undo n` is 1-based over DISTINCT trees, so the two only ever agreed by
-  // accident: the first checkpoint printed "checkpoint 0", and over records [T0, T1, T1, T2]
-  // `/undo 2` printed "checkpoint 2" while restoring the state that preceded tool call 1. A
-  // number a user is shown has to be one they can hand back to the command that showed it.
-  //
-  // A step count is absolute — the n-th most recent distinct checkpoint — not relative to wherever
-  // a previous undo left the worktree, so `/undo 1` run three times aims at the same checkpoint
-  // three times. Measured before this: each of the three printed that it had undone and minted a
-  // fresh recovery commit while the file stayed exactly where the first one put it. Saying so is
-  // the same honesty `/rewind`'s "dropped 0 message(s)" already applies.
-  if (result.restored.length === 0 && result.deleted.length === 0) {
-    console.log(`Already at checkpoint ${steps(args)}; no file changed.`);
-    return;
-  }
-  console.log(`Undid to checkpoint ${steps(args)}.`);
-  printRecovery(result);
+// The step the user asked for, not the record's `seq`. `seq` is the 0-based index of a tool
+// record while `/undo n` is 1-based over DISTINCT trees, so the two only ever agreed by
+// accident: the first checkpoint printed "checkpoint 0", and over records [T0, T1, T1, T2]
+// `/undo 2` printed "checkpoint 2" while restoring the state that preceded tool call 1. A
+// number a user is shown has to be one they can hand back to the command that showed it.
+//
+// A step count is absolute — the n-th most recent distinct checkpoint — not relative to wherever
+// a previous undo left the worktree, so `/undo 1` run three times aims at the same checkpoint
+// three times. Measured before this: each of the three printed that it had undone and minted a
+// fresh recovery commit while the file stayed exactly where the first one put it. Saying so is
+// the same honesty `/rewind`'s "dropped 0 message(s)" already applies.
+//
+// Decision (applyUndo, tui/commands.ts) and presentation (the presenter) are split here per the
+// research spec — the decision function wraps checkpoint.ts's undoFiles unchanged.
+function undoCommand(
+  session: SessionState<ModelMessage>,
+  args: string[],
+  dirs: CommandDirs,
+  presenter: CommandPresenter = consolePresenter,
+): void {
+  presenter.restore(applyUndo(session, args, dirs));
 }
 
 // The other end of what /undo and /restore print: put the worktree back to a commit this session
@@ -185,50 +224,21 @@ function restoreCommand(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
+  presenter: CommandPresenter = consolePresenter,
 ): void {
-  const commit = args[0] ?? "";
-  const result = restoreCommit({
-    ...checkpointTarget(session, dirs),
-    sessionId: session.id,
-    commit,
-    onPlan: printUndoPlan,
-  });
-  if (result.restored.length === 0 && result.deleted.length === 0) {
-    console.log(`Already at ${commit}; no file changed.`);
-    return;
-  }
-  console.log(`Restored ${commit}.`);
-  printRecovery(result);
+  presenter.restore(applyRestore(session, args, dirs));
 }
 
 function rewindCommand(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
+  presenter: CommandPresenter = consolePresenter,
 ): void {
-  const { storeDir } = checkpointTarget(session, dirs);
-  const { rewindTo } = rewindConversation({ storeDir, sessionId: session.id, steps: steps(args) });
-  // Clamped, because an anchor can outlive the array it indexed: a previous /rewind truncated the
-  // session and the messages that followed reused those indices. Slicing past the end is a silent
-  // no-op, and reporting the anchor rather than the count would announce a truncation that never
-  // happened.
-  const kept = Math.min(rewindTo, session.messages.length);
-  const dropped = session.messages.length - kept;
-  session.messages = session.messages.slice(0, kept);
-  saveSession(session, dirs.sessionsDir);
-  // Clamping only catches the anchors that are too LARGE, and those are the harmless ones. An
-  // older anchor small enough to index the rebuilt array points at a DIFFERENT message: with
-  // anchors [1,3,5,7] over nine messages, `/rewind 2` truncates to five, a resume appends five
-  // more and records [6,8], and `/rewind 3` then reaches the stale 7 and slices to 7 — leaving an
-  // assistant tool-call whose tool result was dropped, which is AI_MissingToolResultsError on the
-  // next resume and the exact failure `rewindTo = messages.length - 1` exists to prevent. So a
-  // rewind draws the same kind of line compaction does. Recorded only when something was actually
-  // dropped: a no-op rewind invalidates nothing, and a barrier for it would throw away history
-  // that is still good.
-  if (dropped > 0) appendBarrier(storeDir, session.id, "rewind");
-  console.log(
-    `Session ${session.id}: dropped ${dropped} message(s), ${kept} remain. No file was touched.`,
-  );
+  const { next, message } = applyRewind(session, args, dirs);
+  saveSession(next, dirs.sessionsDir);
+  presenter.sessionUpdated?.(next);
+  presenter.message(message);
 }
 
 // `model` is optional on SessionState so that sessions written before the field existed still load,
@@ -824,14 +834,7 @@ function addTokens(total: number | undefined, reported: number | undefined): num
   return reported === undefined ? total : (total ?? 0) + reported;
 }
 
-// `maxTurns` is an argument rather than a field of ctx: it is neither the resume target nor where
-// its state lives, and this is the only place that reads it.
-async function driveLoop(
-  prepared: PreparedRun,
-  ctx: RunContext,
-  deps: CliDeps,
-  maxTurns: number | undefined,
-): Promise<{
+type DriveLoopResult = {
   doneReason: DoneReason | undefined;
   cancelledBy: NodeJS.Signals | undefined;
   usage: RunUsage;
@@ -839,7 +842,29 @@ async function driveLoop(
   // to reassemble itself: "refused at least once AND executed nothing at all" — see the tracking
   // below for what each half means and why.
   refusedWithoutRunning: boolean;
-}> {
+};
+
+// driveLoop's non-interactive dispatch: reproduces exactly what it printed before this refactor.
+// `messages-updated` never reached printEvent before either (it was intercepted and turned into a
+// save instead, `continue`d past the print) — this adapter is only ever handed the events that
+// did, via the `loop-event` action below, so output.ts stays the presentation layer for a piped/
+// non-TTY run, byte-for-byte unchanged.
+const printDispatch: Dispatch = (action) => {
+  if (action.type === "loop-event") printEvent(action.event);
+};
+
+// `maxTurns` is an argument rather than a field of ctx: it is neither the resume target nor where
+// its state lives, and this is the only place that reads it. `dispatch` is how it reports events —
+// printDispatch above for the non-interactive path, a dispatch into App.tsx's reducer for the TUI
+// one (runTui, further down) — the loop-driving logic itself (the `for await`, the cancellation/
+// AbortController handling) is unchanged either way.
+async function driveLoop(
+  prepared: PreparedRun,
+  ctx: RunContext,
+  deps: CliDeps,
+  maxTurns: number | undefined,
+  dispatch: Dispatch,
+): Promise<DriveLoopResult> {
   const { session, storeDir, tools, model, permissionMode, worktree, allowedTools } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
@@ -888,7 +913,9 @@ async function driveLoop(
       maxIterations: maxTurns,
     })) {
       if (event.type === "messages-updated") {
-        saveSession({ ...session, messages: event.messages }, ctx.sessionsDir);
+        const updated = { ...session, messages: event.messages };
+        saveSession(updated, ctx.sessionsDir);
+        dispatch({ type: "session-updated", session: updated });
         continue;
       }
       if (event.type === "permission-denied" && event.reason === "declined") hadDenial = true;
@@ -924,10 +951,10 @@ async function driveLoop(
         usage.outputTokens = addTokens(usage.outputTokens, event.usage.outputTokens);
       }
       if (event.type === "done") doneReason = event.reason;
-      printEvent(event);
-      // After printEvent, not before: these are two lines of one message and the run-scoped fact
-      // ("approved for the rest of this run") has to come first. Wrapped for the same reason the
-      // appendBarrier call above is (see its comment): an EACCES, a full disk or a config dir
+      dispatch({ type: "loop-event", event });
+      // After the dispatch above, not before: these are two lines of one message and the
+      // run-scoped fact ("approved for the rest of this run") has to come first. Wrapped for the
+      // same reason the appendBarrier call above is (see its comment): an EACCES, a full disk or a config dir
       // removed mid-session is a failure of the thing that remembers grants, and it must not take
       // down the user's in-flight run. Losing the grant costs one prompt next time, so it is a
       // warning, not silence — a grant the user believes was saved and was not is the Hermes #4739
@@ -951,6 +978,101 @@ async function driveLoop(
   }
 
   return { doneReason, cancelledBy, usage, refusedWithoutRunning: hadDenial && !ranTool };
+}
+
+// The TUI's presenter: the same `{message}`/`{plan, message}` shapes tui/commands.ts's decision
+// functions return, dispatched into the live transcript instead of printed. Duplicates
+// printUndoPlan/printRecovery's exact line shapes from output.ts (cli/output.ts:98-109) rather
+// than reusing those functions directly — they write to console.log, which a transcript dispatch
+// cannot be routed through — the console-only presenter above is what stays canonical for
+// non-interactive output.
+function tuiPresenter(dispatch: Dispatch): CommandPresenter {
+  return {
+    message: (text) => dispatch({ type: "transcript-append", line: text }),
+    restore: ({ plan, message }) => {
+      if (plan.diff) dispatch({ type: "transcript-append", line: plan.diff });
+      for (const path of plan.restored) {
+        dispatch({ type: "transcript-append", line: `restored ${path}` });
+      }
+      for (const path of plan.deleted) {
+        dispatch({ type: "transcript-append", line: `deleted  ${path}` });
+      }
+      if (plan.ignored.length > 0) {
+        dispatch({
+          type: "transcript-append",
+          line: `not restored (gitignored): ${plan.ignored.join(", ")}`,
+        });
+      }
+      dispatch({ type: "transcript-append", line: message });
+      if (plan.restored.length > 0 || plan.deleted.length > 0) {
+        dispatch({
+          type: "transcript-append",
+          line: `The state this replaced is commit ${plan.preUndoCommit}. To get it back:`,
+        });
+        dispatch({ type: "transcript-append", line: `  ${plan.recoverCommand}` });
+      }
+    },
+    sessionUpdated: (next) => dispatch({ type: "session-updated", session: next }),
+  };
+}
+
+// Mounted only when process.stdout.isTTY is true (run()'s own branch, above driveLoop's other
+// call site). Drives the SAME driveLoop the non-interactive path uses for the initial task
+// already appended to `prepared.session.messages` by prepareSession — only how it reports events
+// differs. Slash commands typed into the TUI's input box reuse the exact same command functions
+// (cycleModeCommand etc.) the non-interactive path uses, via tuiPresenter instead of
+// consolePresenter — one decision function, two presentations, per the research spec. A submitted
+// line that is not a recognised slash command is not wired to start a new model turn in this
+// phase — Phase 5's scope is the initial task's drive plus slash-command dispatch; resubmitting a
+// free-form task mid-session is later work.
+async function runTui(
+  prepared: PreparedRun,
+  ctx: RunContext,
+  deps: CliDeps,
+  maxTurns: number | undefined,
+): Promise<DriveLoopResult> {
+  let liveSession: SessionState<ModelMessage> = prepared.session;
+  let dispatch: Dispatch | undefined;
+
+  function onSubmit(value: string): void {
+    if (dispatch === undefined) return;
+    const [name = "", ...args] = value.split(/\s+/).filter(Boolean);
+    const command = SLASH_COMMANDS.get(name);
+    if (command !== undefined && command.accepts(args)) {
+      command.run(liveSession, args, dirs(ctx), tuiPresenter(dispatch));
+    }
+  }
+
+  return new Promise<DriveLoopResult>((resolve) => {
+    const instance = render(
+      createElement(App, {
+        session: prepared.session,
+        done: false,
+        onSubmit,
+        // The seam App.tsx built for exactly this (tui/App.tsx's own AppProps comment): called
+        // once on mount with the reducer's own dispatch. `dispatch` here wraps it so this
+        // function's own view of the live session (`liveSession`, what onSubmit's slash commands
+        // act on) tracks the same session-updated actions the reducer does, from one source.
+        connectDispatch: (reducerDispatch: Dispatch) => {
+          dispatch = (action) => {
+            if (action.type === "session-updated") liveSession = action.session;
+            reducerDispatch(action);
+          };
+          driveLoop(prepared, ctx, deps, maxTurns, dispatch).then((result) => {
+            instance.rerender(
+              createElement(App, {
+                session: prepared.session,
+                done: true,
+                onSubmit,
+                connectDispatch: undefined,
+              }),
+            );
+            void instance.waitUntilExit().then(() => resolve(result));
+          });
+        },
+      }),
+    );
+  });
 }
 
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
@@ -1005,12 +1127,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const prepared = prepareSession(ctx, deps, skipPermissions);
   if (typeof prepared === "number") return prepared;
 
-  const { doneReason, cancelledBy, usage, refusedWithoutRunning } = await driveLoop(
-    prepared,
-    ctx,
-    deps,
-    maxTurns,
-  );
+  // TTY-inferred, not a flag (plan Decision 2): a real terminal gets the Ink TUI, driving the
+  // exact same driveLoop as the piped/CI path below — only how it reports events differs
+  // (dispatch into App.tsx's reducer vs. printDispatch's printEvent calls). Falsy — piped, CI, a
+  // redirected file — takes the untouched path this project has always run: same function, same
+  // call order, same output.
+  const { doneReason, cancelledBy, usage, refusedWithoutRunning } = process.stdout.isTTY
+    ? await runTui(prepared, ctx, deps, maxTurns)
+    : await driveLoop(prepared, ctx, deps, maxTurns, printDispatch);
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are
