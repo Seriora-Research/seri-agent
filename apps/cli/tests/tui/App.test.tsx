@@ -211,13 +211,23 @@ describe("App", () => {
       await flush();
       if (dispatch === undefined) throw new Error("connectDispatch never fired");
 
-      dispatch({ type: "approval-requested", toolName: "write_file", args: {}, offersAlways: true });
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: {},
+        offersAlways: true,
+      });
       await flush();
       instance.stdin.write("y");
       await flush();
       expect(answers).toEqual(["once"]);
 
-      dispatch({ type: "approval-requested", toolName: "write_file", args: {}, offersAlways: true });
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: {},
+        offersAlways: true,
+      });
       await flush();
       instance.stdin.write("a");
       await flush();
@@ -237,7 +247,12 @@ describe("App", () => {
       expect(answers).toEqual(["once", "always", "no"]);
 
       // Enter defaults to "no" — the bracketed capital in "[N]o".
-      dispatch({ type: "approval-requested", toolName: "write_file", args: {}, offersAlways: true });
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: {},
+        offersAlways: true,
+      });
       await flush();
       instance.stdin.write("\r");
       await flush();
@@ -263,7 +278,12 @@ describe("App", () => {
       await flush();
       if (dispatch === undefined) throw new Error("connectDispatch never fired");
 
-      dispatch({ type: "approval-requested", toolName: "write_file", args: {}, offersAlways: true });
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: {},
+        offersAlways: true,
+      });
       await flush();
       // A single keystroke, not a multi-character chunk: this is only about confirming the
       // keypress reached ApprovalBox instead of InputBox, not about the multi-character-chunk
