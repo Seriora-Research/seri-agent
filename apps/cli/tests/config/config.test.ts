@@ -74,14 +74,17 @@ describe("loadVerifyConfig", () => {
   });
 
   test("reads the command from config.json, and lets the environment override it", () => {
-    writeFileSync(join(configDir, "config.json"), JSON.stringify({ SERI_VERIFY_COMMAND: "bun run typecheck" }));
+    writeFileSync(
+      join(configDir, "config.json"),
+      JSON.stringify({ SERI_VERIFY_COMMAND: "bun run typecheck" }),
+    );
     expect(loadVerifyConfig().command).toBe("bun run typecheck");
 
     process.env.SERI_VERIFY_COMMAND = "tsc --noEmit";
     expect(loadVerifyConfig().command).toBe("tsc --noEmit");
   });
 
-  test("turns off on exactly \"false\", from config.json or from the environment", () => {
+  test('turns off on exactly "false", from config.json or from the environment', () => {
     writeFileSync(join(configDir, "config.json"), JSON.stringify({ SERI_VERIFY_ENABLED: "false" }));
     expect(loadVerifyConfig().enabled).toBe(false);
 

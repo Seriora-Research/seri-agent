@@ -22,7 +22,11 @@ const CHILD = [
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null; stdout: string };
 
-function startChild(): { child: ReturnType<typeof spawn>; exited: Promise<Exit>; sawLine: (line: string) => Promise<void> } {
+function startChild(): {
+  child: ReturnType<typeof spawn>;
+  exited: Promise<Exit>;
+  sawLine: (line: string) => Promise<void>;
+} {
   const child = spawn(process.execPath, ["-e", CHILD], { stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   child.stdout?.setEncoding("utf8");
@@ -38,8 +42,10 @@ function startChild(): { child: ReturnType<typeof spawn>; exited: Promise<Exit>;
   // was imported (which is what installs the handler) and after the cancel slot was registered.
   const sawLine = async (line: string): Promise<void> => {
     const deadline = Date.now() + 10_000;
-    while (!stdout.includes(line) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
-    if (!stdout.includes(line)) throw new Error(`child never printed ${JSON.stringify(line)}; got ${JSON.stringify(stdout)}`);
+    while (!stdout.includes(line) && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 10));
+    if (!stdout.includes(line))
+      throw new Error(`child never printed ${JSON.stringify(line)}; got ${JSON.stringify(stdout)}`);
   };
 
   return { child, exited, sawLine };

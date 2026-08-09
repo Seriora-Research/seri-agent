@@ -9,10 +9,20 @@ describe("describeNearMiss", () => {
   // line the model got right; measured on the first implementation, it did exactly that and printed
   // the same string as both `actual` and `searched`.
   test("names the LATER differing line when the first line of a multi-line oldString matches", () => {
-    const content = ["export function getApiKey(name) {", "  const config = loadConfig();", "  return config[name];", "}"].join("\n");
+    const content = [
+      "export function getApiKey(name) {",
+      "  const config = loadConfig();",
+      "  return config[name];",
+      "}",
+    ].join("\n");
     const report = describeNearMiss(
       content,
-      ["export function getApiKey(name) {", "  const config = readConfig();", "  return config[name];", "}"].join("\n"),
+      [
+        "export function getApiKey(name) {",
+        "  const config = readConfig();",
+        "  return config[name];",
+        "}",
+      ].join("\n"),
     );
 
     expect(report).toContain("line 2");
@@ -25,7 +35,9 @@ describe("describeNearMiss", () => {
   // ("if (y) {" and "}"), while the earlier one starting at line 2 scores 1 (its "}" alone).
   // Taking the first window that matched anything at all would name line 2.
   test("picks the window with the most matching lines, not the first window that matches at all", () => {
-    const content = ["const a = 1;", "if (x) {", "  go();", "}", "if (y) {", "  stop();", "}"].join("\n");
+    const content = ["const a = 1;", "if (x) {", "  go();", "}", "if (y) {", "  stop();", "}"].join(
+      "\n",
+    );
     const report = describeNearMiss(content, ["if (y) {", "  halt();", "}"].join("\n"));
 
     expect(report).toContain("line 6");
@@ -56,7 +68,11 @@ describe("describeNearMiss", () => {
     ].join("\n");
     const report = describeNearMiss(
       content,
-      ["  const session = await loadSession(req);", "  if (!session) return redirect('/login');", "}"].join("\n"),
+      [
+        "  const session = await loadSession(req);",
+        "  if (!session) return redirect('/login');",
+        "}",
+      ].join("\n"),
     );
 
     expect(report).toBeNull();
@@ -66,7 +82,15 @@ describe("describeNearMiss", () => {
   // is a lone `}` some brace in the file scores 1.0 and the report prints identical `actual` and
   // `searched` — the H2 symptom arriving from the other side. An exact match is not a near miss.
   test("stage 2 never names a line that exactly matches the probe", () => {
-    const content = ["function a() {", "  return 1;", "}", "", "function b() {", "  return 2;", "}"].join("\n");
+    const content = [
+      "function a() {",
+      "  return 1;",
+      "}",
+      "",
+      "function b() {",
+      "  return 2;",
+      "}",
+    ].join("\n");
     const report = describeNearMiss(content, ["}", "const totallyUnrelated = 9;"].join("\n"));
 
     expect(report).toBeNull();
@@ -87,7 +111,11 @@ describe("describeNearMiss", () => {
     ].join("\n");
     const report = describeNearMiss(
       content,
-      ["  const session = await loadSession(req);", "  if (!session) return redirect('/login');", "});"].join("\n"),
+      [
+        "  const session = await loadSession(req);",
+        "  if (!session) return redirect('/login');",
+        "});",
+      ].join("\n"),
     );
 
     expect(report).toBeNull();
@@ -97,7 +125,14 @@ describe("describeNearMiss", () => {
   // `return;` has identifiers, but occurring three times it says nothing about WHICH window is the
   // right one. Frequency, not character class, is what makes a line a usable anchor.
   test("a line that repeats in the content cannot qualify a window on its own", () => {
-    const content = ["const a = 1;", "return;", "const b = 2;", "return;", "const c = 3;", "return;"].join("\n");
+    const content = [
+      "const a = 1;",
+      "return;",
+      "const b = 2;",
+      "return;",
+      "const c = 3;",
+      "return;",
+    ].join("\n");
     const report = describeNearMiss(content, ["totallyDifferentThing();", "return;"].join("\n"));
 
     expect(report).toBeNull();
@@ -105,7 +140,9 @@ describe("describeNearMiss", () => {
 
   test("nothing in the content trim-matches any line, so no line is named", () => {
     const content = "const a = 1;\nconst b = 2;\n";
-    expect(describeNearMiss(content, "export default function Widget(props) {\n  return null;\n}")).toBeNull();
+    expect(
+      describeNearMiss(content, "export default function Widget(props) {\n  return null;\n}"),
+    ).toBeNull();
   });
 
   // The case window scoring alone cannot serve, and the most common edit shape there is. A
@@ -142,8 +179,18 @@ describe("describeNearMiss", () => {
 // The tool-result half of the same behaviour. `edit` throws, the loop turns the throw into an
 // `error-text` tool result (loop.ts:339-346), so what the model reads is exactly this message.
 describe("edit's no-match failure message", () => {
-  const content = ["export function getApiKey(name) {", "  const config = loadConfig();", "  return config[name];", "}"].join("\n");
-  const searched = ["export function getApiKey(name) {", "  const config = readConfig();", "  return config[name];", "}"].join("\n");
+  const content = [
+    "export function getApiKey(name) {",
+    "  const config = loadConfig();",
+    "  return config[name];",
+    "}",
+  ].join("\n");
+  const searched = [
+    "export function getApiKey(name) {",
+    "  const config = readConfig();",
+    "  return config[name];",
+    "}",
+  ].join("\n");
 
   test("carries the near-miss report: the candidate's line number, its actual text, and the searched text", () => {
     expect(() => edit(content, searched, "x")).toThrow(/line 2/);

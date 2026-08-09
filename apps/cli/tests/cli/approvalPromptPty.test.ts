@@ -103,7 +103,10 @@ type Exit = { code: number | null; signal: NodeJS.Signals | null; stdout: string
 // unbuffered, and needs no termios of its own (tcgetattr on a pipe raises, which it tolerates). A
 // pipe in place of the pty would not do — raw mode is the entire mechanism, and over a pipe 0x03
 // could never have raised a signal in the first place, so the test would prove nothing.
-function startChild(scriptPath: string, cwd: string): {
+function startChild(
+  scriptPath: string,
+  cwd: string,
+): {
   child: ReturnType<typeof spawn>;
   exited: Promise<Exit>;
   sawLine: (line: string) => Promise<void>;
@@ -126,15 +129,22 @@ function startChild(scriptPath: string, cwd: string): {
     child.once("exit", (code, signal) => resolve({ code, signal, stdout }));
     child.once("error", (err) => {
       spawnError = err;
-      resolve({ code: null, signal: null, stdout: `could not spawn python3 (pty allocator): ${err.message}` });
+      resolve({
+        code: null,
+        signal: null,
+        stdout: `could not spawn python3 (pty allocator): ${err.message}`,
+      });
     });
   });
 
   const sawLine = async (line: string): Promise<void> => {
     const deadline = Date.now() + 20_000;
-    while (!stdout.includes(line) && spawnError === undefined && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
-    if (spawnError !== undefined) throw new Error(`could not spawn python3 (pty allocator): ${spawnError.message}`);
-    if (!stdout.includes(line)) throw new Error(`child never printed ${JSON.stringify(line)}; got ${JSON.stringify(stdout)}`);
+    while (!stdout.includes(line) && spawnError === undefined && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 20));
+    if (spawnError !== undefined)
+      throw new Error(`could not spawn python3 (pty allocator): ${spawnError.message}`);
+    if (!stdout.includes(line))
+      throw new Error(`child never printed ${JSON.stringify(line)}; got ${JSON.stringify(stdout)}`);
   };
 
   return { child, exited, sawLine };
@@ -175,14 +185,18 @@ describe.skipIf(process.platform === "win32")("approval prompt on a real termina
       // python3, and a red that says "timeout" rather than what actually broke.
       const settled = await Promise.race([
         exited,
-        new Promise<"the prompt never settled">((r) => setTimeout(() => r("the prompt never settled"), 15_000)),
+        new Promise<"the prompt never settled">((r) =>
+          setTimeout(() => r("the prompt never settled"), 15_000),
+        ),
       ]);
 
       // Asserted on stdout rather than on the exit disposition, because the allocator reports its
       // own status and not the child's: pty.spawn's return value is discarded here, so python3
       // exits 0 however the inner bun died. Clause (b)'s by-signal death has its own test in
       // tests/signals.test.ts.
-      expect(settled === "the prompt never settled" ? settled : settled.stdout).toContain("answer=no aborted=true");
+      expect(settled === "the prompt never settled" ? settled : settled.stdout).toContain(
+        "answer=no aborted=true",
+      );
     } finally {
       child.kill("SIGKILL");
     }
@@ -216,7 +230,9 @@ describe.skipIf(process.platform === "win32")("approval prompt on a real termina
 
       const settled = await Promise.race([
         exited,
-        new Promise<"the prompt never settled">((r) => setTimeout(() => r("the prompt never settled"), 15_000)),
+        new Promise<"the prompt never settled">((r) =>
+          setTimeout(() => r("the prompt never settled"), 15_000),
+        ),
       ]);
       expect(settled === "the prompt never settled" ? settled : settled.code).toBe(0);
     } finally {
@@ -245,7 +261,9 @@ describe.skipIf(process.platform === "win32")("approval prompt on a real termina
 
       const settled = await Promise.race([
         exited,
-        new Promise<"the prompt never settled">((r) => setTimeout(() => r("the prompt never settled"), 15_000)),
+        new Promise<"the prompt never settled">((r) =>
+          setTimeout(() => r("the prompt never settled"), 15_000),
+        ),
       ]);
       expect(settled === "the prompt never settled" ? settled : settled.code).toBe(0);
     } finally {

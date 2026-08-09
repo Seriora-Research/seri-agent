@@ -1,4 +1,10 @@
-import { assertSearchPath, MAX_FILE_RESULTS, MAX_RESULTS, outputLines, runRipgrep } from "./runRipgrep";
+import {
+  assertSearchPath,
+  MAX_FILE_RESULTS,
+  MAX_RESULTS,
+  outputLines,
+  runRipgrep,
+} from "./runRipgrep";
 
 // rg emits `text` when a value is valid UTF-8 and falls back to base64 `bytes` when it is
 // not, for both matched lines and file paths.
@@ -52,7 +58,11 @@ export async function grep(
   // --files-with-matches and emits every match with its full line text, which is the entire
   // cost this mode exists to avoid, and `--files --json` is rejected by rg outright.
   const args =
-    mode === "content" ? ["--json"] : mode === "count" ? ["--count", "--with-filename"] : ["--files-with-matches"];
+    mode === "content"
+      ? ["--json"]
+      : mode === "count"
+        ? ["--count", "--with-filename"]
+        : ["--files-with-matches"];
   if (opts.glob) args.push("-g", opts.glob);
   // `--` so a pattern that looks like a flag ("--force", "-v") is searched for rather than
   // parsed by rg, which otherwise exits 2 and surfaces to the model as a thrown error.
@@ -101,5 +111,9 @@ export async function grep(
     if (matches.length > MAX_RESULTS) break;
   }
 
-  return { mode, matches: matches.slice(0, MAX_RESULTS), truncated: overflowed || matches.length > MAX_RESULTS };
+  return {
+    mode,
+    matches: matches.slice(0, MAX_RESULTS),
+    truncated: overflowed || matches.length > MAX_RESULTS,
+  };
 }

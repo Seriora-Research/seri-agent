@@ -38,12 +38,22 @@ import { configCommand as configCommandReal } from "./config/commands";
 import { loadVerifyConfig } from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
 import { cycleMode, type PermissionMode } from "./gate/gate";
-import { type ApprovalAnswer, type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "./loop/loop";
+import {
+  type ApprovalAnswer,
+  type ApprovalPrompt,
+  type LoopEvent,
+  runLoop as runLoopReal,
+} from "./loop/loop";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
 import { getGroqModel as getGroqModelReal, resolveModelId } from "./provider/groq";
 import { toolDefinitions } from "./provider/tools";
-import { findMostRecentSession, loadSession, saveSession, type SessionState } from "./session/session";
+import {
+  findMostRecentSession,
+  loadSession,
+  saveSession,
+  type SessionState,
+} from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
@@ -107,11 +117,21 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   ["/mode", { accepts: (args) => args.length === 0, run: cycleModeCommand }],
   ["/undo", { accepts: isStepCount, run: undoCommand }],
   // A sha and nothing else. `seri "/restore the header spacing"` is a task.
-  ["/restore", { accepts: (args) => args.length === 1 && /^[0-9a-f]{4,40}$/.test(args[0] ?? ""), run: restoreCommand }],
+  [
+    "/restore",
+    {
+      accepts: (args) => args.length === 1 && /^[0-9a-f]{4,40}$/.test(args[0] ?? ""),
+      run: restoreCommand,
+    },
+  ],
   ["/rewind", { accepts: isStepCount, run: rewindCommand }],
 ]);
 
-function cycleModeCommand(session: SessionState<ModelMessage>, _args: string[], dirs: CommandDirs): void {
+function cycleModeCommand(
+  session: SessionState<ModelMessage>,
+  _args: string[],
+  dirs: CommandDirs,
+): void {
   session.permissionMode = cycleMode(session.permissionMode);
   saveSession(session, dirs.sessionsDir);
   console.log(`Session ${session.id}: permission mode is now ${session.permissionMode}`);
@@ -121,7 +141,10 @@ function cycleModeCommand(session: SessionState<ModelMessage>, _args: string[], 
 // directory seri was started in, which is not necessarily the project — resolving the root here
 // rather than at each call site is what keeps the live run and the three restoring commands
 // addressing the same store, since the key is derived from it.
-function checkpointTarget(session: SessionState<ModelMessage>, dirs: CommandDirs): {
+function checkpointTarget(
+  session: SessionState<ModelMessage>,
+  dirs: CommandDirs,
+): {
   storeDir: string;
   worktree: string;
 } {
@@ -158,7 +181,11 @@ function undoCommand(session: SessionState<ModelMessage>, args: string[], dirs: 
 // The other end of what /undo and /restore print: put the worktree back to a commit this session
 // recorded. It exists so recovery is a command that reuses the restore path — removal pass
 // included — rather than a git incantation the user pastes and hopes about.
-function restoreCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
+function restoreCommand(
+  session: SessionState<ModelMessage>,
+  args: string[],
+  dirs: CommandDirs,
+): void {
   const commit = args[0] ?? "";
   const result = restoreCommit({
     ...checkpointTarget(session, dirs),
@@ -174,7 +201,11 @@ function restoreCommand(session: SessionState<ModelMessage>, args: string[], dir
   printRecovery(result);
 }
 
-function rewindCommand(session: SessionState<ModelMessage>, args: string[], dirs: CommandDirs): void {
+function rewindCommand(
+  session: SessionState<ModelMessage>,
+  args: string[],
+  dirs: CommandDirs,
+): void {
   const { storeDir } = checkpointTarget(session, dirs);
   const { rewindTo } = rewindConversation({ storeDir, sessionId: session.id, steps: steps(args) });
   // Clamped, because an anchor can outlive the array it indexed: a previous /rewind truncated the
@@ -195,7 +226,9 @@ function rewindCommand(session: SessionState<ModelMessage>, args: string[], dirs
   // dropped: a no-op rewind invalidates nothing, and a barrier for it would throw away history
   // that is still good.
   if (dropped > 0) appendBarrier(storeDir, session.id, "rewind");
-  console.log(`Session ${session.id}: dropped ${dropped} message(s), ${kept} remain. No file was touched.`);
+  console.log(
+    `Session ${session.id}: dropped ${dropped} message(s), ${kept} remain. No file was touched.`,
+  );
 }
 
 // `model` is optional on SessionState so that sessions written before the field existed still load,
@@ -325,12 +358,17 @@ function truncateArgsDisplay(args: unknown): string {
 // (whichever stream is NOT redirected is where the question renders) and reproduces today's
 // behaviour when neither is a terminal, where it makes no difference which is picked.
 export function chooseInterfaceOutput(): NodeJS.WritableStream {
-  return process.stderr.isTTY ? process.stderr : process.stdout.isTTY ? process.stdout : process.stderr;
+  return process.stderr.isTTY
+    ? process.stderr
+    : process.stdout.isTTY
+      ? process.stdout
+      : process.stderr;
 }
 
 function makeApprovalPrompt(
   // Reads only from `input`, unchanged.
-  openInterface: () => Interface = () => createInterface({ input: process.stdin, output: chooseInterfaceOutput() }),
+  openInterface: () => Interface = () =>
+    createInterface({ input: process.stdin, output: chooseInterfaceOutput() }),
 ): ApprovalPrompt {
   // Once true, no further prompt in this run touches stdin at all. `process.stdin` is a single
   // shared stream that only ever emits 'end' once: the FIRST prompt's Interface is what actually
@@ -401,7 +439,10 @@ function makeApprovalPrompt(
 // (only the ReadLineOptions shape that CONSTRUCTS an Interface is typed, not the instance's own
 // field) but stable at runtime — verified directly against Node's readline implementation.
 function inputHasEnded(rl: Interface): boolean {
-  return (rl as unknown as { input: NodeJS.ReadableStream & { readableEnded?: boolean } }).input.readableEnded === true;
+  return (
+    (rl as unknown as { input: NodeJS.ReadableStream & { readableEnded?: boolean } }).input
+      .readableEnded === true
+  );
 }
 
 const PARSE_OPTIONS = {
@@ -439,7 +480,12 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
   let values: ParsedArgs["values"];
   let positionals: string[];
   try {
-    ({ values, positionals } = parseArgs({ args: argv, strict: true, allowPositionals: true, options: PARSE_OPTIONS }));
+    ({ values, positionals } = parseArgs({
+      args: argv,
+      strict: true,
+      allowPositionals: true,
+      options: PARSE_OPTIONS,
+    }));
   } catch (err) {
     return usageError(err instanceof Error ? err.message : String(err));
   }
@@ -458,7 +504,8 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     // this check is not redundant. Same shape as isStepCount above. Validated here, right after the
     // parse, so a malformed value is a usage error regardless of which subcommand follows it —
     // `seri --max-turns garbage login` used to reach login with the bad flag silently ignored.
-    if (!/^[1-9]\d*$/.test(maxTurnsRaw)) return usageError(`Invalid --max-turns value: ${maxTurnsRaw}`);
+    if (!/^[1-9]\d*$/.test(maxTurnsRaw))
+      return usageError(`Invalid --max-turns value: ${maxTurnsRaw}`);
     maxTurns = Number(maxTurnsRaw);
   }
 
@@ -477,10 +524,17 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
   // looks for a session literally named "/mode" and fails with "session not found" instead — a
   // silent behaviour change rather than a loud one. Caught here as a usage error naming the fix.
   if (values.resume !== undefined && SLASH_COMMANDS.has(values.resume)) {
-    return usageError(`--resume ${values.resume} looks for a session named "${values.resume}". Did you mean: seri --continue ${values.resume}`);
+    return usageError(
+      `--resume ${values.resume} looks for a session named "${values.resume}". Did you mean: seri --continue ${values.resume}`,
+    );
   }
 
-  return { values, positionals, maxTurns, skipPermissions: values["dangerously-skip-permissions"] === true };
+  return {
+    values,
+    positionals,
+    maxTurns,
+    skipPermissions: values["dangerously-skip-permissions"] === true,
+  };
 }
 
 function handleInfoFlags(values: ParsedArgs["values"]): number | undefined {
@@ -507,7 +561,8 @@ async function runSelftest(deps: CliDeps): Promise<number> {
     try {
       writeFileSync(join(dir, "probe.txt"), "seri selftest probe\n");
       const { matches = [] } = await grepFn("selftest probe", { path: dir, mode: "content" });
-      if (matches.length !== 1) throw new Error(`ripgrep returned ${matches.length} matches, expected 1`);
+      if (matches.length !== 1)
+        throw new Error(`ripgrep returned ${matches.length} matches, expected 1`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -521,7 +576,10 @@ async function runSelftest(deps: CliDeps): Promise<number> {
   }
 }
 
-async function handleAuthCommand(positionals: string[], deps: CliDeps): Promise<number | undefined> {
+async function handleAuthCommand(
+  positionals: string[],
+  deps: CliDeps,
+): Promise<number | undefined> {
   if (positionals[0] === "login" || positionals[0] === "signup") {
     const loginFn = deps.login ?? loginReal;
     try {
@@ -559,7 +617,10 @@ function handleConfigCommand(positionals: string[], deps: CliDeps): number | und
     // added here, `seri config set GROQ_API_KEY gsk_live_…` falls through to the task path, mints a
     // session and writes `{"role":"user","content":"config set GROQ_API_KEY gsk_live_…"}` into the
     // session JSON — the key in full, on disk, and tsc stays green.
-    const code: number = configCommandFn(positionals.slice(1), deps.authConfigDir ?? getConfigDir());
+    const code: number = configCommandFn(
+      positionals.slice(1),
+      deps.authConfigDir ?? getConfigDir(),
+    );
     return code;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -575,7 +636,11 @@ function handlePermissionsCommand(positionals: string[], deps: CliDeps): number 
     // project" for a bare command means the one you are standing in. A resumed session started
     // elsewhere is keyed on ITS cwd (checkpointTarget's own reasoning) — so `list` run from a
     // different project shows that project's grants, which is what its heading says it shows.
-    const code: number = fn(positionals.slice(1), deps.permissionsDir ?? getConfigDir(), projectRoot(process.cwd()));
+    const code: number = fn(
+      positionals.slice(1),
+      deps.permissionsDir ?? getConfigDir(),
+      projectRoot(process.cwd()),
+    );
     return code;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -649,13 +714,22 @@ type PreparedRun = {
   allowedTools: readonly string[];
 };
 
-function prepareSession(ctx: RunContext, deps: CliDeps, skipPermissions: boolean): PreparedRun | number {
+function prepareSession(
+  ctx: RunContext,
+  deps: CliDeps,
+  skipPermissions: boolean,
+): PreparedRun | number {
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
 
   let session: RunSession;
   let modelRecorded: boolean;
   try {
-    ({ session, modelRecorded } = loadOrCreateSession(ctx.resuming, ctx.resumeId, ctx.sessionsDir, loadAgentsFileFn));
+    ({ session, modelRecorded } = loadOrCreateSession(
+      ctx.resuming,
+      ctx.resumeId,
+      ctx.sessionsDir,
+      loadAgentsFileFn,
+    ));
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
@@ -860,7 +934,8 @@ async function driveLoop(
       // failure.
       if (event.type === "tool-allowed") {
         try {
-          if (rememberGrant(ctx.permissionsDir, worktree, event.name, printWarning)) printGrantPersisted(event.name, worktree);
+          if (rememberGrant(ctx.permissionsDir, worktree, event.name, printWarning))
+            printGrantPersisted(event.name, worktree);
         } catch (err) {
           printWarning(
             `could not save the permanent approval for ${event.name}, so seri will ask again next time: ${err instanceof Error ? err.message : String(err)}`,
@@ -930,7 +1005,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const prepared = prepareSession(ctx, deps, skipPermissions);
   if (typeof prepared === "number") return prepared;
 
-  const { doneReason, cancelledBy, usage, refusedWithoutRunning } = await driveLoop(prepared, ctx, deps, maxTurns);
+  const { doneReason, cancelledBy, usage, refusedWithoutRunning } = await driveLoop(
+    prepared,
+    ctx,
+    deps,
+    maxTurns,
+  );
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are

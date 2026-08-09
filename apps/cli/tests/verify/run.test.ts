@@ -11,7 +11,12 @@ const OK: ProcessResult = {
   timedOut: false,
 };
 
-type SpawnCall = { executable: string; args: string[]; timeoutMs: number | undefined; signal: AbortSignal | undefined };
+type SpawnCall = {
+  executable: string;
+  args: string[];
+  timeoutMs: number | undefined;
+  signal: AbortSignal | undefined;
+};
 
 // A fake runner rather than a real spawn, so nothing in this file needs a platform guard or a
 // 15000 ms margin: only the e2e test in wrapTools.test.ts spawns for real, and it carries both.
@@ -59,7 +64,9 @@ describe("runCheck", () => {
 
   test("exit 0 with nothing parseable is ok, and reports what ran and what it cost", async () => {
     const runner = fakeSpawn({ stdout: "$ tsc --noEmit\n" });
-    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, { spawn: runner.spawn });
+    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, {
+      spawn: runner.spawn,
+    });
 
     expect(outcome.status).toBe("ok");
     if (outcome.status !== "ok") throw new Error("unreachable");
@@ -72,7 +79,9 @@ describe("runCheck", () => {
       stdout: "src/a.ts(12,7): error TS2322: Type 'number' is not assignable to type 'string'.\n",
       exitCode: 1,
     });
-    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, { spawn: runner.spawn });
+    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, {
+      spawn: runner.spawn,
+    });
 
     expect(outcome).toMatchObject({
       status: "diagnostics",
@@ -90,9 +99,14 @@ describe("runCheck", () => {
   });
 
   test("caps the diagnostics fed back, and still reports the true total", async () => {
-    const flood = Array.from({ length: 57 }, (_, i) => `src/a.ts(${i + 1},1): error TS2304: Cannot find name 'x'.`).join("\n");
+    const flood = Array.from(
+      { length: 57 },
+      (_, i) => `src/a.ts(${i + 1},1): error TS2304: Cannot find name 'x'.`,
+    ).join("\n");
     const runner = fakeSpawn({ stdout: flood, exitCode: 1 });
-    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, { spawn: runner.spawn });
+    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, {
+      spawn: runner.spawn,
+    });
 
     if (outcome.status !== "diagnostics") throw new Error("unreachable");
     expect(MAX_DIAGNOSTICS).toBe(20);
@@ -113,7 +127,9 @@ describe("runCheck", () => {
       ].join("\n"),
       exitCode: 1,
     });
-    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, { spawn: runner.spawn });
+    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, {
+      spawn: runner.spawn,
+    });
 
     if (outcome.status !== "diagnostics") throw new Error("unreachable");
     expect(outcome.diagnostics.map((d) => d.file)).toEqual([
@@ -127,8 +143,13 @@ describe("runCheck", () => {
   });
 
   test("counts no diagnostics as being in the written file when none are", async () => {
-    const runner = fakeSpawn({ stdout: "src/other.ts(1,1): error TS2304: Cannot find name 'a'.", exitCode: 1 });
-    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, { spawn: runner.spawn });
+    const runner = fakeSpawn({
+      stdout: "src/other.ts(1,1): error TS2304: Cannot find name 'a'.",
+      exitCode: 1,
+    });
+    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, {
+      spawn: runner.spawn,
+    });
 
     expect(outcome).toMatchObject({ status: "diagnostics", inWrittenFile: 0 });
   });
@@ -139,7 +160,9 @@ describe("runCheck", () => {
       exitCode: 1,
       stdoutTruncated: true,
     });
-    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, { spawn: runner.spawn });
+    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, {
+      spawn: runner.spawn,
+    });
 
     expect(outcome).toMatchObject({ status: "diagnostics", truncated: true });
   });
@@ -148,7 +171,9 @@ describe("runCheck", () => {
   // parser cannot read must not come back as a green build.
   test("a non-zero exit with nothing parseable is failed, not ok, and carries the raw tail", async () => {
     const runner = fakeSpawn({ stderr: "cargo: no such subcommand `typecheck`", exitCode: 101 });
-    const outcome = await runCheck("cargo typecheck", "src/written.ts", undefined, { spawn: runner.spawn });
+    const outcome = await runCheck("cargo typecheck", "src/written.ts", undefined, {
+      spawn: runner.spawn,
+    });
 
     expect(outcome.status).toBe("failed");
     if (outcome.status !== "failed") throw new Error("unreachable");
@@ -157,7 +182,9 @@ describe("runCheck", () => {
 
   test("a timed-out check is failed and says so", async () => {
     const runner = fakeSpawn({ exitCode: 1, timedOut: true });
-    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, { spawn: runner.spawn });
+    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, {
+      spawn: runner.spawn,
+    });
 
     expect(outcome).toMatchObject({ status: "failed" });
     if (outcome.status !== "failed") throw new Error("unreachable");
@@ -167,7 +194,9 @@ describe("runCheck", () => {
   // A cancelled check rejects (spawnCollect.ts:201-202). The write itself already succeeded, so
   // this must not be re-thrown: that would replace the record of a completed write with a tool error.
   test("a rejecting runner becomes a failed outcome rather than a thrown write", async () => {
-    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, { spawn: () => Promise.reject(new Error("cancelled")) });
+    const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, {
+      spawn: () => Promise.reject(new Error("cancelled")),
+    });
 
     expect(outcome).toMatchObject({ status: "failed" });
     if (outcome.status !== "failed") throw new Error("unreachable");

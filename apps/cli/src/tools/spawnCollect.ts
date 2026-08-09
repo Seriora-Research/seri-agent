@@ -169,10 +169,13 @@ export function spawnCollect(
     child.stderr.on("data", (chunk: string) => err.write(chunk));
 
     let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      if (child.pid !== undefined) killTree(child.pid);
-    }, Math.min(timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS));
+    const timer = setTimeout(
+      () => {
+        timedOut = true;
+        if (child.pid !== undefined) killTree(child.pid);
+      },
+      Math.min(timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS),
+    );
 
     // Killing the tree is only half of a cancel. `close` still fires afterwards with a code and
     // timedOut false, so without remembering that a cancel happened the promise would resolve with

@@ -139,7 +139,8 @@ function localExcludePath(root: string): string | undefined {
 
 function git(gitDir: string, workTree: string | undefined, args: string[]): string {
   const result = run(gitDir, workTree, args);
-  if (result.status !== 0) throw new Error(`git ${args[0]} exited with code ${result.status}: ${result.stderr.trim()}`);
+  if (result.status !== 0)
+    throw new Error(`git ${args[0]} exited with code ${result.status}: ${result.stderr.trim()}`);
   return result.stdout;
 }
 
@@ -227,7 +228,10 @@ export function initShadow(gitDir: string): void {
 export function mirrorLocalExcludes(gitDir: string, root: string): void {
   const source = localExcludePath(root);
   mkdirSync(join(gitDir, "info"), { recursive: true });
-  writeFileSync(join(gitDir, "info", "exclude"), source !== undefined && existsSync(source) ? readFileSync(source) : "");
+  writeFileSync(
+    join(gitDir, "info", "exclude"),
+    source !== undefined && existsSync(source) ? readFileSync(source) : "",
+  );
 }
 
 // The tip of a session's commit chain, or undefined when the session has no ref yet. This is the
@@ -245,7 +249,9 @@ export function resolveRef(gitDir: string, ref: string): string | undefined {
 // the session ref had moved, a commit had been minted and a `pre-undo` record appended, with every
 // retry appending another.
 export function treeExists(gitDir: string, treeish: string): boolean {
-  return run(gitDir, undefined, ["rev-parse", "--verify", "--quiet", `${treeish}^{tree}`]).status === 0;
+  return (
+    run(gitDir, undefined, ["rev-parse", "--verify", "--quiet", `${treeish}^{tree}`]).status === 0
+  );
 }
 
 // `add -A` then `write-tree` — two spawns, no `git commit`. Measured on this repo: the porcelain
@@ -276,15 +282,25 @@ export function writeTree(gitDir: string, workTree: string): string {
 //
 // `ls-files --stage -z` emits `<mode> <sha> <stage>\t<path>` per entry, and mode 160000 is a
 // gitlink — how `add -A` records any directory that is itself a git repository.
-export function summarizeIndex(gitDir: string, workTree: string): { files: number; nested: string[] } {
+export function summarizeIndex(
+  gitDir: string,
+  workTree: string,
+): { files: number; nested: string[] } {
   const entries = paths(git(gitDir, workTree, ["ls-files", "--stage", "-z"]));
   return {
     files: entries.length,
-    nested: entries.filter((entry) => entry.startsWith("160000 ")).map((entry) => entry.slice(entry.indexOf("\t") + 1)),
+    nested: entries
+      .filter((entry) => entry.startsWith("160000 "))
+      .map((entry) => entry.slice(entry.indexOf("\t") + 1)),
   };
 }
 
-export function commitTree(gitDir: string, workTree: string, tree: string, parent?: string): string {
+export function commitTree(
+  gitDir: string,
+  workTree: string,
+  tree: string,
+  parent?: string,
+): string {
   const args = ["commit-tree", tree, "-m", "seri checkpoint"];
   if (parent !== undefined) args.push("-p", parent);
   return git(gitDir, workTree, args).trim();
@@ -297,7 +313,12 @@ export function updateRef(gitDir: string, ref: string, commit: string): void {
 // Sorted oldest-first by the tip commit's date, which for a session ref is the time of its last
 // snapshot. Not by the ref file's mtime: `gc` packs refs, and a packed ref has no file to stat.
 export function listSessionRefs(gitDir: string): string[] {
-  const out = git(gitDir, undefined, ["for-each-ref", "--sort=committerdate", "--format=%(refname)", "refs/seri/sessions"]);
+  const out = git(gitDir, undefined, [
+    "for-each-ref",
+    "--sort=committerdate",
+    "--format=%(refname)",
+    "refs/seri/sessions",
+  ]);
   return out.split("\n").filter(Boolean);
 }
 
@@ -331,11 +352,17 @@ function paths(out: string): string[] {
 // The removal list comes from git's own `ls-files --others --exclude-standard` against the target
 // tree, so it is computed from the tree rather than from what a tool claimed to touch, and can
 // never contain a gitignored path.
-export function planRestore(gitDir: string, workTree: string, tree: string): { restored: string[]; deleted: string[] } {
+export function planRestore(
+  gitDir: string,
+  workTree: string,
+  tree: string,
+): { restored: string[]; deleted: string[] } {
   const changed = paths(git(gitDir, workTree, ["diff", "--name-only", "-z", tree]));
 
   git(gitDir, workTree, ["read-tree", tree]);
-  const deleted = paths(git(gitDir, workTree, ["ls-files", "--others", "--exclude-standard", "-z"]));
+  const deleted = paths(
+    git(gitDir, workTree, ["ls-files", "--others", "--exclude-standard", "-z"]),
+  );
 
   // A path that is about to be deleted also shows up in the diff (the index still held it), so it
   // is subtracted here — reporting a file as both restored and deleted is the kind of thing that

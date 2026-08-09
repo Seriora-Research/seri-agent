@@ -60,7 +60,10 @@ export function usageError(message: string): number {
 // a legitimate name is always a plain identifier (write_file, bash, …), and stringifying it would
 // put visible quotes on every single render for a case that, today, cannot happen at all.
 export function escapeControlChars(text: string): string {
-  return text.replace(/[\x00-\x1f\x7f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
+  return text.replace(
+    /[\x00-\x1f\x7f]/g,
+    (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  );
 }
 
 // stderr, not stdout: stdout carries the model's own output and is routinely piped, and a warning
@@ -73,14 +76,18 @@ export function printWarning(message: string): void {
 // written — driveLoop calls this on rememberGrant's `true`, never unconditionally — so it can
 // never claim a persistence that the store refused (a non-persistable name, an unparseable file).
 export function printGrantPersisted(name: string, worktree: string): void {
-  console.log(`  saved for ${worktree} — undo with: seri permissions remove ${escapeControlChars(name)}`);
+  console.log(
+    `  saved for ${worktree} — undo with: seri permissions remove ${escapeControlChars(name)}`,
+  );
 }
 
 // A grant the user cannot see is a grant they cannot revoke, and a grant made weeks ago in another
 // session is exactly the invisible kind. One line at the start of the run that would otherwise
 // silently skip a prompt.
 export function printPreApproved(tools: readonly string[]): void {
-  console.log(`Pre-approved without asking: ${tools.map(escapeControlChars).join(", ")} — seri permissions list`);
+  console.log(
+    `Pre-approved without asking: ${tools.map(escapeControlChars).join(", ")} — seri permissions list`,
+  );
 }
 
 // Printed before the restore happens, not after. Every path here comes from git's own output, so
@@ -124,7 +131,8 @@ function verificationSuffix(verification: CheckOutcome): string {
       return ` (checked in ${seconds(verification.elapsedMs)}, no diagnostics)`;
     case "diagnostics": {
       const shown = verification.diagnostics.length;
-      const count = shown < verification.total ? `${shown} of ${verification.total}` : `${verification.total}`;
+      const count =
+        shown < verification.total ? `${shown} of ${verification.total}` : `${verification.total}`;
       const noun = verification.total === 1 ? "diagnostic" : "diagnostics";
       const incomplete = verification.truncated ? ", list incomplete" : "";
       return ` (${count} ${noun} in ${seconds(verification.elapsedMs)}${incomplete})`;
@@ -205,7 +213,9 @@ export function printEvent(event: LoopEvent): void {
         // bash and powershell never offer it (the one-rule allowlist: always-allow is scoped to
         // write_file/edit, never a shell), so a streak of shell calls needs /mode instead.
         console.log("Several tool calls were refused in a row, so the run stopped. Run /mode to");
-        console.log("switch to auto, or answer 'a' at the next write_file/edit prompt to allow it.");
+        console.log(
+          "switch to auto, or answer 'a' at the next write_file/edit prompt to allow it.",
+        );
       }
       break;
     case "error":

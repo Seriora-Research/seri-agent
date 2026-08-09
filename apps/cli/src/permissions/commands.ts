@@ -1,4 +1,10 @@
-import { effectiveTools, forgetGrant, loadGrants, PERSISTABLE_TOOLS, permissionsPath } from "./store";
+import {
+  effectiveTools,
+  forgetGrant,
+  loadGrants,
+  PERSISTABLE_TOOLS,
+  permissionsPath,
+} from "./store";
 
 const USAGE = `Usage:
   seri permissions list
@@ -51,7 +57,8 @@ function listCommand(configDir: string, worktree: string): number {
   }
   // The count is not padding: without it a grant in a project the user is not standing in is one
   // they cannot see, which is the exact failure this section exists to close.
-  if (grants.otherProjects > 0) console.log(`Grants for ${grants.otherProjects} other project(s) are in the file.`);
+  if (grants.otherProjects > 0)
+    console.log(`Grants for ${grants.otherProjects} other project(s) are in the file.`);
   console.log("Revoke with: seri permissions remove <tool>");
   return 0;
 }

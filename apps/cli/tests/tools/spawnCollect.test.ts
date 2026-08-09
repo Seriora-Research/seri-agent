@@ -7,7 +7,9 @@ import { pathToFileURL } from "node:url";
 import { spawnCollect } from "../../src/tools/spawnCollect";
 
 // Drives the current runtime as a child process so the fixtures behave the same on every OS.
-function emit(script: string): Promise<ReturnType<typeof spawnCollect> extends Promise<infer R> ? R : never> {
+function emit(
+  script: string,
+): Promise<ReturnType<typeof spawnCollect> extends Promise<infer R> ? R : never> {
   return spawnCollect(process.execPath, ["-e", script]);
 }
 
@@ -75,7 +77,9 @@ describe("spawnCollect", () => {
 
   test("bounds a runaway command instead of growing without limit", async () => {
     // 4 MB of stdout: unbounded accumulation kept every byte of this and handed it to the model.
-    const result = await emit("process.stdout.write('A'.repeat(2_000_000) + 'B'.repeat(2_000_000))");
+    const result = await emit(
+      "process.stdout.write('A'.repeat(2_000_000) + 'B'.repeat(2_000_000))",
+    );
 
     expect(result.stdoutTruncated).toBe(true);
     // The stream that was not touched must not be tarred with the same flag.
@@ -89,7 +93,9 @@ describe("spawnCollect", () => {
   });
 
   test("bounds stderr on the same terms", async () => {
-    const result = await emit("process.stdout.write('kept whole'); process.stderr.write('e'.repeat(1_000_000))");
+    const result = await emit(
+      "process.stdout.write('kept whole'); process.stderr.write('e'.repeat(1_000_000))",
+    );
 
     expect(result.stderrTruncated).toBe(true);
     expect(result.stderr.length).toBeLessThan(30_200);
@@ -162,68 +168,80 @@ describe("spawnCollect", () => {
     expect(result.stdout).not.toContain("�");
   });
 
-  test.skipIf(process.platform === "win32")("kills in-flight children when a signal ends the run", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "seri-signal-test-"));
-    const pidFile = join(dir, "grandchild.pid");
-    const modulePath = pathToFileURL(join(import.meta.dir, "../../src/tools/spawnCollect.ts")).href;
+  test.skipIf(process.platform === "win32")(
+    "kills in-flight children when a signal ends the run",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "seri-signal-test-"));
+      const pidFile = join(dir, "grandchild.pid");
+      const modulePath = pathToFileURL(
+        join(import.meta.dir, "../../src/tools/spawnCollect.ts"),
+      ).href;
 
-    // The grandchild reports its own pid, because spawnCollect deliberately does not expose the
-    // child it spawned. The 60s self-destruct keeps a failing run from stranding it; it is twice
-    // the test's own timeout, so it can never turn a red into a green.
-    const grandchild =
-      `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));` +
-      `setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 60000);`;
-    const seriSide =
-      `const m = await import(${JSON.stringify(modulePath)});` +
-      `m.spawnCollect(process.execPath, ["-e", ${JSON.stringify(grandchild)}]);`;
+      // The grandchild reports its own pid, because spawnCollect deliberately does not expose the
+      // child it spawned. The 60s self-destruct keeps a failing run from stranding it; it is twice
+      // the test's own timeout, so it can never turn a red into a green.
+      const grandchild =
+        `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));` +
+        `setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 60000);`;
+      const seriSide =
+        `const m = await import(${JSON.stringify(modulePath)});` +
+        `m.spawnCollect(process.execPath, ["-e", ${JSON.stringify(grandchild)}]);`;
 
-    const child = spawn(process.execPath, ["-e", seriSide], { stdio: ["ignore", "pipe", "pipe"] });
-    try {
-      // The pid file is the readiness handshake, not a sleep: it cannot exist until the module was
-      // imported (which is what installs the handler) AND spawnCollect actually spawned.
-      const pid = await waitForPid(pidFile);
-      expect(isAlive(pid)).toBe(true);
+      const child = spawn(process.execPath, ["-e", seriSide], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      try {
+        // The pid file is the readiness handshake, not a sleep: it cannot exist until the module was
+        // imported (which is what installs the handler) AND spawnCollect actually spawned.
+        const pid = await waitForPid(pidFile);
+        expect(isAlive(pid)).toBe(true);
 
-      child.kill("SIGTERM");
-      await new Promise((resolve) => child.once("exit", resolve));
+        child.kill("SIGTERM");
+        await new Promise((resolve) => child.once("exit", resolve));
 
-      // Polled, not asserted once: the grandchild is briefly a zombie child of the process we just
-      // killed, and kill(pid, 0) succeeds on a zombie until init reaps it.
-      const dead = await waitFor(() => !isAlive(pid), 5_000);
-      expect(dead ? "killed" : `grandchild ${pid} survived SIGTERM`).toBe("killed");
-    } finally {
-      child.kill("SIGKILL");
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 30_000);
+        // Polled, not asserted once: the grandchild is briefly a zombie child of the process we just
+        // killed, and kill(pid, 0) succeeds on a zombie until init reaps it.
+        const dead = await waitFor(() => !isAlive(pid), 5_000);
+        expect(dead ? "killed" : `grandchild ${pid} survived SIGTERM`).toBe("killed");
+      } finally {
+        child.kill("SIGKILL");
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
 
-  test.skipIf(process.platform === "win32")("rejects a cancelled command instead of resolving with a result", async () => {
-    // Same pid-file handshake as the test above, for the same reason: spawnCollect does not expose
-    // the child it spawned, so the child reports its own pid. The 60s self-destruct is twice this
-    // test's timeout, so it can never turn a red into a green.
-    const dir = mkdtempSync(join(tmpdir(), "seri-cancel-test-"));
-    const pidFile = join(dir, "child.pid");
-    const script =
-      `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));` +
-      `setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 60000);`;
+  test.skipIf(process.platform === "win32")(
+    "rejects a cancelled command instead of resolving with a result",
+    async () => {
+      // Same pid-file handshake as the test above, for the same reason: spawnCollect does not expose
+      // the child it spawned, so the child reports its own pid. The 60s self-destruct is twice this
+      // test's timeout, so it can never turn a red into a green.
+      const dir = mkdtempSync(join(tmpdir(), "seri-cancel-test-"));
+      const pidFile = join(dir, "child.pid");
+      const script =
+        `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));` +
+        `setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 60000);`;
 
-    const controller = new AbortController();
-    const running = spawnCollect(process.execPath, ["-e", script], undefined, controller.signal);
-    try {
-      const pid = await waitForPid(pidFile);
-      expect(isAlive(pid)).toBe(true);
+      const controller = new AbortController();
+      const running = spawnCollect(process.execPath, ["-e", script], undefined, controller.signal);
+      try {
+        const pid = await waitForPid(pidFile);
+        expect(isAlive(pid)).toBe(true);
 
-      controller.abort();
+        controller.abort();
 
-      // The latent bug this guards: `close` fires after the kill with timedOut still false, so
-      // before the reject the promise settled with a normal ProcessResult for a cancelled command.
-      await expect(running).rejects.toThrow(/cancelled/);
+        // The latent bug this guards: `close` fires after the kill with timedOut still false, so
+        // before the reject the promise settled with a normal ProcessResult for a cancelled command.
+        await expect(running).rejects.toThrow(/cancelled/);
 
-      // Polled: a just-killed child is briefly a zombie, and kill(pid, 0) succeeds on a zombie.
-      const dead = await waitFor(() => !isAlive(pid), 5_000);
-      expect(dead ? "killed" : `child ${pid} survived the cancel`).toBe("killed");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 30_000);
+        // Polled: a just-killed child is briefly a zombie, and kill(pid, 0) succeeds on a zombie.
+        const dead = await waitFor(() => !isAlive(pid), 5_000);
+        expect(dead ? "killed" : `child ${pid} survived the cancel`).toBe("killed");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
 });

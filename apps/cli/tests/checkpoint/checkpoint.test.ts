@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
@@ -46,11 +54,19 @@ const SESSION = "session-1";
 // themselves use, so anchoring these to `workTree` by hand is what a real `write_file` call in
 // this worktree would have declared.
 function mutation(overrides: Partial<MutationContext> = {}): MutationContext {
-  return { tool: "write_file", toolCallId: "c1", args: { path: join(workTree, "a.txt") }, rewindTo: 1, ...overrides };
+  return {
+    tool: "write_file",
+    toolCallId: "c1",
+    args: { path: join(workTree, "a.txt") },
+    rewindTo: 1,
+    ...overrides,
+  };
 }
 
 function toolRecords(sessionId = SESSION): Extract<CheckpointRecord, { kind: "tool" }>[] {
-  return readLog(storeDir, sessionId).filter((record): record is Extract<CheckpointRecord, { kind: "tool" }> => record.kind === "tool");
+  return readLog(storeDir, sessionId).filter(
+    (record): record is Extract<CheckpointRecord, { kind: "tool" }> => record.kind === "tool",
+  );
 }
 
 beforeEach(() => {
@@ -69,7 +85,10 @@ afterEach(() => {
 // Deliberately not routed through shadowGit: evidence about the store should not come from the
 // module that wrote it.
 function plainGit(gitDir: string, args: string[]): string {
-  const result = spawnSync("git", [`--git-dir=${gitDir}`, ...args], { encoding: "utf8", windowsHide: true });
+  const result = spawnSync("git", [`--git-dir=${gitDir}`, ...args], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
   return result.stdout;
 }
 
@@ -89,7 +108,9 @@ function checkpointer(overrides: Partial<Parameters<typeof createCheckpointer>[0
 
 describe("checkpointStoreDir", () => {
   test.skipIf(process.platform !== "win32")("keys C:\\P and c:\\p to one store on win32", () => {
-    expect(checkpointStoreDir("cfg", "C:\\Projects\\App")).toBe(checkpointStoreDir("cfg", "c:\\projects\\app"));
+    expect(checkpointStoreDir("cfg", "C:\\Projects\\App")).toBe(
+      checkpointStoreDir("cfg", "c:\\projects\\app"),
+    );
   });
 
   // Neither development box can run this one: Windows skips it and WSL skips it, so CI's macOS leg
@@ -97,11 +118,15 @@ describe("checkpointStoreDir", () => {
   // APFS is case-insensitive by default exactly as NTFS is, and without this nothing checks that
   // the folding still covers darwin.
   test.skipIf(process.platform !== "darwin")("keys /Proj and /proj to one store on darwin", () => {
-    expect(checkpointStoreDir("cfg", "/Users/x/Projects/App")).toBe(checkpointStoreDir("cfg", "/users/x/projects/app"));
+    expect(checkpointStoreDir("cfg", "/Users/x/Projects/App")).toBe(
+      checkpointStoreDir("cfg", "/users/x/projects/app"),
+    );
   });
 
   test("keys different worktrees to different stores", () => {
-    expect(checkpointStoreDir("cfg", join(root, "one"))).not.toBe(checkpointStoreDir("cfg", join(root, "two")));
+    expect(checkpointStoreDir("cfg", join(root, "one"))).not.toBe(
+      checkpointStoreDir("cfg", join(root, "two")),
+    );
   });
 });
 
@@ -157,7 +182,9 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       const secret = join(workTree, "secret.log");
       snapshot(mutation({ args: { path: secret } }));
 
-      expect(warnings).toEqual([`${secret} is gitignored, so it is not checkpointed — /undo cannot restore it`]);
+      expect(warnings).toEqual([
+        `${secret} is gitignored, so it is not checkpointed — /undo cannot restore it`,
+      ]);
       expect(readLog(storeDir, SESSION).filter((record) => record.kind === "ignored")).toEqual([
         expect.objectContaining({ kind: "ignored", path: secret, toolCallId: "c1" }),
       ]);
@@ -183,7 +210,9 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       snapshot(mutation({ toolCallId: "c3" }));
 
       expect(toolRecords()).toHaveLength(3);
-      expect(warnings).toEqual([`${outside} is outside ${workTree}, so it is not checkpointed — /undo cannot restore it`]);
+      expect(warnings).toEqual([
+        `${outside} is outside ${workTree}, so it is not checkpointed — /undo cannot restore it`,
+      ]);
 
       undo(2);
 
@@ -214,14 +243,24 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       // would not equal the path the test built.
       expect(basename(worktree)).toBe("repo");
 
-      createCheckpointer({ storeDir, worktree, sessionId: SESSION, onWarning: (m) => warnings.push(m) })({
+      createCheckpointer({
+        storeDir,
+        worktree,
+        sessionId: SESSION,
+        onWarning: (m) => warnings.push(m),
+      })({
         tool: "write_file",
         toolCallId: "c1",
         args: { path: join(sub, "a.txt") },
         rewindTo: 1,
       });
 
-      const staged = plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", toolRecords()[0]?.tree ?? ""]);
+      const staged = plainGit(join(storeDir, "git"), [
+        "ls-tree",
+        "-r",
+        "--name-only",
+        toolRecords()[0]?.tree ?? "",
+      ]);
       expect(staged).toContain("pkg/a.txt");
       expect(staged).not.toContain(".env");
       expect(staged).not.toContain("node_modules");
@@ -249,7 +288,9 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
 
       // Half one: never copied into the store.
       const tree = toolRecords()[0]?.tree ?? "";
-      expect(plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", tree])).not.toContain("local-secret.txt");
+      expect(plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", tree])).not.toContain(
+        "local-secret.txt",
+      );
 
       // Half two: never deleted by the removal pass.
       const result = undo(2);
@@ -272,7 +313,9 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       // produced a warning about a file that had in fact been checkpointed.
       checkpointer()(mutation({ args: { path: "a.txt" } }));
 
-      expect(warnings).toEqual([`a.txt is outside ${workTree}, so it is not checkpointed — /undo cannot restore it`]);
+      expect(warnings).toEqual([
+        `a.txt is outside ${workTree}, so it is not checkpointed — /undo cannot restore it`,
+      ]);
     },
     GIT_TEST_TIMEOUT_MS,
   );
@@ -291,7 +334,17 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       spawnSync("git", ["add", "-A"], { cwd: nested, windowsHide: true });
       spawnSync(
         "git",
-        ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "x"],
+        [
+          "-c",
+          "user.name=t",
+          "-c",
+          "user.email=t@t",
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          "-qm",
+          "x",
+        ],
         {
           cwd: nested,
           windowsHide: true,
@@ -357,7 +410,9 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       expect(result.deleted).toEqual(["new.txt"]);
       expect(result.diff).toContain("a.txt");
       expect(result.preUndoCommit).toMatch(/^[0-9a-f]{40}$/);
-      expect(readLog(storeDir, SESSION).filter((record) => record.kind === "pre-undo")).toHaveLength(1);
+      expect(
+        readLog(storeDir, SESSION).filter((record) => record.kind === "pre-undo"),
+      ).toHaveLength(1);
     },
     GIT_TEST_TIMEOUT_MS,
   );
@@ -519,7 +574,13 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       const before = readLog(storeDir, SESSION).length;
 
       expect(() =>
-        restoreCommit({ storeDir, worktree: workTree, sessionId: SESSION, commit: "deadbeef", onPlan: () => {} }),
+        restoreCommit({
+          storeDir,
+          worktree: workTree,
+          sessionId: SESSION,
+          commit: "deadbeef",
+          onPlan: () => {},
+        }),
       ).toThrow("deadbeef is not a checkpoint in this session's store.");
 
       // The point of validating first: a typo used to leave a minted commit, a moved ref and a
@@ -534,9 +595,7 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
     () => {
       checkpointer()(mutation());
 
-      expect(() => undo(5)).toThrow(
-        "This session has 1 checkpoint(s) to undo to; asked for 5.",
-      );
+      expect(() => undo(5)).toThrow("This session has 1 checkpoint(s) to undo to; asked for 5.");
     },
     GIT_TEST_TIMEOUT_MS,
   );
@@ -552,8 +611,12 @@ describe.skipIf(!isGitAvailable())("rewindConversation", () => {
       writeFileSync(join(workTree, "a.txt"), "after\n");
       snapshot(mutation({ toolCallId: "c3", rewindTo: 7 }));
 
-      expect(rewindConversation({ storeDir, sessionId: SESSION, steps: 1 })).toEqual({ rewindTo: 7 });
-      expect(rewindConversation({ storeDir, sessionId: SESSION, steps: 2 })).toEqual({ rewindTo: 3 });
+      expect(rewindConversation({ storeDir, sessionId: SESSION, steps: 1 })).toEqual({
+        rewindTo: 7,
+      });
+      expect(rewindConversation({ storeDir, sessionId: SESSION, steps: 2 })).toEqual({
+        rewindTo: 3,
+      });
     },
     GIT_TEST_TIMEOUT_MS,
   );
@@ -571,7 +634,8 @@ describe.skipIf(!isGitAvailable())("rewindConversation", () => {
         snapshot(mutation({ toolCallId: `c${index}`, rewindTo }));
       }
 
-      const at = (steps: number) => rewindConversation({ storeDir, sessionId: SESSION, steps }).rewindTo;
+      const at = (steps: number) =>
+        rewindConversation({ storeDir, sessionId: SESSION, steps }).rewindTo;
       expect([at(1), at(2), at(3), at(4)]).toEqual([8, 7, 9, 3]);
     },
     GIT_TEST_TIMEOUT_MS,
@@ -586,8 +650,12 @@ describe.skipIf(!isGitAvailable())("rewindConversation", () => {
       writeFileSync(join(workTree, "a.txt"), "after\n");
       snapshot(mutation({ toolCallId: "c2", rewindTo: 2 }));
 
-      expect(rewindConversation({ storeDir, sessionId: SESSION, steps: 1 })).toEqual({ rewindTo: 2 });
-      expect(() => rewindConversation({ storeDir, sessionId: SESSION, steps: 2 })).toThrow(/summarized away by compaction/);
+      expect(rewindConversation({ storeDir, sessionId: SESSION, steps: 1 })).toEqual({
+        rewindTo: 2,
+      });
+      expect(() => rewindConversation({ storeDir, sessionId: SESSION, steps: 2 })).toThrow(
+        /summarized away by compaction/,
+      );
     },
     GIT_TEST_TIMEOUT_MS,
   );
@@ -619,13 +687,17 @@ describe.skipIf(!isGitAvailable())("rewindConversation", () => {
 // skipping this on one platform would leave open exactly the hole this test exists to close.
 // `> tmp && mv` is portable, and tests the snapshot slightly harder: `mv` replaces the inode
 // rather than rewriting the file in place.
-describe.skipIf(!isGitAvailable() || !isBashAvailable())("checkpoints around a bash tool call", () => {
-  test(
-    "captures and undoes a change made only through a shell rewrite and an appending redirection",
-    async () => {
+describe.skipIf(!isGitAvailable() || !isBashAvailable())(
+  "checkpoints around a bash tool call",
+  () => {
+    test("captures and undoes a change made only through a shell rewrite and an appending redirection", async () => {
       writeFileSync(join(workTree, "b.txt"), "kept\n");
       const tools = withCheckpoints(toolDefinitions, checkpointer());
-      const options = { toolCallId: "c1", messages: [{ role: "user" as const, content: "go" }], context: {} };
+      const options = {
+        toolCallId: "c1",
+        messages: [{ role: "user" as const, content: "go" }],
+        context: {},
+      };
 
       await tools.bash?.execute?.(
         {
@@ -643,98 +715,93 @@ describe.skipIf(!isGitAvailable() || !isBashAvailable())("checkpoints around a b
 
       expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
       expect(readFileSync(join(workTree, "b.txt"), "utf8")).toBe("kept\n");
-    },
-    30_000,
-  );
-});
+    }, 30_000);
+  },
+);
 
 describe.skipIf(!isGitAvailable())("pruneSessions", () => {
-  test(
-    "keeps the newest 20 session refs and leaves their trees restorable",
-    () => {
-      mkdirSync(storeDir, { recursive: true });
-      const gitDir = join(storeDir, "git");
-      initShadow(gitDir);
+  test("keeps the newest 20 session refs and leaves their trees restorable", () => {
+    mkdirSync(storeDir, { recursive: true });
+    const gitDir = join(storeDir, "git");
+    initShadow(gitDir);
 
-      const trees: string[] = [];
-      for (let i = 0; i < 22; i++) {
-        writeFileSync(join(workTree, "a.txt"), `session ${i}\n`);
-        const tree = writeTree(gitDir, workTree);
-        trees.push(tree);
-        // Zero-padded so oldest-first holds whether git orders these by commit date or falls back
-        // to the ref name — 22 commits made inside one second all carry the same date.
-        updateRef(gitDir, `refs/seri/sessions/s${String(i).padStart(2, "0")}`, commitTree(gitDir, workTree, tree));
-      }
+    const trees: string[] = [];
+    for (let i = 0; i < 22; i++) {
+      writeFileSync(join(workTree, "a.txt"), `session ${i}\n`);
+      const tree = writeTree(gitDir, workTree);
+      trees.push(tree);
+      // Zero-padded so oldest-first holds whether git orders these by commit date or falls back
+      // to the ref name — 22 commits made inside one second all carry the same date.
+      updateRef(
+        gitDir,
+        `refs/seri/sessions/s${String(i).padStart(2, "0")}`,
+        commitTree(gitDir, workTree, tree),
+      );
+    }
 
-      pruneSessions(storeDir);
+    pruneSessions(storeDir);
 
-      const refs = listSessionRefs(gitDir);
-      expect(refs).toHaveLength(20);
-      expect(refs).not.toContain("refs/seri/sessions/s00");
-      expect(refs).not.toContain("refs/seri/sessions/s01");
-      expect(refs).toContain("refs/seri/sessions/s21");
+    const refs = listSessionRefs(gitDir);
+    expect(refs).toHaveLength(20);
+    expect(refs).not.toContain("refs/seri/sessions/s00");
+    expect(refs).not.toContain("refs/seri/sessions/s01");
+    expect(refs).toContain("refs/seri/sessions/s21");
 
-      // The surviving sessions' snapshots are still reachable after the gc that pruning ran.
-      writeFileSync(join(workTree, "a.txt"), "clobbered\n");
-      applyRestore(gitDir, workTree, planRestore(gitDir, workTree, trees[21] ?? "").deleted);
-      expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("session 21\n");
-    },
-    60_000,
-  );
+    // The surviving sessions' snapshots are still reachable after the gc that pruning ran.
+    writeFileSync(join(workTree, "a.txt"), "clobbered\n");
+    applyRestore(gitDir, workTree, planRestore(gitDir, workTree, trees[21] ?? "").deleted);
+    expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("session 21\n");
+  }, 60_000);
 
-  test(
-    "deletes a pruned session's log with its ref, so no log outlives its snapshots",
-    () => {
-      mkdirSync(storeDir, { recursive: true });
-      const gitDir = join(storeDir, "git");
-      initShadow(gitDir);
+  test("deletes a pruned session's log with its ref, so no log outlives its snapshots", () => {
+    mkdirSync(storeDir, { recursive: true });
+    const gitDir = join(storeDir, "git");
+    initShadow(gitDir);
 
-      for (let i = 0; i < 21; i++) {
-        writeFileSync(join(workTree, "a.txt"), `session ${i}\n`);
-        const ref = `refs/seri/sessions/s${String(i).padStart(2, "0")}`;
-        updateRef(gitDir, ref, commitTree(gitDir, workTree, writeTree(gitDir, workTree)));
-        writeFileSync(join(storeDir, `s${String(i).padStart(2, "0")}.jsonl`), "");
-      }
+    for (let i = 0; i < 21; i++) {
+      writeFileSync(join(workTree, "a.txt"), `session ${i}\n`);
+      const ref = `refs/seri/sessions/s${String(i).padStart(2, "0")}`;
+      updateRef(gitDir, ref, commitTree(gitDir, workTree, writeTree(gitDir, workTree)));
+      writeFileSync(join(storeDir, `s${String(i).padStart(2, "0")}.jsonl`), "");
+    }
 
-      pruneSessions(storeDir);
+    pruneSessions(storeDir);
 
-      // Left behind, /undo on the pruned session read a full history, computed targets from it and
-      // then failed at treeExists — contradicting the file it had just read.
-      expect(existsSync(join(storeDir, "s00.jsonl"))).toBe(false);
-      expect(existsSync(join(storeDir, "s20.jsonl"))).toBe(true);
-    },
-    60_000,
-  );
+    // Left behind, /undo on the pruned session read a full history, computed targets from it and
+    // then failed at treeExists — contradicting the file it had just read.
+    expect(existsSync(join(storeDir, "s00.jsonl"))).toBe(false);
+    expect(existsSync(join(storeDir, "s20.jsonl"))).toBe(true);
+  }, 60_000);
 
-  test(
-    "never prunes the ref of the session doing the pruning",
-    () => {
-      // Resuming a session that has fallen outside the newest 20 used to delete its own ref and
-      // then gc: the resumed session started a fresh root chain, and everything it had snapshotted
-      // before went unreachable while its log went on listing those commits.
-      mkdirSync(storeDir, { recursive: true });
-      const gitDir = join(storeDir, "git");
-      initShadow(gitDir);
+  test("never prunes the ref of the session doing the pruning", () => {
+    // Resuming a session that has fallen outside the newest 20 used to delete its own ref and
+    // then gc: the resumed session started a fresh root chain, and everything it had snapshotted
+    // before went unreachable while its log went on listing those commits.
+    mkdirSync(storeDir, { recursive: true });
+    const gitDir = join(storeDir, "git");
+    initShadow(gitDir);
 
-      // The resumed session's own ref goes in first, so oldest-first puts it at the head of the
-      // deletion list.
-      writeFileSync(join(workTree, "a.txt"), "session own\n");
-      const ownCommit = commitTree(gitDir, workTree, writeTree(gitDir, workTree));
-      updateRef(gitDir, `refs/seri/sessions/${SESSION}`, ownCommit);
-      for (let i = 0; i < 21; i++) {
-        writeFileSync(join(workTree, "a.txt"), `session ${i}\n`);
-        updateRef(gitDir, `refs/seri/sessions/s${String(i).padStart(2, "0")}`, commitTree(gitDir, workTree, writeTree(gitDir, workTree)));
-      }
-      // Seed a log so the resumed session is resuming rather than starting.
-      writeFileSync(join(storeDir, `${SESSION}.jsonl`), "");
+    // The resumed session's own ref goes in first, so oldest-first puts it at the head of the
+    // deletion list.
+    writeFileSync(join(workTree, "a.txt"), "session own\n");
+    const ownCommit = commitTree(gitDir, workTree, writeTree(gitDir, workTree));
+    updateRef(gitDir, `refs/seri/sessions/${SESSION}`, ownCommit);
+    for (let i = 0; i < 21; i++) {
+      writeFileSync(join(workTree, "a.txt"), `session ${i}\n`);
+      updateRef(
+        gitDir,
+        `refs/seri/sessions/s${String(i).padStart(2, "0")}`,
+        commitTree(gitDir, workTree, writeTree(gitDir, workTree)),
+      );
+    }
+    // Seed a log so the resumed session is resuming rather than starting.
+    writeFileSync(join(storeDir, `${SESSION}.jsonl`), "");
 
-      checkpointer()(mutation({ toolCallId: "c1" }));
+    checkpointer()(mutation({ toolCallId: "c1" }));
 
-      expect(listSessionRefs(gitDir)).toContain(`refs/seri/sessions/${SESSION}`);
-      // The new checkpoint extends the chain it resumed rather than rooting a new one.
-      const commit = toolRecords()[0]?.commit ?? "";
-      expect(plainGit(gitDir, ["rev-list", commit]).split("\n").filter(Boolean)).toContain(ownCommit);
-    },
-    60_000,
-  );
+    expect(listSessionRefs(gitDir)).toContain(`refs/seri/sessions/${SESSION}`);
+    // The new checkpoint extends the chain it resumed rather than rooting a new one.
+    const commit = toolRecords()[0]?.commit ?? "";
+    expect(plainGit(gitDir, ["rev-list", commit]).split("\n").filter(Boolean)).toContain(ownCommit);
+  }, 60_000);
 });

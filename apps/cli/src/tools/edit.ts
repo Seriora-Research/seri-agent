@@ -20,7 +20,9 @@ function tryExactMatch(content: string, oldString: string): Span | null {
   const start = content.indexOf(oldString);
   if (start === -1) return null;
   if (start !== content.lastIndexOf(oldString)) {
-    throw new Error("oldString matched multiple times in content (exact match); cannot determine which occurrence to replace");
+    throw new Error(
+      "oldString matched multiple times in content (exact match); cannot determine which occurrence to replace",
+    );
   }
   return { start, end: start + oldString.length };
 }
@@ -48,13 +50,18 @@ function tryLineTrimmedMatch(content: string, oldString: string): Span | null {
     }
     if (matched) {
       const lastLine = i + oldLines.length - 1;
-      matches.push({ start: lineStarts[i], end: lineStarts[lastLine] + contentLines[lastLine].length });
+      matches.push({
+        start: lineStarts[i],
+        end: lineStarts[lastLine] + contentLines[lastLine].length,
+      });
     }
   }
 
   if (matches.length === 0) return null;
   if (matches.length > 1) {
-    throw new Error("oldString matched multiple times in content (line-trimmed match); cannot determine which occurrence to replace");
+    throw new Error(
+      "oldString matched multiple times in content (line-trimmed match); cannot determine which occurrence to replace",
+    );
   }
   return matches[0];
 }
@@ -100,14 +107,18 @@ function tryWhitespaceNormalizedMatch(content: string, oldString: string): Span 
 }
 
 export function edit(content: string, oldString: string, newString: string): string {
-  const match = tryExactMatch(content, oldString) ?? tryLineTrimmedMatch(content, oldString) ?? tryWhitespaceNormalizedMatch(content, oldString);
+  const match =
+    tryExactMatch(content, oldString) ??
+    tryLineTrimmedMatch(content, oldString) ??
+    tryWhitespaceNormalizedMatch(content, oldString);
 
   if (match === null) {
     // The near-miss report is appended, never substituted: when no line is close enough
     // describeNearMiss returns null and the message is byte-identical to what it always was, so a
     // caller matching on the old wording (tests/tools/edit.test.ts) keeps matching.
     const nearMiss = describeNearMiss(content, oldString);
-    const base = "Could not find the specified text to replace (tried exact, line-trimmed, and whitespace-normalized matching)";
+    const base =
+      "Could not find the specified text to replace (tried exact, line-trimmed, and whitespace-normalized matching)";
     throw new Error(nearMiss === null ? base : `${base}\n${nearMiss}`);
   }
 

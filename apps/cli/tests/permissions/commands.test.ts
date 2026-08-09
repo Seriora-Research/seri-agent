@@ -3,7 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { permissionsCommand } from "../../src/permissions/commands";
-import { loadGrants, permissionsPath, projectKey, rememberGrant } from "../../src/permissions/store";
+import {
+  loadGrants,
+  permissionsPath,
+  projectKey,
+  rememberGrant,
+} from "../../src/permissions/store";
 
 describe("permissionsCommand", () => {
   let configDir: string;
@@ -57,7 +62,10 @@ describe("permissionsCommand", () => {
   // not be read" would be false there, since the file was read just fine. Live repro: grant
   // write_file, hand-add bash, then revoke write_file, leaving only the refused bash entry.
   test("list on a readable store whose only entry is non-persistable does not claim a read failure", () => {
-    writeFileSync(permissionsPath(configDir), `global: []\nprojects:\n  '${projectKey(worktree)}':\n    - bash\n`);
+    writeFileSync(
+      permissionsPath(configDir),
+      `global: []\nprojects:\n  '${projectKey(worktree)}':\n    - bash\n`,
+    );
 
     const code = permissionsCommand(["list"], configDir, worktree);
 
@@ -141,7 +149,9 @@ describe("permissionsCommand", () => {
     const code = permissionsCommand(["remove", "bash"], configDir, worktree);
 
     expect(code).toBe(0);
-    expect(logs.join("\n")).toContain("bash was not permanently approved — bash and powershell never can be.");
+    expect(logs.join("\n")).toContain(
+      "bash was not permanently approved — bash and powershell never can be.",
+    );
   });
 
   // 18. No subcommand / bogus / remove with no tool.

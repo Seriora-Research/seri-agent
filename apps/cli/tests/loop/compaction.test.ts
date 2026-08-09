@@ -5,19 +5,34 @@ import { compactMessages, findSafeEvictionBoundary } from "../../src/loop/compac
 
 function usage(inputTotal: number, outputTotal: number) {
   return {
-    inputTokens: { total: inputTotal, noCache: inputTotal, cacheRead: undefined, cacheWrite: undefined },
+    inputTokens: {
+      total: inputTotal,
+      noCache: inputTotal,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    },
     outputTokens: { total: outputTotal, text: outputTotal, reasoning: undefined },
   };
 }
 
 function assistantToolCallMsg(id: string): ModelMessage {
-  return { role: "assistant", content: [{ type: "tool-call", toolCallId: id, toolName: "write_file", input: {} }] };
+  return {
+    role: "assistant",
+    content: [{ type: "tool-call", toolCallId: id, toolName: "write_file", input: {} }],
+  };
 }
 
 function toolResultMsg(id: string, value: JSONValue): ModelMessage {
   return {
     role: "tool",
-    content: [{ type: "tool-result", toolCallId: id, toolName: "write_file", output: { type: "json", value } }],
+    content: [
+      {
+        type: "tool-result",
+        toolCallId: id,
+        toolName: "write_file",
+        output: { type: "json", value },
+      },
+    ],
   };
 }
 

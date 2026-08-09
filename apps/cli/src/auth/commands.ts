@@ -6,7 +6,11 @@ export async function login(
   mode: "login" | "signup",
   clientId: string,
   configDir: string,
-  deps: { requestDeviceCode?: typeof requestDeviceCode; openBrowser?: typeof openBrowser; pollForToken?: typeof pollForToken } = {},
+  deps: {
+    requestDeviceCode?: typeof requestDeviceCode;
+    openBrowser?: typeof openBrowser;
+    pollForToken?: typeof pollForToken;
+  } = {},
 ): Promise<void> {
   const requestDeviceCodeFn = deps.requestDeviceCode ?? requestDeviceCode;
   const openBrowserFn = deps.openBrowser ?? openBrowser;
@@ -41,7 +45,11 @@ export async function login(
     configDir,
   );
 
-  console.log(mode === "signup" ? `Account created — logged in as ${result.user.email}` : `Logged in as ${result.user.email}`);
+  console.log(
+    mode === "signup"
+      ? `Account created — logged in as ${result.user.email}`
+      : `Logged in as ${result.user.email}`,
+  );
 }
 
 export function logout(configDir: string): void {

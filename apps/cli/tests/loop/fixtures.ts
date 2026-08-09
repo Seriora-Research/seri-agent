@@ -9,7 +9,12 @@ import type { LoopEvent } from "../../src/loop/loop";
 
 export function usage(inputTotal: number, outputTotal: number) {
   return {
-    inputTokens: { total: inputTotal, noCache: inputTotal, cacheRead: undefined, cacheWrite: undefined },
+    inputTokens: {
+      total: inputTotal,
+      noCache: inputTotal,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    },
     outputTokens: { total: outputTotal, text: outputTotal, reasoning: undefined },
   };
 }

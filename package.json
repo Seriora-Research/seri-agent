@@ -2,7 +2,10 @@
   "name": "seri-monorepo",
   "private": true,
   "license": "Apache-2.0",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "postinstall": "bun run --cwd apps/cli postinstall",
     "dev": "bun run --cwd apps/cli dev",
@@ -21,6 +24,7 @@
     "typecheck": "bun run --cwd apps/cli typecheck && bun run --cwd apps/server typecheck && bun run --cwd packages/plans typecheck && bun run --cwd packages/ui typecheck && bun run --cwd packages/copy-policy typecheck && bun run --cwd apps/web typecheck && bun run --cwd apps/lab typecheck && bun run --cwd apps/portal typecheck",
     "lint": "bun run --cwd apps/cli lint",
     "format": "biome format --write .",
+    "format:check": "biome format .",
     "check": "biome check ."
   },
   "devDependencies": {

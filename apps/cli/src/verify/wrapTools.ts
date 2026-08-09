@@ -45,7 +45,10 @@ export function withVerification(tools: ToolSet, deps: VerifyDeps = {}): ToolSet
         name,
         {
           ...definition,
-          execute: async (args: unknown, options: ToolExecutionOptions<Record<string, unknown>>) => {
+          execute: async (
+            args: unknown,
+            options: ToolExecutionOptions<Record<string, unknown>>,
+          ) => {
             // Awaited first, and not caught: a write that threw wrote nothing, so there is
             // nothing to check and the throw is the model's answer.
             await execute(args, options);
@@ -57,7 +60,9 @@ export function withVerification(tools: ToolSet, deps: VerifyDeps = {}): ToolSet
             // refactor is type-incorrect between its own steps — writing a file that imports a
             // not-yet-written one produces a real error — and blocking would make that
             // impossible to work through. Stage 4's checkpoints are the undo path.
-            const verification = enabled ? await runCheck(deps.command, path, options.abortSignal) : DISABLED;
+            const verification = enabled
+              ? await runCheck(deps.command, path, options.abortSignal)
+              : DISABLED;
             return { written: true, verification } satisfies WriteFileResult;
           },
         },

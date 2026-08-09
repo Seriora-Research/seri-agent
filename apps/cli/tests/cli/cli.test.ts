@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
@@ -37,7 +46,9 @@ describe("run (task invocation)", () => {
   // silenced rather than collected because none of them asserts on it — the ones that reach it (a
   // provider error, a run stopped at a cap) only ever needed it kept out of the test output. A
   // test that wants to assert on stderr stubs it itself, as the two that do already have.
-  async function captureLogs(invoke: () => Promise<number>): Promise<{ code: number; logs: string[] }> {
+  async function captureLogs(
+    invoke: () => Promise<number>,
+  ): Promise<{ code: number; logs: string[] }> {
     const logs: string[] = [];
     const originalLog = console.log;
     const originalError = console.error;
@@ -89,17 +100,35 @@ describe("run (task invocation)", () => {
 
   test("`--continue` with no task resumes the most recent session without appending a message", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
-    const older: SessionState = { id: "older", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [{ role: "user", content: "old task" }] };
-    const newer: SessionState = { id: "newer", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [{ role: "user", content: "new task" }] };
+    const older: SessionState = {
+      id: "older",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [{ role: "user", content: "old task" }],
+    };
+    const newer: SessionState = {
+      id: "newer",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [{ role: "user", content: "new task" }],
+    };
     saveSession(older, sessionsDir);
     saveSession(newer, sessionsDir);
     const base = new Date("2026-01-01T00:00:00Z");
     utimesSync(join(sessionsDir, "older.json"), base, base);
-    utimesSync(join(sessionsDir, "newer.json"), new Date(base.getTime() + 60_000), new Date(base.getTime() + 60_000));
+    utimesSync(
+      join(sessionsDir, "newer.json"),
+      new Date(base.getTime() + 60_000),
+      new Date(base.getTime() + 60_000),
+    );
 
     const { fake, capture } = fakeRunLoop();
 
-    await captureLogs(() => run(["--continue"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+    await captureLogs(() =>
+      run(["--continue"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(capture()?.messages).toEqual([{ role: "user", content: "new task" }]);
     expect(readdirSync(sessionsDir)).toHaveLength(2);
@@ -109,13 +138,29 @@ describe("run (task invocation)", () => {
   // surviving half: this passes on `main` too.
   test("`--resume <id>` resumes that session, not the most recent one", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
-    const older: SessionState = { id: "older", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [{ role: "user", content: "old task" }] };
-    const newer: SessionState = { id: "newer", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [{ role: "user", content: "new task" }] };
+    const older: SessionState = {
+      id: "older",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [{ role: "user", content: "old task" }],
+    };
+    const newer: SessionState = {
+      id: "newer",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [{ role: "user", content: "new task" }],
+    };
     saveSession(older, sessionsDir);
     saveSession(newer, sessionsDir);
     const base = new Date("2026-01-01T00:00:00Z");
     utimesSync(join(sessionsDir, "older.json"), base, base);
-    utimesSync(join(sessionsDir, "newer.json"), new Date(base.getTime() + 60_000), new Date(base.getTime() + 60_000));
+    utimesSync(
+      join(sessionsDir, "newer.json"),
+      new Date(base.getTime() + 60_000),
+      new Date(base.getTime() + 60_000),
+    );
 
     const { fake, capture } = fakeRunLoop();
 
@@ -169,7 +214,9 @@ describe("run (task invocation)", () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const { fake, capture } = fakeRunLoop();
 
-    await captureLogs(() => run(["write", "hello.txt"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+    await captureLogs(() =>
+      run(["write", "hello.txt"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(capture()?.permissionMode).toBe("approve-each");
     const createdId = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
@@ -181,7 +228,11 @@ describe("run (task invocation)", () => {
     const { fake, capture } = fakeRunLoop();
 
     await captureLogs(() =>
-      run(["--dangerously-skip-permissions", "write", "hello.txt"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["--dangerously-skip-permissions", "write", "hello.txt"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
     );
 
     expect(capture()?.permissionMode).toBe("auto");
@@ -195,7 +246,11 @@ describe("run (task invocation)", () => {
     const { fake } = fakeRunLoop(answeredTurn);
 
     await captureLogs(() =>
-      run(["--dangerously-skip-permissions", "write", "hello.txt"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["--dangerously-skip-permissions", "write", "hello.txt"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
     );
 
     const createdId = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
@@ -204,9 +259,14 @@ describe("run (task invocation)", () => {
 
   test("the tool-allowed event prints which tool was approved for the rest of the run", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
-    const { fake } = fakeRunLoop([{ type: "tool-allowed", name: "bash" }, { type: "done", reason: "no-tool-call" }]);
+    const { fake } = fakeRunLoop([
+      { type: "tool-allowed", name: "bash" },
+      { type: "done", reason: "no-tool-call" },
+    ]);
 
-    const { logs } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+    const { logs } = await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(logs.some((line) => line.includes("bash"))).toBe(true);
   });
@@ -218,10 +278,18 @@ describe("run (task invocation)", () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const permissionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-permissions-"));
     extraTmpDirs.push(permissionsDir);
-    const { fake } = fakeRunLoop([{ type: "tool-allowed", name: "bash" }, { type: "done", reason: "no-tool-call" }]);
+    const { fake } = fakeRunLoop([
+      { type: "tool-allowed", name: "bash" },
+      { type: "done", reason: "no-tool-call" },
+    ]);
 
     const { logs } = await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
+      run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        permissionsDir,
+      }),
     );
 
     expect(existsSync(permissionsPath(permissionsDir))).toBe(false);
@@ -233,9 +301,14 @@ describe("run (task invocation)", () => {
   // "control character in the tool name" test), reached after the fact rather than at a prompt.
   test("the tool-allowed event escapes a control character in the tool name", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
-    const { fake } = fakeRunLoop([{ type: "tool-allowed", name: "write\x1bfile" }, { type: "done", reason: "no-tool-call" }]);
+    const { fake } = fakeRunLoop([
+      { type: "tool-allowed", name: "write\x1bfile" },
+      { type: "done", reason: "no-tool-call" },
+    ]);
 
-    const { logs } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+    const { logs } = await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     const rendered = logs.join("\n");
     expect(rendered).toContain("write\\x1bfile");
@@ -248,7 +321,9 @@ describe("run (task invocation)", () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const { fake } = fakeRunLoop([{ type: "done", reason: "repeated-denials" }]);
 
-    const { code, logs } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+    const { code, logs } = await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(code).toBe(1);
     expect(logs.some((line) => line.includes("/mode"))).toBe(true);
@@ -260,9 +335,14 @@ describe("run (task invocation)", () => {
   // used to report success. Measured on the compiled binary before this fix: exit 0, no file.
   test("no-tool-call with a denial and nothing executed exits 1", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
-    const { fake } = fakeRunLoop([{ type: "permission-denied", name: "write_file", reason: "declined" }, { type: "done", reason: "no-tool-call" }]);
+    const { fake } = fakeRunLoop([
+      { type: "permission-denied", name: "write_file", reason: "declined" },
+      { type: "done", reason: "no-tool-call" },
+    ]);
 
-    const { code } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+    const { code } = await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(code).toBe(1);
   });
@@ -274,7 +354,9 @@ describe("run (task invocation)", () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const { fake } = fakeRunLoop();
 
-    const { code } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+    const { code } = await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(code).toBe(0);
   });
@@ -290,7 +372,9 @@ describe("run (task invocation)", () => {
       { type: "done", reason: "no-tool-call" },
     ]);
 
-    const { code } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+    const { code } = await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(code).toBe(0);
   });
@@ -307,7 +391,9 @@ describe("run (task invocation)", () => {
       { type: "done", reason: "repeated-denials" },
     ]);
 
-    const { code } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+    const { code } = await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(code).toBe(1);
   });
@@ -318,9 +404,14 @@ describe("run (task invocation)", () => {
   // "declined" permission-denied were indistinguishable to driveLoop and this exited 1.
   test("a read-only block does not count as a denial for the exit code", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
-    const { fake } = fakeRunLoop([{ type: "permission-denied", name: "write_file", reason: "blocked" }, { type: "done", reason: "no-tool-call" }]);
+    const { fake } = fakeRunLoop([
+      { type: "permission-denied", name: "write_file", reason: "blocked" },
+      { type: "done", reason: "no-tool-call" },
+    ]);
 
-    const { code } = await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }));
+    const { code } = await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(code).toBe(0);
   });
@@ -341,14 +432,18 @@ describe("run (task invocation)", () => {
       { type: "tool-allowed", name: "bash" },
     ]);
 
-    await captureLogs(() => run(["do", "a", "task"], { runLoop: firstRun, loadAgentsFile: () => "", sessionsDir }));
+    await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: firstRun, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     const createdId = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
     const onDisk = JSON.parse(readFileSync(join(sessionsDir, `${createdId}.json`), "utf8"));
     expect("allowedTools" in onDisk).toBe(false);
 
     const { fake: secondRun, capture } = fakeRunLoop();
-    await captureLogs(() => run(["--continue"], { runLoop: secondRun, loadAgentsFile: () => "", sessionsDir }));
+    await captureLogs(() =>
+      run(["--continue"], { runLoop: secondRun, loadAgentsFile: () => "", sessionsDir }),
+    );
 
     expect(capture()?.allowedTools).toEqual([]);
   });
@@ -388,7 +483,14 @@ describe("run (task invocation)", () => {
       expect(created.model).toBe("model-from-env");
       expect(asked).toEqual(["model-from-env"]);
 
-      const pinned: SessionState = { id: "pinned", cwd: ".", systemPrompt: "", permissionMode: "read-only", model: "model-on-session", messages: [] };
+      const pinned: SessionState = {
+        id: "pinned",
+        cwd: ".",
+        systemPrompt: "",
+        permissionMode: "read-only",
+        model: "model-on-session",
+        messages: [],
+      };
       saveSession(pinned, sessionsDir);
       const resumed = await captureLogs(() => run(["--resume", "pinned", "another", "task"], deps));
       expect(resumed.code).toBe(0);
@@ -447,9 +549,17 @@ describe("run (task invocation)", () => {
 
     try {
       // Written the way a pre-`model` seri wrote it: the field is absent, not undefined.
-      const legacy = { id: "legacy", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
+      const legacy = {
+        id: "legacy",
+        cwd: ".",
+        systemPrompt: "",
+        permissionMode: "read-only",
+        messages: [],
+      };
       writeFileSync(join(sessionsDir, "legacy.json"), JSON.stringify(legacy));
-      expect("model" in JSON.parse(readFileSync(join(sessionsDir, "legacy.json"), "utf8"))).toBe(false);
+      expect("model" in JSON.parse(readFileSync(join(sessionsDir, "legacy.json"), "utf8"))).toBe(
+        false,
+      );
 
       const { code } = await captureLogs(() =>
         run(["--resume", "legacy", "another", "task"], {
@@ -491,10 +601,14 @@ describe("run (task invocation)", () => {
     });
 
     try {
-      await captureLogs(() => run(["a", "task"], deps([{ type: "error", error: "model_not_found" }])));
+      await captureLogs(() =>
+        run(["a", "task"], deps([{ type: "error", error: "model_not_found" }])),
+      );
       const id = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
       expect(asked).toEqual(["openai/gpt-os-120b"]);
-      expect("model" in JSON.parse(readFileSync(join(sessionsDir, `${id}.json`), "utf8"))).toBe(false);
+      expect("model" in JSON.parse(readFileSync(join(sessionsDir, `${id}.json`), "utf8"))).toBe(
+        false,
+      );
 
       // The correction the user makes next, and the resume that has to honour it.
       process.env.SERI_MODEL = "openai/gpt-oss-120b";
@@ -537,7 +651,9 @@ describe("run (task invocation)", () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
     const answers: (ApprovalAnswer | undefined)[] = [];
-    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+    async function* runLoopFake(
+      opts: RunLoopOpts,
+    ): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
       // Aborted while the prompt is already open, which is the real sequence, and then aborted
       // before it is opened at all — an already-aborted signal fires no abort event, so a listener
       // on its own would wait forever for something that has already happened.
@@ -546,7 +662,9 @@ describe("run (task invocation)", () => {
       parked.abort();
       answers.push(await pending);
 
-      answers.push(await opts.approvalPrompt?.("write_file", { path: "b.txt" }, AbortSignal.abort()));
+      answers.push(
+        await opts.approvalPrompt?.("write_file", { path: "b.txt" }, AbortSignal.abort()),
+      );
       yield { type: "done", reason: "aborted" };
       return opts.messages;
     }
@@ -554,7 +672,11 @@ describe("run (task invocation)", () => {
     const originalLog = console.log;
     console.log = () => {};
     try {
-      await run(["write", "hello.txt"], { runLoop: runLoopFake, loadAgentsFile: () => "", sessionsDir });
+      await run(["write", "hello.txt"], {
+        runLoop: runLoopFake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      });
     } finally {
       console.log = originalLog;
     }
@@ -574,7 +696,9 @@ describe("run (task invocation)", () => {
     let input: PassThrough | undefined;
     const answers: (ApprovalAnswer | undefined)[] = [];
 
-    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+    async function* runLoopFake(
+      opts: RunLoopOpts,
+    ): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
       const pending = opts.approvalPrompt?.("write_file", { path: "a.txt" }, opts.signal);
       input?.write("y\n");
       answers.push(await pending);
@@ -621,14 +745,21 @@ describe("run (task invocation)", () => {
     const input = new PassThrough();
     input.end();
     const answers: (ApprovalAnswer | "unsettled")[] = [];
-    const unsettledAfter = (ms: number): Promise<"unsettled"> => new Promise((r) => setTimeout(() => r("unsettled"), ms));
+    const unsettledAfter = (ms: number): Promise<"unsettled"> =>
+      new Promise((r) => setTimeout(() => r("unsettled"), ms));
 
-    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+    async function* runLoopFake(
+      opts: RunLoopOpts,
+    ): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
       const first = opts.approvalPrompt?.("write_file", { path: "a.txt" }, opts.signal);
-      answers.push((await Promise.race([first, unsettledAfter(2000)])) as ApprovalAnswer | "unsettled");
+      answers.push(
+        (await Promise.race([first, unsettledAfter(2000)])) as ApprovalAnswer | "unsettled",
+      );
 
       const second = opts.approvalPrompt?.("write_file", { path: "b.txt" }, opts.signal);
-      answers.push((await Promise.race([second, unsettledAfter(2000)])) as ApprovalAnswer | "unsettled");
+      answers.push(
+        (await Promise.race([second, unsettledAfter(2000)])) as ApprovalAnswer | "unsettled",
+      );
 
       yield { type: "done", reason: "no-tool-call" };
       return opts.messages;
@@ -665,7 +796,9 @@ describe("run (task invocation)", () => {
     let rl: Interface | undefined;
     const answers: (ApprovalAnswer | undefined)[] = [];
 
-    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+    async function* runLoopFake(
+      opts: RunLoopOpts,
+    ): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
       const first = opts.approvalPrompt?.("write_file", { path: "a.txt" }, opts.signal);
       rl?.close();
       answers.push(await first);
@@ -712,7 +845,9 @@ describe("run (task invocation)", () => {
     let input: PassThrough | undefined;
     let rendered = "";
 
-    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+    async function* runLoopFake(
+      opts: RunLoopOpts,
+    ): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
       const pending = opts.approvalPrompt?.("write\x1bfile", { path: "a.txt" }, opts.signal);
       input?.write("n\n");
       await pending;
@@ -754,8 +889,14 @@ describe("run (task invocation)", () => {
     let rendered = "";
     const longContent = "x".repeat(2000);
 
-    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
-      const pending = opts.approvalPrompt?.("write_file", { path: "a.txt", content: longContent }, opts.signal);
+    async function* runLoopFake(
+      opts: RunLoopOpts,
+    ): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      const pending = opts.approvalPrompt?.(
+        "write_file",
+        { path: "a.txt", content: longContent },
+        opts.signal,
+      );
       input?.write("n\n");
       await pending;
       yield { type: "done", reason: "no-tool-call" };
@@ -798,7 +939,9 @@ describe("run (task invocation)", () => {
     let rendered = "";
     let threw = false;
 
-    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+    async function* runLoopFake(
+      opts: RunLoopOpts,
+    ): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
       try {
         const pending = opts.approvalPrompt?.("write_file", undefined, opts.signal);
         input?.write("n\n");
@@ -845,7 +988,9 @@ describe("run (task invocation)", () => {
     let rendered = "";
     const answers: (ApprovalAnswer | undefined)[] = [];
 
-    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+    async function* runLoopFake(
+      opts: RunLoopOpts,
+    ): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
       const pending = opts.approvalPrompt?.("bash", { command: "ls -la" }, opts.signal);
       input?.write("a\n");
       answers.push(await pending);
@@ -920,7 +1065,9 @@ describe("run (task invocation)", () => {
 
     let answer: ApprovalAnswer | "unsettled" | undefined;
     let cancelledBy: NodeJS.Signals | undefined;
-    async function* runLoopFake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+    async function* runLoopFake(
+      opts: RunLoopOpts,
+    ): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
       // The run's own cancel is displaced for the duration of the turn, deliberately: signals.ts
       // holds ONE slot, and letting cli.ts's own registration win would end this turn in
       // raiseSignal — the correct production behaviour, and a test process that kills the runner.
@@ -940,7 +1087,10 @@ describe("run (task invocation)", () => {
         // settles — that IS the defect — and a bare await turns this test's negative control into a
         // wedged runner instead of a red line. Measured: the whole chain from emit to resolve is
         // synchronous, so a settled promise always wins this race.
-        answer = await Promise.race([pending, new Promise<"unsettled">((r) => setTimeout(() => r("unsettled"), 1000))]);
+        answer = await Promise.race([
+          pending,
+          new Promise<"unsettled">((r) => setTimeout(() => r("unsettled"), 1000)),
+        ]);
       } finally {
         unregister();
         rl?.close();
@@ -1058,7 +1208,12 @@ describe("run (task invocation)", () => {
             status: "diagnostics",
             command: "tsc --noEmit",
             elapsedMs: 3600,
-            diagnostics: Array.from({ length: 20 }, () => ({ file: "a.ts", line: 1, column: 1, message: "error TS2322: nope" })),
+            diagnostics: Array.from({ length: 20 }, () => ({
+              file: "a.ts",
+              line: 1,
+              column: 1,
+              message: "error TS2322: nope",
+            })),
             truncated: false,
             inWrittenFile: 1,
             total: 300,
@@ -1116,7 +1271,11 @@ describe("run (task invocation)", () => {
         name: "write_file",
         result: {
           written: true,
-          verification: { status: "ok", command: "tsc --noEmit", elapsedMs: 3600 } satisfies CheckOutcome,
+          verification: {
+            status: "ok",
+            command: "tsc --noEmit",
+            elapsedMs: 3600,
+          } satisfies CheckOutcome,
         },
       },
       { type: "done", reason: "no-tool-call" },
@@ -1158,12 +1317,19 @@ describe("run (task invocation)", () => {
   // on fields no line of cli.ts reads. Both are `number | undefined` in the SDK's own type — the
   // undefined case is a provider that did not report that half, and it is a case the summary has
   // to be able to say nothing about.
-  function usageEvent(inputTokens: number | undefined, outputTokens: number | undefined): LoopEvent {
+  function usageEvent(
+    inputTokens: number | undefined,
+    outputTokens: number | undefined,
+  ): LoopEvent {
     return {
       type: "usage",
       usage: {
         inputTokens,
-        inputTokenDetails: { noCacheTokens: undefined, cacheReadTokens: undefined, cacheWriteTokens: undefined },
+        inputTokenDetails: {
+          noCacheTokens: undefined,
+          cacheReadTokens: undefined,
+          cacheWriteTokens: undefined,
+        },
         outputTokens,
         outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
         totalTokens: (inputTokens ?? 0) + (outputTokens ?? 0),
@@ -1199,7 +1365,10 @@ describe("run (task invocation)", () => {
   test("prints only the half a provider reported when it reported one and not the other", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
-    const { fake } = fakeRunLoop([usageEvent(320, undefined), { type: "done", reason: "no-tool-call" }]);
+    const { fake } = fakeRunLoop([
+      usageEvent(320, undefined),
+      { type: "done", reason: "no-tool-call" },
+    ]);
 
     const { logs } = await captureLogs(() =>
       run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
@@ -1266,7 +1435,9 @@ describe("run (task invocation)", () => {
   // all re-insert the boundary being asserted about. This reconstructs the byte stream instead —
   // console.log's newline included, and the model's own text, which goes out through
   // process.stdout.write and never reaches console.log at all.
-  async function captureStdout(invoke: () => Promise<number>): Promise<{ code: number; stdout: string }> {
+  async function captureStdout(
+    invoke: () => Promise<number>,
+  ): Promise<{ code: number; stdout: string }> {
     let stdout = "";
     const originalLog = console.log;
     const originalWrite = process.stdout.write;
@@ -1386,7 +1557,9 @@ describe("run (task invocation)", () => {
     );
 
     expect(code).toBe(2);
-    expect(calls).toEqual([{ args: ["set", "GROQ_API_KEY", "gsk_live_secret"], configDir: tmpConfigRoot }]);
+    expect(calls).toEqual([
+      { args: ["set", "GROQ_API_KEY", "gsk_live_secret"], configDir: tmpConfigRoot },
+    ]);
     expect(capture()).toBeUndefined();
     expect(readdirSync(sessionsDir)).toEqual([]);
   });
@@ -1399,7 +1572,13 @@ describe("run (task invocation)", () => {
     "a task starting with %p is sent to the model, not dispatched as a slash command",
     async (word) => {
       process.env.GROQ_API_KEY = "fake-test-key";
-      const existing: SessionState = { id: "proto", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
+      const existing: SessionState = {
+        id: "proto",
+        cwd: ".",
+        systemPrompt: "",
+        permissionMode: "read-only",
+        messages: [],
+      };
       saveSession(existing, sessionsDir);
 
       const { fake, capture } = fakeRunLoop();
@@ -1408,13 +1587,20 @@ describe("run (task invocation)", () => {
       console.log = () => {};
       let code: number;
       try {
-        code = await run([word, "is", "wrong", "on", "User"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir });
+        code = await run([word, "is", "wrong", "on", "User"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+          sessionsDir,
+        });
       } finally {
         console.log = originalLog;
       }
 
       expect(code).toBe(0);
-      expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: `${word} is wrong on User` });
+      expect(capture()?.messages.at(-1)).toEqual({
+        role: "user",
+        content: `${word} is wrong on User`,
+      });
     },
   );
 });
@@ -1434,7 +1620,9 @@ describe("run (permanent permissions)", () => {
     else process.env[key] = original;
   }
 
-  async function captureLogs(invoke: () => Promise<number>): Promise<{ code: number; logs: string[] }> {
+  async function captureLogs(
+    invoke: () => Promise<number>,
+  ): Promise<{ code: number; logs: string[] }> {
     const logs: string[] = [];
     const originalLog = console.log;
     const originalError = console.error;
@@ -1470,20 +1658,38 @@ describe("run (permanent permissions)", () => {
   // 19. A stored grant reaches runLoop as the seed — the read half of Hermes #4739 at the
   // integration level. Negative control: deleting the loadGrants call in prepareSession.
   test("a stored grant reaches runLoop as the allowedTools seed", async () => {
-    writeFileSync(permissionsPath(permissionsDir), `global: []\nprojects:\n  '${key}':\n    - write_file\n`);
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      `global: []\nprojects:\n  '${key}':\n    - write_file\n`,
+    );
     const { fake, capture } = fakeRunLoop();
 
-    await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir, permissionsDir }));
+    await captureLogs(() =>
+      run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        permissionsDir,
+      }),
+    );
 
     expect(capture()?.allowedTools).toContain("write_file");
   });
 
   // 20. tool-allowed for write_file writes the file, and the run prints where it saved it.
   test("a tool-allowed event for write_file persists the grant and prints where it was saved", async () => {
-    const { fake } = fakeRunLoop([{ type: "tool-allowed", name: "write_file" }, { type: "done", reason: "no-tool-call" }]);
+    const { fake } = fakeRunLoop([
+      { type: "tool-allowed", name: "write_file" },
+      { type: "done", reason: "no-tool-call" },
+    ]);
 
     const { logs } = await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
+      run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        permissionsDir,
+      }),
     );
 
     expect(loadGrants(permissionsDir, projectRoot(process.cwd())).project).toContain("write_file");
@@ -1493,11 +1699,28 @@ describe("run (permanent permissions)", () => {
   // 22. A grant survives into a later invocation — the deterministic twin of acceptance criterion
   // 1, which goes red if either the read or the write half is removed.
   test("a grant made in one run is seeded into the next", async () => {
-    const { fake: firstRun } = fakeRunLoop([{ type: "tool-allowed", name: "write_file" }, { type: "done", reason: "no-tool-call" }]);
-    await captureLogs(() => run(["do", "a", "task"], { runLoop: firstRun, loadAgentsFile: () => "", sessionsDir, permissionsDir }));
+    const { fake: firstRun } = fakeRunLoop([
+      { type: "tool-allowed", name: "write_file" },
+      { type: "done", reason: "no-tool-call" },
+    ]);
+    await captureLogs(() =>
+      run(["do", "a", "task"], {
+        runLoop: firstRun,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        permissionsDir,
+      }),
+    );
 
     const { fake: secondRun, capture } = fakeRunLoop();
-    await captureLogs(() => run(["--continue"], { runLoop: secondRun, loadAgentsFile: () => "", sessionsDir, permissionsDir }));
+    await captureLogs(() =>
+      run(["--continue"], {
+        runLoop: secondRun,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        permissionsDir,
+      }),
+    );
 
     expect(capture()?.allowedTools).toContain("write_file");
   });
@@ -1506,25 +1729,51 @@ describe("run (permanent permissions)", () => {
   // consults the allowlist (the gate blocks first) and auto allows everything anyway, so printing
   // "pre-approved" in either would be a sentence the run does not honour.
   test("the pre-approved line prints only in approve-each", async () => {
-    writeFileSync(permissionsPath(permissionsDir), `global: []\nprojects:\n  '${key}':\n    - write_file\n`);
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      `global: []\nprojects:\n  '${key}':\n    - write_file\n`,
+    );
 
     const { fake: approveEachFake } = fakeRunLoop();
     const { logs: approveEachLogs } = await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: approveEachFake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
+      run(["do", "a", "task"], {
+        runLoop: approveEachFake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        permissionsDir,
+      }),
     );
-    expect(approveEachLogs.some((line) => line.includes("Pre-approved without asking: write_file"))).toBe(true);
+    expect(
+      approveEachLogs.some((line) => line.includes("Pre-approved without asking: write_file")),
+    ).toBe(true);
 
-    const readOnlySession: SessionState = { id: "ro", cwd: process.cwd(), systemPrompt: "", permissionMode: "read-only", messages: [] };
+    const readOnlySession: SessionState = {
+      id: "ro",
+      cwd: process.cwd(),
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [],
+    };
     saveSession(readOnlySession, sessionsDir);
     const { fake: readOnlyFake } = fakeRunLoop();
     const { logs: readOnlyLogs } = await captureLogs(() =>
-      run(["--resume", "ro", "do", "a", "task"], { runLoop: readOnlyFake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
+      run(["--resume", "ro", "do", "a", "task"], {
+        runLoop: readOnlyFake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        permissionsDir,
+      }),
     );
     expect(readOnlyLogs.some((line) => line.includes("Pre-approved without asking"))).toBe(false);
 
     const { fake: autoFake } = fakeRunLoop();
     const { logs: autoLogs } = await captureLogs(() =>
-      run(["--dangerously-skip-permissions", "do", "a", "task"], { runLoop: autoFake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
+      run(["--dangerously-skip-permissions", "do", "a", "task"], {
+        runLoop: autoFake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        permissionsDir,
+      }),
     );
     expect(autoLogs.some((line) => line.includes("Pre-approved without asking"))).toBe(false);
   });
@@ -1535,18 +1784,31 @@ describe("run (permanent permissions)", () => {
   // copying config.ts's upgrade-path behaviour) resets it before ever attempting the write — so
   // the failure is forced by colliding the path with a plain file instead, which makes
   // mkdirSync(configDir) fail with ENOTDIR regardless of ownership or mode.
-  test.skipIf(process.platform === "win32")("a store write failure warns instead of killing the run", async () => {
-    rmSync(permissionsDir, { recursive: true, force: true });
-    writeFileSync(permissionsDir, "not a directory");
-    const { fake } = fakeRunLoop([{ type: "tool-allowed", name: "write_file" }, { type: "done", reason: "no-tool-call" }]);
+  test.skipIf(process.platform === "win32")(
+    "a store write failure warns instead of killing the run",
+    async () => {
+      rmSync(permissionsDir, { recursive: true, force: true });
+      writeFileSync(permissionsDir, "not a directory");
+      const { fake } = fakeRunLoop([
+        { type: "tool-allowed", name: "write_file" },
+        { type: "done", reason: "no-tool-call" },
+      ]);
 
-    const { code, logs } = await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir, permissionsDir }),
-    );
+      const { code, logs } = await captureLogs(() =>
+        run(["do", "a", "task"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+          sessionsDir,
+          permissionsDir,
+        }),
+      );
 
-    expect(code).toBe(0);
-    expect(logs.some((line) => line.includes("could not save the permanent approval for write_file"))).toBe(true);
-  });
+      expect(code).toBe(0);
+      expect(
+        logs.some((line) => line.includes("could not save the permanent approval for write_file")),
+      ).toBe(true);
+    },
+  );
 });
 
 describe("run (/mode)", () => {
@@ -1561,7 +1823,13 @@ describe("run (/mode)", () => {
   });
 
   test("`--continue /mode` cycles the most-recent session's mode", async () => {
-    const existing: SessionState = { id: "abc", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
+    const existing: SessionState = {
+      id: "abc",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [],
+    };
     saveSession(existing, sessionsDir);
 
     const code = await run(["--continue", "/mode"], { sessionsDir });
@@ -1577,7 +1845,13 @@ describe("run (/mode)", () => {
   // left to fail as "session not found": a slash-command name after --resume is a usage error that
   // names --continue as the fix.
   test("`--resume /mode` is a usage error naming --continue, not a session-not-found lookup", async () => {
-    const existing: SessionState = { id: "abc", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
+    const existing: SessionState = {
+      id: "abc",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [],
+    };
     saveSession(existing, sessionsDir);
 
     const errors: string[] = [];
@@ -1600,7 +1874,13 @@ describe("run (/mode)", () => {
     // argument at all means this is not an invocation of it.
     const originalKey = process.env.GROQ_API_KEY;
     process.env.GROQ_API_KEY = "fake-test-key";
-    const existing: SessionState = { id: "ghi", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
+    const existing: SessionState = {
+      id: "ghi",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [],
+    };
     saveSession(existing, sessionsDir);
 
     const { fake, capture } = fakeRunLoop();
@@ -1608,7 +1888,11 @@ describe("run (/mode)", () => {
     const originalLog = console.log;
     console.log = () => {};
     try {
-      await run(["/mode", "is", "broken,", "fix", "it"], { sessionsDir, runLoop: fake, loadAgentsFile: () => "" });
+      await run(["/mode", "is", "broken,", "fix", "it"], {
+        sessionsDir,
+        runLoop: fake,
+        loadAgentsFile: () => "",
+      });
     } finally {
       console.log = originalLog;
       // Deleted rather than reassigned when it was unset: `process.env.X = undefined` stores the
@@ -1617,12 +1901,21 @@ describe("run (/mode)", () => {
       else process.env.GROQ_API_KEY = originalKey;
     }
 
-    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "/mode is broken, fix it" });
+    expect(capture()?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "/mode is broken, fix it",
+    });
     expect(loadSession("ghi", sessionsDir).permissionMode).toBe("read-only");
   });
 
   test("bare `/mode` (no --resume) cycles the most-recent session instead of creating a new orphan session", async () => {
-    const existing: SessionState = { id: "def", cwd: ".", systemPrompt: "", permissionMode: "read-only", messages: [] };
+    const existing: SessionState = {
+      id: "def",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [],
+    };
     saveSession(existing, sessionsDir);
 
     const code = await run(["/mode"], { sessionsDir });
@@ -1719,7 +2012,9 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
 
     expect(logs.join("\n")).toContain("restored a.txt");
     expect(logs.join("\n")).toMatch(/The state this replaced is commit [0-9a-f]{40}\./);
-    expect(logs.join("\n")).toMatch(new RegExp(`seri --resume ${SESSION_ID} /restore [0-9a-f]{40}`));
+    expect(logs.join("\n")).toMatch(
+      new RegExp(`seri --resume ${SESSION_ID} /restore [0-9a-f]{40}`),
+    );
   }, 15_000);
 
   test("the recovery command /undo prints puts back exactly the state it replaced", async () => {
@@ -1736,14 +2031,20 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     })({ tool: "write_file", toolCallId: "c1", args: { path: "old.ts" }, rewindTo: 1 });
     rmSync(join(workTree, "old.ts"));
     writeFileSync(join(workTree, "new.ts"), "new\n");
-    saveSession({ id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages }, sessionsDir);
+    saveSession(
+      { id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages },
+      sessionsDir,
+    );
 
     await run(["--resume", SESSION_ID, "/undo"], { sessionsDir, checkpointsDir });
     expect(existsSync(join(workTree, "old.ts"))).toBe(true);
     expect(existsSync(join(workTree, "new.ts"))).toBe(false);
 
     const recovery = logs.join("\n").match(/seri --resume \S+ (\/restore [0-9a-f]{40})/)?.[1] ?? "";
-    const code = await run(["--resume", SESSION_ID, ...recovery.split(" ")], { sessionsDir, checkpointsDir });
+    const code = await run(["--resume", SESSION_ID, ...recovery.split(" ")], {
+      sessionsDir,
+      checkpointsDir,
+    });
 
     expect(errors).toEqual([]);
     expect(code).toBe(0);
@@ -1782,9 +2083,17 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       onWarning: () => {},
     });
     const record = (rewindTo: number) =>
-      snapshot({ tool: "write_file", toolCallId: `c${rewindTo}`, args: { path: join(workTree, "a.txt") }, rewindTo });
+      snapshot({
+        tool: "write_file",
+        toolCallId: `c${rewindTo}`,
+        args: { path: join(workTree, "a.txt") },
+        rewindTo,
+      });
     for (const anchor of [1, 3, 5, 7]) record(anchor);
-    saveSession({ id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages: nine }, sessionsDir);
+    saveSession(
+      { id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages: nine },
+      sessionsDir,
+    );
 
     await run(["--resume", SESSION_ID, "/rewind", "2"], { sessionsDir, checkpointsDir });
     expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toHaveLength(5);
@@ -1795,7 +2104,10 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     saveSession(resumed, sessionsDir);
     for (const anchor of [6, 8]) record(anchor);
 
-    const code = await run(["--resume", SESSION_ID, "/rewind", "3"], { sessionsDir, checkpointsDir });
+    const code = await run(["--resume", SESSION_ID, "/rewind", "3"], {
+      sessionsDir,
+      checkpointsDir,
+    });
 
     expect(code).toBe(1);
     expect(errors.join("\n")).toContain("since the last rewind");
@@ -1806,10 +2118,15 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     seed();
     const before = readFileSync(join(workTree, "a.txt"));
 
-    const code = await run(["--resume", SESSION_ID, "/rewind", "2"], { sessionsDir, checkpointsDir });
+    const code = await run(["--resume", SESSION_ID, "/rewind", "2"], {
+      sessionsDir,
+      checkpointsDir,
+    });
 
     expect(code).toBe(0);
-    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toEqual(messages.slice(0, 1));
+    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toEqual(
+      messages.slice(0, 1),
+    );
     expect(readFileSync(join(workTree, "a.txt")).equals(before)).toBe(true);
   }, 15_000);
 
@@ -1845,7 +2162,13 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       onWarning: () => {},
     })({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 9 });
     saveSession(
-      { id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages: messages.slice(0, 2) },
+      {
+        id: SESSION_ID,
+        cwd: workTree,
+        systemPrompt: "",
+        permissionMode: "auto",
+        messages: messages.slice(0, 2),
+      },
       sessionsDir,
     );
 
@@ -1897,7 +2220,10 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     }
 
     expect(code).toBe(0);
-    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "/undo the rename and try again" });
+    expect(capture()?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "/undo the rename and try again",
+    });
     expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("final\n");
   }, 20_000);
 });

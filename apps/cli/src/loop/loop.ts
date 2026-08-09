@@ -9,7 +9,12 @@ import type {
   ToolSet,
 } from "ai";
 import { checkPermission, type PermissionMode } from "../gate/gate";
-import { compactMessages, findSafeEvictionBoundary, MAX_RETRIES, type CompactionSummary } from "./compaction";
+import {
+  compactMessages,
+  findSafeEvictionBoundary,
+  MAX_RETRIES,
+  type CompactionSummary,
+} from "./compaction";
 
 export type LoopEvent =
   | { type: "text-delta"; text: string }
@@ -23,7 +28,12 @@ export type LoopEvent =
   // the second — see MAX_CONSECUTIVE_DENIALS.
   | { type: "permission-denied"; name: string; reason: "blocked" | "declined" }
   | { type: "messages-updated"; messages: ModelMessage[] }
-  | { type: "compacted"; summary: CompactionSummary; evictedCount: number; usage: LanguageModelUsage }
+  | {
+      type: "compacted";
+      summary: CompactionSummary;
+      evictedCount: number;
+      usage: LanguageModelUsage;
+    }
   // Per completed model call, not a running total: the loop is stateless by design and summing
   // across turns is the consumer's business. `usage` on `compacted` is the same quantity for the
   // summariser's own round-trip, which is billed like any other and was invisible until now.
@@ -63,7 +73,11 @@ export type LoopEvent =
 // recorded as a denial.
 export type ApprovalAnswer = "once" | "always" | "no";
 
-export type ApprovalPrompt = (toolName: string, args: unknown, signal?: AbortSignal) => Promise<ApprovalAnswer>;
+export type ApprovalPrompt = (
+  toolName: string,
+  args: unknown,
+  signal?: AbortSignal,
+) => Promise<ApprovalAnswer>;
 
 // Hermes' documented default (see docs-tmp research); now reachable from the CLI via
 // --max-turns, where it was previously hardcoded and unconfigurable.
@@ -301,7 +315,11 @@ export async function* runLoop(opts: {
           text += part.text;
           yield { type: "text-delta", text: part.text };
         } else if (part.type === "tool-call") {
-          toolCalls.push({ toolCallId: part.toolCallId, toolName: part.toolName, input: part.input });
+          toolCalls.push({
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            input: part.input,
+          });
         } else if (part.type === "error") {
           yield { type: "error", error: errorText(part.error) };
           // A call that streamed text and then failed was billed for the text it streamed, and
@@ -359,7 +377,12 @@ export async function* runLoop(opts: {
     const assistantContent: AssistantContent = [];
     if (text) assistantContent.push({ type: "text", text });
     for (const call of toolCalls) {
-      assistantContent.push({ type: "tool-call", toolCallId: call.toolCallId, toolName: call.toolName, input: call.input });
+      assistantContent.push({
+        type: "tool-call",
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        input: call.input,
+      });
     }
     messages.push({ role: "assistant", content: assistantContent });
     yield { type: "messages-updated", messages: [...messages] };
@@ -372,7 +395,14 @@ export async function* runLoop(opts: {
       // a half-written file behind.
       if (opts.signal?.aborted) break;
 
-      const verdict = await decidePermission(call.toolName, call.input, opts.permissionMode, allowedTools, opts.approvalPrompt, opts.signal);
+      const verdict = await decidePermission(
+        call.toolName,
+        call.input,
+        opts.permissionMode,
+        allowedTools,
+        opts.approvalPrompt,
+        opts.signal,
+      );
 
       // Re-checked after the prompt, because a cancel that lands while the user is being asked
       // resolves it "no" (cli.ts closes the readline to unpark the turn) and "no" is otherwise
@@ -390,7 +420,11 @@ export async function* runLoop(opts: {
         // Only a declined call is a signal about the RUN — a blocked one is the mode working as
         // the user asked. See MAX_CONSECUTIVE_DENIALS.
         if (verdict === "deny-declined") consecutiveDenials++;
-        yield { type: "permission-denied", name: call.toolName, reason: verdict === "deny-blocked" ? "blocked" : "declined" };
+        yield {
+          type: "permission-denied",
+          name: call.toolName,
+          reason: verdict === "deny-blocked" ? "blocked" : "declined",
+        };
         toolResults.push({
           type: "tool-result",
           toolCallId: call.toolCallId,
@@ -486,7 +520,10 @@ export async function* runLoop(opts: {
         type: "tool-result",
         toolCallId: call.toolCallId,
         toolName: call.toolName,
-        output: { type: "execution-denied", reason: `Tool "${call.toolName}" was cancelled by the user before it completed.` },
+        output: {
+          type: "execution-denied",
+          reason: `Tool "${call.toolName}" was cancelled by the user before it completed.`,
+        },
       });
     }
 
