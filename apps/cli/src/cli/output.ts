@@ -10,7 +10,7 @@
 // free or the sentence above stops being true.
 import type { RestorePlan, RestoreResult } from "../checkpoint/checkpoint";
 import type { LoopEvent } from "../loop/loop";
-import { writeFileVerification, type CheckOutcome } from "../verify/outcome";
+import { type CheckOutcome, writeFileVerification } from "../verify/outcome";
 
 // stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
 // parseArgs rejects, or no task given — is a usage error: printed to stderr, exit 2.
@@ -90,22 +90,39 @@ export function printPreApproved(tools: readonly string[]): void {
   );
 }
 
-// Printed before the restore happens, not after. Every path here comes from git's own output, so
+// One line-shape, one place: the console printers below and the TUI's transcript presenter
+// (cli.ts's tuiPresenter) both call this — through `printUndoPlan`'s own default `console.log`
+// sink for the console path, and with a sink that dispatches a transcript-append action for the
+// TUI path — instead of each hand-copying the same restored/deleted/ignored template, which can
+// drift out of sync the moment one of them changes and the other does not.
+//
+// Called before the restore happens, not after. Every path here comes from git's own output, so
 // an ignored file can never appear under "restored" or "deleted"; the ones that were written and
 // skipped are listed separately rather than left for the user to notice was missing. The deletion
 // list matters most: the removal pass takes every untracked, non-ignored file, including ones a
 // human made by hand in another terminal.
+export function undoPlanLines(plan: RestorePlan, sink: (line: string) => void = console.log): void {
+  if (plan.diff) sink(plan.diff);
+  for (const path of plan.restored) sink(`restored ${path}`);
+  for (const path of plan.deleted) sink(`deleted  ${path}`);
+  if (plan.ignored.length > 0) sink(`not restored (gitignored): ${plan.ignored.join(", ")}`);
+}
+
 export function printUndoPlan(plan: RestorePlan): void {
-  if (plan.diff) console.log(plan.diff);
-  for (const path of plan.restored) console.log(`restored ${path}`);
-  for (const path of plan.deleted) console.log(`deleted  ${path}`);
-  if (plan.ignored.length > 0) console.log(`not restored (gitignored): ${plan.ignored.join(", ")}`);
+  undoPlanLines(plan);
 }
 
 // Restoring is never the operation that loses work: the state it just replaced was committed first.
+export function recoveryLines(
+  result: RestoreResult,
+  sink: (line: string) => void = console.log,
+): void {
+  sink(`The state this replaced is commit ${result.preUndoCommit}. To get it back:`);
+  sink(`  ${result.recoverCommand}`);
+}
+
 export function printRecovery(result: RestoreResult): void {
-  console.log(`The state this replaced is commit ${result.preUndoCommit}. To get it back:`);
-  console.log(`  ${result.recoverCommand}`);
+  recoveryLines(result);
 }
 
 // The per-write cost is the whole reason `verify.enabled` exists, and a user deciding whether to

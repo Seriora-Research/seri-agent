@@ -111,6 +111,38 @@ describe.skipIf(!isGitAvailable())("applyUndo", () => {
 
     expect(message).toBe("Already at checkpoint 1; no file changed.");
   }, 30_000);
+
+  // M-5 regression: onPlan (undoFiles' own callback) has to fire BEFORE the restore/removal pass
+  // mutates the worktree, matching output.ts's own documented guarantee on undoPlanLines ("before
+  // the restore happens, not after") — restoring that for the console path is the whole reason
+  // applyUndo accepts onPlan at all rather than hardcoding a no-op. Checked here by reading the
+  // file's content from INSIDE the callback: at that point the file must still read "after", not
+  // yet reverted to "before".
+  test("onPlan fires with the plan before the restore mutates the worktree", () => {
+    const snapshot = checkpointer();
+    snapshot({
+      tool: "write_file",
+      toolCallId: "c1",
+      args: { path: join(workTree, "a.txt") },
+      rewindTo: 1,
+    });
+    writeFileSync(join(workTree, "a.txt"), "after\n");
+    snapshot({
+      tool: "write_file",
+      toolCallId: "c2",
+      args: { path: join(workTree, "a.txt") },
+      rewindTo: 2,
+    });
+
+    const seenDuringOnPlan: string[] = [];
+    applyUndo(session(), ["2"], { sessionsDir: join(root, "sessions"), checkpointsDir }, (plan) => {
+      seenDuringOnPlan.push(readFileSync(join(workTree, "a.txt"), "utf8"));
+      expect(plan.restored).toEqual(["a.txt"]);
+    });
+
+    expect(seenDuringOnPlan).toEqual(["after\n"]);
+    expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
+  }, 30_000);
 });
 
 describe.skipIf(!isGitAvailable())("applyRestore", () => {
