@@ -84,6 +84,17 @@ type CliDeps = {
   permissionsDir?: string;
   grep?: typeof grepReal;
   createInterface?: () => Interface;
+  // Whether to mount the Ink TUI instead of the piped/non-interactive path — read from a real
+  // process.stdout.isTTY in exactly one place, the import.meta.main entrypoint at the bottom of
+  // this file, and threaded in from there. Defaults to false (below), never to a live
+  // process.stdout.isTTY read inside run() itself: cli.test.ts calls run() directly, bypassing
+  // import.meta.main entirely, and a bare process.stdout.isTTY read would fire identically for a
+  // real invocation and a test call — mounting a raw-mode-input Ink app inside a test process
+  // whenever the test runner happens to have a real terminal attached (a human running `bun test`
+  // in an actual terminal window, not CI). The safe default is what makes every existing test
+  // call site (which never passes isTTY) correctly never mount the TUI, regardless of what
+  // terminal the test process happens to run in.
+  isTTY?: boolean;
 };
 
 type CommandDirs = { sessionsDir: string; checkpointsDir: string };
@@ -1016,8 +1027,9 @@ function tuiPresenter(dispatch: Dispatch): CommandPresenter {
   };
 }
 
-// Mounted only when process.stdout.isTTY is true (run()'s own branch, above driveLoop's other
-// call site). Drives the SAME driveLoop the non-interactive path uses for the initial task
+// Mounted only when deps.isTTY is true (run()'s own branch, above driveLoop's other call site —
+// see CliDeps.isTTY's own comment for why that reads a passed-in flag, not a live
+// process.stdout.isTTY). Drives the SAME driveLoop the non-interactive path uses for the initial task
 // already appended to `prepared.session.messages` by prepareSession — only how it reports events
 // differs. Slash commands typed into the TUI's input box reuse the exact same command functions
 // (cycleModeCommand etc.) the non-interactive path uses, via tuiPresenter instead of
@@ -1130,9 +1142,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // TTY-inferred, not a flag (plan Decision 2): a real terminal gets the Ink TUI, driving the
   // exact same driveLoop as the piped/CI path below — only how it reports events differs
   // (dispatch into App.tsx's reducer vs. printDispatch's printEvent calls). Falsy — piped, CI, a
-  // redirected file — takes the untouched path this project has always run: same function, same
-  // call order, same output.
-  const { doneReason, cancelledBy, usage, refusedWithoutRunning } = process.stdout.isTTY
+  // redirected file, or (deliberately) any caller that doesn't pass isTTY at all — takes the
+  // untouched path this project has always run: same function, same call order, same output. See
+  // CliDeps.isTTY's own comment for why this reads `deps.isTTY`, never process.stdout.isTTY
+  // directly.
+  const isTTY = deps.isTTY ?? false;
+  const { doneReason, cancelledBy, usage, refusedWithoutRunning } = isTTY
     ? await runTui(prepared, ctx, deps, maxTurns)
     : await driveLoop(prepared, ctx, deps, maxTurns, printDispatch);
 
@@ -1197,5 +1212,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 }
 
 if (import.meta.main) {
-  run(process.argv.slice(2)).then((code) => process.exit(code));
+  // The one place a real process.stdout.isTTY is read — see CliDeps.isTTY's own comment for why
+  // run() itself never reads it directly.
+  run(process.argv.slice(2), { isTTY: process.stdout.isTTY }).then((code) => process.exit(code));
 }
