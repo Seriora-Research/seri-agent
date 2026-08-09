@@ -92,7 +92,12 @@ function InputBox({
         return;
       }
       const before = input.slice(0, terminatorIndex);
-      const after = input.slice(terminatorIndex + 1);
+      // MEDIUM-4: a `\r\n` pair (a Windows-clipboard paste is the common source) is ONE
+      // terminator, not two — stripping only the `\r` left a stray leading `\n` in `after`,
+      // requiring an extra, confusing Enter to clear what looked like a blank line, and
+      // embedding a raw `\r\n` into whatever slash-command parsing ran on it next.
+      const terminatorLength = input.startsWith("\r\n", terminatorIndex) ? 2 : 1;
+      const after = input.slice(terminatorIndex + terminatorLength);
       onSubmit?.(value + before);
       setValue(after);
     }

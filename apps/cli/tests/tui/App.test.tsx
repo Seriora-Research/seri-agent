@@ -104,13 +104,33 @@ describe("App", () => {
     expect(instance.lastFrame()).toContain("second line");
   });
 
+  // MEDIUM-4: a `\r\n` pair (a Windows-clipboard paste) is ONE terminator — stripping only the
+  // `\r` used to leave a stray leading `\n` in the retained input, which would render as an
+  // (invisible, since Text collapses it) leading blank rather than "second line" starting flush.
+  test("a pasted chunk with a CRLF terminator does not leave a stray newline in the retained input", async () => {
+    const submitted: string[] = [];
+    const instance = render(
+      <App session={session()} onSubmit={(v) => submitted.push(v)} done={false} />,
+    );
+    await flush();
+
+    instance.stdin.write("first line\r\nsecond line");
+    await flush();
+
+    expect(submitted).toEqual(["first line"]);
+    // Not `\nsecond line` — the retained value itself is asserted (not just lastFrame's
+    // rendering, which could hide a stray `\n` some other way) via a second write that only
+    // submits "second line" cleanly if `after` was exactly that, with no leading control byte.
+    instance.stdin.write("\r");
+    await flush();
+    expect(submitted).toEqual(["first line", "second line"]);
+  });
+
   // HIGH-B/MEDIUM-C: Ctrl-D calls the onQuit prop directly — App.tsx wires it through to
   // InputBox unconditionally, so this is the same trigger runTui's own quit() attaches to.
   test("Ctrl-D calls onQuit", async () => {
     let quit = false;
-    const instance = render(
-      <App session={session()} onQuit={() => (quit = true)} done={false} />,
-    );
+    const instance = render(<App session={session()} onQuit={() => (quit = true)} done={false} />);
     await flush();
 
     instance.stdin.write("\x04");
