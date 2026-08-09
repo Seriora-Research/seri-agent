@@ -1193,10 +1193,19 @@ async function runTui(
   // already uses, makes the turn unwind the normal way — driveLoop yields whatever final
   // messages-updated/usage it can on the way out, runTurn's own try folds that into `usage` and
   // `doneReason` (below, unchanged), and only once `currentTurn` actually settles does this
-  // proceed to the real quit sequence. `doneReason` for a turn ended this way is "aborted" — the
-  // same exit code an aborted turn from any other path gets, unchanged: a task that was cut off
-  // mid-run is not one `seri "…" && next` should treat as accomplished just because the user, not
-  // the model, was the one who ended it.
+  // proceed to the real quit sequence. `doneReason` for a turn ended this way is "aborted", which
+  // (run()'s own exit-code comment, further down, has the full accounting) resolves to exit 1 —
+  // the same code every other *unaccomplished* run returns (`max-iterations`,
+  // `repeated-denials`), not the signal-death every OTHER abort path in this file uses: a
+  // deliberate quit is not the fatal-signal case `raiseSignal` exists for. A task that was cut
+  // off mid-run is still not one `seri "…" && next` should treat as accomplished just because
+  // the user, not the model, was the one who ended it — this all assumes the cancel slot is
+  // still free. If a Ctrl-C already spent it (signals.ts's single slot, cleared the instant a
+  // press is delivered, before the turn it cancelled has even finished unwinding), the
+  // deliverSignal("SIGINT") call below still runs, but finds nothing registered and falls
+  // through to signals.ts's own fatal path instead — no unwind, no summary, the process dies by
+  // signal, the same as a second bare Ctrl-C press (AGENTS.md's own paragraph on the TUI covers
+  // this).
   function quit(): void {
     if (dispatch === undefined || quitting) return;
     quitting = true;
@@ -1220,6 +1229,15 @@ async function runTui(
       });
     };
     if (turnInFlight) {
+      // MEDIUM-5: without this, cancelling a still-running turn on the way out (this whole
+      // branch's own comment above) left the TUI looking frozen for however long the turn took
+      // to unwind, with no indication anything had happened or that Ctrl-C was still available
+      // to force it — dispatched before deliverSignal so it is visible even if the unwind never
+      // completes (a stuck tool ignoring its own abort signal).
+      dispatch({
+        type: "transcript-append",
+        line: "quitting — cancelling the in-flight turn, Ctrl-C to force",
+      });
       deliverSignal("SIGINT");
       void currentTurn.then(finishQuit);
     } else {
@@ -1456,13 +1474,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // comes out of driveLoop's `for await` and never gets here. All of these used to exit 0 and let
   // `seri "…" && next` run next.
   //
-  // `aborted` does not reach this line today, and that rests on `controller.abort()` having
-  // exactly one caller: driveLoop's cancel handler, which sets cancelledBy first, so raiseSignal
-  // ran and did not return. Nothing enforces it — signals.ts names Stage 6's subagents as a second
-  // aborter — and a cancel arriving any other way lands on the 1 below rather than dying by
-  // signal. tests/cli/cli.test.ts records that status for the displaced-slot case, but it asserts
-  // the same 1 a second aborter would produce, so it will not go red when one is added: revisiting
-  // this line is on whoever adds it.
+  // `aborted` DOES reach this line now (HIGH-B, runTui's quit()): the TUI's own graceful-quit
+  // cancels an in-flight turn via the exact same controller.abort() driveLoop's cancel handler
+  // always used, but runTui's own resolve always passes `cancelledBy: undefined` for that
+  // path — a deliberate quit is not the signal-death `raiseSignal` exists to re-raise — so it
+  // lands on the `1` below instead of dying by signal, same as the displaced-slot case
+  // tests/cli/cli.test.ts already records. signals.ts still names Stage 6's subagents as a
+  // second aborter this same fallback would also cover, unchanged.
   if (doneReason === "no-tool-call") return refusedWithoutRunning ? 1 : 0;
   return 1;
 }

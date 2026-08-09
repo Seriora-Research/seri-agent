@@ -692,6 +692,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("/exit");
       child.stdin?.write("\r");
 
+      // MEDIUM-5: visible feedback that quitting is actually doing something, not a TUI that
+      // looks frozen while the cancelled turn unwinds.
+      await sawLine("quitting — cancelling the in-flight turn, Ctrl-C to force");
+
       // The discriminating assertion: pre-fix, quit() never touched turnInFlight or
       // cancellation, so controller.abort() was never called, the fake runLoop's own abort
       // listener never fired, and this line never appeared.
@@ -707,15 +711,28 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       expect(result).not.toBe("the run never settled");
       // Asserted on stdout's own EXIT_CODE line — childScriptQuit's own sibling test explains why
       // `result.code` itself is not the right thing to check here. The turn was cancelled, not
-      // completed — doneReason is "aborted", the same exit code an aborted turn gets from every
-      // other path (run()'s own documented contract): `seri "…" && next` must not run `next` off
-      // the back of a task /exit cut short, so this is 1, not the clean-quit test's own 0.
+      // completed — doneReason is "aborted", which resolves to exit 1, the same code every other
+      // *unaccomplished* run returns (`max-iterations`, `repeated-denials`) — NOT the signal-death
+      // every other abort path in this codebase uses; a deliberate quit is not the fatal-signal
+      // case `raiseSignal` exists for (cli.ts's own comment on this same fact, quit()'s own
+      // comment). `seri "…" && next` must not run `next` off the back of a task /exit cut short
+      // either way, so this is 1, not the clean-quit test's own 0.
       const { stdout } = result as Exit;
       expect(stdout).toContain("EXIT_CODE 1");
       // The turn's own usage (spent before it was cancelled) still made it into the final
       // summary — proof runTurn's usage-folding ran (and quit() waited for it) before resolving,
       // not that the process just happened to exit some other way.
       expect(stdout).toContain("(tokens: 12 in, 34 out)");
+
+      // LOW-1: a mid-turn /exit leaves the session resumable — a well-formed session file still
+      // on disk, not corrupted or removed by the cancel-then-quit sequence.
+      const sessionsDir = join(dir, "sessions");
+      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".json"));
+      if (sessionFile === undefined) throw new Error("no session file written");
+      const onDisk = JSON.parse(readFileSync(join(sessionsDir, sessionFile), "utf8"));
+      expect(onDisk.id).toBe(sessionFile.replace(/\.json$/, ""));
+      expect(Array.isArray(onDisk.messages)).toBe(true);
+      expect(onDisk.messages.length).toBeGreaterThan(0);
     } finally {
       child.kill("SIGKILL");
     }
