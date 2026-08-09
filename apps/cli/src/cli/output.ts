@@ -68,6 +68,24 @@ export function escapeControlChars(text: string): string {
   );
 }
 
+// write_file's input carries the whole file body, so an uncapped JSON.stringify can render
+// hundreds of lines on one prompt line and scroll the question itself out of scrollback before the
+// user can even see it, let alone answer it. Capped, not omitted: the prompt's job is still to
+// show what is about to happen, just not all of it when "all of it" is unreadable anyway. Used by
+// cli.ts's own approval prompt and by App.tsx's live pending-tool box (Ink's TUI) — the two render
+// sites that show `write_file`/`edit`'s own args, whole-file-body carrying tools both.
+const MAX_PROMPT_ARGS_LENGTH = 200;
+export function truncateArgsDisplay(args: unknown): string {
+  // JSON.stringify(undefined) returns `undefined` (the value, not a string), and `.length` on
+  // that throws inside this Promise executor — which rejects approvalPrompt, which nothing in
+  // runLoop wraps, so it would escape driveLoop as an unhandled rejection, skipping printUsage and
+  // the exit-code logic entirely. Unreachable through cli.ts today (call.input is provider-parsed
+  // JSON, never bare undefined), but ApprovalPrompt is an exported seam Stage 11's Ink prompt
+  // re-implements against, and `args: unknown` promises nothing about what a future caller passes.
+  const json = JSON.stringify(args) ?? "undefined";
+  return json.length > MAX_PROMPT_ARGS_LENGTH ? `${json.slice(0, MAX_PROMPT_ARGS_LENGTH)}…` : json;
+}
+
 // stderr, not stdout: stdout carries the model's own output and is routinely piped, and a warning
 // that a file will not be recoverable must not end up inside whatever consumed that pipe.
 export function printWarning(message: string): void {

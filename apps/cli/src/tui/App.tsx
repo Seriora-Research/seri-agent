@@ -8,8 +8,9 @@
 import type { ModelMessage } from "ai";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import { useEffect, useReducer, useState } from "react";
+import { truncateArgsDisplay } from "../cli/output";
 import type { SessionState } from "../session/session";
-import { initialTuiState, type TuiAction, tuiReducer } from "./reducer";
+import { type Dispatch, initialTuiState, tuiReducer } from "./reducer";
 import { theme } from "./theme";
 
 export type AppProps = {
@@ -17,7 +18,7 @@ export type AppProps = {
   // The seam Phase 5 wires driveLoop's dispatch through: called once on mount with the reducer's
   // own dispatch function, the same shape `useReducer` returns. Optional because Phase 4's tests
   // exercise the reducer via `connectDispatch` directly, with no live loop behind it yet.
-  connectDispatch?: (dispatch: (action: TuiAction) => void) => void;
+  connectDispatch?: (dispatch: Dispatch) => void;
   // Submitted line from the input box — Phase 5 wires this to the task/slash-command dispatch;
   // Phase 4 has nowhere real to send it yet.
   onSubmit?: (value: string) => void;
@@ -147,8 +148,11 @@ export function App({
       {state.streaming.length > 0 && <Text>{state.streaming}</Text>}
       {state.pendingTool !== undefined && (
         <Box borderStyle="round" borderColor={theme.warning}>
+          {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: pendingTool is set
+          ONLY for write_file/edit (reducer.ts), the two tools whose args carry a whole file body —
+          exactly the case the helper exists for, uncapped here otherwise. */}
           <Text color={theme.warning}>
-            {`${state.pendingTool.name}(${JSON.stringify(state.pendingTool.args)})`}
+            {`${state.pendingTool.name}(${truncateArgsDisplay(state.pendingTool.args)})`}
           </Text>
         </Box>
       )}
