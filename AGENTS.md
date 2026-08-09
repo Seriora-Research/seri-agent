@@ -69,8 +69,11 @@ duration of one `driveLoop` call, not the process's whole lifetime, so a Ctrl-C 
 nothing is running (between turns) finds the slot already empty and is immediately fatal, not a
 "first press" with a second still to come. The TUI never exits on its own once a turn
 completes — it returns to awaiting input for another task or slash command, indefinitely; the
-only graceful exit is `/exit` (an exact match — trailing words make it an ordinary task instead,
-same as every other slash command's own `accepts()` guard) or Ctrl-D at the input box. If nothing
+only graceful exit is `/exit` (an exact match — trailing words show a command-error instead of
+quitting, the same as every other TUI slash command's own `accepts()` guard failing shows a
+command-error rather than silently falling through to a task; that fallback is the
+NON-INTERACTIVE `handleSlashCommand`'s own behavior for input its table doesn't match at all, a
+different path) or Ctrl-D at the input box. If nothing
 is running, both unmount the TUI immediately and resolve the run with a normal exit code and the
 same final `printUsage` token/cost summary the non-interactive path prints, accumulated across
 every turn the session ran (exit 0, the same as any other completed `no-tool-call` turn). If a
@@ -84,6 +87,15 @@ must not run `next` off the back of a task `/exit` cut short. This assumes the c
 free; if a Ctrl-C already spent it (the paragraph above), quitting has nothing left to cancel
 with and escalates straight to the fatal path instead, the same as a second Ctrl-C would — no
 summary, no unwind, the process dies by signal.
+
+**`--max-turns` means something different in the TUI (finding 8, thermo-nuclear structural
+review, round 6): a per-task budget, not a per-session one.** `driveLoop` is called fresh for
+every submitted task in an interactive session (`runTui`'s own `runTurn`), each call getting the
+same `maxIterations: maxTurns` passed at startup — so a session that submits five tasks gets up to
+`maxTurns` model turns for EACH of them, not `maxTurns` total across the whole session, unlike the
+non-interactive `seri <task>` invocation, where one `driveLoop` call is the whole run. Deliberate,
+not a bug: a hard session-wide cap would make a long interactive session progressively less usable
+the more it was used, which is not what an iteration cap is for.
 
 **Gate-first permissions**, not sandboxing. `apps/cli/src/gate/gate.ts` defines three
 `PermissionMode`s (`read-only` / `approve-each` / `auto`) that cycle via `/mode`. A new
