@@ -65,22 +65,25 @@ context has that. Invoke it by name, not by relying on description-based
 auto-triggering — the loop is unattended-capable and undertriggering silently
 defeats the point.
 
-## Thermo-nuclear-code-quality-review always follows reviewer-verifier in VERIFY
-Standing rule, not a per-STATE.md amendment to re-declare each loop (user directive,
-2026-08-02): every VERIFY phase (feature and bugfix modes) dispatches the
-`thermo-nuclear-code-quality-review` skill immediately after `reviewer-verifier`
-returns its verdict, unconditionally — not gated on the reviewer-verifier finding
-anything. Cap at 2 passes per loop, matching the precedent set across
-vela-stage-0/1/2 and hesper-rename. SKILL.md §5 (VERIFY) must invoke it as an explicit
-step, not rely on the orchestrator manually copying a "process amendment" note into
-each new loop's STATE.md — that manual-carry-forward pattern already silently dropped
-once (hesper-stage-3-compaction's STATE.md omitted it, despite every prior loop in
-this project having it, and vela-stage-2-loop's own retro had already predicted this
-exact failure mode: "depends on the orchestrator remembering to copy it forward...
-worth the user formalizing"). If you are editing SKILL.md and a loop is currently
-active (`.claude/loops/*/STATE.md` exists), you cannot make this edit yet —
-`.claude/skills/*` is hard-frozen while any loop is active; make this change in a
-plain session with no active loop instead.
+## Thermo-nuclear-code-quality-review is user-invoked, never orchestrator-dispatched
+**Reversed 2026-08-09** (user directive; supersedes the 2026-08-02 "always follows
+reviewer-verifier, unconditionally" rule that used to live here). The orchestrator
+must NOT dispatch the `thermo-nuclear-code-quality-review` subagent itself in VERIFY,
+for feature or bugfix mode, regardless of diff size or reviewer-verifier's verdict.
+Running it is the user's call to make and the user's action to take — same footing as
+`/code-review ultra` (`.claude/rules/git-workflow.md`'s own "billed, user-triggered,
+you cannot launch it yourself" framing) and the engineering-loop skill itself
+(`feedback_engineering_loop_for_changes` memory: "skill is user-invoked only, ask
+them to type it"). The orchestrator dispatching the *subagent* is not the same act as
+the user running the *skill*, even though both end up doing the same review — the
+point of this rule is who decides WHEN it runs, not merely that it eventually does.
+
+**How to apply:** VERIFY still ends with reviewer-verifier's verdict written to
+STATE.md/trajectory.md, same as before. Do not go further on your own. If a
+thermo-nuclear pass seems warranted (large diff, structural risk, reviewer-verifier
+flagged maintainability concerns), *say so to the user* and let them decide whether
+to run it — do not decide for them by dispatching it. If they do run it, the existing
+2-passes-per-loop cap still applies.
 
 ## Rename/rebrand loops: the naming vocabulary is elicited, never derived
 For any rename or rebrand, the Goal Audit must produce a **user-confirmed table mapping
