@@ -23,6 +23,7 @@ export const USAGE = `Usage:
   seri --resume <id> [task]       continue that session
   seri [--resume <id>] /mode      cycle the permission mode
   seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha>
+  seri [--resume <id>] /exit      end an interactive TUI session (or Ctrl-D)
   seri login | signup | logout
   seri config set|list|unset
   seri permissions list|remove <tool>
@@ -90,11 +91,11 @@ export function printPreApproved(tools: readonly string[]): void {
   );
 }
 
-// One line-shape, one place: the console printers below and the TUI's transcript presenter
-// (cli.ts's tuiPresenter) both call this — through `printUndoPlan`'s own default `console.log`
-// sink for the console path, and with a sink that dispatches a transcript-append action for the
-// TUI path — instead of each hand-copying the same restored/deleted/ignored template, which can
-// drift out of sync the moment one of them changes and the other does not.
+// One line-shape, one place: cli.ts's consolePresenter and tuiPresenter both call this — the
+// former via its own default `console.log` sink, the latter with a sink that dispatches a
+// transcript-append action per line — instead of each hand-copying the same
+// restored/deleted/ignored template, which can drift out of sync the moment one of them changes
+// and the other does not.
 //
 // Called before the restore happens, not after. Every path here comes from git's own output, so
 // an ignored file can never appear under "restored" or "deleted"; the ones that were written and
@@ -108,10 +109,6 @@ export function undoPlanLines(plan: RestorePlan, sink: (line: string) => void = 
   if (plan.ignored.length > 0) sink(`not restored (gitignored): ${plan.ignored.join(", ")}`);
 }
 
-export function printUndoPlan(plan: RestorePlan): void {
-  undoPlanLines(plan);
-}
-
 // Restoring is never the operation that loses work: the state it just replaced was committed first.
 export function recoveryLines(
   result: RestoreResult,
@@ -119,10 +116,6 @@ export function recoveryLines(
 ): void {
   sink(`The state this replaced is commit ${result.preUndoCommit}. To get it back:`);
   sink(`  ${result.recoverCommand}`);
-}
-
-export function printRecovery(result: RestoreResult): void {
-  recoveryLines(result);
 }
 
 // The per-write cost is the whole reason `verify.enabled` exists, and a user deciding whether to
