@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { APICallError } from "@ai-sdk/provider";
 import { MockLanguageModelV4 } from "ai/test";
-import { runLoop, type LoopEvent } from "../../src/loop/loop";
+import { type LoopEvent, runLoop } from "../../src/loop/loop";
 import {
   baseMessages,
   collect,
@@ -271,6 +271,85 @@ describe("runLoop", () => {
     expect(usageEvents[0]?.usage.outputTokens).toBe(30);
     expect(usageEvents[1]?.usage.inputTokens).toBe(5);
     expect(usageEvents[1]?.usage.outputTokens).toBe(5);
+  });
+
+  test("populates the usage event's cost for an OpenRouter model from providerMetadata", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () =>
+        streamResult([
+          { type: "text-start", id: "1" },
+          { type: "text-delta", id: "1", delta: "Hello" },
+          { type: "text-end", id: "1" },
+          {
+            type: "finish",
+            finishReason: { unified: "stop", raw: undefined },
+            usage: usage(100, 50),
+            providerMetadata: {
+              openrouter: {
+                provider: "openrouter",
+                usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150, cost: 0.0031 },
+              },
+            },
+          },
+        ]),
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "openrouter",
+      }),
+    );
+
+    const usageEvent = events.find(
+      (e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage",
+    );
+    expect(usageEvent?.cost).toEqual({
+      amountUsd: 0.0031,
+      status: "actual",
+      source: "provider_cost_api",
+    });
+  });
+
+  test("reports cost as unknown for a Groq-shaped call whose model isn't in the catalog", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("Hello")),
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "groq",
+        modelId: "some-unlisted-model",
+        catalog: { fetchedAt: "2026-01-01T00:00:00.000Z", entries: [] },
+      }),
+    );
+
+    const usageEvent = events.find(
+      (e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage",
+    );
+    expect(usageEvent?.cost).toEqual({ amountUsd: undefined, status: "unknown", source: "none" });
+  });
+
+  test("leaves cost undefined when no provider/catalog opts are passed", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("Hello")),
+    });
+
+    const events = await collect(
+      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }),
+    );
+
+    const usageEvent = events.find(
+      (e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage",
+    );
+    expect(usageEvent?.cost).toBeUndefined();
   });
 
   // The exit that dropped 907 billed tokens. A call that streams text and then fails is charged

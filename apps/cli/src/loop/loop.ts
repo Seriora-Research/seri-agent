@@ -1,4 +1,4 @@
-import { streamText } from "ai";
+import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type {
   AssistantContent,
   JSONValue,
@@ -8,12 +8,14 @@ import type {
   ToolContent,
   ToolSet,
 } from "ai";
+import { streamText } from "ai";
 import { checkPermission, type PermissionMode } from "../gate/gate";
+import { type CostReport, reportForGroq, reportForOpenRouter } from "../provider/cost";
 import {
+  type CompactionSummary,
   compactMessages,
   findSafeEvictionBoundary,
   MAX_RETRIES,
-  type CompactionSummary,
 } from "./compaction";
 
 export type LoopEvent =
@@ -37,7 +39,9 @@ export type LoopEvent =
   // Per completed model call, not a running total: the loop is stateless by design and summing
   // across turns is the consumer's business. `usage` on `compacted` is the same quantity for the
   // summariser's own round-trip, which is billed like any other and was invisible until now.
-  | { type: "usage"; usage: LanguageModelUsage }
+  // `cost` is only populated on the successful-call path (opts.provider/modelId/catalog supplied);
+  // absent on the failed-mid-stream usage yield below and whenever the caller omits those opts.
+  | { type: "usage"; usage: LanguageModelUsage; cost?: CostReport }
   // The SDK's retry, not one of ours — see MAX_RETRIES in compaction.ts. `attempt` counts retries of the current
   // model call, so the first re-issue is 1. There is no error and no delay here because nothing
   // ai@7.0.48 hands out per attempt carries either — streamText's onLanguageModelCallStart for the
@@ -202,9 +206,24 @@ export async function* runLoop(opts: {
   compactionThreshold?: number;
   preserveRecentMessages?: number;
   signal?: AbortSignal;
+  // Which provider opts.model was constructed from, and the catalog to look it up in — both
+  // optional so every existing caller (none of which pass these yet) keeps today's behaviour
+  // unchanged. Used for the `usage` event's `cost` field (below) and, via the catalog entry's own
+  // `contextWindow`, as a fallback for contextWindowSize when the caller did not pass one
+  // explicitly. `modelId` is threaded in rather than read off opts.model: the loop takes an
+  // already-built LanguageModel and does not introspect it (see the file-level provider-swap
+  // contract), the same reason contextWindowSize itself is already a plain passed-in number.
+  provider?: ModelProvider;
+  modelId?: string;
+  catalog?: ModelCatalog;
 }): AsyncGenerator<LoopEvent> {
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
-  const contextWindowSize = opts.contextWindowSize ?? DEFAULT_CONTEXT_WINDOW_SIZE;
+  const catalogEntry =
+    opts.catalog && opts.provider && opts.modelId
+      ? findCatalogEntry(opts.catalog, opts.modelId, opts.provider)
+      : undefined;
+  const contextWindowSize =
+    opts.contextWindowSize ?? catalogEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE;
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
   const preserveRecentMessages = opts.preserveRecentMessages ?? DEFAULT_PRESERVE_RECENT_MESSAGES;
   const messages: ModelMessage[] = [...opts.messages];
@@ -344,9 +363,19 @@ export async function* runLoop(opts: {
       }
       const resultUsage = await result.usage;
       lastInputTokens = resultUsage.inputTokens ?? 0;
+      // Dollar cost, tagged with its provenance, alongside the raw usage. Only computed when the
+      // caller told us which provider/model/catalog this call used — providerMetadata is a Promise
+      // on streamText results (per reportForOpenRouter's own comment) and is only awaited for the
+      // provider that actually carries it.
+      let cost: CostReport | undefined;
+      if (opts.provider === "openrouter") {
+        cost = reportForOpenRouter(resultUsage, await result.providerMetadata);
+      } else if (opts.provider === "groq" && opts.modelId && opts.catalog) {
+        cost = reportForGroq(opts.modelId, resultUsage, opts.catalog);
+      }
       // The whole of it, not the one field the compaction trigger above needs: what the call cost
       // is the consumer's question to answer, and narrowing it here is what made it unanswerable.
-      yield { type: "usage", usage: resultUsage };
+      yield { type: "usage", usage: resultUsage, cost };
     } catch (err) {
       // This is the path a mid-stream cancel actually takes, measured against ai@7.0.48: the
       // fullStream yields an `abort` part and closes cleanly — the `for await` above does NOT

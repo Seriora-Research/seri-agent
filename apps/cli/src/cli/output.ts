@@ -10,6 +10,7 @@
 // free or the sentence above stops being true.
 import type { RestorePlan, RestoreResult } from "../checkpoint/checkpoint";
 import type { LoopEvent } from "../loop/loop";
+import type { CostReport } from "../provider/cost";
 import { type CheckOutcome, writeFileVerification } from "../verify/outcome";
 
 // stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
@@ -318,4 +319,18 @@ export function printUsage(usage: RunUsage): void {
   if (usage.outputTokens !== undefined) parts.push(`${usage.outputTokens} out`);
   if (parts.length === 0) return;
   console.log(`\n(tokens: ${parts.join(", ")})`);
+}
+
+// A run's dollar cost, tagged with its provenance. Kept separate from printUsage's token line
+// rather than folded into it: BUILD-PLAN's own verify criterion is that a cost tagged `estimated`
+// is VISIBLY distinguishable from one tagged `actual` — a different string on screen, not just
+// different data — so `estimated` gets its own "~" prefix and trailing label rather than the same
+// template with a swapped-in word.
+export function printCost(cost: CostReport): void {
+  if (cost.amountUsd === undefined) {
+    console.log("(cost: unknown)");
+    return;
+  }
+  const amount = `$${cost.amountUsd.toFixed(4)}`;
+  console.log(cost.status === "estimated" ? `(cost: ~${amount} (estimated))` : `(cost: ${amount})`);
 }
