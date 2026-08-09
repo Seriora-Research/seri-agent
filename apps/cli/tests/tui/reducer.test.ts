@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import type { LoopEvent } from "../../src/loop/loop";
 import type { SessionState } from "../../src/session/session";
@@ -216,5 +217,54 @@ describe("tuiReducer: approval-requested / approval-resolved", () => {
 
     state = tuiReducer(state, { type: "approval-resolved" });
     expect(state.pendingApproval).toBeUndefined();
+  });
+});
+
+describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
+  const entry: ModelCatalogEntry = {
+    id: "llama-3.3-70b-versatile",
+    provider: "groq",
+    displayName: "Llama 3.3 70B",
+    family: "llama",
+    contextWindow: 131_072,
+    maxOutputTokens: 32_768,
+    toolCall: true,
+    reasoning: false,
+    pricing: undefined,
+  };
+
+  test("model-picker-requested sets pendingModelPicker", () => {
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+
+    expect(state.pendingModelPicker).toEqual({ entries: [entry] });
+  });
+
+  test("model-picker-resolved with a session updates state.session and clears the picker in the same dispatch", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+
+    const next = session({ model: entry.id, provider: entry.provider });
+    state = tuiReducer(state, { type: "model-picker-resolved", session: next });
+
+    expect(state.pendingModelPicker).toBeUndefined();
+    expect(state.session).toEqual(next);
+  });
+
+  test("model-picker-resolved with no session only clears the picker", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+    const before = state.session;
+
+    state = tuiReducer(state, { type: "model-picker-resolved" });
+
+    expect(state.pendingModelPicker).toBeUndefined();
+    expect(state.session).toBe(before);
   });
 });
