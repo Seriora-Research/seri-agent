@@ -4,7 +4,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import * as pty from "node-pty";
+// Type-only: erased at compile time, so this never touches the actual native module — the runtime
+// value is loaded dynamically inside the test body instead (see the `describe.skipIf` comment
+// below for why: node-pty ships no Linux prebuild, and a top-level `import` would still be
+// requested by `bun test` on ubuntu/macos CI even with the test body itself skipped).
+import type * as PtyModule from "node-pty";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
@@ -63,7 +67,7 @@ type Chunk = { time: number; buf: Buffer; decodedSoFar: string };
 // `stderr: stdin is not a tty` before winpty ever reached the seri CLI. node-pty's Windows backend
 // uses ConPTY (`CreatePseudoConsole`), which creates its OWN console rather than requiring one from
 // the caller — no wrapper binary, no console-inheritance precondition.
-function startChildNodePty(scriptPath: string, cwd: string) {
+function startChildNodePty(pty: typeof PtyModule, scriptPath: string, cwd: string) {
   const term = pty.spawn(process.execPath, [scriptPath], {
     cwd,
     env: process.env as Record<string, string>,
@@ -130,7 +134,11 @@ function timeAtOffset(chunks: Chunk[], offset: number): number {
 // process.env.CI: this has never run in the windows-latest CI job (.github/workflows/ci.yml) and
 // stays out of it deliberately — a diagnostic harness whose own worst case is "inconclusive, pass"
 // (see the events.length === 0 branch below) isn't worth the hang risk against the job timeout;
-// it's meant for local Windows development only.
+// it's meant for local Windows development only. node-pty ships prebuilt binaries for darwin/win32
+// only — no Linux prebuild — so `describe.skipIf` alone isn't enough to keep it off ubuntu CI: that
+// only skips the test BODY, and `bun test` still loads (and would still `import`) this whole file
+// on every runner regardless of which OS's tests it goes on to skip. The `import("node-pty")`
+// inside the test body below is what actually keeps ubuntu/macos from ever requesting the module.
 describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
   "the Ink TUI's synchronized-output protocol on a real Windows console (node-pty/ConPTY)",
   () => {
@@ -152,7 +160,8 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
       const scriptPath = join(dir, "child-tool-write.mjs");
       writeFileSync(scriptPath, childScriptToolWrite(dir));
 
-      const { term, chunks, waitFor, decodedSoFar } = startChildNodePty(scriptPath, dir);
+      const pty = await import("node-pty");
+      const { term, chunks, waitFor, decodedSoFar } = startChildNodePty(pty, scriptPath, dir);
       try {
         // A single wait covers the whole turn: "(done: ...)" only appears after RUNLOOP_READY, the
         // tool-call line, and the tool-result confirmation line have all already been flushed.
