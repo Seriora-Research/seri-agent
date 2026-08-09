@@ -38,20 +38,39 @@ export type AppProps = {
   // the initial mount call — prepareSession already saved that exact session to disk, so the first
   // call here is a harmless, idempotent rewrite of the same content, not a bug worth guarding.
   onSessionChange?: (session: SessionState<ModelMessage>) => void;
-  // True once the run this TUI is driving has finished. Ink does not auto-exit on its own — Phase
-  // 1's own hello-world smoke test hung until an explicit unmount()/exit() call was added — so this
-  // effect is what ends the process, rather than relying on implicit auto-exit-on-unmount (also the
+  // HIGH-1: the TUI's own graceful-quit trigger, called on /exit (onSubmit intercepts it before
+  // the ordinary command dispatch — see runTui's own comment) and on Ctrl-D at the input box (the
+  // normal Unix "end input" convention). runTui's implementation re-renders with done: true (the
+  // hook below) and resolves its own outer promise once Ink has actually unmounted, which is what
+  // lets run() reach printUsage/the exit-code logic at all on the TUI path — before this existed
+  // there was no way to reach it.
+  onQuit?: () => void;
+  // True once runTui's own quit() has fired. Ink does not auto-exit on its own — Phase 1's own
+  // hello-world smoke test hung until an explicit unmount()/exit() call was added — so this effect
+  // is what ends the process, rather than relying on implicit auto-exit-on-unmount (also the
   // documented workaround for a macOS-only Bun/Ink cosmetic issue: cursor invisible after exit).
   done: boolean;
 };
 
-function InputBox({ onSubmit }: { onSubmit?: (value: string) => void }) {
+function InputBox({
+  onSubmit,
+  onQuit,
+}: {
+  onSubmit?: (value: string) => void;
+  onQuit?: () => void;
+}) {
   const [value, setValue] = useState("");
 
   useInput((input, key) => {
     if (key.return) {
       onSubmit?.(value);
       setValue("");
+      return;
+    }
+    // Ctrl-D, the normal Unix "end input" convention — HIGH-1's other trigger for the same quit
+    // path /exit uses (App.tsx's own onQuit prop, wired by runTui).
+    if (key.ctrl && input === "d") {
+      onQuit?.();
       return;
     }
     if (key.backspace || key.delete) {
@@ -76,6 +95,7 @@ export function App({
   onSubmit,
   onCancel,
   onSessionChange,
+  onQuit,
   done,
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
@@ -116,7 +136,7 @@ export function App({
         {state.status.length > 0 && <Text color={theme.muted}>{state.status}</Text>}
       </Box>
       {state.commandError !== undefined && <Text color={theme.error}>{state.commandError}</Text>}
-      <InputBox onSubmit={onSubmit} />
+      <InputBox onSubmit={onSubmit} onQuit={onQuit} />
     </Box>
   );
 }
