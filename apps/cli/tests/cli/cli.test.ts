@@ -1604,11 +1604,10 @@ describe("run (task invocation)", () => {
     },
   );
 
-  // MEDIUM-F: /exit is deliberately not in SLASH_COMMANDS (it only means anything to a live TUI —
-  // see the table's own comment in cli.ts) — before that fix, `seri /exit` matched the table's
-  // no-op entry: with no session it printed a nonsense "No session to run /exit against" and
-  // exited 1, and with one it silently ran the no-op and exited 0, the task never reaching the
-  // model either way. Now it is an ordinary task like any other.
+  // MEDIUM-D: a task whose first word happens to be /exit, followed by other words, is a task
+  // regardless of whether /exit is registered in SLASH_COMMANDS at all — its own `accepts()`
+  // (when it existed) already rejected trailing args, so this alone does not exercise MEDIUM-F's
+  // fix. See the bare-word test below for that.
   test("a task starting with /exit is sent to the model, not treated as a quit command", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const { fake, capture } = fakeRunLoop();
@@ -1624,6 +1623,27 @@ describe("run (task invocation)", () => {
       role: "user",
       content: "/exit the debugger and retry",
     });
+  });
+
+  // MEDIUM-F: /exit is deliberately not in SLASH_COMMANDS (it only means anything to a live TUI —
+  // see the table's own comment in cli.ts) — before that fix, a BARE `seri /exit` (no trailing
+  // args — the previous test's trailing-args case was already routed to the model by the old
+  // entry's own `accepts()`, so it never actually exercised this) matched the table's no-op
+  // entry: with no session (this test's own case, a fresh empty sessionsDir) it printed a
+  // nonsense "No session to run /exit against" and exited 1, the fake runLoop never invoked at
+  // all. Now it reaches the model as an ordinary task like any other.
+  test("a bare /exit with no session is sent to the model, not treated as a quit command", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop();
+
+    const code = await run(["/exit"], {
+      runLoop: fake,
+      loadAgentsFile: () => "",
+      sessionsDir,
+    });
+
+    expect(code).toBe(0);
+    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "/exit" });
   });
 });
 
