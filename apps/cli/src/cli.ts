@@ -728,6 +728,15 @@ function dirs(ctx: RunContext): CommandDirs {
   return { sessionsDir: ctx.sessionsDir, checkpointsDir: ctx.checkpointsDir };
 }
 
+// Shared by prepareSession (decides whether to push the initial user message) and runTui's own
+// connectDispatch (decides whether to echo it) — a brand-new session always gets one, even with an
+// empty taskText, but a resumed session only does if there is actually new text. Kept as one
+// function, not the same expression repeated at both call sites, so the two can't silently drift
+// out of sync with each other.
+function hasNewTask(ctx: RunContext): boolean {
+  return !ctx.resuming || ctx.taskText.length > 0;
+}
+
 // A slash command always operates on the resume target — an explicit --resume id, or the most
 // recent session — and never creates a session just to act on it, so this is called before
 // prepareSession and a bare `/undo` (no --resume) does not fall into the new-session path. `/undo`
@@ -803,8 +812,8 @@ function prepareSession(
 
   if (!ctx.resuming) console.log(`Session ${session.id} created.`);
 
-  if (!ctx.resuming || ctx.taskText) {
-    session.messages.push({ role: "user", content: ctx.taskText });
+  if (hasNewTask(ctx)) {
+    session.messages.push({ role: "user", content: ctx.taskText.trim() });
   }
 
   const getGroqModelFn = deps.getGroqModel ?? getGroqModelReal;
@@ -1550,11 +1559,10 @@ async function runTui(
       onApprovalAnswer,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
-        // Same condition prepareSession (above) uses to decide whether it pushed the initial
-        // user message at all — a bare `--resume` with no new task has nothing to echo, but a
-        // brand-new session always gets one (even an empty taskText), and these two guards must
-        // travel together.
-        if (!ctx.resuming || ctx.taskText) echoUserInput(ctx.taskText);
+        // hasNewTask — the same predicate prepareSession (above) uses to decide whether it pushed
+        // the initial user message at all — a bare `--resume` with no new task has nothing to
+        // echo, but a brand-new session always gets one (even an empty taskText).
+        if (hasNewTask(ctx)) echoUserInput(ctx.taskText);
         currentTurn = runTurn(prepared.session);
       },
     }),
