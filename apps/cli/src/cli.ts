@@ -1463,7 +1463,7 @@ async function runTui(
     // unrecognized command, /exit with arguments — still gets its typed text echoed here, so the
     // command-error it produces has an antecedent that scrolls with it instead of a floating
     // error with nothing to explain it. Do not sink this below the guards.
-    echoUserInput(trimmed);
+    echoUserInput(value);
     const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
     if (name === "/exit") {
       if (args.length > 0) {
