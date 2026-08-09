@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import * as pty from "node-pty";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
@@ -40,8 +41,7 @@ function childScriptToolWrite(dir: string): string {
 
 // The two DEC private-mode-2026 (synchronized output) escape sequences Ink's write-synchronized.js
 // wraps every <Static> flush in (ink.js's renderInteractiveFrame) — see this loop's own background
-// notes for the exact file:line citations. Raw bytes, not strings: this file's whole point is to
-// check what actually crossed the pty, not what a decoded/reassembled string implies happened.
+// notes for the exact file:line citations.
 const BSU = Buffer.from([0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x68]); // \x1b[?2026h
 const ESU = Buffer.from([0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x6c]); // \x1b[?2026l
 
@@ -57,68 +57,51 @@ function findAllOffsets(haystack: Buffer, needle: Buffer): number[] {
 
 type Chunk = { time: number; buf: Buffer; decodedSoFar: string };
 
-// winpty, not python3's pty.spawn (tuiPty.test.ts's own tool): Windows has no pty to allocate via
-// the POSIX `pty` module (that file's own comment — Python 3.12 on Windows lacks `termios`), but
-// winpty ships with Git for Windows (confirmed present at
-// C:\Program Files\Git\usr\bin\winpty.exe) and wraps a native Win32 console app so it sees a real
-// isTTY, which is the one thing this whole investigation turns on.
-function startChildWinpty(scriptPath: string, cwd: string) {
-  const child = spawn("winpty", ["--", process.execPath, scriptPath], {
+// node-pty, not winpty.exe (this file's own prior version): winpty needs its OWN stdin to already
+// be a real Win32 console before it will even start — confirmed dead twice, once in this sandbox
+// and once by a human in their own real Git Bash/MINGW64 terminal, both times
+// `stderr: stdin is not a tty` before winpty ever reached the seri CLI. node-pty's Windows backend
+// uses ConPTY (`CreatePseudoConsole`), which creates its OWN console rather than requiring one from
+// the caller — no wrapper binary, no console-inheritance precondition.
+function startChildNodePty(scriptPath: string, cwd: string) {
+  const term = pty.spawn(process.execPath, [scriptPath], {
     cwd,
-    stdio: ["pipe", "pipe", "pipe"],
+    env: process.env as Record<string, string>,
   });
 
   const chunks: Chunk[] = [];
-  const decoder = new TextDecoder("utf-8");
   let decoded = "";
-  let stderr = "";
-  let spawnError: Error | undefined;
+  let exited = false;
 
-  child.stdout?.on("data", (buf: Buffer) => {
-    decoded += decoder.decode(buf, { stream: true });
+  term.onData((data) => {
+    // node-pty's own windowsTerminal.js ignores the `encoding` option outright (a console.warn,
+    // "Setting encoding on Windows is not supported") and always hands onData a decoded JS string
+    // — there is no raw-Buffer mode on this platform. `Buffer.from(data, "utf8")` below is
+    // therefore a RE-ENCODE, not the literal wire bytes; a caveat, not a defect, for the ASCII-only
+    // CSI/OSC escapes and plain text this file searches for.
+    const buf = Buffer.from(data, "utf8");
+    decoded += data;
     chunks.push({ time: Date.now(), buf, decodedSoFar: decoded });
   });
-  child.stderr?.on("data", (buf: Buffer) => {
-    stderr += buf.toString("utf8");
-  });
-  child.once("error", (err) => {
-    spawnError = err;
+  term.onExit(() => {
+    exited = true;
   });
 
-  // Polls for `line` in the decoded output, but — unlike tuiPty.test.ts's own sawLine — never
-  // throws: a winpty spawn failure (confirmed separately: winpty needs its OWN stdin to already be
-  // a real console, which is exactly what's absent in a piped/headless invocation) has to be
-  // reported as inconclusive by the caller, not as a thrown test error.
   const waitFor = async (line: string, deadlineMs: number): Promise<boolean> => {
     const deadline = Date.now() + deadlineMs;
-    while (
-      !decoded.includes(line) &&
-      spawnError === undefined &&
-      child.exitCode === null &&
-      Date.now() < deadline
-    ) {
+    while (!decoded.includes(line) && !exited && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 20));
     }
     return decoded.includes(line);
   };
 
-  return {
-    child,
-    chunks,
-    waitFor,
-    decodedSoFar: () => decoded,
-    stderrSoFar: () => stderr,
-    spawnError: () => spawnError,
-  };
+  return { term, chunks, waitFor, decodedSoFar: () => decoded };
 }
 
-// Confirmed live in this environment: when winpty's own precondition fails (its stdin isn't a
-// real console — the exact "stdin is not a tty" failure this file's own test comment documents),
-// it still leaves the wrapped bun.exe process it had already spawned running, unsupervised, with
-// `dir` as its cwd — a real orphan, not merely winpty.exe exiting cleanly. `child.kill()` only
-// reaches the winpty.exe wrapper (already dead by then), not this grandchild, so without this the
-// orphan holds `dir` open forever and afterEach's rmSync fails with EBUSY. Matched by the unique
-// script path rather than by image name, so this can never touch an unrelated bun.exe.
+// Same orphan risk as the winpty version, different mechanism: ConPTY's wrapped child is a
+// separate OS process from this test's own, and `term.kill()` alone was not enough to guarantee
+// its termination in every run observed while building this test. Matched by the unique script
+// path rather than by image name, so this can never touch an unrelated process.
 function killOrphansByScriptPath(scriptPath: string): void {
   const escaped = scriptPath.replace(/'/g, "''");
   spawnSync("powershell", [
@@ -138,12 +121,12 @@ function timeAtOffset(chunks: Chunk[], offset: number): number {
 }
 
 describe.skipIf(process.platform !== "win32")(
-  "the Ink TUI's synchronized-output protocol on a real Windows console (winpty)",
+  "the Ink TUI's synchronized-output protocol on a real Windows console (node-pty/ConPTY)",
   () => {
     let dir: string;
 
     beforeEach(() => {
-      dir = mkdtempSync(join(tmpdir(), "seri-winpty-tui-"));
+      dir = mkdtempSync(join(tmpdir(), "seri-nodepty-tui-"));
     });
 
     afterEach(() => {
@@ -154,23 +137,11 @@ describe.skipIf(process.platform !== "win32")(
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     });
 
-    // Outcome (A) vs (B) vs (C) — see this loop's own background notes. Confirmed live in this
-    // sandbox: winpty's own precondition ("my stdin must already be a real Win32 console") is not
-    // met by a piped/headless invocation of winpty itself (reproduced directly, outside this test,
-    // as `winpty -- node -e "1"` → stderr "stdin is not a tty", exit 1) — a MORE fundamental gap
-    // than the fidelity risk this loop's plan anticipated (winpty running fine but mistranslating
-    // exotic escapes). Either failure shape collapses to the same observable here: no bsu/esu bytes
-    // in the raw capture, handled identically below as inconclusive rather than a hard failure —
-    // deliberately not special-cased, since telling them apart only matters for the human report,
-    // which stderrSoFar()/spawnError() already carry into the console.log below.
     test("bsu/esu pairing and timing around a write_file confirmation line", async () => {
       const scriptPath = join(dir, "child-tool-write.mjs");
       writeFileSync(scriptPath, childScriptToolWrite(dir));
 
-      const { child, chunks, waitFor, decodedSoFar, stderrSoFar, spawnError } = startChildWinpty(
-        scriptPath,
-        dir,
-      );
+      const { term, chunks, waitFor, decodedSoFar } = startChildNodePty(scriptPath, dir);
       try {
         // A single wait covers the whole turn: "(done: ...)" only appears after RUNLOOP_READY, the
         // tool-call line, and the tool-result confirmation line have all already been flushed.
@@ -188,11 +159,7 @@ describe.skipIf(process.platform !== "win32")(
         if (events.length === 0) {
           console.log(
             [
-              "WINPTY INCONCLUSIVE: no bsu/esu bytes found in the raw capture — either winpty",
-              "could not translate the synchronized-output escapes faithfully, or it never got a",
-              "real console to run in at all. Diagnostic detail follows for manual inspection.",
-              `spawnError: ${spawnError()?.message ?? "(none)"}`,
-              `stderr: ${stderrSoFar()}`,
+              "NODE-PTY INCONCLUSIVE: no bsu/esu bytes found in the raw capture.",
               `decoded stdout: ${JSON.stringify(decodedSoFar())}`,
               `raw stdout (hex): ${all.toString("hex")}`,
             ].join("\n"),
@@ -214,25 +181,42 @@ describe.skipIf(process.platform !== "win32")(
         }
         expect(open).toBe(false);
 
-        // (c) bounded latency between the confirmation text becoming visible and its closing esu.
-        // 500ms is generous, not tight: Ink's own scheduling writes bsu/content/esu as one
-        // synchronous call (this loop's own reconciler.js/ink.js citations), so a healthy run
-        // should show ~0ms here; 500ms only guards against winpty itself buffering/delaying the
-        // translated bytes, which is the one link in this chain this repo's code does not control.
+        // (c) bounded latency between the write_file confirmation flush's esu and the confirmation
+        // text becoming visible — NOT "esu arrives after the text", which is what this assertion
+        // checked in the winpty version and which is provably false on ConPTY, confirmed live: a
+        // real capture of this exact scenario decoded to
+        // `...\x1b[?2026h\x1b[m\x1b[?2026l\x1b[5;1H✓ write_file done...` — bsu, an SGR reset, esu,
+        // THEN the cursor move and the text, with nothing resembling "✓ write_file done" between
+        // bsu and esu at all. ConPTY does not forward a child's VT stream byte-for-byte; it applies
+        // it to an internal screen-buffer model and re-serializes its OWN output for the reader, and
+        // Windows' console host does not implement DEC 2026 (the pair has zero visible effect), so
+        // it gets flushed as an inert, contentless bracket ahead of the actual screen diff. This is
+        // a property of the Windows console layer, not of Ink or seri's own code — the pairing check
+        // above already confirms Ink emits a well-formed bsu/esu bracket for every Static flush,
+        // which is the part of this that IS this repo's to get right. What's left worth asserting:
+        // the bracket and the content it wraps still land close together in wall-clock time,
+        // regardless of which one the reader sees first — a real stall in seri's own event pipeline
+        // (as opposed to ConPTY's harmless re-ordering) would show up as a large gap here instead.
         const resultChunkIndex = chunks.findIndex((c) =>
           c.decodedSoFar.includes("✓ write_file done"),
         );
         expect(resultChunkIndex).toBeGreaterThanOrEqual(0);
         const resultVisibleTime = chunks[resultChunkIndex].time;
 
-        const esuTimesAtOrAfterResult = findAllOffsets(all, ESU)
-          .map((offset) => timeAtOffset(chunks, offset))
-          .filter((t) => t >= resultVisibleTime)
-          .sort((a, b) => a - b);
-        expect(esuTimesAtOrAfterResult.length).toBeGreaterThan(0);
-        expect(esuTimesAtOrAfterResult[0] - resultVisibleTime).toBeLessThan(500);
+        const lastEsuOffset = findAllOffsets(all, ESU).at(-1);
+        expect(lastEsuOffset).toBeDefined();
+        const lastEsuTime = timeAtOffset(chunks, lastEsuOffset as number);
+        expect(Math.abs(resultVisibleTime - lastEsuTime)).toBeLessThan(500);
       } finally {
-        child.kill("SIGKILL");
+        // `term.kill()` forks node-pty's own `conpty_console_list_agent` helper to enumerate and
+        // force-kill every process in the console (windowsPtyAgent.js's own `kill`), and that
+        // helper's `AttachConsole` call fails the same way winpty's own did in this environment —
+        // printed as a stack trace to this test's shared console, harmless (node-pty falls back to
+        // killing just the known pid after a 5s timeout) and not this file's to silence, since it's
+        // vendored code. killOrphansByScriptPath below is the actual belt-and-suspenders here.
+        try {
+          term.kill();
+        } catch {}
         killOrphansByScriptPath(scriptPath);
       }
     }, 60_000);
