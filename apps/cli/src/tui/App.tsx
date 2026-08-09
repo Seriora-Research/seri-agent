@@ -30,24 +30,20 @@ export type AppProps = {
   // Ink's default on would give Ink its own competing exit path that races the one driveLoop's
   // AbortController expects.
   onCancel?: () => void;
+  // Called whenever the reducer's own `state.session` changes — a mode cycle, a rewind, or the
+  // loop-event reducer's own messages-updated merge. This is now the single source of truth for
+  // persistence on the TUI path (a real bug this fixes: driveLoop used to persist a session it had
+  // captured once at the start of a turn, so the very next messages-updated write silently
+  // reverted a mid-run /mode both on disk and, before this, in the reducer too). Not gated to skip
+  // the initial mount call — prepareSession already saved that exact session to disk, so the first
+  // call here is a harmless, idempotent rewrite of the same content, not a bug worth guarding.
+  onSessionChange?: (session: SessionState<ModelMessage>) => void;
   // True once the run this TUI is driving has finished. Ink does not auto-exit on its own — Phase
   // 1's own hello-world smoke test hung until an explicit unmount()/exit() call was added — so this
   // effect is what ends the process, rather than relying on implicit auto-exit-on-unmount (also the
   // documented workaround for a macOS-only Bun/Ink cosmetic issue: cursor invisible after exit).
   done: boolean;
 };
-
-// A tool-call line for one of the two file-mutating tools is the closest thing this phase has to a
-// pending diff — a real diff renderer is out of scope here ("a simple text representation is fine
-// for this phase — don't over-build", feature-plan.md). Derived from the transcript rather than a
-// new reducer field, since the transcript already carries it.
-function pendingChange(transcript: readonly string[], status: string): string | undefined {
-  const last = transcript.at(-1);
-  if (last === undefined) return undefined;
-  const isFileMutation =
-    status.startsWith("Running write_file") || status.startsWith("Running edit");
-  return isFileMutation ? last : undefined;
-}
 
 function InputBox({ onSubmit }: { onSubmit?: (value: string) => void }) {
   const [value, setValue] = useState("");
@@ -74,7 +70,14 @@ function InputBox({ onSubmit }: { onSubmit?: (value: string) => void }) {
   );
 }
 
-export function App({ session, connectDispatch, onSubmit, onCancel, done }: AppProps) {
+export function App({
+  session,
+  connectDispatch,
+  onSubmit,
+  onCancel,
+  onSessionChange,
+  done,
+}: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
   const { exit } = useApp();
 
@@ -86,6 +89,10 @@ export function App({ session, connectDispatch, onSubmit, onCancel, done }: AppP
     if (done) exit();
   }, [done, exit]);
 
+  useEffect(() => {
+    onSessionChange?.(state.session);
+  }, [state.session, onSessionChange]);
+
   // A second, independent useInput from InputBox's own — Ink delivers the same keypress to every
   // registered handler, so this fires regardless of what InputBox does with the same press (today,
   // nothing: InputBox's own handler skips any key.ctrl input).
@@ -93,21 +100,22 @@ export function App({ session, connectDispatch, onSubmit, onCancel, done }: AppP
     if (key.ctrl && input === "c") onCancel?.();
   });
 
-  const pending = pendingChange(state.transcript, state.status);
-
   return (
     <Box flexDirection="column">
       <Static items={state.transcript}>{(line, index) => <Text key={index}>{line}</Text>}</Static>
       {state.streaming.length > 0 && <Text>{state.streaming}</Text>}
-      {pending !== undefined && (
+      {state.pendingTool !== undefined && (
         <Box borderStyle="round" borderColor={theme.warning}>
-          <Text color={theme.warning}>{pending}</Text>
+          <Text color={theme.warning}>
+            {`${state.pendingTool.name}(${JSON.stringify(state.pendingTool.args)})`}
+          </Text>
         </Box>
       )}
       <Box flexDirection="row" justifyContent="space-between">
         <Text color={theme.accent}>{state.modeIndicator}</Text>
         {state.status.length > 0 && <Text color={theme.muted}>{state.status}</Text>}
       </Box>
+      {state.commandError !== undefined && <Text color={theme.error}>{state.commandError}</Text>}
       <InputBox onSubmit={onSubmit} />
     </Box>
   );
