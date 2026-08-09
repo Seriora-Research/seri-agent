@@ -164,16 +164,85 @@ function childScriptQuit(dir: string): string {
   ].join("\n");
 }
 
+// HIGH-B: parks mid-turn, after reporting real usage, waiting on the SAME abort signal
+// childScriptCancel's fake runLoop waits on — proving /exit cancels an in-flight turn (via the
+// same deliverSignal("SIGINT") path a single Ctrl-C already uses) rather than abandoning it.
+function childScriptQuitMidTurn(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "usage", usage: { inputTokens: 12, outputTokens: 34 } };`,
+    `  await new Promise((resolve) => opts.signal.addEventListener("abort", resolve, { once: true }));`,
+    `  console.log("\\nRUNLOOP_ABORTED aborted=" + opts.signal.aborted);`,
+    `  yield { type: "done", reason: "aborted" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
+// MEDIUM-C: two clean turns, each reporting its own usage, proving the final summary (printed
+// after /exit) sums every turn rather than just the last one.
+function childScriptMultiTurnUsage(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls);`,
+    `  yield { type: "usage", usage: { inputTokens: 10 * calls, outputTokens: 20 * calls } };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
 // LOW-4/MEDIUM-1: a still-in-flight turn that yields a SECOND messages-updated after a mid-turn
 // /mode change — the exact shape of the regression MEDIUM-1 fixed. Pre-fix, driveLoop's own
 // direct saveSession call on that second event used the turn-start (pre-/mode) session and
 // clobbered the on-disk file back to the old mode; post-fix, driveLoop's persist callback is a
 // no-op on the TUI path, so nothing but the reducer's own effect ever writes here. `flagPath`
-// gates the second yield so the test can assert the on-disk state BEFORE releasing it, precisely
-// isolating the write the old code made from the ones this test doesn't dispute.
+// gates the second yield so the test can release it only once the FIRST write (the /mode
+// command's own) is confirmed on disk.
+//
+// HIGH-A: round 3's version of this script waited for the transcript's own "(done: ...)" line
+// before its one disk read — by which point the reducer's own onSessionChange effect for the
+// SECOND messages-updated had already had its own chance to run and correct any stale write,
+// regardless of whether one happened. Mutation-tested (the exact pre-fix stale saveSession call
+// restored into driveLoop): that version stayed green. This version instead reads the session
+// file SYNCHRONOUSLY, from inside this same process, as the very first statement once the
+// generator resumes past the second yield — which is only after driveLoop's own synchronous
+// persist()+dispatch() call for that event has already run, and (mutation-tested the same way,
+// this time confirmed red before green below) before React's own effect scheduler has had a
+// chance to flush the reducer's correction. `MODE_AT_RESUME` reports exactly what driveLoop's own
+// synchronous work left on disk at that instant, not what it eventually settles to.
 function childScriptModePersistence(dir: string, flagPath: string): string {
+  const sessionsDir = join(dir, "sessions");
   return [
-    `import { existsSync } from "node:fs";`,
+    `import { existsSync, readFileSync, readdirSync } from "node:fs";`,
+    `import { join } from "node:path";`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `async function* runLoopFake(opts) {`,
@@ -185,7 +254,9 @@ function childScriptModePersistence(dir: string, flagPath: string): string {
     `    check();`,
     `  });`,
     `  yield { type: "messages-updated", messages: opts.messages };`,
-    `  console.log("\\nRUNLOOP_MSG2");`,
+    `  const sessionFile = readdirSync(${JSON.stringify(sessionsDir)}).find((f) => f.endsWith(".json"));`,
+    `  const modeAtResume = JSON.parse(readFileSync(join(${JSON.stringify(sessionsDir)}, sessionFile), "utf8")).permissionMode;`,
+    `  console.log("\\nMODE_AT_RESUME " + modeAtResume);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
     `}`,
@@ -194,7 +265,7 @@ function childScriptModePersistence(dir: string, flagPath: string): string {
     `  getGroqModel: () => ({}),`,
     `  loadAgentsFile: () => "",`,
     `  isTTY: process.stdout.isTTY,`,
-    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  sessionsDir: ${JSON.stringify(sessionsDir)},`,
     `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
     `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
     `});`,
@@ -215,6 +286,12 @@ function startChild(
   child: ReturnType<typeof spawn>;
   exited: Promise<Exit>;
   sawLine: (line: string) => Promise<void>;
+  // MEDIUM-C: the transcript prints the identical "(done: no-tool-call)" line for every turn in a
+  // multi-turn session, so `sawLine` (a plain substring check) is already true for turn 2's own
+  // occurrence the instant turn 1's happens — this counts occurrences instead, so a caller can
+  // wait for the SECOND (or Nth) one specifically rather than racing turn 2's own completion
+  // against an assertion that turn 1 alone already satisfies.
+  sawLineTimes: (line: string, count: number) => Promise<void>;
 } {
   const args = ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, scriptPath];
   const child = spawn("python3", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
@@ -238,6 +315,8 @@ function startChild(
     });
   });
 
+  const occurrences = (line: string): number => stdout.split(line).length - 1;
+
   const sawLine = async (line: string): Promise<void> => {
     const deadline = Date.now() + 20_000;
     while (!stdout.includes(line) && spawnError === undefined && Date.now() < deadline)
@@ -248,7 +327,19 @@ function startChild(
       throw new Error(`child never printed ${JSON.stringify(line)}; got ${JSON.stringify(stdout)}`);
   };
 
-  return { child, exited, sawLine };
+  const sawLineTimes = async (line: string, count: number): Promise<void> => {
+    const deadline = Date.now() + 20_000;
+    while (occurrences(line) < count && spawnError === undefined && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 20));
+    if (spawnError !== undefined)
+      throw new Error(`could not spawn python3 (pty allocator): ${spawnError.message}`);
+    if (occurrences(line) < count)
+      throw new Error(
+        `child printed ${JSON.stringify(line)} ${occurrences(line)} time(s), wanted ${count}; got ${JSON.stringify(stdout)}`,
+      );
+  };
+
+  return { child, exited, sawLine, sawLineTimes };
 }
 
 // Windows has no pty to allocate — same constraint as approvalPromptPty.test.ts. Real execution is
@@ -364,6 +455,34 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // cycleMode (gate/gate.ts) cycles approve-each -> auto -> read-only -> approve-each, and a
       // fresh session starts at approve-each (the [approve-each] indicator shown on mount), so
       // this first /mode press lands on auto, not read-only.
+      child.stdin?.write("/mode");
+      await sawLine("/mode");
+      child.stdin?.write("\r");
+      await sawLine("permission mode is now auto");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // MEDIUM-D: "/exit the debugger and retry" is a task whose first word happens to be /exit, not
+  // a request to quit — used to be hijacked into one regardless of the trailing words. Confirmed
+  // two ways: the error is shown (not a silent quit), and the process is still alive and answers
+  // an unrelated command afterward, which quitting would not.
+  test("/exit with trailing arguments is rejected rather than quitting the TUI", async () => {
+    const scriptPath = join(dir, "child-exit-hijack.mjs");
+    writeFileSync(scriptPath, childScriptCommandError(dir));
+
+    const { child, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+      await sawLine("(done: no-tool-call)");
+
+      child.stdin?.write("/exit the debugger and retry");
+      await sawLine("/exit the debugger and retry");
+      child.stdin?.write("\r");
+      await sawLine("/exit: invalid arguments.");
+
+      // Still alive — quitting would leave nothing to answer this.
       child.stdin?.write("/mode");
       await sawLine("/mode");
       child.stdin?.write("\r");
@@ -509,12 +628,138 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       ]);
 
       expect(result).not.toBe("the run never settled");
-      const { code, stdout } = result as Exit;
-      expect(code).toBe(0);
+      // Asserted on stdout's own EXIT_CODE line, not `result.code` — same reason
+      // tests/cli/approvalPromptPty.test.ts's own comment gives: the pty allocator (python3)
+      // reports its own exit status, not the grandchild bun process's, so `result.code` is
+      // always 0 regardless of what run() actually returned.
+      const { stdout } = result as Exit;
       expect(stdout).toContain("EXIT_CODE 0");
       // printUsage's own line shape (cli/output.ts) — proof it actually ran, not just that the
       // process happened to exit 0 some other way.
       expect(stdout).toContain("(tokens: 12 in, 34 out)");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // MEDIUM-C: Ctrl-D's own trigger for the same quit path /exit uses — a clone of the test above
+  // with \x04 (Ctrl-D) in place of typing "/exit" and pressing Enter.
+  test("Ctrl-D at the input box quits the same way /exit does", async () => {
+    const scriptPath = join(dir, "child-quit-ctrld.mjs");
+    writeFileSync(scriptPath, childScriptQuit(dir));
+
+    const { child, exited, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+      await sawLine("(done: no-tool-call)");
+
+      child.stdin?.write("\x04");
+
+      const result = await Promise.race([
+        exited,
+        new Promise<"the run never settled">((r) =>
+          setTimeout(() => r("the run never settled"), 15_000),
+        ),
+      ]);
+
+      expect(result).not.toBe("the run never settled");
+      // Asserted on stdout's own EXIT_CODE line — childScriptQuit's own sibling test above
+      // explains why `result.code` itself is not the right thing to check here.
+      const { stdout } = result as Exit;
+      expect(stdout).toContain("EXIT_CODE 0");
+      expect(stdout).toContain("(tokens: 12 in, 34 out)");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // HIGH-B: /exit while a turn is in flight used to abandon it outright — controller.abort() was
+  // never called, the turn's own usage was never folded into the final summary, and runTui's
+  // promise never resolved at all (turnInFlight only clears in runTurn's own finally, which
+  // abandoning the turn never triggered), so run() hung forever instead of settling. Mutation-
+  // tested against the pre-fix quit() (no turnInFlight check at all): this test hung on the
+  // RUNLOOP_ABORTED wait below until its own 60s timeout, every time — confirmed red before this
+  // fix, confirmed green after.
+  test("submitting /exit while a turn is in flight cancels it gracefully instead of abandoning it (HIGH-B)", async () => {
+    const scriptPath = join(dir, "child-quit-mid-turn.mjs");
+    writeFileSync(scriptPath, childScriptQuitMidTurn(dir));
+
+    const { child, exited, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+
+      child.stdin?.write("/exit");
+      await sawLine("/exit");
+      child.stdin?.write("\r");
+
+      // The discriminating assertion: pre-fix, quit() never touched turnInFlight or
+      // cancellation, so controller.abort() was never called, the fake runLoop's own abort
+      // listener never fired, and this line never appeared.
+      await sawLine("RUNLOOP_ABORTED aborted=true");
+
+      const result = await Promise.race([
+        exited,
+        new Promise<"the run never settled">((r) =>
+          setTimeout(() => r("the run never settled"), 15_000),
+        ),
+      ]);
+
+      expect(result).not.toBe("the run never settled");
+      // Asserted on stdout's own EXIT_CODE line — childScriptQuit's own sibling test explains why
+      // `result.code` itself is not the right thing to check here. The turn was cancelled, not
+      // completed — doneReason is "aborted", the same exit code an aborted turn gets from every
+      // other path (run()'s own documented contract): `seri "…" && next` must not run `next` off
+      // the back of a task /exit cut short, so this is 1, not the clean-quit test's own 0.
+      const { stdout } = result as Exit;
+      expect(stdout).toContain("EXIT_CODE 1");
+      // The turn's own usage (spent before it was cancelled) still made it into the final
+      // summary — proof runTurn's usage-folding ran (and quit() waited for it) before resolving,
+      // not that the process just happened to exit some other way.
+      expect(stdout).toContain("(tokens: 12 in, 34 out)");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // MEDIUM-C: a second turn with its own usage — the final summary must sum both, not report only
+  // the last turn's, which addTokens/runTui's own accumulation (cli.ts) claims but had no test.
+  test("a multi-turn session's final usage summary sums every turn's tokens, not just the last one", async () => {
+    const scriptPath = join(dir, "child-multi-turn-usage.mjs");
+    writeFileSync(scriptPath, childScriptMultiTurnUsage(dir));
+
+    const { child, exited, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1");
+      await sawLine("(done: no-tool-call)");
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+      await sawLine("RUNLOOP_CALL 2");
+      // The SECOND occurrence specifically — the plain sawLine above is already true from turn
+      // 1's own, and sending /exit before turn 2's driveLoop call has actually returned would
+      // race turnInFlight instead of testing what this test is about.
+      await sawLineTimes("(done: no-tool-call)", 2);
+
+      child.stdin?.write("/exit");
+      await sawLine("/exit");
+      child.stdin?.write("\r");
+
+      const result = await Promise.race([
+        exited,
+        new Promise<"the run never settled">((r) =>
+          setTimeout(() => r("the run never settled"), 15_000),
+        ),
+      ]);
+
+      expect(result).not.toBe("the run never settled");
+      // Asserted on stdout's own EXIT_CODE line — childScriptQuit's own sibling test explains why
+      // `result.code` itself is not the right thing to check here.
+      const { stdout } = result as Exit;
+      expect(stdout).toContain("EXIT_CODE 0");
+      // Turn 1: 10 in, 20 out. Turn 2: 20 in, 40 out. Summed: 30 in, 60 out — not turn 2's own
+      // 20/40 alone.
+      expect(stdout).toContain("(tokens: 30 in, 60 out)");
     } finally {
       child.kill("SIGKILL");
     }
@@ -581,16 +826,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       } while (mode !== "auto" && Date.now() < deadline);
       expect(mode).toBe("auto");
 
-      // Release the still-in-flight turn's second messages-updated. Pre-MEDIUM-1-fix,
-      // driveLoop's own direct saveSession call here used the turn-start (pre-/mode) session and
-      // clobbered the file above back to "approve-each"; post-fix driveLoop's persist callback is
-      // a no-op on the TUI path, so this must not move the file at all.
+      // Release the still-in-flight turn's second messages-updated. Pre-MEDIUM-1-fix, driveLoop's
+      // own direct saveSession call here used the turn-start (pre-/mode) session and clobbered
+      // the file above back to "approve-each" — for the narrow window before the reducer's own
+      // effect corrected it again. HIGH-A: the child script's own MODE_AT_RESUME marker (its own
+      // comment explains why) is what actually observes that window; waiting for a later line in
+      // the transcript, like the old version of this test did, does not.
       writeFileSync(flagPath, "");
-      await sawLine("RUNLOOP_MSG2");
-      await sawLine("(done: no-tool-call)");
-
-      const modeAfter = JSON.parse(readFileSync(sessionPath, "utf8")).permissionMode;
-      expect(modeAfter).toBe("auto");
+      await sawLine("MODE_AT_RESUME auto");
     } finally {
       child.kill("SIGKILL");
     }
