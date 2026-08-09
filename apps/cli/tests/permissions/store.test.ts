@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -44,7 +52,10 @@ describe("permissions store", () => {
 
   // 4. bash is refused on read — the hand-edit hole, and the most important case in the file.
   test("a hand-written bash entry is dropped on read and warned about exactly once", () => {
-    writeFileSync(permissionsPath(dir), `global: []\nprojects:\n  '${projectKey("/w")}':\n    - bash\n`);
+    writeFileSync(
+      permissionsPath(dir),
+      `global: []\nprojects:\n  '${projectKey("/w")}':\n    - bash\n`,
+    );
     const warnings: string[] = [];
     const grants = loadGrants(dir, "/w", (m) => warnings.push(m));
     expect(grants.project).toEqual([]);
@@ -105,7 +116,10 @@ describe("permissions store", () => {
 
   // 10. forgetGrant clears both sections and is idempotent.
   test("forgetGrant clears both the global and project sections, and is idempotent", () => {
-    writeFileSync(permissionsPath(dir), `global: [edit]\nprojects:\n  '${projectKey("/w")}':\n    - edit\n`);
+    writeFileSync(
+      permissionsPath(dir),
+      `global: [edit]\nprojects:\n  '${projectKey("/w")}':\n    - edit\n`,
+    );
 
     expect(forgetGrant(dir, "/w", "edit")).toEqual({ global: true, project: true });
     expect(forgetGrant(dir, "/w", "edit")).toEqual({ global: false, project: false });
@@ -118,7 +132,10 @@ describe("permissions store", () => {
     writeFileSync(permissionsPath(dir), ":::not yaml:::");
 
     const warnings: string[] = [];
-    expect(forgetGrant(dir, "/w", "write_file", (m) => warnings.push(m))).toEqual({ global: false, project: false });
+    expect(forgetGrant(dir, "/w", "write_file", (m) => warnings.push(m))).toEqual({
+      global: false,
+      project: false,
+    });
     expect(warnings).toHaveLength(1);
   });
 
@@ -147,7 +164,11 @@ describe("permissions store", () => {
     const before = readFileSync(permissionsPath(dir), "utf8");
 
     const warnings: string[] = [];
-    expect(loadGrants(dir, "/w", (m) => warnings.push(m))).toEqual({ global: [], project: [], otherProjects: 0 });
+    expect(loadGrants(dir, "/w", (m) => warnings.push(m))).toEqual({
+      global: [],
+      project: [],
+      otherProjects: 0,
+    });
     expect(warnings).toHaveLength(1);
 
     expect(rememberGrant(dir, "/w", "write_file", (m) => warnings.push(m))).toBe(false);
@@ -174,7 +195,11 @@ describe("permissions store", () => {
     mkdirSync(permissionsPath(dir));
 
     const warnings: string[] = [];
-    expect(loadGrants(dir, "/w", (m) => warnings.push(m))).toEqual({ global: [], project: [], otherProjects: 0 });
+    expect(loadGrants(dir, "/w", (m) => warnings.push(m))).toEqual({
+      global: [],
+      project: [],
+      otherProjects: 0,
+    });
     expect(warnings).toHaveLength(1);
 
     expect(rememberGrant(dir, "/w", "write_file", (m) => warnings.push(m))).toBe(false);

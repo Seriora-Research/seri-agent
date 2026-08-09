@@ -40,7 +40,11 @@ function writeConfig(config: Record<string, string>, configDir: string): void {
   renameSync(tmpPath, path);
 }
 
-export function setConfigValue(key: string, value: string, configDir: string = getConfigDir()): void {
+export function setConfigValue(
+  key: string,
+  value: string,
+  configDir: string = getConfigDir(),
+): void {
   const config = loadConfig(configDir);
   config[key] = value;
   writeConfig(config, configDir);

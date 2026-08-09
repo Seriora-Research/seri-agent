@@ -3,9 +3,13 @@ import { spawnSync } from "node:child_process";
 import { isBashAvailable, runBash } from "../../src/tools/bash";
 
 function countSleepProcesses(): number {
-  const probe = spawnSync("powershell", ["-NoProfile", "-Command", "(Get-Process sleep -EA SilentlyContinue).Count"], {
-    encoding: "utf8",
-  });
+  const probe = spawnSync(
+    "powershell",
+    ["-NoProfile", "-Command", "(Get-Process sleep -EA SilentlyContinue).Count"],
+    {
+      encoding: "utf8",
+    },
+  );
   return Number(probe.stdout.trim()) || 0;
 }
 
@@ -24,15 +28,18 @@ describe("runBash", () => {
 // Windows-only because the leak this guards against is a Windows behavior, and the probe reads
 // the process list through PowerShell. Verified before the fix: child.kill() reported success
 // and left `sleep` running, so every timeout would have orphaned a process.
-describe.skipIf(process.platform !== "win32" || !isBashAvailable())("runBash (timeout kills the tree)", () => {
-  test("kills what the shell started, not just the shell", async () => {
-    const before = countSleepProcesses();
+describe.skipIf(process.platform !== "win32" || !isBashAvailable())(
+  "runBash (timeout kills the tree)",
+  () => {
+    test("kills what the shell started, not just the shell", async () => {
+      const before = countSleepProcesses();
 
-    const result = await runBash("sleep 45", 1500);
-    expect(result.timedOut).toBe(true);
+      const result = await runBash("sleep 45", 1500);
+      expect(result.timedOut).toBe(true);
 
-    // taskkill is synchronous but the process table takes a moment to settle.
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    expect(countSleepProcesses()).toBeLessThanOrEqual(before);
-  }, 30_000);
-});
+      // taskkill is synchronous but the process table takes a moment to settle.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      expect(countSleepProcesses()).toBeLessThanOrEqual(before);
+    }, 30_000);
+  },
+);

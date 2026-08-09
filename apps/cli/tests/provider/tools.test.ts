@@ -8,7 +8,11 @@ import type { GlobResult } from "../../src/tools/glob";
 import type { GrepResult } from "../../src/tools/grep";
 
 // Minimal stub satisfying the AI SDK's execute() options param; unused by our adapters.
-const execOpts: ToolExecutionOptions<Record<string, unknown>> = { toolCallId: "test-call", messages: [], context: {} };
+const execOpts: ToolExecutionOptions<Record<string, unknown>> = {
+  toolCallId: "test-call",
+  messages: [],
+  context: {},
+};
 
 let tmpDir: string;
 
@@ -52,7 +56,10 @@ describe("toolDefinitions", () => {
   test("grep finds a known pattern", async () => {
     tmpDir = makeTmpDir();
     writeFileSync(join(tmpDir, "a.txt"), "hello world\nfoo bar\n");
-    const result = await toolDefinitions.grep.execute?.({ pattern: "hello", path: tmpDir }, execOpts);
+    const result = await toolDefinitions.grep.execute?.(
+      { pattern: "hello", path: tmpDir },
+      execOpts,
+    );
     const { mode, files, truncated } = result as GrepResult;
     expect(mode).toBe("files_with_matches");
     expect(files).toHaveLength(1);
@@ -64,7 +71,10 @@ describe("toolDefinitions", () => {
   test("grep passes mode through to return matched lines", async () => {
     tmpDir = makeTmpDir();
     writeFileSync(join(tmpDir, "a.txt"), "hello world\nfoo bar\n");
-    const result = await toolDefinitions.grep.execute?.({ pattern: "hello", path: tmpDir, mode: "content" }, execOpts);
+    const result = await toolDefinitions.grep.execute?.(
+      { pattern: "hello", path: tmpDir, mode: "content" },
+      execOpts,
+    );
     const { mode, matches } = result as GrepResult;
     expect(mode).toBe("content");
     expect(matches).toHaveLength(1);
@@ -76,7 +86,10 @@ describe("toolDefinitions", () => {
     tmpDir = makeTmpDir();
     writeFileSync(join(tmpDir, "a.txt"), "");
     writeFileSync(join(tmpDir, "b.md"), "");
-    const result = await toolDefinitions.glob.execute?.({ pattern: "*.txt", path: tmpDir }, execOpts);
+    const result = await toolDefinitions.glob.execute?.(
+      { pattern: "*.txt", path: tmpDir },
+      execOpts,
+    );
     const { files, truncated } = result as GlobResult;
     expect(files).toHaveLength(1);
     expect(files[0]).toContain("a.txt");
@@ -89,10 +102,17 @@ describe("toolDefinitions", () => {
     expect((result as { stdout: string }).stdout.trim()).toBe("hi");
   }, 15000);
 
-  test.skipIf(process.platform !== "win32")("powershell runs a command and returns its result", async () => {
-    const result = await toolDefinitions.powershell.execute?.({ command: "Write-Output hi" }, execOpts);
-    expect((result as { stdout: string }).stdout.trim()).toBe("hi");
-  }, 15000);
+  test.skipIf(process.platform !== "win32")(
+    "powershell runs a command and returns its result",
+    async () => {
+      const result = await toolDefinitions.powershell.execute?.(
+        { command: "Write-Output hi" },
+        execOpts,
+      );
+      expect((result as { stdout: string }).stdout.trim()).toBe("hi");
+    },
+    15000,
+  );
 });
 
 describe("FS_MUTATING_TOOL_NAMES", () => {

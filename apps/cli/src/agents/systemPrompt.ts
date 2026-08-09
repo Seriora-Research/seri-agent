@@ -72,5 +72,7 @@ function buildVolatileTier(): string {
 }
 
 export function buildSystemPrompt(agentsContent: string): string {
-  return [buildStableTier(), buildContextTier(agentsContent), buildVolatileTier()].filter(Boolean).join("\n\n");
+  return [buildStableTier(), buildContextTier(agentsContent), buildVolatileTier()]
+    .filter(Boolean)
+    .join("\n\n");
 }

@@ -29,7 +29,12 @@ export type DeviceAuthorization = {
 };
 
 export type TokenResult =
-  | { status: "success"; accessToken: string; refreshToken: string; user: { id: string; email: string } }
+  | {
+      status: "success";
+      accessToken: string;
+      refreshToken: string;
+      user: { id: string; email: string };
+    }
   | { status: "denied" }
   | { status: "expired" }
   | { status: "error"; message: string };
@@ -43,7 +48,10 @@ async function parseResponseBody(response: Response): Promise<any> {
   }
 }
 
-export async function requestDeviceCode(clientId: string, fetchFn: typeof fetch = fetch): Promise<DeviceAuthorization> {
+export async function requestDeviceCode(
+  clientId: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<DeviceAuthorization> {
   const response = await fetchFn(AUTHORIZE_DEVICE_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -51,7 +59,9 @@ export async function requestDeviceCode(clientId: string, fetchFn: typeof fetch 
   });
   const body = await parseResponseBody(response);
   if (!response.ok) {
-    throw new Error(`WorkOS device authorization failed with status ${response.status}: ${JSON.stringify(body)}`);
+    throw new Error(
+      `WorkOS device authorization failed with status ${response.status}: ${JSON.stringify(body)}`,
+    );
   }
   return {
     deviceCode: body.device_code,
@@ -114,6 +124,9 @@ export async function pollForToken(
     if (body.error === "access_denied") return { status: "denied" };
     // Any other terminal error (invalid_request/invalid_client/a transient 5xx/...) stops
     // polling but is distinct from a real user denial.
-    return { status: "error", message: `WorkOS returned an unexpected error during authentication: ${body.error ?? response.status}` };
+    return {
+      status: "error",
+      message: `WorkOS returned an unexpected error during authentication: ${body.error ?? response.status}`,
+    };
   }
 }

@@ -2,27 +2,53 @@ import { describe, expect, test } from "bun:test";
 import { APICallError } from "@ai-sdk/provider";
 import { MockLanguageModelV4 } from "ai/test";
 import { runLoop, type LoopEvent } from "../../src/loop/loop";
-import { baseMessages, collect, makeTools, streamResult, textOnlyChunks, toolCallChunks, usage } from "./fixtures";
+import {
+  baseMessages,
+  collect,
+  makeTools,
+  streamResult,
+  textOnlyChunks,
+  toolCallChunks,
+  usage,
+} from "./fixtures";
 
 describe("runLoop", () => {
   test("terminates on no-tool-call", async () => {
-    const model = new MockLanguageModelV4({ doStream: async () => streamResult(textOnlyChunks("Hello")) });
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("Hello")),
+    });
     const events = await collect(
       runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }),
     );
     expect(events).toContainEqual({ type: "text-delta", text: "Hello" });
-    const update = events.find((e): e is Extract<LoopEvent, { type: "messages-updated" }> => e.type === "messages-updated");
-    expect(update?.messages.at(-1)).toEqual({ role: "assistant", content: [{ type: "text", text: "Hello" }] });
+    const update = events.find(
+      (e): e is Extract<LoopEvent, { type: "messages-updated" }> => e.type === "messages-updated",
+    );
+    expect(update?.messages.at(-1)).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "Hello" }],
+    });
     expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
   });
 
   test("passes the system option through to streamText", async () => {
-    const model = new MockLanguageModelV4({ doStream: async () => streamResult(textOnlyChunks("Hello")) });
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("Hello")),
+    });
     await collect(
-      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto", system: "You are seri, a coding agent." }),
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        system: "You are seri, a coding agent.",
+      }),
     );
 
-    expect(model.doStreamCalls[0]?.prompt[0]).toEqual({ role: "system", content: "You are seri, a coding agent." });
+    expect(model.doStreamCalls[0]?.prompt[0]).toEqual({
+      role: "system",
+      content: "You are seri, a coding agent.",
+    });
   });
 
   test("max-iterations backstop trips after exactly the configured number of iterations", async () => {
@@ -79,7 +105,10 @@ describe("runLoop", () => {
     expect(updates).toHaveLength(3);
     expect(updates[0]?.messages.at(-1)).toMatchObject({ role: "assistant" });
     expect(updates[1]?.messages.at(-1)).toMatchObject({ role: "tool" });
-    expect(updates[2]?.messages.at(-1)).toEqual({ role: "assistant", content: [{ type: "text", text: "Done" }] });
+    expect(updates[2]?.messages.at(-1)).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "Done" }],
+    });
   });
 
   // ai@7.0.48 defaults streamText's onError to `({ error }) => console.error(error)`
@@ -100,7 +129,9 @@ describe("runLoop", () => {
     };
     let events: LoopEvent[];
     try {
-      events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+      events = await collect(
+        runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }),
+      );
     } finally {
       console.error = originalError;
     }
@@ -121,7 +152,9 @@ describe("runLoop", () => {
         throw { error: { message: "tool call validation failed", type: "invalid_request_error" } };
       },
     });
-    const events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+    const events = await collect(
+      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }),
+    );
 
     const errorEvent = events.find((e) => e.type === "error");
     expect(errorEvent?.error).toContain("tool call validation failed");
@@ -176,7 +209,9 @@ describe("runLoop", () => {
     });
 
     const started = Date.now();
-    const events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+    const events = await collect(
+      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }),
+    );
     const elapsed = Date.now() - started;
 
     expect(attempts).toBe(2);
@@ -203,7 +238,9 @@ describe("runLoop", () => {
       },
     });
 
-    const events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+    const events = await collect(
+      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }),
+    );
 
     expect(attempts).toBe(1);
     expect(events.find((e) => e.type === "retry")).toBeUndefined();
@@ -218,10 +255,17 @@ describe("runLoop", () => {
       ],
     });
     const events = await collect(
-      runLoop({ model, tools: makeTools(async () => "ok"), messages: baseMessages, permissionMode: "auto" }),
+      runLoop({
+        model,
+        tools: makeTools(async () => "ok"),
+        messages: baseMessages,
+        permissionMode: "auto",
+      }),
     );
 
-    const usageEvents = events.filter((e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage");
+    const usageEvents = events.filter(
+      (e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage",
+    );
     expect(usageEvents).toHaveLength(2);
     expect(usageEvents[0]?.usage.inputTokens).toBe(120);
     expect(usageEvents[0]?.usage.outputTokens).toBe(30);
@@ -241,14 +285,22 @@ describe("runLoop", () => {
           { type: "text-start", id: "1" },
           { type: "text-delta", id: "1", delta: "partial answer" },
           { type: "error", error: new Error("upstream connection reset") },
-          { type: "finish", finishReason: { unified: "error", raw: undefined }, usage: usage(900, 7) },
+          {
+            type: "finish",
+            finishReason: { unified: "error", raw: undefined },
+            usage: usage(900, 7),
+          },
         ]),
     });
 
-    const events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+    const events = await collect(
+      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }),
+    );
 
     expect(events.find((e) => e.type === "error")?.error).toContain("upstream connection reset");
-    const usageEvents = events.filter((e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage");
+    const usageEvents = events.filter(
+      (e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage",
+    );
     expect(usageEvents).toHaveLength(1);
     expect(usageEvents[0]?.usage.inputTokens).toBe(900);
     expect(usageEvents[0]?.usage.outputTokens).toBe(7);
@@ -266,9 +318,13 @@ describe("runLoop", () => {
       },
     });
 
-    const events = await collect(runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }));
+    const events = await collect(
+      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }),
+    );
 
-    const errors = events.filter((e): e is Extract<LoopEvent, { type: "error" }> => e.type === "error");
+    const errors = events.filter(
+      (e): e is Extract<LoopEvent, { type: "error" }> => e.type === "error",
+    );
     expect(errors).toHaveLength(1);
     expect(errors[0]?.error).toContain("connection refused");
     expect(events.filter((e) => e.type === "usage")).toHaveLength(0);
@@ -276,7 +332,9 @@ describe("runLoop", () => {
 
   test("compacts history once lastInputTokens crosses the threshold across a ~25-turn run, and a pre-compaction fact survives via the summary", async () => {
     const marker = "MARKER_FACT_777";
-    const tools = makeTools(async (input: { path: string }) => (input.path === "marker.txt" ? marker : "ok"));
+    const tools = makeTools(async (input: { path: string }) =>
+      input.path === "marker.txt" ? marker : "ok",
+    );
 
     const summaryObj = {
       goal: "keep working on the task",
@@ -290,7 +348,9 @@ describe("runLoop", () => {
     const doStream = Array.from({ length: totalIterations }, (_, i) => {
       const inputTokens = i === compactAtIteration ? 6000 : 100;
       const path = i === 0 ? "marker.txt" : "a.txt";
-      return streamResult(toolCallChunks(`call-${i}`, "write_file", { path }, usage(inputTokens, 10)));
+      return streamResult(
+        toolCallChunks(`call-${i}`, "write_file", { path }, usage(inputTokens, 10)),
+      );
     });
 
     const model = new MockLanguageModelV4({
@@ -316,7 +376,9 @@ describe("runLoop", () => {
       }),
     );
 
-    const compactedEvents = events.filter((e): e is Extract<LoopEvent, { type: "compacted" }> => e.type === "compacted");
+    const compactedEvents = events.filter(
+      (e): e is Extract<LoopEvent, { type: "compacted" }> => e.type === "compacted",
+    );
     expect(compactedEvents).toHaveLength(1);
     expect(compactedEvents[0]?.evictedCount).toBeGreaterThan(0);
     // The summariser's own round-trip is billed like any other, and compactMessages has always
@@ -354,7 +416,12 @@ describe("runLoop", () => {
     const compactAtIteration = 11; // the doStream call whose usage crosses the threshold
     const doStream = Array.from({ length: totalIterations }, (_, i) =>
       streamResult(
-        toolCallChunks(`call-${i}`, "write_file", { path: "a.txt" }, usage(i === compactAtIteration ? 6000 : 100, 10)),
+        toolCallChunks(
+          `call-${i}`,
+          "write_file",
+          { path: "a.txt" },
+          usage(i === compactAtIteration ? 6000 : 100, 10),
+        ),
       ),
     );
 
@@ -417,7 +484,12 @@ describe("runLoop", () => {
     const compactAtIteration = 11;
     const doStream = Array.from({ length: totalIterations }, (_, i) =>
       streamResult(
-        toolCallChunks(`call-${i}`, "write_file", { path: "a.txt" }, usage(i === compactAtIteration ? 6000 : 100, 10)),
+        toolCallChunks(
+          `call-${i}`,
+          "write_file",
+          { path: "a.txt" },
+          usage(i === compactAtIteration ? 6000 : 100, 10),
+        ),
       ),
     );
 
@@ -451,14 +523,18 @@ describe("runLoop", () => {
 
   test("yields an error and keeps running uncompacted when compactMessages throws", async () => {
     const marker = "MARKER_FACT_777";
-    const tools = makeTools(async (input: { path: string }) => (input.path === "marker.txt" ? marker : "ok"));
+    const tools = makeTools(async (input: { path: string }) =>
+      input.path === "marker.txt" ? marker : "ok",
+    );
 
     const totalIterations = 25;
     const compactAtIteration = 11; // the doStream call whose usage crosses the threshold
     const doStream = Array.from({ length: totalIterations }, (_, i) => {
       const inputTokens = i === compactAtIteration ? 6000 : 100;
       const path = i === 0 ? "marker.txt" : "a.txt";
-      return streamResult(toolCallChunks(`call-${i}`, "write_file", { path }, usage(inputTokens, 10)));
+      return streamResult(
+        toolCallChunks(`call-${i}`, "write_file", { path }, usage(inputTokens, 10)),
+      );
     });
 
     const model = new MockLanguageModelV4({

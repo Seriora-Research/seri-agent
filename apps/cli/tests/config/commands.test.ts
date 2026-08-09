@@ -66,17 +66,20 @@ describe("configCommand", () => {
     expect(loadConfig(configDir)).toEqual({});
   });
 
-  test.skipIf(process.platform === "win32")("set tightens permissions on a pre-existing world-readable config", () => {
-    // The upgrade path: config.json was hand-created before this command existed, so it
-    // carries default-umask (0644) permissions that a plain writeFileSync mode won't change.
-    const path = join(configDir, "config.json");
-    writeFileSync(path, JSON.stringify({ EXISTING: "value" }), { mode: 0o644 });
-    chmodSync(path, 0o644);
+  test.skipIf(process.platform === "win32")(
+    "set tightens permissions on a pre-existing world-readable config",
+    () => {
+      // The upgrade path: config.json was hand-created before this command existed, so it
+      // carries default-umask (0644) permissions that a plain writeFileSync mode won't change.
+      const path = join(configDir, "config.json");
+      writeFileSync(path, JSON.stringify({ EXISTING: "value" }), { mode: 0o644 });
+      chmodSync(path, 0o644);
 
-    configCommand(["set", "GROQ_API_KEY", "gsk_test_value"], configDir);
+      configCommand(["set", "GROQ_API_KEY", "gsk_test_value"], configDir);
 
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-  });
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    },
+  );
 
   test("set leaves no temp file behind", () => {
     configCommand(["set", "GROQ_API_KEY", "gsk_test_value"], configDir);

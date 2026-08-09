@@ -1,5 +1,15 @@
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -75,7 +85,10 @@ function isCachedRg(cached: string): boolean {
   if (!existsSync(cached)) return false;
 
   const stats = statSync(cached);
-  return stats.size === statSync(rgAsset).size && (process.platform === "win32" || (stats.mode & 0o111) !== 0);
+  return (
+    stats.size === statSync(rgAsset).size &&
+    (process.platform === "win32" || (stats.mode & 0o111) !== 0)
+  );
 }
 
 // Published by renaming a fully written, already chmodded file — never by writing in place, and
@@ -145,11 +158,18 @@ function extractToTemp(): string {
 // The first line of `rg --version` is `ripgrep 15.0.0 (rev 3a612f88b8)`. Only --selftest needs it,
 // so no ordinary search ever pays for the spawn.
 export function rgVersion(command: string): string {
-  const result = spawnSync(command, ["--version"], { encoding: "utf8", timeout: RG_TIMEOUT_MS, windowsHide: true });
+  const result = spawnSync(command, ["--version"], {
+    encoding: "utf8",
+    timeout: RG_TIMEOUT_MS,
+    windowsHide: true,
+  });
   if (result.error) throw new Error(`failed to run ${command}: ${result.error.message}`);
 
   const match = /^ripgrep (\d+)\.(\d+)\.(\d+)/.exec(result.stdout);
-  if (!match) throw new Error(`${command} is not ripgrep: --version printed ${JSON.stringify(result.stdout.split("\n")[0]?.trim())}`);
+  if (!match)
+    throw new Error(
+      `${command} is not ripgrep: --version printed ${JSON.stringify(result.stdout.split("\n")[0]?.trim())}`,
+    );
   return `${match[1]}.${match[2]}.${match[3]}`;
 }
 
@@ -223,7 +243,10 @@ export async function assertSearchPath(path: string): Promise<void> {
 // seam line is a parse error, and in files_with_matches/count mode it would silently delete files
 // from the middle of the list. This keeps the HEAD and drops the partial trailing line, which is
 // what outputLines already assumes.
-export function runRipgrep(args: string[], signal?: AbortSignal): Promise<{ stdout: string; truncated: boolean }> {
+export function runRipgrep(
+  args: string[],
+  signal?: AbortSignal,
+): Promise<{ stdout: string; truncated: boolean }> {
   return new Promise((resolve, reject) => {
     // --no-config: rg reads RIPGREP_CONFIG_PATH from the environment, so without this a
     // developer's own ~/.ripgreprc (--smart-case, --hidden, glob excludes) silently changes

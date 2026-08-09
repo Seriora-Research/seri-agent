@@ -32,7 +32,10 @@ export async function runCheck(
   options: RunCheckOptions = {},
 ): Promise<CheckOutcome> {
   if (command === undefined) {
-    return { status: "unavailable", reason: "no check command configured (set SERI_VERIFY_COMMAND)" };
+    return {
+      status: "unavailable",
+      reason: "no check command configured (set SERI_VERIFY_COMMAND)",
+    };
   }
 
   // A plain whitespace split. It does NOT handle quoted arguments or escapes — `tsc --noEmit` and
@@ -53,7 +56,10 @@ export async function runCheck(
     // Includes the "cancelled" rejection spawnCollect raises when the signal fires. Not re-thrown:
     // the write this check follows has already happened, and throwing here would hand the model a
     // tool error for a file that is on disk.
-    return { status: "failed", reason: `${command} could not be run: ${err instanceof Error ? err.message : String(err)}` };
+    return {
+      status: "failed",
+      reason: `${command} could not be run: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 
   const elapsedMs = Date.now() - startedAt;
@@ -68,7 +74,8 @@ export async function runCheck(
   const all = parseDiagnostics(`${result.stdout}\n${result.stderr}`);
 
   if (all.length === 0) {
-    if (result.timedOut) return { status: "failed", reason: `${command} timed out after ${elapsedMs} ms` };
+    if (result.timedOut)
+      return { status: "failed", reason: `${command} timed out after ${elapsedMs} ms` };
     if (result.exitCode === 0) return { status: "ok", command, elapsedMs };
     return {
       status: "failed",

@@ -63,7 +63,10 @@ describe("openBrowser", () => {
 
     openBrowser("https://example.com/device", launcher.spawnFn);
 
-    expect(launcher.launched()).toEqual({ executable: "cmd", args: ["/c", "start", "", "https://example.com/device"] });
+    expect(launcher.launched()).toEqual({
+      executable: "cmd",
+      args: ["/c", "start", "", "https://example.com/device"],
+    });
   });
 
   test("darwin launches via open", () => {
@@ -72,7 +75,10 @@ describe("openBrowser", () => {
 
     openBrowser("https://example.com/device", launcher.spawnFn);
 
-    expect(launcher.launched()).toEqual({ executable: "open", args: ["https://example.com/device"] });
+    expect(launcher.launched()).toEqual({
+      executable: "open",
+      args: ["https://example.com/device"],
+    });
   });
 
   test("other platforms launch via xdg-open", () => {
@@ -81,7 +87,10 @@ describe("openBrowser", () => {
 
     openBrowser("https://example.com/device", launcher.spawnFn);
 
-    expect(launcher.launched()).toEqual({ executable: "xdg-open", args: ["https://example.com/device"] });
+    expect(launcher.launched()).toEqual({
+      executable: "xdg-open",
+      args: ["https://example.com/device"],
+    });
   });
 
   test("swallows a spawn failure instead of throwing", () => {

@@ -80,14 +80,16 @@ const bashTool = tool({
   // and comes back as an ordinary successful ProcessResult. Measured before this line existed —
   // `sleep 4; echo FINISHED-ANYWAY` with an already-aborted signal took 4072 ms and returned
   // exitCode 0.
-  execute: async ({ command, timeoutMs }, { abortSignal }) => runBash(command, timeoutMs, abortSignal),
+  execute: async ({ command, timeoutMs }, { abortSignal }) =>
+    runBash(command, timeoutMs, abortSignal),
 });
 
 const powershellTool = tool({
   description:
     "Run a shell command via PowerShell. Each stream is capped at 30000 characters; `stdoutTruncated` and `stderrTruncated` say which one was cut, and a cut drops the middle and keeps both ends, so redirect that stream to a file and read the part you need rather than assuming it is the whole output. Commands are killed after 2 minutes and `timedOut` is set, with whatever they printed first; pass timeoutMs (up to 600000) for a command you expect to take longer.",
   inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
-  execute: async ({ command, timeoutMs }, { abortSignal }) => runPowerShell(command, timeoutMs, abortSignal),
+  execute: async ({ command, timeoutMs }, { abortSignal }) =>
+    runPowerShell(command, timeoutMs, abortSignal),
 });
 
 export const toolDefinitions = {
@@ -103,7 +105,12 @@ export const toolDefinitions = {
 // Tools that write to disk or execute commands, as opposed to merely reading/searching.
 // gate.ts derives its permission set from this list so a new write-capable tool can't
 // silently drift out of sync with what read-only mode blocks.
-export const WRITE_TOOL_NAMES: (keyof typeof toolDefinitions)[] = ["write_file", "edit", "bash", "powershell"];
+export const WRITE_TOOL_NAMES: (keyof typeof toolDefinitions)[] = [
+  "write_file",
+  "edit",
+  "bash",
+  "powershell",
+];
 
 // Tools that can change the contents of the filesystem, which is what a checkpoint has to be
 // taken in front of. Deliberately NOT WRITE_TOOL_NAMES: that set is the *permission*
@@ -114,4 +121,8 @@ export const WRITE_TOOL_NAMES: (keyof typeof toolDefinitions)[] = ["write_file",
 // predecessor. Kept as a separate list rather than derived from the other so the two can each be
 // wrong independently: a tool that needs approval but writes nothing, or (worse) one that writes
 // without needing approval, must not be forced to be the same mistake twice.
-export const FS_MUTATING_TOOL_NAMES: (keyof typeof toolDefinitions)[] = ["write_file", "bash", "powershell"];
+export const FS_MUTATING_TOOL_NAMES: (keyof typeof toolDefinitions)[] = [
+  "write_file",
+  "bash",
+  "powershell",
+];

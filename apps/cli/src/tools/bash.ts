@@ -2,7 +2,10 @@ import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { type ProcessResult, spawnCollect } from "./spawnCollect";
 
-const WIN32_GIT_BASH_PATHS = ["C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files\\Git\\usr\\bin\\bash.exe"];
+const WIN32_GIT_BASH_PATHS = [
+  "C:\\Program Files\\Git\\bin\\bash.exe",
+  "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+];
 
 function findOnPath(command: string): string | null {
   const dirs = (process.env.PATH ?? "").split(delimiter);

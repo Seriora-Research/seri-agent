@@ -63,7 +63,8 @@ describe("grep (default mode)", () => {
   });
 
   test("caps file names at the file limit, which is higher than the match limit", async () => {
-    for (let i = 0; i < MAX_FILE_RESULTS + 20; i++) writeFileSync(join(tmpDir, `f${i}.md`), "needle\n");
+    for (let i = 0; i < MAX_FILE_RESULTS + 20; i++)
+      writeFileSync(join(tmpDir, `f${i}.md`), "needle\n");
 
     const result = await grep("needle", { path: tmpDir });
 
@@ -109,7 +110,10 @@ describe("grep (content mode)", () => {
     // rg emits base64 `bytes` instead of `text` for anything that is not valid UTF-8. Reading
     // `.text` unconditionally threw here and lost every match in the tree, not just this one.
     // 0xE9 is 'é' in latin-1 and is invalid on its own in UTF-8.
-    writeFileSync(join(tmpDir, "latin1.txt"), Buffer.concat([Buffer.from("needle caf"), Buffer.from([0xe9]), Buffer.from(" x\n")]));
+    writeFileSync(
+      join(tmpDir, "latin1.txt"),
+      Buffer.concat([Buffer.from("needle caf"), Buffer.from([0xe9]), Buffer.from(" x\n")]),
+    );
     writeFileSync(join(tmpDir, "clean.txt"), "needle plain ascii\n");
 
     const result = await grep("needle", { path: tmpDir, mode: "content" });

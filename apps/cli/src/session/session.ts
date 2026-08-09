@@ -20,7 +20,10 @@ export function saveSession(state: SessionState, sessionsDir: string): void {
   writeFileSync(join(sessionsDir, `${state.id}.json`), JSON.stringify(state));
 }
 
-export function loadSession<TMessage = unknown>(id: string, sessionsDir: string): SessionState<TMessage> {
+export function loadSession<TMessage = unknown>(
+  id: string,
+  sessionsDir: string,
+): SessionState<TMessage> {
   const path = join(sessionsDir, `${id}.json`);
   if (!existsSync(path)) throw new Error(`Session "${id}" not found in ${sessionsDir}`);
   return JSON.parse(readFileSync(path, "utf8"));

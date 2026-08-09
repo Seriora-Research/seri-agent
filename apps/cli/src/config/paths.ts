@@ -33,7 +33,15 @@ export const DEFAULT_PROFILE = "default";
 // opposite direction of this cycle.
 let reservedProfileNames: ReadonlySet<string> | undefined;
 export function getReservedProfileNames(): ReadonlySet<string> {
-  reservedProfileNames ??= new Set([CONFIG_FILENAME, AUTH_FILENAME, PERMISSIONS_FILENAME, "sessions", "checkpoints", "rg", "bin"]);
+  reservedProfileNames ??= new Set([
+    CONFIG_FILENAME,
+    AUTH_FILENAME,
+    PERMISSIONS_FILENAME,
+    "sessions",
+    "checkpoints",
+    "rg",
+    "bin",
+  ]);
   return reservedProfileNames;
 }
 
@@ -56,7 +64,10 @@ function profileFromEnv(): string | undefined {
 // one place precedence is resolved — activeProfile() below calls it with `override` rather than
 // re-deriving the same ladder, so a change here governs both the usage-error validation in
 // parseCliArgs and the directory actually resolved at runtime.
-export function resolveProfile(flagValue: string | undefined): { profile: string; source: "flag" | "env" | "default" } {
+export function resolveProfile(flagValue: string | undefined): {
+  profile: string;
+  source: "flag" | "env" | "default";
+} {
   // Truthy, not `!== undefined`: `seri --profile "$UNSET_VAR" …` is a real shell pattern that
   // expands to an explicit empty string, and it should fall through the same way SERI_PROFILE=""
   // already does (profileFromEnv's `||`) rather than failing profileNameError's charset check.
@@ -81,12 +92,14 @@ export function setProfileOverride(profile: string | undefined): void {
 export function profileNameError(name: string): string | undefined {
   // Stops a value like "../../etc" from being a path-traversal primitive: it is fed straight to
   // join() below.
-  if (!/^[A-Za-z0-9._-]+$/.test(name)) return `"${name}" may only contain letters, numbers, ".", "_" and "-"`;
+  if (!/^[A-Za-z0-9._-]+$/.test(name))
+    return `"${name}" may only contain letters, numbers, ".", "_" and "-"`;
   if (name === "." || name === "..") return `"${name}" is not a valid profile name`;
   // Case-folded only on win32/darwin — see caseFold.ts. NTFS and APFS are case-insensitive by
   // default, so --profile Sessions would collide with sessions/ there, but ext4 is case-sensitive
   // and folding unconditionally would reject a name that is genuinely distinct on Linux.
-  if (getReservedProfileNames().has(foldsCase() ? name.toLowerCase() : name)) return `"${name}" is reserved (it collides with a file or directory under every profile root)`;
+  if (getReservedProfileNames().has(foldsCase() ? name.toLowerCase() : name))
+    return `"${name}" is reserved (it collides with a file or directory under every profile root)`;
   return undefined;
 }
 
@@ -99,6 +112,8 @@ export function getConfigDir(): string {
   // win32/darwin exactly like --profile default does, not silently create a separate `Default/`
   // directory because this comparison forgot the case-insensitivity the reserved-name check
   // already accounts for.
-  const isDefault = foldsCase() ? profile.toLowerCase() === DEFAULT_PROFILE : profile === DEFAULT_PROFILE;
+  const isDefault = foldsCase()
+    ? profile.toLowerCase() === DEFAULT_PROFILE
+    : profile === DEFAULT_PROFILE;
   return isDefault ? base : join(base, profile);
 }

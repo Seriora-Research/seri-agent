@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import {
@@ -61,7 +69,9 @@ function manifest(dir: string): Record<string, string> {
         if (entry.name === ".git") continue;
         walk(path);
       } else {
-        out[relative(dir, path).replaceAll("\\", "/")] = createHash("sha256").update(readFileSync(path)).digest("hex");
+        out[relative(dir, path).replaceAll("\\", "/")] = createHash("sha256")
+          .update(readFileSync(path))
+          .digest("hex");
       }
     }
   };
@@ -250,13 +260,28 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
     () => {
       seedWorktree(workTree);
       const userGit = (args: string[]): string => {
-        const result = spawnSync("git", args, { encoding: "utf8", cwd: workTree, windowsHide: true });
+        const result = spawnSync("git", args, {
+          encoding: "utf8",
+          cwd: workTree,
+          windowsHide: true,
+        });
         expect(result.status).toBe(0);
         return result.stdout;
       };
       userGit(["init", "-q"]);
       userGit(["-c", "user.name=u", "-c", "user.email=u@e", "add", "-A"]);
-      userGit(["-c", "user.name=u", "-c", "user.email=u@e", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "initial"]);
+      userGit([
+        "-c",
+        "user.name=u",
+        "-c",
+        "user.email=u@e",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "initial",
+      ]);
 
       const captured = [
         userGit(["status", "--porcelain"]),

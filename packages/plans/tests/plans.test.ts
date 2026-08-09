@@ -62,9 +62,12 @@ describe("toPlan", () => {
     });
   }
 
-  test.each([null, undefined, "", "gold", 3])("maps the unrecognized column value %p to null", (value) => {
-    expect(toPlan(value)).toBeNull();
-  });
+  test.each([null, undefined, "", "gold", 3])(
+    "maps the unrecognized column value %p to null",
+    (value) => {
+      expect(toPlan(value)).toBeNull();
+    },
+  );
 });
 
 describe("toSubscriptionStatus", () => {
@@ -129,10 +132,9 @@ describe("missingProductVars", () => {
   });
 
   test("names only the ones that are missing", () => {
-    expect(missingProductVars({ POLAR_PRODUCT_FREE: "prod_free", POLAR_PRODUCT_PRO: "prod_pro" })).toEqual([
-      "POLAR_PRODUCT_MAX",
-      "POLAR_PRODUCT_ULTRA",
-    ]);
+    expect(
+      missingProductVars({ POLAR_PRODUCT_FREE: "prod_free", POLAR_PRODUCT_PRO: "prod_pro" }),
+    ).toEqual(["POLAR_PRODUCT_MAX", "POLAR_PRODUCT_ULTRA"]);
   });
 
   test("is empty when the deployment is fully configured", () => {

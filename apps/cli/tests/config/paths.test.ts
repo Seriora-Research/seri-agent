@@ -95,7 +95,13 @@ describe("getConfigDir default-profile identity", () => {
     process.env.HOME = "/home/test";
     const base = getBaseConfigDir();
 
-    for (const leaf of ["config.json", "auth.json", "permissions.yaml", "sessions", "checkpoints"]) {
+    for (const leaf of [
+      "config.json",
+      "auth.json",
+      "permissions.yaml",
+      "sessions",
+      "checkpoints",
+    ]) {
       expect(join(getConfigDir(), leaf)).toBe(join(base, leaf));
     }
   });
@@ -142,7 +148,13 @@ describe("getConfigDir disjointness", () => {
     process.env.HOME = "/home/test";
     const base = getBaseConfigDir();
 
-    for (const leaf of ["config.json", "auth.json", "permissions.yaml", "sessions", "checkpoints"]) {
+    for (const leaf of [
+      "config.json",
+      "auth.json",
+      "permissions.yaml",
+      "sessions",
+      "checkpoints",
+    ]) {
       const defaultPath = join(base, leaf);
       setProfileOverride("work");
       const workPath = join(getConfigDir(), leaf);
@@ -184,7 +196,15 @@ describe("profileNameError", () => {
   // an accidental deletion from the reserved set — permissions.yaml or bin included — turns this
   // test red instead of silently shrinking the set the iteration test above checks.
   test("the reserved set is exactly the file and directory names it collides with", () => {
-    const expected = [CONFIG_FILENAME, AUTH_FILENAME, PERMISSIONS_FILENAME, "sessions", "checkpoints", "rg", "bin"];
+    const expected = [
+      CONFIG_FILENAME,
+      AUTH_FILENAME,
+      PERMISSIONS_FILENAME,
+      "sessions",
+      "checkpoints",
+      "rg",
+      "bin",
+    ];
     expect([...getReservedProfileNames()].sort()).toEqual([...expected].sort());
   });
 

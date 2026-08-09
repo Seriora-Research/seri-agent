@@ -58,7 +58,9 @@ export function isPaidPlan(value: unknown): value is PaidPlan {
 }
 
 export function toPlan(value: unknown): Plan | null {
-  return typeof value === "string" && (PLANS as readonly string[]).includes(value) ? (value as Plan) : null;
+  return typeof value === "string" && (PLANS as readonly string[]).includes(value)
+    ? (value as Plan)
+    : null;
 }
 
 export function toSubscriptionStatus(value: unknown): SubscriptionStatus | null {

@@ -12,7 +12,10 @@ import { withVerification } from "../../src/verify/wrapTools";
 
 const messages: ModelMessage[] = [
   { role: "user", content: "do the task" },
-  { role: "assistant", content: [{ type: "tool-call", toolCallId: "c1", toolName: "write_file", input: {} }] },
+  {
+    role: "assistant",
+    content: [{ type: "tool-call", toolCallId: "c1", toolName: "write_file", input: {} }],
+  },
 ];
 
 function execOpts(abortSignal?: AbortSignal): ToolExecutionOptions<Record<string, unknown>> {
@@ -50,7 +53,12 @@ const DIAGNOSTIC_OUTCOME: CheckOutcome = {
   command: "tsc --noEmit",
   elapsedMs: 3600,
   diagnostics: [
-    { file: "src/a.ts", line: 12, column: 7, message: "error TS2322: Type 'number' is not assignable to type 'string'." },
+    {
+      file: "src/a.ts",
+      line: 12,
+      column: 7,
+      message: "error TS2322: Type 'number' is not assignable to type 'string'.",
+    },
   ],
   inWrittenFile: 1,
   truncated: false,
@@ -71,9 +79,15 @@ describe("withVerification", () => {
   // Acceptance criterion 2. Asserted on JSON.stringify because that is literally what the model
   // receives: loop.ts:354 puts the tool's return value into `{type:"json", value}`.
   test("a diagnostic from the check reaches the tool result the model reads", async () => {
-    const wrapped = withVerification(realishTools(), { command: "tsc --noEmit", runCheck: async () => DIAGNOSTIC_OUTCOME });
+    const wrapped = withVerification(realishTools(), {
+      command: "tsc --noEmit",
+      runCheck: async () => DIAGNOSTIC_OUTCOME,
+    });
 
-    const result = await wrapped.write_file?.execute?.({ path: join(root, "a.ts"), content: "x" }, execOpts());
+    const result = await wrapped.write_file?.execute?.(
+      { path: join(root, "a.ts"), content: "x" },
+      execOpts(),
+    );
     const asModelSeesIt = JSON.stringify(result);
 
     expect(asModelSeesIt).toContain("src/a.ts");
@@ -89,7 +103,10 @@ describe("withVerification", () => {
       runCheck: async () => DIAGNOSTIC_OUTCOME,
     });
 
-    const result = await wrapped.write_file?.execute?.({ path: join(root, "a.ts"), content: "x" }, execOpts());
+    const result = await wrapped.write_file?.execute?.(
+      { path: join(root, "a.ts"), content: "x" },
+      execOpts(),
+    );
     const asModelSeesIt = JSON.stringify(result);
 
     expect(asModelSeesIt).not.toContain("src/a.ts");
@@ -98,9 +115,15 @@ describe("withVerification", () => {
   });
 
   test("the write still happens, and is reported, whatever the check says", async () => {
-    const wrapped = withVerification(realishTools(), { command: "tsc --noEmit", runCheck: async () => DIAGNOSTIC_OUTCOME });
+    const wrapped = withVerification(realishTools(), {
+      command: "tsc --noEmit",
+      runCheck: async () => DIAGNOSTIC_OUTCOME,
+    });
 
-    const result = await wrapped.write_file?.execute?.({ path: join(root, "a.ts"), content: "hello" }, execOpts());
+    const result = await wrapped.write_file?.execute?.(
+      { path: join(root, "a.ts"), content: "hello" },
+      execOpts(),
+    );
 
     expect(result).toMatchObject({ written: true });
     expect(readFileSync(join(root, "a.ts"), "utf8")).toBe("hello");
@@ -112,7 +135,10 @@ describe("withVerification", () => {
   test("with no command configured the write succeeds and returns normally", async () => {
     const wrapped = withVerification(realishTools(), {});
 
-    const result = await wrapped.write_file?.execute?.({ path: join(root, "a.ts"), content: "hello" }, execOpts());
+    const result = await wrapped.write_file?.execute?.(
+      { path: join(root, "a.ts"), content: "hello" },
+      execOpts(),
+    );
 
     expect(result).toMatchObject({ written: true, verification: { status: "unavailable" } });
     expect(readFileSync(join(root, "a.ts"), "utf8")).toBe("hello");
@@ -130,7 +156,9 @@ describe("withVerification", () => {
 
     // A directory cannot be replaced by a file.
     mkdirSync(join(root, "dir"), { recursive: true });
-    expect(wrapped.write_file?.execute?.({ path: join(root, "dir"), content: "x" }, execOpts())).rejects.toThrow();
+    expect(
+      wrapped.write_file?.execute?.({ path: join(root, "dir"), content: "x" }, execOpts()),
+    ).rejects.toThrow();
     expect(checks).toBe(0);
   });
 
@@ -160,7 +188,10 @@ describe("withVerification", () => {
       },
     });
 
-    await wrapped.write_file?.execute?.({ path: join(root, "a.ts"), content: "x" }, execOpts(controller.signal));
+    await wrapped.write_file?.execute?.(
+      { path: join(root, "a.ts"), content: "x" },
+      execOpts(controller.signal),
+    );
 
     expect(received).toBe(controller.signal);
   });
@@ -188,7 +219,9 @@ describe("withVerification", () => {
 
 describe("writeFileVerification", () => {
   test("narrows a result this module produced", () => {
-    expect(writeFileVerification({ written: true, verification: DIAGNOSTIC_OUTCOME })).toEqual(DIAGNOSTIC_OUTCOME);
+    expect(writeFileVerification({ written: true, verification: DIAGNOSTIC_OUTCOME })).toEqual(
+      DIAGNOSTIC_OUTCOME,
+    );
   });
 
   test("is undefined for results this module did not produce", () => {
@@ -231,25 +264,23 @@ describe.skipIf(!existsSync(TSC) || !BUN_ON_PATH || !PATHS_ARE_SPACE_FREE)(
       rmSync(project, { recursive: true, force: true });
     });
 
-    test(
-      "writing a file with a type error puts the real compiler's diagnostic in the tool result",
-      async () => {
-        const target = join(project, "a.ts");
-        // Exactly what a user would put in SERI_VERIFY_COMMAND: their own toolchain, named
-        // explicitly. Nothing here is discovered from the fixture.
-        const wrapped = withVerification(realishTools(), { command: `bun ${TSC} --noEmit --strict ${target}` });
+    test("writing a file with a type error puts the real compiler's diagnostic in the tool result", async () => {
+      const target = join(project, "a.ts");
+      // Exactly what a user would put in SERI_VERIFY_COMMAND: their own toolchain, named
+      // explicitly. Nothing here is discovered from the fixture.
+      const wrapped = withVerification(realishTools(), {
+        command: `bun ${TSC} --noEmit --strict ${target}`,
+      });
 
-        const result = await wrapped.write_file?.execute?.(
-          { path: target, content: "export const greeting: string = 42;\n" },
-          execOpts(),
-        );
-        const asModelSeesIt = JSON.stringify(result);
+      const result = await wrapped.write_file?.execute?.(
+        { path: target, content: "export const greeting: string = 42;\n" },
+        execOpts(),
+      );
+      const asModelSeesIt = JSON.stringify(result);
 
-        expect(asModelSeesIt).toContain("a.ts");
-        expect(asModelSeesIt).toContain("is not assignable to type 'string'");
-        expect(result).toMatchObject({ written: true, verification: { status: "diagnostics" } });
-      },
-      15000,
-    );
+      expect(asModelSeesIt).toContain("a.ts");
+      expect(asModelSeesIt).toContain("is not assignable to type 'string'");
+      expect(result).toMatchObject({ written: true, verification: { status: "diagnostics" } });
+    }, 15000);
   },
 );

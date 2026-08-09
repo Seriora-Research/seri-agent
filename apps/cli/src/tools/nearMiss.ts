@@ -70,7 +70,8 @@ function similarity(a: string, b: string): number {
   while (prefix < shorter && a[prefix] === b[prefix]) prefix++;
 
   let suffix = 0;
-  while (suffix < shorter - prefix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) suffix++;
+  while (suffix < shorter - prefix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix])
+    suffix++;
 
   // Clamped at `shorter` so two identical lines score 1 rather than 2: prefix and suffix would
   // otherwise both count the whole line.
@@ -133,11 +134,17 @@ export function describeNearMiss(content: string, oldString: string): string | n
   }
 
   if (bestStart !== -1) {
-    const differing = trimmedOld.findIndex((line, j) => contentLines[bestStart + j].trim() !== line);
+    const differing = trimmedOld.findIndex(
+      (line, j) => contentLines[bestStart + j].trim() !== line,
+    );
     // Every line of the best window matched. Unreachable from `edit` — tier 1 would have replaced
     // it — but this is an exported pure function and "nothing differs" has no line to name.
     if (differing === -1) return null;
-    return report(bestStart + differing, contentLines[bestStart + differing].trim(), trimmedOld[differing]);
+    return report(
+      bestStart + differing,
+      contentLines[bestStart + differing].trim(),
+      trimmedOld[differing],
+    );
   }
 
   // Stage 2, reached when no window qualified. Three shapes land here and stage 1 serves none of

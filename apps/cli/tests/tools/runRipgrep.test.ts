@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -51,7 +61,8 @@ function configDirIn(root: string): string {
 // never started or as a survivor that was never killed. A fresh mkdtemp name appears on exactly one
 // command line, and the cases below keep it off their own by passing it through the environment.
 function rgPidFor(dir: string): number | undefined {
-  const line = spawnSync("pgrep", ["-f", dir], { encoding: "utf8" }).stdout.trim().split("\n")[0] ?? "";
+  const line =
+    spawnSync("pgrep", ["-f", dir], { encoding: "utf8" }).stdout.trim().split("\n")[0] ?? "";
   const pid = Number.parseInt(line, 10);
   return Number.isInteger(pid) ? pid : undefined;
 }
@@ -97,7 +108,8 @@ function runChild(script: string[], env: NodeJS.ProcessEnv): string[] {
   // spawnSync leaves stdout null when the spawn itself fails, and the child's import throws
   // outright on a fresh clone that has not run postinstall. Surface either as itself rather
   // than as a TypeError or an empty-string mismatch that names neither.
-  if (child.status !== 0) throw new Error(`probe child exited ${child.status}: ${child.error ?? child.stderr}`);
+  if (child.status !== 0)
+    throw new Error(`probe child exited ${child.status}: ${child.error ?? child.stderr}`);
   return child.stdout.trim().split(/\r?\n/);
 }
 
@@ -150,7 +162,10 @@ describe("rg resolution", () => {
       [0, 1, 2, 3].map(
         () =>
           new Promise<number | null>((resolve) => {
-            const child = spawn(process.execPath, ["-e", script], { env: cacheEnv(cacheRoot), stdio: "ignore" });
+            const child = spawn(process.execPath, ["-e", script], {
+              env: cacheEnv(cacheRoot),
+              stdio: "ignore",
+            });
             child.once("exit", resolve);
           }),
       ),
@@ -179,19 +194,23 @@ describe("rg resolution", () => {
     expect(statSync(String(again)).size).toBe(statSync(ASSET).size);
   }, 30_000);
 
-  test.skipIf(process.platform === "win32")("repopulates a cached rg that lost its exec bit", () => {
-    // Right size, wrong mode — what a home restored from a backup, an rsync without -p or a round
-    // trip through exFAT leaves behind. Size alone would accept it, spawnSync would fail EACCES,
-    // and since resolution never re-resolves that machine would be bricked for good. Windows has
-    // no exec bit, so the branch this guards does not exist there.
-    const [command] = runChild(RESOLVE, cacheEnv(cacheRoot));
-    chmodSync(String(command), 0o644);
+  test.skipIf(process.platform === "win32")(
+    "repopulates a cached rg that lost its exec bit",
+    () => {
+      // Right size, wrong mode — what a home restored from a backup, an rsync without -p or a round
+      // trip through exFAT leaves behind. Size alone would accept it, spawnSync would fail EACCES,
+      // and since resolution never re-resolves that machine would be bricked for good. Windows has
+      // no exec bit, so the branch this guards does not exist there.
+      const [command] = runChild(RESOLVE, cacheEnv(cacheRoot));
+      chmodSync(String(command), 0o644);
 
-    const [again] = runChild(RESOLVE, cacheEnv(cacheRoot));
+      const [again] = runChild(RESOLVE, cacheEnv(cacheRoot));
 
-    expect(again).toBe(String(command));
-    expect(statSync(String(again)).mode & 0o111).not.toBe(0);
-  }, 30_000);
+      expect(again).toBe(String(command));
+      expect(statSync(String(again)).mode & 0o111).not.toBe(0);
+    },
+    30_000,
+  );
 
   test("keys the cache so a different seri or a different rg cannot reuse it", () => {
     // Every release ships exactly one vendored rg, so the version bump alone would do — the asset
@@ -199,7 +218,9 @@ describe("rg resolution", () => {
     // under another key is left strictly alone: nothing here sweeps, by design.
     const [command] = runChild(RESOLVE, cacheEnv(cacheRoot));
     const cacheDir = join(configDirIn(cacheRoot), "rg");
-    expect(readdirSync(cacheDir)).toEqual([`${pkg.version}-${process.platform}-${process.arch}-${statSync(ASSET).size}`]);
+    expect(readdirSync(cacheDir)).toEqual([
+      `${pkg.version}-${process.platform}-${process.arch}-${statSync(ASSET).size}`,
+    ]);
 
     const foreign = join(cacheDir, "0.0.0-otherplatform-otherarch-1");
     mkdirSync(foreign, { recursive: true });
@@ -295,7 +316,9 @@ describe("runRipgrep", () => {
   });
 
   test("still throws when rg genuinely fails", async () => {
-    await expect(runRipgrep(["--definitely-not-a-real-flag", tmpDir])).rejects.toThrow(/rg exited with code/);
+    await expect(runRipgrep(["--definitely-not-a-real-flag", tmpDir])).rejects.toThrow(
+      /rg exited with code/,
+    );
   });
 
   test("ignores the user's own ripgrep config", async () => {
@@ -318,88 +341,102 @@ describe("runRipgrep", () => {
     }
   });
 
-  test.skipIf(process.platform === "win32")("a cancelled search is killed rather than run to completion", async () => {
-    const dir = slowSearchDir("seri-rg-cancel-");
+  test.skipIf(process.platform === "win32")(
+    "a cancelled search is killed rather than run to completion",
+    async () => {
+      const dir = slowSearchDir("seri-rg-cancel-");
 
-    const controller = new AbortController();
-    const search = runRipgrep([...SLOW_SEARCH_ARGS, dir], controller.signal);
-    // Attached now, not after the abort: a rejection observed by nothing in between would surface
-    // as an unhandled rejection rather than as this test's own result.
-    const outcome = search.then(() => "resolved", (err: Error) => `rejected: ${err.message}`);
-    const settledWithin = (ms: number): Promise<string> =>
-      Promise.race([outcome, new Promise<string>((r) => setTimeout(() => r("still searching"), ms))]);
+      const controller = new AbortController();
+      const search = runRipgrep([...SLOW_SEARCH_ARGS, dir], controller.signal);
+      // Attached now, not after the abort: a rejection observed by nothing in between would surface
+      // as an unhandled rejection rather than as this test's own result.
+      const outcome = search.then(
+        () => "resolved",
+        (err: Error) => `rejected: ${err.message}`,
+      );
+      const settledWithin = (ms: number): Promise<string> =>
+        Promise.race([
+          outcome,
+          new Promise<string>((r) => setTimeout(() => r("still searching"), ms)),
+        ]);
 
-    try {
-      // Interrupting a live search, not tidying up a finished one — asserted on the promise and on
-      // the process, since clause (c) is explicitly not satisfied by the call merely returning.
-      //
-      // Waited on the process table rather than on a fixed slice of wall clock. This used to assert
-      // "still searching" after a flat 500 ms, which reads the filesystem's throughput as though it
-      // were a constant of the code. Measured on WSL Ubuntu-24.04 with the same 2 GiB of holes:
-      // 5641 ms on ext4, 3196 ms on tmpfs (/dev/shm) — so a RAM-backed /tmp is only ~1.8x, not the
-      // order of magnitude that would have made 500 ms a live flake, and the old form did pass
-      // there. But 6x of margin is the machine's property, not the assertion's, and it is spent for
-      // nothing: waiting until rg is observed alive and only then checking the promise has not
-      // settled leaves a window of one pgrep instead of a window of one filesystem, and the case
-      // drops from 548 ms to 54 ms.
-      const rgPid = await waitForRgPid(dir, 20_000);
-      expect(await settledWithin(0)).toBe("still searching");
+      try {
+        // Interrupting a live search, not tidying up a finished one — asserted on the promise and on
+        // the process, since clause (c) is explicitly not satisfied by the call merely returning.
+        //
+        // Waited on the process table rather than on a fixed slice of wall clock. This used to assert
+        // "still searching" after a flat 500 ms, which reads the filesystem's throughput as though it
+        // were a constant of the code. Measured on WSL Ubuntu-24.04 with the same 2 GiB of holes:
+        // 5641 ms on ext4, 3196 ms on tmpfs (/dev/shm) — so a RAM-backed /tmp is only ~1.8x, not the
+        // order of magnitude that would have made 500 ms a live flake, and the old form did pass
+        // there. But 6x of margin is the machine's property, not the assertion's, and it is spent for
+        // nothing: waiting until rg is observed alive and only then checking the promise has not
+        // settled leaves a window of one pgrep instead of a window of one filesystem, and the case
+        // drops from 548 ms to 54 ms.
+        const rgPid = await waitForRgPid(dir, 20_000);
+        expect(await settledWithin(0)).toBe("still searching");
 
-      controller.abort();
+        controller.abort();
 
-      // Raced rather than plainly awaited so that dropping the abort listener fails here in 5 s
-      // with "still searching" instead of hanging for the rest of the 2 GiB.
-      expect(await settledWithin(5_000)).toBe("rejected: cancelled");
+        // Raced rather than plainly awaited so that dropping the abort listener fails here in 5 s
+        // with "still searching" instead of hanging for the rest of the 2 GiB.
+        expect(await settledWithin(5_000)).toBe("rejected: cancelled");
 
-      // Polled: a just-killed process is briefly a zombie and still answers kill(pid, 0).
-      const deadline = Date.now() + 5_000;
-      while (isAlive(rgPid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
-      expect(isAlive(rgPid) ? `rg ${rgPid} survived the cancel` : "killed").toBe("killed");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 45_000);
-
-  test.skipIf(process.platform === "win32")("kills an in-flight search when a signal ends the run", async () => {
-    // The gap spawnSync could not have: it blocks until rg is done, so there was never an in-flight
-    // rg for a fatal signal to strand. Now there is, and the timer that would eventually kill it
-    // dies with this process — so rg has to be on the same cleanup list spawnCollect's children are.
-    const dir = slowSearchDir("seri-rg-signal-");
-    // Through the environment, not argv, so the directory names rg's command line and nothing else
-    // — the seri-side process would otherwise carry it too and rgPidFor could return either.
-    const script =
-      `const m = await import(${JSON.stringify(MODULE)});` +
-      `m.runRipgrep([${SLOW_SEARCH_ARGS.map((a) => JSON.stringify(a)).join(", ")}, process.env.SERI_TEST_DIR]).catch(() => {});`;
-    const child = spawn(process.execPath, ["-e", script], {
-      stdio: "ignore",
-      env: { ...process.env, SERI_TEST_DIR: dir },
-    });
-
-    try {
-      // rg being observed alive is the readiness handshake: it cannot be listed until the module was
-      // imported (which is what installs the signal handler) AND the spawn actually happened.
-      const rgPid = await waitForRgPid(dir, 20_000);
-
-      child.kill("SIGTERM");
-      await new Promise((resolve) => child.once("exit", resolve));
-
-      // Polled: rg is briefly a zombie of the process just killed, and kill(pid, 0) succeeds on a
-      // zombie until init reaps it.
-      const deadline = Date.now() + 5_000;
-      while (isAlive(rgPid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
-      expect(isAlive(rgPid) ? `rg ${rgPid} survived SIGTERM` : "killed").toBe("killed");
-    } finally {
-      child.kill("SIGKILL");
-      // A failing run must not leave 2 GiB of searching to burn through the rest of the suite.
-      // Racy by nature — the survivor can be reaped between the two calls — so a throw here is the
-      // process already being gone, not a second failure worth reporting over the real one.
-      const survivor = rgPidFor(dir);
-      if (survivor !== undefined) {
-        try {
-          process.kill(survivor, "SIGKILL");
-        } catch {}
+        // Polled: a just-killed process is briefly a zombie and still answers kill(pid, 0).
+        const deadline = Date.now() + 5_000;
+        while (isAlive(rgPid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+        expect(isAlive(rgPid) ? `rg ${rgPid} survived the cancel` : "killed").toBe("killed");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
       }
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 45_000);
+    },
+    45_000,
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "kills an in-flight search when a signal ends the run",
+    async () => {
+      // The gap spawnSync could not have: it blocks until rg is done, so there was never an in-flight
+      // rg for a fatal signal to strand. Now there is, and the timer that would eventually kill it
+      // dies with this process — so rg has to be on the same cleanup list spawnCollect's children are.
+      const dir = slowSearchDir("seri-rg-signal-");
+      // Through the environment, not argv, so the directory names rg's command line and nothing else
+      // — the seri-side process would otherwise carry it too and rgPidFor could return either.
+      const script =
+        `const m = await import(${JSON.stringify(MODULE)});` +
+        `m.runRipgrep([${SLOW_SEARCH_ARGS.map((a) => JSON.stringify(a)).join(", ")}, process.env.SERI_TEST_DIR]).catch(() => {});`;
+      const child = spawn(process.execPath, ["-e", script], {
+        stdio: "ignore",
+        env: { ...process.env, SERI_TEST_DIR: dir },
+      });
+
+      try {
+        // rg being observed alive is the readiness handshake: it cannot be listed until the module was
+        // imported (which is what installs the signal handler) AND the spawn actually happened.
+        const rgPid = await waitForRgPid(dir, 20_000);
+
+        child.kill("SIGTERM");
+        await new Promise((resolve) => child.once("exit", resolve));
+
+        // Polled: rg is briefly a zombie of the process just killed, and kill(pid, 0) succeeds on a
+        // zombie until init reaps it.
+        const deadline = Date.now() + 5_000;
+        while (isAlive(rgPid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+        expect(isAlive(rgPid) ? `rg ${rgPid} survived SIGTERM` : "killed").toBe("killed");
+      } finally {
+        child.kill("SIGKILL");
+        // A failing run must not leave 2 GiB of searching to burn through the rest of the suite.
+        // Racy by nature — the survivor can be reaped between the two calls — so a throw here is the
+        // process already being gone, not a second failure worth reporting over the real one.
+        const survivor = rgPidFor(dir);
+        if (survivor !== undefined) {
+          try {
+            process.kill(survivor, "SIGKILL");
+          } catch {}
+        }
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    45_000,
+  );
 });

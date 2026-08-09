@@ -9,7 +9,7 @@ describe("parseDiagnostics", () => {
       "",
       "some unrelated progress line",
       "src/b.ts(3,1): error TS2304: Cannot find name 'foo'.",
-      "error: script \"typecheck\" exited with code 1",
+      'error: script "typecheck" exited with code 1',
     ].join("\n");
 
     expect(parseDiagnostics(text)).toEqual([
@@ -24,7 +24,8 @@ describe("parseDiagnostics", () => {
   });
 
   test("parses CRLF output, which is what tsc emits on Windows", () => {
-    const text = "src/a.ts(1,1): error TS1005: ';' expected.\r\nsrc/b.ts(2,2): error TS1005: ';' expected.\r\n";
+    const text =
+      "src/a.ts(1,1): error TS1005: ';' expected.\r\nsrc/b.ts(2,2): error TS1005: ';' expected.\r\n";
     const parsed = parseDiagnostics(text);
     expect(parsed).toHaveLength(2);
     expect(parsed[0].message).toBe("error TS1005: ';' expected.");
@@ -36,7 +37,12 @@ describe("parseDiagnostics", () => {
   test("a line severed by spawnCollect's middle-drop is skipped; the lines around it still parse", () => {
     const head = "src/a.ts(1,1): error TS2322: Type 'number' is not assignable to type 'string'.";
     const tail = "src/z.ts(99,4): error TS2304: Cannot find name 'bar'.";
-    const text = [head, "\n... [4210 characters omitted] ...", "s(41,9): error TS2339: Property 'x' does not exi", tail].join("\n");
+    const text = [
+      head,
+      "\n... [4210 characters omitted] ...",
+      "s(41,9): error TS2339: Property 'x' does not exi",
+      tail,
+    ].join("\n");
 
     expect(parseDiagnostics(text).map((d) => d.file)).toEqual(["src/a.ts", "src/z.ts"]);
   });

@@ -84,7 +84,9 @@ describe("run (argv and usage errors)", () => {
   // silenced rather than collected because none of them asserts on it — the ones that reach it (a
   // provider error, a run stopped at a cap) only ever needed it kept out of the test output. A
   // test that wants to assert on stderr stubs it itself, as the two that do already have.
-  async function captureLogs(invoke: () => Promise<number>): Promise<{ code: number; logs: string[] }> {
+  async function captureLogs(
+    invoke: () => Promise<number>,
+  ): Promise<{ code: number; logs: string[] }> {
     const logs: string[] = [];
     const originalLog = console.log;
     const originalError = console.error;
@@ -117,25 +119,28 @@ describe("run (argv and usage errors)", () => {
   // model as the user message: a session file on disk and a full turn burned (5 tool calls,
   // observed live) to answer a request for the usage text. The key has to be set, or getGroqModel
   // throws before saveSession and the last two assertions would pass for the wrong reason.
-  test.each(["--help", "-h"])("%p prints usage without creating a session or calling the model", async (flag) => {
-    process.env.GROQ_API_KEY = "fake-test-key";
+  test.each(["--help", "-h"])(
+    "%p prints usage without creating a session or calling the model",
+    async (flag) => {
+      process.env.GROQ_API_KEY = "fake-test-key";
 
-    const { fake, capture } = fakeRunLoop();
+      const { fake, capture } = fakeRunLoop();
 
-    const { code, logs } = await captureLogs(() =>
-      run([flag], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
-    );
+      const { code, logs } = await captureLogs(() =>
+        run([flag], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      );
 
-    expect(code).toBe(0);
-    const usage = logs.join("\n");
-    expect(usage).toContain("Usage:");
-    // The usage text restates the SLASH_COMMANDS table, whose whole point is that a command is
-    // defined in one place. `toContain("Usage:")` alone let every advertised line be deleted, so
-    // the half of the text that has a table behind it is checked against the table.
-    for (const name of SLASH_COMMANDS.keys()) expect(usage).toContain(name);
-    expect(capture()).toBeUndefined();
-    expect(readdirSync(sessionsDir)).toEqual([]);
-  });
+      expect(code).toBe(0);
+      const usage = logs.join("\n");
+      expect(usage).toContain("Usage:");
+      // The usage text restates the SLASH_COMMANDS table, whose whole point is that a command is
+      // defined in one place. `toContain("Usage:")` alone let every advertised line be deleted, so
+      // the half of the text that has a table behind it is checked against the table.
+      for (const name of SLASH_COMMANDS.keys()) expect(usage).toContain(name);
+      expect(capture()).toBeUndefined();
+      expect(readdirSync(sessionsDir)).toEqual([]);
+    },
+  );
 
   // The defect above, one argument away: gating on argv.length meant `seri -h config` was not "the
   // whole invocation", so it fell through to the task path and wrote a session file and billed a
@@ -143,46 +148,63 @@ describe("run (argv and usage errors)", () => {
   // position, so this form prints usage without ever reaching the task path — and so do `seri
   // --help --resume` and `seri --version --quiet`, both usage errors now rather than a route to
   // the task path at all.
-  test.each(["--help", "-h"])("%p followed by another argument still prints usage", async (flag) => {
-    process.env.GROQ_API_KEY = "fake-test-key";
+  test.each(["--help", "-h"])(
+    "%p followed by another argument still prints usage",
+    async (flag) => {
+      process.env.GROQ_API_KEY = "fake-test-key";
 
-    const { fake, capture } = fakeRunLoop();
+      const { fake, capture } = fakeRunLoop();
 
-    const { code, logs } = await captureLogs(() =>
-      run([flag, "config"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
-    );
+      const { code, logs } = await captureLogs(() =>
+        run([flag, "config"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      );
 
-    expect(code).toBe(0);
-    expect(logs.join("\n")).toContain("Usage:");
-    expect(capture()).toBeUndefined();
-    expect(readdirSync(sessionsDir)).toEqual([]);
-  });
+      expect(code).toBe(0);
+      expect(logs.join("\n")).toContain("Usage:");
+      expect(capture()).toBeUndefined();
+      expect(readdirSync(sessionsDir)).toEqual([]);
+    },
+  );
 
   // Inverts the pre-parseArgs behaviour: under parseArgs a flag anywhere in argv is a flag, so
   // `seri fix the --help output` now prints usage and never reaches the model — measured on the
   // compiled binary that `claude fix the --help output` behaves the same way. `--` is the
   // documented escape for a task that contains what looks like a flag, exercised in the same test
   // so it never needs a third copy of this fake.
-  test.each(["--help", "-h"])("a task containing %p prints usage instead of reaching the model; -- escapes it", async (flag) => {
-    process.env.GROQ_API_KEY = "fake-test-key";
+  test.each(["--help", "-h"])(
+    "a task containing %p prints usage instead of reaching the model; -- escapes it",
+    async (flag) => {
+      process.env.GROQ_API_KEY = "fake-test-key";
 
-    const { fake, capture } = fakeRunLoop();
+      const { fake, capture } = fakeRunLoop();
 
-    const { code, logs } = await captureLogs(() =>
-      run(["fix", "the", flag, "output"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
-    );
+      const { code, logs } = await captureLogs(() =>
+        run(["fix", "the", flag, "output"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+          sessionsDir,
+        }),
+      );
 
-    expect(code).toBe(0);
-    expect(logs.join("\n")).toContain("Usage:");
-    expect(capture()).toBeUndefined();
-    expect(readdirSync(sessionsDir)).toEqual([]);
+      expect(code).toBe(0);
+      expect(logs.join("\n")).toContain("Usage:");
+      expect(capture()).toBeUndefined();
+      expect(readdirSync(sessionsDir)).toEqual([]);
 
-    await captureLogs(() =>
-      run(["--", "fix", "the", flag, "output"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
-    );
+      await captureLogs(() =>
+        run(["--", "fix", "the", flag, "output"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+          sessionsDir,
+        }),
+      );
 
-    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: `fix the ${flag} output` });
-  });
+      expect(capture()?.messages.at(-1)).toEqual({
+        role: "user",
+        content: `fix the ${flag} output`,
+      });
+    },
+  );
 
   // The same inversion for the third flag: `seri fix the --selftest flag` now runs the
   // build-verification selftest and never reaches the model; `--` escapes it the same way.
@@ -209,10 +231,18 @@ describe("run (argv and usage errors)", () => {
     expect(logs.join("\n")).toContain("selftest ok");
 
     await captureLogs(() =>
-      run(["--", "fix", "the", "--selftest", "flag"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir, grep: grepFn }),
+      run(["--", "fix", "the", "--selftest", "flag"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        grep: grepFn,
+      }),
     );
 
-    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "fix the --selftest flag" });
+    expect(capture()?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "fix the --selftest flag",
+    });
   });
 
   test("bare seri prints usage instead of exiting silently", async () => {
@@ -247,7 +277,11 @@ describe("run (argv and usage errors)", () => {
     console.error = (msg: string) => errors.push(String(msg));
     let code: number;
     try {
-      code = await run(["--resume", "--help"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir });
+      code = await run(["--resume", "--help"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      });
     } finally {
       console.error = originalError;
     }
@@ -281,7 +315,11 @@ describe("run (argv and usage errors)", () => {
     const { fake, capture } = fakeRunLoop();
 
     await captureLogs(() =>
-      run(["--max-turns", "3", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["--max-turns", "3", "do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
     );
 
     expect(capture()?.maxIterations).toBe(3);
@@ -293,7 +331,11 @@ describe("run (argv and usage errors)", () => {
     const { fake, capture } = fakeRunLoop();
 
     const { code } = await captureLogs(() =>
-      run(["--max-turns", value, "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["--max-turns", value, "do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(2);
@@ -329,7 +371,11 @@ describe("run (argv and usage errors)", () => {
     const { fake, capture } = fakeRunLoop();
 
     const { code } = await captureLogs(() =>
-      run(["--dangerously-skip-permissions", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["--dangerously-skip-permissions", "do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
     );
 
     expect(code).not.toBe(2);
@@ -342,7 +388,11 @@ describe("run (argv and usage errors)", () => {
     const { fake, capture } = fakeRunLoop();
 
     const { code } = await captureLogs(() =>
-      run(["--dangerously-skip-permissions"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["--dangerously-skip-permissions"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(2);
@@ -411,7 +461,9 @@ describe("run (argv and usage errors)", () => {
       process.env.GROQ_API_KEY = "fake-test-key";
       const { fake, capture } = fakeRunLoop();
 
-      await captureLogs(() => run(["--profile", "work", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }));
+      await captureLogs(() =>
+        run(["--profile", "work", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }),
+      );
 
       expect(capture()).toBeDefined();
       const base = getBaseConfigDir();
@@ -424,7 +476,9 @@ describe("run (argv and usage errors)", () => {
       process.env.SERI_PROFILE = "work";
       const { fake, capture } = fakeRunLoop();
 
-      await captureLogs(() => run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }));
+      await captureLogs(() =>
+        run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }),
+      );
 
       expect(capture()).toBeDefined();
       const base = getBaseConfigDir();
@@ -439,7 +493,9 @@ describe("run (argv and usage errors)", () => {
       process.env.SERI_PROFILE = "envd";
       const { fake, capture } = fakeRunLoop();
 
-      await captureLogs(() => run(["--profile", "work", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }));
+      await captureLogs(() =>
+        run(["--profile", "work", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }),
+      );
 
       expect(capture()).toBeDefined();
       const base = getBaseConfigDir();
@@ -451,7 +507,10 @@ describe("run (argv and usage errors)", () => {
       const { fake, capture } = fakeRunLoop();
 
       const { code } = await captureLogs(() =>
-        run(["--profile", "sessions", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }),
+        run(["--profile", "sessions", "do", "a", "task"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+        }),
       );
 
       expect(code).toBe(2);
@@ -465,7 +524,12 @@ describe("run (argv and usage errors)", () => {
       process.env.GROQ_API_KEY = "fake-test-key";
       const { fake, capture } = fakeRunLoop();
 
-      await captureLogs(() => run(["--profile", "default", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }));
+      await captureLogs(() =>
+        run(["--profile", "default", "do", "a", "task"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+        }),
+      );
 
       expect(capture()).toBeDefined();
       const base = getBaseConfigDir();
@@ -487,9 +551,16 @@ describe("run (argv and usage errors)", () => {
       process.env.GROQ_API_KEY = "fake-test-key";
       const { fake } = fakeRunLoop();
 
-      await captureLogs(() => run(["--profile", "work", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }));
+      await captureLogs(() =>
+        run(["--profile", "work", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }),
+      );
 
-      const { code } = await captureLogs(() => run(["--max-turns", "garbage", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }));
+      const { code } = await captureLogs(() =>
+        run(["--max-turns", "garbage", "do", "a", "task"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+        }),
+      );
 
       expect(code).toBe(2);
       expect(getConfigDir()).toBe(getBaseConfigDir());
@@ -597,24 +668,27 @@ describe("run (login/signup/logout)", () => {
   // "Flags are flags anywhere" means --help never reaches these subcommands: seri's own USAGE wins
   // instead of the subcommand ever running. A real behaviour change from `main`, and the approved
   // design (not a defect) — pinned so it stays intentional.
-  test.each(["login", "signup", "logout"])("`seri %s --help` prints seri's usage, not the subcommand", async (subcommand) => {
-    const logs: string[] = [];
-    const originalLog = console.log;
-    console.log = (msg: string) => logs.push(String(msg));
-    let code: number;
-    try {
-      code = await run([subcommand, "--help"], {
-        login: failIfCalled("login"),
-        logout: failIfCalled("logout"),
-        authConfigDir: "fake-config-dir",
-        getGroqModel: failIfCalled("getGroqModel"),
-        loadAgentsFile: failIfCalled("loadAgentsFile"),
-      });
-    } finally {
-      console.log = originalLog;
-    }
+  test.each(["login", "signup", "logout"])(
+    "`seri %s --help` prints seri's usage, not the subcommand",
+    async (subcommand) => {
+      const logs: string[] = [];
+      const originalLog = console.log;
+      console.log = (msg: string) => logs.push(String(msg));
+      let code: number;
+      try {
+        code = await run([subcommand, "--help"], {
+          login: failIfCalled("login"),
+          logout: failIfCalled("logout"),
+          authConfigDir: "fake-config-dir",
+          getGroqModel: failIfCalled("getGroqModel"),
+          loadAgentsFile: failIfCalled("loadAgentsFile"),
+        });
+      } finally {
+        console.log = originalLog;
+      }
 
-    expect(code).toBe(0);
-    expect(logs.join("\n")).toContain("Usage:");
-  });
+      expect(code).toBe(0);
+      expect(logs.join("\n")).toContain("Usage:");
+    },
+  );
 });

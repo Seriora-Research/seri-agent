@@ -21,21 +21,21 @@ function deps(pollResult: TokenResult) {
 
 describe("login", () => {
   test("throws 'Authorization was denied.' when pollForToken resolves denied", async () => {
-    await expect(login("login", "client_123", "fake-config-dir", deps({ status: "denied" }))).rejects.toThrow(
-      "Authorization was denied.",
-    );
+    await expect(
+      login("login", "client_123", "fake-config-dir", deps({ status: "denied" })),
+    ).rejects.toThrow("Authorization was denied.");
   });
 
   test("throws the expiry message when pollForToken resolves expired", async () => {
-    await expect(login("login", "client_123", "fake-config-dir", deps({ status: "expired" }))).rejects.toThrow(
-      "The login request expired. Please try again.",
-    );
+    await expect(
+      login("login", "client_123", "fake-config-dir", deps({ status: "expired" })),
+    ).rejects.toThrow("The login request expired. Please try again.");
   });
 
   test("throws the underlying message when pollForToken resolves error", async () => {
     const message = "WorkOS returned an unexpected error during authentication: invalid_client";
-    await expect(login("login", "client_123", "fake-config-dir", deps({ status: "error", message }))).rejects.toThrow(
-      message,
-    );
+    await expect(
+      login("login", "client_123", "fake-config-dir", deps({ status: "error", message })),
+    ).rejects.toThrow(message);
   });
 });

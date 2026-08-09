@@ -107,7 +107,11 @@ function scalarStrings(seq: YAMLSeq): string[] {
 // The file is hand-editable, so a name outside PERSISTABLE_TOOLS reaching this far (typed by hand,
 // or by anything else that can write the config dir) is dropped rather than honoured, and named so
 // the drop is not silent.
-function extractToolList(node: unknown, path: string, onWarning: ((message: string) => void) | undefined): string[] {
+function extractToolList(
+  node: unknown,
+  path: string,
+  onWarning: ((message: string) => void) | undefined,
+): string[] {
   if (!(node instanceof YAMLSeq)) return [];
   const result: string[] = [];
   for (const value of scalarStrings(node)) {
@@ -132,7 +136,11 @@ function toolsInDoc(doc: Document, key: string): string[] {
   return [...globalTools, ...projectTools];
 }
 
-export function loadGrants(configDir: string, worktree: string, onWarning?: (message: string) => void): Grants {
+export function loadGrants(
+  configDir: string,
+  worktree: string,
+  onWarning?: (message: string) => void,
+): Grants {
   const path = permissionsPath(configDir);
   const state = readStore(configDir);
   if (state.status === "missing") return { global: [], project: [], otherProjects: 0 };
@@ -182,7 +190,12 @@ function writeDocument(doc: Document, configDir: string): void {
 // JSON. `.flow = false` on the map/seq this call touches is what keeps a freshly-populated
 // `projects: {}`/entry list in the block style the populated example in the plan shows, rather than
 // yaml's default of matching the empty flow collection's own style.
-export function rememberGrant(configDir: string, worktree: string, tool: string, onWarning?: (message: string) => void): boolean {
+export function rememberGrant(
+  configDir: string,
+  worktree: string,
+  tool: string,
+  onWarning?: (message: string) => void,
+): boolean {
   if (!PERSISTABLE_TOOLS.has(tool)) return false;
   const path = permissionsPath(configDir);
   const state = readStore(configDir);
@@ -244,7 +257,12 @@ export function forgetGrant(
   // Prune the project's key entirely once its list is empty, rather than leaving `key: []`
   // behind: an orphaned empty list would still count toward loadGrants' otherProjects below
   // forever, and it clutters the hand-editable file with an entry nobody put there on purpose.
-  if (removedProject && list instanceof YAMLSeq && list.items.length === 0 && projectsNode instanceof YAMLMap) {
+  if (
+    removedProject &&
+    list instanceof YAMLSeq &&
+    list.items.length === 0 &&
+    projectsNode instanceof YAMLMap
+  ) {
     projectsNode.delete(key);
   }
 
@@ -253,7 +271,9 @@ export function forgetGrant(
 }
 
 function removeFromSeq(seq: YAMLSeq, tool: string): boolean {
-  const index = seq.items.findIndex((item) => (item instanceof Scalar ? item.value : item) === tool);
+  const index = seq.items.findIndex(
+    (item) => (item instanceof Scalar ? item.value : item) === tool,
+  );
   if (index === -1) return false;
   seq.items.splice(index, 1);
   return true;
