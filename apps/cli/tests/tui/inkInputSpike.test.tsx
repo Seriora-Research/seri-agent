@@ -11,6 +11,13 @@
 // await a tick before reading lastFrame(), same as asserting on any other React state update.
 // Phase 4's input-driven component tests use ink-testing-library on this basis; no bespoke harness
 // needed.
+//
+// Kept permanently rather than deleted once the spike was answered (L-4, thermo-nuclear review):
+// this is not a seri behavior test — it is an upgrade canary. A future ink-testing-library or Ink
+// version bump that regresses this exact wiring (the library's own issue #29 is evidence it has
+// happened before) shows up here first, with the same measurement above still explaining what a
+// failure would mean, rather than being rediscovered by a Phase-4-style component test going red
+// for a reason unrelated to whatever it was actually testing.
 import { describe, expect, test } from "bun:test";
 import { Text, useInput } from "ink";
 import { render } from "ink-testing-library";
