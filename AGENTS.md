@@ -69,9 +69,16 @@ duration of one `driveLoop` call, not the process's whole lifetime, so a Ctrl-C 
 nothing is running (between turns) finds the slot already empty and is immediately fatal, not a
 "first press" with a second still to come. The TUI never exits on its own once a turn
 completes — it returns to awaiting input for another task or slash command, indefinitely; the
-only graceful exit is `/exit` or Ctrl-D at the input box, both of which unmount the TUI and
-resolve the run with a normal exit code and the same final `printUsage` token/cost summary the
-non-interactive path prints, accumulated across every turn the session ran.
+only graceful exit is `/exit` (an exact match — trailing words make it an ordinary task instead,
+same as every other slash command's own `accepts()` guard) or Ctrl-D at the input box. If nothing
+is running, both unmount the TUI immediately and resolve the run with a normal exit code and the
+same final `printUsage` token/cost summary the non-interactive path prints, accumulated across
+every turn the session ran (exit 0, the same as any other completed `no-tool-call` turn). If a
+turn IS in flight, quitting cancels it first — the same `deliverSignal`/cancel-slot mechanism a
+single Ctrl-C uses — and waits for it to actually unwind before exiting, so a tool mid-write is
+never orphaned and whatever usage that turn had already spent still makes it into the summary;
+the exit code in that case is 1 (an aborted turn, same as every other cancelled-and-not-finished
+run), not 0 — `seri "task" && next` must not run `next` off the back of a task `/exit` cut short.
 
 **Gate-first permissions**, not sandboxing. `apps/cli/src/gate/gate.ts` defines three
 `PermissionMode`s (`read-only` / `approve-each` / `auto`) that cycle via `/mode`. A new
