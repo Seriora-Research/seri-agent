@@ -50,10 +50,12 @@ export type TuiAction =
   | { type: "loop-event"; event: LoopEvent }
   | { type: "command-error"; message: string };
 
-// A shorthand used across driveLoop, the slash-command presenters, and the TUI entry point in
-// cli.ts — every one of them just needs "given this action, do something with it," with the two
-// concrete implementations (printEvent's own call site and tuiPresenter) deciding what. Lives
-// here, not cli.ts, since it is built from TuiAction, declared right above it.
+// A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
+// prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
+// `dispatch` handle built from it, and tuiPresenter (cli.ts), which dispatches into it rather
+// than printing. driveLoop itself takes a plain `onEvent: (event: LoopEvent) => void` now, not
+// this — it only ever dispatched one action shape, so it no longer needs to know TuiAction
+// exists at all. Lives here, not cli.ts, since it is built from TuiAction, declared right above.
 export type Dispatch = (action: TuiAction) => void;
 
 export function tuiReducer(state: TuiState, action: TuiAction): TuiState {

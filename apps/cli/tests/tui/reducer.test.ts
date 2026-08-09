@@ -49,6 +49,39 @@ describe("tuiReducer: transcript-append", () => {
     expect(next.transcript).toEqual(["Session s1: permission mode is now auto"]);
     expect(next.session).toBe(state.session);
   });
+
+  // Regression guard: transcript-append used to be a bare append (`{ ...state, transcript:
+  // [...state.transcript, action.line] }`), unlike every other transcript-writing case, which
+  // all go through pushLine and flush state.streaming first. Harmless while transcript-append had
+  // no real callers mid-stream, but tuiPresenter.message, undoPlanLines/recoveryLines, and quit()'s
+  // own "quitting - cancelling..." line all dispatch it now, and the last of those can fire WHILE
+  // a turn is still streaming text (a /mode or /exit typed mid-answer) — a bare append would leave
+  // the partial answer sitting in `streaming`, appended later, AFTER the transcript-append line,
+  // reordering the transcript against what the model actually said first. The test above alone
+  // does not catch this: initialTuiState's own streaming is already "", so a bare append and
+  // pushLine produce identical results there. Verified: reverting transcript-append's case to the
+  // bare append above and re-running this test fails it — the bare append never touches
+  // `streaming` at all, so `next.streaming` stays "the streamed answer so far" (not "") and
+  // `next.transcript` is only `["/mode: permission mode is now auto"]`, missing the streamed
+  // text entirely rather than having it flushed first.
+  test("flushes pending streamed text before the appended line, same as every other transcript-writing case", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "the streamed answer so far" },
+    });
+
+    const next = tuiReducer(state, {
+      type: "transcript-append",
+      line: "/mode: permission mode is now auto",
+    });
+
+    expect(next.transcript).toEqual([
+      "the streamed answer so far",
+      "/mode: permission mode is now auto",
+    ]);
+    expect(next.streaming).toBe("");
+  });
 });
 
 describe("tuiReducer: loop-event", () => {
