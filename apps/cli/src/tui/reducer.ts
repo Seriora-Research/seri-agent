@@ -50,6 +50,12 @@ export type TuiAction =
   | { type: "loop-event"; event: LoopEvent }
   | { type: "command-error"; message: string };
 
+// A shorthand used across driveLoop, the slash-command presenters, and the TUI entry point in
+// cli.ts — every one of them just needs "given this action, do something with it," with the two
+// concrete implementations (printEvent's own call site and tuiPresenter) deciding what. Lives
+// here, not cli.ts, since it is built from TuiAction, declared right above it.
+export type Dispatch = (action: TuiAction) => void;
+
 export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
   switch (action.type) {
     case "session-updated":
@@ -58,8 +64,13 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         session: action.session,
         modeIndicator: modeIndicator(action.session.permissionMode),
       };
+    // pushLine, not a bare append: this used to be harmless when transcript-append had no real
+    // callers, but tuiPresenter.message, undoPlanLines/recoveryLines and quit()'s own "quitting -
+    // cancelling..." line all go through this case now, and the last of those fires specifically
+    // WHILE a turn may still be streaming text — without flushing here first, a /mode or /exit
+    // typed mid-stream reordered the transcript against the model's own still-in-progress answer.
     case "transcript-append":
-      return { ...state, transcript: [...state.transcript, action.line] };
+      return pushLine(state, action.line);
     case "loop-event":
       return applyLoopEvent(state, action.event);
     case "command-error":
