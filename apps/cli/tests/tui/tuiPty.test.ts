@@ -352,6 +352,7 @@ function startChild(
   // wait for the SECOND (or Nth) one specifically rather than racing turn 2's own completion
   // against an assertion that turn 1 alone already satisfies.
   sawLineTimes: (line: string, count: number) => Promise<void>;
+  occurrences: (line: string) => number;
 } {
   const args = ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, scriptPath];
   const child = spawn("python3", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
@@ -399,7 +400,7 @@ function startChild(
       );
   };
 
-  return { child, exited, sawLine, sawLineTimes };
+  return { child, exited, sawLine, sawLineTimes, occurrences };
 }
 
 // Windows has no pty to allocate — same constraint as approvalPromptPty.test.ts. Real execution is
@@ -464,7 +465,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-input.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
 
@@ -478,6 +479,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // permissionMode ("approve-each") one step, dispatched into the transcript by tuiPresenter
       // (Phase 5) rather than console.log'd — this line only appears if that whole chain ran.
       await sawLine("permission mode is now auto");
+      // The submitted command itself, echoed into the persistent transcript exactly once — not
+      // just its result. onSubmit's own transcript-append dispatch, before the command dispatch.
+      expect(occurrences("> /mode")).toBe(1);
     } finally {
       child.kill("SIGKILL");
     }
@@ -589,7 +593,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-multi-turn.mjs");
     writeFileSync(scriptPath, childScriptMultiTurn(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
     try {
       // prepareSession appended the initial task as the session's only message.
       await sawLine("RUNLOOP_CALL 1 messages=1");
@@ -618,6 +622,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // 1 initial + 1 turn-1 assistant reply + 1 new user message = 3, and the app is still
       // running to report it at all — proof it did not exit after the first turn.
       await sawLine("RUNLOOP_CALL 2 messages=3");
+      // The second task's own text, echoed into the persistent transcript exactly once — the
+      // input box's live reflection (waited on above) is not the same thing as the submitted
+      // line actually landing in Static.
+      expect(occurrences("> a second task")).toBe(1);
     } finally {
       child.kill("SIGKILL");
     }
