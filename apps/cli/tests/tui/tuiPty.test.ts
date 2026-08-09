@@ -814,7 +814,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   // the first place — the existing reducer-unit test only checks in-memory state, which the old,
   // buggy code also got right eventually; the bug was specifically about what landed on disk in
   // between. Asserts the on-disk session file directly, not the transcript or reducer state.
-  test("a mid-turn /mode change is on disk immediately and a still-running turn's later write does not revert it", async () => {
+  test("a mid-turn /mode change is on disk before the turn's next write, and that write does not revert it", async () => {
     const flagPath = join(dir, "release-turn");
     const scriptPath = join(dir, "child-mode-persist.mjs");
     writeFileSync(scriptPath, childScriptModePersistence(dir, flagPath));
