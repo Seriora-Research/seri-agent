@@ -13,6 +13,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@ai-sdk/groq": "^4.0.19",
+        "@seri/model-catalog": "workspace:*",
         "@vscode/ripgrep": "^1.18.0",
         "ai": "^7.0.47",
         "ink": "^7.1.1",
