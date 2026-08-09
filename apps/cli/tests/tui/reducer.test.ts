@@ -82,6 +82,30 @@ describe("tuiReducer: transcript-append", () => {
     ]);
     expect(next.streaming).toBe("");
   });
+
+  // Design-question fix (this PR's own follow-up): echoUserInput (cli.ts) dispatches
+  // transcript-append with `flush: false` for a submission REJECTED by a mid-turn gate (e.g.
+  // MEDIUM-3's /rewind-while-turnInFlight check) — the model's own turn is unaffected, so echoing
+  // the rejected text should not fragment its still-in-progress answer into two transcript
+  // entries. `flush: false` must not touch `streaming` at all: not flush it into transcript (that
+  // would still fragment the answer) and not clear it either (that would silently drop the
+  // model's partial text — a worse bug than the one being fixed).
+  test("flush: false appends the line without flushing OR clearing pending streamed text", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "the model's still-in-progress answer" },
+    });
+
+    const next = tuiReducer(state, {
+      type: "transcript-append",
+      line: "> /rewind 1",
+      flush: false,
+    });
+
+    expect(next.transcript).toEqual(["> /rewind 1"]);
+    expect(next.streaming).toBe("the model's still-in-progress answer");
+  });
 });
 
 describe("tuiReducer: loop-event", () => {

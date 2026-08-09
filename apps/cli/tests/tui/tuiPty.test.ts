@@ -301,6 +301,40 @@ function childScriptModePersistence(dir: string, flagPath: string): string {
   ].join("\n");
 }
 
+// Design-question fix (this PR's own follow-up): a runLoop that streams text in two parts with a
+// gap in between, released by the same flag-file pattern childScriptModePersistence uses, so a
+// /rewind sent during that gap (rejected by MEDIUM-3's turnInFlight check) lands while the model's
+// answer is genuinely still in progress — not resolved yet, same as the mode-persistence script's
+// own reasoning for using a flag file instead of a fixed delay.
+function childScriptRewindDuringStream(dir: string, flagPath: string): string {
+  return [
+    `import { existsSync } from "node:fs";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "text-delta", text: "Hello " };`,
+    `  console.log("\\nSTREAM_PART_1");`,
+    `  await new Promise((resolve) => {`,
+    `    const check = () => { if (existsSync(${JSON.stringify(flagPath)})) resolve(); else setTimeout(check, 20); };`,
+    `    check();`,
+    `  });`,
+    `  yield { type: "text-delta", text: "world" };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
 // research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
 // identical signature... with zero change to loop.ts/gate.ts") that every earlier round of this
@@ -886,6 +920,37 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("/mode");
       child.stdin?.write("\r");
       await sawLine("permission mode is now auto");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // Design-question fix (this PR's own follow-up): a submission rejected by the turnInFlight gate
+  // (same /rewind-while-in-flight gate as the test just above) still gets echoed, per this whole
+  // PR's own point — but the echo must not fragment the model's still-streaming answer into two
+  // transcript entries via transcript-append's own default flush behavior. "Hello " streams, /rewind
+  // 1 is sent and rejected while that is still pending, then "world" streams and the turn finishes
+  // — end-to-end proof (not just the reducer-unit level) that the full answer lands as ONE
+  // contiguous transcript entry, "Hello world", not split around the rejected command's own echo.
+  test("a submission rejected by the turnInFlight gate is echoed without fragmenting the model's in-progress answer", async () => {
+    const flagPath = join(dir, "release-turn");
+    const scriptPath = join(dir, "child-rewind-during-stream.mjs");
+    writeFileSync(scriptPath, childScriptRewindDuringStream(dir, flagPath));
+
+    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+      await sawLine("STREAM_PART_1");
+
+      child.stdin?.write("/rewind 1");
+      await sawLine("/rewind 1");
+      child.stdin?.write("\r");
+      await sawLine("/rewind: can't run while a turn is in flight.");
+
+      writeFileSync(flagPath, "");
+      await sawLine("(done: no-tool-call)");
+
+      expect(occurrences("Hello world")).toBe(1);
     } finally {
       child.kill("SIGKILL");
     }

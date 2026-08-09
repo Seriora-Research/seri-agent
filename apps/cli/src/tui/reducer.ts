@@ -56,7 +56,10 @@ export function initialTuiState(session: SessionState<ModelMessage>): TuiState {
 
 export type TuiAction =
   | { type: "session-updated"; session: SessionState<ModelMessage> }
-  | { type: "transcript-append"; line: string }
+  // `flush` defaults to true (every existing caller relies on that) — set to false by a submission
+  // echo that must not fragment an in-progress streamed answer into two transcript entries (see
+  // pushLine's own comment).
+  | { type: "transcript-append"; line: string; flush?: boolean }
   | { type: "loop-event"; event: LoopEvent }
   | { type: "command-error"; message: string }
   | { type: "approval-requested"; toolName: string; args: unknown; offersAlways: boolean }
@@ -84,7 +87,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     // WHILE a turn may still be streaming text — without flushing here first, a /mode or /exit
     // typed mid-stream reordered the transcript against the model's own still-in-progress answer.
     case "transcript-append":
-      return pushLine(state, action.line);
+      return pushLine(state, action.line, action.flush ?? true);
     case "loop-event":
       return applyLoopEvent(state, action.event);
     case "command-error":
@@ -105,7 +108,12 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
 
 // Commits any pending streamed text as its own transcript line before appending `line`, so a
 // tool-call/done/error that arrives mid-stream does not discard the model's partial answer.
-function pushLine(state: TuiState, line: string): TuiState {
+// `flush: false` (a submission echo — see TuiAction's own comment) skips that flush-transfer
+// entirely and leaves `state.streaming` untouched: not moved into `transcript` (still committed
+// later, whole, by whatever event finishes the turn) and not cleared either (clearing it would
+// silently drop the model's in-progress text instead of just deferring its commit).
+function pushLine(state: TuiState, line: string, flush = true): TuiState {
+  if (!flush) return { ...state, transcript: [...state.transcript, line] };
   const transcript =
     state.streaming.length > 0 ? [...state.transcript, state.streaming] : state.transcript;
   return { ...state, transcript: [...transcript, line], streaming: "" };

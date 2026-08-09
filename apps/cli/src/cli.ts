@@ -1164,9 +1164,14 @@ async function runTui(
     reactDispatch?.(action);
   };
   // Echoes the user's own submitted text into the persistent transcript — onSubmit and
-  // connectDispatch's initial-argv-task case both need this, verbatim.
+  // connectDispatch's initial-argv-task case both need this, verbatim. `flush: false`: a
+  // submission this echoes can be REJECTED (e.g. MEDIUM-3's turnInFlight gate) while the model's
+  // own turn keeps streaming unaffected — flushing here would fragment that in-progress answer
+  // into two transcript entries for a submission that did nothing. The rejected/accepted text
+  // still gets echoed either way (this whole fix's own point); only the flush side-effect is
+  // skipped.
   const echoUserInput = (text: string): void =>
-    dispatch({ type: "transcript-append", line: `> ${text.trim()}` });
+    dispatch({ type: "transcript-append", line: `> ${text.trim()}`, flush: false });
   let turnInFlight = false;
   // HIGH-B: the currently in-flight turn's own promise (a fresh one assigned at each of the two
   // call sites that start one, both guarded so a new turn is never started while one is already
