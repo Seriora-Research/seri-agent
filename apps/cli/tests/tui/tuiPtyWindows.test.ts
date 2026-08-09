@@ -115,11 +115,19 @@ function startChildNodePty(pty: typeof PtyModule, scriptPath: string, cwd: strin
 // targeting the actual leaked child.
 function killOrphansByScriptPath(scriptPath: string): void {
   const escaped = scriptPath.replace(/'/g, "''");
-  spawnSync("powershell", [
-    "-NoProfile",
-    "-Command",
-    `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains('${escaped}') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
-  ]);
+  // timeout: this runs synchronously in the test's own `finally` — spawnSync blocks the JS thread,
+  // so no timer (bun test's own per-test timeout included) can fire while Get-CimInstance is stuck,
+  // and it's known to occasionally stall on Windows. A few seconds is plenty for a local WMI query;
+  // a stall past that degrades to "cleanup didn't fully finish" instead of hanging the process.
+  spawnSync(
+    "powershell",
+    [
+      "-NoProfile",
+      "-Command",
+      `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains('${escaped}') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
+    ],
+    { timeout: 5_000 },
+  );
 }
 
 function timeAtOffset(chunks: Chunk[], offset: number): number {
@@ -165,7 +173,17 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
       try {
         // A single wait covers the whole turn: "(done: ...)" only appears after RUNLOOP_READY, the
         // tool-call line, and the tool-result confirmation line have all already been flushed.
-        await waitFor("(done: no-tool-call)", 20_000);
+        // Checked directly, not discarded: a regression here used to fall through to the
+        // less-specific RUNLOOP_READY/╭ checks below (which can still pass) before eventually
+        // failing ~20s later on an unrelated resultChunkIndex check — this fails immediately, at
+        // the actual point of regression, naming what never appeared (same shape as the sibling
+        // tuiPty.test.ts's own sawLine).
+        const sawDone = await waitFor("(done: no-tool-call)", 20_000);
+        if (!sawDone) {
+          throw new Error(
+            `child never printed "(done: no-tool-call)"; got ${JSON.stringify(decodedSoFar())}`,
+          );
+        }
         // Trailing bytes (the closing esu, if any) can arrive a beat after the decoded text does —
         // give them a moment before the buffer is treated as final.
         await new Promise((r) => setTimeout(r, 300));
@@ -199,22 +217,39 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
           return;
         }
 
+        // Where the confirmation flush lives, needed by both (b) and (c) below.
+        const resultChunkIndex = chunks.findIndex((c) =>
+          c.decodedSoFar.includes("✓ write_file done"),
+        );
+        expect(resultChunkIndex).toBeGreaterThanOrEqual(0);
+        const resultVisibleTime = chunks[resultChunkIndex].time;
+        // Bytes preceding and including the chunk the confirmation text first appears in.
+        const resultByteOffset = chunks
+          .slice(0, resultChunkIndex + 1)
+          .reduce((sum, c) => sum + c.buf.length, 0);
+
         // (b) bsu/esu alternate strictly, starting with bsu, never orphaned and never doubled, and
-        // nothing left open at the end. This is a sanity check on ConPTY's OWN re-serialized output
-        // stream, not on what Ink literally wrote to its pty: a real capture of this exact scenario
-        // decoded to `...\x1b[?2026h\x1b[m\x1b[?2026l\x1b[5;1H✓ write_file done...` — bsu, an SGR
-        // reset, esu, THEN the cursor move and the text, with nothing resembling "✓ write_file done"
-        // between bsu and esu at all (three of the four pairs captured were fully empty; the
-        // fourth — this one — held only the 3-byte SGR reset). Ink's own literal write is
-        // `bsu → staticOutput → esu` as one call (ink.js:779-790) with the rendered frame INSIDE the
-        // bracket; what this harness observes instead is ConPTY's own synthesized bracket around its
-        // own screen-buffer diff, since ConPTY applies the child's VT stream to an internal buffer
-        // and re-serializes its own output for the reader rather than forwarding bytes verbatim.
-        // This pairing check therefore says nothing about whether INK's own bracket was well-formed
-        // — that's established by reading ink.js:779-790, not by this capture — it only confirms
-        // ConPTY's re-serialization is itself internally consistent.
+        // nothing left open, THROUGH the confirmation flush — not the entire remaining capture:
+        // the 300ms tail above is enough for the confirmation flush's own esu to land, but a later,
+        // slower frame's bsu (a subsequent Static flush this test doesn't otherwise wait for) could
+        // still be mid-flight with its esu not yet arrived when the snapshot above was taken, and
+        // that has nothing to do with the claim this test is actually making. This is a sanity check
+        // on ConPTY's OWN re-serialized output stream, not on what Ink literally wrote to its pty: a
+        // real capture of this exact scenario decoded to
+        // `...\x1b[?2026h\x1b[m\x1b[?2026l\x1b[5;1H✓ write_file done...` — bsu, an SGR reset, esu,
+        // THEN the cursor move and the text, with nothing resembling "✓ write_file done" between bsu
+        // and esu at all (three of the four pairs captured were fully empty; the fourth — this one
+        // — held only the 3-byte SGR reset). Ink's own literal write is `bsu → staticOutput → esu`
+        // as one call (ink.js:779-790) with the rendered frame INSIDE the bracket; what this harness
+        // observes instead is ConPTY's own synthesized bracket around its own screen-buffer diff,
+        // since ConPTY applies the child's VT stream to an internal buffer and re-serializes its own
+        // output for the reader rather than forwarding bytes verbatim. This pairing check therefore
+        // says nothing about whether INK's own bracket was well-formed — that's established by
+        // reading ink.js:779-790, not by this capture — it only confirms ConPTY's re-serialization
+        // is itself internally consistent.
+        const relevantEvents = events.filter((e) => e.offset < resultByteOffset);
         let open = false;
-        for (const e of events) {
+        for (const e of relevantEvents) {
           if (e.type === "bsu") {
             expect(open).toBe(false);
             open = true;
@@ -234,18 +269,8 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
         // synchronized here. What's left worth asserting: the bracket and the content near it still
         // land close together in wall-clock time; a real stall in seri's own event pipeline (as
         // opposed to ConPTY's harmless re-ordering) would show up as a large gap here instead.
-        const resultChunkIndex = chunks.findIndex((c) =>
-          c.decodedSoFar.includes("✓ write_file done"),
-        );
-        expect(resultChunkIndex).toBeGreaterThanOrEqual(0);
-        const resultVisibleTime = chunks[resultChunkIndex].time;
-        // Bytes preceding and including the chunk the confirmation text first appears in — the esu
-        // nearest that point, not simply the last esu in the whole capture (a later, unrelated
-        // Static flush — e.g. a subsequent turn — would otherwise be picked instead).
-        const resultByteOffset = chunks
-          .slice(0, resultChunkIndex + 1)
-          .reduce((sum, c) => sum + c.buf.length, 0);
-
+        // The esu nearest resultByteOffset, not simply the last esu in the whole capture (a later,
+        // unrelated Static flush — e.g. a subsequent turn — would otherwise be picked instead).
         const nearestEsuOffset = findAllOffsets(all, ESU)
           .filter((offset) => offset < resultByteOffset)
           .at(-1);
