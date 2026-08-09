@@ -108,4 +108,32 @@ describe("tuiReducer: loop-event", () => {
     expect(state.transcript).toEqual([]);
     expect(state.streaming).toBe("");
   });
+
+  // C-1 (regression): driveLoop used to compute the messages-updated merge itself, from a
+  // `session` variable it closed over once at the start of a turn — so a mid-run /mode dispatched
+  // its own fresh session-updated action, and the very next messages-updated event silently
+  // reverted it, both in the reducer and (since driveLoop's own saveSession call used the same
+  // stale variable) on disk. Fixed by having the reducer do this merge itself, against its OWN
+  // current `state.session` — this test is the regression guard for that: it dispatches a
+  // session-updated (the same shape a mid-run /mode produces) and THEN a messages-updated, and
+  // would have failed against the pre-fix reducer, which treated messages-updated as a no-op on
+  // `session` entirely (verified: reverting this file's messages-updated case to `return state;`
+  // and re-running this test fails it — the assertion below then sees the ORIGINAL
+  // "approve-each" mode, not "read-only").
+  test("messages-updated merges into the CURRENT session, not a stale one dispatched earlier", () => {
+    let state = initialTuiState(session({ permissionMode: "approve-each" }));
+    // A mid-run /mode: the same action tuiPresenter.sessionUpdated dispatches.
+    state = tuiReducer(state, {
+      type: "session-updated",
+      session: session({ permissionMode: "read-only" }),
+    });
+    // driveLoop's own report of the turn's next messages-updated event.
+    state = apply(state, {
+      type: "messages-updated",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(state.session.permissionMode).toBe("read-only");
+    expect(state.session.messages).toEqual([{ role: "user", content: "hi" }]);
+  });
 });
