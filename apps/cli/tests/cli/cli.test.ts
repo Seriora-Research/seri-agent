@@ -1603,6 +1603,28 @@ describe("run (task invocation)", () => {
       });
     },
   );
+
+  // MEDIUM-F: /exit is deliberately not in SLASH_COMMANDS (it only means anything to a live TUI —
+  // see the table's own comment in cli.ts) — before that fix, `seri /exit` matched the table's
+  // no-op entry: with no session it printed a nonsense "No session to run /exit against" and
+  // exited 1, and with one it silently ran the no-op and exited 0, the task never reaching the
+  // model either way. Now it is an ordinary task like any other.
+  test("a task starting with /exit is sent to the model, not treated as a quit command", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop();
+
+    const code = await run(["/exit", "the", "debugger", "and", "retry"], {
+      runLoop: fake,
+      loadAgentsFile: () => "",
+      sessionsDir,
+    });
+
+    expect(code).toBe(0);
+    expect(capture()?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "/exit the debugger and retry",
+    });
+  });
 });
 
 describe("run (permanent permissions)", () => {

@@ -85,4 +85,37 @@ describe("App", () => {
 
     expect(instance.lastFrame()).toContain("[auto]");
   });
+
+  // MEDIUM-E: a paste — delivered to useInput as one multi-character `input` chunk, not one call
+  // per character — can embed a real `\r`/`\n` that `key.return` (which only fires for a chunk
+  // that IS a bare terminator on its own) never sees. Before this fix it fell into the plain
+  // append branch and the terminator ended up embedded literally in the input, never submitting.
+  test("a pasted chunk with an embedded newline submits at the first line, not silently swallowing it", async () => {
+    const submitted: string[] = [];
+    const instance = render(
+      <App session={session()} onSubmit={(v) => submitted.push(v)} done={false} />,
+    );
+    await flush();
+
+    instance.stdin.write("first line\nsecond line");
+    await flush();
+
+    expect(submitted).toEqual(["first line"]);
+    expect(instance.lastFrame()).toContain("second line");
+  });
+
+  // HIGH-B/MEDIUM-C: Ctrl-D calls the onQuit prop directly — App.tsx wires it through to
+  // InputBox unconditionally, so this is the same trigger runTui's own quit() attaches to.
+  test("Ctrl-D calls onQuit", async () => {
+    let quit = false;
+    const instance = render(
+      <App session={session()} onQuit={() => (quit = true)} done={false} />,
+    );
+    await flush();
+
+    instance.stdin.write("\x04");
+    await flush();
+
+    expect(quit).toBe(true);
+  });
 });

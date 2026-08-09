@@ -78,7 +78,23 @@ function InputBox({
       return;
     }
     if (!key.ctrl && !key.meta && input.length > 0) {
-      setValue((current) => current + input);
+      // MEDIUM-E: `key.return` above only fires for a chunk that IS a bare terminator on its
+      // own — a paste (delivered as one multi-character `input` chunk, not one useInput call per
+      // character; a pasted stack trace is the real case) can embed a `\r`/`\n` that key.return
+      // never sees, so without this it fell straight into the plain append below and the
+      // terminator ended up embedded literally in the input, never submitting. Splits on the
+      // FIRST terminator only: everything before it submits now, same as pressing Enter right
+      // there; everything after becomes the new input value, awaiting its own Enter rather than
+      // being silently swallowed or further auto-split.
+      const terminatorIndex = input.search(/[\r\n]/);
+      if (terminatorIndex === -1) {
+        setValue((current) => current + input);
+        return;
+      }
+      const before = input.slice(0, terminatorIndex);
+      const after = input.slice(terminatorIndex + 1);
+      onSubmit?.(value + before);
+      setValue(after);
     }
   });
 

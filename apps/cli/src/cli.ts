@@ -170,14 +170,16 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
     },
   ],
   ["/rewind", { accepts: isStepCount, run: rewindCommand }],
-  // HIGH-1: registered here for discoverability (the existing pattern every other command uses),
-  // but the TUI path never actually reaches this `run` — runTui's own onSubmit intercepts /exit
-  // before the generic dispatch below and calls its own quit() instead, which is what actually
-  // unmounts Ink and resolves runTui's outer promise. A no-op for the non-interactive path
-  // (handleSlashCommand): there is nothing to "exit" beyond the process already ending once this
-  // call returns, the same as it always has.
-  ["/exit", { accepts: (args) => args.length === 0, run: () => {} }],
 ]);
+
+// MEDIUM-F: /exit is deliberately NOT a SLASH_COMMANDS entry — it used to be, with a no-op `run`
+// for the non-interactive path, but handleSlashCommand (below) resolves a resume target for
+// anything it matches: `seri /exit` with no session printed a nonsense "No session to run /exit
+// against" and exited 1, and with a session it silently ran the no-op and exited 0 — the task
+// never reached the model, exactly the hijack SlashCommand's own comment above says this table
+// exists to prevent. /exit only means anything to a live TUI (there is nothing to "exit" in a
+// process that is about to end anyway), so it is intercepted solely in runTui's own onSubmit,
+// below, and documented in USAGE without a table entry backing it.
 
 // The non-interactive presenter: exactly what every command printed inline before this refactor
 // (console.log, plus undoPlanLines/recoveryLines — via their own default console.log sink — for
@@ -1078,6 +1080,17 @@ async function runTui(
   let liveSession: SessionState<ModelMessage> = prepared.session;
   let dispatch: Dispatch | undefined;
   let turnInFlight = false;
+  // HIGH-B: the currently in-flight turn's own promise (a fresh one assigned at each of the two
+  // call sites that start one, both guarded so a new turn is never started while one is already
+  // running — see runTurn's own comment). quit() awaits this when a turn is in flight instead of
+  // abandoning it, so cancelling on the way out actually unwinds before the quit sequence runs.
+  // The initial value is never awaited for real: quit() only reads it when turnInFlight is true,
+  // which is only ever set by an assignment to this variable first.
+  let currentTurn: Promise<void> = Promise.resolve();
+  // LOW-G: without this, a second /exit or Ctrl-D while quit() is already unwinding a cancelled
+  // turn would re-enter instance.rerender()/waitUntilExit() on an instance already mid-teardown —
+  // Ink's own render() has no guard against that itself.
+  let quitting = false;
 
   // HIGH-1: accumulated across every turn this TUI session runs (addTokens, the same summing
   // driveLoop itself does within one turn), not just the last one — a multi-turn session's own
@@ -1148,6 +1161,11 @@ async function runTui(
       };
       doneReason = result.doneReason;
       refusedWithoutRunning = result.refusedWithoutRunning;
+      // LOW-J: `result.cancelledBy` is deliberately not read here. The TUI never re-raises a
+      // signal on a plain, individually-cancelled turn (H-3 returns it to awaiting input, not to
+      // process death) — only quit()'s own resolve decides `cancelledBy` for the run as a whole,
+      // and it always passes `undefined`, since even a turn quit() itself cancelled first
+      // (HIGH-B) ends the *session* by choice, not by a signal the shell needs to see re-raised.
     } catch (err) {
       // H-2: driveLoop rejecting (not just resolving with an aborted/errored `done`) used to
       // leave this promise — and run()'s own `await runTui(...)` — hanging forever. Unmount
@@ -1165,27 +1183,48 @@ async function runTui(
   // the process dying by signal on the fatal Ctrl-C path — see onCancel below). Before this
   // existed, runTui's promise only ever rejected, so run()'s printUsage/raiseSignal/exit-code
   // logic was unreachable dead code for the entire TUI path, even after a turn completed
-  // normally. Re-renders with done: true (App.tsx's own useApp().exit() effect) rather than
-  // calling instance.unmount() directly, so a clean quit gets Ink's own graceful teardown instead
-  // of the forced-unmount path H-2/M-2 use for a failure; waits for that to actually finish
-  // (waitUntilExit) before resolving, so run()'s own console.log(printUsage's output) never races
-  // Ink's last frame.
+  // normally.
+  //
+  // HIGH-B: if a turn is still running, quit() used to abandon it outright — controller.abort()
+  // was never called (so a tool child process kept running after this process was gone),
+  // whatever usage the abandoned turn had already spent was never folded into `usage` below, and
+  // `turnInFlight` never cleared, so runTui's promise never resolved at all and run() hung
+  // forever. Cancelling first, via the exact same deliverSignal("SIGINT") path a single Ctrl-C
+  // already uses, makes the turn unwind the normal way — driveLoop yields whatever final
+  // messages-updated/usage it can on the way out, runTurn's own try folds that into `usage` and
+  // `doneReason` (below, unchanged), and only once `currentTurn` actually settles does this
+  // proceed to the real quit sequence. `doneReason` for a turn ended this way is "aborted" — the
+  // same exit code an aborted turn from any other path gets, unchanged: a task that was cut off
+  // mid-run is not one `seri "…" && next` should treat as accomplished just because the user, not
+  // the model, was the one who ended it.
   function quit(): void {
-    if (dispatch === undefined) return;
-    instance.rerender(
-      createElement(App, {
-        session: liveSession,
-        done: true,
-        onSubmit,
-        onCancel: () => deliverSignal("SIGINT"),
-        onSessionChange,
-        onQuit: quit,
-        connectDispatch: undefined,
-      }),
-    );
-    void instance.waitUntilExit().then(() => {
-      resolveRunTui({ doneReason, cancelledBy: undefined, usage, refusedWithoutRunning });
-    });
+    if (dispatch === undefined || quitting) return;
+    quitting = true;
+    const finishQuit = (): void => {
+      instance.rerender(
+        createElement(App, {
+          // LOW-J: inert after mount — App only reads `session` once, via useReducer's lazy
+          // initializer, so this rerender's value is never actually read. Passed anyway because
+          // the prop is required and `liveSession` is the accurate value if that ever changes.
+          session: liveSession,
+          done: true,
+          onSubmit,
+          onCancel: () => deliverSignal("SIGINT"),
+          onSessionChange,
+          onQuit: quit,
+          connectDispatch: undefined,
+        }),
+      );
+      void instance.waitUntilExit().then(() => {
+        resolveRunTui({ doneReason, cancelledBy: undefined, usage, refusedWithoutRunning });
+      });
+    };
+    if (turnInFlight) {
+      deliverSignal("SIGINT");
+      void currentTurn.then(finishQuit);
+    } else {
+      finishQuit();
+    }
   }
 
   // H-1: a decision function throwing (e.g. `/undo 5` with fewer checkpoints than that) used to
@@ -1194,15 +1233,22 @@ async function runTui(
   // none. M-3: input shaped like a slash command that matches nothing, or matches one but fails
   // its own accepts() guard, gets the same visible feedback instead of silently vanishing —
   // genuinely free-form text (H-3) is the only thing that becomes a new task, and only when it
-  // is not shaped like a slash command at all. HIGH-1: /exit is intercepted here, before the
-  // generic SLASH_COMMANDS dispatch, since quitting is runTui's own business, not a
-  // session-decision function's (see SLASH_COMMANDS' own /exit entry).
+  // is not shaped like a slash command at all. HIGH-1/MEDIUM-F: /exit is intercepted here, before
+  // the generic SLASH_COMMANDS dispatch, since quitting is runTui's own business, not a
+  // session-decision function's — it is not in that table at all (see the table's own comment).
+  // MEDIUM-D: an EXACT match only, `args.length === 0`, the same discipline every SLASH_COMMANDS
+  // entry's own accepts() already applies — `/exit the debugger and retry` is a task whose first
+  // word happens to be /exit, not a request to quit, and used to be hijacked into one.
   function onSubmit(value: string): void {
     if (dispatch === undefined) return;
     const trimmed = value.trim();
     if (trimmed.length === 0) return;
     const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
     if (name === "/exit") {
+      if (args.length > 0) {
+        dispatch({ type: "command-error", message: "/exit: invalid arguments." });
+        return;
+      }
       quit();
       return;
     }
@@ -1219,7 +1265,7 @@ async function runTui(
         });
         return;
       }
-      void runTurn({
+      currentTurn = runTurn({
         ...liveSession,
         messages: [...liveSession.messages, { role: "user", content: trimmed }],
       });
@@ -1271,7 +1317,7 @@ async function runTui(
       onQuit: quit,
       connectDispatch: (reducerDispatch: Dispatch) => {
         dispatch = reducerDispatch;
-        void runTurn(prepared.session);
+        currentTurn = runTurn(prepared.session);
       },
     }),
     { exitOnCtrlC: false },
