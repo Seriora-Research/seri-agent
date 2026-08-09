@@ -199,16 +199,24 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
   // The TUI counterpart of approvalPromptPty.test.ts's "a real Ctrl-C at the prompt cancels the
   // turn" test — same fact (a single press cancels the in-flight turn rather than being silently
-  // dropped or killing the process outright), different route to signals.ts: there is no readline
-  // Interface in the TUI path, so this exercises App.tsx's own onCancel handler and runTui's
-  // exitOnCtrlC: false instead (this session's own fix, added while writing this test — Ink's
+  // dropped), different route to signals.ts: there is no readline Interface in the TUI path, so
+  // this exercises App.tsx's own onCancel handler and runTui's exitOnCtrlC: false instead (Ink's
   // default exitOnCtrlC would otherwise unmount the app on the same press, competing with the
   // cancel this asserts on).
+  //
+  // Asserted on stdout, not on the process exiting: H-3's multi-turn wiring means a cancelled turn
+  // returns the TUI to "awaiting input" rather than ending the process (only a fatal Ctrl-C does
+  // that — see the "second Ctrl-C" test below). Confirmed for real on a pty (WSL2) that the
+  // process does NOT exit here: driveLoop resolves, runTurn's `finally` clears turnInFlight, and
+  // the process sits waiting for more input until the harness kills it in `finally` — an earlier
+  // version of this test raced `exited` instead and hung for the full timeout every time, which is
+  // what this comment now documents rather than an assertion that stopped matching H-3's own
+  // behavior.
   test("a single Ctrl-C during an Ink-driven run cancels the turn instead of killing the process outright", async () => {
     const scriptPath = join(dir, "child-cancel.mjs");
     writeFileSync(scriptPath, childScriptCancel(dir));
 
-    const { child, exited, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine } = startChild(scriptPath, dir);
     try {
       // Waiting for the fake runLoop's own readiness line is also what keeps the byte out of the
       // window before Ink sets raw mode (useInput's mount effect calls setRawMode(true)) — driveLoop
@@ -220,17 +228,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\x03");
       // stdin is deliberately left open, same reason as the sibling file: an EOF would end the run
       // its own way, before the press is ever interpreted.
-
-      const settled = await Promise.race([
-        exited,
-        new Promise<"the run never settled">((r) =>
-          setTimeout(() => r("the run never settled"), 15_000),
-        ),
-      ]);
-
-      expect(settled === "the run never settled" ? settled : settled.stdout).toContain(
-        "RUNLOOP_ABORTED aborted=true",
-      );
+      await sawLine("RUNLOOP_ABORTED aborted=true");
     } finally {
       child.kill("SIGKILL");
     }
@@ -293,10 +291,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("checkpoint(s) to undo to; asked for 5");
 
       // Still alive: an ordinary command sent right after both of the above still works.
+      // cycleMode (gate/gate.ts) cycles approve-each -> auto -> read-only -> approve-each, and a
+      // fresh session starts at approve-each (the [approve-each] indicator shown on mount), so
+      // this first /mode press lands on auto, not read-only.
       child.stdin?.write("/mode");
       await sawLine("/mode");
       child.stdin?.write("\r");
-      await sawLine("permission mode is now read-only");
+      await sawLine("permission mode is now auto");
     } finally {
       child.kill("SIGKILL");
     }
@@ -343,10 +344,26 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     try {
       // prepareSession appended the initial task as the session's only message.
       await sawLine("RUNLOOP_CALL 1 messages=1");
-      // Turn 1's own messages-updated (one assistant reply) landed in the reducer's session.
-      await sawLine("ok 1");
+      // Turn 1's own "done" — not "ok 1" (the fake runLoop's assistant reply content): that lives
+      // only in session.messages via the reducer's messages-updated merge, never rendered to the
+      // transcript, the same as a real model reply's own content is never echoed back by
+      // messages-updated (tui/reducer.ts's own case, and printEvent's identical no-op for the
+      // non-interactive path). Waiting for "done" here is what actually matters: it is only
+      // dispatched after driveLoop's own for-await loop has fully returned, so by the time it
+      // appears, turnInFlight has cleared (the input box will accept a new submission) and
+      // onSessionChange has already run for turn 1's own messages-updated (its dispatch strictly
+      // precedes "done"'s in the same driveLoop call), so liveSession already carries the turn-1
+      // assistant reply before task 2 is submitted.
+      await sawLine("(done: no-tool-call)");
 
       child.stdin?.write("a second task");
+      // Reflected live in the input box's own rendered frame first, same as the raw-mode-input
+      // test above — sending "\r" immediately after, with no wait for the text to actually land,
+      // measured (on a real pty) to lose the Enter press entirely: the box was left showing "a
+      // second task" unsubmitted and no second driveLoop call ever happened, this test hanging to
+      // its own timeout every time. Root cause not further isolated beyond that reproduction; the
+      // fix is the same one every other input-driven test in this file already applies.
+      await sawLine("a second task");
       child.stdin?.write("\r");
 
       // 1 initial + 1 turn-1 assistant reply + 1 new user message = 3, and the app is still
