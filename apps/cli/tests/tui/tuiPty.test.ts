@@ -435,7 +435,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-cancel.mjs");
     writeFileSync(scriptPath, childScriptCancel(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
     try {
       // Waiting for the fake runLoop's own readiness line is also what keeps the byte out of the
       // window before Ink sets raw mode (useInput's mount effect calls setRawMode(true)) — driveLoop
@@ -444,6 +444,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // the pty is still canonical, 0x03 would raise a real SIGINT and the test would pass for the
       // wrong reason — same reasoning as approvalPromptPty.test.ts's own "[a]lways" wait.
       await sawLine("RUNLOOP_READY");
+      // connectDispatch's own echo of the initial argv task ("do a task", this file's own
+      // cli.run(["do", "a", "task"], ...) argv) — covered here, not a dedicated test, since every
+      // child script in this file already launches with the same argv and this is the first test
+      // to reach RUNLOOP_READY. Dispatched before RUNLOOP_READY's own console.log (connectDispatch
+      // echoes, then calls runTurn, which is what reaches the fake runLoop), but the echo only
+      // reaches the pty once Ink commits the <Static> update — waited on explicitly rather than
+      // read immediately, same reasoning as the second-turn test's own sawLineTimes wait below.
+      await sawLine("> do a task");
+      expect(occurrences("> do a task")).toBe(1);
       child.stdin?.write("\x03");
       // stdin is deliberately left open, same reason as the sibling file: an EOF would end the run
       // its own way, before the press is ever interpreted.
@@ -593,7 +602,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-multi-turn.mjs");
     writeFileSync(scriptPath, childScriptMultiTurn(dir));
 
-    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+    const { child, sawLine, sawLineTimes, occurrences } = startChild(scriptPath, dir);
     try {
       // prepareSession appended the initial task as the session's only message.
       await sawLine("RUNLOOP_CALL 1 messages=1");
@@ -624,7 +633,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_CALL 2 messages=3");
       // The second task's own text, echoed into the persistent transcript exactly once — the
       // input box's live reflection (waited on above) is not the same thing as the submitted
-      // line actually landing in Static.
+      // line actually landing in Static. Waited on explicitly (not just re-checked via
+      // occurrences() below): the echo reaches the pty only once Ink commits the <Static> update,
+      // a scheduler macrotask after RUNLOOP_CALL 2's own console.log, so reading occurrences()
+      // without waiting first can race it on a slow/loaded runner.
+      await sawLineTimes("> a second task", 1);
       expect(occurrences("> a second task")).toBe(1);
     } finally {
       child.kill("SIGKILL");

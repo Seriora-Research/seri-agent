@@ -1454,6 +1454,11 @@ async function runTui(
     if (reactDispatch === undefined) return;
     const trimmed = value.trim();
     if (trimmed.length === 0) return;
+    // Deliberately unconditional and before every branch below (not per-branch, and not moved
+    // below the /exit/unrecognized-command guards): a rejected submission — invalid args, an
+    // unrecognized command, /exit with arguments — still gets its typed text echoed here, so the
+    // command-error it produces has an antecedent that scrolls with it instead of a floating
+    // error with nothing to explain it. Do not sink this below the guards.
     dispatch({ type: "transcript-append", line: `> ${trimmed}` });
     const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
     if (name === "/exit") {
