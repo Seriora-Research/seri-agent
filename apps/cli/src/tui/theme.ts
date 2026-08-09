@@ -3,7 +3,6 @@
 // exactly one place to hold the line. ANSI-16 color names only — Ink's <Text color> accepts these
 // directly.
 export const theme = {
-  success: "green",
   error: "red",
   warning: "yellow",
   accent: "cyan",
