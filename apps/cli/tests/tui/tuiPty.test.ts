@@ -301,6 +301,40 @@ function childScriptModePersistence(dir: string, flagPath: string): string {
   ].join("\n");
 }
 
+// Design-question fix (this PR's own follow-up): a runLoop that streams text in two parts with a
+// gap in between, released by the same flag-file pattern childScriptModePersistence uses, so a
+// /rewind sent during that gap (rejected by MEDIUM-3's turnInFlight check) lands while the model's
+// answer is genuinely still in progress — not resolved yet, same as the mode-persistence script's
+// own reasoning for using a flag file instead of a fixed delay.
+function childScriptRewindDuringStream(dir: string, flagPath: string): string {
+  return [
+    `import { existsSync } from "node:fs";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "text-delta", text: "Hello " };`,
+    `  console.log("\\nSTREAM_PART_1");`,
+    `  await new Promise((resolve) => {`,
+    `    const check = () => { if (existsSync(${JSON.stringify(flagPath)})) resolve(); else setTimeout(check, 20); };`,
+    `    check();`,
+    `  });`,
+    `  yield { type: "text-delta", text: "world" };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
 // research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
 // identical signature... with zero change to loop.ts/gate.ts") that every earlier round of this
@@ -352,6 +386,7 @@ function startChild(
   // wait for the SECOND (or Nth) one specifically rather than racing turn 2's own completion
   // against an assertion that turn 1 alone already satisfies.
   sawLineTimes: (line: string, count: number) => Promise<void>;
+  occurrences: (line: string) => number;
 } {
   const args = ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, scriptPath];
   const child = spawn("python3", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
@@ -399,7 +434,7 @@ function startChild(
       );
   };
 
-  return { child, exited, sawLine, sawLineTimes };
+  return { child, exited, sawLine, sawLineTimes, occurrences };
 }
 
 // Windows has no pty to allocate — same constraint as approvalPromptPty.test.ts. Real execution is
@@ -434,7 +469,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-cancel.mjs");
     writeFileSync(scriptPath, childScriptCancel(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
     try {
       // Waiting for the fake runLoop's own readiness line is also what keeps the byte out of the
       // window before Ink sets raw mode (useInput's mount effect calls setRawMode(true)) — driveLoop
@@ -443,6 +478,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // the pty is still canonical, 0x03 would raise a real SIGINT and the test would pass for the
       // wrong reason — same reasoning as approvalPromptPty.test.ts's own "[a]lways" wait.
       await sawLine("RUNLOOP_READY");
+      // connectDispatch's own echo of the initial argv task ("do a task", this file's own
+      // cli.run(["do", "a", "task"], ...) argv) — covered here, not a dedicated test, since every
+      // child script in this file already launches with the same argv and this is the first test
+      // to reach RUNLOOP_READY. Dispatched before RUNLOOP_READY's own console.log (connectDispatch
+      // echoes, then calls runTurn, which is what reaches the fake runLoop), but the echo only
+      // reaches the pty once Ink commits the <Static> update — waited on explicitly rather than
+      // read immediately, same reasoning as the second-turn test's own sawLineTimes wait below.
+      await sawLine("> do a task");
+      expect(occurrences("> do a task")).toBe(1);
       child.stdin?.write("\x03");
       // stdin is deliberately left open, same reason as the sibling file: an EOF would end the run
       // its own way, before the press is ever interpreted.
@@ -464,7 +508,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-input.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
 
@@ -478,6 +522,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // permissionMode ("approve-each") one step, dispatched into the transcript by tuiPresenter
       // (Phase 5) rather than console.log'd — this line only appears if that whole chain ran.
       await sawLine("permission mode is now auto");
+      // The submitted command itself, echoed into the persistent transcript exactly once — not
+      // just its result. onSubmit's own transcript-append dispatch, before the command dispatch.
+      // Waited on explicitly before reading occurrences(), same as the argv-task and second-task
+      // echo checks elsewhere in this file: the echo lands via an async <Static> commit, not
+      // synchronously with the dispatch that triggered it.
+      await sawLine("> /mode");
+      expect(occurrences("> /mode")).toBe(1);
     } finally {
       child.kill("SIGKILL");
     }
@@ -589,7 +640,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-multi-turn.mjs");
     writeFileSync(scriptPath, childScriptMultiTurn(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine, sawLineTimes, occurrences } = startChild(scriptPath, dir);
     try {
       // prepareSession appended the initial task as the session's only message.
       await sawLine("RUNLOOP_CALL 1 messages=1");
@@ -618,6 +669,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // 1 initial + 1 turn-1 assistant reply + 1 new user message = 3, and the app is still
       // running to report it at all — proof it did not exit after the first turn.
       await sawLine("RUNLOOP_CALL 2 messages=3");
+      // The second task's own text, echoed into the persistent transcript exactly once — the
+      // input box's live reflection (waited on above) is not the same thing as the submitted
+      // line actually landing in Static. Waited on explicitly (not just re-checked via
+      // occurrences() below): the echo reaches the pty only once Ink commits the <Static> update,
+      // a scheduler macrotask after RUNLOOP_CALL 2's own console.log, so reading occurrences()
+      // without waiting first can race it on a slow/loaded runner.
+      await sawLineTimes("> a second task", 1);
+      expect(occurrences("> a second task")).toBe(1);
     } finally {
       child.kill("SIGKILL");
     }
@@ -865,6 +924,37 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("/mode");
       child.stdin?.write("\r");
       await sawLine("permission mode is now auto");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // Design-question fix (this PR's own follow-up): a submission rejected by the turnInFlight gate
+  // (same /rewind-while-in-flight gate as the test just above) still gets echoed, per this whole
+  // PR's own point — but the echo must not fragment the model's still-streaming answer into two
+  // transcript entries via transcript-append's own default flush behavior. "Hello " streams, /rewind
+  // 1 is sent and rejected while that is still pending, then "world" streams and the turn finishes
+  // — end-to-end proof (not just the reducer-unit level) that the full answer lands as ONE
+  // contiguous transcript entry, "Hello world", not split around the rejected command's own echo.
+  test("a submission rejected by the turnInFlight gate is echoed without fragmenting the model's in-progress answer", async () => {
+    const flagPath = join(dir, "release-turn");
+    const scriptPath = join(dir, "child-rewind-during-stream.mjs");
+    writeFileSync(scriptPath, childScriptRewindDuringStream(dir, flagPath));
+
+    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+      await sawLine("STREAM_PART_1");
+
+      child.stdin?.write("/rewind 1");
+      await sawLine("/rewind 1");
+      child.stdin?.write("\r");
+      await sawLine("/rewind: can't run while a turn is in flight.");
+
+      writeFileSync(flagPath, "");
+      await sawLine("(done: no-tool-call)");
+
+      expect(occurrences("Hello world")).toBe(1);
     } finally {
       child.kill("SIGKILL");
     }

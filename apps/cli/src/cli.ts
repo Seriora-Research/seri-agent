@@ -728,6 +728,15 @@ function dirs(ctx: RunContext): CommandDirs {
   return { sessionsDir: ctx.sessionsDir, checkpointsDir: ctx.checkpointsDir };
 }
 
+// Shared by prepareSession (decides whether to push the initial user message) and runTui's own
+// connectDispatch (decides whether to echo it) — a brand-new session always gets one, even with an
+// empty taskText, but a resumed session only does if there is actually new text. Kept as one
+// function, not the same expression repeated at both call sites, so the two can't silently drift
+// out of sync with each other.
+function hasNewTask(ctx: RunContext): boolean {
+  return !ctx.resuming || ctx.taskText.length > 0;
+}
+
 // A slash command always operates on the resume target — an explicit --resume id, or the most
 // recent session — and never creates a session just to act on it, so this is called before
 // prepareSession and a bare `/undo` (no --resume) does not fall into the new-session path. `/undo`
@@ -803,8 +812,8 @@ function prepareSession(
 
   if (!ctx.resuming) console.log(`Session ${session.id} created.`);
 
-  if (!ctx.resuming || ctx.taskText) {
-    session.messages.push({ role: "user", content: ctx.taskText });
+  if (hasNewTask(ctx)) {
+    session.messages.push({ role: "user", content: ctx.taskText.trim() });
   }
 
   const getGroqModelFn = deps.getGroqModel ?? getGroqModelReal;
@@ -1074,6 +1083,13 @@ async function driveLoop(
   return { doneReason, cancelledBy, usage, refusedWithoutRunning: hadDenial && !ranTool };
 }
 
+// A plain default-flush transcript-append, shared by tuiPresenter's own `append` below and
+// runTui's quit() — the only two places that dispatch this exact shape rather than something with
+// its own `> `/`flush: false` handling (echoUserInput, a different shape entirely, is not this).
+function pushTranscriptLine(dispatch: Dispatch, line: string): void {
+  dispatch({ type: "transcript-append", line });
+}
+
 // The TUI's presenter: the same `{message}`/`{plan, message}` shapes tui/commands.ts's decision
 // functions return, dispatched into the live transcript instead of printed. Calls the SAME
 // undoPlanLines/recoveryLines output.ts uses for the console path (M-6: these used to be a
@@ -1085,7 +1101,7 @@ async function driveLoop(
 // persisting, not just dispatching, fixing the gap code review found in the previous round's
 // finding-9 fix (this file's own CommandPresenter comment has the full account).
 function tuiPresenter(dispatch: Dispatch, awaitPersist: () => Promise<void>): CommandPresenter {
-  const append = (line: string): void => dispatch({ type: "transcript-append", line });
+  const append = (line: string): void => pushTranscriptLine(dispatch, line);
   return {
     message: append,
     onPlan: (plan) => undoPlanLines(plan, append),
@@ -1163,6 +1179,15 @@ async function runTui(
     liveState = tuiReducer(liveState, action);
     reactDispatch?.(action);
   };
+  // Echoes the user's own submitted text into the persistent transcript — onSubmit and
+  // connectDispatch's initial-argv-task case both need this, verbatim. `flush: false`: a
+  // submission this echoes can be REJECTED (e.g. MEDIUM-3's turnInFlight gate) while the model's
+  // own turn keeps streaming unaffected — flushing here would fragment that in-progress answer
+  // into two transcript entries for a submission that did nothing. The rejected/accepted text
+  // still gets echoed either way (this whole fix's own point); only the flush side-effect is
+  // skipped.
+  const echoUserInput = (text: string): void =>
+    dispatch({ type: "transcript-append", line: `> ${text.trim()}`, flush: false });
   let turnInFlight = false;
   // HIGH-B: the currently in-flight turn's own promise (a fresh one assigned at each of the two
   // call sites that start one, both guarded so a new turn is never started while one is already
@@ -1423,10 +1448,7 @@ async function runTui(
       // to unwind, with no indication anything had happened or that Ctrl-C was still available
       // to force it — dispatched before deliverSignal so it is visible even if the unwind never
       // completes (a stuck tool ignoring its own abort signal).
-      dispatch({
-        type: "transcript-append",
-        line: "quitting — cancelling the in-flight turn, Ctrl-C to force",
-      });
+      pushTranscriptLine(dispatch, "quitting — cancelling the in-flight turn, Ctrl-C to force");
       deliverSignal("SIGINT");
       void currentTurn.then(finishQuit);
     } else {
@@ -1454,6 +1476,12 @@ async function runTui(
     if (reactDispatch === undefined) return;
     const trimmed = value.trim();
     if (trimmed.length === 0) return;
+    // Deliberately unconditional and before every branch below (not per-branch, and not moved
+    // below the /exit/unrecognized-command guards): a rejected submission — invalid args, an
+    // unrecognized command, /exit with arguments — still gets its typed text echoed here, so the
+    // command-error it produces has an antecedent that scrolls with it instead of a floating
+    // error with nothing to explain it. Do not sink this below the guards.
+    echoUserInput(value);
     const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
     if (name === "/exit") {
       if (args.length > 0) {
@@ -1535,6 +1563,10 @@ async function runTui(
       onApprovalAnswer,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
+        // hasNewTask — the same predicate prepareSession (above) uses to decide whether it pushed
+        // the initial user message at all — a bare `--resume` with no new task has nothing to
+        // echo, but a brand-new session always gets one (even an empty taskText).
+        if (hasNewTask(ctx)) echoUserInput(ctx.taskText);
         currentTurn = runTurn(prepared.session);
       },
     }),

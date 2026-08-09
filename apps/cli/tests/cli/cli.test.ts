@@ -208,6 +208,21 @@ describe("run (task invocation)", () => {
     expect(capture()?.system).toBe(buildSystemPrompt(""));
   });
 
+  // Design-question fix (this PR's own follow-up, echo/storage mismatch): prepareSession used to
+  // store ctx.taskText raw, while onSubmit's interactive path (cli.ts) always trims — leaving the
+  // argv-task path storing/sending padded whitespace to the model even though its own TUI echo
+  // (echoUserInput) already trims for display. Trimming here brings the two paths into agreement.
+  test("a task with leading/trailing whitespace is trimmed before being sent to the model", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop();
+
+    await captureLogs(() =>
+      run(["  do a task  "], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(capture()?.messages).toEqual([{ role: "user", content: "do a task" }]);
+  });
+
   // Two assertions, because the one at :153 above would pass if the mode reached the loop but
   // never made it to the session file on disk.
   test("a new session is created in approve-each, and the file on disk says so too", async () => {
