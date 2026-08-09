@@ -1163,6 +1163,10 @@ async function runTui(
     liveState = tuiReducer(liveState, action);
     reactDispatch?.(action);
   };
+  // Echoes the user's own submitted text into the persistent transcript — onSubmit and
+  // connectDispatch's initial-argv-task case both need this, verbatim.
+  const echoUserInput = (text: string): void =>
+    dispatch({ type: "transcript-append", line: `> ${text}` });
   let turnInFlight = false;
   // HIGH-B: the currently in-flight turn's own promise (a fresh one assigned at each of the two
   // call sites that start one, both guarded so a new turn is never started while one is already
@@ -1459,7 +1463,7 @@ async function runTui(
     // unrecognized command, /exit with arguments — still gets its typed text echoed here, so the
     // command-error it produces has an antecedent that scrolls with it instead of a floating
     // error with nothing to explain it. Do not sink this below the guards.
-    dispatch({ type: "transcript-append", line: `> ${trimmed}` });
+    echoUserInput(trimmed);
     const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
     if (name === "/exit") {
       if (args.length > 0) {
@@ -1541,8 +1545,8 @@ async function runTui(
       onApprovalAnswer,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
-        if (ctx.taskText.length > 0)
-          dispatch({ type: "transcript-append", line: `> ${ctx.taskText}` });
+        // A bare `--resume` with no new task has nothing to echo.
+        if (ctx.taskText.length > 0) echoUserInput(ctx.taskText);
         currentTurn = runTurn(prepared.session);
       },
     }),
