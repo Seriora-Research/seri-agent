@@ -5,22 +5,22 @@ import { getApiKey } from "../config/config";
 // No default for modelId, matching groq.ts: the caller (provider/model.ts) is the single
 // authority on what id to construct with.
 //
-// Two settings, both required for `providerMetadata.openrouter.usage.cost` (cost.ts's own
-// reportForOpenRouter) to actually show up, confirmed against the installed
-// @openrouter/ai-sdk-provider@3.0.0's compiled source (dist/index.js), not just its .d.ts:
-// `compatibility: "strict"` is what makes the provider send `stream_options.include_usage: true`
-// on the request at all — in the default "compatible" mode it sends no stream_options, which is
-// the OpenAI-protocol switch that makes a STREAMING response emit a final usage-bearing chunk in
-// the first place (dist/index.js:3888-3890, `stream_options: this.config.compatibility ===
-// "strict" ? {include_usage: true, …} : void 0` — unconditional once strict, no per-call opt-in
-// needed on top). `usage: { include: true }`, passed as a per-model setting rather than a
-// per-call one (this repo's loop.ts calls streamText with no OpenRouter-specific settings of its
-// own), is OpenRouter's own top-level extension that asks for the DOLLAR figure specifically —
-// sent as a plain `usage` field on every request body regardless of compatibility mode
-// (dist/index.js:3638, `usage: this.settings.usage`), but the `cost` field on the response's
-// `usage` object (OpenRouterUsageAccounting.cost) is only populated when this is set. Without the
-// first, streaming requests get no final usage chunk to read `cost` off at all; without the
-// second, a request that does emit one gets token counts with no `cost`.
+// `compatibility: "strict"` and `usage: { include: true }` are OpenRouter's own documented pair
+// for usage accounting (https://openrouter.ai/docs/use-cases/usage-accounting) — confirmed against
+// the installed @openrouter/ai-sdk-provider@3.0.0's compiled source (dist/index.js), not just its
+// .d.ts: `strict` is what makes the provider send `stream_options.include_usage: true` on a
+// streaming request (dist/index.js:3888-3890); `usage.include` is a separate top-level `usage`
+// field OpenRouter itself reads to decide whether to attach `cost` to the response's usage object.
+// Kept even though a live check (2026-08-09, live API, gpt-oss-20b) found `providerMetadata
+// .openrouter.usage.cost` already populated with NEITHER setting present — this SDK version's
+// default "compatible" mode returned a full usage+cost object unprompted, contradicting the
+// "OpenRouter likely never returns cost without opting in" premise this was written to fix. Left in
+// anyway: it is still the officially documented way to REQUEST usage accounting rather than rely on
+// undocumented default behaviour that could change upstream, it costs nothing measured (same cost
+// data came back with both settings applied), and it is what a reader following OpenRouter's own
+// docs would expect to see here. Do not read the two `dist/index.js` line-number claims above as
+// "this is why cost was missing before" — that specific causal claim was not observed; only the
+// settings' own existence and effect on the outbound request body were confirmed.
 export function getOpenRouterModel(modelId: string): LanguageModel {
   const apiKey = getApiKey("OPENROUTER_API_KEY");
   if (!apiKey) {
