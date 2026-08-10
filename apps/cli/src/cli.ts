@@ -1311,6 +1311,18 @@ async function runTui(
     model: prepared.session.model,
     provider: prepared.session.provider,
   };
+  // Tracks what actually LANDED in config.json, separate from `confirmedModel` above — the two
+  // used to share one variable for two jobs (code-review finding on PR #71): `confirmedModel`
+  // moved to the new pair BEFORE `persistDefaultModel` was even attempted, so once it had moved,
+  // the runTurn's own inequality guard (below) was already satisfied for that pair and a
+  // persist that failed on its first attempt (a transient EACCES/ENOSPC/read-only config dir)
+  // was never retried, even though every later turn kept succeeding on that exact model. This
+  // starts at the same starting pair as `confirmedModel` for the identical reason: turn 1, which
+  // runs on the model the session already started on, must not attempt a persist at all.
+  let lastPersistedModel: { model: string; provider: ModelProvider } = {
+    model: prepared.session.model,
+    provider: prepared.session.provider,
+  };
   // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
   // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
   // what every other function in this closure actually calls now.
@@ -1578,26 +1590,33 @@ async function runTui(
           // makes a picker switch's FIRST successful turn confirm it, with no special-casing for
           // "was this turn a switch."
           //
-          // The inequality guard does three jobs at once: (1) it IS the "was this turn a switch?"
-          // detector — `confirmedModel` only ever moves through this one line, and the only thing
-          // that mutates session.model/.provider mid-run is the /model picker's
-          // model-picker-resolved merge; (2) `messages-updated` fires several times per turn
-          // (loop.ts's own multiple yield sites), so an unguarded write would be one config.json
-          // rewrite per tool call; (3) it is what keeps a user who never picks anything from ever
-          // getting DEFAULT_MODEL frozen into config.json, pinning them to today's default across a
-          // binary upgrade. The try/catch + printWarning mirrors onSessionChange's own pattern
-          // above: a config write failure (EACCES, ENOSPC, a read-only config dir) must degrade to
-          // a warning, never convert a turn that already succeeded into a failure.
-          if (
-            event.type === "messages-updated" &&
-            (confirmedModel.model !== modelId || confirmedModel.provider !== provider)
-          ) {
-            confirmedModel = { model: modelId, provider };
-            try {
-              persistDefaultModel(confirmedModel);
-            } catch (err) {
-              const message = err instanceof Error ? err.message : String(err);
-              printWarning(`could not save the default model: ${message}`);
+          // Two independent inequality guards below, against two independent variables
+          // (`confirmedModel`'s own comment explains why they're no longer one) — each is still a
+          // three-job guard on its own: (1) turn-switch detection for its own variable; (2)
+          // `messages-updated` fires several times per turn (loop.ts's own multiple yield sites),
+          // so an unguarded check would be one action per tool call; (3) it is what keeps a user
+          // who never picks anything from ever getting DEFAULT_MODEL frozen into config.json,
+          // pinning them to today's default across a binary upgrade — both variables start at the
+          // session's own starting pair, so turn 1 (same model) trips neither.
+          if (event.type === "messages-updated") {
+            if (confirmedModel.model !== modelId || confirmedModel.provider !== provider) {
+              confirmedModel = { model: modelId, provider };
+            }
+            // Gated on `lastPersistedModel`, not `confirmedModel`: the try/catch + printWarning
+            // mirrors onSessionChange's own pattern above — a config write failure (EACCES,
+            // ENOSPC, a read-only config dir) must degrade to a warning, never convert a turn
+            // that already succeeded into a failure — but unlike `confirmedModel`, this variable
+            // only advances on a SUCCESSFUL persist, so a failed attempt is retried by the next
+            // turn that lands on this same model/provider, instead of being silently and
+            // permanently skipped for the rest of the session.
+            if (lastPersistedModel.model !== modelId || lastPersistedModel.provider !== provider) {
+              try {
+                persistDefaultModel({ model: modelId, provider });
+                lastPersistedModel = { model: modelId, provider };
+              } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                printWarning(`could not save the default model: ${message}`);
+              }
             }
           }
         },

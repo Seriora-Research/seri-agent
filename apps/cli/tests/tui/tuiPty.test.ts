@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -847,6 +855,73 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       expect(config.SERI_PROVIDER).toBe("groq");
       // Negative control built in: the pre-switch model must not be the one that landed.
       expect(config.SERI_MODEL).not.toBe("openai/gpt-oss-120b");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // MEDIUM finding (code-review on PR #71): `confirmedModel` used to move to the new pair BEFORE
+  // `persistDefaultModel` was even attempted, so a transient write failure (EACCES/ENOSPC/a
+  // read-only config dir) left the inequality guard already satisfied and the write was never
+  // retried, even though every later turn kept succeeding on the exact same model. Reuses
+  // childScriptModelSwitch as-is (its fake runLoop already handles an arbitrary number of turns
+  // generically) — the difference is entirely on the host side: the SECOND turn's persist attempt
+  // is sabotaged, then cleared, and a THIRD turn on the same (already-switched) model proves the
+  // retry.
+  test("a failed default-model persist is retried by a later turn on the same model", async () => {
+    const scriptPath = join(dir, "child-model-switch-persist-retry.mjs");
+    writeFileSync(scriptPath, childScriptModelSwitch(dir));
+
+    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
+      await sawLine("(done: no-tool-call)");
+
+      // Sabotage the NEXT persist attempt before it happens: config/config.ts's own
+      // write-then-rename path (writeConfig) writes to `<config.json>.tmp` before renaming it
+      // into place — pre-creating that exact path AS A DIRECTORY makes its writeFileSync throw
+      // EISDIR, the same class of failure a read-only config dir or a full disk would produce.
+      const configDir = join(dir, ".seri");
+      mkdirSync(configDir, { recursive: true });
+      mkdirSync(join(configDir, "config.json.tmp"));
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      await sawLine("GPT OSS 120B");
+
+      child.stdin?.write("70b-versatile");
+      await sawLine("70b-versatile");
+      child.stdin?.write("\r");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      // The switch DID take effect live, and the turn itself succeeded — this failure is
+      // entirely in the persist attempt behind it, not in the model call.
+      await sawLine(
+        "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 systemHasModelId=true",
+      );
+      await sawLine("could not save the default model:");
+      expect(existsSync(join(configDir, "config.json"))).toBe(false);
+
+      // Clear the sabotage and let the SAME model answer one more turn — the retry this test
+      // exists to prove, not a fresh switch.
+      rmSync(join(configDir, "config.json.tmp"), { recursive: true, force: true });
+
+      child.stdin?.write("a third task");
+      await sawLine("a third task");
+      child.stdin?.write("\r");
+
+      await sawLine(
+        "RUNLOOP_CALL 3 model=llama-3.3-70b-versatile messages=5 systemHasModelId=true",
+      );
+      await sawLineTimes("(done: no-tool-call)", 3);
+      const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+      expect(config.SERI_MODEL).toBe("llama-3.3-70b-versatile");
+      expect(config.SERI_PROVIDER).toBe("groq");
     } finally {
       child.kill("SIGKILL");
     }
