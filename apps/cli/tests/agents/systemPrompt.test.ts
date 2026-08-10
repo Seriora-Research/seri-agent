@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { buildSystemPrompt } from "../../src/agents/systemPrompt";
+import type { ModelCatalog } from "@seri/model-catalog";
+import { buildSystemPrompt, buildVolatileTier } from "../../src/agents/systemPrompt";
 
 // These assert on meaning, not on wording: each check is a phrase the measured failure needs
 // present, matched case-insensitively, so the prompt can be reworded without the test going red
@@ -61,5 +62,40 @@ describe("buildSystemPrompt", () => {
     expect(agentsIndex).toBeGreaterThan(toolsIndex);
 
     expect(withAgents).toBe(`${withoutAgents}\n\n${agentsFixture}`);
+  });
+});
+
+describe("buildVolatileTier", () => {
+  test("a cataloged model's identity line uses the catalog's displayName", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: new Date().toISOString(),
+      entries: [
+        {
+          id: "openai/gpt-oss-120b",
+          provider: "groq",
+          displayName: "GPT OSS 120B",
+          family: "gpt-oss",
+          contextWindow: 131072,
+          maxOutputTokens: 32768,
+          toolCall: true,
+          reasoning: true,
+          pricing: undefined,
+        },
+      ],
+    };
+
+    const line = buildVolatileTier("openai/gpt-oss-120b", "groq", catalog);
+
+    expect(line).toContain("GPT OSS 120B");
+    expect(line).toContain("groq/openai/gpt-oss-120b");
+  });
+
+  test("an uncataloged model still gets an identity line, using the raw id", () => {
+    const catalog: ModelCatalog = { fetchedAt: new Date().toISOString(), entries: [] };
+
+    const line = buildVolatileTier("some-raw-id", "groq", catalog);
+
+    expect(line.length).toBeGreaterThan(0);
+    expect(line).toContain("some-raw-id");
   });
 });
