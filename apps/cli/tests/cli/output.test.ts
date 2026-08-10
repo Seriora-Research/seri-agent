@@ -33,4 +33,15 @@ describe("printCost", () => {
     );
     expect(line).toBe("(cost: unknown)");
   });
+
+  // VERIFY pass 2, HIGH-2: addCost (cli.ts) can carry a defined dollar amount forward from an
+  // earlier certain turn while degrading the combined status to "unknown" — status must win over
+  // amountUsd's mere presence, or this renders as a plain, falsely-confident dollar figure.
+  test("renders a defined amount with status unknown as a partial/uncertain total, not a bare figure", () => {
+    const [line] = captureLog(() =>
+      printCost({ amountUsd: 0.002, status: "unknown", source: "none" }),
+    );
+    expect(line).toBe("(cost: ≥ $0.0020, partially unknown)");
+    expect(line).not.toBe("(cost: $0.0020)");
+  });
 });

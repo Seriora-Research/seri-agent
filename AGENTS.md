@@ -131,8 +131,10 @@ default is in `docs/PROMPT-ROUTING.md`) and OpenRouter (`apps/cli/src/provider/o
 `compatibility: "strict"`). A new session starts on Groq; switching to OpenRouter, or to a
 different model on either provider, is the in-TUI `/model` picker (`apps/cli/src/tui/App.tsx`'s
 `ModelPicker`) — mid-session, context preserved, only written to disk once a turn on the new
-model actually succeeds (`apps/cli/src/cli.ts`'s "pin only what worked" invariant, applied to a
-live switch the same way `prepareSession` already applies it to session creation). Both
+model actually succeeds (`apps/cli/src/cli.ts`'s "pin only what worked" invariant). Note this
+holds for a live switch specifically; a brand-new TUI session's not-yet-confirmed model can still
+reach disk earlier via a mount-time effect — a separate, pre-existing gap, not something this
+sentence should be read as claiming is closed. Both
 providers' model metadata (context window, pricing, tool-call/reasoning support) comes from a
 models.dev-sourced catalog (`packages/model-catalog`, wrapped for the CLI in
 `apps/cli/src/provider/catalog.ts`), fetched live with a bundled fallback manifest

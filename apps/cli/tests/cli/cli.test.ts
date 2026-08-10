@@ -17,7 +17,7 @@ import type { ModelMessage } from "ai";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
-import { chooseInterfaceOutput, run, SLASH_COMMANDS } from "../../src/cli";
+import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS } from "../../src/cli";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
 import { loadGrants, permissionsPath, projectKey } from "../../src/permissions/store";
 import type { CostReport } from "../../src/provider/cost";
@@ -2369,4 +2369,50 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
 
     expect(readLog(storeDir, SESSION_ID).some((r) => r.kind === "rewind-barrier")).toBe(true);
   }, 15_000);
+});
+
+describe("addCost", () => {
+  const actual: CostReport = { amountUsd: 0.0001, status: "actual", source: "provider_cost_api" };
+  const estimated: CostReport = {
+    amountUsd: 0.002,
+    status: "estimated",
+    source: "provider_models_api",
+  };
+  const unknown: CostReport = { amountUsd: undefined, status: "unknown", source: "none" };
+
+  test("one report, the other undefined: returns the defined one unchanged", () => {
+    expect(addCost(undefined, actual)).toEqual(actual);
+    expect(addCost(actual, undefined)).toEqual(actual);
+    expect(addCost(undefined, undefined)).toBeUndefined();
+  });
+
+  // VERIFY pass 2, HIGH-2: taking the most recent report's status unconditionally let an "actual"
+  // turn mask an earlier "estimated"/"unknown" turn in the running total — a partially-uncertain
+  // total must not present as fully certain.
+  test("estimated then actual: sums the amount, keeps status estimated (the weaker one)", () => {
+    const combined = addCost(estimated, actual);
+    expect(combined?.amountUsd).toBeCloseTo(0.0021, 6);
+    expect(combined?.status).toBe("estimated");
+    expect(combined?.source).toBe("provider_models_api");
+  });
+
+  test("actual then estimated: order doesn't matter, still degrades to estimated", () => {
+    const combined = addCost(actual, estimated);
+    expect(combined?.amountUsd).toBeCloseTo(0.0021, 6);
+    expect(combined?.status).toBe("estimated");
+  });
+
+  test("estimated then unknown: degrades to unknown, keeps the known partial amount", () => {
+    const combined = addCost(estimated, unknown);
+    expect(combined?.status).toBe("unknown");
+    expect(combined?.source).toBe("none");
+    // addTokens keeps the running total when the new report has no amount to add — the $0.002
+    // already earned is not thrown away, only the certainty label is downgraded.
+    expect(combined?.amountUsd).toBeCloseTo(0.002, 6);
+  });
+
+  test("actual then unknown: degrades all the way to unknown even from the strongest status", () => {
+    const combined = addCost(actual, unknown);
+    expect(combined?.status).toBe("unknown");
+  });
 });

@@ -329,6 +329,18 @@ export function printUsage(usage: RunUsage): void {
 // different data — so `estimated` gets its own "~" prefix and trailing label rather than the same
 // template with a swapped-in word.
 export function printCost(cost: CostReport): void {
+  // `status` is checked before `amountUsd`, not after: `addCost` (cli.ts) can carry a defined
+  // dollar figure forward from an earlier, more-certain turn while the combined status degrades to
+  // "unknown" (a later turn contributed nothing costable) — printing that number bare would claim
+  // more certainty than the total actually has, which is the exact bug VERIFY pass 2 caught.
+  if (cost.status === "unknown") {
+    console.log(
+      cost.amountUsd === undefined
+        ? "(cost: unknown)"
+        : `(cost: ≥ $${cost.amountUsd.toFixed(4)}, partially unknown)`,
+    );
+    return;
+  }
   if (cost.amountUsd === undefined) {
     console.log("(cost: unknown)");
     return;

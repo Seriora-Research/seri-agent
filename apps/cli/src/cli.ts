@@ -948,14 +948,29 @@ function addTokens(total: number | undefined, reported: number | undefined): num
 
 // Same "sum what showed up" rule as addTokens, extended to a CostReport: the dollar amount sums
 // like a token count (addTokens handles that half directly), but status/source are provenance
-// tags, not numbers, so there is nothing to sum them into — the most recent report's tags win,
-// which is right for the overwhelming common case (one report) and no worse than "some number" for
-// a multi-turn TUI session that switched models mid-way (B4/M-2's own model-switch reasoning
-// doesn't apply here: this is a display total, not a persisted fact).
-function addCost(total: CostReport | undefined, next: CostReport | undefined): CostReport | undefined {
+// tags, not numbers — VERIFY pass 2 caught that taking the most recent report's tags unconditionally
+// lets a certain turn's "actual" mask an earlier turn's "estimated"/"unknown" in the running total,
+// which is exactly the confident-looking-wrong-number failure the cost feature exists to prevent.
+// A total is never more certain than its least-certain contributor: whichever of the two reports
+// ranks weaker on COST_STATUS_RANK supplies BOTH the status and the source, not just the status.
+const COST_STATUS_RANK: Record<CostReport["status"], number> = {
+  unknown: 0,
+  estimated: 1,
+  included: 2,
+  actual: 2,
+};
+export function addCost(
+  total: CostReport | undefined,
+  next: CostReport | undefined,
+): CostReport | undefined {
   if (next === undefined) return total;
   if (total === undefined) return next;
-  return { amountUsd: addTokens(total.amountUsd, next.amountUsd), status: next.status, source: next.source };
+  const weaker = COST_STATUS_RANK[total.status] <= COST_STATUS_RANK[next.status] ? total : next;
+  return {
+    amountUsd: addTokens(total.amountUsd, next.amountUsd),
+    status: weaker.status,
+    source: weaker.source,
+  };
 }
 
 type DriveLoopResult = {
@@ -1346,7 +1361,11 @@ async function runTui(
     // B2 fix: writes `confirmedModel`, not `session`'s own live model/provider — see
     // `confirmedModel`'s own comment above. Every other field of `session` (messages,
     // permissionMode, …) is unaffected; only these two are ever substituted.
-    const toPersist = { ...session, model: confirmedModel.model, provider: confirmedModel.provider };
+    const toPersist = {
+      ...session,
+      model: confirmedModel.model,
+      provider: confirmedModel.provider,
+    };
     try {
       saveSession(toPersist, ctx.sessionsDir);
     } catch (err) {
