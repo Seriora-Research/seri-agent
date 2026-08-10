@@ -1,3 +1,5 @@
+import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
+
 // One prompt for every model, deliberately: routing a different prompt per model family is what
 // both references do (OpenCode selects a file, Hermes injects a block for GPT/Codex only) and it is
 // deferred to Stage 7a, when a catalog exists to route on — see docs/PROMPT-ROUTING.md. Until then
@@ -63,16 +65,20 @@ function buildContextTier(agentsContent: string): string {
   return agentsContent;
 }
 
-// Last, so a change here invalidates the least of a cached prefix. Nothing produces volatile
-// content yet (no memory built this stage) — this is a structural placeholder.
-// Position (last) is not test-asserted while this returns "" — empty content is unobservable in
-// the output. Add a position-pinning test when this tier first returns real content.
-function buildVolatileTier(): string {
-  return "";
+// Per turn: tells the model which model/provider it is actually running as this turn, so a live
+// `/model` switch is reflected instead of confabulated. Composed outside buildSystemPrompt, at the
+// driveLoop call site in cli.ts, where session.model/.provider/catalog are already in scope — kept
+// last-in-string there too, so this is the only tier that invalidates a cached prefix.
+export function buildVolatileTier(
+  modelId: string,
+  provider: ModelProvider,
+  catalog: ModelCatalog,
+): string {
+  const entry = findCatalogEntry(catalog, modelId, provider);
+  const label = entry?.displayName ?? modelId;
+  return `You are powered by the model named ${label}. The exact model ID is ${provider}/${modelId}.`;
 }
 
 export function buildSystemPrompt(agentsContent: string): string {
-  return [buildStableTier(), buildContextTier(agentsContent), buildVolatileTier()]
-    .filter(Boolean)
-    .join("\n\n");
+  return [buildStableTier(), buildContextTier(agentsContent)].filter(Boolean).join("\n\n");
 }
