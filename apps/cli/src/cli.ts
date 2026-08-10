@@ -976,6 +976,16 @@ async function prepareSession(
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
 
+// Shared by confirmedModel's and lastPersistedModel's own guards (both inside runTui, below) —
+// hand-duplicating `a.model !== b.model || a.provider !== b.provider` at each site was the same
+// comparison typed twice with two different variable names.
+function modelPairChanged(
+  a: { model: string; provider: ModelProvider },
+  b: { model: string; provider: ModelProvider },
+): boolean {
+  return a.model !== b.model || a.provider !== b.provider;
+}
+
 // undefined + n is n, not NaN, and undefined + undefined stays undefined: a run's total is the sum
 // of the calls that reported, and stays unreported if none did.
 function addTokens(total: number | undefined, reported: number | undefined): number | undefined {
@@ -1623,7 +1633,7 @@ async function runTui(
           // pinning them to today's default across a binary upgrade — both variables start at the
           // session's own starting pair, so turn 1 (same model) trips neither.
           if (event.type === "messages-updated") {
-            if (confirmedModel.model !== modelId || confirmedModel.provider !== provider) {
+            if (modelPairChanged(confirmedModel, { model: modelId, provider })) {
               confirmedModel = { model: modelId, provider };
             }
             // Gated on `lastPersistedModel`, not `confirmedModel`: the try/catch + printWarning
@@ -1641,7 +1651,7 @@ async function runTui(
             // prevent.
             if (
               !persistAttemptedThisTurn &&
-              (lastPersistedModel.model !== modelId || lastPersistedModel.provider !== provider)
+              modelPairChanged(lastPersistedModel, { model: modelId, provider })
             ) {
               persistAttemptedThisTurn = true;
               try {
