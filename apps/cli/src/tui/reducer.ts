@@ -1,6 +1,7 @@
 // The shared-state home the research spec's Constraint 4 requires: driveLoop and all four slash
 // commands dispatch into this one reducer rather than each holding a separate copy. Zero Ink/React
 // import — a plain, standalone reducer, testable without a terminal.
+import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { toolAllowedLine, toolResultLine } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
@@ -35,6 +36,26 @@ export type TuiState = {
   // exclusive, matching how the non-interactive CLI already blocks on this same question before
   // reading anything else from stdin.
   pendingApproval: { toolName: string; args: unknown; offersAlways: boolean } | undefined;
+  // /model's own live state, mirroring pendingApproval's shape exactly: set when the picker opens
+  // (decideModelPickerOpen's own result, tui/commands.ts), cleared once resolved. App.tsx renders
+  // its own ModelPicker instead of InputBox whenever this is set — the same three-way mutual
+  // exclusion pendingApproval already establishes for ApprovalBox, extended to a third state
+  // rather than a second independent flag. `pendingApproval` and `pendingModelPicker` CAN both be
+  // set at once, despite that: cli.ts's onSubmit handles /model before the turnInFlight guard that
+  // gates ordinary tasks and mutatesRunState commands, so a user can open the picker while a turn
+  // — and the approval prompt it may have triggered — is still in flight. App.tsx's own render
+  // ternary picks ApprovalBox first in that case, so the picker stays open (this field stays set)
+  // but hidden behind the approval prompt until that resolves, rather than the two ever competing
+  // for the screen at once. Whether that is the right UX for a mid-turn /model is not decided by
+  // this comment; it is only what the current render order actually does.
+  pendingModelPicker: { entries: ModelCatalogEntry[] } | undefined;
+  // Code-review finding: a single pty chunk carrying filter text, a terminator, AND further
+  // characters (measured as real on a real terminal, the same class InputBox's own MEDIUM-E fix
+  // addressed) used to just discard everything after the terminator when it closed the picker —
+  // dropped keystrokes with the picker gone and no trace of what was typed. Set by
+  // `model-picker-resolved`'s `leftoverInput`, consumed once by InputBox as its own starting
+  // value on the very next mount, then cleared — never re-applied to a later, unrelated mount.
+  pendingInputPrefill: string | undefined;
 };
 
 function modeIndicator(mode: PermissionMode): string {
@@ -51,6 +72,8 @@ export function initialTuiState(session: SessionState<ModelMessage>): TuiState {
     pendingTool: undefined,
     commandError: undefined,
     pendingApproval: undefined,
+    pendingModelPicker: undefined,
+    pendingInputPrefill: undefined,
   };
 }
 
@@ -63,7 +86,30 @@ export type TuiAction =
   | { type: "loop-event"; event: LoopEvent }
   | { type: "command-error"; message: string }
   | { type: "approval-requested"; toolName: string; args: unknown; offersAlways: boolean }
-  | { type: "approval-resolved" };
+  | { type: "approval-resolved" }
+  | { type: "model-picker-requested"; entries: ModelCatalogEntry[] }
+  // `pick`, when present, is the SAME atomic transition as clearing pendingModelPicker — not a
+  // second dispatch — so there is never a one-frame render where the session already switched
+  // models but the picker is still showing, or the picker is gone but the switch hasn't landed.
+  // Carries only the pick itself (model + provider), not a whole captured SessionState: this used
+  // to carry a full session snapshot taken from `state.session` at the moment ModelPicker rendered
+  // (App.tsx's own `session` prop), which a `messages-updated` landing in between picker-open and
+  // picker-resolve (a real race — the picker can open mid-turn, see pendingModelPicker's own
+  // comment) would make stale — resolving the picker then overwrote the reducer's own, newer
+  // `state.session.messages` with whatever the picker had captured minutes earlier. Merging just
+  // the pick into the reducer's OWN CURRENT session (below) instead of replacing it wholesale is
+  // what closes that race, the same "read the reducer's own state, not a caller's stale copy"
+  // fix already applied to `messages-updated` itself (see that case's own comment).
+  | {
+      type: "model-picker-resolved";
+      pick?: { model: string; provider: ModelProvider };
+      // Text typed after a combined-chunk terminator (see `pendingInputPrefill`'s own comment) —
+      // present only on the rare chunked-input path, absent on every ordinary Enter.
+      leftoverInput?: string;
+    }
+  // A one-shot signal: InputBox has read `pendingInputPrefill` as its starting value and it must
+  // not be handed to any later, unrelated mount. Dispatched by InputBox itself, once, on mount.
+  | { type: "input-prefill-consumed" };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -103,6 +149,22 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       };
     case "approval-resolved":
       return { ...state, pendingApproval: undefined };
+    case "model-picker-requested":
+      return { ...state, pendingModelPicker: { entries: action.entries } };
+    case "model-picker-resolved":
+      // Merged into `state.session` (this reducer's own current session), not a caller-captured
+      // one — see TuiAction's own comment on `pick`. `permissionMode` is untouched by a pick, so
+      // (unlike session-updated, above) there is no `modeIndicator` to recompute here.
+      return action.pick === undefined
+        ? { ...state, pendingModelPicker: undefined, pendingInputPrefill: action.leftoverInput }
+        : {
+            ...state,
+            pendingModelPicker: undefined,
+            pendingInputPrefill: action.leftoverInput,
+            session: { ...state.session, model: action.pick.model, provider: action.pick.provider },
+          };
+    case "input-prefill-consumed":
+      return { ...state, pendingInputPrefill: undefined };
   }
 }
 

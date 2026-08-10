@@ -7,6 +7,11 @@
 // checkpointTarget is exported and reused by cli.ts's prepareSession — the one copy this module
 // and cli.ts both call through to, rather than cli.ts keeping its own duplicate (it did, briefly,
 // between Phase 2 and the fix that consolidated it here).
+import {
+  filterCatalogEntries,
+  type ModelCatalog,
+  type ModelCatalogEntry,
+} from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import {
   appendBarrier,
@@ -48,6 +53,16 @@ export function decideModeCycle(session: SessionState<ModelMessage>): {
 } {
   const next = { ...session, permissionMode: cycleMode(session.permissionMode) };
   return { next, message: `Session ${next.id}: permission mode is now ${next.permissionMode}` };
+}
+
+// The decision half of /model, mirroring decideModeCycle's own pure, no-I/O shape: what to show,
+// not how to show it or what happens once the user picks. `filterCatalogEntries` (already applied
+// once when the catalog was built — catalog.ts's own mapRawCatalog) is re-applied here rather than
+// trusted, so a picker built against a catalog from a different source (a future test fixture, or
+// @seri/model-catalog changing what it bundles) can't silently offer a model with no tool-call
+// support to select.
+export function decideModelPickerOpen(catalog: ModelCatalog): ModelCatalogEntry[] {
+  return filterCatalogEntries(catalog.entries);
 }
 
 // `onPlan` defaults to a no-op but is meant to be passed through from the caller's own presenter

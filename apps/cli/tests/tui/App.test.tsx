@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { render } from "ink-testing-library";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { SessionState } from "../../src/session/session";
-import { App } from "../../src/tui/App";
+import { App, formatContextWindow, formatCost, formatModelRow } from "../../src/tui/App";
 import type { TuiAction } from "../../src/tui/reducer";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -338,6 +339,209 @@ describe("App", () => {
       instance.stdin.write("y");
       await flush();
       expect(answers).toEqual(["once"]);
+    });
+  });
+
+  describe("model picker", () => {
+    function entry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+      return {
+        id: "llama-3.3-70b-versatile",
+        provider: "groq",
+        displayName: "Llama 3.3 70B",
+        family: "llama",
+        contextWindow: 131_072,
+        maxOutputTokens: 32_768,
+        toolCall: true,
+        reasoning: false,
+        pricing: undefined,
+        ...overrides,
+      };
+    }
+
+    test("renders in place of the input box once requested", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "model-picker-requested", entries: [entry()] });
+      await flush();
+
+      expect(instance.lastFrame()).toContain("Llama 3.3 70B");
+    });
+
+    // The concrete mechanical proof of "context preserved" (feature-plan.md's own acceptance
+    // criterion): onModelSelected only ever carries the picked model/provider — `messages` (and
+    // everything else about the session) is never part of the pick at all, so there is nothing to
+    // migrate or drop; the reducer's own model-picker-resolved merges it onto whatever session is
+    // current when the pick resolves (reducer.test.ts covers that merge directly).
+    test("typing filters the list, and Enter resolves the highlighted entry", async () => {
+      const selected: Array<{ model: string; provider: "groq" | "openrouter" }> = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const startingSession = session({ messages: [{ role: "user", content: "hi" }] });
+      const instance = render(
+        <App
+          session={startingSession}
+          connectDispatch={(d) => (dispatch = d)}
+          onModelSelected={(pick) => selected.push(pick)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({
+        type: "model-picker-requested",
+        entries: [
+          entry({ id: "llama-3.3-70b-versatile", displayName: "Llama 3.3 70B" }),
+          entry({ id: "llama-3.1-8b-instant", displayName: "Llama 3.1 8B" }),
+        ],
+      });
+      await flush();
+
+      // Narrows to the second entry only — "8b" is not a substring of the first entry's id or
+      // displayName.
+      instance.stdin.write("8b");
+      await flush();
+      expect(instance.lastFrame()).toContain("8b");
+
+      instance.stdin.write("\r");
+      await flush();
+
+      expect(selected).toEqual([{ model: "llama-3.1-8b-instant", provider: "groq" }]);
+    });
+
+    test("Escape and Ctrl-D both cancel without resolving a model", async () => {
+      const cancelled: string[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onModelPickerCancel={() => cancelled.push("cancelled")}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "model-picker-requested", entries: [entry()] });
+      await flush();
+      instance.stdin.write("\x1b"); // Escape
+      // A bare Escape byte is ambiguous with the start of a longer ANSI sequence (an arrow key,
+      // say), so Ink's own input parser holds it for a short window (App.js's own
+      // pendingInputFlushDelayMilliseconds, 20ms) before treating it as a standalone Escape
+      // keypress — longer than the plain macrotask tick `flush()` waits everywhere else in this
+      // file.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(cancelled).toEqual(["cancelled"]);
+
+      dispatch({ type: "model-picker-requested", entries: [entry()] });
+      await flush();
+      instance.stdin.write("\x04"); // Ctrl-D
+      await flush();
+      expect(cancelled).toEqual(["cancelled", "cancelled"]);
+    });
+
+    test("shows a +N more hint once the filtered list exceeds the visible window", async () => {
+      const { instance, dispatch } = await connect();
+      const entries = Array.from({ length: 12 }, (_, i) =>
+        entry({ id: `model-${i}`, displayName: `Model ${i}` }),
+      );
+
+      dispatch({ type: "model-picker-requested", entries });
+      await flush();
+
+      expect(instance.lastFrame()).toContain("+2 more — keep typing to narrow");
+    });
+
+    // C1: the real bug — the visible window used to always be the first MODEL_PICKER_WINDOW
+    // entries regardless of `selectedIndex`, so Down past the 10th entry moved the highlight
+    // somewhere nothing on screen showed. Down 15 times over 20 entries lands well past the
+    // original window; this checks BOTH halves the task's own comment calls out: the list actually
+    // scrolls (the 16th entry, id "model-15", becomes visible; the 1st, "model-0", scrolls out),
+    // AND the row Enter resolves is the one actually highlighted — an off-by-one in the scroll math
+    // would resolve a neighbour instead.
+    test("Down past the visible window scrolls the list, and Enter selects the highlighted row", async () => {
+      const selected: Array<{ model: string; provider: "groq" | "openrouter" }> = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onModelSelected={(pick) => selected.push(pick)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      const entries = Array.from({ length: 20 }, (_, i) =>
+        entry({ id: `model-${i}`, displayName: `Model ${i}` }),
+      );
+      dispatch({ type: "model-picker-requested", entries });
+      await flush();
+
+      // One write per keypress, not one write carrying all 15 escape sequences concatenated —
+      // Ink's own input parser only recognised the first arrow key when they arrived as a single
+      // chunk (measured), the same "one write per keystroke" constraint this file's other
+      // multi-keypress tests already work under.
+      for (let i = 0; i < 15; i++) {
+        instance.stdin.write("\x1b[B"); // Down arrow
+        await flush();
+      }
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Model 15");
+      expect(frame).not.toContain("Model 0 ");
+
+      instance.stdin.write("\r");
+      await flush();
+
+      expect(selected).toEqual([{ model: "model-15", provider: "groq" }]);
+    });
+  });
+
+  describe("formatModelRow / formatContextWindow / formatCost", () => {
+    function entry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+      return {
+        id: "llama-3.3-70b-versatile",
+        provider: "groq",
+        displayName: "Llama 3.3 70B",
+        family: "llama",
+        contextWindow: 131_072,
+        maxOutputTokens: 32_768,
+        toolCall: true,
+        reasoning: false,
+        pricing: { inputPerMTok: 0.59, outputPerMTok: 0.79 },
+        ...overrides,
+      };
+    }
+
+    test("formatContextWindow compacts to binary K/M, matching how a context window is described elsewhere in this repo", () => {
+      expect(formatContextWindow(131_072)).toBe("128K");
+      expect(formatContextWindow(1_050_000)).toBe("1.0M");
+      expect(formatContextWindow(512)).toBe("512");
+    });
+
+    test("formatCost formats pricing as $in/$out per 1M, or an em dash when there is none", () => {
+      expect(formatCost({ inputPerMTok: 0.59, outputPerMTok: 0.79 })).toBe("$0.59/$0.79");
+      expect(formatCost(undefined)).toBe("—");
+    });
+
+    test("formatModelRow includes name, provider, context and cost, in that order", () => {
+      const row = formatModelRow(entry());
+      const nameIndex = row.indexOf("Llama 3.3 70B");
+      const providerIndex = row.indexOf("groq");
+      const contextIndex = row.indexOf("128K");
+      const costIndex = row.indexOf("$0.59/$0.79");
+      expect(nameIndex).toBeGreaterThanOrEqual(0);
+      expect(providerIndex).toBeGreaterThan(nameIndex);
+      expect(contextIndex).toBeGreaterThan(providerIndex);
+      expect(costIndex).toBeGreaterThan(contextIndex);
+    });
+
+    test("formatModelRow truncates a displayName longer than the name column", () => {
+      const row = formatModelRow(entry({ displayName: "A".repeat(40) }));
+      expect(row).toContain("…");
+      expect(row.indexOf("A".repeat(40))).toBe(-1);
     });
   });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import type { LoopEvent } from "../../src/loop/loop";
 import type { SessionState } from "../../src/session/session";
@@ -216,5 +217,136 @@ describe("tuiReducer: approval-requested / approval-resolved", () => {
 
     state = tuiReducer(state, { type: "approval-resolved" });
     expect(state.pendingApproval).toBeUndefined();
+  });
+});
+
+describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
+  const entry: ModelCatalogEntry = {
+    id: "llama-3.3-70b-versatile",
+    provider: "groq",
+    displayName: "Llama 3.3 70B",
+    family: "llama",
+    contextWindow: 131_072,
+    maxOutputTokens: 32_768,
+    toolCall: true,
+    reasoning: false,
+    pricing: undefined,
+  };
+
+  test("model-picker-requested sets pendingModelPicker", () => {
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+
+    expect(state.pendingModelPicker).toEqual({ entries: [entry] });
+  });
+
+  test("model-picker-resolved with a pick merges model/provider into state.session and clears the picker in the same dispatch", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: entry.id, provider: entry.provider },
+    });
+
+    expect(state.pendingModelPicker).toBeUndefined();
+    expect(state.session).toEqual(session({ model: entry.id, provider: entry.provider }));
+  });
+
+  // B4/MEDIUM-4: the bug this closes. `model-picker-resolved` used to carry a whole SessionState
+  // captured when the picker rendered and replace `state.session` wholesale with it — so a
+  // `messages-updated` landing while the picker was still open (the picker can open mid-turn, see
+  // pendingModelPicker's own comment) got silently reverted the moment the pick resolved. Merging
+  // just the pick into whatever `state.session` actually is AT RESOLUTION TIME is what fixes it —
+  // this asserts the merge lands on top of a session newer than the one the picker was opened with.
+  test("model-picker-resolved merges into the CURRENT session, not a stale one captured when the picker opened", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+    // Simulates a turn's own messages-updated event landing while the picker is still open.
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "messages-updated", messages: [{ role: "user", content: "hi" }] },
+    });
+
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: entry.id, provider: entry.provider },
+    });
+
+    expect(state.session.model).toBe(entry.id);
+    expect(state.session.provider).toBe(entry.provider);
+    expect(state.session.messages).toEqual([{ role: "user", content: "hi" }]);
+  });
+
+  test("model-picker-resolved with no pick only clears the picker", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+    const before = state.session;
+
+    state = tuiReducer(state, { type: "model-picker-resolved" });
+
+    expect(state.pendingModelPicker).toBeUndefined();
+    expect(state.session).toBe(before);
+  });
+
+  // Code-review finding: a combined pty chunk carrying filter text, a terminator, AND further
+  // characters used to just discard everything after the terminator when the picker closed —
+  // dropped keystrokes with no trace. leftoverInput is how App.tsx's ModelPicker hands that text
+  // back; pendingInputPrefill is where the reducer parks it for InputBox's very next mount.
+  test("model-picker-resolved with leftoverInput sets pendingInputPrefill", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: entry.id, provider: entry.provider },
+      leftoverInput: "another query",
+    });
+
+    expect(state.pendingInputPrefill).toBe("another query");
+    expect(state.session.model).toBe(entry.id);
+  });
+
+  test("model-picker-resolved without leftoverInput leaves pendingInputPrefill undefined", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: entry.id, provider: entry.provider },
+    });
+
+    expect(state.pendingInputPrefill).toBeUndefined();
+  });
+
+  test("input-prefill-consumed clears pendingInputPrefill", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: entry.id, provider: entry.provider },
+      leftoverInput: "another query",
+    });
+    expect(state.pendingInputPrefill).toBe("another query");
+
+    state = tuiReducer(state, { type: "input-prefill-consumed" });
+
+    expect(state.pendingInputPrefill).toBeUndefined();
+    // Consuming the prefill must not disturb the session the same dispatch already landed.
+    expect(state.session.model).toBe(entry.id);
   });
 });

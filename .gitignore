@@ -46,3 +46,7 @@ supabase-pass.md
 
 # Live credentials for the portal deploy — never commit (public repo).
 PORTAL-ENV.md
+
+# A live OpenRouter API key used for Stage 7a's manual verification (VERIFY pass 1, HIGH-3) —
+# never commit (VERIFY pass 2, MEDIUM-1: was untracked but unignored, one `git add -A` from a leak).
+openrouter.md

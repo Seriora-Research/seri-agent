@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
+import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
@@ -21,6 +22,7 @@ import { projectRoot } from "./checkpoint/shadowGit";
 import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
   approvalPromptText,
+  printCost,
   printEvent,
   printGrantPersisted,
   printPreApproved,
@@ -44,7 +46,11 @@ import {
 } from "./loop/loop";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
-import { getGroqModel as getGroqModelReal, resolveModelId } from "./provider/groq";
+import { getModelCatalog } from "./provider/catalog";
+import type { CostReport } from "./provider/cost";
+import { type getGroqModel as getGroqModelReal, resolveModelId } from "./provider/groq";
+import { getModel } from "./provider/model";
+import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
 import { toolDefinitions } from "./provider/tools";
 import {
   findMostRecentSession,
@@ -59,6 +65,7 @@ import {
   type CommandDirs,
   checkpointTarget,
   decideModeCycle,
+  decideModelPickerOpen,
   decideRestore,
   decideRewind,
   decideUndo,
@@ -69,6 +76,10 @@ import { withVerification } from "./verify/wrapTools";
 type CliDeps = {
   runLoop?: typeof runLoopReal;
   getGroqModel?: typeof getGroqModelReal;
+  // Mirrors getGroqModel exactly — getModel (provider/model.ts) dispatches to whichever of the two
+  // a session's provider names, so a test injecting one but not the other still gets the real
+  // implementation for whichever provider it never exercises.
+  getOpenRouterModel?: typeof getOpenRouterModelReal;
   loadAgentsFile?: typeof loadAgentsFileReal;
   sessionsDir?: string;
   checkpointsDir?: string;
@@ -312,10 +323,10 @@ async function rewindCommand(
   presenter.message(message);
 }
 
-// `model` is optional on SessionState so that sessions written before the field existed still load,
-// but every session this function hands back has one — which is what lets the rest of the run stop
-// asking, and getGroqModel drop its default parameter.
-type RunSession = SessionState<ModelMessage> & { model: string };
+// `model`/`provider` are optional on SessionState so that sessions written before either field
+// existed still load, but every session this function hands back has both — which is what lets the
+// rest of the run stop asking, and getModel drop a default parameter for either.
+type RunSession = SessionState<ModelMessage> & { model: string; provider: ModelProvider };
 
 // `modelRecorded` says where the model came from: true if the session file already had one, false
 // if it was just resolved from the environment and no provider call has confirmed it exists.
@@ -354,11 +365,16 @@ function loadOrCreateSession(
     // does NOT protect: a session written before the field existed was really running
     // llama-3.3-70b-versatile, nothing records that, and this first resume moves it to whatever
     // resolveModelId returns.
+    //
+    // `provider` is backfilled the same way, absent meaning "groq" — the only provider that
+    // existed before this field did, so an old session's absence and an explicit "groq" mean the
+    // same thing (SessionState.provider's own comment).
     return {
       session: {
         ...loaded,
         systemPrompt: buildSystemPrompt(loadAgentsFileFn(loaded.cwd)),
         model: loaded.model ?? resolveModelId(),
+        provider: loaded.provider ?? "groq",
       },
       modelRecorded: loaded.model !== undefined,
     };
@@ -380,6 +396,7 @@ function loadOrCreateSession(
       // allowlist, run-scoped for every other write tool the gate ever grows.
       permissionMode: "approve-each",
       model: resolveModelId(),
+      provider: "groq",
       messages: [],
     },
     modelRecorded: false,
@@ -767,8 +784,15 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
 
 // Everything the loop is driven with, resolved before the first model call so a failure to build
 // any of it is an exit code rather than a half-started turn.
+//
+// Code-review finding: `session` used to be typed as the loose `SessionState<ModelMessage>`
+// (model/provider optional) even though `prepareSession` (below) only ever builds a fully-resolved
+// `RunSession` — forcing a defensive `?? "groq"` fallback and two bare `as RunSession` casts
+// downstream to re-assert, by convention, an invariant the type already failed to state. `RunSession`
+// here means a future code path that legitimately produces a session without model/provider (an
+// import/migration path, say) is a compile error at its own call site, not a silent fallthrough.
 type PreparedRun = {
-  session: SessionState<ModelMessage>;
+  session: RunSession;
   storeDir: string;
   tools: ToolSet;
   model: LanguageModel;
@@ -787,13 +811,22 @@ type PreparedRun = {
   // fact the loop is driven with, carried on this object so driveLoop has nothing to re-derive and
   // nothing to assign into `session`.
   allowedTools: readonly string[];
+  // Loaded once here (@seri/model-catalog caches it for the rest of the process anyway) and carried
+  // on this object so runTui's own per-turn model re-resolution (runTurn, below — the /model fix)
+  // has it without loading it again every turn.
+  catalog: ModelCatalog;
+  // The catalog's own `contextWindow` for `model`, above — undefined when the catalog has no entry
+  // for this exact id/provider pair (an id typed straight into SERI_MODEL, say), in which case
+  // runLoop's own DEFAULT_CONTEXT_WINDOW_SIZE applies, matching what every run did before this
+  // field existed.
+  contextWindowSize: number | undefined;
 };
 
-function prepareSession(
+async function prepareSession(
   ctx: RunContext,
   deps: CliDeps,
   skipPermissions: boolean,
-): PreparedRun | number {
+): Promise<PreparedRun | number> {
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
 
   let session: RunSession;
@@ -816,14 +849,25 @@ function prepareSession(
     session.messages.push({ role: "user", content: ctx.taskText.trim() });
   }
 
-  const getGroqModelFn = deps.getGroqModel ?? getGroqModelReal;
-  let model;
+  // Loaded once, here, alongside the model resolution it feeds — /model (runTui's own runTurn)
+  // reuses this SAME catalog on every later turn rather than reloading it, but @seri/model-catalog
+  // caches for the rest of the process either way (catalog.ts's own loadCatalog).
+  const catalog = await getModelCatalog();
+  let model: LanguageModel;
   try {
-    model = getGroqModelFn(session.model);
+    model = getModel(session.model, session.provider, {
+      getGroqModel: deps.getGroqModel,
+      getOpenRouterModel: deps.getOpenRouterModel,
+    });
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   }
+  const contextWindowSize = findCatalogEntry(
+    catalog,
+    session.model,
+    session.provider,
+  )?.contextWindow;
 
   // A model this run merely RESOLVED is deliberately left out of the file. getGroqModel accepts any
   // string — an unknown id is not rejected here, it comes back as a provider 404 mid-run — so
@@ -888,7 +932,17 @@ function prepareSession(
     loadVerifyConfig(),
   );
 
-  return { session, storeDir, tools, model, permissionMode, worktree, allowedTools };
+  return {
+    session,
+    storeDir,
+    tools,
+    model,
+    permissionMode,
+    worktree,
+    allowedTools,
+    catalog,
+    contextWindowSize,
+  };
 }
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
@@ -899,10 +953,40 @@ function addTokens(total: number | undefined, reported: number | undefined): num
   return reported === undefined ? total : (total ?? 0) + reported;
 }
 
+// Same "sum what showed up" rule as addTokens, extended to a CostReport: the dollar amount sums
+// like a token count (addTokens handles that half directly), but status/source are provenance
+// tags, not numbers — VERIFY pass 2 caught that taking the most recent report's tags unconditionally
+// lets a certain turn's "actual" mask an earlier turn's "estimated"/"unknown" in the running total,
+// which is exactly the confident-looking-wrong-number failure the cost feature exists to prevent.
+// A total is never more certain than its least-certain contributor: whichever of the two reports
+// ranks weaker on COST_STATUS_RANK supplies BOTH the status and the source, not just the status.
+const COST_STATUS_RANK: Record<CostReport["status"], number> = {
+  unknown: 0,
+  estimated: 1,
+  included: 2,
+  actual: 2,
+};
+export function addCost(
+  total: CostReport | undefined,
+  next: CostReport | undefined,
+): CostReport | undefined {
+  if (next === undefined) return total;
+  if (total === undefined) return next;
+  const weaker = COST_STATUS_RANK[total.status] <= COST_STATUS_RANK[next.status] ? total : next;
+  return {
+    amountUsd: addTokens(total.amountUsd, next.amountUsd),
+    status: weaker.status,
+    source: weaker.source,
+  };
+}
+
 type DriveLoopResult = {
   doneReason: DoneReason | undefined;
   cancelledBy: NodeJS.Signals | undefined;
   usage: RunUsage;
+  // Same shape as `usage`: summed across every `usage` event this call's runLoopFn yielded, via
+  // addCost above. undefined when the run never got as far as a completed model call.
+  cost: CostReport | undefined;
   // The one fact `run()`'s exit code actually needs, not the two inputs it would otherwise have
   // to reassemble itself: "refused at least once AND executed nothing at all" — see the tracking
   // below for what each half means and why.
@@ -961,7 +1045,8 @@ async function driveLoop(
   persist: (session: SessionState<ModelMessage>) => void,
   approvalPrompt: ApprovalPrompt,
 ): Promise<DriveLoopResult> {
-  const { session, storeDir, tools, model, worktree, allowedTools } = prepared;
+  const { session, storeDir, tools, model, worktree, allowedTools, catalog, contextWindowSize } =
+    prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
@@ -978,6 +1063,7 @@ async function driveLoop(
 
   let doneReason: DoneReason | undefined;
   const usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
+  let cost: CostReport | undefined;
   // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
   // what an exit code promises a shell, which is this consumer's business, not the loop's.
   // `permission-denied` fires on two different facts carried in its `reason` — "blocked" is a
@@ -1010,6 +1096,21 @@ async function driveLoop(
       system: session.systemPrompt,
       signal: controller.signal,
       maxIterations: maxTurns,
+      // HIGH-1: without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`
+      // / `opts.provider === "groq" && opts.modelId && opts.catalog`) never fires and every `usage`
+      // event's `cost` field is silently undefined — the run genuinely never computes a cost, no
+      // matter what cost.ts itself does. No `?? "groq"` fallback needed here (a prior version had
+      // one): `session` is destructured from `prepared: PreparedRun`, whose `session` field is
+      // `RunSession` — `provider` is never optional at this point, only at the edges that produce
+      // one (`loadOrCreateSession`'s own backfill is where an absent provider becomes "groq").
+      // `session.model` is the model this call is actually being made against.
+      provider: session.provider,
+      modelId: session.model,
+      catalog,
+      // The catalog's own contextWindow for whatever model this turn is actually calling — a
+      // /model switch to a provider/model with a different limit must change compaction's own
+      // math, not just which endpoint gets called (PreparedRun.contextWindowSize's own comment).
+      contextWindowSize,
     })) {
       if (event.type === "messages-updated") {
         // `persist` (this function's own comment above explains the two callers) is the ONLY
@@ -1053,6 +1154,10 @@ async function driveLoop(
         usage.inputTokens = addTokens(usage.inputTokens, event.usage.inputTokens);
         usage.outputTokens = addTokens(usage.outputTokens, event.usage.outputTokens);
       }
+      // `compacted` has no `cost` of its own (the summariser's own round-trip is billed the same
+      // as any other call, but loop.ts does not price it — see loop.ts's own `usage` event comment
+      // for the token half of the same asymmetry) — only `usage` carries one.
+      if (event.type === "usage") cost = addCost(cost, event.cost);
       if (event.type === "done") doneReason = event.reason;
       onEvent(event);
       // After the dispatch above, not before: these are two lines of one message and the
@@ -1080,7 +1185,7 @@ async function driveLoop(
     unregisterCancel();
   }
 
-  return { doneReason, cancelledBy, usage, refusedWithoutRunning: hadDenial && !ranTool };
+  return { doneReason, cancelledBy, usage, cost, refusedWithoutRunning: hadDenial && !ranTool };
 }
 
 // A plain default-flush transcript-append, shared by tuiPresenter's own `append` below and
@@ -1165,6 +1270,23 @@ async function runTui(
   // own effect, MEDIUM-1's own accepted, documented, narrow trade-off (persistence lagging by a
   // tick) is unrelated to reads racing ahead of a stale copy, which is what this closes.
   let liveState: TuiState = initialTuiState(prepared.session);
+  // B2 fix (MEDIUM-5): the model/provider onSessionChange (below) actually WRITES to disk, kept
+  // deliberately separate from `liveState.session.model`/`.provider` (what a picked model changes
+  // immediately, so the next runTurn attempts it — onModelSelected's own comment) — mirrors
+  // prepareSession's own "only pin a model that demonstrably worked" invariant (that function's own
+  // comment), applied to a live /model switch instead of just session creation. Starts at this
+  // run's own starting model/provider — already trusted the same way prepareSession trusts it for
+  // turn 1 — and only ever moves forward on a genuinely successful turn (runTurn's own onEvent
+  // callback, below, on `messages-updated`), never on the picker resolving by itself. A picked
+  // model whose first turn errors (no working key, an unknown id) leaves this untouched, so the
+  // session on disk stays pinned to the model that was last known to work — recoverable on the next
+  // `--resume` — instead of a switch nothing ever confirmed.
+  // `prepared.session` is already `RunSession` (PreparedRun's own type, above) — the two casts this
+  // line used to need are gone along with the loose type that forced them.
+  let confirmedModel: { model: string; provider: ModelProvider } = {
+    model: prepared.session.model,
+    provider: prepared.session.provider,
+  };
   // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
   // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
   // what every other function in this closure actually calls now.
@@ -1208,6 +1330,7 @@ async function runTui(
   // they drive (run()'s own logic, unchanged) is about the LAST turn's outcome, the same as it
   // always answered "did the run just now finish, and how."
   let usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
+  let cost: CostReport | undefined;
   let doneReason: DoneReason | undefined;
   let refusedWithoutRunning = false;
 
@@ -1246,8 +1369,16 @@ async function runTui(
   function onSessionChange(session: SessionState<ModelMessage>): void {
     const resolvers = pendingPersistResolvers;
     pendingPersistResolvers = [];
+    // B2 fix: writes `confirmedModel`, not `session`'s own live model/provider — see
+    // `confirmedModel`'s own comment above. Every other field of `session` (messages,
+    // permissionMode, …) is unaffected; only these two are ever substituted.
+    const toPersist = {
+      ...session,
+      model: confirmedModel.model,
+      provider: confirmedModel.provider,
+    };
     try {
-      saveSession(session, ctx.sessionsDir);
+      saveSession(toPersist, ctx.sessionsDir);
     } catch (err) {
       const message = `could not save the session: ${err instanceof Error ? err.message : String(err)}`;
       printWarning(message);
@@ -1338,6 +1469,25 @@ async function runTui(
     resolve(answer);
   }
 
+  // ModelPicker's own two resolutions (App.tsx's onModelSelected/onModelPickerCancel props) — both
+  // dispatch model-picker-resolved, the one action that clears the picker and (only when a model
+  // was actually picked) merges the pick into `state.session` in the same atomic transition
+  // (reducer.ts's own comment on why that is one dispatch, not two). This is deliberately the ONLY
+  // effect of a pick: `state.session.model`/`.provider` changes immediately, so the very next
+  // runTurn call (which reads them fresh — that function's own comment) attempts the new model —
+  // but `confirmedModel` (below) does NOT move here, so onSessionChange keeps writing the OLD,
+  // still-working model/provider to disk until a turn actually succeeds on the new one.
+  function onModelSelected(
+    pick: { model: string; provider: ModelProvider },
+    leftoverInput?: string,
+  ): void {
+    dispatch({ type: "model-picker-resolved", pick, leftoverInput });
+  }
+
+  function onModelPickerCancel(): void {
+    dispatch({ type: "model-picker-resolved" });
+  }
+
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
   // reducer and driveLoop have always shared. Guarded against overlap: a second Enter press
@@ -1347,14 +1497,64 @@ async function runTui(
   async function runTurn(session: SessionState<ModelMessage>): Promise<void> {
     if (reactDispatch === undefined || turnInFlight) return;
     turnInFlight = true;
-    const turnPrepared: PreparedRun = { ...prepared, session };
+    // Re-resolved from the CURRENT session on every turn — the actual /model fix. Before this,
+    // every turn reused `prepared.model`, the LanguageModel prepareSession built once from
+    // whatever session.model/provider were at the very start of the run, so a live switch
+    // (ModelPicker's own onModelSelected, dispatched into the reducer) never took effect: the next
+    // turn kept calling the old provider's endpoint no matter what the session said. `session` is
+    // untouched here — this only changes which model answers it, not what it contains.
+    //
+    // Every session reaching here started as a RunSession (loadOrCreateSession's own backfill
+    // guarantee) and stays one: every step along the way (decideModeCycle, decideRewind, the
+    // reducer's own model-picker-resolved merge) only ever spreads the session it had, never drops
+    // `model`/`provider`. TypeScript loses that once a session narrows to the reducer's own
+    // `SessionState<ModelMessage>` (tui/reducer.ts), so this is the one place that puts it back —
+    // the same kind of "this file already knows a stronger invariant tsc can't see" gap
+    // `resolveRunTui!`'s own definite-assignment assertion, above, papers over too.
+    const { model: modelId, provider } = session as RunSession;
+    let model: LanguageModel;
+    try {
+      model = getModel(modelId, provider, {
+        getGroqModel: deps.getGroqModel,
+        getOpenRouterModel: deps.getOpenRouterModel,
+      });
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      turnInFlight = false;
+      return;
+    }
+    const contextWindowSize = findCatalogEntry(prepared.catalog, modelId, provider)?.contextWindow;
+    // `session as RunSession`, not the raw (reducer-typed) `session`: PreparedRun.session is now
+    // RunSession (code-review finding — see PreparedRun's own comment), and this call site already
+    // established the same invariant two lines up for `modelId`/`provider`; reusing it here instead
+    // of casting a second time in one function.
+    const turnPrepared: PreparedRun = {
+      ...prepared,
+      session: session as RunSession,
+      model,
+      contextWindowSize,
+    };
     try {
       const result = await driveLoop(
         turnPrepared,
         ctx,
         deps,
         maxTurns,
-        (event) => dispatch({ type: "loop-event", event }),
+        (event) => {
+          dispatch({ type: "loop-event", event });
+          // B2 fix: `messages-updated` is loop.ts's own signal that a model call actually
+          // succeeded (loadOrCreateSession's own comment: "driveLoop's messages-updated save
+          // records it... only after a turn the provider actually answered") — so THIS turn's
+          // `modelId`/`provider` (destructured above, what it was actually called with) are now
+          // demonstrably working and safe to persist. Confirming on every turn, not just a
+          // picker-driven one, is a no-op for the common case (same value already) and is what
+          // makes a picker switch's FIRST successful turn confirm it, with no special-casing for
+          // "was this turn a switch."
+          if (event.type === "messages-updated") confirmedModel = { model: modelId, provider };
+        },
         getPermissionMode,
         () => {},
         tuiApprovalPrompt,
@@ -1363,6 +1563,7 @@ async function runTui(
         inputTokens: addTokens(usage.inputTokens, result.usage.inputTokens),
         outputTokens: addTokens(usage.outputTokens, result.usage.outputTokens),
       };
+      cost = addCost(cost, result.cost);
       doneReason = result.doneReason;
       refusedWithoutRunning = result.refusedWithoutRunning;
       // LOW-J: `result.cancelledBy` is deliberately not read here. The TUI never re-raises a
@@ -1435,11 +1636,13 @@ async function runTui(
           onSessionChange,
           onQuit: quit,
           onApprovalAnswer,
+          onModelSelected,
+          onModelPickerCancel,
           connectDispatch: undefined,
         }),
       );
       void instance.waitUntilExit().then(() => {
-        resolveRunTui({ doneReason, cancelledBy: undefined, usage, refusedWithoutRunning });
+        resolveRunTui({ doneReason, cancelledBy: undefined, usage, cost, refusedWithoutRunning });
       });
     };
     if (turnInFlight) {
@@ -1489,6 +1692,21 @@ async function runTui(
         return;
       }
       quit();
+      return;
+    }
+    // /model, like /exit just above, is intercepted here rather than added to SLASH_COMMANDS: it
+    // opens a live, selectable picker, which means nothing on the non-interactive path
+    // SLASH_COMMANDS also serves (handleSlashCommand has no screen to render a picker onto), so it
+    // is not in that table at all (mirrors that table's own comment on why /exit isn't either).
+    if (name === "/model") {
+      if (args.length > 0) {
+        dispatch({ type: "command-error", message: "/model: invalid arguments." });
+        return;
+      }
+      dispatch({
+        type: "model-picker-requested",
+        entries: decideModelPickerOpen(prepared.catalog),
+      });
       return;
     }
     const command = SLASH_COMMANDS.get(name);
@@ -1561,6 +1779,8 @@ async function runTui(
       onSessionChange,
       onQuit: quit,
       onApprovalAnswer,
+      onModelSelected,
+      onModelPickerCancel,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
         // hasNewTask — the same predicate prepareSession (above) uses to decide whether it pushed
@@ -1650,7 +1870,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const slash = await handleSlashCommand(ctx);
   if (slash !== undefined) return slash;
 
-  const prepared = prepareSession(ctx, deps, skipPermissions);
+  const prepared = await prepareSession(ctx, deps, skipPermissions);
   if (typeof prepared === "number") return prepared;
 
   // TTY-inferred, not a flag (plan Decision 2): a real terminal gets the Ink TUI, driving the
@@ -1661,7 +1881,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // CliDeps.isTTY's own comment for why this reads `deps.isTTY`, never process.stdout.isTTY
   // directly.
   const isTTY = deps.isTTY ?? false;
-  const { doneReason, cancelledBy, usage, refusedWithoutRunning } = isTTY
+  const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning } = isTTY
     ? await runTui(prepared, ctx, deps, maxTurns, skipPermissions)
     : await driveLoop(
         prepared,
@@ -1684,6 +1904,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // one exit this does not cover is a throw escaping driveLoop's `for await` (approvalPrompt
   // rejecting), which already skips the exit code below too.
   printUsage(usage);
+  // Same guard printUsage's own callers get for free (a run that never called anything has
+  // nothing to report): `cost` stays undefined until the first `usage` event carries one, which
+  // only happens once opts.provider/modelId/catalog reach loop.ts at all (driveLoop's own runLoopFn
+  // call, above) — HIGH-1's fix. `printCost` itself handles a report whose `amountUsd` came back
+  // undefined (an id absent from the catalog, an OpenRouter response with no cost data).
+  if (cost !== undefined) printCost(cost);
 
   // The turn was cancelled, so the process still dies the way Ctrl-C makes a process die. Not
   // process.exit: a status is not a death by signal, and `for f in a b c; do seri "$f"; done` only

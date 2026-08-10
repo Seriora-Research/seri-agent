@@ -167,6 +167,85 @@ function childScriptMultiTurn(dir: string): string {
   ].join("\n");
 }
 
+// Stage 7a Slice 4: the actual /model bug fix, proven with a real second turn the same way
+// childScriptMultiTurn proves H-3 above — a fake runLoop that reports which model id and how many
+// messages EACH call actually received, so a live /model switch (a real picker, driven by real
+// keystrokes) taking effect on the very next turn is observable from outside the process, not just
+// asserted against the reducer in isolation. `getGroqModel` returns the id itself rather than an
+// opaque `{}` (every OTHER script in this file's own convention) specifically so the fake runLoop
+// can report which one it was actually handed. `SERI_DISABLE_MODELS_FETCH` keeps the catalog load
+// prepareSession now always does (this same Slice) on the CLI's own bundled fallback manifest —
+// deterministic, and no network dependency for a filter query this script needs to stay unique
+// against.
+function childScriptModelSwitch(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " messages=" + opts.messages.length);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: (id) => ({ id }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// B2/MEDIUM-5: the "pin only what worked" invariant applied to a live /model switch, proven the
+// same real-keystroke way childScriptModelSwitch's own test proves the switch takes effect at all.
+// Turn 1 succeeds normally on the starting model; turn 2 — on the model the real picker just
+// switched to — fails with no `messages-updated` at all (the shape a bad key or an unreachable
+// provider actually takes: loop.ts's own first catch yields `error` and returns, no `done`, no
+// persist call for the TUI path — driveLoop's own comment on why persist is messages-updated-only).
+// The script reads the on-disk session file itself, from inside this same process, once the failed
+// call has yielded its `error` — proving what actually reached disk, not what the live reducer
+// state (already switched, or the second RUNLOOP_CALL line would report the OLD model) merely says.
+function childScriptModelSwitchFailure(dir: string): string {
+  const sessionsDir = join(dir, "sessions");
+  return [
+    `import { readdirSync, readFileSync } from "node:fs";`,
+    `import { join } from "node:path";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id);`,
+    `  if (calls === 1) {`,
+    `    yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok" }] };`,
+    `    yield { type: "done", reason: "no-tool-call" };`,
+    `    return opts.messages;`,
+    `  }`,
+    `  yield { type: "error", error: "simulated: no working key for this provider" };`,
+    `  const sessionFile = readdirSync(${JSON.stringify(sessionsDir)}).find((f) => f.endsWith(".json"));`,
+    `  const onDisk = JSON.parse(readFileSync(join(${JSON.stringify(sessionsDir)}, sessionFile), "utf8"));`,
+    `  console.log("\\nMODEL_ON_DISK_AFTER_FAILURE " + onDisk.model);`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: (id) => ({ id }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(sessionsDir)},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // HIGH-1: a turn that finishes and reports usage, then the TUI is left awaiting input — proving
 // `run()` actually reaches `printUsage`/the exit-code logic on the TUI path once /exit or Ctrl-D
 // resolves runTui's promise, which nothing did before this fix.
@@ -677,6 +756,96 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // without waiting first can race it on a slow/loaded runner.
       await sawLineTimes("> a second task", 1);
       expect(occurrences("> a second task")).toBe(1);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // Stage 7a Slice 4: the concrete mechanical proof of "context preserved" — a real /model switch,
+  // driven by real keystrokes through the actual picker (not a synthetic reducer dispatch), takes
+  // effect on the very next turn (a different model id is what the SECOND RUNLOOP_CALL reports),
+  // while the message array driveLoop is handed keeps growing exactly as childScriptMultiTurn's own
+  // sibling test above already proves it does without a switch — 3, not reset or corrupted by the
+  // model change in between.
+  test("switching the model via /model re-resolves the model on the very next turn without touching accumulated messages", async () => {
+    const scriptPath = join(dir, "child-model-switch.mjs");
+    writeFileSync(scriptPath, childScriptModelSwitch(dir));
+
+    const { child, sawLine } = startChild(scriptPath, dir);
+    try {
+      // The default model (groq.ts's own DEFAULT_MODEL) — proves the FIRST turn used it, before
+      // any switch.
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1");
+      await sawLine("(done: no-tool-call)");
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      // The picker replaces the input box (App.tsx's own three-way mutual exclusion) — the bundled
+      // fallback manifest's own default model is one of the 6 groq entries, always inside the
+      // picker's default (unfiltered) top-10 window regardless of catalog ordering, so this is a
+      // reliable sync point proving the picker actually mounted before typing a filter.
+      await sawLine("GPT OSS 120B");
+
+      // Narrows to exactly one entry across the WHOLE catalog (groq and openrouter both) — verified
+      // directly against the bundled catalog-manifest.json before writing this string; "3.3-70b"
+      // alone also matches an OpenRouter entry, "70b-versatile" does not.
+      child.stdin?.write("70b-versatile");
+      await sawLine("70b-versatile");
+      child.stdin?.write("\r");
+      // The Enter keypress resolves synchronously (App.tsx's own dispatch wrapper updates
+      // `liveState` in the same tick), but the actual React unmount of ModelPicker and mount of
+      // InputBox — which is what moves the NEXT keystroke's own useInput listener from one
+      // component to the other — commits on a later tick. Measured on a real pty without this
+      // wait: "a second task" arrived before that commit and landed in ModelPicker's still-
+      // mounted filter query instead, rendered as "70b-versatile\ra second task" inside the
+      // picker's own box, with no second RUNLOOP_CALL at all.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      // A different model id, and 3 messages (1 initial + 1 turn-1 assistant reply + 1 new user
+      // message) — the switch changed WHICH model answers, not what it was handed.
+      await sawLine("RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // B2/MEDIUM-5: the other half of "context preserved" — a switch whose first turn FAILS must not
+  // be the one that reaches disk. Same real picker interaction as the test above; the difference is
+  // entirely in the fake runLoop (childScriptModelSwitchFailure's own comment).
+  test("a /model switch whose first turn fails is not persisted — the on-disk session keeps the model that last worked", async () => {
+    const scriptPath = join(dir, "child-model-switch-failure.mjs");
+    writeFileSync(scriptPath, childScriptModelSwitchFailure(dir));
+
+    const { child, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
+      await sawLine("(done: no-tool-call)");
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      await sawLine("GPT OSS 120B");
+
+      child.stdin?.write("70b-versatile");
+      await sawLine("70b-versatile");
+      child.stdin?.write("\r");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      // The switch DID take effect live — the second call was actually attempted against the new
+      // model, same as the successful-switch test above — and it failed.
+      await sawLine("RUNLOOP_CALL 2 model=llama-3.3-70b-versatile");
+      // But the file on disk still names the model turn 1 actually completed with, not the one
+      // turn 2 merely attempted and failed on.
+      await sawLine("MODEL_ON_DISK_AFTER_FAILURE openai/gpt-oss-120b");
     } finally {
       child.kill("SIGKILL");
     }

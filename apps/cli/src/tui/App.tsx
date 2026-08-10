@@ -5,6 +5,7 @@
 // directly. Everything below it is a live region: status/spinner, a pending-write placeholder, the
 // mode indicator, and a basic input box, all re-rendered in place rather than scrolled.
 
+import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import { useEffect, useReducer, useState } from "react";
@@ -59,6 +60,19 @@ export type AppProps = {
   // calling makeApprovalPrompt's readline-based prompt instead: a SECOND stdin consumer and a
   // SECOND SIGINT route racing Ink's own raw-mode ownership and signals.ts's single cancel slot.
   onApprovalAnswer?: (answer: ApprovalAnswer) => void;
+  // /model's own two resolutions, mirroring onApprovalAnswer's shape: called from ModelPicker's own
+  // keypress handler, wired by runTui to dispatch model-picker-resolved (with or without a pick)
+  // into the SAME reducer everything else here already shares. `onModelSelected` takes just the
+  // pick (model + provider), not a whole session — TuiAction's own "model-picker-resolved" comment
+  // explains why a whole captured session is the race this stopped carrying.
+  // `leftoverInput`: text typed after a terminator embedded in the same combined pty chunk that
+  // resolved this pick — see `pendingInputPrefill`'s own comment (reducer.ts). Absent on the
+  // ordinary single-Enter path.
+  onModelSelected?: (
+    pick: { model: string; provider: ModelProvider },
+    leftoverInput?: string,
+  ) => void;
+  onModelPickerCancel?: () => void;
 };
 
 // approvalPromptText (cli/output.ts), not a hand-copied template: round 7 code review found this
@@ -125,14 +139,239 @@ function ApprovalBox({
   );
 }
 
+// The most a picker window ever shows at once, regardless of how many entries match the current
+// filter — the catalog easily runs into the hundreds (models.dev's own OpenRouter listing), and
+// rendering all of them would scroll the picker itself out of view, the same reasoning
+// truncateArgsDisplay already applies to a single long line. `selectedIndex` can move past this
+// many rows (arrow-key navigation over the full filtered list, not just what's on screen) — see
+// `scrollOffset`, below, for how the visible window slides to keep it in view.
+const MODEL_PICKER_WINDOW = 10;
+
+// Column widths for formatModelRow/MODEL_PICKER_HEADER below — plain padded strings, not a table
+// component: this repo hand-rolls its TUI deliberately (App.tsx's own file-level comment) and Ink
+// has none built in.
+const NAME_WIDTH = 22;
+const PROVIDER_WIDTH = 10;
+const CONTEXT_WIDTH = 7;
+
+// Truncates with a trailing ellipsis (never mid-multi-byte-safe beyond what .slice already is —
+// every field this feeds is plain ASCII: a model id/displayName/provider name) or pads with
+// trailing spaces, so every row's later columns start at the same screen column regardless of an
+// earlier one's actual length.
+function truncatePad(text: string, width: number): string {
+  return text.length > width ? `${text.slice(0, width - 1)}…` : text.padEnd(width);
+}
+
+// Binary units (1024, not 1000): matches how a context window is actually described everywhere
+// else this repo prints one (contextWindowSize's own comments, loop.ts) — 131,072 is "128K" this
+// way, matching the task's own worked example, not "131K" a decimal K would give.
+export function formatContextWindow(tokens: number): string {
+  if (tokens >= 1024 * 1024) return `${(tokens / (1024 * 1024)).toFixed(1)}M`;
+  if (tokens >= 1024) return `${Math.round(tokens / 1024)}K`;
+  return `${tokens}`;
+}
+
+// "—" (not "?"/"unknown"/blank) for the same reason printCost (cli/output.ts) writes out "unknown"
+// rather than a bare "$": pricing.ts's own ModelCatalogEntry.pricing comment says `undefined` means
+// models.dev never published a rate for this entry, not that it is free — an em dash reads as "no
+// data" without implying either.
+export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
+  if (pricing === undefined) return "—";
+  return `$${pricing.inputPerMTok.toFixed(2)}/$${pricing.outputPerMTok.toFixed(2)}`;
+}
+
+// One row's worth of columns (name, provider, context, cost), space-joined — the picker's own
+// selection marker ("> "/"  ") is prepended at the call site, not here, matching how the un-columned
+// version already separated "which row is highlighted" from "what the row says". Factored out and
+// exported specifically so column formatting is unit-testable without mounting Ink at all — this
+// file had no pure formatting function of its own before the picker's columns needed one.
+export function formatModelRow(entry: ModelCatalogEntry): string {
+  return [
+    truncatePad(entry.displayName, NAME_WIDTH),
+    truncatePad(entry.provider, PROVIDER_WIDTH),
+    formatContextWindow(entry.contextWindow).padStart(CONTEXT_WIDTH),
+    formatCost(entry.pricing),
+  ].join(" ");
+}
+
+// The picker's own column labels, same widths as formatModelRow's own columns — so the header sits
+// flush above the rows it names regardless of terminal width.
+const MODEL_PICKER_HEADER = [
+  truncatePad("Name", NAME_WIDTH),
+  truncatePad("Provider", PROVIDER_WIDTH),
+  "Context".padStart(CONTEXT_WIDTH),
+  "Cost",
+].join(" ");
+
+function matchesFilter(entry: ModelCatalogEntry, query: string): boolean {
+  const needle = query.toLowerCase();
+  return (
+    entry.id.toLowerCase().includes(needle) ||
+    entry.displayName.toLowerCase().includes(needle) ||
+    // `family` is a free-text field lifted verbatim from models.dev (ModelCatalogEntry's own
+    // comment, packages/model-catalog/src/types.ts) — some upstream entries carry `null` there
+    // rather than an empty string, so this cannot assume it is always safe to call
+    // `.toLowerCase()` on directly.
+    (entry.family ?? "").toLowerCase().includes(needle)
+  );
+}
+
+// /model's own live state (tui/reducer.ts's pendingModelPicker) — mirrors ApprovalBox's shape
+// exactly: its own useInput, a round-bordered box, mutually exclusive with InputBox. `filterQuery`
+// and `selectedIndex` are local component state, not reducer state, for the same reason InputBox's
+// own `value` is: this is transient UI data with no reason to survive a resolve/cancel or be
+// visible to anything outside this component.
+function ModelPicker({
+  entries,
+  onModelSelected,
+  onModelPickerCancel,
+}: {
+  entries: ModelCatalogEntry[];
+  onModelSelected?: (
+    pick: { model: string; provider: ModelProvider },
+    leftoverInput?: string,
+  ) => void;
+  onModelPickerCancel?: () => void;
+}) {
+  const [filterQuery, setFilterQuery] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  // C1 fix: the window rendered used to always be `filtered.slice(0, MODEL_PICKER_WINDOW)` —
+  // the first N entries, regardless of `selectedIndex` — so Down past the visible window moved
+  // the highlight somewhere nothing on screen showed, and with 279 catalog entries most of the
+  // list was unreachable. `scrollOffset` is the top of the currently-rendered window; it only
+  // moves when `selectedIndex` would otherwise land outside `[scrollOffset, scrollOffset +
+  // MODEL_PICKER_WINDOW)` (moveSelection, below) — not recomputed fresh from `selectedIndex` on
+  // every render, which would re-center the window on every keypress instead of sliding it only
+  // when actually needed.
+  const [scrollOffset, setScrollOffset] = useState(0);
+
+  const filtered =
+    filterQuery.length === 0
+      ? entries
+      : entries.filter((entry) => matchesFilter(entry, filterQuery));
+
+  // Moves the selection to `next` (already clamped to `[0, filtered.length - 1]` by the caller)
+  // and slides `scrollOffset` only far enough to keep it inside the visible window — the classic
+  // "clamp, don't re-center" rule a sliding window needs so scrolling up from the bottom of a long
+  // list doesn't snap back to the top the instant the highlight re-enters the window it was
+  // already inside.
+  function moveSelection(next: number): void {
+    setSelectedIndex(next);
+    setScrollOffset((offset) => {
+      if (next < offset) return next;
+      if (next >= offset + MODEL_PICKER_WINDOW) return next - MODEL_PICKER_WINDOW + 1;
+      return offset;
+    });
+  }
+
+  useInput((input, key) => {
+    // Escape OR Ctrl-D — deliberately NOT ApprovalBox's Ctrl-D (which triggers app quit): this is
+    // "never mind, back to typing", not a graceful-quit sequence.
+    if (key.escape || (key.ctrl && input === "d")) {
+      onModelPickerCancel?.();
+      return;
+    }
+    if (key.upArrow) {
+      moveSelection(Math.max(0, selectedIndex - 1));
+      return;
+    }
+    if (key.downArrow) {
+      moveSelection(Math.min(filtered.length - 1, selectedIndex + 1));
+      return;
+    }
+    if (key.return) {
+      const entry = filtered[selectedIndex];
+      if (entry !== undefined) {
+        onModelSelected?.({ model: entry.id, provider: entry.provider });
+      }
+      return;
+    }
+    if (key.ctrl || key.meta) return;
+    if (key.backspace || key.delete) {
+      setFilterQuery((query) => query.slice(0, -1));
+      setSelectedIndex(0);
+      setScrollOffset(0);
+      return;
+    }
+    if (input.length === 0) return;
+    // MEDIUM-E's own finding (InputBox, above), applying here too: a chunk delivered faster than
+    // one keypress per `useInput` call — typed filter text immediately followed by Enter, measured
+    // on a real pty to arrive as ONE combined chunk rather than two separate calls — can embed a
+    // `\r`/`\n` that `key.return` above never sees, since that only fires for a chunk that IS a
+    // bare terminator on its own. Everything up to the first terminator is filter text; the
+    // terminator itself selects the top match against the FULLY updated query, mirroring
+    // `key.return`'s own action (against `selectedIndex 0`, the same reset every other
+    // filter-changing keystroke already applies) rather than silently dropping the keystroke.
+    const terminatorIndex = input.search(/[\r\n]/);
+    const typed = terminatorIndex === -1 ? input : input.slice(0, terminatorIndex);
+    const nextQuery = filterQuery + typed;
+    if (terminatorIndex === -1) {
+      setFilterQuery(nextQuery);
+      setSelectedIndex(0);
+      setScrollOffset(0);
+      return;
+    }
+    // Code-review finding: this used to stop at `typed` and silently discard everything after the
+    // terminator — real keystrokes vanished with no trace once the picker closed. `terminatorLength`
+    // mirrors InputBox's own MEDIUM-4 fix (a `\r\n` pair, the common Windows-clipboard shape, is ONE
+    // terminator, not two) and `after` is handed to `onModelSelected` so it can prefill the very next
+    // InputBox mount — the closest equivalent here to InputBox's own "awaiting its own Enter" carry.
+    const terminatorLength = input.startsWith("\r\n", terminatorIndex) ? 2 : 1;
+    const after = input.slice(terminatorIndex + terminatorLength);
+    const nextFiltered =
+      nextQuery.length === 0 ? entries : entries.filter((entry) => matchesFilter(entry, nextQuery));
+    const entry = nextFiltered[0];
+    if (entry !== undefined) {
+      onModelSelected?.({ model: entry.id, provider: entry.provider }, after || undefined);
+    }
+  });
+
+  const visible = filtered.slice(scrollOffset, scrollOffset + MODEL_PICKER_WINDOW);
+  const remaining = filtered.length - visible.length;
+
+  return (
+    <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+      <Text>{filterQuery.length > 0 ? filterQuery : " "}</Text>
+      <Text color={theme.muted}>{`  ${MODEL_PICKER_HEADER}`}</Text>
+      {visible.map((entry, localIndex) => {
+        const index = scrollOffset + localIndex;
+        return (
+          <Text
+            key={`${entry.provider}/${entry.id}`}
+            color={index === selectedIndex ? theme.accent : undefined}
+          >
+            {index === selectedIndex ? "> " : "  "}
+            {formatModelRow(entry)}
+          </Text>
+        );
+      })}
+      {remaining > 0 && <Text color={theme.muted}>+{remaining} more — keep typing to narrow</Text>}
+    </Box>
+  );
+}
+
 function InputBox({
   onSubmit,
   onQuit,
+  prefill,
+  onPrefillConsumed,
 }: {
   onSubmit?: (value: string) => void;
   onQuit?: () => void;
+  // Leftover text from a combined-chunk terminator in a just-closed ModelPicker (see
+  // reducer.ts's `pendingInputPrefill`) — read once, as this mount's own starting value, never
+  // re-applied on a later mount because `onPrefillConsumed` clears it in the same tick.
+  prefill?: string;
+  onPrefillConsumed?: () => void;
 }) {
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(prefill ?? "");
+  useEffect(() => {
+    if (prefill !== undefined) onPrefillConsumed?.();
+    // `prefill` in deps is what Biome's react-hooks rule wants, not a real re-subscription: this
+    // effect only ever needs to run once, and it only ever DOES run once, because InputBox is a
+    // fresh instance every time it (re)mounts (see the render ternary below) — "on mount" already
+    // means "once per pick", so a changed `prefill` on an already-mounted instance never happens.
+  }, [prefill, onPrefillConsumed]);
 
   useInput((input, key) => {
     if (key.return) {
@@ -192,6 +431,8 @@ export function App({
   onQuit,
   done,
   onApprovalAnswer,
+  onModelSelected,
+  onModelPickerCancel,
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
   const { exit } = useApp();
@@ -236,15 +477,27 @@ export function App({
       {state.commandError !== undefined && <Text color={theme.error}>{state.commandError}</Text>}
       {/* Findings 1+5: mutually exclusive with InputBox — a pending approval question is the only
       thing this run is waiting on, and answering it (not typing a task or slash command) is the
-      only input that means anything until it clears. */}
+      only input that means anything until it clears. Extended to a third state for /model: a
+      pending model pick is the same kind of "only this input means anything right now" question. */}
       {state.pendingApproval !== undefined ? (
         <ApprovalBox
           pendingApproval={state.pendingApproval}
           onAnswer={onApprovalAnswer}
           onQuit={onQuit}
         />
+      ) : state.pendingModelPicker !== undefined ? (
+        <ModelPicker
+          entries={state.pendingModelPicker.entries}
+          onModelSelected={onModelSelected}
+          onModelPickerCancel={onModelPickerCancel}
+        />
       ) : (
-        <InputBox onSubmit={onSubmit} onQuit={onQuit} />
+        <InputBox
+          onSubmit={onSubmit}
+          onQuit={onQuit}
+          prefill={state.pendingInputPrefill}
+          onPrefillConsumed={() => dispatch({ type: "input-prefill-consumed" })}
+        />
       )}
     </Box>
   );

@@ -17,9 +17,10 @@ import type { ModelMessage } from "ai";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
-import { chooseInterfaceOutput, run, SLASH_COMMANDS } from "../../src/cli";
+import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS } from "../../src/cli";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
 import { loadGrants, permissionsPath, projectKey } from "../../src/permissions/store";
+import type { CostReport } from "../../src/provider/cost";
 import { getGroqModel } from "../../src/provider/groq";
 import { toolDefinitions } from "../../src/provider/tools";
 import { onSignalCancel } from "../../src/signals";
@@ -1332,9 +1333,14 @@ describe("run (task invocation)", () => {
   // on fields no line of cli.ts reads. Both are `number | undefined` in the SDK's own type — the
   // undefined case is a provider that did not report that half, and it is a case the summary has
   // to be able to say nothing about.
+  // `cost` is optional and omitted by every caller except the printCost test below — passing it
+  // through here rather than spreading the result keeps this typed as the `usage` member of
+  // LoopEvent specifically, not the whole union (a spread widens to "some member plus an extra
+  // property", which tsc rejects since only `usage` actually has a `cost` field).
   function usageEvent(
     inputTokens: number | undefined,
     outputTokens: number | undefined,
+    cost?: CostReport,
   ): LoopEvent {
     return {
       type: "usage",
@@ -1349,6 +1355,7 @@ describe("run (task invocation)", () => {
         outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
         totalTokens: (inputTokens ?? 0) + (outputTokens ?? 0),
       },
+      cost,
     };
   }
 
@@ -1443,6 +1450,47 @@ describe("run (task invocation)", () => {
 
     expect(code).toBe(1);
     expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["\n(tokens: 120 in, 30 out)"]);
+  });
+
+  // HIGH-1: driveLoop used to call runLoopFn with no provider/modelId/catalog at all, which is what
+  // loop.ts's own cost branch (`opts.provider === "openrouter" ? … : opts.provider === "groq" &&
+  // opts.modelId && opts.catalog ? … : undefined`) is gated on — so cost was silently never computed
+  // in production, no matter what cost.ts itself did. This asserts the wiring, not the pricing math
+  // (cost.test.ts already covers reportForGroq/reportForOpenRouter directly).
+  test("passes provider, modelId and catalog to runLoop so it can compute a cost", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake, capture } = fakeRunLoop();
+    await run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir });
+
+    const opts = capture();
+    expect(opts?.provider).toBe("groq");
+    expect(opts?.modelId).toBeDefined();
+    expect(opts?.catalog).toBeDefined();
+  });
+
+  // The other half of HIGH-1: printCost had zero callers anywhere in src/ before this — a cost
+  // computed by loop.ts never reached the terminal at all. Printed alongside the token summary,
+  // same as printUsage, and only when the run actually reported one (cost.test.ts's own
+  // "unknown"/undefined cases are what printCost itself does with those; this only checks the line
+  // reaches the terminal at all).
+  test("prints the run's cost alongside its token summary", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake } = fakeRunLoop([
+      usageEvent(120, 30, {
+        amountUsd: 0.0021,
+        status: "estimated",
+        source: "provider_models_api",
+      }),
+      { type: "done", reason: "no-tool-call" },
+    ]);
+
+    const { logs } = await captureLogs(() =>
+      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(logs.filter((line) => line.includes("cost:"))).toEqual(["(cost: ~$0.0021 (estimated))"]);
   });
 
   // captureLogs collects console.log's arguments, and a defect that is precisely a missing line
@@ -2321,4 +2369,50 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
 
     expect(readLog(storeDir, SESSION_ID).some((r) => r.kind === "rewind-barrier")).toBe(true);
   }, 15_000);
+});
+
+describe("addCost", () => {
+  const actual: CostReport = { amountUsd: 0.0001, status: "actual", source: "provider_cost_api" };
+  const estimated: CostReport = {
+    amountUsd: 0.002,
+    status: "estimated",
+    source: "provider_models_api",
+  };
+  const unknown: CostReport = { amountUsd: undefined, status: "unknown", source: "none" };
+
+  test("one report, the other undefined: returns the defined one unchanged", () => {
+    expect(addCost(undefined, actual)).toEqual(actual);
+    expect(addCost(actual, undefined)).toEqual(actual);
+    expect(addCost(undefined, undefined)).toBeUndefined();
+  });
+
+  // VERIFY pass 2, HIGH-2: taking the most recent report's status unconditionally let an "actual"
+  // turn mask an earlier "estimated"/"unknown" turn in the running total — a partially-uncertain
+  // total must not present as fully certain.
+  test("estimated then actual: sums the amount, keeps status estimated (the weaker one)", () => {
+    const combined = addCost(estimated, actual);
+    expect(combined?.amountUsd).toBeCloseTo(0.0021, 6);
+    expect(combined?.status).toBe("estimated");
+    expect(combined?.source).toBe("provider_models_api");
+  });
+
+  test("actual then estimated: order doesn't matter, still degrades to estimated", () => {
+    const combined = addCost(actual, estimated);
+    expect(combined?.amountUsd).toBeCloseTo(0.0021, 6);
+    expect(combined?.status).toBe("estimated");
+  });
+
+  test("estimated then unknown: degrades to unknown, keeps the known partial amount", () => {
+    const combined = addCost(estimated, unknown);
+    expect(combined?.status).toBe("unknown");
+    expect(combined?.source).toBe("none");
+    // addTokens keeps the running total when the new report has no amount to add — the $0.002
+    // already earned is not thrown away, only the certainty label is downgraded.
+    expect(combined?.amountUsd).toBeCloseTo(0.002, 6);
+  });
+
+  test("actual then unknown: degrades all the way to unknown even from the strongest status", () => {
+    const combined = addCost(actual, unknown);
+    expect(combined?.status).toBe("unknown");
+  });
 });
