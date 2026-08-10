@@ -1456,10 +1456,10 @@ describe("run (task invocation)", () => {
   });
 
   // HIGH-1: driveLoop used to call runLoopFn with no provider/modelId/catalog at all, which is what
-  // loop.ts's own cost branch (`opts.provider === "openrouter" ? … : opts.provider === "groq" &&
-  // opts.modelId && opts.catalog ? … : undefined`) is gated on — so cost was silently never computed
-  // in production, no matter what cost.ts itself did. This asserts the wiring, not the pricing math
-  // (cost.test.ts already covers reportForGroq/reportForOpenRouter directly).
+  // loop.ts's own cost branch (`opts.provider === "openrouter" ? … : opts.provider && opts.modelId
+  // && opts.catalog ? … : undefined`) is gated on — so cost was silently never computed in
+  // production, no matter what cost.ts itself did. This asserts the wiring, not the pricing math
+  // (cost.test.ts already covers reportFromCatalogPricing/reportForOpenRouter directly).
   test("passes provider, modelId and catalog to runLoop so it can compute a cost", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 

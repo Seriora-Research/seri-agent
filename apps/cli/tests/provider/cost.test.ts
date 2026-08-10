@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelCatalog } from "@seri/model-catalog";
 import type { LanguageModelUsage, ProviderMetadata } from "ai";
-import { reportForGroq, reportForOpenRouter } from "../../src/provider/cost";
+import { reportForOpenRouter, reportFromCatalogPricing } from "../../src/provider/cost";
 
 const usage = (inputTokens: number, outputTokens: number): LanguageModelUsage => ({
   inputTokens,
@@ -45,6 +45,22 @@ const fixtureCatalog: ModelCatalog = {
         cacheWritePerMTok: 0.5,
       },
     },
+    {
+      id: "claude-cached-model",
+      provider: "anthropic",
+      displayName: "Claude Cached Model",
+      family: "claude",
+      contextWindow: 200_000,
+      maxOutputTokens: 8_192,
+      toolCall: true,
+      reasoning: false,
+      pricing: {
+        inputPerMTok: 3.0,
+        outputPerMTok: 15.0,
+        cacheReadPerMTok: 0.3,
+        cacheWritePerMTok: 3.75,
+      },
+    },
   ],
 };
 
@@ -80,10 +96,15 @@ describe("reportForOpenRouter", () => {
   });
 });
 
-describe("reportForGroq", () => {
+describe("reportFromCatalogPricing", () => {
   test("computes cost from the catalog entry's pricing", () => {
     expect(
-      reportForGroq("llama-3.3-70b-versatile", usage(1_000_000, 1_000_000), fixtureCatalog),
+      reportFromCatalogPricing(
+        "llama-3.3-70b-versatile",
+        "groq",
+        usage(1_000_000, 1_000_000),
+        fixtureCatalog,
+      ),
     ).toEqual({
       amountUsd: 1.38,
       status: "estimated",
@@ -92,7 +113,29 @@ describe("reportForGroq", () => {
   });
 
   test("returns unknown/none for a model id absent from the catalog", () => {
-    expect(reportForGroq("some-unlisted-model", usage(100, 50), fixtureCatalog)).toEqual({
+    expect(
+      reportFromCatalogPricing("some-unlisted-model", "groq", usage(100, 50), fixtureCatalog),
+    ).toEqual({
+      amountUsd: undefined,
+      status: "unknown",
+      source: "none",
+    });
+  });
+
+  // The negative control for the `provider` parameter this plan adds: "llama-3.3-70b-versatile"
+  // exists in the catalog, but only under "groq" — asking for it under "anthropic" must miss the
+  // lookup and degrade to unknown, not silently find the groq entry. This is the one case that
+  // would still pass if a hardcoded "groq" survived inside findCatalogEntry's call, unnoticed by
+  // every other test in this file.
+  test("returns unknown/none when the model id exists in the catalog but under a different provider", () => {
+    expect(
+      reportFromCatalogPricing(
+        "llama-3.3-70b-versatile",
+        "anthropic",
+        usage(100, 50),
+        fixtureCatalog,
+      ),
+    ).toEqual({
       amountUsd: undefined,
       status: "unknown",
       source: "none",
@@ -114,9 +157,35 @@ describe("reportForGroq", () => {
       totalTokens: 1_000_000,
     };
     // 600k * $1.00/M + 300k * $0.10/M + 100k * $0.50/M = 0.6 + 0.03 + 0.05 = 0.68
-    const report = reportForGroq("cached-model", cachedUsage, fixtureCatalog);
+    const report = reportFromCatalogPricing("cached-model", "groq", cachedUsage, fixtureCatalog);
     expect(report.status).toBe("estimated");
     expect(report.amountUsd).toBeCloseTo(0.68, 6);
+  });
+
+  // The branch Anthropic actually exercises (D4's own finding: its usage carries
+  // inputTokenDetails.cacheReadTokens/cacheWriteTokens), proven against an anthropic catalog
+  // entry rather than reusing the groq fixture above.
+  test("prices an anthropic entry's cache-read tokens at its cache rate", () => {
+    const cachedUsage: LanguageModelUsage = {
+      inputTokens: 1_000_000,
+      inputTokenDetails: {
+        noCacheTokens: 700_000,
+        cacheReadTokens: 300_000,
+        cacheWriteTokens: undefined,
+      },
+      outputTokens: 0,
+      outputTokenDetails: { textTokens: 0, reasoningTokens: undefined },
+      totalTokens: 1_000_000,
+    };
+    // 700k * $3.00/M + 300k * $0.30/M = 2.1 + 0.09 = 2.19
+    const report = reportFromCatalogPricing(
+      "claude-cached-model",
+      "anthropic",
+      cachedUsage,
+      fixtureCatalog,
+    );
+    expect(report.status).toBe("estimated");
+    expect(report.amountUsd).toBeCloseTo(2.19, 6);
   });
 
   test("falls back to the full input rate when the catalog entry has no cache-specific pricing", () => {
@@ -132,7 +201,12 @@ describe("reportForGroq", () => {
       totalTokens: 1_000_000,
     };
     // llama-3.3-70b-versatile has no cacheReadPerMTok — the whole 1M still prices at $0.59/M.
-    const report = reportForGroq("llama-3.3-70b-versatile", cachedUsage, fixtureCatalog);
+    const report = reportFromCatalogPricing(
+      "llama-3.3-70b-versatile",
+      "groq",
+      cachedUsage,
+      fixtureCatalog,
+    );
     expect(report.amountUsd).toBeCloseTo(0.59, 6);
   });
 });

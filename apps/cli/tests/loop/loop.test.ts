@@ -419,9 +419,9 @@ describe("runLoop", () => {
     const usageEvent = events.find(
       (e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage",
     );
-    // Unlisted model -> reportForGroq's own "unknown" case -- but a DEFINED CostReport, not an
-    // absent `cost` field, which is what addCost's contract needs to tell "nothing happened" apart
-    // from "something happened whose cost we can't compute".
+    // Unlisted model -> reportFromCatalogPricing's own "unknown" case -- but a DEFINED
+    // CostReport, not an absent `cost` field, which is what addCost's contract needs to tell
+    // "nothing happened" apart from "something happened whose cost we can't compute".
     expect(usageEvent?.cost).toEqual({ amountUsd: undefined, status: "unknown", source: "none" });
   });
 

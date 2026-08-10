@@ -1,4 +1,4 @@
-import { findCatalogEntry, type ModelCatalog } from "@seri/model-catalog";
+import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type { LanguageModelUsage, ProviderMetadata } from "ai";
 
 // TS string-literal unions, not enums or classes — matching this file's sibling PermissionMode
@@ -33,22 +33,24 @@ export function reportForOpenRouter(
     ?.cost;
   // A missing cost is not an actual $0 — OpenRouter can omit `usage.cost` (no accounting configured,
   // an unlisted model, a provider that doesn't report it), and labelling that "actual" would show a
-  // dollar figure nobody measured. reportForGroq already draws this same "no data → unknown" line for
-  // its own missing-pricing case; this mirrors it for OpenRouter's missing-cost case.
+  // dollar figure nobody measured. reportFromCatalogPricing already draws this same "no data →
+  // unknown" line for its own missing-pricing case; this mirrors it for OpenRouter's missing-cost
+  // case.
   if (amountUsd === undefined) return { amountUsd: undefined, status: "unknown", source: "none" };
   return { amountUsd, status: "actual", source: "provider_cost_api" };
 }
 
-// Groq's API reports only tokens/time, never a dollar figure, so cost is computed from the
-// catalog's models.dev-sourced pricing instead of a hand-maintained table. A model id absent from
-// the catalog (real: Slice 2's manifest only has 6 of Groq's 15 live models) degrades to unknown
-// rather than a stale guess.
-export function reportForGroq(
+// Any provider whose API reports tokens but no dollar figure — today Groq, Anthropic, OpenAI and
+// Google — so cost is computed from the catalog's models.dev-sourced pricing instead of a
+// hand-maintained table. A model id absent from the catalog (real: Slice 2's manifest only has 6
+// of Groq's 15 live models) degrades to unknown rather than a stale guess.
+export function reportFromCatalogPricing(
   modelId: string,
+  provider: ModelProvider,
   usage: LanguageModelUsage,
   catalog: ModelCatalog,
 ): CostReport {
-  const entry = findCatalogEntry(catalog, modelId, "groq");
+  const entry = findCatalogEntry(catalog, modelId, provider);
   if (!entry?.pricing) return { amountUsd: undefined, status: "unknown", source: "none" };
   const { pricing } = entry;
   // A code-review finding: pricing ALL of usage.inputTokens at the full rate double-bills whatever
