@@ -46,6 +46,29 @@ describe("buildSystemPrompt", () => {
     expect(withAgents).toContain("# Project rules\nUse tabs.");
   });
 
+  test("the assembled system prompt lists every real tool by its own name", () => {
+    const prompt = buildSystemPrompt("");
+
+    for (const name of [
+      "read_file",
+      "write_file",
+      "edit",
+      "grep",
+      "glob",
+      "bash",
+      "powershell",
+    ]) {
+      expect(prompt).toContain(`\`${name}\``);
+    }
+  });
+
+  test("the assembled system prompt tells the model bash/powershell/write_file/edit are destructive and to investigate before overwriting unfamiliar state", () => {
+    const prompt = buildSystemPrompt("");
+
+    expect(prompt).toMatch(/destroy work/i);
+    expect(prompt).toMatch(/investigate before deleting or overwriting/i);
+  });
+
   // Stage B2: the stable tier (tool guidance) must precede the context tier (AGENTS.md) in the
   // assembled output, and the join between them must match today's separator shape exactly — a
   // naive three-operand join can add an extra "\n\n" that today's conditional two-operand join
