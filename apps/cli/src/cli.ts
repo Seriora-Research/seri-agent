@@ -863,7 +863,7 @@ async function prepareSession(
   const catalog = await getModelCatalog();
   let model: LanguageModel;
   try {
-    model = getModel(session.model, session.provider, {
+    model = getModel(session.model, session.provider, session.id, {
       getGroqModel: deps.getGroqModel,
       getOpenRouterModel: deps.getOpenRouterModel,
     });
@@ -1521,10 +1521,10 @@ async function runTui(
     // `SessionState<ModelMessage>` (tui/reducer.ts), so this is the one place that puts it back —
     // the same kind of "this file already knows a stronger invariant tsc can't see" gap
     // `resolveRunTui!`'s own definite-assignment assertion, above, papers over too.
-    const { model: modelId, provider } = session as RunSession;
+    const { id: sessionId, model: modelId, provider } = session as RunSession;
     let model: LanguageModel;
     try {
-      model = getModel(modelId, provider, {
+      model = getModel(modelId, provider, sessionId, {
         getGroqModel: deps.getGroqModel,
         getOpenRouterModel: deps.getOpenRouterModel,
       });
