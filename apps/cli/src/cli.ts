@@ -4,12 +4,17 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
-import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
+import {
+  findCatalogEntry,
+  type ModelCatalog,
+  type ModelCatalogEntry,
+  type ModelProvider,
+} from "@seri/model-catalog";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
-import { buildSystemPrompt } from "./agents/systemPrompt";
+import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
 import { getWorkosClientId } from "./auth/deviceFlow";
 import {
@@ -815,11 +820,14 @@ type PreparedRun = {
   // on this object so runTui's own per-turn model re-resolution (runTurn, below — the /model fix)
   // has it without loading it again every turn.
   catalog: ModelCatalog;
-  // The catalog's own `contextWindow` for `model`, above — undefined when the catalog has no entry
-  // for this exact id/provider pair (an id typed straight into SERI_MODEL, say), in which case
-  // runLoop's own DEFAULT_CONTEXT_WINDOW_SIZE applies, matching what every run did before this
-  // field existed.
-  contextWindowSize: number | undefined;
+  // The catalog's own entry for `model`/`provider`, above — undefined when the catalog has no
+  // entry for this exact id/provider pair (an id typed straight into SERI_MODEL, say). driveLoop
+  // reads two fields off it: `.contextWindow` (falls back to runLoop's own
+  // DEFAULT_CONTEXT_WINDOW_SIZE when undefined, matching what every run did before this field
+  // existed) and `.displayName` (falls back to the raw id, buildVolatileTier's own job). Carrying
+  // the whole entry rather than just `contextWindow` means driveLoop needs exactly one
+  // `findCatalogEntry` call per turn instead of two identical ones for the same (modelId, provider).
+  catalogEntry: ModelCatalogEntry | undefined;
 };
 
 async function prepareSession(
@@ -863,11 +871,7 @@ async function prepareSession(
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   }
-  const contextWindowSize = findCatalogEntry(
-    catalog,
-    session.model,
-    session.provider,
-  )?.contextWindow;
+  const catalogEntry = findCatalogEntry(catalog, session.model, session.provider);
 
   // A model this run merely RESOLVED is deliberately left out of the file. getGroqModel accepts any
   // string — an unknown id is not rejected here, it comes back as a provider 404 mid-run — so
@@ -941,7 +945,7 @@ async function prepareSession(
     worktree,
     allowedTools,
     catalog,
-    contextWindowSize,
+    catalogEntry,
   };
 }
 
@@ -1045,7 +1049,7 @@ async function driveLoop(
   persist: (session: SessionState<ModelMessage>) => void,
   approvalPrompt: ApprovalPrompt,
 ): Promise<DriveLoopResult> {
-  const { session, storeDir, tools, model, worktree, allowedTools, catalog, contextWindowSize } =
+  const { session, storeDir, tools, model, worktree, allowedTools, catalog, catalogEntry } =
     prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
@@ -1093,7 +1097,13 @@ async function driveLoop(
       // below.
       allowedTools,
       approvalPrompt,
-      system: session.systemPrompt,
+      // Recomputed every driveLoop call (once per TUI turn, once per non-interactive process), from
+      // the session's current model/provider — never captured once at session start, so a live
+      // /model switch is reflected on the very next turn instead of confabulated.
+      system: joinTiers(
+        session.systemPrompt,
+        buildVolatileTier(session.model, session.provider, catalogEntry?.displayName),
+      ),
       signal: controller.signal,
       maxIterations: maxTurns,
       // HIGH-1: without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`
@@ -1109,8 +1119,8 @@ async function driveLoop(
       catalog,
       // The catalog's own contextWindow for whatever model this turn is actually calling — a
       // /model switch to a provider/model with a different limit must change compaction's own
-      // math, not just which endpoint gets called (PreparedRun.contextWindowSize's own comment).
-      contextWindowSize,
+      // math, not just which endpoint gets called (PreparedRun.catalogEntry's own comment).
+      contextWindowSize: catalogEntry?.contextWindow,
     })) {
       if (event.type === "messages-updated") {
         // `persist` (this function's own comment above explains the two callers) is the ONLY
@@ -1526,7 +1536,7 @@ async function runTui(
       turnInFlight = false;
       return;
     }
-    const contextWindowSize = findCatalogEntry(prepared.catalog, modelId, provider)?.contextWindow;
+    const catalogEntry = findCatalogEntry(prepared.catalog, modelId, provider);
     // `session as RunSession`, not the raw (reducer-typed) `session`: PreparedRun.session is now
     // RunSession (code-review finding — see PreparedRun's own comment), and this call site already
     // established the same invariant two lines up for `modelId`/`provider`; reusing it here instead
@@ -1535,7 +1545,7 @@ async function runTui(
       ...prepared,
       session: session as RunSession,
       model,
-      contextWindowSize,
+      catalogEntry,
     };
     try {
       const result = await driveLoop(

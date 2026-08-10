@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildSystemPrompt } from "../../src/agents/systemPrompt";
+import { buildSystemPrompt, buildVolatileTier } from "../../src/agents/systemPrompt";
 
 // These assert on meaning, not on wording: each check is a phrase the measured failure needs
 // present, matched case-insensitively, so the prompt can be reworded without the test going red
@@ -61,5 +61,30 @@ describe("buildSystemPrompt", () => {
     expect(agentsIndex).toBeGreaterThan(toolsIndex);
 
     expect(withAgents).toBe(`${withoutAgents}\n\n${agentsFixture}`);
+  });
+});
+
+describe("buildVolatileTier", () => {
+  test("a cataloged model's identity line uses the resolved displayName", () => {
+    const line = buildVolatileTier("openai/gpt-oss-120b", "groq", "GPT OSS 120B");
+
+    expect(line).toContain("GPT OSS 120B");
+    expect(line).toContain("groq/openai/gpt-oss-120b");
+  });
+
+  test("an uncataloged model (no displayName) still gets an identity line, using the raw id", () => {
+    const line = buildVolatileTier("some-raw-id", "groq", undefined);
+
+    expect(line.length).toBeGreaterThan(0);
+    expect(line).toContain("some-raw-id");
+  });
+
+  // code-review finding on PR #66: a catalog entry whose `name` came back "" (present but empty,
+  // not null/undefined) must still fall back to the raw id — `??` doesn't catch that, `||` does.
+  test("a catalog entry with an empty-string displayName falls back to the raw id, not a blank label", () => {
+    const line = buildVolatileTier("some-raw-id", "groq", "");
+
+    expect(line).not.toContain("named . ");
+    expect(line).toContain("some-raw-id");
   });
 });

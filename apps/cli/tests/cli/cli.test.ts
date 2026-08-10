@@ -205,8 +205,10 @@ describe("run (task invocation)", () => {
     expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "write hello.txt" });
     expect(capture()?.messages).toHaveLength(1);
     // The assembled prompt, not the bare identity line: with no AGENTS.md this used to be 29
-    // characters of identity and no tool guidance at all.
-    expect(capture()?.system).toBe(buildSystemPrompt(""));
+    // characters of identity and no tool guidance at all. The per-turn volatile tier (which model
+    // this run actually is) is appended after it — see driveLoop's system composition.
+    expect(capture()?.system?.startsWith(buildSystemPrompt(""))).toBe(true);
+    expect(capture()?.system).toMatch(/You are powered by the model named/);
   });
 
   // Design-question fix (this PR's own follow-up, echo/storage mismatch): prepareSession used to
@@ -550,7 +552,8 @@ describe("run (task invocation)", () => {
     );
 
     expect(code).toBe(0);
-    expect(capture()?.system).toBe(buildSystemPrompt(""));
+    expect(capture()?.system?.startsWith(buildSystemPrompt(""))).toBe(true);
+    expect(capture()?.system).toContain("model-on-session");
     expect(askedFor).toEqual([sessionCwd]);
   });
 

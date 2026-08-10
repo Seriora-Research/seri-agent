@@ -185,7 +185,7 @@ function childScriptModelSwitch(dir: string): string {
     `let calls = 0;`,
     `async function* runLoopFake(opts) {`,
     `  calls++;`,
-    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " messages=" + opts.messages.length);`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " messages=" + opts.messages.length + " systemHasModelId=" + opts.system.includes(opts.model.id));`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -775,7 +775,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     try {
       // The default model (groq.ts's own DEFAULT_MODEL) — proves the FIRST turn used it, before
       // any switch.
-      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1");
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
       await sawLine("(done: no-tool-call)");
 
       child.stdin?.write("/model");
@@ -807,8 +807,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
 
       // A different model id, and 3 messages (1 initial + 1 turn-1 assistant reply + 1 new user
-      // message) — the switch changed WHICH model answers, not what it was handed.
-      await sawLine("RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3");
+      // message) — the switch changed WHICH model answers, not what it was handed. The trailing
+      // systemHasModelId=true proves the system prompt sent for THIS call names the NEW model
+      // (llama-3.3-70b-versatile) — not the one the session started on — i.e. the identity line is
+      // recomputed every driveLoop call rather than captured once at session start.
+      await sawLine(
+        "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 systemHasModelId=true",
+      );
     } finally {
       child.kill("SIGKILL");
     }
