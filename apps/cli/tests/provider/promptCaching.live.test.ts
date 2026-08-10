@@ -35,7 +35,7 @@ test.skipIf(!process.env.GROQ_API_KEY || process.env.SERI_LIVE_CACHE_CHECK !== "
     expect(usage1.inputTokenDetails?.cacheReadTokens ?? 0).toBe(0);
     // Asserted separately from the >0 check below: a bare `?? 0` can't tell "Groq reported a
     // real miss" from "Groq's response has no cache field at all" (the latter is what actually
-    // happened live, 2026-08-10 — see PROMPT-CACHING-VERIFICATION.md) — this makes that
+    // happened on 4/4 live attempts, 2026-08-10, against openai/gpt-oss-120b) — this makes that
     // distinction show up in the failure message instead of costing a fresh debug session.
     expect(usage2.inputTokenDetails?.cacheReadTokens).toBeDefined();
     expect(usage2.inputTokenDetails?.cacheReadTokens).toBeGreaterThan(0);

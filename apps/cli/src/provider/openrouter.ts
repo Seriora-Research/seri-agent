@@ -26,9 +26,12 @@ import { getApiKey } from "../config/config";
 // `session_id` land on the same upstream backend, which is what lets its prompt cache hit across
 // turns. The same doc warns the two routing mechanisms conflict — "if you set `provider.order`
 // yourself, your order wins over sticky routing" — so a future contributor adding `provider.order`
-// here must remove `session_id` first, or vice versa, not combine them. See
-// OPENROUTER-PROVIDER-PINNING.md for why dynamic multi-backend provider pinning is deliberately
-// not built here at all.
+// here must remove `session_id` first, or vice versa, not combine them. Dynamic multi-backend
+// provider pinning (deriving a `provider.order` pin per model via OpenRouter's
+// `/models/{author}/{slug}/endpoints` API) was researched and deliberately not built here:
+// correct pinning gets backend consistency but not a cache guarantee (2/2 tested backends showed
+// zero cache activity despite a verified-correct pin, 2026-08-10), and no comparable harness has
+// shipped the cache-hit-specific version of this.
 export function getOpenRouterModel(modelId: string, sessionId: string): LanguageModel {
   const apiKey = getApiKey("OPENROUTER_API_KEY");
   if (!apiKey) {
