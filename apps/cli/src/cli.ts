@@ -53,7 +53,7 @@ import { permissionsCommand as permissionsCommandReal } from "./permissions/comm
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
-import { persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
+import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { getModel } from "./provider/model";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
@@ -378,12 +378,14 @@ function loadOrCreateSession(
     //
     // `provider` alone can still be absent on a session that already recorded a `model` — a
     // session written before the `provider` field existed, back when groq was the only provider —
-    // and that case keeps its own narrower, unconditional backfill: absent means "groq"
-    // (SessionState.provider's own comment), independent of resolveDefaultModel().
+    // and that case keeps its own narrower, unconditional backfill: absent means DEFAULT_PROVIDER
+    // (SessionState.provider's own comment; DEFAULT_PROVIDER is "groq" today, the same value this
+    // used to hardcode directly — imported instead so there is one source of truth for it),
+    // independent of resolveDefaultModel().
     const { model, provider } =
       loaded.model === undefined
         ? resolveDefaultModel()
-        : { model: loaded.model, provider: loaded.provider ?? "groq" };
+        : { model: loaded.model, provider: loaded.provider ?? DEFAULT_PROVIDER };
     return {
       session: {
         ...loaded,
