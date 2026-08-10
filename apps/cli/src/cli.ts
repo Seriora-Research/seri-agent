@@ -1573,6 +1573,16 @@ async function runTui(
       model,
       catalogEntry,
     };
+    // Reset once per call to runTurn — i.e. once per turn, not once per `messages-updated` event
+    // (code-review finding on PR #71's own re-review). `modelId`/`provider` are destructured once,
+    // above, and never change for the life of one driveLoop call, so a boolean is all that's
+    // needed: loop.ts can yield `messages-updated` several times in a single turn (once per tool
+    // call), and without this, a PERSISTENTLY failing write (a config dir that stays read-only for
+    // the whole turn, not a one-off transient blip) would retry — and re-warn — on every one of
+    // those events instead of once. `lastPersistedModel`'s own retry-on-a-LATER-turn guarantee is
+    // untouched: this only caps attempts to at most one per turn, it does not suppress the next
+    // turn's own attempt.
+    let persistAttemptedThisTurn = false;
     try {
       const result = await driveLoop(
         turnPrepared,
@@ -1608,8 +1618,18 @@ async function runTui(
             // that already succeeded into a failure — but unlike `confirmedModel`, this variable
             // only advances on a SUCCESSFUL persist, so a failed attempt is retried by the next
             // turn that lands on this same model/provider, instead of being silently and
-            // permanently skipped for the rest of the session.
-            if (lastPersistedModel.model !== modelId || lastPersistedModel.provider !== provider) {
+            // permanently skipped for the rest of the session. `persistAttemptedThisTurn` (its own
+            // comment, above) is what caps that retry at one ATTEMPT per turn — without it, a
+            // persistently failing write (as opposed to the one-off transient blip the retry above
+            // is for) would re-attempt, and re-warn, on every `messages-updated` a multi-tool-call
+            // turn yields, reintroducing the exact per-tool-call write-amplification the ORIGINAL
+            // (pre-B2-fix, single-variable) inequality guard's comment (2) already promised to
+            // prevent.
+            if (
+              !persistAttemptedThisTurn &&
+              (lastPersistedModel.model !== modelId || lastPersistedModel.provider !== provider)
+            ) {
+              persistAttemptedThisTurn = true;
               try {
                 persistDefaultModel({ model: modelId, provider });
                 lastPersistedModel = { model: modelId, provider };
