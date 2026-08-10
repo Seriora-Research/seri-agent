@@ -1,4 +1,4 @@
-import type { ModelProvider } from "@seri/model-catalog";
+import { CATALOG_PROVIDERS, type ModelProvider } from "@seri/model-catalog";
 import { getApiKey, setConfigValue } from "../config/config";
 import { resolveModelId } from "./groq";
 
@@ -7,14 +7,14 @@ import { resolveModelId } from "./groq";
 // read as groq-scoped and drift.
 export const DEFAULT_PROVIDER: ModelProvider = "groq";
 
+// Derived from CATALOG_PROVIDERS (model-catalog's own single source of truth for which providers
+// are real) rather than a second, independently-hardcoded literal list: a future 6th provider
+// added to CATALOG_PROVIDERS/ModelProvider/model.ts's switch but forgotten here used to silently
+// fall back to DEFAULT_PROVIDER instead of being recognized — this closes that one gap, though
+// ModelProvider's own union and model.ts's switch cases remain separate, unavoidable sources of
+// truth without a bigger refactor.
 export function isModelProvider(value: string): value is ModelProvider {
-  return (
-    value === "groq" ||
-    value === "openrouter" ||
-    value === "anthropic" ||
-    value === "openai" ||
-    value === "google"
-  );
+  return CATALOG_PROVIDERS.includes(value as ModelProvider);
 }
 
 // The model half delegates to resolveModelId() (groq.ts) — zero duplication, and SERI_MODEL's

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CATALOG_PROVIDERS } from "@seri/model-catalog";
 import { DEFAULT_MODEL } from "../../src/provider/groq";
 import {
   DEFAULT_PROVIDER,
@@ -38,8 +39,13 @@ afterEach(() => {
 });
 
 describe("isModelProvider", () => {
-  test("accepts all five real providers", () => {
-    for (const p of ["groq", "openrouter", "anthropic", "openai", "google"]) {
+  // Derived from CATALOG_PROVIDERS itself (not a second, hand-written parallel list): the
+  // regression this guards is isModelProvider silently drifting out of sync with its own stated
+  // source of truth, which a hardcoded expected-list here couldn't catch — both sides would drift
+  // together.
+  test("accepts every provider CATALOG_PROVIDERS lists", () => {
+    expect(CATALOG_PROVIDERS.length).toBeGreaterThan(0);
+    for (const p of CATALOG_PROVIDERS) {
       expect(isModelProvider(p)).toBe(true);
     }
   });

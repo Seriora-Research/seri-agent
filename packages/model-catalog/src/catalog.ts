@@ -7,7 +7,11 @@ const MODELS_DEV_URL = "https://models.dev/api.json";
 const FETCH_TIMEOUT_MS = 10_000;
 
 // seri only has these five providers — every other key in models.dev's response is ignored.
-const CATALOG_PROVIDERS: readonly ModelProvider[] = [
+// Exported (not just used by mapRawCatalog below) so it is the single source of truth a
+// consumer's own provider-membership check can derive from instead of maintaining a second,
+// independently-hardcoded list that can silently drift out of sync with this one — apps/cli's
+// provider/defaults.ts's isModelProvider is the current example.
+export const CATALOG_PROVIDERS: readonly ModelProvider[] = [
   "groq",
   "openrouter",
   "anthropic",
