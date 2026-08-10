@@ -658,6 +658,52 @@ describe("run (task invocation)", () => {
     }
   });
 
+  // HIGH finding (code-review on PR #71): the backfill used to pair resolveModelId() (SERI_MODEL
+  // only) with an independently-hardcoded "groq" provider — so a persisted non-groq
+  // SERI_MODEL/SERI_PROVIDER pair (a normal side effect of any successful /model pick, per
+  // persistDefaultModel) backfilled to a MISMATCHED pair, e.g. an anthropic model id called
+  // through getGroqModel, failing confusingly at the API boundary. The fix backfills model AND
+  // provider together via resolveDefaultModel(), so a legacy session with no `model` field always
+  // backfills to a real, consistent pair — proven here with a persisted non-groq (openrouter) pair.
+  test("a session with no model backfills the persisted non-groq pair, not a mismatch", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const asked: string[] = [];
+
+    setConfigValue("SERI_MODEL", "picked-model");
+    setConfigValue("SERI_PROVIDER", "openrouter");
+
+    // Written the way a pre-`model` seri wrote it: the field is absent, not undefined.
+    const legacy = {
+      id: "legacy-no-provider",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [],
+    };
+    writeFileSync(join(sessionsDir, "legacy-no-provider.json"), JSON.stringify(legacy));
+
+    const { code } = await captureLogs(() =>
+      run(["--resume", "legacy-no-provider", "another", "task"], {
+        runLoop: fakeRunLoop(answeredTurn).fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        getGroqModel: () => {
+          throw new Error("should not be called: the persisted pair is openrouter, not groq");
+        },
+        getOpenRouterModel: (id: string) => {
+          asked.push(id);
+          return getGroqModel("openai/gpt-oss-120b");
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(asked).toEqual(["picked-model"]);
+    const resumed = loadSession("legacy-no-provider", sessionsDir);
+    expect(resumed.model).toBe("picked-model");
+    expect(resumed.provider).toBe("openrouter");
+  });
+
   // getGroqModel takes any string, so a typo only surfaces as a provider 404 once the run is under
   // way. Recording it at creation would mint a session pinned to an id that cannot work, and
   // `--continue` — the obvious retry — would re-read it and fail the same way with a corrected

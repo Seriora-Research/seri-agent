@@ -54,7 +54,7 @@ import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import { persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
-import { type getGroqModel as getGroqModelReal, resolveModelId } from "./provider/groq";
+import type { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { getModel } from "./provider/model";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
 import { toolDefinitions } from "./provider/tools";
@@ -367,20 +367,29 @@ function loadOrCreateSession(
     // exactly the 29-character string this rebuild exists to stop serving.
     //
     // `model` is backfilled only when absent, so a session that recorded one keeps it and the
-    // environment cannot switch models under a conversation already running on one. Note what that
-    // does NOT protect: a session written before the field existed was really running
-    // llama-3.3-70b-versatile, nothing records that, and this first resume moves it to whatever
-    // resolveModelId returns.
+    // environment cannot switch models under a conversation already running on one. When `model`
+    // is absent, `model`/`provider` are backfilled TOGETHER via resolveDefaultModel() — the same
+    // pair a brand-new session starts on — never independently: resolveModelId() alone can return
+    // a persisted non-groq SERI_MODEL (a successful /model pick on e.g. anthropic, per
+    // persistDefaultModel), and pairing that with a separately-hardcoded "groq" would call the
+    // wrong provider's API and fail confusingly. Note what this does NOT protect: a session
+    // written before the field existed was really running llama-3.3-70b-versatile, nothing
+    // records that, and this first resume moves it to whatever resolveDefaultModel() returns.
     //
-    // `provider` is backfilled the same way, absent meaning "groq" — the only provider that
-    // existed before this field did, so an old session's absence and an explicit "groq" mean the
-    // same thing (SessionState.provider's own comment).
+    // `provider` alone can still be absent on a session that already recorded a `model` — a
+    // session written before the `provider` field existed, back when groq was the only provider —
+    // and that case keeps its own narrower, unconditional backfill: absent means "groq"
+    // (SessionState.provider's own comment), independent of resolveDefaultModel().
+    const { model, provider } =
+      loaded.model === undefined
+        ? resolveDefaultModel()
+        : { model: loaded.model, provider: loaded.provider ?? "groq" };
     return {
       session: {
         ...loaded,
         systemPrompt: buildSystemPrompt(loadAgentsFileFn(loaded.cwd)),
-        model: loaded.model ?? resolveModelId(),
-        provider: loaded.provider ?? "groq",
+        model,
+        provider,
       },
       modelRecorded: loaded.model !== undefined,
     };
