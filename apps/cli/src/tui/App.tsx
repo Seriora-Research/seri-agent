@@ -136,8 +136,66 @@ function ApprovalBox({
 // The most a picker window ever shows at once, regardless of how many entries match the current
 // filter — the catalog easily runs into the hundreds (models.dev's own OpenRouter listing), and
 // rendering all of them would scroll the picker itself out of view, the same reasoning
-// truncateArgsDisplay already applies to a single long line.
+// truncateArgsDisplay already applies to a single long line. `selectedIndex` can move past this
+// many rows (arrow-key navigation over the full filtered list, not just what's on screen) — see
+// `scrollOffset`, below, for how the visible window slides to keep it in view.
 const MODEL_PICKER_WINDOW = 10;
+
+// Column widths for formatModelRow/MODEL_PICKER_HEADER below — plain padded strings, not a table
+// component: this repo hand-rolls its TUI deliberately (App.tsx's own file-level comment) and Ink
+// has none built in.
+const NAME_WIDTH = 22;
+const PROVIDER_WIDTH = 10;
+const CONTEXT_WIDTH = 7;
+
+// Truncates with a trailing ellipsis (never mid-multi-byte-safe beyond what .slice already is —
+// every field this feeds is plain ASCII: a model id/displayName/provider name) or pads with
+// trailing spaces, so every row's later columns start at the same screen column regardless of an
+// earlier one's actual length.
+function truncatePad(text: string, width: number): string {
+  return text.length > width ? `${text.slice(0, width - 1)}…` : text.padEnd(width);
+}
+
+// Binary units (1024, not 1000): matches how a context window is actually described everywhere
+// else this repo prints one (contextWindowSize's own comments, loop.ts) — 131,072 is "128K" this
+// way, matching the task's own worked example, not "131K" a decimal K would give.
+export function formatContextWindow(tokens: number): string {
+  if (tokens >= 1024 * 1024) return `${(tokens / (1024 * 1024)).toFixed(1)}M`;
+  if (tokens >= 1024) return `${Math.round(tokens / 1024)}K`;
+  return `${tokens}`;
+}
+
+// "—" (not "?"/"unknown"/blank) for the same reason printCost (cli/output.ts) writes out "unknown"
+// rather than a bare "$": pricing.ts's own ModelCatalogEntry.pricing comment says `undefined` means
+// models.dev never published a rate for this entry, not that it is free — an em dash reads as "no
+// data" without implying either.
+export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
+  if (pricing === undefined) return "—";
+  return `$${pricing.inputPerMTok.toFixed(2)}/$${pricing.outputPerMTok.toFixed(2)}`;
+}
+
+// One row's worth of columns (name, provider, context, cost), space-joined — the picker's own
+// selection marker ("> "/"  ") is prepended at the call site, not here, matching how the un-columned
+// version already separated "which row is highlighted" from "what the row says". Factored out and
+// exported specifically so column formatting is unit-testable without mounting Ink at all — this
+// file had no pure formatting function of its own before the picker's columns needed one.
+export function formatModelRow(entry: ModelCatalogEntry): string {
+  return [
+    truncatePad(entry.displayName, NAME_WIDTH),
+    truncatePad(entry.provider, PROVIDER_WIDTH),
+    formatContextWindow(entry.contextWindow).padStart(CONTEXT_WIDTH),
+    formatCost(entry.pricing),
+  ].join(" ");
+}
+
+// The picker's own column labels, same widths as formatModelRow's own columns — so the header sits
+// flush above the rows it names regardless of terminal width.
+const MODEL_PICKER_HEADER = [
+  truncatePad("Name", NAME_WIDTH),
+  truncatePad("Provider", PROVIDER_WIDTH),
+  "Context".padStart(CONTEXT_WIDTH),
+  "Cost",
+].join(" ");
 
 function matchesFilter(entry: ModelCatalogEntry, query: string): boolean {
   const needle = query.toLowerCase();
@@ -168,11 +226,34 @@ function ModelPicker({
 }) {
   const [filterQuery, setFilterQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  // C1 fix: the window rendered used to always be `filtered.slice(0, MODEL_PICKER_WINDOW)` —
+  // the first N entries, regardless of `selectedIndex` — so Down past the visible window moved
+  // the highlight somewhere nothing on screen showed, and with 279 catalog entries most of the
+  // list was unreachable. `scrollOffset` is the top of the currently-rendered window; it only
+  // moves when `selectedIndex` would otherwise land outside `[scrollOffset, scrollOffset +
+  // MODEL_PICKER_WINDOW)` (moveSelection, below) — not recomputed fresh from `selectedIndex` on
+  // every render, which would re-center the window on every keypress instead of sliding it only
+  // when actually needed.
+  const [scrollOffset, setScrollOffset] = useState(0);
 
   const filtered =
     filterQuery.length === 0
       ? entries
       : entries.filter((entry) => matchesFilter(entry, filterQuery));
+
+  // Moves the selection to `next` (already clamped to `[0, filtered.length - 1]` by the caller)
+  // and slides `scrollOffset` only far enough to keep it inside the visible window — the classic
+  // "clamp, don't re-center" rule a sliding window needs so scrolling up from the bottom of a long
+  // list doesn't snap back to the top the instant the highlight re-enters the window it was
+  // already inside.
+  function moveSelection(next: number): void {
+    setSelectedIndex(next);
+    setScrollOffset((offset) => {
+      if (next < offset) return next;
+      if (next >= offset + MODEL_PICKER_WINDOW) return next - MODEL_PICKER_WINDOW + 1;
+      return offset;
+    });
+  }
 
   useInput((input, key) => {
     // Escape OR Ctrl-D — deliberately NOT ApprovalBox's Ctrl-D (which triggers app quit): this is
@@ -182,11 +263,11 @@ function ModelPicker({
       return;
     }
     if (key.upArrow) {
-      setSelectedIndex((index) => Math.max(0, index - 1));
+      moveSelection(Math.max(0, selectedIndex - 1));
       return;
     }
     if (key.downArrow) {
-      setSelectedIndex((index) => Math.min(filtered.length - 1, index + 1));
+      moveSelection(Math.min(filtered.length - 1, selectedIndex + 1));
       return;
     }
     if (key.return) {
@@ -200,6 +281,7 @@ function ModelPicker({
     if (key.backspace || key.delete) {
       setFilterQuery((query) => query.slice(0, -1));
       setSelectedIndex(0);
+      setScrollOffset(0);
       return;
     }
     if (input.length === 0) return;
@@ -217,6 +299,7 @@ function ModelPicker({
     if (terminatorIndex === -1) {
       setFilterQuery(nextQuery);
       setSelectedIndex(0);
+      setScrollOffset(0);
       return;
     }
     const nextFiltered =
@@ -227,21 +310,25 @@ function ModelPicker({
     }
   });
 
-  const visible = filtered.slice(0, MODEL_PICKER_WINDOW);
+  const visible = filtered.slice(scrollOffset, scrollOffset + MODEL_PICKER_WINDOW);
   const remaining = filtered.length - visible.length;
 
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
       <Text>{filterQuery.length > 0 ? filterQuery : " "}</Text>
-      {visible.map((entry, index) => (
-        <Text
-          key={`${entry.provider}/${entry.id}`}
-          color={index === selectedIndex ? theme.accent : undefined}
-        >
-          {index === selectedIndex ? "> " : "  "}
-          {entry.displayName} ({entry.id})
-        </Text>
-      ))}
+      <Text color={theme.muted}>{`  ${MODEL_PICKER_HEADER}`}</Text>
+      {visible.map((entry, localIndex) => {
+        const index = scrollOffset + localIndex;
+        return (
+          <Text
+            key={`${entry.provider}/${entry.id}`}
+            color={index === selectedIndex ? theme.accent : undefined}
+          >
+            {index === selectedIndex ? "> " : "  "}
+            {formatModelRow(entry)}
+          </Text>
+        );
+      })}
       {remaining > 0 && <Text color={theme.muted}>+{remaining} more — keep typing to narrow</Text>}
     </Box>
   );
