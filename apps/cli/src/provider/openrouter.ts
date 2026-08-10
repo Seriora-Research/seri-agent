@@ -18,12 +18,25 @@ import { getApiKey } from "../config/config";
 // configurability with a measured null effect, not a fix for anything. A prior round of this
 // feature (MEDIUM-1) assumed cost needed an explicit opt-in seri wasn't making; both the design doc
 // and a live check say that assumption was wrong for this SDK version, so it is not carried forward.
-export function getOpenRouterModel(modelId: string): LanguageModel {
+// `session_id` is passed via `extraBody`, not a typed field: the installed
+// @openrouter/ai-sdk-provider@3.0.0's settings types have no `session_id` option anywhere —
+// only `extraBody?: Record<string, unknown>` on `OpenRouterSharedSettings`, which is what
+// `extraBody` below actually reaches. This is OpenRouter's documented sticky-routing mechanism
+// (https://openrouter.ai/blog/tutorials/prompt-caching-sticky-routing/): requests sharing a
+// `session_id` land on the same upstream backend, which is what lets its prompt cache hit across
+// turns. The same doc warns the two routing mechanisms conflict — "if you set `provider.order`
+// yourself, your order wins over sticky routing" — so a future contributor adding `provider.order`
+// here must remove `session_id` first, or vice versa, not combine them. See
+// OPENROUTER-PROVIDER-PINNING.md for why dynamic multi-backend provider pinning is deliberately
+// not built here at all.
+export function getOpenRouterModel(modelId: string, sessionId: string): LanguageModel {
   const apiKey = getApiKey("OPENROUTER_API_KEY");
   if (!apiKey) {
     throw new Error(
       "OPENROUTER_API_KEY is not set. Run: seri config set OPENROUTER_API_KEY <your-key>",
     );
   }
-  return createOpenRouter({ apiKey, compatibility: "strict" })(modelId);
+  return createOpenRouter({ apiKey, compatibility: "strict" })(modelId, {
+    extraBody: { session_id: sessionId },
+  });
 }
