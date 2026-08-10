@@ -1,51 +1,53 @@
-import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { resetCatalogCache } from "@seri/model-catalog";
+import { getModelCatalog } from "../../src/provider/catalog";
 
-const CATALOG_MODULE = pathToFileURL(join(import.meta.dir, "../../src/provider/catalog.ts")).href;
-
-// A separate process, not an in-process call to getModelCatalog: @seri/model-catalog caches its
-// own fetch result for the lifetime of the process (packages/model-catalog/src/catalog.ts's own
-// module-level `cached`), and cli.ts's own prepareSession (Stage 7a Slice 4) now calls
-// getModelCatalog on every run — including every run this suite's own cli.test.ts makes, which
-// runs in the same `bun test` process as this file. An in-process call here would risk reading
-// whatever one of THOSE calls already cached, rather than genuinely exercising the fetch-fails-
-// and-falls-back path this test is about. A fresh process is what guarantees a pristine cache
-// regardless of what else this suite already ran, and in which order.
+// In-process, not a spawned child (M-2/M-3 fix): a spawned child inherits this package's own test
+// script env (apps/cli/package.json's `"test": "SERI_DISABLE_MODELS_FETCH=1 bun test"`), which made
+// loadCatalog skip the fetch before the injected failing fetch could ever run — so the previous
+// version of this test genuinely never exercised the fetch-fails-and-falls-back path it claimed to,
+// despite its own comment saying it did. Two things make an in-process test safe here instead:
+// `resetCatalogCache()` (packages/model-catalog/src/catalog.ts, now re-exported from index.ts)
+// clears the process-lifetime cache another test in this same `bun test` process may have already
+// populated, and deleting SERI_DISABLE_MODELS_FETCH for the duration of this test — restored in
+// afterEach — makes the outcome independent of whatever the package script sets by default.
 describe("getModelCatalog", () => {
-  test("prints a warning exactly once when the live fetch fails, and returns the bundled fallback", () => {
-    const dir = mkdtempSync(join(tmpdir(), "seri-catalog-test-"));
+  const originalDisableFlag = process.env.SERI_DISABLE_MODELS_FETCH;
+
+  beforeEach(() => {
+    resetCatalogCache();
+    delete process.env.SERI_DISABLE_MODELS_FETCH;
+  });
+
+  afterEach(() => {
+    if (originalDisableFlag === undefined) delete process.env.SERI_DISABLE_MODELS_FETCH;
+    else process.env.SERI_DISABLE_MODELS_FETCH = originalDisableFlag;
+  });
+
+  test("prints a warning exactly once when the live fetch fails, and returns the bundled fallback", async () => {
+    // `called` is what actually distinguishes this from the SERI_DISABLE_MODELS_FETCH path: both
+    // produce the same externally visible result (one warning, a non-empty fallback catalog) — see
+    // this file's own top comment — so the assertion below on `called` is what the previous version
+    // of this test was missing and is the reason it did not catch its own vacuousness.
+    let called = false;
+    const failingFetch: typeof fetch = (async () => {
+      called = true;
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let catalog: Awaited<ReturnType<typeof getModelCatalog>>;
     try {
-      const scriptPath = join(dir, "script.mjs");
-      writeFileSync(
-        scriptPath,
-        [
-          `const { getModelCatalog } = await import(${JSON.stringify(CATALOG_MODULE)});`,
-          `const errors = [];`,
-          `const originalError = console.error;`,
-          `console.error = (msg) => errors.push(String(msg));`,
-          `const failingFetch = async () => { throw new Error("network down"); };`,
-          `let catalog;`,
-          `try {`,
-          `  catalog = await getModelCatalog(failingFetch);`,
-          `} finally {`,
-          `  console.error = originalError;`,
-          `}`,
-          `console.log(JSON.stringify({ errors, entryCount: catalog.entries.length }));`,
-        ].join("\n"),
-      );
-
-      const output = execFileSync(process.execPath, [scriptPath], { encoding: "utf8" });
-      const { errors, entryCount } = JSON.parse(output.trim().split("\n").at(-1) ?? "{}");
-
-      expect(errors).toHaveLength(1);
-      expect(errors[0]).toContain("models.dev");
-      expect(entryCount).toBeGreaterThan(0);
+      catalog = await getModelCatalog(failingFetch);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      console.error = originalError;
     }
-  }, 20_000);
+
+    expect(called).toBe(true);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("models.dev");
+    expect(catalog.entries.length).toBeGreaterThan(0);
+  });
 });

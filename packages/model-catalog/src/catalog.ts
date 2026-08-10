@@ -61,8 +61,12 @@ export function mapRawCatalog(raw: RawCatalogResponse): ModelCatalogEntry[] {
 
 let cached: ModelCatalog | undefined;
 
-// Test-only reset for the process-lifetime cache below — the package's own tests are the only
-// caller, reached via a direct relative import rather than through index.ts's public surface.
+// Test-only reset for the process-lifetime cache below. Exported from index.ts (not just this
+// package's own tests via a direct relative import) so a CONSUMER's test suite — apps/cli's
+// catalog.test.ts, notably — can reset the cache too: apps/cli's own getModelCatalog wraps
+// loadCatalog and is exercised by many tests in the same `bun test` process, so a test that needs
+// to observe a genuine fetch-fails-and-falls-back path has to clear whatever an earlier test
+// already cached first.
 export function resetCatalogCache(): void {
   cached = undefined;
 }
