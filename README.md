@@ -55,8 +55,8 @@ seri config set GROQ_API_KEY <your-key>
 seri "explain what this repo does"
 ```
 
-The default model is `openai/gpt-oss-120b`, chosen by measurement: on the same task, the same
-prompt and a fresh session each run, it made a real tool call in 20 of 20 runs where
+The default model is `openai/gpt-oss-120b` on Groq, chosen by measurement: on the same task, the
+same prompt and a fresh session each run, it made a real tool call in 20 of 20 runs where
 `llama-3.3-70b-versatile` managed 5 of 11. Set the `SERI_MODEL` env var for any other Groq model
 id. `seri config set SERI_MODEL <id>` works too, with the env var winning, but `seri config list`
 masks what it prints like an API key — `openai/gpt-oss-120b` reads back as `open...120b`, and an id
@@ -68,6 +68,22 @@ time the provider answers on it, so `--continue` keeps using the one that sessio
 Sessions from before seri recorded the model at all are the one exception: they ran
 `llama-3.3-70b-versatile`, nothing in the file says so, and the first `--continue` after upgrading
 moves them onto whatever `SERI_MODEL` resolves to and records that from then on.
+
+Anthropic, OpenAI and Google work the same BYOK way as Groq and OpenRouter — set the matching key
+and pick a model:
+
+```sh
+seri config set ANTHROPIC_API_KEY <your-key>
+seri config set OPENAI_API_KEY <your-key>
+seri config set GOOGLE_GENERATIVE_AI_API_KEY <your-key>
+```
+
+`SERI_PROVIDER` names which of the five (`groq`, `openrouter`, `anthropic`, `openai`, `google`)
+`SERI_MODEL` should be read against; it defaults to `groq` and follows the same
+env-beats-config precedence as every other key here. **A `/model` pick whose next turn actually
+succeeds now becomes the default for every future brand-new session**, not just the one you picked
+it in — it writes `SERI_MODEL`/`SERI_PROVIDER` to `config.json` the same way `seri config set`
+would. A session that never touches `/model` never writes either key.
 
 `seri --help` prints the usage text, and `seri --version` the installed version.
 `seri --continue` resumes the most recent session, and `seri --resume <id>` a named one; a task
