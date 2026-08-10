@@ -6,13 +6,13 @@
     "cursor+gpt": "{ orchestrator: gpt-4o, reviewer-verifier: o3, explorer: gpt-4o-mini }",
     "claude-code": "{ orchestrator: claude-opus-4-8, reviewer-verifier: claude-opus-4-8 }"
   },
-  "orchestrator": "claude-opus-5",
+  "orchestrator": "claude-fable-5",
   "env-detector": "claude-sonnet-5",
   "explorer": "claude-sonnet-5",
-  "researcher": "claude-opus-5",
+  "researcher": "claude-fable-5",
   "planner": "claude-opus-5",
   "implementer": "claude-sonnet-5",
-  "reviewer-verifier": "claude-opus-5",
+  "reviewer-verifier": "claude-fable-5",
   "test-runner": "claude-sonnet-5",
-  "retro": "inherit"
+  "retro": "claude-opus-5"
 }
