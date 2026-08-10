@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ModelProvider } from "@seri/model-catalog";
 import type { PermissionMode } from "../gate/gate";
 
 export type SessionState<TMessage = unknown> = {
@@ -15,7 +16,7 @@ export type SessionState<TMessage = unknown> = {
   // Same optionality reasoning as `model`, just above: a session written before this field existed
   // still loads, and absence means "groq" — the only provider that existed before Stage 7a added
   // OpenRouter, so an old session's absent field and an explicit "groq" mean the same thing.
-  provider?: "groq" | "openrouter";
+  provider?: ModelProvider;
   messages: TMessage[];
 };
 

@@ -12,7 +12,9 @@ const CATALOG_PROVIDERS: readonly ModelProvider[] = ["groq", "openrouter"];
 type RawModel = {
   id: string;
   name: string;
-  family: string;
+  // Code-review finding: some real models.dev entries carry no family — was typed `string`
+  // unconditionally, which just meant an upstream `null` came through as a lie, not an error.
+  family: string | null;
   tool_call: boolean;
   reasoning: boolean;
   limit: { context: number; output: number };

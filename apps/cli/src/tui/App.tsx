@@ -5,7 +5,7 @@
 // directly. Everything below it is a live region: status/spinner, a pending-write placeholder, the
 // mode indicator, and a basic input box, all re-rendered in place rather than scrolled.
 
-import type { ModelCatalogEntry } from "@seri/model-catalog";
+import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import { useEffect, useReducer, useState } from "react";
@@ -65,7 +65,13 @@ export type AppProps = {
   // into the SAME reducer everything else here already shares. `onModelSelected` takes just the
   // pick (model + provider), not a whole session — TuiAction's own "model-picker-resolved" comment
   // explains why a whole captured session is the race this stopped carrying.
-  onModelSelected?: (pick: { model: string; provider: "groq" | "openrouter" }) => void;
+  // `leftoverInput`: text typed after a terminator embedded in the same combined pty chunk that
+  // resolved this pick — see `pendingInputPrefill`'s own comment (reducer.ts). Absent on the
+  // ordinary single-Enter path.
+  onModelSelected?: (
+    pick: { model: string; provider: ModelProvider },
+    leftoverInput?: string,
+  ) => void;
   onModelPickerCancel?: () => void;
 };
 
@@ -221,7 +227,10 @@ function ModelPicker({
   onModelPickerCancel,
 }: {
   entries: ModelCatalogEntry[];
-  onModelSelected?: (pick: { model: string; provider: "groq" | "openrouter" }) => void;
+  onModelSelected?: (
+    pick: { model: string; provider: ModelProvider },
+    leftoverInput?: string,
+  ) => void;
   onModelPickerCancel?: () => void;
 }) {
   const [filterQuery, setFilterQuery] = useState("");
@@ -302,11 +311,18 @@ function ModelPicker({
       setScrollOffset(0);
       return;
     }
+    // Code-review finding: this used to stop at `typed` and silently discard everything after the
+    // terminator — real keystrokes vanished with no trace once the picker closed. `terminatorLength`
+    // mirrors InputBox's own MEDIUM-4 fix (a `\r\n` pair, the common Windows-clipboard shape, is ONE
+    // terminator, not two) and `after` is handed to `onModelSelected` so it can prefill the very next
+    // InputBox mount — the closest equivalent here to InputBox's own "awaiting its own Enter" carry.
+    const terminatorLength = input.startsWith("\r\n", terminatorIndex) ? 2 : 1;
+    const after = input.slice(terminatorIndex + terminatorLength);
     const nextFiltered =
       nextQuery.length === 0 ? entries : entries.filter((entry) => matchesFilter(entry, nextQuery));
     const entry = nextFiltered[0];
     if (entry !== undefined) {
-      onModelSelected?.({ model: entry.id, provider: entry.provider });
+      onModelSelected?.({ model: entry.id, provider: entry.provider }, after || undefined);
     }
   });
 
@@ -337,11 +353,25 @@ function ModelPicker({
 function InputBox({
   onSubmit,
   onQuit,
+  prefill,
+  onPrefillConsumed,
 }: {
   onSubmit?: (value: string) => void;
   onQuit?: () => void;
+  // Leftover text from a combined-chunk terminator in a just-closed ModelPicker (see
+  // reducer.ts's `pendingInputPrefill`) — read once, as this mount's own starting value, never
+  // re-applied on a later mount because `onPrefillConsumed` clears it in the same tick.
+  prefill?: string;
+  onPrefillConsumed?: () => void;
 }) {
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(prefill ?? "");
+  useEffect(() => {
+    if (prefill !== undefined) onPrefillConsumed?.();
+    // `prefill` in deps is what Biome's react-hooks rule wants, not a real re-subscription: this
+    // effect only ever needs to run once, and it only ever DOES run once, because InputBox is a
+    // fresh instance every time it (re)mounts (see the render ternary below) — "on mount" already
+    // means "once per pick", so a changed `prefill` on an already-mounted instance never happens.
+  }, [prefill, onPrefillConsumed]);
 
   useInput((input, key) => {
     if (key.return) {
@@ -462,7 +492,12 @@ export function App({
           onModelPickerCancel={onModelPickerCancel}
         />
       ) : (
-        <InputBox onSubmit={onSubmit} onQuit={onQuit} />
+        <InputBox
+          onSubmit={onSubmit}
+          onQuit={onQuit}
+          prefill={state.pendingInputPrefill}
+          onPrefillConsumed={() => dispatch({ type: "input-prefill-consumed" })}
+        />
       )}
     </Box>
   );

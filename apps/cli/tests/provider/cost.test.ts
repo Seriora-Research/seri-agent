@@ -29,6 +29,22 @@ const fixtureCatalog: ModelCatalog = {
       reasoning: false,
       pricing: { inputPerMTok: 0.59, outputPerMTok: 0.79 },
     },
+    {
+      id: "cached-model",
+      provider: "groq",
+      displayName: "Cached Model",
+      family: "test",
+      contextWindow: 131_072,
+      maxOutputTokens: 32_768,
+      toolCall: true,
+      reasoning: false,
+      pricing: {
+        inputPerMTok: 1.0,
+        outputPerMTok: 2.0,
+        cacheReadPerMTok: 0.1,
+        cacheWritePerMTok: 0.5,
+      },
+    },
   ],
 };
 
@@ -81,5 +97,42 @@ describe("reportForGroq", () => {
       status: "unknown",
       source: "none",
     });
+  });
+
+  // Code-review finding: pricing ALL of usage.inputTokens at the full rate double-bills whatever
+  // portion was actually a cache read/write.
+  test("prices cache-read and cache-write tokens at the catalog's cache rates, not the full rate", () => {
+    const cachedUsage: LanguageModelUsage = {
+      inputTokens: 1_000_000,
+      inputTokenDetails: {
+        noCacheTokens: 600_000,
+        cacheReadTokens: 300_000,
+        cacheWriteTokens: 100_000,
+      },
+      outputTokens: 0,
+      outputTokenDetails: { textTokens: 0, reasoningTokens: undefined },
+      totalTokens: 1_000_000,
+    };
+    // 600k * $1.00/M + 300k * $0.10/M + 100k * $0.50/M = 0.6 + 0.03 + 0.05 = 0.68
+    const report = reportForGroq("cached-model", cachedUsage, fixtureCatalog);
+    expect(report.status).toBe("estimated");
+    expect(report.amountUsd).toBeCloseTo(0.68, 6);
+  });
+
+  test("falls back to the full input rate when the catalog entry has no cache-specific pricing", () => {
+    const cachedUsage: LanguageModelUsage = {
+      inputTokens: 1_000_000,
+      inputTokenDetails: {
+        noCacheTokens: 500_000,
+        cacheReadTokens: 500_000,
+        cacheWriteTokens: undefined,
+      },
+      outputTokens: 0,
+      outputTokenDetails: { textTokens: 0, reasoningTokens: undefined },
+      totalTokens: 1_000_000,
+    };
+    // llama-3.3-70b-versatile has no cacheReadPerMTok — the whole 1M still prices at $0.59/M.
+    const report = reportForGroq("llama-3.3-70b-versatile", cachedUsage, fixtureCatalog);
+    expect(report.amountUsd).toBeCloseTo(0.59, 6);
   });
 });

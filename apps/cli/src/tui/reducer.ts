@@ -1,7 +1,7 @@
 // The shared-state home the research spec's Constraint 4 requires: driveLoop and all four slash
 // commands dispatch into this one reducer rather than each holding a separate copy. Zero Ink/React
 // import — a plain, standalone reducer, testable without a terminal.
-import type { ModelCatalogEntry } from "@seri/model-catalog";
+import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { toolAllowedLine, toolResultLine } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
@@ -49,6 +49,13 @@ export type TuiState = {
   // for the screen at once. Whether that is the right UX for a mid-turn /model is not decided by
   // this comment; it is only what the current render order actually does.
   pendingModelPicker: { entries: ModelCatalogEntry[] } | undefined;
+  // Code-review finding: a single pty chunk carrying filter text, a terminator, AND further
+  // characters (measured as real on a real terminal, the same class InputBox's own MEDIUM-E fix
+  // addressed) used to just discard everything after the terminator when it closed the picker —
+  // dropped keystrokes with the picker gone and no trace of what was typed. Set by
+  // `model-picker-resolved`'s `leftoverInput`, consumed once by InputBox as its own starting
+  // value on the very next mount, then cleared — never re-applied to a later, unrelated mount.
+  pendingInputPrefill: string | undefined;
 };
 
 function modeIndicator(mode: PermissionMode): string {
@@ -66,6 +73,7 @@ export function initialTuiState(session: SessionState<ModelMessage>): TuiState {
     commandError: undefined,
     pendingApproval: undefined,
     pendingModelPicker: undefined,
+    pendingInputPrefill: undefined,
   };
 }
 
@@ -92,7 +100,16 @@ export type TuiAction =
   // the pick into the reducer's OWN CURRENT session (below) instead of replacing it wholesale is
   // what closes that race, the same "read the reducer's own state, not a caller's stale copy"
   // fix already applied to `messages-updated` itself (see that case's own comment).
-  | { type: "model-picker-resolved"; pick?: { model: string; provider: "groq" | "openrouter" } };
+  | {
+      type: "model-picker-resolved";
+      pick?: { model: string; provider: ModelProvider };
+      // Text typed after a combined-chunk terminator (see `pendingInputPrefill`'s own comment) —
+      // present only on the rare chunked-input path, absent on every ordinary Enter.
+      leftoverInput?: string;
+    }
+  // A one-shot signal: InputBox has read `pendingInputPrefill` as its starting value and it must
+  // not be handed to any later, unrelated mount. Dispatched by InputBox itself, once, on mount.
+  | { type: "input-prefill-consumed" };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -139,12 +156,15 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       // one — see TuiAction's own comment on `pick`. `permissionMode` is untouched by a pick, so
       // (unlike session-updated, above) there is no `modeIndicator` to recompute here.
       return action.pick === undefined
-        ? { ...state, pendingModelPicker: undefined }
+        ? { ...state, pendingModelPicker: undefined, pendingInputPrefill: action.leftoverInput }
         : {
             ...state,
             pendingModelPicker: undefined,
+            pendingInputPrefill: action.leftoverInput,
             session: { ...state.session, model: action.pick.model, provider: action.pick.provider },
           };
+    case "input-prefill-consumed":
+      return { ...state, pendingInputPrefill: undefined };
   }
 }
 

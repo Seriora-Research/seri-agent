@@ -296,4 +296,57 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     expect(state.pendingModelPicker).toBeUndefined();
     expect(state.session).toBe(before);
   });
+
+  // Code-review finding: a combined pty chunk carrying filter text, a terminator, AND further
+  // characters used to just discard everything after the terminator when the picker closed —
+  // dropped keystrokes with no trace. leftoverInput is how App.tsx's ModelPicker hands that text
+  // back; pendingInputPrefill is where the reducer parks it for InputBox's very next mount.
+  test("model-picker-resolved with leftoverInput sets pendingInputPrefill", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: entry.id, provider: entry.provider },
+      leftoverInput: "another query",
+    });
+
+    expect(state.pendingInputPrefill).toBe("another query");
+    expect(state.session.model).toBe(entry.id);
+  });
+
+  test("model-picker-resolved without leftoverInput leaves pendingInputPrefill undefined", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: entry.id, provider: entry.provider },
+    });
+
+    expect(state.pendingInputPrefill).toBeUndefined();
+  });
+
+  test("input-prefill-consumed clears pendingInputPrefill", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: entry.id, provider: entry.provider },
+      leftoverInput: "another query",
+    });
+    expect(state.pendingInputPrefill).toBe("another query");
+
+    state = tuiReducer(state, { type: "input-prefill-consumed" });
+
+    expect(state.pendingInputPrefill).toBeUndefined();
+    // Consuming the prefill must not disturb the session the same dispatch already landed.
+    expect(state.session.model).toBe(entry.id);
+  });
 });

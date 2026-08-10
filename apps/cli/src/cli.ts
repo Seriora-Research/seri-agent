@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
-import { findCatalogEntry, type ModelCatalog } from "@seri/model-catalog";
+import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
@@ -326,7 +326,7 @@ async function rewindCommand(
 // `model`/`provider` are optional on SessionState so that sessions written before either field
 // existed still load, but every session this function hands back has both — which is what lets the
 // rest of the run stop asking, and getModel drop a default parameter for either.
-type RunSession = SessionState<ModelMessage> & { model: string; provider: "groq" | "openrouter" };
+type RunSession = SessionState<ModelMessage> & { model: string; provider: ModelProvider };
 
 // `modelRecorded` says where the model came from: true if the session file already had one, false
 // if it was just resolved from the environment and no provider call has confirmed it exists.
@@ -784,8 +784,15 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
 
 // Everything the loop is driven with, resolved before the first model call so a failure to build
 // any of it is an exit code rather than a half-started turn.
+//
+// Code-review finding: `session` used to be typed as the loose `SessionState<ModelMessage>`
+// (model/provider optional) even though `prepareSession` (below) only ever builds a fully-resolved
+// `RunSession` — forcing a defensive `?? "groq"` fallback and two bare `as RunSession` casts
+// downstream to re-assert, by convention, an invariant the type already failed to state. `RunSession`
+// here means a future code path that legitimately produces a session without model/provider (an
+// import/migration path, say) is a compile error at its own call site, not a silent fallthrough.
 type PreparedRun = {
-  session: SessionState<ModelMessage>;
+  session: RunSession;
   storeDir: string;
   tools: ToolSet;
   model: LanguageModel;
@@ -1092,10 +1099,12 @@ async function driveLoop(
       // HIGH-1: without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`
       // / `opts.provider === "groq" && opts.modelId && opts.catalog`) never fires and every `usage`
       // event's `cost` field is silently undefined — the run genuinely never computes a cost, no
-      // matter what cost.ts itself does. `session.provider ?? "groq"` matches loadOrCreateSession's
-      // own backfill (an absent provider means "groq", the only one that existed before this field
-      // did); `session.model` is the model this call is actually being made against.
-      provider: session.provider ?? "groq",
+      // matter what cost.ts itself does. No `?? "groq"` fallback needed here (a prior version had
+      // one): `session` is destructured from `prepared: PreparedRun`, whose `session` field is
+      // `RunSession` — `provider` is never optional at this point, only at the edges that produce
+      // one (`loadOrCreateSession`'s own backfill is where an absent provider becomes "groq").
+      // `session.model` is the model this call is actually being made against.
+      provider: session.provider,
       modelId: session.model,
       catalog,
       // The catalog's own contextWindow for whatever model this turn is actually calling — a
@@ -1272,9 +1281,11 @@ async function runTui(
   // model whose first turn errors (no working key, an unknown id) leaves this untouched, so the
   // session on disk stays pinned to the model that was last known to work — recoverable on the next
   // `--resume` — instead of a switch nothing ever confirmed.
-  let confirmedModel: { model: string; provider: "groq" | "openrouter" } = {
-    model: (prepared.session as RunSession).model,
-    provider: (prepared.session as RunSession).provider,
+  // `prepared.session` is already `RunSession` (PreparedRun's own type, above) — the two casts this
+  // line used to need are gone along with the loose type that forced them.
+  let confirmedModel: { model: string; provider: ModelProvider } = {
+    model: prepared.session.model,
+    provider: prepared.session.provider,
   };
   // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
   // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
@@ -1466,8 +1477,11 @@ async function runTui(
   // runTurn call (which reads them fresh — that function's own comment) attempts the new model —
   // but `confirmedModel` (below) does NOT move here, so onSessionChange keeps writing the OLD,
   // still-working model/provider to disk until a turn actually succeeds on the new one.
-  function onModelSelected(pick: { model: string; provider: "groq" | "openrouter" }): void {
-    dispatch({ type: "model-picker-resolved", pick });
+  function onModelSelected(
+    pick: { model: string; provider: ModelProvider },
+    leftoverInput?: string,
+  ): void {
+    dispatch({ type: "model-picker-resolved", pick, leftoverInput });
   }
 
   function onModelPickerCancel(): void {
@@ -1513,7 +1527,16 @@ async function runTui(
       return;
     }
     const contextWindowSize = findCatalogEntry(prepared.catalog, modelId, provider)?.contextWindow;
-    const turnPrepared: PreparedRun = { ...prepared, session, model, contextWindowSize };
+    // `session as RunSession`, not the raw (reducer-typed) `session`: PreparedRun.session is now
+    // RunSession (code-review finding — see PreparedRun's own comment), and this call site already
+    // established the same invariant two lines up for `modelId`/`provider`; reusing it here instead
+    // of casting a second time in one function.
+    const turnPrepared: PreparedRun = {
+      ...prepared,
+      session: session as RunSession,
+      model,
+      contextWindowSize,
+    };
     try {
       const result = await driveLoop(
         turnPrepared,

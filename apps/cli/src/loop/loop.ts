@@ -357,7 +357,22 @@ export async function* runLoop(opts: {
           // Through Promise.resolve because the SDK types this as a PromiseLike, which has no
           // .catch — it is a real Promise at runtime, but the declared type is what tsc checks.
           const failedUsage = await Promise.resolve(result.usage).catch(() => undefined);
-          if (failedUsage !== undefined) yield { type: "usage", usage: failedUsage };
+          if (failedUsage !== undefined) {
+            // A code-review finding, not hypothetical: this path used to yield `usage` with no
+            // `cost` field at all, which `addCost` (cli.ts) treats identically to "nothing new
+            // happened" — real billed tokens from a turn that streamed partway then failed would
+            // silently vanish from the running total instead of degrading it to `unknown`.
+            let failedCost: CostReport | undefined;
+            if (opts.provider === "openrouter") {
+              const providerMetadata = await Promise.resolve(result.providerMetadata).catch(
+                () => undefined,
+              );
+              failedCost = reportForOpenRouter(failedUsage, providerMetadata);
+            } else if (opts.provider === "groq" && opts.modelId && opts.catalog) {
+              failedCost = reportForGroq(opts.modelId, failedUsage, opts.catalog);
+            }
+            yield { type: "usage", usage: failedUsage, cost: failedCost };
+          }
           return;
         }
       }
@@ -369,7 +384,14 @@ export async function* runLoop(opts: {
       // provider that actually carries it.
       let cost: CostReport | undefined;
       if (opts.provider === "openrouter") {
-        cost = reportForOpenRouter(resultUsage, await result.providerMetadata);
+        // A code-review finding: unguarded, a rejection here (providerMetadata is a Promise per
+        // reportForOpenRouter's own comment) would escape to the catch below and convert an
+        // already-successfully-completed turn into a lost `error` — discarding the text/tool-calls
+        // that already finished. Same treatment as the sibling `result.usage` await a few lines up.
+        const providerMetadata = await Promise.resolve(result.providerMetadata).catch(
+          () => undefined,
+        );
+        cost = reportForOpenRouter(resultUsage, providerMetadata);
       } else if (opts.provider === "groq" && opts.modelId && opts.catalog) {
         cost = reportForGroq(opts.modelId, resultUsage, opts.catalog);
       }

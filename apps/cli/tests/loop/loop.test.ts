@@ -385,6 +385,46 @@ describe("runLoop", () => {
     expect(usageEvents[0]?.usage.outputTokens).toBe(7);
   });
 
+  // Code-review finding: this exact usage event used to be yielded with no `cost` field at all —
+  // not even a defined "unknown" one — so `addCost` (cli.ts) treated it as "nothing new happened"
+  // and real billed tokens from a turn that streamed partway then failed silently vanished from a
+  // session's running cost total instead of degrading it to unknown.
+  test("a turn that streams text and then fails mid-stream still reports a cost, not an absent one", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () =>
+        streamResult([
+          { type: "text-start", id: "1" },
+          { type: "text-delta", id: "1", delta: "partial answer" },
+          { type: "error", error: new Error("upstream connection reset") },
+          {
+            type: "finish",
+            finishReason: { unified: "error", raw: undefined },
+            usage: usage(900, 7),
+          },
+        ]),
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "groq",
+        modelId: "some-unlisted-model",
+        catalog: { fetchedAt: "2026-01-01T00:00:00.000Z", entries: [] },
+      }),
+    );
+
+    const usageEvent = events.find(
+      (e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage",
+    );
+    // Unlisted model -> reportForGroq's own "unknown" case -- but a DEFINED CostReport, not an
+    // absent `cost` field, which is what addCost's contract needs to tell "nothing happened" apart
+    // from "something happened whose cost we can't compute".
+    expect(usageEvent?.cost).toEqual({ amountUsd: undefined, status: "unknown", source: "none" });
+  });
+
   // The other half of that exit, and the reason the await is caught rather than bare: when the
   // failure IS the call — doStream rejecting, nothing streamed — result.usage rejects with
   // AI_NoOutputGeneratedError instead of resolving. That rejection lands in the same try that

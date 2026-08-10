@@ -50,7 +50,21 @@ export function reportForGroq(
 ): CostReport {
   const entry = findCatalogEntry(catalog, modelId, "groq");
   if (!entry?.pricing) return { amountUsd: undefined, status: "unknown", source: "none" };
-  const inputCost = ((usage.inputTokens ?? 0) / 1_000_000) * entry.pricing.inputPerMTok;
-  const outputCost = ((usage.outputTokens ?? 0) / 1_000_000) * entry.pricing.outputPerMTok;
+  const { pricing } = entry;
+  // A code-review finding: pricing ALL of usage.inputTokens at the full rate double-bills whatever
+  // portion was actually a cache read/write, once the catalog entry has cache pricing at all —
+  // usage.inputTokens is the total (cached + non-cached), not the non-cached count alone.
+  const cacheReadTokens = usage.inputTokenDetails?.cacheReadTokens ?? 0;
+  const cacheWriteTokens = usage.inputTokenDetails?.cacheWriteTokens ?? 0;
+  const noCacheTokens =
+    usage.inputTokenDetails?.noCacheTokens ??
+    Math.max(0, (usage.inputTokens ?? 0) - cacheReadTokens - cacheWriteTokens);
+  // Falls back to the full input rate for a catalog entry with no cache-specific pricing, rather
+  // than assuming a discount the catalog never actually reported.
+  const inputCost =
+    (noCacheTokens / 1_000_000) * pricing.inputPerMTok +
+    (cacheReadTokens / 1_000_000) * (pricing.cacheReadPerMTok ?? pricing.inputPerMTok) +
+    (cacheWriteTokens / 1_000_000) * (pricing.cacheWritePerMTok ?? pricing.inputPerMTok);
+  const outputCost = ((usage.outputTokens ?? 0) / 1_000_000) * pricing.outputPerMTok;
   return { amountUsd: inputCost + outputCost, status: "estimated", source: "provider_models_api" };
 }
