@@ -8,7 +8,7 @@ const MODEL_ID = "openai/gpt-4o-mini";
 // model's minimum cacheable prompt size. ~6000 chars is ~1500 tokens at a conservative ~4
 // chars/token, safely above the top of Groq's own documented 128-1024 token range (this file's
 // sibling promptCaching.live.test.ts), and OpenRouter's own live-verified prefix (~1520 tokens,
-// OPENROUTER-PROVIDER-PINNING.md) is in the same range.
+// measured 2026-08-10 against openai/gpt-4o-mini) is in the same range.
 const PADDING = "The quick brown fox jumps over the lazy dog. ".repeat(150);
 
 // Same asserted-not-inferred shape as cost.ts's own OpenRouterProviderMetadata: the AI SDK's
