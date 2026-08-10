@@ -368,17 +368,19 @@ describe("App", () => {
     });
 
     // The concrete mechanical proof of "context preserved" (feature-plan.md's own acceptance
-    // criterion): the resolved session carries the picked model/provider, and nothing else —
-    // `messages` in particular is exactly what the session already had, not migrated or dropped.
-    test("typing filters the list, and Enter resolves the highlighted entry — leaving messages untouched", async () => {
-      const selected: SessionState<ModelMessage>[] = [];
+    // criterion): onModelSelected only ever carries the picked model/provider — `messages` (and
+    // everything else about the session) is never part of the pick at all, so there is nothing to
+    // migrate or drop; the reducer's own model-picker-resolved merges it onto whatever session is
+    // current when the pick resolves (reducer.test.ts covers that merge directly).
+    test("typing filters the list, and Enter resolves the highlighted entry", async () => {
+      const selected: Array<{ model: string; provider: "groq" | "openrouter" }> = [];
       let dispatch: ((action: TuiAction) => void) | undefined;
       const startingSession = session({ messages: [{ role: "user", content: "hi" }] });
       const instance = render(
         <App
           session={startingSession}
           connectDispatch={(d) => (dispatch = d)}
-          onModelSelected={(next) => selected.push(next)}
+          onModelSelected={(pick) => selected.push(pick)}
           done={false}
         />,
       );
@@ -403,10 +405,7 @@ describe("App", () => {
       instance.stdin.write("\r");
       await flush();
 
-      expect(selected).toEqual([
-        { ...startingSession, model: "llama-3.1-8b-instant", provider: "groq" },
-      ]);
-      expect(selected[0]?.messages).toBe(startingSession.messages);
+      expect(selected).toEqual([{ model: "llama-3.1-8b-instant", provider: "groq" }]);
     });
 
     test("Escape and Ctrl-D both cancel without resolving a model", async () => {

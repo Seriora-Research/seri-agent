@@ -61,9 +61,11 @@ export type AppProps = {
   // SECOND SIGINT route racing Ink's own raw-mode ownership and signals.ts's single cancel slot.
   onApprovalAnswer?: (answer: ApprovalAnswer) => void;
   // /model's own two resolutions, mirroring onApprovalAnswer's shape: called from ModelPicker's own
-  // keypress handler, wired by runTui to dispatch model-picker-resolved (with or without a new
-  // session) into the SAME reducer everything else here already shares.
-  onModelSelected?: (next: SessionState<ModelMessage>) => void;
+  // keypress handler, wired by runTui to dispatch model-picker-resolved (with or without a pick)
+  // into the SAME reducer everything else here already shares. `onModelSelected` takes just the
+  // pick (model + provider), not a whole session — TuiAction's own "model-picker-resolved" comment
+  // explains why a whole captured session is the race this stopped carrying.
+  onModelSelected?: (pick: { model: string; provider: "groq" | "openrouter" }) => void;
   onModelPickerCancel?: () => void;
 };
 
@@ -157,13 +159,11 @@ function matchesFilter(entry: ModelCatalogEntry, query: string): boolean {
 // visible to anything outside this component.
 function ModelPicker({
   entries,
-  session,
   onModelSelected,
   onModelPickerCancel,
 }: {
   entries: ModelCatalogEntry[];
-  session: SessionState<ModelMessage>;
-  onModelSelected?: (next: SessionState<ModelMessage>) => void;
+  onModelSelected?: (pick: { model: string; provider: "groq" | "openrouter" }) => void;
   onModelPickerCancel?: () => void;
 }) {
   const [filterQuery, setFilterQuery] = useState("");
@@ -192,7 +192,7 @@ function ModelPicker({
     if (key.return) {
       const entry = filtered[selectedIndex];
       if (entry !== undefined) {
-        onModelSelected?.({ ...session, model: entry.id, provider: entry.provider });
+        onModelSelected?.({ model: entry.id, provider: entry.provider });
       }
       return;
     }
@@ -223,7 +223,7 @@ function ModelPicker({
       nextQuery.length === 0 ? entries : entries.filter((entry) => matchesFilter(entry, nextQuery));
     const entry = nextFiltered[0];
     if (entry !== undefined) {
-      onModelSelected?.({ ...session, model: entry.id, provider: entry.provider });
+      onModelSelected?.({ model: entry.id, provider: entry.provider });
     }
   });
 
@@ -371,7 +371,6 @@ export function App({
       ) : state.pendingModelPicker !== undefined ? (
         <ModelPicker
           entries={state.pendingModelPicker.entries}
-          session={state.session}
           onModelSelected={onModelSelected}
           onModelPickerCancel={onModelPickerCancel}
         />

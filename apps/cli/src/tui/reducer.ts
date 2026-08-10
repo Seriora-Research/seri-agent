@@ -40,8 +40,14 @@ export type TuiState = {
   // (decideModelPickerOpen's own result, tui/commands.ts), cleared once resolved. App.tsx renders
   // its own ModelPicker instead of InputBox whenever this is set — the same three-way mutual
   // exclusion pendingApproval already establishes for ApprovalBox, extended to a third state
-  // rather than a second independent flag, since a pending approval and a pending model pick can
-  // never both be true at once (the picker is opened from the input box, not mid-turn).
+  // rather than a second independent flag. `pendingApproval` and `pendingModelPicker` CAN both be
+  // set at once, despite that: cli.ts's onSubmit handles /model before the turnInFlight guard that
+  // gates ordinary tasks and mutatesRunState commands, so a user can open the picker while a turn
+  // — and the approval prompt it may have triggered — is still in flight. App.tsx's own render
+  // ternary picks ApprovalBox first in that case, so the picker stays open (this field stays set)
+  // but hidden behind the approval prompt until that resolves, rather than the two ever competing
+  // for the screen at once. Whether that is the right UX for a mid-turn /model is not decided by
+  // this comment; it is only what the current render order actually does.
   pendingModelPicker: { entries: ModelCatalogEntry[] } | undefined;
 };
 
@@ -74,10 +80,19 @@ export type TuiAction =
   | { type: "approval-requested"; toolName: string; args: unknown; offersAlways: boolean }
   | { type: "approval-resolved" }
   | { type: "model-picker-requested"; entries: ModelCatalogEntry[] }
-  // `session`, when present, is the SAME atomic transition as clearing pendingModelPicker — not a
+  // `pick`, when present, is the SAME atomic transition as clearing pendingModelPicker — not a
   // second dispatch — so there is never a one-frame render where the session already switched
   // models but the picker is still showing, or the picker is gone but the switch hasn't landed.
-  | { type: "model-picker-resolved"; session?: SessionState<ModelMessage> };
+  // Carries only the pick itself (model + provider), not a whole captured SessionState: this used
+  // to carry a full session snapshot taken from `state.session` at the moment ModelPicker rendered
+  // (App.tsx's own `session` prop), which a `messages-updated` landing in between picker-open and
+  // picker-resolve (a real race — the picker can open mid-turn, see pendingModelPicker's own
+  // comment) would make stale — resolving the picker then overwrote the reducer's own, newer
+  // `state.session.messages` with whatever the picker had captured minutes earlier. Merging just
+  // the pick into the reducer's OWN CURRENT session (below) instead of replacing it wholesale is
+  // what closes that race, the same "read the reducer's own state, not a caller's stale copy"
+  // fix already applied to `messages-updated` itself (see that case's own comment).
+  | { type: "model-picker-resolved"; pick?: { model: string; provider: "groq" | "openrouter" } };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -120,13 +135,15 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "model-picker-requested":
       return { ...state, pendingModelPicker: { entries: action.entries } };
     case "model-picker-resolved":
-      return action.session === undefined
+      // Merged into `state.session` (this reducer's own current session), not a caller-captured
+      // one — see TuiAction's own comment on `pick`. `permissionMode` is untouched by a pick, so
+      // (unlike session-updated, above) there is no `modeIndicator` to recompute here.
+      return action.pick === undefined
         ? { ...state, pendingModelPicker: undefined }
         : {
             ...state,
             pendingModelPicker: undefined,
-            session: action.session,
-            modeIndicator: modeIndicator(action.session.permissionMode),
+            session: { ...state.session, model: action.pick.model, provider: action.pick.provider },
           };
   }
 }

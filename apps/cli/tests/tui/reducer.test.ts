@@ -242,20 +242,49 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     expect(state.pendingModelPicker).toEqual({ entries: [entry] });
   });
 
-  test("model-picker-resolved with a session updates state.session and clears the picker in the same dispatch", () => {
+  test("model-picker-resolved with a pick merges model/provider into state.session and clears the picker in the same dispatch", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "model-picker-requested",
       entries: [entry],
     });
 
-    const next = session({ model: entry.id, provider: entry.provider });
-    state = tuiReducer(state, { type: "model-picker-resolved", session: next });
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: entry.id, provider: entry.provider },
+    });
 
     expect(state.pendingModelPicker).toBeUndefined();
-    expect(state.session).toEqual(next);
+    expect(state.session).toEqual(session({ model: entry.id, provider: entry.provider }));
   });
 
-  test("model-picker-resolved with no session only clears the picker", () => {
+  // B4/MEDIUM-4: the bug this closes. `model-picker-resolved` used to carry a whole SessionState
+  // captured when the picker rendered and replace `state.session` wholesale with it — so a
+  // `messages-updated` landing while the picker was still open (the picker can open mid-turn, see
+  // pendingModelPicker's own comment) got silently reverted the moment the pick resolved. Merging
+  // just the pick into whatever `state.session` actually is AT RESOLUTION TIME is what fixes it —
+  // this asserts the merge lands on top of a session newer than the one the picker was opened with.
+  test("model-picker-resolved merges into the CURRENT session, not a stale one captured when the picker opened", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "model-picker-requested",
+      entries: [entry],
+    });
+    // Simulates a turn's own messages-updated event landing while the picker is still open.
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "messages-updated", messages: [{ role: "user", content: "hi" }] },
+    });
+
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: entry.id, provider: entry.provider },
+    });
+
+    expect(state.session.model).toBe(entry.id);
+    expect(state.session.provider).toBe(entry.provider);
+    expect(state.session.messages).toEqual([{ role: "user", content: "hi" }]);
+  });
+
+  test("model-picker-resolved with no pick only clears the picker", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "model-picker-requested",
       entries: [entry],

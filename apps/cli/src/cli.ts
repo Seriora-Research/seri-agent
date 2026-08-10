@@ -1246,6 +1246,21 @@ async function runTui(
   // own effect, MEDIUM-1's own accepted, documented, narrow trade-off (persistence lagging by a
   // tick) is unrelated to reads racing ahead of a stale copy, which is what this closes.
   let liveState: TuiState = initialTuiState(prepared.session);
+  // B2 fix (MEDIUM-5): the model/provider onSessionChange (below) actually WRITES to disk, kept
+  // deliberately separate from `liveState.session.model`/`.provider` (what a picked model changes
+  // immediately, so the next runTurn attempts it — onModelSelected's own comment) — mirrors
+  // prepareSession's own "only pin a model that demonstrably worked" invariant (that function's own
+  // comment), applied to a live /model switch instead of just session creation. Starts at this
+  // run's own starting model/provider — already trusted the same way prepareSession trusts it for
+  // turn 1 — and only ever moves forward on a genuinely successful turn (runTurn's own onEvent
+  // callback, below, on `messages-updated`), never on the picker resolving by itself. A picked
+  // model whose first turn errors (no working key, an unknown id) leaves this untouched, so the
+  // session on disk stays pinned to the model that was last known to work — recoverable on the next
+  // `--resume` — instead of a switch nothing ever confirmed.
+  let confirmedModel: { model: string; provider: "groq" | "openrouter" } = {
+    model: (prepared.session as RunSession).model,
+    provider: (prepared.session as RunSession).provider,
+  };
   // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
   // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
   // what every other function in this closure actually calls now.
@@ -1328,8 +1343,12 @@ async function runTui(
   function onSessionChange(session: SessionState<ModelMessage>): void {
     const resolvers = pendingPersistResolvers;
     pendingPersistResolvers = [];
+    // B2 fix: writes `confirmedModel`, not `session`'s own live model/provider — see
+    // `confirmedModel`'s own comment above. Every other field of `session` (messages,
+    // permissionMode, …) is unaffected; only these two are ever substituted.
+    const toPersist = { ...session, model: confirmedModel.model, provider: confirmedModel.provider };
     try {
-      saveSession(session, ctx.sessionsDir);
+      saveSession(toPersist, ctx.sessionsDir);
     } catch (err) {
       const message = `could not save the session: ${err instanceof Error ? err.message : String(err)}`;
       printWarning(message);
@@ -1422,10 +1441,14 @@ async function runTui(
 
   // ModelPicker's own two resolutions (App.tsx's onModelSelected/onModelPickerCancel props) — both
   // dispatch model-picker-resolved, the one action that clears the picker and (only when a model
-  // was actually picked) replaces `state.session` in the same atomic transition (reducer.ts's own
-  // comment on why that is one dispatch, not two).
-  function onModelSelected(next: SessionState<ModelMessage>): void {
-    dispatch({ type: "model-picker-resolved", session: next });
+  // was actually picked) merges the pick into `state.session` in the same atomic transition
+  // (reducer.ts's own comment on why that is one dispatch, not two). This is deliberately the ONLY
+  // effect of a pick: `state.session.model`/`.provider` changes immediately, so the very next
+  // runTurn call (which reads them fresh — that function's own comment) attempts the new model —
+  // but `confirmedModel` (below) does NOT move here, so onSessionChange keeps writing the OLD,
+  // still-working model/provider to disk until a turn actually succeeds on the new one.
+  function onModelSelected(pick: { model: string; provider: "groq" | "openrouter" }): void {
+    dispatch({ type: "model-picker-resolved", pick });
   }
 
   function onModelPickerCancel(): void {
@@ -1449,8 +1472,8 @@ async function runTui(
     // untouched here — this only changes which model answers it, not what it contains.
     //
     // Every session reaching here started as a RunSession (loadOrCreateSession's own backfill
-    // guarantee) and stays one: every step along the way (decideModeCycle, decideRewind,
-    // ModelPicker's own onModelSelected) only ever spreads the session it was given, never drops
+    // guarantee) and stays one: every step along the way (decideModeCycle, decideRewind, the
+    // reducer's own model-picker-resolved merge) only ever spreads the session it had, never drops
     // `model`/`provider`. TypeScript loses that once a session narrows to the reducer's own
     // `SessionState<ModelMessage>` (tui/reducer.ts), so this is the one place that puts it back —
     // the same kind of "this file already knows a stronger invariant tsc can't see" gap
@@ -1478,7 +1501,18 @@ async function runTui(
         ctx,
         deps,
         maxTurns,
-        (event) => dispatch({ type: "loop-event", event }),
+        (event) => {
+          dispatch({ type: "loop-event", event });
+          // B2 fix: `messages-updated` is loop.ts's own signal that a model call actually
+          // succeeded (loadOrCreateSession's own comment: "driveLoop's messages-updated save
+          // records it... only after a turn the provider actually answered") — so THIS turn's
+          // `modelId`/`provider` (destructured above, what it was actually called with) are now
+          // demonstrably working and safe to persist. Confirming on every turn, not just a
+          // picker-driven one, is a no-op for the common case (same value already) and is what
+          // makes a picker switch's FIRST successful turn confirm it, with no special-casing for
+          // "was this turn a switch."
+          if (event.type === "messages-updated") confirmedModel = { model: modelId, provider };
+        },
         getPermissionMode,
         () => {},
         tuiApprovalPrompt,
