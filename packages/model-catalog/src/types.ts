@@ -1,7 +1,7 @@
 // The shared vocabulary both apps/cli and (later) apps/portal type against — verbatim from
 // research-spec.md's question (b), mirroring models.dev's own schema rather than either
 // provider's raw API shape.
-export type ModelProvider = "groq" | "openrouter";
+export type ModelProvider = "groq" | "openrouter" | "anthropic" | "openai" | "google";
 
 export type ModelCatalogEntry = {
   id: string; // e.g. "llama-3.3-70b-versatile" (groq) or "meta-llama/llama-3.3-70b-instruct" (openrouter)

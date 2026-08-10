@@ -6,8 +6,14 @@ const MODELS_DEV_URL = "https://models.dev/api.json";
 // limit, so this is the mitigation for an unbounded-hang request, not a measured budget.
 const FETCH_TIMEOUT_MS = 10_000;
 
-// seri only has these two providers — every other key in models.dev's response is ignored.
-const CATALOG_PROVIDERS: readonly ModelProvider[] = ["groq", "openrouter"];
+// seri only has these five providers — every other key in models.dev's response is ignored.
+const CATALOG_PROVIDERS: readonly ModelProvider[] = [
+  "groq",
+  "openrouter",
+  "anthropic",
+  "openai",
+  "google",
+];
 
 type RawModel = {
   id: string;

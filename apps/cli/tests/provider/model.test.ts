@@ -38,11 +38,13 @@ describe("getModel", () => {
   });
 
   // Code-review finding: `provider` can arrive from a bare JSON.parse (session.ts's loadSession
-  // has no schema check), so a value neither "groq" nor "openrouter" is a real, reachable case,
-  // not just a type-system impossibility — it must throw a clear error, not silently route to
-  // OpenRouter (the old ternary's fallback branch).
+  // has no schema check), so a value outside the real union is a real, reachable case, not just a
+  // type-system impossibility — it must throw a clear error, not silently route to OpenRouter (the
+  // old ternary's fallback branch). "mistral", not "anthropic": once anthropic became a real
+  // ModelProvider member, this fixture would dispatch to getAnthropicModel instead of hitting the
+  // default case at all.
   test("throws naming the value for an unrecognized provider, instead of silently routing to OpenRouter", () => {
-    const badProvider = "anthropic" as unknown as Parameters<typeof getModel>[1];
+    const badProvider = "mistral" as unknown as Parameters<typeof getModel>[1];
     expect(() =>
       getModel("some-id", badProvider, "test-session-id", {
         getGroqModel: () => {
@@ -52,6 +54,6 @@ describe("getModel", () => {
           throw new Error("should not be called");
         },
       }),
-    ).toThrow(/Unknown model provider.*anthropic/);
+    ).toThrow(/Unknown model provider.*mistral/);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ModelCatalogEntry } from "@seri/model-catalog";
+import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { render } from "ink-testing-library";
 import type { ApprovalAnswer } from "../../src/loop/loop";
@@ -373,7 +373,7 @@ describe("App", () => {
     // migrate or drop; the reducer's own model-picker-resolved merges it onto whatever session is
     // current when the pick resolves (reducer.test.ts covers that merge directly).
     test("typing filters the list, and Enter resolves the highlighted entry", async () => {
-      const selected: Array<{ model: string; provider: "groq" | "openrouter" }> = [];
+      const selected: Array<{ model: string; provider: ModelProvider }> = [];
       let dispatch: ((action: TuiAction) => void) | undefined;
       const startingSession = session({ messages: [{ role: "user", content: "hi" }] });
       const instance = render(
@@ -460,7 +460,7 @@ describe("App", () => {
     // AND the row Enter resolves is the one actually highlighted — an off-by-one in the scroll math
     // would resolve a neighbour instead.
     test("Down past the visible window scrolls the list, and Enter selects the highlighted row", async () => {
-      const selected: Array<{ model: string; provider: "groq" | "openrouter" }> = [];
+      const selected: Array<{ model: string; provider: ModelProvider }> = [];
       let dispatch: ((action: TuiAction) => void) | undefined;
       const instance = render(
         <App
