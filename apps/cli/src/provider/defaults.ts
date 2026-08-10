@@ -31,14 +31,12 @@ export function isModelProvider(value: string): value is ModelProvider {
 // getApiKey's own deliberate `||`), and a startup crash for a typo is a worse failure than a
 // documented fallback.
 //
-// Not delegated to resolveModelId() (groq.ts): that function can't express "which source did
-// this come from," only the final resolved string, and this needs to branch on exactly that.
-// Reimplemented locally instead — env checked first (SERI_MODEL not set there falls through to
-// config), with a SINGLE loadConfig() call for both keys together, so a persisted pair is read
-// as what it is: one pair, not two independent lookups. resolveModelId() itself is untouched
-// (groq.ts's own DEFAULT_MODEL/env-then-config precedence, and its four existing tests, still
-// apply to every OTHER caller); it currently has none in production code, only its own dedicated
-// test in groq.test.ts, since this was its last one.
+// Not delegated to a shared resolver: the earlier resolveModelId() (groq.ts) couldn't express
+// "which source did this come from," only the final resolved string, and this needs to branch on
+// exactly that — reimplemented locally instead, env checked first (SERI_MODEL not set there falls
+// through to config), with a SINGLE loadConfig() call for both keys together, so a persisted pair
+// is read as what it is: one pair, not two independent lookups. resolveModelId() itself was
+// removed once this was its only remaining caller (groq.ts keeps DEFAULT_MODEL, still used above).
 export function resolveDefaultModel(): { model: string; provider: ModelProvider } {
   const envModel = process.env.SERI_MODEL;
   if (envModel) {
