@@ -31,6 +31,11 @@ export function reportForOpenRouter(
 ): CostReport {
   const amountUsd = (providerMetadata as OpenRouterProviderMetadata | undefined)?.openrouter?.usage
     ?.cost;
+  // A missing cost is not an actual $0 — OpenRouter can omit `usage.cost` (no accounting configured,
+  // an unlisted model, a provider that doesn't report it), and labelling that "actual" would show a
+  // dollar figure nobody measured. reportForGroq already draws this same "no data → unknown" line for
+  // its own missing-pricing case; this mirrors it for OpenRouter's missing-cost case.
+  if (amountUsd === undefined) return { amountUsd: undefined, status: "unknown", source: "none" };
   return { amountUsd, status: "actual", source: "provider_cost_api" };
 }
 

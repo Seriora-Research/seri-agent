@@ -47,6 +47,21 @@ describe("reportForOpenRouter", () => {
       source: "provider_cost_api",
     });
   });
+
+  test("returns unknown/none when providerMetadata carries no cost field", () => {
+    const providerMetadata: ProviderMetadata = {
+      openrouter: {
+        provider: "openrouter",
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      },
+    };
+
+    expect(reportForOpenRouter(usage(100, 50), providerMetadata)).toEqual({
+      amountUsd: undefined,
+      status: "unknown",
+      source: "none",
+    });
+  });
 });
 
 describe("reportForGroq", () => {
