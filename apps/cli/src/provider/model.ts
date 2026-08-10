@@ -6,8 +6,8 @@ import { getGroqModel as getGroqModelReal } from "./groq";
 import { getOpenAIModel as getOpenAIModelReal } from "./openai";
 import { getOpenRouterModel as getOpenRouterModelReal } from "./openrouter";
 
-// Optional injected fns, mirroring cli.ts's own CliDeps pattern — lets tests exercise the
-// dispatch without constructing a real provider.
+// Optional injected fns, mirroring cli.ts's own CliDeps (all five fields, same names) — lets
+// tests exercise the dispatch without constructing a real provider.
 type ModelDeps = {
   getGroqModel?: typeof getGroqModelReal;
   getOpenRouterModel?: typeof getOpenRouterModelReal;

@@ -615,6 +615,38 @@ describe("run (task invocation)", () => {
     expect(secondSession.provider).toBe("openrouter");
   });
 
+  // code-review finding on PR #71: CliDeps was never extended with getAnthropicModel/
+  // getOpenAIModel/getGoogleModel (unlike getGroqModel/getOpenRouterModel, already here) even
+  // though model.ts's own ModelDeps was — so neither of cli.ts's two getModel() call sites could
+  // inject a fake for the 3 new providers, leaving them reachable only through the real,
+  // network-calling implementations from this file's own tests. This is the wiring proof for one
+  // of the three (anthropic); the other two thread through the exact same CliDeps fields.
+  test("a native provider (anthropic) dispatches through its own injected CliDeps fn", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const askedAnthropic: string[] = [];
+    setConfigValue("SERI_MODEL", "claude-picked-model");
+    setConfigValue("SERI_PROVIDER", "anthropic");
+
+    const { code } = await captureLogs(() =>
+      run(["a", "task"], {
+        runLoop: fakeRunLoop(answeredTurn).fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        getAnthropicModel: (id: string) => {
+          askedAnthropic.push(id);
+          return getGroqModel("openai/gpt-oss-120b");
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(askedAnthropic).toEqual(["claude-picked-model"]);
+    const id = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
+    const session = loadSession(id, sessionsDir);
+    expect(session.model).toBe("claude-picked-model");
+    expect(session.provider).toBe("anthropic");
+  });
+
   // The case `loaded.model ?? resolveModelId()` exists for, and the only one the two tests above
   // do not reach: a session file written before `model` was a field. It must still load, and it
   // must acquire a model rather than resuming with none.

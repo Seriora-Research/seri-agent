@@ -53,9 +53,12 @@ import { permissionsCommand as permissionsCommandReal } from "./permissions/comm
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
+import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
+import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { getModel } from "./provider/model";
+import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
 import { toolDefinitions } from "./provider/tools";
 import {
@@ -82,10 +85,13 @@ import { withVerification } from "./verify/wrapTools";
 type CliDeps = {
   runLoop?: typeof runLoopReal;
   getGroqModel?: typeof getGroqModelReal;
-  // Mirrors getGroqModel exactly — getModel (provider/model.ts) dispatches to whichever of the two
-  // a session's provider names, so a test injecting one but not the other still gets the real
-  // implementation for whichever provider it never exercises.
+  // All five mirror getGroqModel exactly — getModel (provider/model.ts) dispatches to whichever
+  // of the five a session's provider names, so a test injecting some but not others still gets
+  // the real implementation for whichever provider it never exercises.
   getOpenRouterModel?: typeof getOpenRouterModelReal;
+  getAnthropicModel?: typeof getAnthropicModelReal;
+  getOpenAIModel?: typeof getOpenAIModelReal;
+  getGoogleModel?: typeof getGoogleModelReal;
   loadAgentsFile?: typeof loadAgentsFileReal;
   sessionsDir?: string;
   checkpointsDir?: string;
@@ -882,6 +888,9 @@ async function prepareSession(
     model = getModel(session.model, session.provider, session.id, {
       getGroqModel: deps.getGroqModel,
       getOpenRouterModel: deps.getOpenRouterModel,
+      getAnthropicModel: deps.getAnthropicModel,
+      getOpenAIModel: deps.getOpenAIModel,
+      getGoogleModel: deps.getGoogleModel,
     });
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -1555,6 +1564,9 @@ async function runTui(
       model = getModel(modelId, provider, sessionId, {
         getGroqModel: deps.getGroqModel,
         getOpenRouterModel: deps.getOpenRouterModel,
+        getAnthropicModel: deps.getAnthropicModel,
+        getOpenAIModel: deps.getOpenAIModel,
+        getGoogleModel: deps.getGoogleModel,
       });
     } catch (err) {
       dispatch({
