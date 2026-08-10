@@ -1,6 +1,6 @@
 import { CATALOG_PROVIDERS, type ModelProvider } from "@seri/model-catalog";
-import { getApiKey, setConfigValues } from "../config/config";
-import { resolveModelId } from "./groq";
+import { loadConfig, setConfigValues } from "../config/config";
+import { DEFAULT_MODEL } from "./groq";
 
 // Not in groq.ts: that file's DEFAULT_MODEL carries a groq-model-specific measurement comment
 // (20/20 vs 5/11 tool calls), and a provider-agnostic resolver sitting under that comment would
@@ -17,20 +17,42 @@ export function isModelProvider(value: string): value is ModelProvider {
   return CATALOG_PROVIDERS.includes(value as ModelProvider);
 }
 
-// The model half delegates to resolveModelId() (groq.ts) — zero duplication, and SERI_MODEL's
-// existing env-then-config precedence and its own tests keep working unchanged. The provider half
-// mirrors it: `SERI_PROVIDER`, env-then-config via getApiKey, falling back to DEFAULT_PROVIDER.
+// model and provider are resolved as a COUPLED pair, not independently (code-review finding on
+// PR #71): SERI_MODEL and SERI_PROVIDER each doing their own env-then-config lookup (the
+// resolveModelId()-delegating shape this used to have) meant a one-off env override of ONLY
+// SERI_MODEL — `SERI_MODEL=llama-3.3-70b-versatile seri "task"`, the exact workflow README.md
+// documents — could pick up a STALE persisted SERI_PROVIDER from config.json (an earlier /model
+// pick on e.g. anthropic), producing a model id dispatched to the wrong provider's API. The rule:
+// whichever source supplies `model` also supplies `provider` — they are never mixed. An
+// unrecognized or missing SERI_PROVIDER value from that SAME source falls back to
+// DEFAULT_PROVIDER rather than throwing or reaching into the other source: config.json is
+// hand-editable, every other reader in this layer already degrades silently on a malformed value
+// (loadConfig drops non-strings, loadVerifyConfig treats anything but "false" as enabled,
+// getApiKey's own deliberate `||`), and a startup crash for a typo is a worse failure than a
+// documented fallback.
 //
-// An unrecognized SERI_PROVIDER value (including "") falls back silently rather than throwing:
-// config.json is hand-editable, every other reader in this layer already degrades silently on a
-// malformed value (loadConfig drops non-strings, loadVerifyConfig treats anything but "false" as
-// enabled, getApiKey's own deliberate `||`), and a startup crash for a typo is a worse failure
-// than a documented fallback.
+// Not delegated to resolveModelId() (groq.ts): that function can't express "which source did
+// this come from," only the final resolved string, and this needs to branch on exactly that.
+// Reimplemented locally instead — env checked first (SERI_MODEL not set there falls through to
+// config), with a SINGLE loadConfig() call for both keys together, so a persisted pair is read
+// as what it is: one pair, not two independent lookups. resolveModelId() itself is untouched
+// (groq.ts's own DEFAULT_MODEL/env-then-config precedence, and its four existing tests, still
+// apply to every OTHER caller); it currently has none in production code, only its own dedicated
+// test in groq.test.ts, since this was its last one.
 export function resolveDefaultModel(): { model: string; provider: ModelProvider } {
-  const provider = getApiKey("SERI_PROVIDER");
+  const envModel = process.env.SERI_MODEL;
+  if (envModel) {
+    const envProvider = process.env.SERI_PROVIDER;
+    return {
+      model: envModel,
+      provider: envProvider && isModelProvider(envProvider) ? envProvider : DEFAULT_PROVIDER,
+    };
+  }
+  const config = loadConfig();
+  const configProvider = config.SERI_PROVIDER;
   return {
-    model: resolveModelId(),
-    provider: provider !== undefined && isModelProvider(provider) ? provider : DEFAULT_PROVIDER,
+    model: config.SERI_MODEL || DEFAULT_MODEL,
+    provider: configProvider && isModelProvider(configProvider) ? configProvider : DEFAULT_PROVIDER,
   };
 }
 

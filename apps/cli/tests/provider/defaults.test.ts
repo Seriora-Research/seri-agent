@@ -73,6 +73,22 @@ describe("resolveDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({ model: "env-model", provider: "anthropic" });
   });
 
+  // code-review finding on PR #71 (round 2): model and provider used to resolve independently,
+  // each with its own env-then-config lookup. A one-off env override of ONLY SERI_MODEL — the
+  // exact `SERI_MODEL=<id> seri "task"` workflow README.md documents — picked up a STALE
+  // persisted SERI_PROVIDER from an earlier /model pick, mixing a model id from one source with a
+  // provider from another. Whichever source supplies the model must also supply the provider:
+  // overriding only SERI_MODEL via env must fall back to DEFAULT_PROVIDER, not reach into
+  // config.json's persisted (and here, wrong) provider.
+  test("env overriding only SERI_MODEL ignores a stale persisted provider, not mixes it in", () => {
+    persistDefaultModel({ model: "claude-sonnet-4-5", provider: "anthropic" });
+    process.env.SERI_MODEL = "llama-3.3-70b-versatile";
+    expect(resolveDefaultModel()).toEqual({
+      model: "llama-3.3-70b-versatile",
+      provider: DEFAULT_PROVIDER,
+    });
+  });
+
   test("SERI_PROVIDER='' falls through to the config/default, the deliberate ||", () => {
     persistDefaultModel({ model: "picked-model", provider: "openrouter" });
     process.env.SERI_PROVIDER = "";
