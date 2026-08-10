@@ -5,22 +5,19 @@ import { getApiKey } from "../config/config";
 // No default for modelId, matching groq.ts: the caller (provider/model.ts) is the single
 // authority on what id to construct with.
 //
-// `compatibility: "strict"` and `usage: { include: true }` are OpenRouter's own documented pair
-// for usage accounting (https://openrouter.ai/docs/use-cases/usage-accounting) — confirmed against
-// the installed @openrouter/ai-sdk-provider@3.0.0's compiled source (dist/index.js), not just its
-// .d.ts: `strict` is what makes the provider send `stream_options.include_usage: true` on a
-// streaming request (dist/index.js:3888-3890); `usage.include` is a separate top-level `usage`
-// field OpenRouter itself reads to decide whether to attach `cost` to the response's usage object.
-// Kept even though a live check (2026-08-09, live API, gpt-oss-20b) found `providerMetadata
-// .openrouter.usage.cost` already populated with NEITHER setting present — this SDK version's
-// default "compatible" mode returned a full usage+cost object unprompted, contradicting the
-// "OpenRouter likely never returns cost without opting in" premise this was written to fix. Left in
-// anyway: it is still the officially documented way to REQUEST usage accounting rather than rely on
-// undocumented default behaviour that could change upstream, it costs nothing measured (same cost
-// data came back with both settings applied), and it is what a reader following OpenRouter's own
-// docs would expect to see here. Do not read the two `dist/index.js` line-number claims above as
-// "this is why cost was missing before" — that specific causal claim was not observed; only the
-// settings' own existence and effect on the outbound request body were confirmed.
+// `compatibility: "strict"`, not the package default ("compatible"): the installed
+// @openrouter/ai-sdk-provider@3.0.0's own settings doc says to use "strict" specifically when
+// talking to the OpenRouter API directly (as this file does) and "compatible" only when routing a
+// THIRD-PARTY provider's own OpenAI-compatible endpoint through it — seri is squarely the first
+// case. `usage: { include: true }`, the older explicit opt-in for usage accounting, is deliberately
+// NOT set here: PROMPT-ROUTING.md's own 7a research already found "OpenRouter returns usage.cost...
+// on every response, always, with no opt-in (the old usage: { include: true } parameter is
+// deprecated and inert)" — confirmed again directly against the live API (2026-08-09, gpt-oss-20b):
+// `providerMetadata.openrouter.usage.cost` came back populated with `compatibility: "strict"` alone,
+// and identically with `usage.include` also set, so adding it back would be speculative
+// configurability with a measured null effect, not a fix for anything. A prior round of this
+// feature (MEDIUM-1) assumed cost needed an explicit opt-in seri wasn't making; both the design doc
+// and a live check say that assumption was wrong for this SDK version, so it is not carried forward.
 export function getOpenRouterModel(modelId: string): LanguageModel {
   const apiKey = getApiKey("OPENROUTER_API_KEY");
   if (!apiKey) {
@@ -28,7 +25,5 @@ export function getOpenRouterModel(modelId: string): LanguageModel {
       "OPENROUTER_API_KEY is not set. Run: seri config set OPENROUTER_API_KEY <your-key>",
     );
   }
-  return createOpenRouter({ apiKey, compatibility: "strict" })(modelId, {
-    usage: { include: true },
-  });
+  return createOpenRouter({ apiKey, compatibility: "strict" })(modelId);
 }
