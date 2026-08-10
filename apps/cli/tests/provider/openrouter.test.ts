@@ -30,14 +30,14 @@ afterEach(() => {
 
 describe("getOpenRouterModel", () => {
   test("throws a clear error when OPENROUTER_API_KEY is unset", () => {
-    expect(() => getOpenRouterModel("openai/gpt-oss-120b")).toThrow(
+    expect(() => getOpenRouterModel("openai/gpt-oss-120b", "test-session-id")).toThrow(
       "OPENROUTER_API_KEY is not set. Run: seri config set OPENROUTER_API_KEY <your-key>",
     );
   });
 
   test("returns a model object without a network call when OPENROUTER_API_KEY is set", () => {
     process.env.OPENROUTER_API_KEY = "fake-test-key";
-    const model = getOpenRouterModel("openai/gpt-oss-120b");
+    const model = getOpenRouterModel("openai/gpt-oss-120b", "test-session-id");
     expect(model).toBeDefined();
   });
 });
