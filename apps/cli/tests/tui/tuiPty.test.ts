@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -145,6 +145,11 @@ function childScriptRejects(dir: string): string {
 // exiting after the first turn or a second turn starting from a fresh/stale message list.
 function childScriptMultiTurn(dir: string): string {
   return [
+    // HOME redirection (D9's own reasoning): this script never touches /model, so nothing here
+    // should EVER write config.json — but the sibling test below needs to check the real
+    // location that write would land at, and a bare, unredirected check would either be
+    // meaningless or, if the guard were ever broken, land on the developer's real ~/.seri.
+    `process.env.HOME = ${JSON.stringify(dir)};`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `let calls = 0;`,
@@ -179,6 +184,10 @@ function childScriptMultiTurn(dir: string): string {
 // against.
 function childScriptModelSwitch(dir: string): string {
   return [
+    // D9: without this, a successful /model pick (this script's own point) calls
+    // setConfigValue, whose default configDir is process.env.HOME || homedir() — unredirected,
+    // that would rewrite the developer's REAL ~/.seri/config.json on every test run.
+    `process.env.HOME = ${JSON.stringify(dir)};`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
     `const cli = await import(${JSON.stringify(CLI)});`,
@@ -214,6 +223,9 @@ function childScriptModelSwitch(dir: string): string {
 function childScriptModelSwitchFailure(dir: string): string {
   const sessionsDir = join(dir, "sessions");
   return [
+    // D9: same HOME redirection as childScriptModelSwitch's own comment — mandatory before
+    // anything else runs, so a stray persist here could never reach the developer's real config.
+    `process.env.HOME = ${JSON.stringify(dir)};`,
     `import { readdirSync, readFileSync } from "node:fs";`,
     `import { join } from "node:path";`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -756,6 +768,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // without waiting first can race it on a slow/loaded runner.
       await sawLineTimes("> a second task", 1);
       expect(occurrences("> a second task")).toBe(1);
+
+      // Scenario c at the TUI level (feature-plan.md): a session that never invokes /model must
+      // never persist anything to config.json, even after multiple successful turns — the guard
+      // against write-amplification/accidentally-always-persisting. Waiting for turn 2's own
+      // "done" first is what makes this meaningful: it is only dispatched after turn 2's
+      // messages-updated has already been processed (the same ordering childScriptModelSwitch's
+      // own test relies on), so any persist that WOULD have fired already has by this point.
+      await sawLineTimes("(done: no-tool-call)", 2);
+      expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
     } finally {
       child.kill("SIGKILL");
     }
@@ -771,7 +792,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-switch.mjs");
     writeFileSync(scriptPath, childScriptModelSwitch(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
     try {
       // The default model (groq.ts's own DEFAULT_MODEL) — proves the FIRST turn used it, before
       // any switch.
@@ -814,6 +835,18 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine(
         "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 systemHasModelId=true",
       );
+
+      // Scenarios a + e (feature-plan.md): the switch that just worked is now the global default
+      // for every future brand-new session, not just this one — proven here on the write side.
+      // Waiting for turn 2's own "done" first: it is only dispatched after turn 2's
+      // messages-updated has already been processed by cli.ts's onEvent, which is where the
+      // persist (if any) happens, so by the time "done" appears the write is already on disk.
+      await sawLineTimes("(done: no-tool-call)", 2);
+      const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+      expect(config.SERI_MODEL).toBe("llama-3.3-70b-versatile");
+      expect(config.SERI_PROVIDER).toBe("groq");
+      // Negative control built in: the pre-switch model must not be the one that landed.
+      expect(config.SERI_MODEL).not.toBe("openai/gpt-oss-120b");
     } finally {
       child.kill("SIGKILL");
     }
@@ -851,6 +884,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // But the file on disk still names the model turn 1 actually completed with, not the one
       // turn 2 merely attempted and failed on.
       await sawLine("MODEL_ON_DISK_AFTER_FAILURE openai/gpt-oss-120b");
+
+      // Scenario d (feature-plan.md): the failed pick must not become the global default either.
+      // Turn 2 never emitted messages-updated at all (it failed straight to `error`), so cli.ts's
+      // persist call — gated on messages-updated — never ran for this switch; turn 1 didn't
+      // trigger it either, since it ran on the model the session already started on (no switch
+      // yet, so the inequality guard never fires). config.json is never written by this run at all.
+      expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
     } finally {
       child.kill("SIGKILL");
     }

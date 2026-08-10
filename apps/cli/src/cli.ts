@@ -53,6 +53,7 @@ import { permissionsCommand as permissionsCommandReal } from "./permissions/comm
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
+import { persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import { type getGroqModel as getGroqModelReal, resolveModelId } from "./provider/groq";
 import { getModel } from "./provider/model";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
@@ -385,6 +386,10 @@ function loadOrCreateSession(
     };
   }
 
+  // A brand-new session starts on whatever a previously successful `/model` pick persisted
+  // (resolveDefaultModel's own comment), falling back to DEFAULT_MODEL/"groq" the same way
+  // resolveModelId always has when nothing was ever picked.
+  const { model, provider } = resolveDefaultModel();
   return {
     session: {
       id: randomUUID(),
@@ -400,8 +405,8 @@ function loadOrCreateSession(
       // rejected every-call mode — permanent for write_file/edit since permanent-permissions-
       // allowlist, run-scoped for every other write tool the gate ever grows.
       permissionMode: "approve-each",
-      model: resolveModelId(),
-      provider: "groq",
+      model,
+      provider,
       messages: [],
     },
     modelRecorded: false,
@@ -1563,7 +1568,29 @@ async function runTui(
           // picker-driven one, is a no-op for the common case (same value already) and is what
           // makes a picker switch's FIRST successful turn confirm it, with no special-casing for
           // "was this turn a switch."
-          if (event.type === "messages-updated") confirmedModel = { model: modelId, provider };
+          //
+          // The inequality guard does three jobs at once: (1) it IS the "was this turn a switch?"
+          // detector — `confirmedModel` only ever moves through this one line, and the only thing
+          // that mutates session.model/.provider mid-run is the /model picker's
+          // model-picker-resolved merge; (2) `messages-updated` fires several times per turn
+          // (loop.ts's own multiple yield sites), so an unguarded write would be one config.json
+          // rewrite per tool call; (3) it is what keeps a user who never picks anything from ever
+          // getting DEFAULT_MODEL frozen into config.json, pinning them to today's default across a
+          // binary upgrade. The try/catch + printWarning mirrors onSessionChange's own pattern
+          // above: a config write failure (EACCES, ENOSPC, a read-only config dir) must degrade to
+          // a warning, never convert a turn that already succeeded into a failure.
+          if (
+            event.type === "messages-updated" &&
+            (confirmedModel.model !== modelId || confirmedModel.provider !== provider)
+          ) {
+            confirmedModel = { model: modelId, provider };
+            try {
+              persistDefaultModel(confirmedModel);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              printWarning(`could not save the default model: ${message}`);
+            }
+          }
         },
         getPermissionMode,
         () => {},
