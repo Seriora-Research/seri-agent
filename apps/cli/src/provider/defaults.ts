@@ -1,5 +1,5 @@
 import { CATALOG_PROVIDERS, type ModelProvider } from "@seri/model-catalog";
-import { getApiKey, setConfigValue } from "../config/config";
+import { getApiKey, setConfigValues } from "../config/config";
 import { resolveModelId } from "./groq";
 
 // Not in groq.ts: that file's DEFAULT_MODEL carries a groq-model-specific measurement comment
@@ -34,7 +34,11 @@ export function resolveDefaultModel(): { model: string; provider: ModelProvider 
   };
 }
 
+// One setConfigValues call, not two setConfigValue calls: SERI_MODEL and SERI_PROVIDER are a
+// pair — a process kill, or a write failure, between two independent writes would leave
+// config.json with the new model but the old provider (or vice versa), the same mismatch class
+// cli.ts's own legacy-resume backfill guards against on the read side. setConfigValues's own
+// comment has the mechanism (one loadConfig/writeConfig pair for both keys).
 export function persistDefaultModel(pick: { model: string; provider: ModelProvider }): void {
-  setConfigValue("SERI_MODEL", pick.model);
-  setConfigValue("SERI_PROVIDER", pick.provider);
+  setConfigValues({ SERI_MODEL: pick.model, SERI_PROVIDER: pick.provider });
 }

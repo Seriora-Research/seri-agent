@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CATALOG_PROVIDERS } from "@seri/model-catalog";
@@ -94,5 +94,24 @@ describe("persistDefaultModel", () => {
   test("writes both keys, readable back by a subsequent resolveDefaultModel", () => {
     persistDefaultModel({ model: "written-model", provider: "google" });
     expect(resolveDefaultModel()).toEqual({ model: "written-model", provider: "google" });
+  });
+
+  // code-review finding on PR #71: persistDefaultModel used to call setConfigValue twice — an
+  // interruption between the two (a process kill, or the second call throwing) could leave
+  // config.json with the new SERI_MODEL but the old SERI_PROVIDER, or vice versa. Now backed by
+  // setConfigValues's own single write (config.test.ts's own atomicity test covers that function
+  // directly) — this is the same proof at persistDefaultModel's own call site: sabotaging the one
+  // write leaves the PREVIOUSLY persisted pair completely unchanged, never a mismatched hybrid of
+  // the old and new picks.
+  test("a sabotaged persist leaves the previously persisted pair unchanged, not a mismatch", () => {
+    persistDefaultModel({ model: "first-model", provider: "openrouter" });
+
+    const configDir = join(tmpRoot, ".seri");
+    mkdirSync(configDir, { recursive: true });
+    mkdirSync(join(configDir, "config.json.tmp"));
+
+    expect(() => persistDefaultModel({ model: "second-model", provider: "anthropic" })).toThrow();
+
+    expect(resolveDefaultModel()).toEqual({ model: "first-model", provider: "openrouter" });
   });
 });

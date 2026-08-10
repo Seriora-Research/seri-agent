@@ -50,6 +50,23 @@ export function setConfigValue(
   writeConfig(config, configDir);
 }
 
+// A sibling of setConfigValue, not a replacement: that one keeps its exact existing
+// signature/behavior (seri config set and its own tests call it directly). This one exists for a
+// caller that needs several keys to land together — a single loadConfig/writeConfig pair, so
+// there is exactly one write-then-rename (writeConfig's own comment) for the whole batch, not one
+// per key. Two independent setConfigValue calls for a logically-paired update (code-review
+// finding: apps/cli/src/provider/defaults.ts's persistDefaultModel) can be interrupted between
+// them — a process kill, or the second call throwing (EACCES/ENOSPC/EISDIR) — leaving config.json
+// with only one of the two keys updated.
+export function setConfigValues(
+  entries: Record<string, string>,
+  configDir: string = getConfigDir(),
+): void {
+  const config = loadConfig(configDir);
+  Object.assign(config, entries);
+  writeConfig(config, configDir);
+}
+
 // Returns false when the key wasn't set, so callers can tell "removed" from "nothing to remove".
 export function unsetConfigValue(key: string, configDir: string = getConfigDir()): boolean {
   const config = loadConfig(configDir);
