@@ -19,14 +19,19 @@ type ModelDeps = {
 // instead of erroring. `session.ts`'s own `loadSession` is a bare `JSON.parse`, so nothing
 // upstream validates this either. A `switch` over the real `ModelProvider` union makes an
 // unrecognized value a thrown error naming the bad value, not a wrong provider silently called.
-export function getModel(id: string, provider: ModelProvider, deps: ModelDeps = {}): LanguageModel {
+export function getModel(
+  id: string,
+  provider: ModelProvider,
+  sessionId: string,
+  deps: ModelDeps = {},
+): LanguageModel {
   const getGroqModelFn = deps.getGroqModel ?? getGroqModelReal;
   const getOpenRouterModelFn = deps.getOpenRouterModel ?? getOpenRouterModelReal;
   switch (provider) {
     case "groq":
       return getGroqModelFn(id);
     case "openrouter":
-      return getOpenRouterModelFn(id);
+      return getOpenRouterModelFn(id, sessionId);
     default:
       // provider is `never` here if ModelProvider only ever has "groq"/"openrouter" — but this
       // value can also come from JSON.parse (session.ts), which no type system can guarantee.
