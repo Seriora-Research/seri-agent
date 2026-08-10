@@ -125,9 +125,21 @@ gets a real PowerShell; bash is opt-in via Git Bash detection). `edit` is a 3-ti
 match cascade (exact → line-trimmed → whitespace-normalized) with a
 disproportionate-match guard against replacing far more than was asked for.
 
-**Provider**: Vercel AI SDK, currently Groq only (`apps/cli/src/provider/groq.ts`,
-`openai/gpt-oss-120b` default, any Groq model id via `SERI_MODEL`; the measurement
-behind that default is in `docs/PROMPT-ROUTING.md`). API keys resolve from env var first, then
+**Provider**: Vercel AI SDK, two providers — Groq (`apps/cli/src/provider/groq.ts`,
+`openai/gpt-oss-120b` default, any Groq model id via `SERI_MODEL`; the measurement behind that
+default is in `docs/PROMPT-ROUTING.md`) and OpenRouter (`apps/cli/src/provider/openrouter.ts`,
+`compatibility: "strict"`). A new session starts on Groq; switching to OpenRouter, or to a
+different model on either provider, is the in-TUI `/model` picker (`apps/cli/src/tui/App.tsx`'s
+`ModelPicker`) — mid-session, context preserved, only written to disk once a turn on the new
+model actually succeeds (`apps/cli/src/cli.ts`'s "pin only what worked" invariant, applied to a
+live switch the same way `prepareSession` already applies it to session creation). Both
+providers' model metadata (context window, pricing, tool-call/reasoning support) comes from a
+models.dev-sourced catalog (`packages/model-catalog`, wrapped for the CLI in
+`apps/cli/src/provider/catalog.ts`), fetched live with a bundled fallback manifest
+(`catalog-manifest.json`) for a failed fetch or `SERI_DISABLE_MODELS_FETCH`. A run's dollar cost
+is reported with its provenance (`apps/cli/src/provider/cost.ts`'s `CostReport`) —
+provider-reported `actual` for OpenRouter, catalog-computed `estimated` for Groq, printed with a
+visibly different line for each. API keys resolve from env var first, then
 `~/.seri/config.json` — see
 `apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`. A non-default profile
 (`--profile <name>` or `SERI_PROFILE`, the flag wins) puts config.json, auth.json,
