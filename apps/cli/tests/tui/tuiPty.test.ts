@@ -811,7 +811,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // systemHasModelId=true proves the system prompt sent for THIS call names the NEW model
       // (llama-3.3-70b-versatile) — not the one the session started on — i.e. the identity line is
       // recomputed every driveLoop call rather than captured once at session start.
-      await sawLine("RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 systemHasModelId=true");
+      await sawLine(
+        "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 systemHasModelId=true",
+      );
     } finally {
       child.kill("SIGKILL");
     }
