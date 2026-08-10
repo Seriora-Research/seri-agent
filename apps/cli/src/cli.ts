@@ -22,6 +22,7 @@ import { projectRoot } from "./checkpoint/shadowGit";
 import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
   approvalPromptText,
+  printCost,
   printEvent,
   printGrantPersisted,
   printPreApproved,
@@ -46,6 +47,7 @@ import {
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
 import { getModelCatalog } from "./provider/catalog";
+import type { CostReport } from "./provider/cost";
 import { type getGroqModel as getGroqModelReal, resolveModelId } from "./provider/groq";
 import { getModel } from "./provider/model";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
@@ -944,10 +946,25 @@ function addTokens(total: number | undefined, reported: number | undefined): num
   return reported === undefined ? total : (total ?? 0) + reported;
 }
 
+// Same "sum what showed up" rule as addTokens, extended to a CostReport: the dollar amount sums
+// like a token count (addTokens handles that half directly), but status/source are provenance
+// tags, not numbers, so there is nothing to sum them into — the most recent report's tags win,
+// which is right for the overwhelming common case (one report) and no worse than "some number" for
+// a multi-turn TUI session that switched models mid-way (B4/M-2's own model-switch reasoning
+// doesn't apply here: this is a display total, not a persisted fact).
+function addCost(total: CostReport | undefined, next: CostReport | undefined): CostReport | undefined {
+  if (next === undefined) return total;
+  if (total === undefined) return next;
+  return { amountUsd: addTokens(total.amountUsd, next.amountUsd), status: next.status, source: next.source };
+}
+
 type DriveLoopResult = {
   doneReason: DoneReason | undefined;
   cancelledBy: NodeJS.Signals | undefined;
   usage: RunUsage;
+  // Same shape as `usage`: summed across every `usage` event this call's runLoopFn yielded, via
+  // addCost above. undefined when the run never got as far as a completed model call.
+  cost: CostReport | undefined;
   // The one fact `run()`'s exit code actually needs, not the two inputs it would otherwise have
   // to reassemble itself: "refused at least once AND executed nothing at all" — see the tracking
   // below for what each half means and why.
@@ -1006,7 +1023,8 @@ async function driveLoop(
   persist: (session: SessionState<ModelMessage>) => void,
   approvalPrompt: ApprovalPrompt,
 ): Promise<DriveLoopResult> {
-  const { session, storeDir, tools, model, worktree, allowedTools, contextWindowSize } = prepared;
+  const { session, storeDir, tools, model, worktree, allowedTools, catalog, contextWindowSize } =
+    prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
@@ -1023,6 +1041,7 @@ async function driveLoop(
 
   let doneReason: DoneReason | undefined;
   const usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
+  let cost: CostReport | undefined;
   // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
   // what an exit code promises a shell, which is this consumer's business, not the loop's.
   // `permission-denied` fires on two different facts carried in its `reason` — "blocked" is a
@@ -1055,6 +1074,15 @@ async function driveLoop(
       system: session.systemPrompt,
       signal: controller.signal,
       maxIterations: maxTurns,
+      // HIGH-1: without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`
+      // / `opts.provider === "groq" && opts.modelId && opts.catalog`) never fires and every `usage`
+      // event's `cost` field is silently undefined — the run genuinely never computes a cost, no
+      // matter what cost.ts itself does. `session.provider ?? "groq"` matches loadOrCreateSession's
+      // own backfill (an absent provider means "groq", the only one that existed before this field
+      // did); `session.model` is the model this call is actually being made against.
+      provider: session.provider ?? "groq",
+      modelId: session.model,
+      catalog,
       // The catalog's own contextWindow for whatever model this turn is actually calling — a
       // /model switch to a provider/model with a different limit must change compaction's own
       // math, not just which endpoint gets called (PreparedRun.contextWindowSize's own comment).
@@ -1102,6 +1130,10 @@ async function driveLoop(
         usage.inputTokens = addTokens(usage.inputTokens, event.usage.inputTokens);
         usage.outputTokens = addTokens(usage.outputTokens, event.usage.outputTokens);
       }
+      // `compacted` has no `cost` of its own (the summariser's own round-trip is billed the same
+      // as any other call, but loop.ts does not price it — see loop.ts's own `usage` event comment
+      // for the token half of the same asymmetry) — only `usage` carries one.
+      if (event.type === "usage") cost = addCost(cost, event.cost);
       if (event.type === "done") doneReason = event.reason;
       onEvent(event);
       // After the dispatch above, not before: these are two lines of one message and the
@@ -1129,7 +1161,7 @@ async function driveLoop(
     unregisterCancel();
   }
 
-  return { doneReason, cancelledBy, usage, refusedWithoutRunning: hadDenial && !ranTool };
+  return { doneReason, cancelledBy, usage, cost, refusedWithoutRunning: hadDenial && !ranTool };
 }
 
 // A plain default-flush transcript-append, shared by tuiPresenter's own `append` below and
@@ -1257,6 +1289,7 @@ async function runTui(
   // they drive (run()'s own logic, unchanged) is about the LAST turn's outcome, the same as it
   // always answered "did the run just now finish, and how."
   let usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
+  let cost: CostReport | undefined;
   let doneReason: DoneReason | undefined;
   let refusedWithoutRunning = false;
 
@@ -1454,6 +1487,7 @@ async function runTui(
         inputTokens: addTokens(usage.inputTokens, result.usage.inputTokens),
         outputTokens: addTokens(usage.outputTokens, result.usage.outputTokens),
       };
+      cost = addCost(cost, result.cost);
       doneReason = result.doneReason;
       refusedWithoutRunning = result.refusedWithoutRunning;
       // LOW-J: `result.cancelledBy` is deliberately not read here. The TUI never re-raises a
@@ -1532,7 +1566,7 @@ async function runTui(
         }),
       );
       void instance.waitUntilExit().then(() => {
-        resolveRunTui({ doneReason, cancelledBy: undefined, usage, refusedWithoutRunning });
+        resolveRunTui({ doneReason, cancelledBy: undefined, usage, cost, refusedWithoutRunning });
       });
     };
     if (turnInFlight) {
@@ -1771,7 +1805,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // CliDeps.isTTY's own comment for why this reads `deps.isTTY`, never process.stdout.isTTY
   // directly.
   const isTTY = deps.isTTY ?? false;
-  const { doneReason, cancelledBy, usage, refusedWithoutRunning } = isTTY
+  const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning } = isTTY
     ? await runTui(prepared, ctx, deps, maxTurns, skipPermissions)
     : await driveLoop(
         prepared,
@@ -1794,6 +1828,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // one exit this does not cover is a throw escaping driveLoop's `for await` (approvalPrompt
   // rejecting), which already skips the exit code below too.
   printUsage(usage);
+  // Same guard printUsage's own callers get for free (a run that never called anything has
+  // nothing to report): `cost` stays undefined until the first `usage` event carries one, which
+  // only happens once opts.provider/modelId/catalog reach loop.ts at all (driveLoop's own runLoopFn
+  // call, above) — HIGH-1's fix. `printCost` itself handles a report whose `amountUsd` came back
+  // undefined (an id absent from the catalog, an OpenRouter response with no cost data).
+  if (cost !== undefined) printCost(cost);
 
   // The turn was cancelled, so the process still dies the way Ctrl-C makes a process die. Not
   // process.exit: a status is not a death by signal, and `for f in a b c; do seri "$f"; done` only
