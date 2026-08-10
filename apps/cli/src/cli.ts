@@ -9,7 +9,7 @@ import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
-import { buildSystemPrompt } from "./agents/systemPrompt";
+import { buildSystemPrompt, buildVolatileTier } from "./agents/systemPrompt";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
 import { getWorkosClientId } from "./auth/deviceFlow";
 import {
@@ -1093,7 +1093,12 @@ async function driveLoop(
       // below.
       allowedTools,
       approvalPrompt,
-      system: session.systemPrompt,
+      // Recomputed every driveLoop call (once per TUI turn, once per non-interactive process), from
+      // the session's current model/provider — never captured once at session start, so a live
+      // /model switch is reflected on the very next turn instead of confabulated.
+      system: [session.systemPrompt, buildVolatileTier(session.model, session.provider, catalog)]
+        .filter(Boolean)
+        .join("\n\n"),
       signal: controller.signal,
       maxIterations: maxTurns,
       // HIGH-1: without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`
