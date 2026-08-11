@@ -2260,7 +2260,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-env-shadow-removable.mjs");
       writeFileSync(scriptPath, childScriptSetupEnvShadow(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2269,7 +2269,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await wait100ms();
         await sawLine("/setup — provider API keys");
-        await sawLine("set by $OPENAI_API_KEY in your environment");
+        // Item #5 (round 3): the row's OWN text distinguishes this removable case from the
+        // sibling test's non-removable one — not the old "unset it in your shell" text (which
+        // would be actively wrong here: 'r' genuinely removes the config.json entry underneath).
+        await sawLine("config entry underneath — removable");
+        expect(occurrences("set by $OPENAI_API_KEY in your environment")).toBe(0);
 
         // Down to openrouter, anthropic, openai — three Downs (groq=0, openrouter=1,
         // anthropic=2, openai=3).

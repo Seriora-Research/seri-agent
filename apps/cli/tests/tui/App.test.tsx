@@ -4,7 +4,13 @@ import type { ModelMessage } from "ai";
 import { render } from "ink-testing-library";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { SessionState } from "../../src/session/session";
-import { App, formatContextWindow, formatCost, formatModelRow } from "../../src/tui/App";
+import {
+  App,
+  formatContextWindow,
+  formatCost,
+  formatModelRow,
+  formatSetupRow,
+} from "../../src/tui/App";
 import type { ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import type { TuiAction } from "../../src/tui/reducer";
 
@@ -547,6 +553,48 @@ describe("App", () => {
         },
       ];
     }
+
+    // Code-review finding (PR #73, round 3, item #5): an env row is not always the non-removable
+    // case — `formatSetupRow` used to render the same "unset it in your shell" text for EVERY
+    // env-sourced row regardless of `removable`, telling a user with a real, removable config.json
+    // entry underneath that removal was impossible when it was not.
+    describe("formatSetupRow", () => {
+      function row(overrides: Partial<SetupProviderRow> = {}): SetupProviderRow {
+        return {
+          provider: "anthropic",
+          keyName: "ANTHROPIC_API_KEY",
+          source: "unset",
+          masked: undefined,
+          removable: false,
+          ...overrides,
+        };
+      }
+
+      test("unset: just the provider name and 'not set'", () => {
+        expect(formatSetupRow(row())).toContain("not set");
+      });
+
+      test("config: the masked value, labeled (config)", () => {
+        const text = formatSetupRow(row({ source: "config", masked: "sk-a...wxyz" }));
+        expect(text).toContain("anthropic");
+        expect(text).toContain("sk-a...wxyz (config)");
+      });
+
+      test("env, not removable: the disabled-remove reason, not a masked value", () => {
+        const text = formatSetupRow(row({ source: "env", masked: "sk-a...wxyz", removable: false }));
+        expect(text).toContain("set by $ANTHROPIC_API_KEY in your environment");
+        expect(text).toContain("unset it in your shell");
+        expect(text).not.toContain("sk-a...wxyz");
+      });
+
+      // The fix itself: env AND removable must say removal is possible, not the disabled reason.
+      test("env, removable: says a config.json entry underneath is removable, not that removal is disabled", () => {
+        const text = formatSetupRow(row({ source: "env", masked: "sk-a...wxyz", removable: true }));
+        expect(text).not.toContain("unset it in your shell");
+        expect(text).toContain("removable");
+        expect(text).toContain("sk-a...wxyz");
+      });
+    });
 
     test("the list step shows all five provider rows, masked values included", async () => {
       const { instance, dispatch } = await connect();

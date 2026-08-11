@@ -401,12 +401,25 @@ function envShadowReason(keyName: string): string {
 }
 
 // One /setup list row's own text — masked value + source for a config/unset row, D8's own
-// disabled-remove reason for an env row (which is more useful there than a masked value nobody
-// can act on: the fix is in the shell, not in this panel).
-function formatSetupRow(row: SetupProviderRow): string {
+// disabled-remove reason for an env row with nothing removable underneath it (which is more
+// useful there than a masked value nobody can act on: the fix is in the shell, not in this
+// panel).
+//
+// Bug fixed here (code-review, PR #73, round 3, item #5): an env row is not always the
+// non-removable case — `row.removable` (providerKeyState's own `hasConfigEntry`) is true when a
+// config.json entry sits underneath the env var that's shadowing it, and pressing 'r'/Delete on
+// that row genuinely removes it. `envShadowReason`'s "unset it in your shell" text used to render
+// unconditionally for EVERY env row, telling a user with a real, removable entry that removal was
+// impossible when it was not — commands.ts's own comment on `decideSetupOpen` already claimed
+// "the panel states why, for the env case," which was false for exactly this state until now.
+export function formatSetupRow(row: SetupProviderRow): string {
   const name = truncatePad(row.provider, PROVIDER_WIDTH);
   if (row.source === "unset") return `${name} not set`;
-  if (row.source === "env") return `${name} ${envShadowReason(row.keyName)}`;
+  if (row.source === "env") {
+    return row.removable
+      ? `${name} ${row.masked} (env, config entry underneath — removable)`
+      : `${name} ${envShadowReason(row.keyName)}`;
+  }
   return `${name} ${row.masked} (config)`;
 }
 
