@@ -61,13 +61,15 @@ export function decideModeCycle(session: SessionState<ModelMessage>): {
 }
 
 // A single picker row: the catalog entry itself, whether ITS OWN provider currently has a key
-// (App.tsx's own "your key"/"no key" column), and how many OTHER routes reach the same logical
-// model (routes.ts's routeKey — the D1 grouping) so the row can say "+N routes" instead of leaving
-// the alternatives scattered elsewhere in a flat list.
+// (App.tsx's own "your key"/"no key" column), how many OTHER routes reach the same logical model
+// (routes.ts's routeKey — the D1 grouping) so a keyed row can say "+N routes" instead of leaving
+// the alternatives scattered elsewhere in a flat list, and — when this row has no key of its own —
+// which specific sibling provider `resolveRoute` would actually send it to, if any.
 export type ModelPickerEntry = {
   entry: ModelCatalogEntry;
   keyConfigured: boolean;
   alternatives: number;
+  rerouteTo?: ModelProvider;
 };
 
 // The decision half of /model, mirroring decideModeCycle's own pure, no-I/O shape: what to show,
@@ -92,10 +94,21 @@ export function decideModelPickerOpen(
   for (const group of groups.values()) {
     const ordered = [...group].sort(byRoutePriority);
     for (const entry of ordered) {
+      const keyConfigured = configured.has(entry.provider);
+      // Same candidate `ordered` already provides, in the same priority order `resolveRoute`
+      // (provider/routing.ts) sorts its own candidates into — so the first configured sibling
+      // found here is byte-for-byte the provider a reroute would actually choose, not a
+      // re-derived guess that could drift from it. `undefined` for a row that has its own key
+      // (nothing to reroute to) or whose siblings are all keyless too (nowhere to send it).
+      const rerouteTo = keyConfigured
+        ? undefined
+        : ordered.find((candidate) => candidate !== entry && configured.has(candidate.provider))
+            ?.provider;
       rows.push({
         entry,
-        keyConfigured: configured.has(entry.provider),
+        keyConfigured,
         alternatives: group.length - 1,
+        rerouteTo,
       });
     }
   }
