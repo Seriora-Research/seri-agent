@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
-import { buildRoleToolSet, DISPATCHABLE_ROLES, roleAddendum } from "../../src/subagents/roles";
+import {
+  buildRoleToolSet,
+  DISPATCHABLE_ROLES,
+  roleAddendum,
+  roleMutatesFilesystem,
+} from "../../src/subagents/roles";
 
 describe("buildRoleToolSet", () => {
   test("explore and plan are both exactly read_file/grep/glob, and identical to each other", () => {
@@ -50,5 +55,20 @@ describe("roleAddendum", () => {
   test("plan is never told to write; test is never told to fix", () => {
     expect(roleAddendum("plan")).toMatch(/cannot write/i);
     expect(roleAddendum("test")).toMatch(/cannot fix/i);
+  });
+});
+
+describe("roleMutatesFilesystem", () => {
+  // The predicate dispatch.ts keys both its pre-dispatch checkpoint and its writer-serialization
+  // on: explore/plan hold no tool in FS_MUTATING_TOOL_NAMES, code/test both do (test via
+  // bash/powershell, not write_file) and must be treated the same way as a result.
+  test("explore and plan do not mutate the filesystem", () => {
+    expect(roleMutatesFilesystem("explore")).toBe(false);
+    expect(roleMutatesFilesystem("plan")).toBe(false);
+  });
+
+  test("code and test both mutate the filesystem", () => {
+    expect(roleMutatesFilesystem("code")).toBe(true);
+    expect(roleMutatesFilesystem("test")).toBe(true);
   });
 });

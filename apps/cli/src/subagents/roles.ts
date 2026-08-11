@@ -1,5 +1,10 @@
 import type { ToolSet } from "ai";
-import { READ_ONLY_TOOL_NAMES, type ToolName, toolDefinitions } from "../provider/tools";
+import {
+  FS_MUTATING_TOOL_NAMES,
+  READ_ONLY_TOOL_NAMES,
+  type ToolName,
+  toolDefinitions,
+} from "../provider/tools";
 
 export type SubagentRole = "explore" | "plan" | "code" | "test";
 
@@ -27,6 +32,15 @@ export function buildRoleToolSet(role: SubagentRole): ToolSet {
   return Object.fromEntries(
     ROLE_TOOL_NAMES[role].map((name) => [name, toolDefinitions[name]]),
   ) as ToolSet;
+}
+
+// A role needs the pre-dispatch checkpoint and gets serialized against every other mutating-tool
+// role if it holds ANY tool in FS_MUTATING_TOOL_NAMES — derived from the role's own grant, not a
+// role-name list, so a future role gaining bash does not silently skip either guard.
+export function roleMutatesFilesystem(role: SubagentRole): boolean {
+  return ROLE_TOOL_NAMES[role].some((name) =>
+    (FS_MUTATING_TOOL_NAMES as readonly string[]).includes(name),
+  );
 }
 
 const ROLE_JOB: Record<SubagentRole, string> = {

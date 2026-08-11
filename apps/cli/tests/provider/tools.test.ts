@@ -138,7 +138,10 @@ describe("FS_MUTATING_TOOL_NAMES", () => {
 
 describe("READ_ONLY_TOOL_NAMES", () => {
   test("is exactly read_file/grep/glob", () => {
-    expect(READ_ONLY_TOOL_NAMES.sort()).toEqual(["glob", "grep", "read_file"]);
+    // Sorted on a copy: READ_ONLY_TOOL_NAMES is `readonly` in production and shared by reference
+    // into roles.ts's explore/plan tool lists — sorting it in place here would mutate a value the
+    // rest of this test process still reads.
+    expect([...READ_ONLY_TOOL_NAMES].sort()).toEqual(["glob", "grep", "read_file"]);
   });
 
   test("shares no member with WRITE_TOOL_NAMES", () => {

@@ -59,7 +59,7 @@ describe("toolResultLine", () => {
       type: "tool-result",
       name: "dispatch_subagents",
       result: {
-        results: [{}, {}],
+        results: [{ doneReason: "no-tool-call" }, { doneReason: "no-tool-call" }],
         totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       },
     });
@@ -70,8 +70,22 @@ describe("toolResultLine", () => {
     const line = toolResultLine({
       type: "tool-result",
       name: "dispatch_subagents",
-      result: { results: [{}], totalUsage: {} },
+      result: { results: [{ doneReason: "no-tool-call" }], totalUsage: {} },
     });
     expect(line).toBe("✓ dispatch_subagents done (1 task)");
+  });
+
+  // A row with doneReason undefined never ran (batch-cap overflow, or a row this test itself just
+  // stands in for) — the count must say so instead of claiming every task ran.
+  test("dispatch_subagents renders N of M when some rows never ran", () => {
+    const line = toolResultLine({
+      type: "tool-result",
+      name: "dispatch_subagents",
+      result: {
+        results: [{ doneReason: "no-tool-call" }, { doneReason: undefined }],
+        totalUsage: {},
+      },
+    });
+    expect(line).toBe("✓ dispatch_subagents done (1 of 2 tasks)");
   });
 });

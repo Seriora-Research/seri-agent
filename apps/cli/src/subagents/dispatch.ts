@@ -1,22 +1,20 @@
-import { resolve } from "node:path";
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
-import type {
-  LanguageModel,
-  LanguageModelUsage,
-  ModelMessage,
-  ToolExecutionOptions,
-  ToolSet,
-} from "ai";
+import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "ai";
 import { tool } from "ai";
 import { z } from "zod";
 import { joinTiers } from "../agents/systemPrompt";
-import { foldsCase } from "../caseFold";
 import type { MutationContext, OnBeforeMutation } from "../checkpoint/wrapTools";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent, runLoop } from "../loop/loop";
 import type { CostReport } from "../provider/cost";
 import { DISPATCH_TOOL_NAME } from "../provider/tools";
-import { buildRoleToolSet, DISPATCHABLE_ROLES, roleAddendum, type SubagentRole } from "./roles";
+import {
+  buildRoleToolSet,
+  DISPATCHABLE_ROLES,
+  roleAddendum,
+  roleMutatesFilesystem,
+  type SubagentRole,
+} from "./roles";
 
 // Hermes' own parallel-batch cap (research-spec.md's Sources) — tasks past this per dispatch_subagents
 // call are returned as not-run rows instead of being run, so the model can re-dispatch the rest.
@@ -39,6 +37,9 @@ export type SubagentResult = SubagentTask & {
   summary: string;
   usage: SubagentUsage;
   toolCallsMade: number;
+  // undefined for a row that never ran (the batch-cap overflow rows below) — output.ts's own
+  // renderer uses this to tell "ran" apart from "not run" without a second flag.
+  doneReason: DoneReason | undefined;
 };
 
 export type DispatchResult = { results: SubagentResult[]; totalUsage: SubagentUsage };
@@ -77,19 +78,27 @@ function sumUsage(a: SubagentUsage, b: SubagentUsage): SubagentUsage {
   };
 }
 
+// doneReason === "repeated-denials" is never checked here: children never receive an
+// approvalPrompt (SubagentRuntime has none — the plan's own §5), so decidePermission (loop.ts) can
+// only ever return "deny-blocked" for a child, never "deny-declined", and consecutiveDenials only
+// counts the latter. deniedCount below is the real, role-agnostic signal — it counts every
+// permission-denied event a child got (blocked or declined), not a canned "code"-only string that
+// was wrong for a denied "test" subagent, and it fires whether or not the child also hit the
+// iteration cap afterward, which is the more informative of the two facts to report.
 function fallbackSummary(
   doneReason: DoneReason | undefined,
   lastError: string | undefined,
+  deniedCount: number,
   mode: PermissionMode,
 ): string {
   if (doneReason === "aborted") return "cancelled before it produced a summary";
-  if (doneReason === "max-iterations") return "stopped at the iteration cap without a summary";
-  if (doneReason === "repeated-denials") {
+  if (deniedCount > 0) {
     return (
-      `its tool calls were not permitted (permission mode: ${mode}) — a "code" subagent can only ` +
-      `write in auto mode or for a tool already granted before this dispatch call`
+      `its tool calls were not permitted (permission mode: "${mode}", ${deniedCount} denied) — ` +
+      `it can only write in auto mode or for a tool already granted before this dispatch call`
     );
   }
+  if (doneReason === "max-iterations") return "stopped at the iteration cap without a summary";
   return lastError ?? "produced no summary";
 }
 
@@ -102,10 +111,6 @@ export async function runSubagent(opts: {
   messages: ModelMessage[];
   runtime: SubagentRuntime;
   signal?: AbortSignal;
-  // Checked after every event; returning true breaks the `for await`, which calls the generator's
-  // own `return()` and abandons the child — the only mechanism used to stop one child mid-flight
-  // without a second AbortController (dispatch_subagents' writer-overlap serialization uses this).
-  stop?: () => boolean;
 }): Promise<{
   summary: string;
   usage: SubagentUsage;
@@ -119,6 +124,7 @@ export async function runSubagent(opts: {
   let usage: SubagentUsage = {};
   let doneReason: DoneReason | undefined;
   let lastError: string | undefined;
+  let deniedCount = 0;
 
   for await (const event of runtime.runLoop({
     model: runtime.model,
@@ -140,74 +146,34 @@ export async function runSubagent(opts: {
       // Intermediate narration before a tool call is not the deliverable.
       segment = "";
       toolCallsMade++;
-    } else if (event.type === "usage") {
+    } else if (event.type === "usage" || event.type === "compacted") {
+      // The child's own compaction round-trip is billed like any other call and would otherwise
+      // vanish from its usage total — the same asymmetry cli.ts's driveLoop already fixed for the
+      // parent (see that file's own "compacted alongside usage" comment).
       usage = sumUsage(usage, {
         inputTokens: event.usage.inputTokens,
         outputTokens: event.usage.outputTokens,
         totalTokens: event.usage.totalTokens,
       });
-      runtime.onChildUsage?.(event.usage, event.cost);
+      // `compacted` carries no `cost` of its own (cli.ts's own comment says why), so onChildUsage
+      // — which forwards cost alongside tokens — only fires for a real `usage` event.
+      if (event.type === "usage") runtime.onChildUsage?.(event.usage, event.cost);
+    } else if (event.type === "permission-denied") {
+      deniedCount++;
     } else if (event.type === "error") {
       lastError = event.error;
     } else if (event.type === "done") {
       doneReason = event.reason;
     }
-    if (opts.stop?.() === true) break;
   }
 
   const summary = segment.trim();
   return {
-    summary: summary.length > 0 ? summary : fallbackSummary(doneReason, lastError, mode),
+    summary:
+      summary.length > 0 ? summary : fallbackSummary(doneReason, lastError, deniedCount, mode),
     usage,
     toolCallsMade,
     doneReason,
-  };
-}
-
-// Resolved+case-folded per caseFold.ts's own foldsCase, the same normalization
-// permissions/store.ts's projectKey uses, so `SRC/a.ts` and `src/a.ts` are one file on
-// Windows/macOS and two on Linux.
-function pathKey(path: string): string {
-  const resolved = resolve(path);
-  return foldsCase() ? resolved.toLowerCase() : resolved;
-}
-
-// Wraps only write_file (spread-and-replace, checkpoint/wrapTools.ts's own shape) on a `code`
-// child's ToolSet with a claim check that runs before the real execute. `edit` writes nothing
-// (provider/tools.ts's FS_MUTATING_TOOL_NAMES comment) and a path inside a bash/powershell command
-// is unrecoverable without parsing shell — the same knowingly-partial scope verify/wrapTools.ts and
-// checkpoint.ts already accept.
-function wrapWriteFile(
-  tools: ToolSet,
-  myIndex: number,
-  claims: Map<string, number>,
-  running: ReadonlySet<number>,
-  conflicts: Map<number, string>,
-): ToolSet {
-  const definition = tools.write_file;
-  if (!definition?.execute) return tools;
-  const execute = definition.execute;
-  return {
-    ...tools,
-    write_file: {
-      ...definition,
-      execute: (args: unknown, options: ToolExecutionOptions<Record<string, unknown>>) => {
-        const path = (args as { path: string }).path;
-        const key = pathKey(path);
-        const owner = claims.get(key);
-        // A claim held by a task that has already finished does not block: the file is stable and
-        // this write is a legitimate sequential one, not a collision.
-        if (owner !== undefined && owner !== myIndex && running.has(owner)) {
-          conflicts.set(myIndex, path);
-          throw new Error(
-            `another subagent is writing ${path} in this same dispatch; this subagent was stopped ` +
-              `and will be re-run after it finishes`,
-          );
-        }
-        claims.set(key, myIndex);
-        return execute(args, options);
-      },
-    },
   };
 }
 
@@ -238,8 +204,11 @@ export function createDispatchTool(runtime: SubagentRuntime) {
       // One parent-anchored snapshot before any child runs, not one per child write: a per-child
       // withCheckpoints would append a child-derived rewindTo to the PARENT session's rewind log
       // (checkpoint.ts's newestDistinct), corrupting /rewind. The anchor is the parent's own
-      // message array, which is why this call sits here instead of inside a child.
-      if (runnable.some((task) => task.role === "code") && runtime.checkpointer) {
+      // message array, which is why this call sits here instead of inside a child. Keyed on the
+      // same predicate the serialization below uses (roleMutatesFilesystem), not on `role ===
+      // "code"`: a `test`-only batch holds bash/powershell (both in FS_MUTATING_TOOL_NAMES) and
+      // needs the same snapshot, or its shell writes have zero /undo coverage.
+      if (runnable.some((task) => roleMutatesFilesystem(task.role)) && runtime.checkpointer) {
         const context: MutationContext = {
           tool: DISPATCH_TOOL_NAME,
           toolCallId: options.toolCallId,
@@ -249,69 +218,60 @@ export function createDispatchTool(runtime: SubagentRuntime) {
         runtime.checkpointer(context);
       }
 
-      const claims = new Map<string, number>();
-      const running = new Set<number>();
-      const conflicts = new Map<number, string>();
-
-      async function runOne(task: SubagentTask, index: number) {
-        running.add(index);
-        try {
-          const roleTools = buildRoleToolSet(task.role);
-          const childTools =
-            task.role === "code"
-              ? wrapWriteFile(roleTools, index, claims, running, conflicts)
-              : roleTools;
-          return await runSubagent({
-            tools: childTools,
-            system: joinTiers(runtime.system, roleAddendum(task.role)),
-            messages: [{ role: "user", content: task.goal }],
-            runtime,
-            signal: options.abortSignal,
-            stop: () => conflicts.has(index),
-          });
-        } finally {
-          running.delete(index);
-        }
+      function runOne(task: SubagentTask) {
+        return runSubagent({
+          tools: buildRoleToolSet(task.role),
+          system: joinTiers(runtime.system, roleAddendum(task.role)),
+          messages: [{ role: "user", content: task.goal }],
+          runtime,
+          signal: options.abortSignal,
+        });
       }
 
-      const firstWave = await Promise.all(runnable.map((task, index) => runOne(task, index)));
+      // Readers (explore/plan) run concurrently with each other and with the writer chain below —
+      // this is the fan-out the stage exists for. Writers (any role holding a mutating tool: code,
+      // test) run one at a time, in call order: one filesystem, one writer at a time. This is what
+      // makes a `code` child's write through bash/powershell safe by construction, not by tracking
+      // which path a call touched — no per-path check could see through an arbitrary shell command
+      // anyway. Trade-off, accepted deliberately: two `code` tasks writing to different paths no
+      // longer run concurrently either; the prior per-path mechanism's own remedy for the one case
+      // it caught was discarding a full child run, which was already a bad trade.
+      const settled: Awaited<ReturnType<typeof runOne>>[] = new Array(runnable.length);
+      const readerIdx = runnable
+        .map((_, i) => i)
+        .filter((i) => !roleMutatesFilesystem(runnable[i].role));
+      const writerIdx = runnable
+        .map((_, i) => i)
+        .filter((i) => roleMutatesFilesystem(runnable[i].role));
+      await Promise.all([
+        ...readerIdx.map(async (i) => {
+          settled[i] = await runOne(runnable[i]);
+        }),
+        (async () => {
+          for (const i of writerIdx) settled[i] = await runOne(runnable[i]);
+        })(),
+      ]);
+
       const results: SubagentResult[] = runnable.map((task, index) => ({
         role: task.role,
         goal: task.goal,
-        summary: firstWave[index].summary,
-        usage: firstWave[index].usage,
-        toolCallsMade: firstWave[index].toolCallsMade,
+        summary: settled[index].summary,
+        usage: settled[index].usage,
+        toolCallsMade: settled[index].toolCallsMade,
+        doneReason: settled[index].doneReason,
       }));
-
-      // Re-run each conflicted task sequentially, one at a time, after the first wave settles.
-      // From scratch, not resumed: the loser re-read_files after the winner's write, so its change
-      // applies on top instead of clobbering content it read before the winner wrote. Because
-      // re-runs are sequential and a finished task's claim never blocks, a re-run cannot conflict
-      // again — attempts are summed so the wasted first try still shows up in usage/toolCallsMade.
-      // Snapshotted before the loop: a defensive re-conflict during a retry would otherwise
-      // re-insert its index into `conflicts` and be picked up by a live iterator, retrying forever.
-      const conflictedIndices = [...conflicts.keys()];
-      for (const index of conflictedIndices) {
-        const task = runnable[index];
-        const previous = results[index];
-        conflicts.delete(index);
-        const attempt = await runOne(task, index);
-        results[index] = {
-          role: task.role,
-          goal: task.goal,
-          summary: attempt.summary,
-          usage: sumUsage(previous.usage, attempt.usage),
-          toolCallsMade: previous.toolCallsMade + attempt.toolCallsMade,
-        };
-      }
 
       for (const task of overflow) {
         results.push({
           role: task.role,
           goal: task.goal,
           summary: `not run: this dispatch already used its ${MAX_TASKS_PER_DISPATCH}-task limit; re-dispatch this task on its own`,
-          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          // {} not zeroed: addTokens' own contract (cli.ts) distinguishes "reported zero" from
+          // "never reported", and a row that never ran must stay in the second category or
+          // totalUsage on an all-overflow batch would read as a confident zero instead of unknown.
+          usage: {},
           toolCallsMade: 0,
+          doneReason: undefined,
         });
       }
 
