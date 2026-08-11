@@ -253,6 +253,43 @@ function childScriptModelMultiRoute(dir: string): string {
   ].join("\n");
 }
 
+// D4's own real surviving code path (feature-plan.md): D3's fix makes it structurally impossible
+// for a session that starts already-rerouted to ever persist on turn 1 (see childScriptReroute's
+// own test, above) — so the only place D4 ("persist the RESOLVED pair, not the one requested") can
+// still fire is a LIVE, mid-session /model pick whose own target then gets rerouted on the very
+// next turn. Turn 1 runs on the session's own starting pair (GROQ_API_KEY configured, no reroute).
+// Mid-session, the picker explicitly selects (claude-sonnet-5, openrouter) — OPENROUTER_API_KEY is
+// deliberately never set, and ANTHROPIC_API_KEY is, so resolveRoute reroutes turn 2 to the native
+// sibling instead.
+function childScriptModelPickRerouted(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.ANTHROPIC_API_KEY = "fake-test-key";`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " provider=" + opts.provider);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: (id) => ({ id }),`,
+    `  getAnthropicModel: (id) => ({ id }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // MEDIUM finding (code-review re-review on PR #71): loop.ts yields `messages-updated` once per
 // tool call within a SINGLE turn (its own multiple yield sites), not once per turn — so this
 // script's turn 2 yields it three times before `done`, simulating a turn with several tool calls,
@@ -1123,6 +1160,61 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
+  // D4's own real, still-reachable path — see childScriptModelPickRerouted's own comment for why
+  // this is the ONLY scenario left alive after D3's fix.
+  test("a live /model pick to a route that itself reroutes persists the RESOLVED provider, not the one literally picked (D4)", async () => {
+    const scriptPath = join(dir, "child-model-pick-rerouted.mjs");
+    writeFileSync(scriptPath, childScriptModelPickRerouted(dir));
+
+    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
+      await sawLine("(done: no-tool-call)");
+
+      // Turn 1 ran on the session's own starting pair (GROQ_API_KEY configured, no reroute) — the
+      // pre-condition this test needs: nothing persisted yet, so a later write is provably new.
+      expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      await sawLine("Route");
+
+      // Multi-term filtering (App.tsx's own matchesFilter, D1/D2 commit) narrows to EXACTLY the
+      // openrouter row: "claude-sonnet-5" matches both routes' own id, "openrouter" matches only
+      // this row's own provider field — sidesteps needing an arrow-key press to reach a specific
+      // row within a group, and picks the route that deliberately has NO key, which is the whole
+      // point of this test (proving the LATER reroute, not the literal pick, is what persists).
+      child.stdin?.write("claude-sonnet-5 openrouter");
+      await sawLine("claude-sonnet-5 openrouter");
+      child.stdin?.write("\r");
+      // The mandatory wait after a keypress that swaps the mounted component (picker -> input
+      // box) — childScriptModelSwitch's own test has the full measured story for this.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      // Rerouted: the picked provider (openrouter) has no key, but anthropic — claude-sonnet-5's
+      // native sibling — does, so resolveRoute reroutes turn 2 there (D2).
+      await sawLine("RUNLOOP_CALL 2 model=claude-sonnet-5 provider=anthropic");
+      await sawLineTimes("(done: no-tool-call)", 2);
+      // "(done: no-tool-call)" appearing in the captured pty stdout is not a reliable proxy for
+      // "config.json has already been written" — measured live, waiting on it alone flaked here.
+      // Poll for the file itself instead (waitForFile's own comment).
+      await waitForFile(join(dir, ".seri", "config.json"));
+
+      const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+      expect(config.SERI_MODEL).toBe("claude-sonnet-5");
+      // D4: the RESOLVED pair persists, not the one literally selected in the picker.
+      expect(config.SERI_PROVIDER).toBe("anthropic");
+      expect(config.SERI_PROVIDER).not.toBe("openrouter");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
   // MEDIUM finding (code-review on PR #71): `confirmedModel` used to move to the new pair BEFORE
   // `persistDefaultModel` was even attempted, so a transient write failure (EACCES/ENOSPC/a
   // read-only config dir) left the inequality guard already satisfied and the write was never
@@ -1786,6 +1878,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
   function wait100ms(): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  // Polls for a file's existence rather than a flat sleep — measured live (D4's own reroute-
+  // persist test, below): the config.json write is synchronous once persistDefaultModel actually
+  // runs, but a fixed "(done: no-tool-call)" text landing in the captured pty stdout is not a
+  // reliable proxy for "the write already happened," the same class of gap `sawLine`'s own polling
+  // already exists to close for arbitrary transcript text — this is that same idiom for a file.
+  async function waitForFile(path: string, timeoutMs = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!existsSync(path) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
   }
 
   describe("/setup", () => {
