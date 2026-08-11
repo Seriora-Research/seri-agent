@@ -220,7 +220,8 @@ export function toolResultLine(event: Extract<LoopEvent, { type: "tool-result" }
     event.name === "dispatch_subagents" ? dispatchTaskCount(event.result) : undefined;
   if (dispatch !== undefined) {
     const tokens = dispatch.tokens === undefined ? "" : `, ${dispatch.tokens} tokens`;
-    return `✓ dispatch_subagents done (${dispatch.count} tasks${tokens})`;
+    const noun = dispatch.count === 1 ? "task" : "tasks";
+    return `✓ dispatch_subagents done (${dispatch.count} ${noun}${tokens})`;
   }
   const verification = writeFileVerification(event.result);
   return `✓ ${event.name} done${verification === undefined ? "" : verificationSuffix(verification)}`;

@@ -17,7 +17,12 @@ const ROLE_TOOL_NAMES: Record<SubagentRole, readonly ToolName[]> = {
 };
 
 // Definitions passed by reference, never wrapped — same non-mutating idiom as
-// checkpoint/wrapTools.ts's read-only branch.
+// checkpoint/wrapTools.ts's read-only branch. Deliberately NOT withVerification either: a `code`
+// child's write_file therefore skips the parent's verify-on-write check, the same way it already
+// skips withCheckpoints (dispatch.ts's own pre-dispatch-snapshot comment explains that half).
+// Composing verification into a child's ToolSet is a real design question of its own — whether a
+// failure should read like the parent's near-miss report, whether it needs its own rewindTo
+// reasoning — left as a follow-up rather than decided here.
 export function buildRoleToolSet(role: SubagentRole): ToolSet {
   return Object.fromEntries(
     ROLE_TOOL_NAMES[role].map((name) => [name, toolDefinitions[name]]),

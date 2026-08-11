@@ -72,6 +72,6 @@ describe("toolResultLine", () => {
       name: "dispatch_subagents",
       result: { results: [{}], totalUsage: {} },
     });
-    expect(line).toBe("✓ dispatch_subagents done (1 tasks)");
+    expect(line).toBe("✓ dispatch_subagents done (1 task)");
   });
 });

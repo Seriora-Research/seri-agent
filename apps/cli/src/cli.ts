@@ -1201,7 +1201,13 @@ async function driveLoop(
   let doneReason: DoneReason | undefined;
   const usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
   let cost: CostReport | undefined;
-  // Hoisted so this and runLoopFn's own `system` opt below are the exact same value.
+  // Hoisted so this and runLoopFn's own `system` opt below are the exact same value. Recomputed
+  // every driveLoop call (once per TUI turn, once per non-interactive process), from the RESOLVED
+  // model/provider (`route`, D3/D4 feature-plan.md) — never captured once at session start, so a
+  // live /model switch OR a routing-priority reroute is reflected on the very next turn instead of
+  // confabulated. `route`, not `session.model`/`.provider`: `session` carries what was REQUESTED,
+  // and a rerouted turn's system prompt/cost provenance must name the model actually being called,
+  // not the one that was asked for and silently rerouted away from.
   const system = joinTiers(
     session.systemPrompt,
     buildVolatileTier(route.model, route.provider, catalogEntry?.displayName),
