@@ -82,11 +82,13 @@ export function resolveRoute(
 
   // Rule 2: native-direct over aggregator, ties within a tier broken by CATALOG_PROVIDERS order —
   // sorted once rather than a hand-rolled two-pass "find native, else find aggregator" search.
+  // `chosen` is typed `ModelCatalogEntry`, not `| undefined`, by tsc itself — array destructuring
+  // does not go through `noUncheckedIndexedAccess` (that flag is not even enabled in this
+  // project's own tsconfig.json), and a defensive `if (chosen === undefined)` branch here was
+  // dead code satisfying neither a real runtime case (the `candidates.length === 0` guard above
+  // already rules that out) nor the compiler — removed (code-review finding, PR #73, round 3,
+  // item #9), verified by compiling the equivalent destructure in isolation rather than assumed.
   const [chosen] = [...candidates].sort(byRoutePriority);
-  // Unreachable given the `candidates.length === 0` guard above — narrows `chosen` for tsc.
-  if (chosen === undefined) {
-    return noReroute;
-  }
 
   return {
     model: chosen.id,
