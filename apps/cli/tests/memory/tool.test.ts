@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getPendingDir } from "../../src/config/paths";
 import { setConfigValue } from "../../src/config/config";
+import { getPendingDir } from "../../src/config/paths";
+import { loadMemoryFile, type MemoryContext, memoryFilePath } from "../../src/memory/store";
 import { makeMemoryWriteTool, memoryWriteInputSchema } from "../../src/memory/tool";
-import { loadMemoryFile, memoryFilePath, type MemoryContext } from "../../src/memory/store";
 
 const MEMORY_CAP_USER = 1_375;
 
@@ -27,16 +27,29 @@ function callTool(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   // biome-ignore lint/style/noNonNullAssertion: every memory_write tool built here always has `execute`.
-  return toolDef.execute!(args as never, {
-    toolCallId: "t1",
-    messages: [],
-  } as never) as Promise<unknown>;
+  return toolDef.execute!(
+    args as never,
+    {
+      toolCallId: "t1",
+      messages: [],
+    } as never,
+  ) as Promise<unknown>;
 }
 
 describe("makeMemoryWriteTool", () => {
   test("schema rejects a call missing reason or durable, independent of action", () => {
-    const missingReason = memoryWriteInputSchema.safeParse({ scope: "user", action: "add", content: "x", durable: true });
-    const missingDurable = memoryWriteInputSchema.safeParse({ scope: "user", action: "add", content: "x", reason: "r" });
+    const missingReason = memoryWriteInputSchema.safeParse({
+      scope: "user",
+      action: "add",
+      content: "x",
+      durable: true,
+    });
+    const missingDurable = memoryWriteInputSchema.safeParse({
+      scope: "user",
+      action: "add",
+      content: "x",
+      reason: "r",
+    });
     expect(missingReason.success).toBe(false);
     expect(missingDurable.success).toBe(false);
   });
@@ -90,7 +103,13 @@ describe("makeMemoryWriteTool", () => {
     const secret = "gsk_abcdefghijklmnopqrstuvwxyz0123456789";
     let thrown: Error | undefined;
     try {
-      await callTool(toolDef, { scope: "user", action: "add", content: secret, reason: "r", durable: true });
+      await callTool(toolDef, {
+        scope: "user",
+        action: "add",
+        content: secret,
+        reason: "r",
+        durable: true,
+      });
     } catch (err) {
       thrown = err as Error;
     }

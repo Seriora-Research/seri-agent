@@ -3,7 +3,13 @@ import { z } from "zod";
 import { loadMemoryConfig } from "../config/config";
 import { scanForInjection } from "./injectionScan";
 import { stagePendingWrite } from "./pending";
-import { applyWrite, computeWrite, loadMemoryFile, type MemoryContext, type MemoryWriteRequest } from "./store";
+import {
+  applyWrite,
+  computeWrite,
+  loadMemoryFile,
+  type MemoryContext,
+  type MemoryWriteRequest,
+} from "./store";
 
 // `reason` and `durable` are required regardless of `action` — enforced HERE, at the schema level,
 // so a call missing either is a schema validation error the model sees before computeWrite ever
@@ -71,7 +77,11 @@ export function makeMemoryWriteTool(ctx: MemoryContext) {
         };
       }
       const result = applyWrite(req, ctx, today);
-      return { staged: false, path: result.path, message: "Written directly (approval gate is off)." };
+      return {
+        staged: false,
+        path: result.path,
+        message: "Written directly (approval gate is off).",
+      };
     },
   });
 }

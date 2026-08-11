@@ -207,7 +207,9 @@ function percentBudget(file: MemoryFile): string {
 
 function section(heading: string, file: MemoryFile): string {
   const body =
-    file.entries.length === 0 ? "(nothing recorded yet)" : file.entries.map((e) => e.line).join("\n");
+    file.entries.length === 0
+      ? "(nothing recorded yet)"
+      : file.entries.map((e) => e.line).join("\n");
   return `## ${heading} — ${file.label} ${percentBudget(file)}\n${body}`;
 }
 

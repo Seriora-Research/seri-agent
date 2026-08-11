@@ -24,11 +24,19 @@ const RULES: Rule[] = [
   { category: "credential", name: "openai-key", pattern: /\bsk-[A-Za-z0-9_-]{20,}/ },
   { category: "credential", name: "groq-key", pattern: /\bgsk_[A-Za-z0-9]{20,}/ },
   { category: "credential", name: "github-pat-classic", pattern: /\bghp_[A-Za-z0-9]{36}\b/ },
-  { category: "credential", name: "github-pat-fine-grained", pattern: /\bgithub_pat_[A-Za-z0-9_]{22,}/ },
+  {
+    category: "credential",
+    name: "github-pat-fine-grained",
+    pattern: /\bgithub_pat_[A-Za-z0-9_]{22,}/,
+  },
   { category: "credential", name: "aws-access-key", pattern: /\bAKIA[0-9A-Z]{16}\b/ },
   { category: "credential", name: "google-api-key", pattern: /\bAIza[0-9A-Za-z_-]{35}\b/ },
   { category: "credential", name: "slack-token", pattern: /\bxox[baprs]-[A-Za-z0-9-]{10,}/ },
-  { category: "credential", name: "private-key-block", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+  {
+    category: "credential",
+    name: "private-key-block",
+    pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  },
   {
     category: "credential",
     name: "assignment",
@@ -57,7 +65,11 @@ const RULES: Rule[] = [
     pattern: /disregard\s+(the\s+)?(previous|above|system|prior)/i,
   },
   { category: "injection-phrasing", name: "you-are-now", pattern: /\byou\s+are\s+now\b/i },
-  { category: "injection-phrasing", name: "new-instructions", pattern: /\bnew\s+instructions\s*:/i },
+  {
+    category: "injection-phrasing",
+    name: "new-instructions",
+    pattern: /\bnew\s+instructions\s*:/i,
+  },
   { category: "injection-phrasing", name: "system-prompt", pattern: /\bsystem\s+prompt\b/i },
   {
     category: "injection-phrasing",
@@ -75,7 +87,11 @@ const RULES: Rule[] = [
     name: "always-approve",
     pattern: /always\s+(approve|allow|run|say\s+yes)/i,
   },
-  { category: "injection-phrasing", name: "skip-permissions-flag", pattern: /--dangerously-skip-permissions/i },
+  {
+    category: "injection-phrasing",
+    name: "skip-permissions-flag",
+    pattern: /--dangerously-skip-permissions/i,
+  },
   {
     category: "injection-phrasing",
     name: "bypass",
@@ -84,17 +100,33 @@ const RULES: Rule[] = [
   // persistence-path — paths a self-persisting agent would try to write to.
   { category: "persistence-path", name: "ssh-dir", pattern: /[~./\\]\.ssh\b/ },
   { category: "persistence-path", name: "authorized-keys", pattern: /\bauthorized_keys\b/ },
-  { category: "persistence-path", name: "ssh-private-key-name", pattern: /\bid_(rsa|ed25519|ecdsa)\b/ },
-  { category: "persistence-path", name: "shell-rc", pattern: /\.(bashrc|zshrc|bash_profile|profile)\b/ },
+  {
+    category: "persistence-path",
+    name: "ssh-private-key-name",
+    pattern: /\bid_(rsa|ed25519|ecdsa)\b/,
+  },
+  {
+    category: "persistence-path",
+    name: "shell-rc",
+    pattern: /\.(bashrc|zshrc|bash_profile|profile)\b/,
+  },
   { category: "persistence-path", name: "crontab", pattern: /\bcrontab\b/ },
-  { category: "persistence-path", name: "etc-auth-files", pattern: /\/etc\/(passwd|shadow|sudoers)/ },
+  {
+    category: "persistence-path",
+    name: "etc-auth-files",
+    pattern: /\/etc\/(passwd|shadow|sudoers)/,
+  },
   { category: "persistence-path", name: "launch-agents", pattern: /\bLaunchAgents?\b/ },
   {
     category: "persistence-path",
     name: "systemd-unit",
     pattern: /\bsystemd\b[\s\S]{0,20}\b(service|unit)\b/,
   },
-  { category: "persistence-path", name: "startup-folder", pattern: /\bStartup\b[\s\S]{0,10}\bfolder\b/ },
+  {
+    category: "persistence-path",
+    name: "startup-folder",
+    pattern: /\bStartup\b[\s\S]{0,10}\bfolder\b/,
+  },
   { category: "persistence-path", name: "registry-hive", pattern: /HKEY_|HKCU:|HKLM:/ },
   { category: "persistence-path", name: "git-hooks", pattern: /\.git[\\/]hooks\b/ },
   // agent-config — path-shaped references to seri's OWN configuration only, never bare

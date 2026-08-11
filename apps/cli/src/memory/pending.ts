@@ -51,7 +51,11 @@ function writePendingFile(path: string, record: PendingWrite): void {
   renameSync(tmpPath, path);
 }
 
-export function stagePendingWrite(req: MemoryWriteRequest, ctx: MemoryContext, now: Date): PendingWrite {
+export function stagePendingWrite(
+  req: MemoryWriteRequest,
+  ctx: MemoryContext,
+  now: Date,
+): PendingWrite {
   const record: PendingWrite = {
     id: randomBytes(6).toString("hex"),
     stagedAt: now.toISOString(),
@@ -90,7 +94,10 @@ const SCOPES: MemoryScope[] = ["user", "memory-global", "memory-project"];
 // A malformed/unreadable .pending file is skipped with an onWarning call, never fatal — the same
 // degrade-never-fail policy permissions/store.ts's readStore applies, for the same reason: one bad
 // file must not make /memory pending unusable.
-export function listPending(configDir: string, onWarning?: (message: string) => void): PendingWrite[] {
+export function listPending(
+  configDir: string,
+  onWarning?: (message: string) => void,
+): PendingWrite[] {
   const results: PendingWrite[] = [];
   const root = getPendingDir(configDir);
   for (const scope of SCOPES) {
@@ -140,7 +147,14 @@ function ctxForPending(configDir: string, p: PendingWrite): MemoryContext {
 }
 
 function toRequest(p: PendingWrite): MemoryWriteRequest {
-  return { scope: p.scope, action: p.action, target: p.target, content: p.content, reason: p.reason, durable: p.durable };
+  return {
+    scope: p.scope,
+    action: p.action,
+    target: p.target,
+    content: p.content,
+    reason: p.reason,
+    durable: p.durable,
+  };
 }
 
 const DIFF_CONTEXT = 2;
@@ -169,10 +183,14 @@ function diffLines(before: string, after: string): string[] {
   }
 
   const out: string[] = [];
-  for (const line of beforeLines.slice(Math.max(0, prefix - DIFF_CONTEXT), prefix)) out.push(`  ${line}`);
+  for (const line of beforeLines.slice(Math.max(0, prefix - DIFF_CONTEXT), prefix))
+    out.push(`  ${line}`);
   for (const line of beforeLines.slice(prefix, beforeLines.length - suffix)) out.push(`- ${line}`);
   for (const line of afterLines.slice(prefix, afterLines.length - suffix)) out.push(`+ ${line}`);
-  for (const line of afterLines.slice(afterLines.length - suffix, afterLines.length - suffix + DIFF_CONTEXT)) {
+  for (const line of afterLines.slice(
+    afterLines.length - suffix,
+    afterLines.length - suffix + DIFF_CONTEXT,
+  )) {
     out.push(`  ${line}`);
   }
   return out;

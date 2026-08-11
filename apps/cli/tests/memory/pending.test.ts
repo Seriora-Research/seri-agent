@@ -12,7 +12,7 @@ import {
   resolvePendingRef,
   stagePendingWrite,
 } from "../../src/memory/pending";
-import { loadMemoryFile, memoryFilePath, type MemoryContext } from "../../src/memory/store";
+import { loadMemoryFile, type MemoryContext, memoryFilePath } from "../../src/memory/store";
 
 let configDir: string | undefined;
 function makeCtx(worktree = "/home/x/harness"): MemoryContext {
@@ -33,7 +33,13 @@ describe("stagePendingWrite / listPending", () => {
     expect(before).not.toContain("prefers tabs");
 
     const staged = stagePendingWrite(
-      { scope: "user", action: "add", content: "prefers tabs", reason: "user said so", durable: true },
+      {
+        scope: "user",
+        action: "add",
+        content: "prefers tabs",
+        reason: "user said so",
+        durable: true,
+      },
       ctx,
       new Date("2026-08-11T00:00:00Z"),
     );
@@ -50,7 +56,13 @@ describe("stagePendingWrite / listPending", () => {
   test("listPending reports id, scope, and a one-line summary", () => {
     const ctx = makeCtx();
     const staged = stagePendingWrite(
-      { scope: "memory-global", action: "add", content: "uses bun test", reason: "r", durable: true },
+      {
+        scope: "memory-global",
+        action: "add",
+        content: "uses bun test",
+        reason: "r",
+        durable: true,
+      },
       ctx,
       new Date(),
     );
@@ -63,7 +75,11 @@ describe("stagePendingWrite / listPending", () => {
 
   test("a malformed .pending file is skipped with a warning, not fatal", () => {
     const ctx = makeCtx();
-    stagePendingWrite({ scope: "user", action: "add", content: "ok", reason: "r", durable: true }, ctx, new Date());
+    stagePendingWrite(
+      { scope: "user", action: "add", content: "ok", reason: "r", durable: true },
+      ctx,
+      new Date(),
+    );
     const dir = join(getPendingDir(ctx.configDir), "user");
     writeFileSync(join(dir, "broken.pending"), "not json");
     const warnings: string[] = [];
@@ -76,8 +92,16 @@ describe("stagePendingWrite / listPending", () => {
 describe("resolvePendingRef", () => {
   test("resolves an unambiguous prefix, and 'all' returns everything", () => {
     const ctx = makeCtx();
-    const a = stagePendingWrite({ scope: "user", action: "add", content: "a", reason: "r", durable: true }, ctx, new Date());
-    stagePendingWrite({ scope: "memory-global", action: "add", content: "b", reason: "r", durable: true }, ctx, new Date());
+    const a = stagePendingWrite(
+      { scope: "user", action: "add", content: "a", reason: "r", durable: true },
+      ctx,
+      new Date(),
+    );
+    stagePendingWrite(
+      { scope: "memory-global", action: "add", content: "b", reason: "r", durable: true },
+      ctx,
+      new Date(),
+    );
 
     expect(resolvePendingRef(ctx.configDir, a.id)).toHaveLength(1);
     expect(resolvePendingRef(ctx.configDir, a.id.slice(0, 4))).toHaveLength(1);
@@ -88,13 +112,23 @@ describe("resolvePendingRef", () => {
     const ctx = makeCtx();
     // Written directly at their target paths (not via stagePendingWrite, whose id is random) so
     // the shared "aaaa" prefix is deterministic rather than left to chance.
-    const base = { stagedAt: new Date().toISOString(), scope: "user" as const, action: "add" as const, content: "x", reason: "r", durable: true, entryDate: "2026-08-11" };
+    const base = {
+      stagedAt: new Date().toISOString(),
+      scope: "user" as const,
+      action: "add" as const,
+      content: "x",
+      reason: "r",
+      durable: true,
+      entryDate: "2026-08-11",
+    };
     for (const id of ["aaaa11111111", "aaaa22222222"]) {
       const path = pendingPath(ctx.configDir, "user", id);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({ ...base, id }));
     }
-    expect(() => resolvePendingRef(ctx.configDir, "aaaa")).toThrow(/Ambiguous id "aaaa" — matches 2 staged writes\./);
+    expect(() => resolvePendingRef(ctx.configDir, "aaaa")).toThrow(
+      /Ambiguous id "aaaa" — matches 2 staged writes\./,
+    );
   });
 });
 
@@ -102,7 +136,13 @@ describe("diffPending / approvePending / rejectPending", () => {
   test("diff renders +/- lines and both char/cap headers", () => {
     const ctx = makeCtx();
     const staged = stagePendingWrite(
-      { scope: "user", action: "add", content: "prefers tabs", reason: "user said so", durable: true },
+      {
+        scope: "user",
+        action: "add",
+        content: "prefers tabs",
+        reason: "user said so",
+        durable: true,
+      },
       ctx,
       new Date("2026-08-11T00:00:00Z"),
     );
@@ -118,7 +158,11 @@ describe("diffPending / approvePending / rejectPending", () => {
     const ctx = makeCtx();
     const livePath = memoryFilePath("user", ctx);
     const before = existsSync(livePath) ? readFileSync(livePath, "utf8") : "";
-    const staged = stagePendingWrite({ scope: "user", action: "add", content: "x", reason: "r", durable: true }, ctx, new Date());
+    const staged = stagePendingWrite(
+      { scope: "user", action: "add", content: "x", reason: "r", durable: true },
+      ctx,
+      new Date(),
+    );
 
     rejectPending(ctx.configDir, staged);
 
@@ -144,9 +188,21 @@ describe("diffPending / approvePending / rejectPending", () => {
 
   test("approve all applies writes staged in all three scopes to the three correct paths, and pending then reports none", () => {
     const ctx = makeCtx("/home/x/harness");
-    stagePendingWrite({ scope: "user", action: "add", content: "u", reason: "r", durable: true }, ctx, new Date());
-    stagePendingWrite({ scope: "memory-global", action: "add", content: "g", reason: "r", durable: true }, ctx, new Date());
-    stagePendingWrite({ scope: "memory-project", action: "add", content: "p", reason: "r", durable: true }, ctx, new Date());
+    stagePendingWrite(
+      { scope: "user", action: "add", content: "u", reason: "r", durable: true },
+      ctx,
+      new Date(),
+    );
+    stagePendingWrite(
+      { scope: "memory-global", action: "add", content: "g", reason: "r", durable: true },
+      ctx,
+      new Date(),
+    );
+    stagePendingWrite(
+      { scope: "memory-project", action: "add", content: "p", reason: "r", durable: true },
+      ctx,
+      new Date(),
+    );
 
     for (const p of resolvePendingRef(ctx.configDir, "all")) approvePending(ctx.configDir, p);
 

@@ -8,9 +8,9 @@ import {
   loadMemory,
   loadMemoryFile,
   MEMORY_CAPS,
-  memoryFilePath,
   type MemoryContext,
   type MemoryFile,
+  memoryFilePath,
   projectDirToken,
   renderMemoryTier,
 } from "../../src/memory/store";
@@ -88,17 +88,33 @@ describe("loadMemoryFile / loadMemory", () => {
 
 describe("computeWrite: action semantics", () => {
   function emptyFile(scope: "user" | "memory-global" | "memory-project" = "user"): MemoryFile {
-    return { scope, path: "/x/USER.md", text: "", chars: 0, cap: MEMORY_CAPS[scope], entries: [], label: "USER.md" };
+    return {
+      scope,
+      path: "/x/USER.md",
+      text: "",
+      chars: 0,
+      cap: MEMORY_CAPS[scope],
+      entries: [],
+      label: "USER.md",
+    };
   }
 
   test("add appends a dated line", () => {
-    const next = computeWrite(emptyFile(), { scope: "user", action: "add", content: "prefers tabs", reason: "r", durable: true }, "2026-08-11");
+    const next = computeWrite(
+      emptyFile(),
+      { scope: "user", action: "add", content: "prefers tabs", reason: "r", durable: true },
+      "2026-08-11",
+    );
     expect(next).toBe("- [2026-08-11] prefers tabs");
   });
 
   test("add rejects embedded newlines", () => {
     expect(() =>
-      computeWrite(emptyFile(), { scope: "user", action: "add", content: "a\nb", reason: "r", durable: true }, "2026-08-11"),
+      computeWrite(
+        emptyFile(),
+        { scope: "user", action: "add", content: "a\nb", reason: "r", durable: true },
+        "2026-08-11",
+      ),
     ).toThrow(/single line/);
   });
 
@@ -114,7 +130,14 @@ describe("computeWrite: action semantics", () => {
     };
     const next = computeWrite(
       file,
-      { scope: "user", action: "replace", target: "old fact", content: "new fact", reason: "r", durable: true },
+      {
+        scope: "user",
+        action: "replace",
+        target: "old fact",
+        content: "new fact",
+        reason: "r",
+        durable: true,
+      },
       "2026-08-11",
     );
     expect(next.split("\n")).toHaveLength(2);
@@ -131,7 +154,11 @@ describe("computeWrite: action semantics", () => {
         { date: "2026-01-02", text: "other fact", line: "- [2026-01-02] other fact" },
       ],
     };
-    const next = computeWrite(file, { scope: "user", action: "remove", target: "old fact", reason: "r", durable: true }, "2026-08-11");
+    const next = computeWrite(
+      file,
+      { scope: "user", action: "remove", target: "old fact", reason: "r", durable: true },
+      "2026-08-11",
+    );
     expect(next).toBe("- [2026-01-02] other fact");
   });
 
@@ -141,17 +168,29 @@ describe("computeWrite: action semantics", () => {
       text: "- [2026-01-01] uses bun test\n- [2026-01-02] also uses bun test here",
       entries: [
         { date: "2026-01-01", text: "uses bun test", line: "- [2026-01-01] uses bun test" },
-        { date: "2026-01-02", text: "also uses bun test here", line: "- [2026-01-02] also uses bun test here" },
+        {
+          date: "2026-01-02",
+          text: "also uses bun test here",
+          line: "- [2026-01-02] also uses bun test here",
+        },
       ],
     };
     expect(() =>
-      computeWrite(file, { scope: "user", action: "remove", target: "bun test", reason: "r", durable: true }, "2026-08-11"),
+      computeWrite(
+        file,
+        { scope: "user", action: "remove", target: "bun test", reason: "r", durable: true },
+        "2026-08-11",
+      ),
     ).toThrow(/2 entries/);
   });
 
   test("a target matching nothing throws", () => {
     expect(() =>
-      computeWrite(emptyFile(), { scope: "user", action: "remove", target: "nope", reason: "r", durable: true }, "2026-08-11"),
+      computeWrite(
+        emptyFile(),
+        { scope: "user", action: "remove", target: "nope", reason: "r", durable: true },
+        "2026-08-11",
+      ),
     ).toThrow(/no entry contains/);
   });
 
@@ -161,7 +200,11 @@ describe("computeWrite: action semantics", () => {
     ["replace", { action: "replace" as const }],
   ])("%s with missing required fields throws", (_name, partial) => {
     expect(() =>
-      computeWrite(emptyFile(), { scope: "user", reason: "r", durable: true, ...partial }, "2026-08-11"),
+      computeWrite(
+        emptyFile(),
+        { scope: "user", reason: "r", durable: true, ...partial },
+        "2026-08-11",
+      ),
     ).toThrow();
   });
 });
@@ -172,7 +215,17 @@ describe("computeWrite: cap enforcement (BUILD-PLAN verify bar)", () => {
     // Seed 1340 chars of entries whose TEXT DIFFERS from the attempted write below — the negative
     // control code-quality.md requires: a self-comparison would pass vacuously.
     const seedEntry = `- [2026-08-01] ${"x".repeat(1_320)}`;
-    applyWrite({ scope: "user", action: "add", content: seedEntry.slice("- [2026-08-01] ".length), reason: "seed", durable: true }, ctx, "2026-08-01");
+    applyWrite(
+      {
+        scope: "user",
+        action: "add",
+        content: seedEntry.slice("- [2026-08-01] ".length),
+        reason: "seed",
+        durable: true,
+      },
+      ctx,
+      "2026-08-01",
+    );
     const path = memoryFilePath("user", ctx);
     const before = readFileSync(path, "utf8");
     expect(before.length).toBeLessThan(MEMORY_CAPS.user);
@@ -180,7 +233,13 @@ describe("computeWrite: cap enforcement (BUILD-PLAN verify bar)", () => {
 
     expect(() =>
       applyWrite(
-        { scope: "user", action: "add", content: `distinct-overflow-marker-${"y".repeat(80)}`, reason: "r", durable: true },
+        {
+          scope: "user",
+          action: "add",
+          content: `distinct-overflow-marker-${"y".repeat(80)}`,
+          reason: "r",
+          durable: true,
+        },
         ctx,
         "2026-08-11",
       ),
@@ -193,13 +252,33 @@ describe("computeWrite: cap enforcement (BUILD-PLAN verify bar)", () => {
   test("memory-global cap: an over-cap add throws and the message names the exact overage", () => {
     const ctx = makeCtx();
     const seedContent = "x".repeat(2_180);
-    applyWrite({ scope: "memory-global", action: "add", content: seedContent, reason: "seed", durable: true }, ctx, "2026-08-01");
+    applyWrite(
+      {
+        scope: "memory-global",
+        action: "add",
+        content: seedContent,
+        reason: "seed",
+        durable: true,
+      },
+      ctx,
+      "2026-08-01",
+    );
     const path = memoryFilePath("memory-global", ctx);
     const before = readFileSync(path, "utf8");
 
     let thrown: Error | undefined;
     try {
-      applyWrite({ scope: "memory-global", action: "add", content: "one more fact", reason: "r", durable: true }, ctx, "2026-08-11");
+      applyWrite(
+        {
+          scope: "memory-global",
+          action: "add",
+          content: "one more fact",
+          reason: "r",
+          durable: true,
+        },
+        ctx,
+        "2026-08-11",
+      );
     } catch (err) {
       thrown = err as Error;
     }
@@ -210,12 +289,32 @@ describe("computeWrite: cap enforcement (BUILD-PLAN verify bar)", () => {
   test("memory-project cap: an over-cap add throws and the live file stays untouched", () => {
     const ctx = makeCtx("/home/x/harness");
     const seedContent = "x".repeat(2_180);
-    applyWrite({ scope: "memory-project", action: "add", content: seedContent, reason: "seed", durable: true }, ctx, "2026-08-01");
+    applyWrite(
+      {
+        scope: "memory-project",
+        action: "add",
+        content: seedContent,
+        reason: "seed",
+        durable: true,
+      },
+      ctx,
+      "2026-08-01",
+    );
     const path = memoryFilePath("memory-project", ctx);
     const before = readFileSync(path, "utf8");
 
     expect(() =>
-      applyWrite({ scope: "memory-project", action: "add", content: "one more fact", reason: "r", durable: true }, ctx, "2026-08-11"),
+      applyWrite(
+        {
+          scope: "memory-project",
+          action: "add",
+          content: "one more fact",
+          reason: "r",
+          durable: true,
+        },
+        ctx,
+        "2026-08-11",
+      ),
     ).toThrow(/2200-char cap/);
     expect(readFileSync(path, "utf8")).toBe(before);
   });
@@ -225,7 +324,11 @@ describe("applyWrite", () => {
   test("writes LF-only, never CRLF, even on win32", () => {
     setPlatform("win32");
     const ctx = makeCtx();
-    applyWrite({ scope: "user", action: "add", content: "one", reason: "r", durable: true }, ctx, "2026-08-11");
+    applyWrite(
+      { scope: "user", action: "add", content: "one", reason: "r", durable: true },
+      ctx,
+      "2026-08-11",
+    );
     const path = memoryFilePath("user", ctx);
     const raw = readFileSync(path, "utf8");
     expect(raw).not.toContain("\r\n");
@@ -233,18 +336,26 @@ describe("applyWrite", () => {
 
   test("returns before/after and the before differs from a distinct after", () => {
     const ctx = makeCtx();
-    const first = applyWrite({ scope: "user", action: "add", content: "one", reason: "r", durable: true }, ctx, "2026-08-11");
+    const first = applyWrite(
+      { scope: "user", action: "add", content: "one", reason: "r", durable: true },
+      ctx,
+      "2026-08-11",
+    );
     expect(first.before).toBe("");
     expect(first.after).toBe("- [2026-08-11] one");
 
-    const second = applyWrite({ scope: "user", action: "add", content: "two", reason: "r", durable: true }, ctx, "2026-08-11");
+    const second = applyWrite(
+      { scope: "user", action: "add", content: "two", reason: "r", durable: true },
+      ctx,
+      "2026-08-11",
+    );
     expect(second.before).toBe(first.after);
     expect(second.after).not.toBe(second.before);
   });
 });
 
 describe("renderMemoryTier", () => {
-  test("undefined and an all-empty LoadedMemory both render \"\" (B2 guarantee)", () => {
+  test('undefined and an all-empty LoadedMemory both render "" (B2 guarantee)', () => {
     const ctx = makeCtx();
     expect(renderMemoryTier(undefined)).toBe("");
     expect(renderMemoryTier(loadMemory(ctx))).toBe("");
@@ -252,7 +363,11 @@ describe("renderMemoryTier", () => {
 
   test("negative control: a non-empty file renders something", () => {
     const ctx = makeCtx();
-    applyWrite({ scope: "user", action: "add", content: "prefers tabs", reason: "r", durable: true }, ctx, "2026-08-11");
+    applyWrite(
+      { scope: "user", action: "add", content: "prefers tabs", reason: "r", durable: true },
+      ctx,
+      "2026-08-11",
+    );
     const rendered = renderMemoryTier(loadMemory(ctx));
     expect(rendered).not.toBe("");
     expect(rendered).toContain("# Memory");
