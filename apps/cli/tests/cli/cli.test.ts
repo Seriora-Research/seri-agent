@@ -256,8 +256,12 @@ describe("run (task invocation)", () => {
     expect(code).toBe(0);
     expect(capture()).toBeDefined();
     expect(capture()?.permissionMode).toBe("approve-each");
-    // The same tool set, with only the filesystem-mutating tools wrapped for checkpointing.
-    expect(Object.keys(capture()?.tools ?? {})).toEqual(Object.keys(toolDefinitions));
+    // The same tool set, with only the filesystem-mutating tools wrapped for checkpointing, plus
+    // dispatch_subagents — driveLoop's own withSubagents composition, not part of toolDefinitions.
+    expect(Object.keys(capture()?.tools ?? {})).toEqual([
+      ...Object.keys(toolDefinitions),
+      "dispatch_subagents",
+    ]);
     expect(capture()?.tools.read_file).toBe(toolDefinitions.read_file);
     expect(capture()?.tools.grep).toBe(toolDefinitions.grep);
     expect(capture()?.tools.glob).toBe(toolDefinitions.glob);

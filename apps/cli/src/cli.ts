@@ -24,7 +24,7 @@ import {
   type RestoreResult,
 } from "./checkpoint/checkpoint";
 import { projectRoot } from "./checkpoint/shadowGit";
-import { withCheckpoints } from "./checkpoint/wrapTools";
+import { type OnBeforeMutation, withCheckpoints } from "./checkpoint/wrapTools";
 import {
   approvalPromptText,
   printCost,
@@ -78,6 +78,7 @@ import {
   saveSession,
 } from "./session/session";
 import { deliverSignal, onSignalCancel, onSignalCleanup, raiseSignal } from "./signals";
+import { withSubagents } from "./subagents/dispatch";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import {
@@ -875,6 +876,9 @@ type PreparedRun = {
   // turn 1 actually runs on a rerouted one trips their inequality guards on turn 1 and persists a
   // switch the session never asked for — see those variables' own comments.
   route: { model: string; provider: ModelProvider };
+  // The same OnBeforeMutation `tools`' own withCheckpoints was built with — driveLoop's
+  // withSubagents reuses it for one pre-dispatch snapshot instead of building a second one.
+  checkpointer: OnBeforeMutation;
 };
 
 // Shared by prepareSession's own non-TTY notice and runTui's runTurn (below) — the two used to
@@ -1032,11 +1036,14 @@ async function prepareSession(
   // puts each on the correct side. The AbortSignal the check is run with is the one runLoop hands
   // `execute` (loop.ts:331), which is driveLoop's controller — the same Ctrl-C that stops a bash
   // command stops a check.
+  const checkpointer = createCheckpointer({
+    storeDir,
+    worktree,
+    sessionId: session.id,
+    onWarning: printWarning,
+  });
   const tools = withVerification(
-    withCheckpoints(
-      toolDefinitions,
-      createCheckpointer({ storeDir, worktree, sessionId: session.id, onWarning: printWarning }),
-    ),
+    withCheckpoints(toolDefinitions, checkpointer),
     loadVerifyConfig(),
   );
 
@@ -1051,6 +1058,7 @@ async function prepareSession(
     catalog,
     catalogEntry,
     route,
+    checkpointer,
   };
 }
 
@@ -1164,8 +1172,18 @@ async function driveLoop(
   persist: (session: SessionState<ModelMessage>) => void,
   approvalPrompt: ApprovalPrompt,
 ): Promise<DriveLoopResult> {
-  const { session, storeDir, tools, model, worktree, allowedTools, catalog, catalogEntry, route } =
-    prepared;
+  const {
+    session,
+    storeDir,
+    tools: baseTools,
+    model,
+    worktree,
+    allowedTools,
+    catalog,
+    catalogEntry,
+    route,
+    checkpointer,
+  } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
@@ -1183,6 +1201,32 @@ async function driveLoop(
   let doneReason: DoneReason | undefined;
   const usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
   let cost: CostReport | undefined;
+  // Hoisted so this and runLoopFn's own `system` opt below are the exact same value.
+  const system = joinTiers(
+    session.systemPrompt,
+    buildVolatileTier(route.model, route.provider, catalogEntry?.displayName),
+  );
+  // The one composition that enables dispatch_subagents; deleting this call (tools -> baseTools)
+  // is the whole rollback, matching withCheckpoints/withVerification's own comment in prepareSession.
+  const tools = withSubagents(baseTools, {
+    runLoop: runLoopFn,
+    model,
+    provider: route.provider,
+    modelId: route.model,
+    catalog,
+    contextWindowSize: catalogEntry?.contextWindow,
+    system,
+    permissionMode: getPermissionMode,
+    allowedTools,
+    checkpointer,
+    // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
+    // subagent tokens land in the run's own reported total instead of vanishing.
+    onChildUsage: (childUsage, childCost) => {
+      usage.inputTokens = addTokens(usage.inputTokens, childUsage.inputTokens);
+      usage.outputTokens = addTokens(usage.outputTokens, childUsage.outputTokens);
+      cost = addCost(cost, childCost);
+    },
+  });
   // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
   // what an exit code promises a shell, which is this consumer's business, not the loop's.
   // `permission-denied` fires on two different facts carried in its `reason` — "blocked" is a
@@ -1212,17 +1256,8 @@ async function driveLoop(
       // below.
       allowedTools,
       approvalPrompt,
-      // Recomputed every driveLoop call (once per TUI turn, once per non-interactive process), from
-      // the RESOLVED model/provider (`route`, D3/D4 feature-plan.md) — never captured once at
-      // session start, so a live /model switch OR a routing-priority reroute is reflected on the
-      // very next turn instead of confabulated. `route`, not `session.model`/`.provider`:
-      // `session` carries what was REQUESTED, and a rerouted turn's system prompt/cost provenance
-      // must name the model actually being called, not the one that was asked for and silently
-      // rerouted away from.
-      system: joinTiers(
-        session.systemPrompt,
-        buildVolatileTier(route.model, route.provider, catalogEntry?.displayName),
-      ),
+      // Computed once above, so a live /model switch or reroute reaches subagents identically.
+      system,
       signal: controller.signal,
       maxIterations: maxTurns,
       // HIGH-1: without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`
