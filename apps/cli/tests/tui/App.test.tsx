@@ -581,7 +581,9 @@ describe("App", () => {
       });
 
       test("env, not removable: the disabled-remove reason, not a masked value", () => {
-        const text = formatSetupRow(row({ source: "env", masked: "sk-a...wxyz", removable: false }));
+        const text = formatSetupRow(
+          row({ source: "env", masked: "sk-a...wxyz", removable: false }),
+        );
         expect(text).toContain("set by $ANTHROPIC_API_KEY in your environment");
         expect(text).toContain("unset it in your shell");
         expect(text).not.toContain("sk-a...wxyz");

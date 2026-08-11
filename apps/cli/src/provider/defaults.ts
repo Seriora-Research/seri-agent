@@ -44,9 +44,10 @@ export function isModelProvider(value: string): value is ModelProvider {
 // session.model/session.provider backfilled from the wrong (real) config.json, and a successful
 // turn's persist wrote back into the real user's config.json even though the run was meant to stay
 // inside `authConfigDir`.
-export function resolveDefaultModel(
-  configDir?: string,
-): { model: string; provider: ModelProvider } {
+export function resolveDefaultModel(configDir?: string): {
+  model: string;
+  provider: ModelProvider;
+} {
   const envModel = process.env.SERI_MODEL;
   if (envModel) {
     const envProvider = process.env.SERI_PROVIDER;
