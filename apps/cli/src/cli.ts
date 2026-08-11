@@ -41,13 +41,12 @@ import {
   usageError,
 } from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
-import { loadMemoryConfig, loadVerifyConfig, setConfigValue, unsetConfigValue } from "./config/config";
+import { loadVerifyConfig, setConfigValue, unsetConfigValue } from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
 import type { PermissionMode } from "./gate/gate";
 import {
   type ApprovalAnswer,
   type ApprovalPrompt,
-  DEFAULT_CONTEXT_WINDOW_SIZE,
   type LoopEvent,
   runLoop as runLoopReal,
 } from "./loop/loop";
@@ -55,9 +54,8 @@ import {
   type ArchivistReport,
   type ArchivistState,
   createArchivistState,
-  resetCursorOnCompaction,
-  runArchivist,
-  shouldRunArchivist,
+  maybeRunArchivist,
+  observeArchivistEvent,
 } from "./memory/archivist";
 import { decideMemoryCommand, memoryCommandAccepts } from "./memory/commands";
 import { loadMemory, type LoadedMemory } from "./memory/store";
@@ -1307,10 +1305,6 @@ async function driveLoop(
   // also `continue`s past it) — so `ranTool` is exactly "did anything actually run".
   let hadDenial = false;
   let ranTool = false;
-  // The archivist reviews the FULL current transcript, not `session.messages` (prepared.session's
-  // own snapshot from before this turn ran) — updated on every messages-updated event alongside
-  // `persist`, so the trigger check after the loop below sees whatever this turn itself added.
-  let latestMessages: ModelMessage[] = session.messages;
   let archivist: ArchivistReport | undefined;
   try {
     for await (const event of runLoopFn({
@@ -1350,22 +1344,22 @@ async function driveLoop(
       // math, not just which endpoint gets called (PreparedRun.catalogEntry's own comment).
       contextWindowSize: catalogEntry?.contextWindow,
     })) {
+      // The archivist's entire view of this turn — its own module owns what each event means to
+      // it (memory/archivist.ts's own comment on observeArchivistEvent), so nothing else in this
+      // loop mutates archivistState directly.
+      observeArchivistEvent(archivistState, event);
       if (event.type === "messages-updated") {
         // `persist` (this function's own comment above explains the two callers) is the ONLY
         // write for this event now — MEDIUM-1: driveLoop used to ALSO call saveSession directly
         // here, using the session THIS call started with, and rely on the TUI path's reducer to
         // correct it moments later; that left a real, if narrow, crash/fatal-signal window where
         // the stale write was the last one on disk. No direct saveSession call here anymore.
-        latestMessages = event.messages;
         persist({ ...session, messages: event.messages });
         onEvent(event);
         continue;
       }
       if (event.type === "permission-denied" && event.reason === "declined") hadDenial = true;
-      if (event.type === "tool-call") {
-        ranTool = true;
-        archivistState.toolCallsSinceRun++;
-      }
+      if (event.type === "tool-call") ranTool = true;
       // Compaction splices the whole message array, so every rewind anchor recorded before this
       // point indexes into an array that no longer exists. The barrier is what lets `/rewind` say
       // so instead of silently slicing garbage. A session that never checkpointed has no log, and
@@ -1379,7 +1373,6 @@ async function driveLoop(
       // checkpointing exists to protect. The cost of losing a barrier is that a later /rewind may
       // cross this compaction, so it is a warning and not silence.
       if (event.type === "compacted") {
-        archivistState.compactedThisTurn = true;
         try {
           appendBarrier(storeDir, session.id, "compaction");
         } catch (err) {
@@ -1396,7 +1389,6 @@ async function driveLoop(
       if (event.type === "usage" || event.type === "compacted") {
         usage.inputTokens = addTokens(usage.inputTokens, event.usage.inputTokens);
         usage.outputTokens = addTokens(usage.outputTokens, event.usage.outputTokens);
-        archivistState.lastInputTokens = event.usage.inputTokens ?? archivistState.lastInputTokens;
       }
       // `compacted` has no `cost` of its own (the summariser's own round-trip is billed the same
       // as any other call, but loop.ts does not price it — see loop.ts's own `usage` event comment
@@ -1423,45 +1415,21 @@ async function driveLoop(
       }
     }
 
-    // A mid-turn compaction splices `latestMessages` down to the compaction summary + preserved
-    // recent messages, so `archivistState.messageCursor` — an index computed against the array
-    // BEFORE that splice — no longer points at the same content; see resetCursorOnCompaction's own
-    // comment for why 0 is the safe, conservative reset. This is what makes `compactedThisTurn`
-    // (set on the `compacted` event above, read here) an actual read, not dead write-only state.
-    resetCursorOnCompaction(archivistState);
     // Inside the same try, before `finally` unregisters the cancel slot: the archivist's own child
     // runLoop must share `controller.signal` while that slot is still registered, per the
     // one-cancel-stops-everything contract every dispatch_subagents child already relies on.
-    // `archivistEnabled` is read live from config on every turn (not cached in PreparedRun), so
-    // `/memory archivist off` takes effect on the very next turn without a restart.
-    const archivistEnabled = loadMemoryConfig(ctx.configDir).archivistEnabled;
-    // `?? DEFAULT_CONTEXT_WINDOW_SIZE`, matching runLoop's own fallback exactly (loop.ts) — without
-    // it, a model absent from the catalog left `contextWindowSize` undefined, and the near-
-    // compaction trigger's own `contextWindowSize !== undefined` guard (archivist.ts) then never
-    // evaluates at all, even though runLoop's compaction math IS running against this same
-    // fallback for that model. The archivist's near-compaction trigger exists precisely so its
-    // save can outrun that flush; it must use the identical number runLoop actually compacts on.
-    const trigger = controller.signal.aborted
-      ? undefined
-      : shouldRunArchivist(
-          archivistState,
-          catalogEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE,
-          archivistEnabled,
-        );
-    if (trigger) {
-      archivist = await runArchivist({
-        messages: latestMessages,
-        state: archivistState,
-        trigger,
-        ctx: { configDir: ctx.configDir, worktree },
-        model,
-        route,
-        catalog,
-        signal: controller.signal,
-        onWarning: printWarning,
-      });
-    }
-    archivistState.compactedThisTurn = false;
+    // maybeRunArchivist (memory/archivist.ts) owns the out-of-bounds cursor guard, the live
+    // /memory archivist toggle read, and the trigger check — cli.ts carries none of that itself.
+    archivist = await maybeRunArchivist({
+      state: archivistState,
+      ctx: { configDir: ctx.configDir, worktree },
+      contextWindow: catalogEntry?.contextWindow,
+      model,
+      route,
+      catalog,
+      signal: controller.signal,
+      onWarning: printWarning,
+    });
   } finally {
     // In a finally, so a run that throws out of the loop does not leave the slot pointing at a
     // controller nothing is waiting on — a later signal would then be swallowed as a cancel of a

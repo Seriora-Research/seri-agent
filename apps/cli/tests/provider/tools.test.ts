@@ -161,8 +161,8 @@ describe("DISPATCH_TOOL_NAME", () => {
 
 describe("memory_write (Stage 6b)", () => {
   // Deliberately absent (spec's own explicit non-change): memory_write is built by
-  // memory/tool.ts's makeMemoryWriteTool factory and reaches exactly one ToolSet, the archivist's,
-  // via roles.ts's buildRoleToolSet extraTools seam — never through toolDefinitions.
+  // memory/tool.ts's makeMemoryWriteTool factory and reaches exactly one ToolSet, built directly
+  // in memory/archivist.ts's runArchivist — never through toolDefinitions.
   test("is not a key of toolDefinitions", () => {
     expect(Object.keys(toolDefinitions)).not.toContain("memory_write");
   });

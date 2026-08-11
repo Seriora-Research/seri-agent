@@ -6,12 +6,14 @@ import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { ModelCatalog } from "@seri/model-catalog";
 import { MockLanguageModelV4 } from "ai/test";
 import { buildVolatileTier } from "../../src/agents/systemPrompt";
-import { DEFAULT_CONTEXT_WINDOW_SIZE, runLoop } from "../../src/loop/loop";
+import { setConfigValue } from "../../src/config/config";
+import { DEFAULT_CONTEXT_WINDOW_SIZE, type LoopEvent, runLoop } from "../../src/loop/loop";
 import {
   ARCHIVIST_TOOL_CALL_INTERVAL,
   buildArchivistGoal,
   createArchivistState,
-  resetCursorOnCompaction,
+  maybeRunArchivist,
+  observeArchivistEvent,
   runArchivist,
   shouldRunArchivist,
 } from "../../src/memory/archivist";
@@ -19,7 +21,6 @@ import { applyWrite, loadMemory, type MemoryContext } from "../../src/memory/sto
 import { makeMemoryWriteTool } from "../../src/memory/tool";
 import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
 import { runSubagent, type SubagentRuntime } from "../../src/subagents/dispatch";
-import { buildRoleToolSet } from "../../src/subagents/roles";
 import { streamResult, usage as usageChunk } from "../loop/fixtures";
 
 let configDir: string | undefined;
@@ -33,15 +34,12 @@ afterEach(() => {
   configDir = undefined;
 });
 
+function emptySession() {
+  return { id: "s", cwd: "/", systemPrompt: "", permissionMode: "auto" as const, messages: [] };
+}
+
 describe("shouldRunArchivist", () => {
-  const state = () =>
-    createArchivistState({
-      id: "s",
-      cwd: "/",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [],
-    });
+  const state = () => createArchivistState(emptySession());
 
   test("undefined below the tool-call interval, with no near-compaction signal", () => {
     const s = state();
@@ -72,9 +70,9 @@ describe("shouldRunArchivist", () => {
   // MEDIUM finding (reviewer-verifier): a model absent from the catalog left driveLoop passing
   // `contextWindowSize: undefined` here, so the near-compaction trigger's own `!== undefined`
   // guard never evaluated at all — even though runLoop's own compaction math was already running
-  // against DEFAULT_CONTEXT_WINDOW_SIZE for that exact model. cli.ts now passes
-  // `catalogEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE`; this pins the fallback value
-  // itself, not a magic number, so a future change to the constant can't silently desync the two.
+  // against DEFAULT_CONTEXT_WINDOW_SIZE for that exact model. maybeRunArchivist now passes
+  // `contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE`; this pins the fallback value itself, not a
+  // magic number, so a future change to the constant can't silently desync the two.
   test('"near-compaction" fires against DEFAULT_CONTEXT_WINDOW_SIZE, the real fallback a catalog-absent model gets', () => {
     const s = state();
     s.toolCallsSinceRun = 1;
@@ -83,40 +81,8 @@ describe("shouldRunArchivist", () => {
   });
 });
 
-describe("resetCursorOnCompaction", () => {
-  test("resets messageCursor to 0 when compactedThisTurn is true", () => {
-    const s = createArchivistState({
-      id: "s",
-      cwd: "/",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [],
-    });
-    s.messageCursor = 42;
-    s.compactedThisTurn = true;
-    resetCursorOnCompaction(s);
-    expect(s.messageCursor).toBe(0);
-  });
-
-  // Negative control: an untouched cursor must survive a no-op call — otherwise this couldn't be
-  // told apart from a function that always zeroes the cursor.
-  test("leaves messageCursor untouched when compactedThisTurn is false", () => {
-    const s = createArchivistState({
-      id: "s",
-      cwd: "/",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [],
-    });
-    s.messageCursor = 42;
-    s.compactedThisTurn = false;
-    resetCursorOnCompaction(s);
-    expect(s.messageCursor).toBe(42);
-  });
-});
-
 describe("createArchivistState", () => {
-  test("starts the cursor at the session's CURRENT message count, not zero", () => {
+  test("starts the cursor at the session's CURRENT message count, and messages mirrors it", () => {
     const dummyMessage = { role: "user", content: "x" } as const;
     const session = {
       id: "s",
@@ -127,19 +93,70 @@ describe("createArchivistState", () => {
     };
     const s = createArchivistState(session);
     expect(s.messageCursor).toBe(3);
+    expect(s.messages).toEqual(session.messages);
     expect(s.toolCallsSinceRun).toBe(0);
     expect(s.runs).toBe(0);
   });
 });
 
-describe("buildArchivistGoal", () => {
-  test("embeds both the current memory content and the transcript slice", () => {
-    const ctx = makeCtx();
-    const memory = loadMemory(ctx);
-    const goal = buildArchivistGoal([{ role: "user", content: "hi" }], memory, "tool-count");
-    expect(goal).toContain("Trigger: tool-count");
-    expect(goal).toContain("all three files are empty");
-    expect(goal).toContain('"hi"');
+describe("observeArchivistEvent", () => {
+  test("messages-updated replaces state.messages with the event's own array", () => {
+    const s = createArchivistState(emptySession());
+    const next = [{ role: "user" as const, content: "hi" }];
+    observeArchivistEvent(s, { type: "messages-updated", messages: next });
+    expect(s.messages).toBe(next);
+  });
+
+  test("tool-call increments toolCallsSinceRun", () => {
+    const s = createArchivistState(emptySession());
+    observeArchivistEvent(s, { type: "tool-call", name: "write_file", args: {} });
+    observeArchivistEvent(s, { type: "tool-call", name: "write_file", args: {} });
+    expect(s.toolCallsSinceRun).toBe(2);
+  });
+
+  test("a real usage event updates lastInputTokens", () => {
+    const s = createArchivistState(emptySession());
+    const usageEvent: Extract<LoopEvent, { type: "usage" }> = {
+      type: "usage",
+      usage: {
+        inputTokens: 4_000,
+        inputTokenDetails: {
+          noCacheTokens: 4_000,
+          cacheReadTokens: undefined,
+          cacheWriteTokens: undefined,
+        },
+        outputTokens: 10,
+        outputTokenDetails: { textTokens: 10, reasoningTokens: undefined },
+        totalTokens: 4_010,
+      },
+    };
+    observeArchivistEvent(s, usageEvent);
+    expect(s.lastInputTokens).toBe(4_000);
+  });
+
+  // A "compacted" event's own usage is the summarizer's OWN round-trip cost, unrelated to
+  // post-compaction transcript size — using it here would pollute the near-compaction trigger's
+  // math with the wrong number. Negative control: only "usage" updates lastInputTokens.
+  test("a compacted event does NOT update lastInputTokens", () => {
+    const s = createArchivistState(emptySession());
+    s.lastInputTokens = 1_234;
+    observeArchivistEvent(s, {
+      type: "compacted",
+      summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
+      evictedCount: 1,
+      usage: {
+        inputTokens: 9_999,
+        inputTokenDetails: {
+          noCacheTokens: 9_999,
+          cacheReadTokens: undefined,
+          cacheWriteTokens: undefined,
+        },
+        outputTokens: 5,
+        outputTokenDetails: { textTokens: 5, reasoningTokens: undefined },
+        totalTokens: 10_004,
+      },
+    });
+    expect(s.lastInputTokens).toBe(1_234);
   });
 });
 
@@ -177,6 +194,173 @@ function toolCallStream(
   ];
 }
 
+function stopStream(): LanguageModelV4StreamPart[] {
+  return [
+    { type: "finish", finishReason: { unified: "stop", raw: undefined }, usage: usageChunk(2, 2) },
+  ];
+}
+
+describe("maybeRunArchivist", () => {
+  // A truncation (compaction OR /rewind) can leave the cursor pointing past the array's new end.
+  // toolCallsSinceRun/lastInputTokens are left below either trigger's threshold so
+  // shouldRunArchivist returns undefined and no model call happens — isolating the cursor guard.
+  test("resets an out-of-bounds messageCursor to 0", async () => {
+    const ctx = makeCtx();
+    const s = createArchivistState(emptySession());
+    s.messages = [
+      { role: "user", content: "a" },
+      { role: "user", content: "b" },
+    ];
+    s.messageCursor = 5; // past the end
+    const report = await maybeRunArchivist({
+      state: s,
+      ctx,
+      contextWindow: 100_000,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      signal: new AbortController().signal,
+      onWarning: () => {},
+    });
+    expect(report).toBeUndefined();
+    expect(s.messageCursor).toBe(0);
+  });
+
+  // Negative control: an in-bounds cursor must survive untouched, or the guard above couldn't be
+  // told apart from a function that always zeroes the cursor.
+  test("leaves an in-bounds messageCursor untouched", async () => {
+    const ctx = makeCtx();
+    const s = createArchivistState(emptySession());
+    s.messages = [
+      { role: "user", content: "a" },
+      { role: "user", content: "b" },
+    ];
+    s.messageCursor = 1;
+    await maybeRunArchivist({
+      state: s,
+      ctx,
+      contextWindow: 100_000,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      signal: new AbortController().signal,
+      onWarning: () => {},
+    });
+    expect(s.messageCursor).toBe(1);
+  });
+
+  test("enabled=false (a /memory archivist off toggle) returns undefined without calling the model, even past the tool-count threshold", async () => {
+    const ctx = makeCtx();
+    setConfigValue("SERI_ARCHIVIST_ENABLED", "false", ctx.configDir);
+    const s = createArchivistState(emptySession());
+    s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+    const model = new MockLanguageModelV4({ doStream: [] });
+    const report = await maybeRunArchivist({
+      state: s,
+      ctx,
+      contextWindow: 100_000,
+      model,
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      signal: new AbortController().signal,
+      onWarning: () => {},
+    });
+    expect(report).toBeUndefined();
+    expect(model.doStreamCalls).toHaveLength(0);
+  });
+
+  test("an already-aborted signal returns undefined", async () => {
+    const ctx = makeCtx();
+    const s = createArchivistState(emptySession());
+    s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+    const controller = new AbortController();
+    controller.abort();
+    const report = await maybeRunArchivist({
+      state: s,
+      ctx,
+      contextWindow: 100_000,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      signal: controller.signal,
+      onWarning: () => {},
+    });
+    expect(report).toBeUndefined();
+  });
+
+  test("end-to-end: enabled + trigger met drives a real archivist run and returns its report", async () => {
+    const ctx = makeCtx();
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(
+          toolCallStream("call-1", "memory_write", {
+            scope: "memory-project",
+            action: "add",
+            content: "tests run with bun test",
+            reason: "seen in transcript",
+            durable: true,
+          }),
+        ),
+        streamResult(stopStream()),
+      ],
+    });
+    const s = createArchivistState(emptySession());
+    s.messages = [{ role: "user", content: "task" }];
+    s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+
+    const report = await maybeRunArchivist({
+      state: s,
+      ctx,
+      contextWindow: 100_000,
+      model,
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      signal: new AbortController().signal,
+      onWarning: () => {},
+    });
+
+    expect(report?.trigger).toBe("tool-count");
+    expect(s.toolCallsSinceRun).toBe(0);
+    expect(s.runs).toBe(1);
+  });
+});
+
+describe("buildArchivistGoal", () => {
+  test("embeds both the current memory content and the transcript slice", () => {
+    const ctx = makeCtx();
+    const memory = loadMemory(ctx);
+    const goal = buildArchivistGoal([{ role: "user", content: "hi" }], memory, "tool-count");
+    expect(goal).toContain("Trigger: tool-count");
+    expect(goal).toContain("all three files are empty");
+    expect(goal).toContain('"hi"');
+  });
+
+  // Up to ARCHIVIST_TOOL_CALL_INTERVAL tool calls between two runs can include large outputs
+  // (verbose test runs, big file reads) — serialized uncapped this can trivially exceed the
+  // archivist's own child model's context window. A transcript whose serialized form exceeds the
+  // budget must be truncated with a marker, not passed through whole.
+  test("a transcript whose serialized form exceeds the cap is truncated with a marker", () => {
+    const ctx = makeCtx();
+    const memory = loadMemory(ctx);
+    const bigTranscript = [{ role: "user" as const, content: "x".repeat(60_000) }];
+    const goal = buildArchivistGoal(bigTranscript, memory, "tool-count");
+    expect(goal).toContain("truncated from");
+    expect(goal.length).toBeLessThan(JSON.stringify(bigTranscript).length);
+  });
+
+  // Negative control: a transcript comfortably under the cap is passed through whole, with no
+  // truncation marker — otherwise the test above couldn't be told apart from unconditional
+  // truncation.
+  test("a transcript under the cap is not truncated", () => {
+    const ctx = makeCtx();
+    const memory = loadMemory(ctx);
+    const smallTranscript = [{ role: "user" as const, content: "hello" }];
+    const goal = buildArchivistGoal(smallTranscript, memory, "tool-count");
+    expect(goal).not.toContain("truncated from");
+    expect(goal).toContain('"hello"');
+  });
+});
+
 describe("runArchivist", () => {
   test("a successful run stages a write, reports usage/cost, resets the counter, and advances the cursor", async () => {
     const ctx = makeCtx();
@@ -191,13 +375,7 @@ describe("runArchivist", () => {
             durable: true,
           }),
         ),
-        streamResult([
-          {
-            type: "finish",
-            finishReason: { unified: "stop", raw: undefined },
-            usage: usageChunk(2, 2),
-          },
-        ]),
+        streamResult(stopStream()),
       ],
     });
     const seedMessage = { role: "user", content: "x" } as const;
@@ -258,17 +436,7 @@ describe("runArchivist", () => {
       "2026-08-11",
     );
 
-    const model = new MockLanguageModelV4({
-      doStream: [
-        streamResult([
-          {
-            type: "finish",
-            finishReason: { unified: "stop", raw: undefined },
-            usage: usageChunk(2, 2),
-          },
-        ]),
-      ],
-    });
+    const model = new MockLanguageModelV4({ doStream: [streamResult(stopStream())] });
     const state = createArchivistState({
       id: "s",
       cwd: "/",
@@ -294,7 +462,12 @@ describe("runArchivist", () => {
     expect(sentPrompt).toContain("already-recorded-live-fact");
   });
 
-  test("a dispatch that throws returns undefined, calls onWarning, and leaves the counter untouched", async () => {
+  // MEDIUM finding (reviewer-verifier): the catch block used to return without touching the
+  // counter, so a persistently-failing archivist (bad catalog entry, provider outage, an
+  // oversized transcript) retried on literally every subsequent turn forever, warning every time,
+  // with no backoff and no cap. A failed attempt now costs one interval, the same as a successful
+  // one — this is what stops that retry storm.
+  test("a dispatch that throws resets the counter to 0, returns undefined, and calls onWarning", async () => {
     const ctx = makeCtx();
     const state = createArchivistState({
       id: "s",
@@ -330,10 +503,12 @@ describe("runArchivist", () => {
     expect(report).toBeUndefined();
     expect(warnings.length).toBe(1);
     expect(warnings[0]).toContain("archivist run failed");
-    expect(state.toolCallsSinceRun).toBe(ARCHIVIST_TOOL_CALL_INTERVAL);
+    expect(state.toolCallsSinceRun).toBe(0);
   });
 
-  test("an already-aborted signal returns undefined silently (no onWarning call)", async () => {
+  // Negative control for the fix above: an ABORT (as opposed to a genuine failure) must NOT cost
+  // an interval — cancelled work should be free to retry immediately.
+  test("an already-aborted signal returns undefined silently (no onWarning call) and leaves the counter untouched", async () => {
     const ctx = makeCtx();
     const model = new MockLanguageModelV4({ doStream: [] });
     const state = createArchivistState({
@@ -343,6 +518,7 @@ describe("runArchivist", () => {
       permissionMode: "auto",
       messages: [],
     });
+    state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
     const controller = new AbortController();
     controller.abort();
     const warnings: string[] = [];
@@ -361,13 +537,14 @@ describe("runArchivist", () => {
 
     expect(report).toBeUndefined();
     expect(warnings).toEqual([]);
+    expect(state.toolCallsSinceRun).toBe(ARCHIVIST_TOOL_CALL_INTERVAL);
   });
 });
 
 describe("the archivist provably cannot edit a file, run a command, or dispatch further subagents", () => {
   test("its ToolSet is exactly memory_write", () => {
     const ctx = makeCtx();
-    const tools = buildRoleToolSet("archivist", { memory_write: makeMemoryWriteTool(ctx) });
+    const tools = { memory_write: makeMemoryWriteTool(ctx) };
     expect(Object.keys(tools)).toEqual(["memory_write"]);
     expect(DISPATCH_TOOL_NAME in tools).toBe(false);
   });
@@ -440,7 +617,7 @@ describe("the archivist provably cannot edit a file, run a command, or dispatch 
       allowedTools: [],
     };
     const result = await runSubagent({
-      tools: buildRoleToolSet("archivist", { memory_write: makeMemoryWriteTool(ctx) }),
+      tools: { memory_write: makeMemoryWriteTool(ctx) },
       system: "ARCHIVIST",
       messages: [{ role: "user", content: "goal" }],
       runtime,
@@ -458,7 +635,6 @@ describe("the archivist provably cannot edit a file, run a command, or dispatch 
 describe("session-1 correction changes session-2 behavior without being repeated", () => {
   test("a memory_write with the gate OFF is visible to a fresh loadMemory + buildVolatileTier call, simulating session 2's prepareSession", async () => {
     const ctx = makeCtx();
-    const { setConfigValue } = await import("../../src/config/config");
     setConfigValue("SERI_MEMORY_APPROVAL", "false", ctx.configDir);
 
     // Negative control FIRST: before any write, a fresh load contains nothing of the correction.

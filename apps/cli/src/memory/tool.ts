@@ -40,7 +40,8 @@ const DESCRIPTION =
 
 // A factory, not a module-level const like provider/tools.ts's seven: the tool needs a per-dispatch
 // configDir/worktree, which toolDefinitions' tools never do. Never added to toolDefinitions itself
-// — it reaches exactly one ToolSet, the archivist's, via roles.ts's buildRoleToolSet extraTools seam.
+// — it reaches exactly one ToolSet, the archivist's own, built directly in memory/archivist.ts's
+// runArchivist rather than through subagents/roles.ts (the archivist is not a DISPATCHABLE_ROLE).
 export function makeMemoryWriteTool(ctx: MemoryContext) {
   return tool({
     description: DESCRIPTION,
