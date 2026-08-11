@@ -65,6 +65,18 @@ export async function validateProviderKey(
     return { ok: true, checked: false };
   }
 
+  // An empty/falsy key can never authenticate — reject it here, the same way a real 401/403
+  // would, rather than falling into the switch below. Bug fixed here (reviewer-verifier,
+  // multi-provider-byok-phase-2): every get<X>Model constructor (apps/cli/src/provider/*.ts) has
+  // its own `if (!apiKey) throw missingKeyError(...)` guard, which used to fire SYNCHRONOUSLY from
+  // inside the switch below — outside this function's own try/catch, so an empty-string submit
+  // made this function reject instead of resolve, contradicting the "never throws" contract
+  // cli.ts's onSetupKeyEntered relies on (no try/catch around its own `await
+  // validateProviderKey(...)` call) and leaving /setup's panel stuck on "Validating…" forever.
+  if (!apiKey) {
+    return { ok: false, reason: "auth", message: "API key cannot be empty." };
+  }
+
   const modelId = VALIDATION_MODEL_IDS[provider];
   // A five-case switch, mirroring getModel's own dispatch (provider/model.ts) — including that
   // function's own reasoning for a switch over a ternary/lookup table: an unrecognized value
