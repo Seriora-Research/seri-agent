@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { printCost, USAGE } from "../../src/cli/output";
+import { printCost, toolResultLine, USAGE } from "../../src/cli/output";
 
 function captureLog(fn: () => void): string[] {
   const lines: string[] = [];
@@ -50,5 +50,28 @@ describe("printCost", () => {
     );
     expect(line).toBe("(cost: ≥ $0.0020, partially unknown)");
     expect(line).not.toBe("(cost: $0.0020)");
+  });
+});
+
+describe("toolResultLine", () => {
+  test("dispatch_subagents renders task count and total tokens", () => {
+    const line = toolResultLine({
+      type: "tool-result",
+      name: "dispatch_subagents",
+      result: {
+        results: [{}, {}],
+        totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      },
+    });
+    expect(line).toBe("✓ dispatch_subagents done (2 tasks, 15 tokens)");
+  });
+
+  test("dispatch_subagents omits the token clause when totalTokens is undefined", () => {
+    const line = toolResultLine({
+      type: "tool-result",
+      name: "dispatch_subagents",
+      result: { results: [{}], totalUsage: {} },
+    });
+    expect(line).toBe("✓ dispatch_subagents done (1 tasks)");
   });
 });

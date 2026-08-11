@@ -203,11 +203,27 @@ function verificationSuffix(verification: CheckOutcome): string {
 // The verification suffix is NOT named that way: the narrowing belongs to the module that
 // produces the shape, so this file asks it rather than re-deriving it, and `edit` stays the only
 // tool name here.
+// Structural, not an import of subagents/dispatch.ts — same reason writeFileVerification takes
+// `unknown` too: that module reaches tools/bash.ts's process-global signal handler at load.
+function dispatchTaskCount(
+  result: unknown,
+): { count: number; tokens: number | undefined } | undefined {
+  const value = result as { results?: unknown; totalUsage?: { totalTokens?: unknown } } | undefined;
+  if (!Array.isArray(value?.results)) return undefined;
+  const tokens = value.totalUsage?.totalTokens;
+  return { count: value.results.length, tokens: typeof tokens === "number" ? tokens : undefined };
+}
+
 export function toolResultLine(event: Extract<LoopEvent, { type: "tool-result" }>): string {
+  if (event.name === "edit") return "✓ edit done (text returned, nothing written)";
+  const dispatch =
+    event.name === "dispatch_subagents" ? dispatchTaskCount(event.result) : undefined;
+  if (dispatch !== undefined) {
+    const tokens = dispatch.tokens === undefined ? "" : `, ${dispatch.tokens} tokens`;
+    return `✓ dispatch_subagents done (${dispatch.count} tasks${tokens})`;
+  }
   const verification = writeFileVerification(event.result);
-  return event.name === "edit"
-    ? "✓ edit done (text returned, nothing written)"
-    : `✓ ${event.name} done${verification === undefined ? "" : verificationSuffix(verification)}`;
+  return `✓ ${event.name} done${verification === undefined ? "" : verificationSuffix(verification)}`;
 }
 
 // Printed because a grant the user cannot see is a grant they cannot revoke. This string is still
