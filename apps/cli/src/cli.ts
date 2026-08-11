@@ -926,13 +926,19 @@ async function prepareSession(
       { model: session.model, provider: session.provider },
       configuredProviders(configDir),
     );
-    model = getModel(route.model, route.provider, session.id, {
-      getGroqModel: deps.getGroqModel,
-      getOpenRouterModel: deps.getOpenRouterModel,
-      getAnthropicModel: deps.getAnthropicModel,
-      getOpenAIModel: deps.getOpenAIModel,
-      getGoogleModel: deps.getGoogleModel,
-    });
+    model = getModel(
+      route.model,
+      route.provider,
+      session.id,
+      {
+        getGroqModel: deps.getGroqModel,
+        getOpenRouterModel: deps.getOpenRouterModel,
+        getAnthropicModel: deps.getAnthropicModel,
+        getOpenAIModel: deps.getOpenAIModel,
+        getGoogleModel: deps.getGoogleModel,
+      },
+      configDir,
+    );
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
@@ -1816,13 +1822,19 @@ async function runTui(
         { model: requestedModel, provider: requestedProvider },
         configuredProviders(configDir),
       );
-      model = getModel(route.model, route.provider, sessionId, {
-        getGroqModel: deps.getGroqModel,
-        getOpenRouterModel: deps.getOpenRouterModel,
-        getAnthropicModel: deps.getAnthropicModel,
-        getOpenAIModel: deps.getOpenAIModel,
-        getGoogleModel: deps.getGoogleModel,
-      });
+      model = getModel(
+        route.model,
+        route.provider,
+        sessionId,
+        {
+          getGroqModel: deps.getGroqModel,
+          getOpenRouterModel: deps.getOpenRouterModel,
+          getAnthropicModel: deps.getAnthropicModel,
+          getOpenAIModel: deps.getOpenAIModel,
+          getGoogleModel: deps.getGoogleModel,
+        },
+        configDir,
+      );
     } catch (err) {
       dispatch({
         type: "command-error",
