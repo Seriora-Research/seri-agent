@@ -13,19 +13,31 @@ import { PROVIDER_API_KEY_NAMES } from "./keys";
 // for their OWN bare-id entries (e.g. groq's llama-3.3-70b-versatile). The distinction that
 // matters for routing priority is aggregator-vs-not, and groq/openrouter are the two aggregators
 // in CATALOG_PROVIDERS today; anthropic/openai/google never proxy another vendor's models.
-export const NATIVE_PROVIDERS: ReadonlySet<ModelProvider> = new Set([
-  "anthropic",
-  "openai",
-  "google",
-]);
+//
+// `Record<ModelProvider, boolean>`, not a bare `Set` literal (code-review finding, PR #73, round
+// 3, item #10, mirroring PROVIDER_API_KEY_NAMES's own established pattern, keys.ts): a `Set`
+// built from a hand-picked literal array has no compile-time tie to `ModelProvider` at all — a 6th
+// provider added to CATALOG_PROVIDERS/ModelProvider but forgotten here used to silently fall into
+// the aggregator tier (wrong reroute priority, wrong /model picker ordering) with no compiler
+// error. A `Record` with one entry per `ModelProvider` member makes a forgotten one a COMPILE
+// error (missing property) instead, the same guarantee `isModelProvider` (provider/defaults.ts)
+// explicitly does NOT have (its own comment: it derives membership from CATALOG_PROVIDERS at
+// runtime only, because it has no per-provider payload to type-check against — this one does).
+export const NATIVE_PROVIDERS: Record<ModelProvider, boolean> = {
+  anthropic: true,
+  openai: true,
+  google: true,
+  groq: false,
+  openrouter: false,
+};
 
 // The native-then-aggregator, CATALOG_PROVIDERS-tiebroken ordering rule 2 applies — exported so
 // /model's own picker (tui/commands.ts's decideModelPickerOpen) can order a route group's members
 // in the SAME order routing would actually choose them, rather than re-deriving an independent
 // copy of this comparator that could silently drift from it.
 export function byRoutePriority(a: ModelCatalogEntry, b: ModelCatalogEntry): number {
-  const aTier = NATIVE_PROVIDERS.has(a.provider) ? 0 : 1;
-  const bTier = NATIVE_PROVIDERS.has(b.provider) ? 0 : 1;
+  const aTier = NATIVE_PROVIDERS[a.provider] ? 0 : 1;
+  const bTier = NATIVE_PROVIDERS[b.provider] ? 0 : 1;
   if (aTier !== bTier) return aTier - bTier;
   return CATALOG_PROVIDERS.indexOf(a.provider) - CATALOG_PROVIDERS.indexOf(b.provider);
 }
