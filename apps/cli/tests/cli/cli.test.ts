@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { PassThrough } from "node:stream";
+import { resetCatalogCache } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
@@ -34,6 +35,7 @@ type RunLoopOpts = Parameters<typeof runLoop>[0];
 describe("run (task invocation)", () => {
   const originalKey = process.env.GROQ_API_KEY;
   const originalHome = process.env.HOME;
+  const originalDisableModelsFetch = process.env.SERI_DISABLE_MODELS_FETCH;
   let sessionsDir: string;
   let tmpConfigRoot: string;
   // Temp dirs a single test needs, torn down by the shared afterEach below.
@@ -70,11 +72,28 @@ describe("run (task invocation)", () => {
     // can never supply GROQ_API_KEY and mask the "unset" case (same guard as groq.test.ts).
     tmpConfigRoot = mkdtempSync(join(tmpdir(), "seri-cli-test-config-"));
     process.env.HOME = tmpConfigRoot;
+    // Every test in this file that reaches prepareSession goes through getModelCatalog(), which
+    // wraps @seri/model-catalog's own loadCatalog() — a MODULE-LEVEL cache shared by every test
+    // file in the same process, not scoped to this describe block. apps/cli's own package-level
+    // `"test": "SERI_DISABLE_MODELS_FETCH=1 bun test"` script normally guarantees the deterministic
+    // bundled-fallback path, but that guarantee is invisible here: a bare repo-root `bun test`
+    // (which runs every package's test files in ONE shared process, not through any package
+    // script) does not set it, and packages/model-catalog/tests/catalog.test.ts's own "caches
+    // in-memory for the process" test populates that same cache with a fake 2-entry catalog and
+    // never resets it after its own describe block — whichever test runs next in the process
+    // inherits it. Reset the cache and force the deterministic path explicitly, rather than
+    // trusting the ambient env var or the order test files happen to run in.
+    resetCatalogCache();
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
   });
 
   afterEach(() => {
     restoreEnv("GROQ_API_KEY", originalKey);
     restoreEnv("HOME", originalHome);
+    restoreEnv("SERI_DISABLE_MODELS_FETCH", originalDisableModelsFetch);
+    // Cleared on the way out too, so a real catalog this file legitimately cached does not become
+    // the NEXT file's own stale leak in the same shared process.
+    resetCatalogCache();
     rmSync(sessionsDir, { recursive: true, force: true });
     rmSync(tmpConfigRoot, { recursive: true, force: true });
     // Cleaned here rather than at the end of the test that made it, so a failing assertion leaks
