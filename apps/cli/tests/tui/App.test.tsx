@@ -928,7 +928,9 @@ describe("App", () => {
       expect(configured).not.toContain("no key");
       expect(configured).not.toContain("route");
 
-      const unconfigured = formatModelRow(pickerRow({ keyConfigured: false, alternatives: 0 }));
+      const unconfigured = formatModelRow(
+        pickerRow({ keyConfigured: false, alternatives: 0, rerouteTo: undefined }),
+      );
       expect(unconfigured).toContain("no key");
       expect(unconfigured).not.toContain("your key");
 
@@ -938,6 +940,30 @@ describe("App", () => {
 
       const withTwoAlternatives = formatModelRow(pickerRow({ alternatives: 2 }));
       expect(withTwoAlternatives).toContain("+2 routes");
+    });
+
+    // Same D1/D2 section: a keyless row with a reachable sibling names that sibling directly
+    // instead of a bare "no key" plus a count the user would have to guess the meaning of.
+    test("formatModelRow names the reroute target on a keyless row that has one", () => {
+      const rerouted = formatModelRow(
+        pickerRow({ keyConfigured: false, alternatives: 1, rerouteTo: "anthropic" }),
+      );
+      expect(rerouted).toContain("→ anthropic");
+      expect(rerouted).not.toContain("no key");
+      // The reroute target already says where this row goes — no need to also restate the raw
+      // sibling count next to it.
+      expect(rerouted).not.toContain("route");
+    });
+
+    // The bug this format replaces: "no key +N routes" used to be shown even when NONE of those
+    // N siblings had a key either, promising a fallback that did not exist. A keyless row with no
+    // configured sibling must read as a plain dead end, not "no key" plus a misleading count.
+    test("formatModelRow shows a bare 'no key' when no sibling has a key either, even with alternatives > 0", () => {
+      const deadEnd = formatModelRow(
+        pickerRow({ keyConfigured: false, alternatives: 2, rerouteTo: undefined }),
+      );
+      expect(deadEnd).toContain("no key");
+      expect(deadEnd).not.toContain("route");
     });
 
     test("formatModelRow truncates a displayName longer than the name column", () => {

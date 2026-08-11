@@ -163,9 +163,10 @@ const MODEL_PICKER_WINDOW = 10;
 const NAME_WIDTH = 22;
 const PROVIDER_WIDTH = 10;
 const CONTEXT_WIDTH = 7;
-// Widest real value is "your key" (8 chars) — 9 leaves one column of breathing room, matching
-// this file's other columns' own generosity over their own widest realistic value.
-const ROUTE_WIDTH = 9;
+// Widest real value is "→ openrouter" (12 chars — the longest CATALOG_PROVIDERS name behind the
+// reroute arrow) — 13 leaves one column of breathing room, matching this file's other columns'
+// own generosity over their own widest realistic value.
+const ROUTE_WIDTH = 13;
 // Cost was the table's last column before Route (D1/D2, feature-plan.md) became the new trailing
 // one — formatCost's own output is genuinely variable-width ("—" vs "$150.00/$600.00"), which was
 // fine when nothing followed it, but Route now does, so this pads it too, or Route would drift
@@ -208,20 +209,31 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
 // needed one.
 //
 // D1/D2 (feature-plan.md): the trailing Route column names whether THIS row's own provider has a
-// key ("your key"/"no key" — the same fact routing-priority resolution would act on) and, when
-// this row is one of several routes to the same logical model (`alternatives > 0`, set by
-// decideModelPickerOpen), how many OTHER routes exist — so a route with no key of its own but a
-// reachable sibling still reads as reachable, not as a dead end.
+// key ("your key" — the same fact routing-priority resolution would act on). A row with no key of
+// its own names the specific sibling provider it would actually reroute to ("→ openrouter"),
+// rather than a bare "no key" plus an alternatives count that used to overstate reachability: the
+// PROVIDER_WIDTH-adjacent `Provider` column already shows what "your key" belongs to, so repeating
+// it there would be redundant, but a REROUTE target is a different provider than this row's own
+// and is exactly the thing "no key" alone left the user to guess at. Only a row with no key AND no
+// configured sibling reads as the true dead end, "no key" with nothing after it. The "+N route(s)"
+// suffix survives only for a row that already works on its own (`keyConfigured`): once a no-key
+// row names its reroute target directly, restating a raw sibling count next to it would double up
+// on the same information, or — when none of those siblings has a key either — repeat the original
+// bug of promising a fallback that does not exist.
 export function formatModelRow(row: ModelPickerEntry): string {
-  const { entry, keyConfigured, alternatives } = row;
-  const suffix = alternatives > 0 ? ` +${alternatives} route${alternatives === 1 ? "" : "s"}` : "";
+  const { entry, keyConfigured, alternatives, rerouteTo } = row;
+  const route = keyConfigured ? "your key" : rerouteTo ? `→ ${rerouteTo}` : "no key";
+  const suffix =
+    keyConfigured && alternatives > 0
+      ? ` +${alternatives} route${alternatives === 1 ? "" : "s"}`
+      : "";
   return (
     [
       truncatePad(entry.displayName, NAME_WIDTH),
       truncatePad(entry.provider, PROVIDER_WIDTH),
       formatContextWindow(entry.contextWindow).padStart(CONTEXT_WIDTH),
       truncatePad(formatCost(entry.pricing), COST_WIDTH),
-      truncatePad(keyConfigured ? "your key" : "no key", ROUTE_WIDTH),
+      truncatePad(route, ROUTE_WIDTH),
     ].join(" ") + suffix
   );
 }

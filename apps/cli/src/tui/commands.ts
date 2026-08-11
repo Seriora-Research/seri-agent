@@ -28,7 +28,7 @@ import {
 import { projectRoot } from "../checkpoint/shadowGit";
 import { cycleMode } from "../gate/gate";
 import { allProviderKeyStates } from "../provider/keys";
-import { byRoutePriority } from "../provider/routing";
+import { byRoutePriority, resolveRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 
 export type CommandDirs = { sessionsDir: string; checkpointsDir: string };
@@ -61,13 +61,15 @@ export function decideModeCycle(session: SessionState<ModelMessage>): {
 }
 
 // A single picker row: the catalog entry itself, whether ITS OWN provider currently has a key
-// (App.tsx's own "your key"/"no key" column), and how many OTHER routes reach the same logical
-// model (routes.ts's routeKey — the D1 grouping) so the row can say "+N routes" instead of leaving
-// the alternatives scattered elsewhere in a flat list.
+// (App.tsx's own "your key"/"no key" column), how many OTHER routes reach the same logical model
+// (routes.ts's routeKey — the D1 grouping) so a keyed row can say "+N routes" instead of leaving
+// the alternatives scattered elsewhere in a flat list, and — when this row has no key of its own —
+// which specific sibling provider `resolveRoute` would actually send it to, if any.
 export type ModelPickerEntry = {
   entry: ModelCatalogEntry;
   keyConfigured: boolean;
   alternatives: number;
+  rerouteTo?: ModelProvider;
 };
 
 // The decision half of /model, mirroring decideModeCycle's own pure, no-I/O shape: what to show,
@@ -91,11 +93,30 @@ export function decideModelPickerOpen(
   const rows: ModelPickerEntry[] = [];
   for (const group of groups.values()) {
     const ordered = [...group].sort(byRoutePriority);
+    // Computed once per GROUP, not per row: resolveRoute's rule 2 depends only on the group's
+    // siblings and `configured`, never on which keyless member is asking, so every keyless row
+    // in a group shares the same answer — and calling resolveRoute itself, through any one
+    // keyless member as the "requested" pair, ties this display to the actual routing decision
+    // instead of a hand-rolled second copy of its tie-break that could silently drift from it
+    // (code-review finding, PR #75: the earlier per-row `ordered.find` re-derived resolveRoute's
+    // own filter+sort rather than calling it, an O(n^2)-per-group re-derivation of one answer).
+    const firstKeyless = ordered.find((candidate) => !configured.has(candidate.provider));
+    const resolved =
+      firstKeyless === undefined
+        ? undefined
+        : resolveRoute(
+            catalog,
+            { model: firstKeyless.id, provider: firstKeyless.provider },
+            configured,
+          );
+    const rerouteTarget = resolved?.rerouted ? resolved.provider : undefined;
     for (const entry of ordered) {
+      const keyConfigured = configured.has(entry.provider);
       rows.push({
         entry,
-        keyConfigured: configured.has(entry.provider),
+        keyConfigured,
         alternatives: group.length - 1,
+        rerouteTo: keyConfigured ? undefined : rerouteTarget,
       });
     }
   }

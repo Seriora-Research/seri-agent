@@ -155,6 +155,40 @@ describe("decideModelPickerOpen", () => {
     // A model with no siblings has zero alternatives, not `undefined` or `-1`.
     expect(groqRow?.alternatives).toBe(0);
   });
+
+  test("rerouteTo names the specific sibling a keyless row would actually reroute to", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "anthropic/claude-sonnet-5", provider: "openrouter" }),
+        catalogEntry({ id: "claude-sonnet-5", provider: "anthropic" }),
+      ],
+    };
+
+    const rows = decideModelPickerOpen(catalog, new Set(["anthropic"]));
+    const openrouterRow = rows.find((row) => row.entry.provider === "openrouter");
+    const anthropicRow = rows.find((row) => row.entry.provider === "anthropic");
+
+    expect(openrouterRow?.rerouteTo).toBe("anthropic");
+    // A row that already has its own key has nothing to reroute to.
+    expect(anthropicRow?.rerouteTo).toBeUndefined();
+  });
+
+  test("rerouteTo is undefined when no sibling has a key either — a true dead end, not a guess", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "anthropic/claude-sonnet-5", provider: "openrouter" }),
+        catalogEntry({ id: "claude-sonnet-5", provider: "anthropic" }),
+      ],
+    };
+
+    const rows = decideModelPickerOpen(catalog, new Set());
+    const openrouterRow = rows.find((row) => row.entry.provider === "openrouter");
+
+    expect(openrouterRow?.alternatives).toBe(1);
+    expect(openrouterRow?.rerouteTo).toBeUndefined();
+  });
 });
 
 const ALL_KEY_NAMES = [
