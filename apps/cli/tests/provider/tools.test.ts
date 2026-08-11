@@ -3,7 +3,13 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
-import { FS_MUTATING_TOOL_NAMES, toolDefinitions } from "../../src/provider/tools";
+import {
+  DISPATCH_TOOL_NAME,
+  FS_MUTATING_TOOL_NAMES,
+  READ_ONLY_TOOL_NAMES,
+  toolDefinitions,
+  WRITE_TOOL_NAMES,
+} from "../../src/provider/tools";
 import type { GlobResult } from "../../src/tools/glob";
 import type { GrepResult } from "../../src/tools/grep";
 
@@ -127,5 +133,25 @@ describe("FS_MUTATING_TOOL_NAMES", () => {
     for (const name of FS_MUTATING_TOOL_NAMES) {
       expect(toolDefinitions[name]).toBeDefined();
     }
+  });
+});
+
+describe("READ_ONLY_TOOL_NAMES", () => {
+  test("is exactly read_file/grep/glob", () => {
+    expect(READ_ONLY_TOOL_NAMES.sort()).toEqual(["glob", "grep", "read_file"]);
+  });
+
+  test("shares no member with WRITE_TOOL_NAMES", () => {
+    for (const name of READ_ONLY_TOOL_NAMES) {
+      expect(WRITE_TOOL_NAMES).not.toContain(name);
+    }
+  });
+});
+
+describe("DISPATCH_TOOL_NAME", () => {
+  // The whole one-level subagent recursion guard (subagents/roles.ts): this name is not a key of
+  // toolDefinitions, so no subagent ToolSet built from it can ever contain the tool.
+  test("is not a key of toolDefinitions", () => {
+    expect(Object.keys(toolDefinitions)).not.toContain(DISPATCH_TOOL_NAME);
   });
 });

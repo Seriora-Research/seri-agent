@@ -126,3 +126,17 @@ export const FS_MUTATING_TOOL_NAMES: (keyof typeof toolDefinitions)[] = [
   "bash",
   "powershell",
 ];
+
+export type ToolName = keyof typeof toolDefinitions;
+
+// Derived from toolDefinitions minus WRITE_TOOL_NAMES, not hand-listed: a new write-capable tool
+// is excluded by construction instead of by remembering to update a second list — the same
+// rationale WRITE_TOOL_NAMES' own comment gives for gate.ts.
+export const READ_ONLY_TOOL_NAMES: ToolName[] = (Object.keys(toolDefinitions) as ToolName[]).filter(
+  (name) => !WRITE_TOOL_NAMES.includes(name),
+);
+
+// Not a key of toolDefinitions, and that absence IS the one-level subagent recursion guard
+// (subagents/roles.ts): every subagent's ToolSet is built by picking names out of
+// toolDefinitions, so `ToolName` can never name this tool and no child ToolSet can contain it.
+export const DISPATCH_TOOL_NAME = "dispatch_subagents";
