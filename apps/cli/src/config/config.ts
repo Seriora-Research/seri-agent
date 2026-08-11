@@ -101,6 +101,21 @@ export function loadVerifyConfig(configDir?: string): VerifyConfig {
   };
 }
 
+// Stage 6b: the two /memory-controlled toggles, copying loadVerifyConfig's exact
+// read(...) !== "false" shape (above) so a typo can't silently disable either safe default. Both
+// are read live rather than cached, since either can flip mid-session via /memory approval on|off
+// or /memory archivist on|off and driveLoop re-reads this every turn.
+export type MemoryConfig = { approvalRequired: boolean; archivistEnabled: boolean };
+
+export function loadMemoryConfig(configDir?: string): MemoryConfig {
+  const config = loadConfig(configDir);
+  const read = (name: string): string | undefined => process.env[name] || config[name] || undefined;
+  return {
+    approvalRequired: read("SERI_MEMORY_APPROVAL") !== "false",
+    archivistEnabled: read("SERI_ARCHIVIST_ENABLED") !== "false",
+  };
+}
+
 // configDir is threaded through rather than always resolved internally so that a caller
 // which writes with an explicit dir (`seri config set`) reads back from that same dir.
 export function getApiKey(name: string, configDir?: string): string | undefined {

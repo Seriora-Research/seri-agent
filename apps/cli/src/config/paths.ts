@@ -13,6 +13,13 @@ export function getBaseConfigDir(): string {
 
 export const DEFAULT_PROFILE = "default";
 
+// Stage 6b's two profile-root directories — kept as named consts, not inline string literals, so
+// getReservedProfileNames()'s set below and getMemoriesDir/getPendingDir's own accessors read from
+// one source and cannot drift apart from each other, the same anti-drift discipline this file's
+// own header comment already applies to CONFIG_FILENAME/AUTH_FILENAME/PERMISSIONS_FILENAME.
+export const MEMORIES_DIRNAME = "memories";
+export const PENDING_DIRNAME = "pending";
+
 // The full names of every sibling a profile directory would collide with under the default root.
 // The three file-backed entries are read from the file that owns them (config.json, auth.json,
 // permissions.yaml), so this set cannot drift out of sync with the literal each of those modules
@@ -41,6 +48,8 @@ export function getReservedProfileNames(): ReadonlySet<string> {
     "checkpoints",
     "rg",
     "bin",
+    MEMORIES_DIRNAME,
+    PENDING_DIRNAME,
   ]);
   return reservedProfileNames;
 }
@@ -116,4 +125,16 @@ export function getConfigDir(): string {
     ? profile.toLowerCase() === DEFAULT_PROFILE
     : profile === DEFAULT_PROFILE;
   return isDefault ? base : join(base, profile);
+}
+
+// Stage 6b: where the three persistent-memory files (USER.md, MEMORY.md, <project>/MEMORY.md)
+// live, and where a write is staged before /memory approve applies it. Both default to
+// getConfigDir() like every other profile-root accessor, but take an explicit configDir too — the
+// memory store is built and tested against an mkdtempSync fixture, never the real profile root.
+export function getMemoriesDir(configDir: string = getConfigDir()): string {
+  return join(configDir, MEMORIES_DIRNAME);
+}
+
+export function getPendingDir(configDir: string = getConfigDir()): string {
+  return join(configDir, PENDING_DIRNAME);
 }
