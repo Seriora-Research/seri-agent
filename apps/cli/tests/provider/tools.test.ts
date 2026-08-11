@@ -158,3 +158,20 @@ describe("DISPATCH_TOOL_NAME", () => {
     expect(Object.keys(toolDefinitions)).not.toContain(DISPATCH_TOOL_NAME);
   });
 });
+
+describe("memory_write (Stage 6b)", () => {
+  // Deliberately absent (spec's own explicit non-change): memory_write is built by
+  // memory/tool.ts's makeMemoryWriteTool factory and reaches exactly one ToolSet, the archivist's,
+  // via roles.ts's buildRoleToolSet extraTools seam — never through toolDefinitions.
+  test("is not a key of toolDefinitions", () => {
+    expect(Object.keys(toolDefinitions)).not.toContain("memory_write");
+  });
+
+  // memory_write writes under the profile root, not the worktree: WRITE_TOOL_NAMES/gate.ts
+  // classify worktree-write permission blocking, and FS_MUTATING_TOOL_NAMES is what a checkpoint
+  // snapshots ahead of — neither applies to a file shadow-git has nothing to snapshot.
+  test("is in neither WRITE_TOOL_NAMES nor FS_MUTATING_TOOL_NAMES", () => {
+    expect(WRITE_TOOL_NAMES).not.toContain("memory_write");
+    expect(FS_MUTATING_TOOL_NAMES).not.toContain("memory_write");
+  });
+});

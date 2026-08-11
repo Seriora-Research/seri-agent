@@ -7,6 +7,8 @@ import {
   DEFAULT_PROFILE,
   getBaseConfigDir,
   getConfigDir,
+  getMemoriesDir,
+  getPendingDir,
   getReservedProfileNames,
   profileNameError,
   resolveProfile,
@@ -204,8 +206,22 @@ describe("profileNameError", () => {
       "checkpoints",
       "rg",
       "bin",
+      "memories",
+      "pending",
     ];
     expect([...getReservedProfileNames()].sort()).toEqual([...expected].sort());
+  });
+
+  // Stage 6b: memories/ and pending/ join the reserved set the same way sessions/checkpoints did.
+  test.each(["memories", "pending"])("%s is reserved", (name) => {
+    expect(profileNameError(name)).toBeDefined();
+  });
+
+  test.each(["Memories", "Pending"])("%s is reserved case-folded on win32/darwin", (name) => {
+    setPlatform("win32");
+    expect(profileNameError(name)).toBeDefined();
+    setPlatform("darwin");
+    expect(profileNameError(name)).toBeDefined();
   });
 
   // Case-folding is platform-conditional (win32/darwin only), matching the one existing precedent
@@ -270,5 +286,19 @@ describe("resolveProfile precedence (D1)", () => {
   test("an empty --profile flag still falls through to SERI_PROFILE", () => {
     process.env.SERI_PROFILE = "envd";
     expect(resolveProfile("")).toEqual({ profile: "envd", source: "env" });
+  });
+});
+
+describe("getMemoriesDir / getPendingDir", () => {
+  test("join under getConfigDir() by default", () => {
+    setPlatform("linux");
+    process.env.HOME = "/home/test";
+    expect(getMemoriesDir()).toBe(join(getConfigDir(), "memories"));
+    expect(getPendingDir()).toBe(join(getConfigDir(), "pending"));
+  });
+
+  test("honour an explicit configDir argument", () => {
+    expect(getMemoriesDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "memories"));
+    expect(getPendingDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "pending"));
   });
 });
