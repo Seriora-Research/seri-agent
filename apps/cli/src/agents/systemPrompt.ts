@@ -5,8 +5,18 @@ import type { ModelProvider } from "@seri/model-catalog";
 // deferred to Stage 7a, when a catalog exists to route on — see docs/PROMPT-ROUTING.md. Until then
 // every model gets the enforcement instruction, because the model that needs it is the default.
 //
-// Two sections are measurement-driven — they exist because of a failure that was observed, and
+// Three sections are measurement-driven — they exist because of a failure that was observed, and
 // deleting them would undo a fix:
+//   - "# What needs a tool" — the measured symptom, from a live session (Llama 3.3 70B via Groq):
+//     asked to remember a number for the rest of the conversation, the model called `write_file`
+//     and created a file for it, unprompted — the conversation history already carries that number
+//     forward every turn (loop.ts resends the full `messages` array each turn; nothing needed
+//     writing). Placed BEFORE "# Calling tools" and worded as a scope gate ("does this task need a
+//     tool at all"), never touching "# Calling tools"'s own text, because that section's mandate
+//     ("you MUST call your tools") is the fix for the opposite failure — a model that only
+//     describes a needed call instead of making it. Read in isolation, "you must call tools" gives
+//     a model no signal that it applies only once a tool is actually needed; this section supplies
+//     that signal without diluting the mandate it precedes.
 //   - "# Calling tools" — the measured symptom. The model emits `<function/write_file({...})>` as
 //     assistant text and the loop ends `done: no-tool-call` having done nothing. "Never talk to the
 //     user through bash/powershell" is the same category: text outside a tool call is the only
@@ -61,6 +71,9 @@ Be short and direct. No superlatives, no emojis unless the user asks for them. R
 - \`glob\` — list files matching a pattern.
 - \`bash\` — run a shell command via bash.
 - \`powershell\` — run a shell command via PowerShell.
+
+# What needs a tool
+Not everything you're told needs a tool call. A question, or something to keep in mind for the rest of this conversation, is answered in text — the conversation itself already carries it forward turn to turn, so there is nothing to write down. Reach for a tool when the task itself requires touching the project: reading, changing, or running something. This does not relax "Calling tools" below — once a task does need a tool, calling it is mandatory, not optional.
 
 # Calling tools
 You MUST call your tools to do the work. Do not describe a call, plan one, or write one out as text — a call you only talk about never runs, and the user is left with an explanation and an unchanged project.
