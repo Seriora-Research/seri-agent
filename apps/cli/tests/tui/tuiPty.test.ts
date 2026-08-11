@@ -792,6 +792,42 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     rmSync(dir, { recursive: true, force: true });
   });
 
+  // Polls for config.json to satisfy a predicate on its own PARSED content, rather than a flat
+  // sleep or a bare existence check — measured live (a session-start reroute test, WSL; then
+  // three more sites, macOS CI round 3): a fixed "(done: no-tool-call)"/"Saved …"/"Removed …" line
+  // landing in the captured pty stdout is not a reliable proxy for "the write already happened"
+  // (the file write itself is synchronous once persistDefaultModel/setConfigValue actually runs,
+  // but nothing guarantees a captured stdout line and a DIFFERENT process's own filesystem read
+  // observe that same moment in the same order on every runner — measured to differ on WSL and
+  // again on macOS CI, never on Windows or ubuntu-latest, which is exactly what made this look
+  // fixed after the first occurrence). A bare existence check is NOT enough on its own either:
+  // several call sites here read a config.json that already EXISTS with OLD content (seedConfig's
+  // own pre-write, or an earlier turn's own persist) before the assertion's own write is expected
+  // to land — existence alone would return instantly against the stale content and never actually
+  // wait for the NEW value, silently defeating the whole poll. `predicate` is what closes that
+  // gap: every call site asserts on the SPECIFIC value it's about to check, so the poll can't
+  // return before that value is genuinely present. Mirrors `sawLine`'s own bounded-poll idiom
+  // (20ms interval, a deadline, not a flat sleep) for a file instead of a stdout string. Declared
+  // here, before the first test, rather than lower in the file where it was first added (`function`
+  // hoisting made a later declaration technically reachable from an earlier test too, but every
+  // other helper in this file is declared before its own first use — this one now is too).
+  async function waitForConfig(
+    path: string,
+    predicate: (config: Record<string, string>) => boolean,
+    timeoutMs = 5000,
+  ): Promise<Record<string, string>> {
+    const deadline = Date.now() + timeoutMs;
+    let config: Record<string, string> = {};
+    while (Date.now() < deadline) {
+      if (existsSync(path)) {
+        config = JSON.parse(readFileSync(path, "utf8"));
+        if (predicate(config)) return config;
+      }
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return config;
+  }
+
   // The TUI counterpart of approvalPromptPty.test.ts's "a real Ctrl-C at the prompt cancels the
   // turn" test — same fact (a single press cancels the in-flight turn rather than being silently
   // dropped), different route to signals.ts: there is no readline Interface in the TUI path, so
@@ -1091,9 +1127,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // for every future brand-new session, not just this one — proven here on the write side.
       // Waiting for turn 2's own "done" first: it is only dispatched after turn 2's
       // messages-updated has already been processed by cli.ts's onEvent, which is where the
-      // persist (if any) happens, so by the time "done" appears the write is already on disk.
+      // persist (if any) happens — the write itself is synchronous by that point, but a captured
+      // pty stdout line and a DIFFERENT process's own filesystem read are not guaranteed to
+      // observe that moment in the same order on every runner (macOS CI, round 3: this exact
+      // ENOENT). waitForConfig polls for the actual expected value instead of assuming.
       await sawLineTimes("(done: no-tool-call)", 2);
-      const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+      const config = await waitForConfig(
+        join(dir, ".seri", "config.json"),
+        (c) => c.SERI_MODEL === "llama-3.3-70b-versatile",
+      );
       expect(config.SERI_MODEL).toBe("llama-3.3-70b-versatile");
       expect(config.SERI_PROVIDER).toBe("groq");
       // Negative control built in: the pre-switch model must not be the one that landed.
@@ -1150,7 +1192,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_CALL 2 model=claude-sonnet-5 provider=anthropic");
       await sawLineTimes("(done: no-tool-call)", 2);
 
-      const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+      // waitForConfig, not a bare readFileSync right after sawLineTimes — the same race macOS CI
+      // caught elsewhere in this file (waitForConfig's own comment).
+      const config = await waitForConfig(
+        join(dir, ".seri", "config.json"),
+        (c) => c.SERI_MODEL === "claude-sonnet-5",
+      );
       expect(config.SERI_MODEL).toBe("claude-sonnet-5");
       expect(config.SERI_PROVIDER).toBe("anthropic");
       // Negative control: the OTHER route to the same model must not be what persisted.
@@ -1202,10 +1249,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLineTimes("(done: no-tool-call)", 2);
       // "(done: no-tool-call)" appearing in the captured pty stdout is not a reliable proxy for
       // "config.json has already been written" — measured live, waiting on it alone flaked here.
-      // Poll for the file itself instead (waitForFile's own comment).
-      await waitForFile(join(dir, ".seri", "config.json"));
-
-      const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+      // Poll for the actual content instead (waitForConfig's own comment).
+      const config = await waitForConfig(
+        join(dir, ".seri", "config.json"),
+        (c) => c.SERI_MODEL === "claude-sonnet-5",
+      );
       expect(config.SERI_MODEL).toBe("claude-sonnet-5");
       // D4: the RESOLVED pair persists, not the one literally selected in the picker.
       expect(config.SERI_PROVIDER).toBe("anthropic");
@@ -1274,7 +1322,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         "RUNLOOP_CALL 3 model=llama-3.3-70b-versatile messages=5 systemHasModelId=true",
       );
       await sawLineTimes("(done: no-tool-call)", 3);
-      const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+      // waitForConfig, not a bare readFileSync right after sawLineTimes — the same race macOS CI
+      // caught elsewhere in this file (waitForConfig's own comment).
+      const config = await waitForConfig(
+        join(configDir, "config.json"),
+        (c) => c.SERI_MODEL === "llama-3.3-70b-versatile",
+      );
       expect(config.SERI_MODEL).toBe("llama-3.3-70b-versatile");
       expect(config.SERI_PROVIDER).toBe("groq");
     } finally {
@@ -1325,6 +1378,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // after the generator's three earlier yields have all been consumed in order.
       await sawLineTimes("(done: no-tool-call)", 2);
 
+      // Bug fixed here (macOS CI, round 3): this went straight to `occurrences()` with no
+      // preceding `sawLine` for the SAME text — unlike every other occurrences() check in this
+      // file (the argv-task/second-task echo checks, above), which all wait for the line to
+      // actually land before counting it. `occurrences()` is a synchronous snapshot of whatever is
+      // CURRENTLY captured; "(done: no-tool-call)" appearing is not proof the warning (printed
+      // earlier in the same turn, but via a different stream — printWarning is console.error, the
+      // done line is Ink's own stdout render) has also reached the captured buffer yet. Waiting for
+      // it explicitly first is what makes the count below actually mean something.
+      await sawLine("could not save the default model:");
       // The actual assertion: one warning for the whole turn, not three.
       expect(occurrences("could not save the default model:")).toBe(1);
       expect(existsSync(join(configDir, "config.json"))).toBe(false);
@@ -1648,6 +1710,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       writeFileSync(flagPath, "");
       await sawLine("(done: no-tool-call)");
+      // Bug fixed here (macOS CI, round 3): waited on "(done: …)" but never on "Hello world"
+      // itself before counting it — the same missing-poll shape as the persist-warning occurrences
+      // check above. Explicit wait first, matching every other occurrences() check in this file.
+      await sawLine("Hello world");
 
       expect(occurrences("Hello world")).toBe(1);
     } finally {
@@ -1888,16 +1954,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     return new Promise((resolve) => setTimeout(resolve, 100));
   }
 
-  // Polls for a file's existence rather than a flat sleep — measured live (D4's own reroute-
-  // persist test, below): the config.json write is synchronous once persistDefaultModel actually
-  // runs, but a fixed "(done: no-tool-call)" text landing in the captured pty stdout is not a
-  // reliable proxy for "the write already happened," the same class of gap `sawLine`'s own polling
-  // already exists to close for arbitrary transcript text — this is that same idiom for a file.
-  async function waitForFile(path: string, timeoutMs = 5000): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    while (!existsSync(path) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
-  }
-
   describe("/setup", () => {
     test("lists all five providers with correct source, masked values, and disabled removal for an env row", async () => {
       seedConfig(dir, { ANTHROPIC_API_KEY: "sk-ant-fake-config-key-abcdefgh" });
@@ -1949,7 +2005,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await sawLine("Saved OPENROUTER_API_KEY.");
 
-        const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+        // waitForConfig, not a bare readFileSync right after sawLine — the same race macOS CI
+        // caught elsewhere in this file (waitForConfig's own comment).
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENROUTER_API_KEY === secret,
+        );
         expect(config.OPENROUTER_API_KEY).toBe(secret);
 
         // The negative control at the process level: the raw key must never have reached stdout,
@@ -1992,7 +2053,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await sawLine("Saved OPENROUTER_API_KEY.");
 
-        const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+        // waitForConfig, not a bare readFileSync right after sawLine — config.json already EXISTS
+        // here (seedConfig's own pre-write, above), so a bare existence check would return
+        // instantly against the OLD value; the predicate is what actually waits for the replace.
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENROUTER_API_KEY === "sk-or-replaced-value",
+        );
         expect(config.OPENROUTER_API_KEY).toBe("sk-or-replaced-value");
         expect(config.ANTHROPIC_API_KEY).toBe("sk-ant-untouched-value");
       } finally {
@@ -2028,7 +2095,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("y");
         await sawLine("Removed OPENROUTER_API_KEY.");
 
-        const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+        // waitForConfig, not a bare readFileSync right after sawLine — config.json already EXISTS
+        // here (seedConfig's own pre-write, above) WITH the key about to be removed, so a bare
+        // existence check would return instantly against the pre-removal content; the predicate is
+        // what actually waits for the removal to land.
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENROUTER_API_KEY === undefined,
+        );
         expect(config.OPENROUTER_API_KEY).toBeUndefined();
         expect(config.ANTHROPIC_API_KEY).toBe("sk-ant-to-keep");
       } finally {
