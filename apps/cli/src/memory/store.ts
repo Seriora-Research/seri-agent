@@ -108,7 +108,7 @@ export type MemoryWriteRequest = {
   durable: boolean; // provenance tag: lasting fact/preference (true) vs session-scoped noise (false)
 };
 
-function truncate(text: string, max: number): string {
+export function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 

@@ -2562,7 +2562,12 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
 
     const rewind = SLASH_COMMANDS.get("/rewind");
     if (rewind === undefined) throw new Error("/rewind is not registered");
-    const done = rewind.run(session, [], { sessionsDir, checkpointsDir }, fakePresenter);
+    const done = rewind.run(
+      session,
+      [],
+      { sessionsDir, checkpointsDir, configDir: root },
+      fakePresenter,
+    );
 
     // sessionUpdated's own promise is still pending — recordBarrier must not have run yet.
     expect(readLog(storeDir, SESSION_ID).some((r) => r.kind === "rewind-barrier")).toBe(false);

@@ -372,9 +372,8 @@ async function rewindCommand(
 
 // Unlike /mode, /undo, /rewind and /restore, decideMemoryCommand's own I/O (config.json, the
 // pending/ queue) is keyed on configDir/worktree, not on the session it's handed — session is
-// present only because SlashCommand.run's signature requires one. `dirs.configDir` falls back to
-// getConfigDir() rather than being asserted non-optional here: CommandDirs' own field stays
-// optional (that type's comment explains why), and this is the one caller that actually reads it.
+// present only because SlashCommand.run's signature requires one. This is the one caller that
+// actually reads `dirs.configDir`.
 async function memoryCommand(
   session: SessionState<ModelMessage>,
   args: string[],
@@ -382,7 +381,7 @@ async function memoryCommand(
   presenter: CommandPresenter = consolePresenter(dirs),
 ): Promise<void> {
   const { lines } = decideMemoryCommand(args, {
-    configDir: dirs.configDir ?? getConfigDir(),
+    configDir: dirs.configDir,
     worktree: projectRoot(session.cwd),
   });
   for (const line of lines) presenter.message(line);
@@ -820,12 +819,6 @@ type RunContext = CommandDirs & {
   resumeId: string | undefined;
   taskText: string;
   permissionsDir: string;
-  // Stage 6b: the same configDir prepareSession resolves (deps.authConfigDir ?? getConfigDir()),
-  // carried here so /memory's slash command (handleSlashCommand, below) and driveLoop's own
-  // archivist trigger read the identical directory a /setup-written key or a /memory approval
-  // toggle just landed in — required, not optional, unlike CommandDirs' own configDir? (that field
-  // stays optional only so tui/commands.ts's existing test literals keep compiling).
-  configDir: string;
 };
 
 function dirs(ctx: RunContext): CommandDirs {

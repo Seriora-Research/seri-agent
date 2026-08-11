@@ -8,12 +8,9 @@ import {
   rejectPending,
   resolvePendingRef,
 } from "./pending";
+import { truncate } from "./store";
 
 export type MemoryCommandDeps = { configDir: string; worktree: string };
-
-function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
-}
 
 function summaryLine(p: PendingWrite): string {
   const detail =

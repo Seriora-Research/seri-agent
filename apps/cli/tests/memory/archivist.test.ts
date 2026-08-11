@@ -96,7 +96,6 @@ describe("createArchivistState", () => {
     expect(s.messageCursor).toBe(3);
     expect(s.messages).toEqual(session.messages);
     expect(s.toolCallsSinceRun).toBe(0);
-    expect(s.runs).toBe(0);
   });
 });
 
@@ -370,7 +369,6 @@ describe("maybeRunArchivist", () => {
 
     expect(report?.trigger).toBe("tool-count");
     expect(s.toolCallsSinceRun).toBe(0);
-    expect(s.runs).toBe(1);
   });
 });
 
@@ -469,7 +467,6 @@ describe("runArchivist", () => {
     expect(report?.cost?.amountUsd).toBeGreaterThan(0);
     expect(state.toolCallsSinceRun).toBe(0);
     expect(state.messageCursor).toBe(3);
-    expect(state.runs).toBe(1);
   });
 
   // MEDIUM finding (reviewer-verifier): runArchivist used to build its goal from the caller's
@@ -649,7 +646,6 @@ describe("the archivist provably cannot edit a file, run a command, or dispatch 
       provider: "groq",
       modelId: "test-model",
       catalog: catalogFor(),
-      system: "PARENT",
       permissionMode: () => "auto",
       allowedTools: [],
     };

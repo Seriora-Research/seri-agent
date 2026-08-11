@@ -31,9 +31,7 @@ import { allProviderKeyStates } from "../provider/keys";
 import { byRoutePriority, resolveRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 
-// `configDir` is optional (Stage 6b) so the two existing `{ sessionsDir, checkpointsDir }` literals
-// elsewhere in the test suite keep compiling unchanged — only /memory (memory/commands.ts) reads it.
-export type CommandDirs = { sessionsDir: string; checkpointsDir: string; configDir?: string };
+export type CommandDirs = { sessionsDir: string; checkpointsDir: string; configDir: string };
 
 // The session records the directory seri was started in, which is not necessarily the project —
 // resolving the root here rather than at each call site is what keeps the live run and the three

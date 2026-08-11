@@ -56,7 +56,6 @@ export type ArchivistState = {
   messageCursor: number; // index into `messages` the last pass consumed up to
   messages: ModelMessage[]; // the live transcript, kept current by observeArchivistEvent
   lastInputTokens: number | undefined;
-  runs: number;
 };
 
 // messageCursor starts at the CURRENT length: a resumed session does not re-archive history a
@@ -67,7 +66,6 @@ export function createArchivistState(session: SessionState<ModelMessage>): Archi
     messageCursor: session.messages.length,
     messages: session.messages,
     lastInputTokens: undefined,
-    runs: 0,
   };
 }
 
@@ -125,8 +123,8 @@ export function shouldRunArchivist(
 // outputs (verbose test runs, big file reads) — serialized uncapped, this can trivially exceed
 // the archivist's own child model's context window, worst of all on exactly the turn where the
 // near-compaction trigger fires (the main session's own context is already largest then). Same
-// truncate-with-a-marker shape as loop.ts's MAX_SERIALISED_ERROR_LENGTH and
-// tools/spawnCollect.ts's own output cap, not a new one invented here.
+// truncate-with-a-marker shape as loop.ts's MAX_SERIALISED_ERROR_LENGTH, not a new one invented
+// here.
 const MAX_ARCHIVIST_TRANSCRIPT_CHARS = 40_000;
 
 // The archivist has no read_file, and replace/remove operate by substring against the LIVE file —
@@ -198,11 +196,6 @@ export async function runArchivist(args: {
     provider: args.route.provider,
     modelId: args.route.model,
     catalog: args.catalog,
-    // SubagentRuntime.system is required (dispatch.ts's runOne is its only other producer, and
-    // that call site genuinely reads it via joinTiers) but runSubagent itself never reads
-    // `runtime.system` — only opts.system, passed directly below, which IS what the archivist's
-    // child actually runs with. Set here only to satisfy the type; unread for this runtime.
-    system: ARCHIVIST_PROMPT,
     permissionMode: () => "auto",
     allowedTools: [],
   };
@@ -243,7 +236,6 @@ export async function runArchivist(args: {
 
   args.state.messageCursor = args.state.messages.length;
   args.state.toolCallsSinceRun = 0;
-  args.state.runs++;
 
   return {
     trigger: args.trigger,
