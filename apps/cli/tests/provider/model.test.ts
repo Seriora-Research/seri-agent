@@ -198,5 +198,21 @@ describe("getModel", () => {
       });
       expect(seenApiKeys).toEqual([undefined]);
     });
+
+    // Code-review finding (PR #73, round 3, item #2): each get<X>Model's own `apiKey` parameter
+    // has a DEFAULT (`apiKey = getApiKey(NAME)`, no configDir) — passing an explicit `undefined`
+    // argument, exactly what the fix above did whenever the resolved key was absent, RE-TRIGGERS
+    // that default in JS, so it silently re-resolved against the ambient default configDir instead
+    // of throwing. No `getGroqModel` override here (deliberately `{}` for deps) — the REAL
+    // constructor is what has the default-param re-trigger; an injected fake never exercises it.
+    test("throws instead of silently authenticating with the ambient default configDir's key", () => {
+      // The ambient default (ordinary getConfigDir(), i.e. fakeHome/.seri) DOES have a key —
+      // exactly the case that used to be silently (and wrongly) preferred.
+      setConfigValue("GROQ_API_KEY", "sk-from-ambient-default-dir", undefined);
+      // The caller's OWN configDir has nothing for groq.
+      expect(() => getModel("some-id", "groq", "test-session-id", {}, configDir)).toThrow(
+        "GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>",
+      );
+    });
   });
 });
