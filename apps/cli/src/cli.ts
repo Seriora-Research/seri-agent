@@ -363,6 +363,7 @@ function loadOrCreateSession(
   resumeId: string | undefined,
   sessionsDir: string,
   loadAgentsFileFn: typeof loadAgentsFileReal,
+  configDir: string,
 ): { session: RunSession; modelRecorded: boolean } {
   if (resuming) {
     const id = resumeId ?? findMostRecentSession(sessionsDir);
@@ -405,7 +406,7 @@ function loadOrCreateSession(
     // independent of resolveDefaultModel().
     const { model, provider } =
       loaded.model === undefined
-        ? resolveDefaultModel()
+        ? resolveDefaultModel(configDir)
         : { model: loaded.model, provider: loaded.provider ?? DEFAULT_PROVIDER };
     return {
       session: {
@@ -421,7 +422,7 @@ function loadOrCreateSession(
   // A brand-new session starts on whatever a previously successful `/model` pick persisted
   // (resolveDefaultModel's own comment), falling back to DEFAULT_MODEL/"groq" the same way
   // resolveModelId always has when nothing was ever picked.
-  const { model, provider } = resolveDefaultModel();
+  const { model, provider } = resolveDefaultModel(configDir);
   return {
     session: {
       id: randomUUID(),
@@ -889,6 +890,13 @@ async function prepareSession(
   isTTY: boolean,
 ): Promise<PreparedRun | number> {
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
+  // Resolved before loadOrCreateSession, not after (code-review finding, PR #73, round 3, item
+  // #4): that function's own model/provider backfill (resolveDefaultModel) needs the SAME
+  // configDir routing/getModel below already use, not the ambient default — a sandboxed
+  // `authConfigDir` caller used to get session.model/session.provider read from the wrong
+  // config.json entirely. `configDir` matches `seri config`'s own resolution (D7), so a key
+  // `/setup` or `seri config set` just wrote is picked up on the very next run.
+  const configDir = deps.authConfigDir ?? getConfigDir();
 
   let session: RunSession;
   let modelRecorded: boolean;
@@ -898,6 +906,7 @@ async function prepareSession(
       ctx.resumeId,
       ctx.sessionsDir,
       loadAgentsFileFn,
+      configDir,
     ));
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -915,10 +924,7 @@ async function prepareSession(
   // caches for the rest of the process either way (catalog.ts's own loadCatalog).
   const catalog = await getModelCatalog();
   // D3 (feature-plan.md): resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
-  // stays a pure, environment-independent switch with its own test file. `configDir` matches
-  // `seri config`'s own resolution (D7), so a key `/setup` or `seri config set` just wrote is
-  // picked up on the very next run.
-  const configDir = deps.authConfigDir ?? getConfigDir();
+  // stays a pure, environment-independent switch with its own test file.
   // Bug fixed here (code-review, PR #73): `configuredProviders` (called by `resolveRoute` below)
   // reads config.json — `getApiKey`'s own `loadConfig` call, which does a bare `JSON.parse` — so a
   // corrupted config.json throws SYNCHRONOUSLY, the same failure mode `getModel` itself already
@@ -1958,7 +1964,7 @@ async function runTui(
             ) {
               persistAttemptedThisTurn = true;
               try {
-                persistDefaultModel({ model: modelId, provider });
+                persistDefaultModel({ model: modelId, provider }, configDir);
                 lastPersistedModel = { model: modelId, provider };
               } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);

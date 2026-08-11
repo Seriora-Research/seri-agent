@@ -131,3 +131,34 @@ describe("persistDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({ model: "first-model", provider: "openrouter" });
   });
 });
+
+// Code-review finding (PR #73, round 3, item #4): both functions never accepted a configDir at
+// all, unlike everything else round 2 threaded through (configuredProviders, getModel,
+// providerKeyState) — a `run(argv, {authConfigDir: someDir})` caller got session.model/
+// session.provider backfilled from the wrong (ambient) config.json, and a successful turn's
+// persist silently wrote back into the real user's config.json even though the run was meant to
+// stay sandboxed inside authConfigDir.
+describe("configDir isolation", () => {
+  test("both functions read/write the given configDir, not the ambient default", () => {
+    // The ambient default (HOME-based, this file's own beforeEach) has one pair persisted.
+    persistDefaultModel({ model: "ambient-model", provider: "openrouter" });
+
+    // A caller-supplied configDir has a DIFFERENT pair.
+    const callerDir = mkdtempSync(join(tmpdir(), "seri-defaults-test-caller-"));
+    try {
+      persistDefaultModel({ model: "caller-model", provider: "anthropic" }, callerDir);
+
+      expect(resolveDefaultModel(callerDir)).toEqual({
+        model: "caller-model",
+        provider: "anthropic",
+      });
+      // The negative control this test's own point rests on: the ambient default's own pair is
+      // untouched by the caller-scoped write above, and still resolves independently — proving
+      // the two directories are genuinely isolated, not that resolveDefaultModel(callerDir)
+      // happened to return the right answer by coincidence.
+      expect(resolveDefaultModel()).toEqual({ model: "ambient-model", provider: "openrouter" });
+    } finally {
+      rmSync(callerDir, { recursive: true, force: true });
+    }
+  });
+});

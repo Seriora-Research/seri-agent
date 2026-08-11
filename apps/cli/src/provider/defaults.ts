@@ -37,7 +37,16 @@ export function isModelProvider(value: string): value is ModelProvider {
 // through to config), with a SINGLE loadConfig() call for both keys together, so a persisted pair
 // is read as what it is: one pair, not two independent lookups. resolveModelId() itself was
 // removed once this was its only remaining caller (groq.ts keeps DEFAULT_MODEL, still used above).
-export function resolveDefaultModel(): { model: string; provider: ModelProvider } {
+// `configDir` (code-review finding, PR #73, round 3, item #4): everything else round 2 updated to
+// use `deps.authConfigDir ?? getConfigDir()` (configuredProviders, getModel, providerKeyState) —
+// this pair was the one holdout, still always reading the AMBIENT default config.json regardless
+// of what a `run(argv, {authConfigDir: someDir})` caller asked for. A sandboxed caller got
+// session.model/session.provider backfilled from the wrong (real) config.json, and a successful
+// turn's persist wrote back into the real user's config.json even though the run was meant to stay
+// inside `authConfigDir`.
+export function resolveDefaultModel(
+  configDir?: string,
+): { model: string; provider: ModelProvider } {
   const envModel = process.env.SERI_MODEL;
   if (envModel) {
     const envProvider = process.env.SERI_PROVIDER;
@@ -46,7 +55,7 @@ export function resolveDefaultModel(): { model: string; provider: ModelProvider 
       provider: envProvider && isModelProvider(envProvider) ? envProvider : DEFAULT_PROVIDER,
     };
   }
-  const config = loadConfig();
+  const config = loadConfig(configDir);
   const configProvider = config.SERI_PROVIDER;
   return {
     model: config.SERI_MODEL || DEFAULT_MODEL,
@@ -59,6 +68,9 @@ export function resolveDefaultModel(): { model: string; provider: ModelProvider 
 // config.json with the new model but the old provider (or vice versa), the same mismatch class
 // cli.ts's own legacy-resume backfill guards against on the read side. setConfigValues's own
 // comment has the mechanism (one loadConfig/writeConfig pair for both keys).
-export function persistDefaultModel(pick: { model: string; provider: ModelProvider }): void {
-  setConfigValues({ SERI_MODEL: pick.model, SERI_PROVIDER: pick.provider });
+export function persistDefaultModel(
+  pick: { model: string; provider: ModelProvider },
+  configDir?: string,
+): void {
+  setConfigValues({ SERI_MODEL: pick.model, SERI_PROVIDER: pick.provider }, configDir);
 }
