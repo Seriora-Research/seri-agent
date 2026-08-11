@@ -306,6 +306,80 @@ function childScriptModelSwitchFailure(dir: string): string {
   ].join("\n");
 }
 
+// D2/D3 (feature-plan.md, multi-provider-byok-phase-2): a session explicitly pinned to
+// (claude-sonnet-5, openrouter) — the design doc's own motivating pair (routes.test.ts's own
+// comment has the full story) — with only ANTHROPIC_API_KEY present and OPENROUTER_API_KEY
+// deleted, so routing-priority resolution must reroute to the native Anthropic sibling on turn 1.
+// The fake runLoop reports `opts.model.via` (which of the two injected constructors was actually
+// called) and `opts.provider` (driveLoop's own resolved-pair argument, D3's fix to what used to
+// read the REQUESTED pair) — two independent signals that the reroute actually took effect, not
+// just that SOME model answered.
+function childScriptReroute(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_MODEL = "anthropic/claude-sonnet-5";`,
+    `process.env.SERI_PROVIDER = "openrouter";`,
+    `process.env.ANTHROPIC_API_KEY = "fake-test-key";`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `delete process.env.GROQ_API_KEY;`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " via=" + opts.model.via + " provider=" + opts.provider);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getOpenRouterModel: (id) => ({ id, via: "or" }),`,
+    `  getAnthropicModel: (id) => ({ id, via: "anthropic" }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// The negative-control sibling of childScriptReroute, just above: identical pinned pair, but
+// OPENROUTER_API_KEY is present too (alongside ANTHROPIC_API_KEY) — D2 rule 1 says an explicit
+// pick with its own key wins even when a native sibling also has one, so this must stay on
+// OpenRouter and never print a reroute notice at all.
+function childScriptNoReroute(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_MODEL = "anthropic/claude-sonnet-5";`,
+    `process.env.SERI_PROVIDER = "openrouter";`,
+    `process.env.ANTHROPIC_API_KEY = "fake-test-key";`,
+    `process.env.OPENROUTER_API_KEY = "fake-test-key";`,
+    `delete process.env.GROQ_API_KEY;`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " via=" + opts.model.via + " provider=" + opts.provider);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getOpenRouterModel: (id) => ({ id, via: "or" }),`,
+    `  getAnthropicModel: (id) => ({ id, via: "anthropic" }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // HIGH-1: a turn that finishes and reports usage, then the TUI is left awaiting input — proving
 // `run()` actually reaches `printUsage`/the exit-code logic on the TUI path once /exit or Ctrl-D
 // resolves runTui's promise, which nothing did before this fix.
@@ -1478,6 +1552,55 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // Still alive and the turn actually finished — proof the answer really unblocked
       // driveLoop's own await, not that the process just happened to still be running.
       await sawLine("(done: no-tool-call)");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // D2/D3/D4 (feature-plan.md): the routing-priority reroute end to end — a real turn actually
+  // dispatches to the rerouted provider's own constructor (`via=anthropic`, not the requested
+  // `or`), the transcript carries exactly the notice D2 requires, and the resolved pair — not the
+  // requested one — is what lands in config.json (D4).
+  test("a routing-priority reroute takes effect on turn 1, announces itself once, and persists the resolved provider", async () => {
+    const scriptPath = join(dir, "child-reroute.mjs");
+    writeFileSync(scriptPath, childScriptReroute(dir));
+
+    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 via=anthropic provider=anthropic");
+      await sawLine(
+        "↻ routing claude-sonnet-5 via anthropic (your key) — no OPENROUTER_API_KEY configured",
+      );
+      await sawLine("(done: no-tool-call)");
+
+      // Exactly one transcript notice for this one turn — the per-turn cap D2's own acceptance
+      // criterion names, not a re-print on every messages-updated event within it.
+      expect(
+        occurrences("↻ routing claude-sonnet-5 via anthropic (your key) — no OPENROUTER_API_KEY"),
+      ).toBe(1);
+
+      const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+      expect(config.SERI_MODEL).toBe("claude-sonnet-5");
+      expect(config.SERI_PROVIDER).toBe("anthropic");
+      // Negative control: the requested (never-actually-called) pair must not be what persisted.
+      expect(config.SERI_PROVIDER).not.toBe("openrouter");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // The negative-control sibling of the test above: an explicit pick whose own provider HAS a key
+  // wins even when a native sibling also has one (D2 rule 1) — no reroute, and therefore no notice.
+  test("an explicit pick with its own key stays on that provider and never prints a reroute notice", async () => {
+    const scriptPath = join(dir, "child-no-reroute.mjs");
+    writeFileSync(scriptPath, childScriptNoReroute(dir));
+
+    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 via=or provider=openrouter");
+      await sawLine("(done: no-tool-call)");
+
+      expect(occurrences("↻ routing")).toBe(0);
     } finally {
       child.kill("SIGKILL");
     }

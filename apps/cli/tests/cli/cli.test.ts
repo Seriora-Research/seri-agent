@@ -100,6 +100,43 @@ describe("run (task invocation)", () => {
     expect(errors.length).toBeGreaterThan(0);
   });
 
+  // D2/D3 (feature-plan.md, multi-provider-byok-phase-2): routing-priority resolution on the
+  // non-interactive path. DEFAULT_MODEL ("openai/gpt-oss-120b", groq.ts) is one of the bundled
+  // manifest's own groq<->openrouter exact-id collisions (routes.manifest.test.ts's own fixture
+  // class), so a fresh session with GROQ_API_KEY unset and OPENROUTER_API_KEY set reroutes there
+  // without any explicit /model pick.
+  test("reroutes to a sibling provider with a key when the requested one has none, and warns (non-interactive path)", async () => {
+    delete process.env.GROQ_API_KEY;
+    process.env.OPENROUTER_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop();
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+
+    let code: number;
+    try {
+      code = await run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir });
+    } finally {
+      console.error = originalError;
+      // Not covered by this describe block's own shared afterEach (which only restores
+      // GROQ_API_KEY/HOME) — this test is the only one here that touches OPENROUTER_API_KEY.
+      delete process.env.OPENROUTER_API_KEY;
+    }
+
+    expect(code).toBe(0);
+    // D4: the call is actually made against the RESOLVED pair, not the requested one.
+    expect(capture()?.provider).toBe("openrouter");
+    expect(capture()?.modelId).toBe("openai/gpt-oss-120b");
+    // D2's own transparency rule: never silent.
+    expect(
+      errors.some(
+        (line) =>
+          line.includes("routing openai/gpt-oss-120b via openrouter") &&
+          line.includes("no GROQ_API_KEY configured"),
+      ),
+    ).toBe(true);
+  });
+
   test("`--continue` with no task resumes the most recent session without appending a message", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const older: SessionState = {

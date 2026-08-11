@@ -57,9 +57,11 @@ import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anth
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
+import { configuredProviders } from "./provider/keys";
 import { getModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
+import { resolveRoute } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
 import {
   findMostRecentSession,
@@ -850,6 +852,13 @@ type PreparedRun = {
   // the whole entry rather than just `contextWindow` means driveLoop needs exactly one
   // `findCatalogEntry` call per turn instead of two identical ones for the same (modelId, provider).
   catalogEntry: ModelCatalogEntry | undefined;
+  // The (model, provider) pair the run actually resolved to, per resolveRoute (D2/D3,
+  // feature-plan.md's multi-provider-byok-phase-2) — NOT necessarily `session.model`/`.provider`,
+  // which is what the session merely REQUESTED. runTui's own `confirmedModel`/`lastPersistedModel`
+  // must initialize from this, not from `session`: starting them from the requested pair while
+  // turn 1 actually runs on a rerouted one trips their inequality guards on turn 1 and persists a
+  // switch the session never asked for — see those variables' own comments.
+  route: { model: string; provider: ModelProvider };
 };
 
 async function prepareSession(
@@ -883,9 +892,24 @@ async function prepareSession(
   // reuses this SAME catalog on every later turn rather than reloading it, but @seri/model-catalog
   // caches for the rest of the process either way (catalog.ts's own loadCatalog).
   const catalog = await getModelCatalog();
+  // D3 (feature-plan.md): resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
+  // stays a pure, environment-independent switch with its own test file. `configDir` matches
+  // `seri config`'s own resolution (D7), so a key `/setup` or `seri config set` just wrote is
+  // picked up on the very next run. A rerouted pair is never silent (D2): the piped/non-interactive
+  // path gets the notice here; runTui's own runTurn (below) prints the TUI equivalent into the
+  // transcript once per turn.
+  const configDir = deps.authConfigDir ?? getConfigDir();
+  const route = resolveRoute(
+    catalog,
+    { model: session.model, provider: session.provider },
+    configuredProviders(configDir),
+  );
+  if (route.rerouted) {
+    printWarning(`routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`);
+  }
   let model: LanguageModel;
   try {
-    model = getModel(session.model, session.provider, session.id, {
+    model = getModel(route.model, route.provider, session.id, {
       getGroqModel: deps.getGroqModel,
       getOpenRouterModel: deps.getOpenRouterModel,
       getAnthropicModel: deps.getAnthropicModel,
@@ -896,7 +920,9 @@ async function prepareSession(
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   }
-  const catalogEntry = findCatalogEntry(catalog, session.model, session.provider);
+  // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
+  // cost and context-window come from the wrong provider's entry.
+  const catalogEntry = findCatalogEntry(catalog, route.model, route.provider);
 
   // A model this run merely RESOLVED is deliberately left out of the file. getGroqModel accepts any
   // string — an unknown id is not rejected here, it comes back as a provider 404 mid-run — so
@@ -971,6 +997,7 @@ async function prepareSession(
     allowedTools,
     catalog,
     catalogEntry,
+    route,
   };
 }
 
@@ -1084,7 +1111,7 @@ async function driveLoop(
   persist: (session: SessionState<ModelMessage>) => void,
   approvalPrompt: ApprovalPrompt,
 ): Promise<DriveLoopResult> {
-  const { session, storeDir, tools, model, worktree, allowedTools, catalog, catalogEntry } =
+  const { session, storeDir, tools, model, worktree, allowedTools, catalog, catalogEntry, route } =
     prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
@@ -1133,11 +1160,15 @@ async function driveLoop(
       allowedTools,
       approvalPrompt,
       // Recomputed every driveLoop call (once per TUI turn, once per non-interactive process), from
-      // the session's current model/provider — never captured once at session start, so a live
-      // /model switch is reflected on the very next turn instead of confabulated.
+      // the RESOLVED model/provider (`route`, D3/D4 feature-plan.md) — never captured once at
+      // session start, so a live /model switch OR a routing-priority reroute is reflected on the
+      // very next turn instead of confabulated. `route`, not `session.model`/`.provider`:
+      // `session` carries what was REQUESTED, and a rerouted turn's system prompt/cost provenance
+      // must name the model actually being called, not the one that was asked for and silently
+      // rerouted away from.
       system: joinTiers(
         session.systemPrompt,
-        buildVolatileTier(session.model, session.provider, catalogEntry?.displayName),
+        buildVolatileTier(route.model, route.provider, catalogEntry?.displayName),
       ),
       signal: controller.signal,
       maxIterations: maxTurns,
@@ -1145,12 +1176,13 @@ async function driveLoop(
       // / `opts.provider === "groq" && opts.modelId && opts.catalog`) never fires and every `usage`
       // event's `cost` field is silently undefined — the run genuinely never computes a cost, no
       // matter what cost.ts itself does. No `?? "groq"` fallback needed here (a prior version had
-      // one): `session` is destructured from `prepared: PreparedRun`, whose `session` field is
-      // `RunSession` — `provider` is never optional at this point, only at the edges that produce
-      // one (`loadOrCreateSession`'s own backfill is where an absent provider becomes "groq").
-      // `session.model` is the model this call is actually being made against.
-      provider: session.provider,
-      modelId: session.model,
+      // one): `route` (PreparedRun's own field) is never optional — `resolveRoute` always returns a
+      // concrete pair. `route.model`/`.provider`, not `session.model`/`.provider`: this is the
+      // pair the call is ACTUALLY being made against (this function's own comment just above), and
+      // the two can differ from a routing-priority reroute (D2/D3) — using the requested pair here
+      // would mis-tag a rerouted call's cost report with the wrong provider's pricing branch.
+      provider: route.provider,
+      modelId: route.model,
       catalog,
       // The catalog's own contextWindow for whatever model this turn is actually calling — a
       // /model switch to a provider/model with a different limit must change compaction's own
@@ -1294,6 +1326,11 @@ async function runTui(
   const { createElement } = await import("react");
   const { App } = await import("./tui/App");
 
+  // Matches prepareSession's own resolution (D7, feature-plan.md) — routing-priority's per-turn
+  // re-resolution (runTurn, below) and /setup's own reads/writes (a later commit in this loop)
+  // both need it, and both must agree with prepareSession on where "the config dir" is.
+  const configDir = deps.authConfigDir ?? getConfigDir();
+
   // Findings 2/3/4/6 (thermo-nuclear structural review, round 6): `liveState` is a SYNCHRONOUS
   // mirror of the reducer's own state, kept current by running the exact same pure `tuiReducer`
   // function here, in `dispatch` below, every time ANY caller in this closure dispatches an
@@ -1326,11 +1363,16 @@ async function runTui(
   // model whose first turn errors (no working key, an unknown id) leaves this untouched, so the
   // session on disk stays pinned to the model that was last known to work — recoverable on the next
   // `--resume` — instead of a switch nothing ever confirmed.
-  // `prepared.session` is already `RunSession` (PreparedRun's own type, above) — the two casts this
-  // line used to need are gone along with the loose type that forced them.
+  // D3 (feature-plan.md): initialized from `prepared.route` — the pair the run actually RESOLVED
+  // to — not `prepared.session.{model,provider}`, which is only what the session REQUESTED. The
+  // two can differ from turn 1 (a routing-priority reroute, D2), and starting from the requested
+  // pair while turn 1 actually runs on the resolved one would trip this variable's own inequality
+  // guard (below) on turn 1, persisting a switch the session never asked for and breaking the
+  // "a session that never touches /model never writes config.json" invariant
+  // (tuiPty.test.ts's own regression guard for this).
   let confirmedModel: { model: string; provider: ModelProvider } = {
-    model: prepared.session.model,
-    provider: prepared.session.provider,
+    model: prepared.route.model,
+    provider: prepared.route.provider,
   };
   // Tracks what actually LANDED in config.json, separate from `confirmedModel` above — the two
   // used to share one variable for two jobs (code-review finding on PR #71): `confirmedModel`
@@ -1340,9 +1382,11 @@ async function runTui(
   // was never retried, even though every later turn kept succeeding on that exact model. This
   // starts at the same starting pair as `confirmedModel` for the identical reason: turn 1, which
   // runs on the model the session already started on, must not attempt a persist at all.
+  // Same reasoning as `confirmedModel`, just above: starts at `prepared.route`, not
+  // `prepared.session`, for the identical reason.
   let lastPersistedModel: { model: string; provider: ModelProvider } = {
-    model: prepared.session.model,
-    provider: prepared.session.provider,
+    model: prepared.route.model,
+    provider: prepared.route.provider,
   };
   // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
   // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
@@ -1568,7 +1612,23 @@ async function runTui(
     // `SessionState<ModelMessage>` (tui/reducer.ts), so this is the one place that puts it back —
     // the same kind of "this file already knows a stronger invariant tsc can't see" gap
     // `resolveRunTui!`'s own definite-assignment assertion, above, papers over too.
-    const { id: sessionId, model: modelId, provider } = session as RunSession;
+    const { id: sessionId, model: requestedModel, provider: requestedProvider } =
+      session as RunSession;
+    // D3 (feature-plan.md): re-resolved every turn, same reasoning as the model re-resolution
+    // above — a routing-priority reroute (D2) must be reconsidered on every turn too, not just at
+    // session start, so a key added mid-session via /setup takes effect on the very next turn.
+    const route = resolveRoute(
+      prepared.catalog,
+      { model: requestedModel, provider: requestedProvider },
+      configuredProviders(configDir),
+    );
+    const { model: modelId, provider } = route;
+    if (route.rerouted) {
+      dispatch({
+        type: "transcript-append",
+        line: `↻ routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`,
+      });
+    }
     let model: LanguageModel;
     try {
       model = getModel(modelId, provider, sessionId, {
@@ -1586,21 +1646,23 @@ async function runTui(
       turnInFlight = false;
       return;
     }
+    // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one.
     const catalogEntry = findCatalogEntry(prepared.catalog, modelId, provider);
     // `session as RunSession`, not the raw (reducer-typed) `session`: PreparedRun.session is now
     // RunSession (code-review finding — see PreparedRun's own comment), and this call site already
-    // established the same invariant two lines up for `modelId`/`provider`; reusing it here instead
-    // of casting a second time in one function.
+    // established the same invariant two lines up for `requestedModel`/`requestedProvider`; reusing
+    // it here instead of casting a second time in one function.
     const turnPrepared: PreparedRun = {
       ...prepared,
       session: session as RunSession,
       model,
       catalogEntry,
+      route,
     };
     // Reset once per call to runTurn — i.e. once per turn, not once per `messages-updated` event
-    // (code-review finding on PR #71's own re-review). `modelId`/`provider` are destructured once,
-    // above, and never change for the life of one driveLoop call, so a boolean is all that's
-    // needed: loop.ts can yield `messages-updated` several times in a single turn (once per tool
+    // (code-review finding on PR #71's own re-review). `modelId`/`provider` are resolved once,
+    // above (`route`), and never change for the life of one driveLoop call, so a boolean is all
+    // that's needed: loop.ts can yield `messages-updated` several times in a single turn (once per tool
     // call), and without this, a PERSISTENTLY failing write (a config dir that stays read-only for
     // the whole turn, not a one-off transient blip) would retry — and re-warn — on every one of
     // those events instead of once. `lastPersistedModel`'s own retry-on-a-LATER-turn guarantee is
