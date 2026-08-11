@@ -87,10 +87,13 @@ export async function validateProviderKey(
 
   const modelId = VALIDATION_MODEL_IDS[provider];
   // A five-case switch, mirroring getModel's own dispatch (provider/model.ts) — including that
-  // function's own reasoning for a switch over a ternary/lookup table: an unrecognized value
-  // (unreachable through the real ModelProvider union, but this function's own caller reads a
-  // value the panel itself already constrained to CATALOG_PROVIDERS, so this is belt-and-braces)
-  // throws naming the bad value rather than silently doing nothing.
+  // function's own reasoning for a switch over a ternary/lookup table: an unrecognized value is
+  // unreachable through the real ModelProvider union (this function's own caller reads a value
+  // the panel itself already constrained to CATALOG_PROVIDERS), but unlike getModel's own switch
+  // this function's documented contract is "never throws" (its own callers, cli.ts's
+  // onSetupKeyEntered included, rely on that) — so the default case returns an ok:false result
+  // naming the bad value instead of throwing, dead code today but consistent with the contract
+  // rather than a second, silent way to break it later.
   let model: ReturnType<typeof getGroqModel>;
   switch (provider) {
     case "groq":
@@ -109,7 +112,11 @@ export async function validateProviderKey(
       model = getGoogleModel(modelId, apiKey);
       break;
     default:
-      throw new Error(`Unknown model provider: ${JSON.stringify(provider)}`);
+      return {
+        ok: false,
+        reason: "auth",
+        message: `Unknown model provider: ${JSON.stringify(provider)}`,
+      };
   }
 
   const generate = deps.generate ?? generateTextReal;

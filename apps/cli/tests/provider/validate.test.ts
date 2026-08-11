@@ -126,4 +126,23 @@ describe("validateProviderKey", () => {
 
     expect(result).toEqual({ ok: false, reason: "auth", message: "API key cannot be empty." });
   });
+
+  // Bug fixed here (code-review, PR #73): an unrecognized provider (unreachable through the real
+  // ModelProvider union — this is belt-and-braces, mirroring getModel's own default case, model.ts)
+  // used to `throw`, breaking this function's own documented "never throws" contract. Now returns
+  // an ok:false result instead, same as every other rejection here.
+  test("an unrecognized provider returns ok:false instead of throwing", async () => {
+    const badProvider = "mistral" as unknown as Parameters<typeof validateProviderKey>[0];
+    let called = false;
+    const result = await validateProviderKey(badProvider, "fake-key", {
+      generate: (async () => {
+        called = true;
+        return { text: "hi" };
+      }) as never,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ reason: "auth" });
+    expect(called).toBe(false);
+  });
 });
