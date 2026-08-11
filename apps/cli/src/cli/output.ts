@@ -382,7 +382,7 @@ export function printCost(cost: CostReport): void {
   console.log(cost.status === "estimated" ? `(cost: ~${amount} (estimated))` : `(cost: ${amount})`);
 }
 
-// The inline half of printCost's own formatting — needed here because archivistLines renders cost
+// The inline half of printCost's own formatting — needed here because archivistLine renders cost
 // on the SAME line as the trigger/token count, not as printCost's own standalone line. Kept
 // minimal (amount + estimated-label only) rather than sharing printCost's full branch structure,
 // since "unknown" never reaches here: reportFromCatalogPricing (archivist.ts's own caller) always
@@ -396,16 +396,15 @@ function costFragment(cost: CostReport): string {
 
 // The archivist's usage/cost are reported on their own line, deliberately never summed into
 // printUsage/printCost's own totals (driveLoop's own comment on why: folding them in would
-// silently change what cli.test.ts's existing "(tokens: …)" assertions mean).
-export function archivistLines(
-  report: ArchivistReport,
-  sink: (line: string) => void = console.log,
-): void {
+// silently change what cli.test.ts's existing "(tokens: …)" assertions mean). Returns the one
+// line it renders rather than taking a sink callback — cli.ts's two call sites (console.log for
+// the non-interactive path, pushTranscriptLine for the TUI) each just wrap the string themselves.
+export function archivistLine(report: ArchivistReport): string {
   const tokenParts: string[] = [];
   if (report.usage.inputTokens !== undefined) tokenParts.push(`${report.usage.inputTokens} in`);
   if (report.usage.outputTokens !== undefined) tokenParts.push(`${report.usage.outputTokens} out`);
   const tokens = tokenParts.length > 0 ? `, tokens: ${tokenParts.join(", ")}` : "";
   const cost = report.cost === undefined ? "" : `, ${costFragment(report.cost)}`;
   const calls = `${report.toolCallsMade} tool call${report.toolCallsMade === 1 ? "" : "s"}`;
-  sink(`(archivist: ${report.trigger} trigger, ${calls}${tokens}${cost})`);
+  return `(archivist: ${report.trigger} trigger, ${calls}${tokens}${cost})`;
 }

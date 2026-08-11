@@ -1,14 +1,14 @@
 import { setConfigValue } from "../config/config";
+import { truncate } from "../truncate";
 import {
   approvePending,
   diffPending,
   listPending,
-  pendingLabel,
   type PendingWrite,
+  pendingLabel,
   rejectPending,
   resolvePendingRef,
 } from "./pending";
-import { truncate } from "./store";
 
 export type MemoryCommandDeps = { configDir: string };
 
@@ -47,101 +47,95 @@ export function memoryCommandAccepts(args: string[]): boolean {
   return false;
 }
 
+// Shared by diff/approve/reject (byte-identical across all three until this collapsed them):
+// resolve the ref, report "no match" once, then run `act` against each match with the same
+// per-entry try/catch. `act` can throw for one entry — a diff's target text gone stale (another
+// pending write for the same scope already consolidated it), an approve's cap exceeded, a
+// reject's .pending file already gone (a concurrent process rejected/removed it first) — and that
+// throw must not discard the lines already collected for entries processed before it in an "all"
+// batch, or the user could not tell which of N entries, if any, actually succeeded.
+// `separateEntries` reproduces diff's own blank-line-per-entry spacing (its multi-line diffs need
+// visual separation an approve/reject one-liner doesn't).
+function forEachMatch(
+  configDir: string,
+  ref: string,
+  verb: string,
+  separateEntries: boolean,
+  act: (p: PendingWrite) => string[],
+): string[] {
+  const matches = resolvePendingRef(configDir, ref);
+  if (matches.length === 0) return [`No staged write matches "${ref}".`];
+  const lines: string[] = [];
+  for (const p of matches) {
+    try {
+      lines.push(...act(p));
+    } catch (err) {
+      lines.push(`Could not ${verb} ${p.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (separateEntries) lines.push("");
+  }
+  return lines;
+}
+
 // decide*, not apply* — prints nothing itself, following tui/commands.ts's own decision/
 // presentation split, so /memory can render into the live TUI transcript exactly the same way
 // /mode, /undo, /rewind and /restore already do.
-export function decideMemoryCommand(
-  args: string[],
-  deps: MemoryCommandDeps,
-): { lines: string[]; changed: boolean } {
+export function decideMemoryCommand(args: string[], deps: MemoryCommandDeps): { lines: string[] } {
   const [sub, ...rest] = args;
 
   if (sub === "pending") {
     const pending = listPending(deps.configDir);
-    if (pending.length === 0) return { lines: ["No staged memory writes."], changed: false };
-    return { lines: pending.map(summaryLine), changed: false };
+    if (pending.length === 0) return { lines: ["No staged memory writes."] };
+    return { lines: pending.map(summaryLine) };
   }
 
   if (sub === "diff" && rest.length === 1) {
-    const matches = resolvePendingRef(deps.configDir, rest[0]);
-    if (matches.length === 0)
-      return { lines: [`No staged write matches "${rest[0]}".`], changed: false };
-    const lines: string[] = [];
-    // Per-entry try/catch, the same shape "approve" already uses below: diffPending re-runs
-    // computeWrite against the CURRENT live file (correct — approve-time re-check, store.ts's own
-    // comment on approvePending explains why), which can throw for one entry (its target text went
-    // stale, e.g. another pending write for the same scope already consolidated it) without that
-    // throw discarding every diff already collected for entries processed before it in "diff all".
-    for (const p of matches) {
-      try {
-        lines.push(...diffPending(deps.configDir, p).lines, "");
-      } catch (err) {
-        lines.push(
-          `Could not diff ${p.id}: ${err instanceof Error ? err.message : String(err)}`,
-          "",
-        );
-      }
-    }
-    return { lines, changed: false };
+    // diffPending re-runs computeWrite against the CURRENT live file (correct — approve-time
+    // re-check, store.ts's own comment on approvePending explains why), which is what can throw.
+    return {
+      lines: forEachMatch(
+        deps.configDir,
+        rest[0],
+        "diff",
+        true,
+        (p) => diffPending(deps.configDir, p).lines,
+      ),
+    };
   }
 
   if (sub === "approve" && rest.length === 1) {
-    const matches = resolvePendingRef(deps.configDir, rest[0]);
-    if (matches.length === 0)
-      return { lines: [`No staged write matches "${rest[0]}".`], changed: false };
-    const lines: string[] = [];
-    let changed = false;
-    for (const p of matches) {
-      try {
+    return {
+      lines: forEachMatch(deps.configDir, rest[0], "approve", false, (p) => {
         approvePending(deps.configDir, p);
-        lines.push(`Approved ${p.id}: wrote ${pendingLabel(p)}.`);
-        changed = true;
-      } catch (err) {
-        lines.push(
-          `Could not approve ${p.id}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-    return { lines, changed };
+        return [`Approved ${p.id}: wrote ${pendingLabel(p)}.`];
+      }),
+    };
   }
 
   if (sub === "reject" && rest.length === 1) {
-    const matches = resolvePendingRef(deps.configDir, rest[0]);
-    if (matches.length === 0)
-      return { lines: [`No staged write matches "${rest[0]}".`], changed: false };
-    const lines: string[] = [];
-    let changed = false;
-    // Per-entry try/catch, the same shape "approve"/"diff" already use above: rejectPending is a
-    // raw unlinkSync with no existence check, so an entry already removed by a concurrent process
-    // (or a .pending file gone for any other reason) throws — without this, that one throw would
-    // abort "reject all" with zero output, leaving the user unable to tell which of the N entries,
-    // if any, were actually rejected before it.
-    for (const p of matches) {
-      try {
+    // rejectPending is a raw unlinkSync with no existence check, so an entry whose .pending file
+    // is already gone throws — the one failure forEachMatch's own comment describes for reject.
+    return {
+      lines: forEachMatch(deps.configDir, rest[0], "reject", false, (p) => {
         rejectPending(deps.configDir, p);
-        lines.push(`Rejected ${p.id}.`);
-        changed = true;
-      } catch (err) {
-        lines.push(`Could not reject ${p.id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    return { lines, changed };
+        return [`Rejected ${p.id}.`];
+      }),
+    };
   }
 
   if (sub === "approval" && ON_OFF_RE.test(rest[0] ?? "")) {
     setConfigValue("SERI_MEMORY_APPROVAL", rest[0] === "on" ? "true" : "false", deps.configDir);
-    return { lines: [`Memory approval gate is now ${rest[0]}.`], changed: true };
+    return { lines: [`Memory approval gate is now ${rest[0]}.`] };
   }
 
   if (sub === "archivist" && ON_OFF_RE.test(rest[0] ?? "")) {
     setConfigValue("SERI_ARCHIVIST_ENABLED", rest[0] === "on" ? "true" : "false", deps.configDir);
-    return { lines: [`Archivist is now ${rest[0]}.`], changed: true };
+    return { lines: [`Archivist is now ${rest[0]}.`] };
   }
 
   return {
     lines: [
       "Usage: /memory pending | diff <id|all> | approve <id|all> | reject <id|all> | approval on|off | archivist on|off",
     ],
-    changed: false,
   };
 }

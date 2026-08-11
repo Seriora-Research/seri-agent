@@ -51,7 +51,6 @@ describe("decideMemoryCommand", () => {
   test("pending: reports none when nothing is staged", () => {
     const ctx = makeCtx();
     const result = decideMemoryCommand(["pending"], ctx);
-    expect(result.changed).toBe(false);
     expect(result.lines[0]).toContain("No staged");
   });
 
@@ -70,8 +69,7 @@ describe("decideMemoryCommand", () => {
     const diff = decideMemoryCommand(["diff", staged.id], ctx);
     expect(diff.lines.some((l) => l.includes("prefers tabs"))).toBe(true);
 
-    const rejected = decideMemoryCommand(["reject", staged.id], ctx);
-    expect(rejected.changed).toBe(true);
+    decideMemoryCommand(["reject", staged.id], ctx);
     expect(decideMemoryCommand(["pending"], ctx).lines[0]).toContain("No staged");
   });
 
@@ -113,57 +111,49 @@ describe("decideMemoryCommand", () => {
       new Date(),
     );
     const result = decideMemoryCommand(["approve", staged.id], ctx);
-    expect(result.changed).toBe(true);
     expect(result.lines[0]).toContain("Approved");
   });
 
-  test("diff/approve/reject on an unknown id report no match and change nothing", () => {
+  test("diff/approve/reject on an unknown id report no match", () => {
     const ctx = makeCtx();
     for (const sub of ["diff", "approve", "reject"]) {
       const result = decideMemoryCommand([sub, "deadbeef"], ctx);
-      expect(result.changed).toBe(false);
       expect(result.lines[0]).toContain("No staged write matches");
     }
   });
 
   test("approval on|off toggles SERI_MEMORY_APPROVAL and loadMemoryConfig reflects it", () => {
     const ctx = makeCtx();
-    const off = decideMemoryCommand(["approval", "off"], ctx);
-    expect(off.changed).toBe(true);
+    decideMemoryCommand(["approval", "off"], ctx);
     expect(loadMemoryConfig(ctx.configDir).approvalRequired).toBe(false);
 
-    const on = decideMemoryCommand(["approval", "on"], ctx);
-    expect(on.changed).toBe(true);
+    decideMemoryCommand(["approval", "on"], ctx);
     expect(loadMemoryConfig(ctx.configDir).approvalRequired).toBe(true);
   });
 
-  test("an unknown approval arg returns a usage line and changed: false", () => {
+  test("an unknown approval arg returns a usage line", () => {
     const ctx = makeCtx();
     const result = decideMemoryCommand(["approval"], ctx);
-    expect(result.changed).toBe(false);
     expect(result.lines[0]).toContain("Usage:");
   });
 
   test("archivist on|off toggles SERI_ARCHIVIST_ENABLED and loadMemoryConfig reflects it", () => {
     const ctx = makeCtx();
-    const off = decideMemoryCommand(["archivist", "off"], ctx);
-    expect(off.changed).toBe(true);
+    decideMemoryCommand(["archivist", "off"], ctx);
     expect(loadMemoryConfig(ctx.configDir).archivistEnabled).toBe(false);
 
-    const on = decideMemoryCommand(["archivist", "on"], ctx);
-    expect(on.changed).toBe(true);
+    decideMemoryCommand(["archivist", "on"], ctx);
     expect(loadMemoryConfig(ctx.configDir).archivistEnabled).toBe(true);
   });
 
-  test("archivist with no arg or an invalid arg returns a usage line and changed: false", () => {
+  test("archivist with no arg or an invalid arg returns a usage line", () => {
     const ctx = makeCtx();
     expect(decideMemoryCommand(["archivist"], ctx)).toEqual({
       lines: [
         "Usage: /memory pending | diff <id|all> | approve <id|all> | reject <id|all> | approval on|off | archivist on|off",
       ],
-      changed: false,
     });
-    expect(decideMemoryCommand(["archivist", "maybe"], ctx).changed).toBe(false);
+    expect(decideMemoryCommand(["archivist", "maybe"], ctx).lines[0]).toContain("Usage:");
   });
 
   // diffPending re-runs computeWrite against the CURRENT live file (correct — approve-time
@@ -185,7 +175,6 @@ describe("decideMemoryCommand", () => {
     );
 
     const result = decideMemoryCommand(["diff", "all"], ctx);
-    expect(result.changed).toBe(false);
     expect(result.lines.some((l) => l.includes("a fine entry"))).toBe(true);
     expect(result.lines.some((l) => l.startsWith("Could not diff"))).toBe(true);
   });
@@ -222,7 +211,6 @@ describe("decideMemoryCommand", () => {
     );
 
     const result = decideMemoryCommand(["reject", "all"], ctx);
-    expect(result.changed).toBe(true);
     expect(result.lines.some((l) => l === `Rejected ${good.id}.`)).toBe(true);
     expect(result.lines.some((l) => l.startsWith(`Could not reject ${staleId}`))).toBe(true);
   });
@@ -246,7 +234,6 @@ describe("decideMemoryCommand", () => {
     );
 
     const result = decideMemoryCommand(["approve", "all"], ctx);
-    expect(result.changed).toBe(true);
     expect(result.lines).toHaveLength(3);
     expect(decideMemoryCommand(["pending"], ctx).lines[0]).toContain("No staged");
   });

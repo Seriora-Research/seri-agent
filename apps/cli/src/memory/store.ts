@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import { atomicWriteFile } from "../atomicWriteFile";
 import { getMemoriesDir } from "../config/paths";
 import { projectKey } from "../permissions/store";
+import { truncate } from "../truncate";
 
 export type MemoryScope = "user" | "memory-global" | "memory-project";
 
@@ -107,10 +108,6 @@ export type MemoryWriteRequest = {
   reason: string; // provenance tag: which turn/fact triggered this write — never written to the file itself (§1f)
   durable: boolean; // provenance tag: lasting fact/preference (true) vs session-scoped noise (false)
 };
-
-export function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
-}
 
 // The un-truncated "Current entries" block every refusal below carries, so the model (or a human
 // at /memory diff) can see everything it might consolidate rather than guessing at what else is in

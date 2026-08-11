@@ -94,6 +94,15 @@ export function observeArchivistEvent(state: ArchivistState, event: LoopEvent): 
   if (event.type === "tool-call") state.toolCallsSinceRun++;
   if (event.type === "usage")
     state.lastInputTokens = event.usage.inputTokens ?? state.lastInputTokens;
+  // Deterministic reset at the event itself, not left to maybeRunArchivist's generic end-of-turn
+  // bounds check alone (kept anyway, as defense-in-depth for any other future truncation source) —
+  // resetArchivistForRewind's own comment explains the exact gap a generic-only check has: enough
+  // NEW messages landing in the SAME turn, after this compaction, can push messages.length back
+  // past the stale cursor before the end-of-turn guard next runs, at which point `cursor > length`
+  // is simply false again and the guard never fires. loop.ts splices the array BEFORE yielding
+  // this event, so there is no stale-array window to worry about here the way there was for
+  // resetArchivistForRewind's own fix.
+  if (event.type === "compacted") state.messageCursor = 0;
 }
 
 export type ArchivistTrigger = "tool-count" | "near-compaction";

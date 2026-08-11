@@ -27,7 +27,7 @@ import { projectRoot } from "./checkpoint/shadowGit";
 import { type OnBeforeMutation, withCheckpoints } from "./checkpoint/wrapTools";
 import {
   approvalPromptText,
-  archivistLines,
+  archivistLine,
   printCost,
   printEvent,
   printGrantPersisted,
@@ -1651,7 +1651,7 @@ async function runTui(
   let refusedWithoutRunning = false;
   // Same "last turn's outcome" reasoning as doneReason/refusedWithoutRunning, just above — a turn
   // with nothing to report simply leaves this undefined again. runTurn (below) also renders every
-  // non-undefined report live into the transcript, the moment it happens, via archivistLines; this
+  // non-undefined report live into the transcript, the moment it happens, via archivistLine; this
   // copy is what lets the FINAL resolveRunTui result carry one too, printed once more after Ink
   // unmounts, the same way `usage`/`cost` already print again there.
   let archivist: ArchivistReport | undefined;
@@ -2174,7 +2174,7 @@ async function runTui(
       // feeds the FINAL resolveRunTui result (printed once more after Ink unmounts, quit()'s own
       // comment explains why).
       if (result.archivist) {
-        archivistLines(result.archivist, (line) => pushTranscriptLine(dispatch, line));
+        pushTranscriptLine(dispatch, archivistLine(result.archivist));
       }
       // LOW-J: `result.cancelledBy` is deliberately not read here. The TUI never re-raises a
       // signal on a plain, individually-cancelled turn (H-3 returns it to awaiting input, not to
@@ -2588,7 +2588,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (cost !== undefined) printCost(cost);
   // The archivist's own line, deliberately separate from the two above — driveLoop's own comment
   // on DriveLoopResult.archivist explains why its usage/cost are never folded into `usage`/`cost`.
-  if (archivist) archivistLines(archivist);
+  if (archivist) console.log(archivistLine(archivist));
 
   // The turn was cancelled, so the process still dies the way Ctrl-C makes a process die. Not
   // process.exit: a status is not a death by signal, and `for f in a b c; do seri "$f"; done` only

@@ -2,6 +2,8 @@
 // tool.ts) — a memory file is re-read into every future session's system prompt, so anything that
 // lands there is a standing instruction to the model, not a one-off answer that scrolls away.
 
+import { truncate } from "../truncate";
+
 export type InjectionCategory =
   | "credential"
   | "invisible-unicode"
@@ -163,9 +165,12 @@ export function scanForInjection(text: string): ScanResult {
         reason: `matched the "${rule.name}" rule at offset ${match.index}`,
       };
     }
-    const excerpt =
-      match[0].length > MAX_MATCH_EXCERPT ? `${match[0].slice(0, MAX_MATCH_EXCERPT)}…` : match[0];
-    return { ok: false, category: rule.category, rule: rule.name, reason: `matched "${excerpt}"` };
+    return {
+      ok: false,
+      category: rule.category,
+      rule: rule.name,
+      reason: `matched "${truncate(match[0], MAX_MATCH_EXCERPT)}"`,
+    };
   }
   return { ok: true };
 }

@@ -207,6 +207,66 @@ describe("observeArchivistEvent", () => {
     });
     expect(s.lastInputTokens).toBe(1_234);
   });
+
+  // Round-4 review (SHOULD FIX): before this, compaction relied solely on maybeRunArchivist's
+  // generic end-of-turn bounds check, which has exactly the gap resetArchivistForRewind's own
+  // comment describes for /rewind: enough NEW messages landing in the SAME turn, after
+  // compaction, can push messages.length back past the stale cursor before the end-of-turn check
+  // next runs, at which point `cursor > length` is simply false again and the generic guard never
+  // fires. Proven the same way the resetArchivistForRewind test above does: apply ONLY the
+  // generic bounds check to this exact sequence first and show the cursor stays wrong, then show
+  // the deterministic "compacted" reset (observeArchivistEvent, at the event itself) prevents it.
+  test("a mid-turn compacted event resets the cursor, even when post-compaction growth would defeat the generic bounds check alone", () => {
+    const s = createArchivistState(emptySession());
+    s.messages = Array.from({ length: 5 }, (_, i) => ({
+      role: "user" as const,
+      content: `message ${i + 1}`,
+    }));
+    s.messageCursor = 5; // fully reviewed, pre-compaction
+
+    // Compaction evicts down to 2 messages (loop.ts splices in place, then yields "compacted").
+    const postCompactionMessages = s.messages.slice(0, 2);
+
+    // Negative control: the generic bounds check ALONE, applied to the array as it stands
+    // immediately after growth (see below) with the STALE pre-compaction cursor, does not fire --
+    // this is what the deterministic reset exists to prevent.
+    const grownWithoutReset = [
+      ...postCompactionMessages,
+      { role: "user" as const, content: "new message A" },
+      { role: "user" as const, content: "new message B" },
+      { role: "user" as const, content: "new message C" },
+      { role: "user" as const, content: "new message D" },
+    ];
+    const staleCursor = 5;
+    const genericGuardResult = staleCursor > grownWithoutReset.length ? 0 : staleCursor; // mirrors maybeRunArchivist's own guard
+    expect(genericGuardResult).toBe(5); // still wrong: 5 is not > 6, so the guard never fires
+
+    // The actual fix: the "compacted" event itself resets the cursor, before any of the same-turn
+    // growth below happens. loop.ts yields "messages-updated" right after "compacted" in the same
+    // iteration, so both are simulated here in that order.
+    observeArchivistEvent(s, {
+      type: "compacted",
+      summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
+      evictedCount: 3,
+      usage: {
+        inputTokens: 1,
+        inputTokenDetails: {
+          noCacheTokens: 1,
+          cacheReadTokens: undefined,
+          cacheWriteTokens: undefined,
+        },
+        outputTokens: 1,
+        outputTokenDetails: { textTokens: 1, reasoningTokens: undefined },
+        totalTokens: 2,
+      },
+    });
+    observeArchivistEvent(s, { type: "messages-updated", messages: postCompactionMessages });
+    expect(s.messageCursor).toBe(0);
+
+    // The same same-turn growth now happens on top of the ALREADY-RESET state.
+    observeArchivistEvent(s, { type: "messages-updated", messages: grownWithoutReset });
+    expect(s.messageCursor).toBe(0); // untouched by the growth -- still correct
+  });
 });
 
 function catalogFor(): ModelCatalog {
