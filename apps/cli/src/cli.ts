@@ -27,6 +27,7 @@ import { projectRoot } from "./checkpoint/shadowGit";
 import { type OnBeforeMutation, withCheckpoints } from "./checkpoint/wrapTools";
 import {
   approvalPromptText,
+  archivistLines,
   printCost,
   printEvent,
   printGrantPersisted,
@@ -40,7 +41,7 @@ import {
   usageError,
 } from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
-import { loadVerifyConfig, setConfigValue, unsetConfigValue } from "./config/config";
+import { loadMemoryConfig, loadVerifyConfig, setConfigValue, unsetConfigValue } from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
 import type { PermissionMode } from "./gate/gate";
 import {
@@ -49,6 +50,15 @@ import {
   type LoopEvent,
   runLoop as runLoopReal,
 } from "./loop/loop";
+import {
+  type ArchivistReport,
+  type ArchivistState,
+  createArchivistState,
+  runArchivist,
+  shouldRunArchivist,
+} from "./memory/archivist";
+import { decideMemoryCommand, memoryCommandAccepts } from "./memory/commands";
+import { loadMemory, type LoadedMemory } from "./memory/store";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
 import { getModelCatalog } from "./provider/catalog";
@@ -245,6 +255,12 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
     },
   ],
   ["/rewind", { accepts: isStepCount, run: rewindCommand, mutatesRunState: true }],
+  // mutatesRunState: /memory approve|reject mutates the pending/ queue and the live memory files,
+  // and must not race the archivist staging more writes mid-turn (C-7's own comment on why that
+  // block runs before `finally` unregisters the cancel slot). Per-command, not per-subcommand
+  // (accepted deliberately — SlashCommand's own field comment explains why a read-only
+  // /memory pending shares the gate with a mutating /memory approve).
+  ["/memory", { accepts: memoryCommandAccepts, run: memoryCommand, mutatesRunState: true }],
 ]);
 
 // MEDIUM-F: /exit is deliberately NOT a SLASH_COMMANDS entry — it used to be, with a no-op `run`
@@ -351,6 +367,24 @@ async function rewindCommand(
   // be able to cross this point.
   recordBarrier();
   presenter.message(message);
+}
+
+// Unlike /mode, /undo, /rewind and /restore, decideMemoryCommand's own I/O (config.json, the
+// pending/ queue) is keyed on configDir/worktree, not on the session it's handed — session is
+// present only because SlashCommand.run's signature requires one. `dirs.configDir` falls back to
+// getConfigDir() rather than being asserted non-optional here: CommandDirs' own field stays
+// optional (that type's comment explains why), and this is the one caller that actually reads it.
+async function memoryCommand(
+  session: SessionState<ModelMessage>,
+  args: string[],
+  dirs: CommandDirs,
+  presenter: CommandPresenter = consolePresenter(dirs),
+): Promise<void> {
+  const { lines } = decideMemoryCommand(args, {
+    configDir: dirs.configDir ?? getConfigDir(),
+    worktree: projectRoot(session.cwd),
+  });
+  for (const line of lines) presenter.message(line);
 }
 
 // `model`/`provider` are optional on SessionState so that sessions written before either field
@@ -785,10 +819,16 @@ type RunContext = CommandDirs & {
   resumeId: string | undefined;
   taskText: string;
   permissionsDir: string;
+  // Stage 6b: the same configDir prepareSession resolves (deps.authConfigDir ?? getConfigDir()),
+  // carried here so /memory's slash command (handleSlashCommand, below) and driveLoop's own
+  // archivist trigger read the identical directory a /setup-written key or a /memory approval
+  // toggle just landed in — required, not optional, unlike CommandDirs' own configDir? (that field
+  // stays optional only so tui/commands.ts's existing test literals keep compiling).
+  configDir: string;
 };
 
 function dirs(ctx: RunContext): CommandDirs {
-  return { sessionsDir: ctx.sessionsDir, checkpointsDir: ctx.checkpointsDir };
+  return { sessionsDir: ctx.sessionsDir, checkpointsDir: ctx.checkpointsDir, configDir: ctx.configDir };
 }
 
 // Shared by prepareSession (decides whether to push the initial user message) and runTui's own
@@ -879,6 +919,10 @@ type PreparedRun = {
   // The same OnBeforeMutation `tools`' own withCheckpoints was built with — driveLoop's
   // withSubagents reuses it for one pre-dispatch snapshot instead of building a second one.
   checkpointer: OnBeforeMutation;
+  // Loaded once here, alongside everything else this object resolves once per run — "frozen per
+  // session" (renderMemoryTier's own doc comment) means loaded HERE and nowhere else; a write made
+  // mid-session takes effect next session, not this one.
+  memory: LoadedMemory;
 };
 
 // Shared by prepareSession's own non-TTY notice and runTui's runTurn (below) — the two used to
@@ -1047,6 +1091,10 @@ async function prepareSession(
     loadVerifyConfig(),
   );
 
+  // Loaded once, here, alongside everything else this function resolves once per run — this is
+  // what "frozen per session" means (memory/store.ts's own renderMemoryTier doc comment).
+  const memory = loadMemory({ configDir, worktree });
+
   return {
     session,
     storeDir,
@@ -1059,6 +1107,7 @@ async function prepareSession(
     catalogEntry,
     route,
     checkpointer,
+    memory,
   };
 }
 
@@ -1118,6 +1167,11 @@ type DriveLoopResult = {
   // to reassemble itself: "refused at least once AND executed nothing at all" — see the tracking
   // below for what each half means and why.
   refusedWithoutRunning: boolean;
+  // undefined on every turn that didn't trigger the archivist (the common case). Deliberately NOT
+  // folded into `usage`/`cost` above — the verify bar demands the archivist's cost be
+  // distinguishable from the main turn's, and summing it in would silently change what this file's
+  // own printUsage/printCost assertions mean.
+  archivist: ArchivistReport | undefined;
 };
 
 // `maxTurns` is an argument rather than a field of ctx: it is neither the resume target nor where
@@ -1171,6 +1225,11 @@ async function driveLoop(
   getPermissionMode: () => PermissionMode,
   persist: (session: SessionState<ModelMessage>) => void,
   approvalPrompt: ApprovalPrompt,
+  // Stage 6b: the tool-call counter/message cursor the archivist trigger reads and advances — one
+  // instance per run, created once (createArchivistState) by this function's two callers, not
+  // rebuilt here, so the counter accumulates across every turn of a TUI session rather than
+  // resetting on each driveLoop call.
+  archivistState: ArchivistState,
 ): Promise<DriveLoopResult> {
   const {
     session,
@@ -1183,6 +1242,7 @@ async function driveLoop(
     catalogEntry,
     route,
     checkpointer,
+    memory,
   } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
@@ -1210,7 +1270,7 @@ async function driveLoop(
   // not the one that was asked for and silently rerouted away from.
   const system = joinTiers(
     session.systemPrompt,
-    buildVolatileTier(route.model, route.provider, catalogEntry?.displayName),
+    buildVolatileTier(route.model, route.provider, catalogEntry?.displayName, memory),
   );
   // The one composition that enables dispatch_subagents; deleting this call (tools -> baseTools)
   // is the whole rollback, matching withCheckpoints/withVerification's own comment in prepareSession.
@@ -1245,6 +1305,11 @@ async function driveLoop(
   // also `continue`s past it) — so `ranTool` is exactly "did anything actually run".
   let hadDenial = false;
   let ranTool = false;
+  // The archivist reviews the FULL current transcript, not `session.messages` (prepared.session's
+  // own snapshot from before this turn ran) — updated on every messages-updated event alongside
+  // `persist`, so the trigger check after the loop below sees whatever this turn itself added.
+  let latestMessages: ModelMessage[] = session.messages;
+  let archivist: ArchivistReport | undefined;
   try {
     for await (const event of runLoopFn({
       model,
@@ -1289,12 +1354,16 @@ async function driveLoop(
         // here, using the session THIS call started with, and rely on the TUI path's reducer to
         // correct it moments later; that left a real, if narrow, crash/fatal-signal window where
         // the stale write was the last one on disk. No direct saveSession call here anymore.
+        latestMessages = event.messages;
         persist({ ...session, messages: event.messages });
         onEvent(event);
         continue;
       }
       if (event.type === "permission-denied" && event.reason === "declined") hadDenial = true;
-      if (event.type === "tool-call") ranTool = true;
+      if (event.type === "tool-call") {
+        ranTool = true;
+        archivistState.toolCallsSinceRun++;
+      }
       // Compaction splices the whole message array, so every rewind anchor recorded before this
       // point indexes into an array that no longer exists. The barrier is what lets `/rewind` say
       // so instead of silently slicing garbage. A session that never checkpointed has no log, and
@@ -1308,6 +1377,7 @@ async function driveLoop(
       // checkpointing exists to protect. The cost of losing a barrier is that a later /rewind may
       // cross this compaction, so it is a warning and not silence.
       if (event.type === "compacted") {
+        archivistState.compactedThisTurn = true;
         try {
           appendBarrier(storeDir, session.id, "compaction");
         } catch (err) {
@@ -1324,6 +1394,7 @@ async function driveLoop(
       if (event.type === "usage" || event.type === "compacted") {
         usage.inputTokens = addTokens(usage.inputTokens, event.usage.inputTokens);
         usage.outputTokens = addTokens(usage.outputTokens, event.usage.outputTokens);
+        archivistState.lastInputTokens = event.usage.inputTokens ?? archivistState.lastInputTokens;
       }
       // `compacted` has no `cost` of its own (the summariser's own round-trip is billed the same
       // as any other call, but loop.ts does not price it — see loop.ts's own `usage` event comment
@@ -1349,6 +1420,31 @@ async function driveLoop(
         }
       }
     }
+
+    // Inside the same try, before `finally` unregisters the cancel slot: the archivist's own child
+    // runLoop must share `controller.signal` while that slot is still registered, per the
+    // one-cancel-stops-everything contract every dispatch_subagents child already relies on.
+    // `archivistEnabled` is read live from config on every turn (not cached in PreparedRun), so
+    // `/memory archivist off` takes effect on the very next turn without a restart.
+    const archivistEnabled = loadMemoryConfig(ctx.configDir).archivistEnabled;
+    const trigger = controller.signal.aborted
+      ? undefined
+      : shouldRunArchivist(archivistState, catalogEntry?.contextWindow, archivistEnabled);
+    if (trigger) {
+      archivist = await runArchivist({
+        messages: latestMessages,
+        state: archivistState,
+        trigger,
+        memory,
+        ctx: { configDir: ctx.configDir, worktree },
+        model,
+        route,
+        catalog,
+        signal: controller.signal,
+        onWarning: printWarning,
+      });
+    }
+    archivistState.compactedThisTurn = false;
   } finally {
     // In a finally, so a run that throws out of the loop does not leave the slot pointing at a
     // controller nothing is waiting on — a later signal would then be swallowed as a cancel of a
@@ -1356,7 +1452,14 @@ async function driveLoop(
     unregisterCancel();
   }
 
-  return { doneReason, cancelledBy, usage, cost, refusedWithoutRunning: hadDenial && !ranTool };
+  return {
+    doneReason,
+    cancelledBy,
+    usage,
+    cost,
+    refusedWithoutRunning: hadDenial && !ranTool,
+    archivist,
+  };
 }
 
 // A plain default-flush transcript-append, shared by tuiPresenter's own `append` below and
@@ -1528,6 +1631,15 @@ async function runTui(
   let cost: CostReport | undefined;
   let doneReason: DoneReason | undefined;
   let refusedWithoutRunning = false;
+  // Same "last turn's outcome" reasoning as doneReason/refusedWithoutRunning, just above — a turn
+  // with nothing to report simply leaves this undefined again. runTurn (below) also renders every
+  // non-undefined report live into the transcript, the moment it happens, via archivistLines; this
+  // copy is what lets the FINAL resolveRunTui result carry one too, printed once more after Ink
+  // unmounts, the same way `usage`/`cost` already print again there.
+  let archivist: ArchivistReport | undefined;
+  // Created ONCE per run, outside the per-turn loop, so the tool-call counter accumulates across
+  // every turn of this TUI session rather than resetting each time runTurn calls driveLoop.
+  const archivistState = createArchivistState(prepared.session);
 
   // Resolvers waiting on onSessionChange's OWN NEXT actual persist, not merely the next dispatch
   // — tuiPresenter's own sessionUpdated (round 7 code review's finding-9 fix) pushes one every
@@ -2029,6 +2141,7 @@ async function runTui(
         getPermissionMode,
         () => {},
         tuiApprovalPrompt,
+        archivistState,
       );
       usage = {
         inputTokens: addTokens(usage.inputTokens, result.usage.inputTokens),
@@ -2037,6 +2150,14 @@ async function runTui(
       cost = addCost(cost, result.cost);
       doneReason = result.doneReason;
       refusedWithoutRunning = result.refusedWithoutRunning;
+      archivist = result.archivist;
+      // Rendered live into the transcript the moment it happens, the same run this turn just
+      // produced it in — not deferred to session end, unlike the `archivist` copy above, which only
+      // feeds the FINAL resolveRunTui result (printed once more after Ink unmounts, quit()'s own
+      // comment explains why).
+      if (result.archivist) {
+        archivistLines(result.archivist, (line) => pushTranscriptLine(dispatch, line));
+      }
       // LOW-J: `result.cancelledBy` is deliberately not read here. The TUI never re-raises a
       // signal on a plain, individually-cancelled turn (H-3 returns it to awaiting input, not to
       // process death) — only quit()'s own resolve decides `cancelledBy` for the run as a whole,
@@ -2118,7 +2239,14 @@ async function runTui(
         }),
       );
       void instance.waitUntilExit().then(() => {
-        resolveRunTui({ doneReason, cancelledBy: undefined, usage, cost, refusedWithoutRunning });
+        resolveRunTui({
+          doneReason,
+          cancelledBy: undefined,
+          usage,
+          cost,
+          refusedWithoutRunning,
+          archivist,
+        });
       });
     };
     if (turnInFlight) {
@@ -2376,6 +2504,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     sessionsDir: deps.sessionsDir ?? join(getConfigDir(), "sessions"),
     checkpointsDir: deps.checkpointsDir ?? join(getConfigDir(), "checkpoints"),
     permissionsDir: deps.permissionsDir ?? getConfigDir(),
+    // Matches prepareSession's own resolution (D7) so /memory and the archivist read the same
+    // config.json / memories/ directory a /setup-written key or a config set just landed in.
+    configDir: deps.authConfigDir ?? getConfigDir(),
   };
 
   // Before prepareSession, never after: a bare `/undo` must act on the resume target rather than
@@ -2395,7 +2526,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
   if (typeof prepared === "number") return prepared;
 
-  const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning } = isTTY
+  const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning, archivist } = isTTY
     ? await runTui(prepared, ctx, deps, maxTurns, skipPermissions)
     : await driveLoop(
         prepared,
@@ -2406,6 +2537,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         () => prepared.permissionMode,
         (session) => saveSession(session, ctx.sessionsDir),
         makeApprovalPrompt(deps.createInterface),
+        createArchivistState(prepared.session),
       );
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
@@ -2424,6 +2556,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // call, above) — HIGH-1's fix. `printCost` itself handles a report whose `amountUsd` came back
   // undefined (an id absent from the catalog, an OpenRouter response with no cost data).
   if (cost !== undefined) printCost(cost);
+  // The archivist's own line, deliberately separate from the two above — driveLoop's own comment
+  // on DriveLoopResult.archivist explains why its usage/cost are never folded into `usage`/`cost`.
+  if (archivist) archivistLines(archivist);
 
   // The turn was cancelled, so the process still dies the way Ctrl-C makes a process die. Not
   // process.exit: a status is not a death by signal, and `for f in a b c; do seri "$f"; done` only
