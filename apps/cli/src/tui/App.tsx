@@ -12,6 +12,7 @@ import { useEffect, useReducer, useState } from "react";
 import { approvalPromptText, truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { SessionState } from "../session/session";
+import type { ModelPickerEntry } from "./commands";
 import { type Dispatch, initialTuiState, tuiReducer } from "./reducer";
 import { theme } from "./theme";
 
@@ -153,6 +154,16 @@ const MODEL_PICKER_WINDOW = 10;
 const NAME_WIDTH = 22;
 const PROVIDER_WIDTH = 10;
 const CONTEXT_WIDTH = 7;
+// Widest real value is "your key" (8 chars) — 9 leaves one column of breathing room, matching
+// this file's other columns' own generosity over their own widest realistic value.
+const ROUTE_WIDTH = 9;
+// Cost was the table's last column before Route (D1/D2, feature-plan.md) became the new trailing
+// one — formatCost's own output is genuinely variable-width ("—" vs "$150.00/$600.00"), which was
+// fine when nothing followed it, but Route now does, so this pads it too, or Route would drift
+// out of its own column depending on how expensive a given row's model is. 18 covers the widest
+// real pair in the bundled manifest (measured: $150.00/$600.00, 15 characters) with a little room
+// to spare, not the exact minimum.
+const COST_WIDTH = 18;
 
 // Truncates with a trailing ellipsis (never mid-multi-byte-safe beyond what .slice already is —
 // every field this feeds is plain ASCII: a model id/displayName/provider name) or pads with
@@ -180,18 +191,31 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
   return `$${pricing.inputPerMTok.toFixed(2)}/$${pricing.outputPerMTok.toFixed(2)}`;
 }
 
-// One row's worth of columns (name, provider, context, cost), space-joined — the picker's own
-// selection marker ("> "/"  ") is prepended at the call site, not here, matching how the un-columned
-// version already separated "which row is highlighted" from "what the row says". Factored out and
-// exported specifically so column formatting is unit-testable without mounting Ink at all — this
-// file had no pure formatting function of its own before the picker's columns needed one.
-export function formatModelRow(entry: ModelCatalogEntry): string {
-  return [
-    truncatePad(entry.displayName, NAME_WIDTH),
-    truncatePad(entry.provider, PROVIDER_WIDTH),
-    formatContextWindow(entry.contextWindow).padStart(CONTEXT_WIDTH),
-    formatCost(entry.pricing),
-  ].join(" ");
+// One row's worth of columns (name, provider, context, cost, route), space-joined — the picker's
+// own selection marker ("> "/"  ") is prepended at the call site, not here, matching how the
+// un-columned version already separated "which row is highlighted" from "what the row says".
+// Factored out and exported specifically so column formatting is unit-testable without mounting
+// Ink at all — this file had no pure formatting function of its own before the picker's columns
+// needed one.
+//
+// D1/D2 (feature-plan.md): the trailing Route column names whether THIS row's own provider has a
+// key ("your key"/"no key" — the same fact routing-priority resolution would act on) and, when
+// this row is one of several routes to the same logical model (`alternatives > 0`, set by
+// decideModelPickerOpen), how many OTHER routes exist — so a route with no key of its own but a
+// reachable sibling still reads as reachable, not as a dead end.
+export function formatModelRow(row: ModelPickerEntry): string {
+  const { entry, keyConfigured, alternatives } = row;
+  const suffix =
+    alternatives > 0 ? ` +${alternatives} route${alternatives === 1 ? "" : "s"}` : "";
+  return (
+    [
+      truncatePad(entry.displayName, NAME_WIDTH),
+      truncatePad(entry.provider, PROVIDER_WIDTH),
+      formatContextWindow(entry.contextWindow).padStart(CONTEXT_WIDTH),
+      truncatePad(formatCost(entry.pricing), COST_WIDTH),
+      truncatePad(keyConfigured ? "your key" : "no key", ROUTE_WIDTH),
+    ].join(" ") + suffix
+  );
 }
 
 // The picker's own column labels, same widths as formatModelRow's own columns — so the header sits
@@ -200,20 +224,30 @@ const MODEL_PICKER_HEADER = [
   truncatePad("Name", NAME_WIDTH),
   truncatePad("Provider", PROVIDER_WIDTH),
   "Context".padStart(CONTEXT_WIDTH),
-  "Cost",
+  truncatePad("Cost", COST_WIDTH),
+  truncatePad("Route", ROUTE_WIDTH),
 ].join(" ");
 
-function matchesFilter(entry: ModelCatalogEntry, query: string): boolean {
-  const needle = query.toLowerCase();
-  return (
-    entry.id.toLowerCase().includes(needle) ||
-    entry.displayName.toLowerCase().includes(needle) ||
+// Multi-term AND-of-ORs, not a single unsplit substring check: the query is split on whitespace,
+// and EVERY term must match at least one field (id, displayName, family, or — new in this commit —
+// provider), independently. A single-term query behaves exactly as before (id/displayName/family,
+// now also provider); a multi-term one (e.g. "sonnet-5 anthropic") is what lets a query narrow to
+// one specific ROUTE of a multi-route model rather than only ever narrowing by name.
+function matchesFilter(row: ModelPickerEntry, query: string): boolean {
+  const terms = query.toLowerCase().split(/\s+/).filter((term) => term.length > 0);
+  if (terms.length === 0) return true;
+  const { entry } = row;
+  const haystacks = [
+    entry.id.toLowerCase(),
+    entry.displayName.toLowerCase(),
     // `family` is a free-text field lifted verbatim from models.dev (ModelCatalogEntry's own
     // comment, packages/model-catalog/src/types.ts) — some upstream entries carry `null` there
     // rather than an empty string, so this cannot assume it is always safe to call
     // `.toLowerCase()` on directly.
-    (entry.family ?? "").toLowerCase().includes(needle)
-  );
+    (entry.family ?? "").toLowerCase(),
+    entry.provider.toLowerCase(),
+  ];
+  return terms.every((term) => haystacks.some((haystack) => haystack.includes(term)));
 }
 
 // /model's own live state (tui/reducer.ts's pendingModelPicker) — mirrors ApprovalBox's shape
@@ -226,7 +260,7 @@ function ModelPicker({
   onModelSelected,
   onModelPickerCancel,
 }: {
-  entries: ModelCatalogEntry[];
+  entries: ModelPickerEntry[];
   onModelSelected?: (
     pick: { model: string; provider: ModelProvider },
     leftoverInput?: string,
@@ -248,7 +282,7 @@ function ModelPicker({
   const filtered =
     filterQuery.length === 0
       ? entries
-      : entries.filter((entry) => matchesFilter(entry, filterQuery));
+      : entries.filter((row) => matchesFilter(row, filterQuery));
 
   // Moves the selection to `next` (already clamped to `[0, filtered.length - 1]` by the caller)
   // and slides `scrollOffset` only far enough to keep it inside the visible window — the classic
@@ -280,9 +314,9 @@ function ModelPicker({
       return;
     }
     if (key.return) {
-      const entry = filtered[selectedIndex];
-      if (entry !== undefined) {
-        onModelSelected?.({ model: entry.id, provider: entry.provider });
+      const row = filtered[selectedIndex];
+      if (row !== undefined) {
+        onModelSelected?.({ model: row.entry.id, provider: row.entry.provider });
       }
       return;
     }
@@ -319,10 +353,10 @@ function ModelPicker({
     const terminatorLength = input.startsWith("\r\n", terminatorIndex) ? 2 : 1;
     const after = input.slice(terminatorIndex + terminatorLength);
     const nextFiltered =
-      nextQuery.length === 0 ? entries : entries.filter((entry) => matchesFilter(entry, nextQuery));
-    const entry = nextFiltered[0];
-    if (entry !== undefined) {
-      onModelSelected?.({ model: entry.id, provider: entry.provider }, after || undefined);
+      nextQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, nextQuery));
+    const row = nextFiltered[0];
+    if (row !== undefined) {
+      onModelSelected?.({ model: row.entry.id, provider: row.entry.provider }, after || undefined);
     }
   });
 
@@ -333,15 +367,15 @@ function ModelPicker({
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
       <Text>{filterQuery.length > 0 ? filterQuery : " "}</Text>
       <Text color={theme.muted}>{`  ${MODEL_PICKER_HEADER}`}</Text>
-      {visible.map((entry, localIndex) => {
+      {visible.map((row, localIndex) => {
         const index = scrollOffset + localIndex;
         return (
           <Text
-            key={`${entry.provider}/${entry.id}`}
+            key={`${row.entry.provider}/${row.entry.id}`}
             color={index === selectedIndex ? theme.accent : undefined}
           >
             {index === selectedIndex ? "> " : "  "}
-            {formatModelRow(entry)}
+            {formatModelRow(row)}
           </Text>
         );
       })}

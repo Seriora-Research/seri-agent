@@ -100,7 +100,57 @@ describe("decideModelPickerOpen", () => {
       ],
     };
 
-    expect(decideModelPickerOpen(catalog).map((entry) => entry.id)).toEqual(["a", "c"]);
+    expect(
+      decideModelPickerOpen(catalog, new Set()).map((row) => row.entry.id),
+    ).toEqual(["a", "c"]);
+  });
+
+  // D1/D2 (feature-plan.md): a model reachable through more than one provider lands as
+  // ADJACENT rows, native-then-aggregator — the same order routing-priority resolution
+  // (resolveRoute) would itself choose.
+  test("a multi-route model's rows land adjacently, native before aggregator", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "anthropic/claude-sonnet-5", provider: "openrouter" }),
+        catalogEntry({ id: "unrelated", provider: "groq" }),
+        catalogEntry({ id: "claude-sonnet-5", provider: "anthropic" }),
+      ],
+    };
+
+    const rows = decideModelPickerOpen(catalog, new Set());
+    expect(rows.map((row) => `${row.entry.provider}:${row.entry.id}`)).toEqual([
+      // The sonnet-5 GROUP's own first appearance (routeKey "anthropic/claude-sonnet-5") is the
+      // openrouter entry at index 0 of the fixture, so the group as a whole sorts before the
+      // "unrelated" group — but WITHIN the group, native anthropic sorts before aggregator
+      // openrouter regardless of which one appeared first in the catalog.
+      "anthropic:claude-sonnet-5",
+      "openrouter:anthropic/claude-sonnet-5",
+      "groq:unrelated",
+    ]);
+  });
+
+  test("keyConfigured reflects the passed set, and alternatives counts sibling routes", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "anthropic/claude-sonnet-5", provider: "openrouter" }),
+        catalogEntry({ id: "claude-sonnet-5", provider: "anthropic" }),
+        catalogEntry({ id: "unrelated", provider: "groq" }),
+      ],
+    };
+
+    const rows = decideModelPickerOpen(catalog, new Set(["anthropic"]));
+    const openrouterRow = rows.find((row) => row.entry.provider === "openrouter");
+    const anthropicRow = rows.find((row) => row.entry.provider === "anthropic");
+    const groqRow = rows.find((row) => row.entry.provider === "groq");
+
+    expect(openrouterRow?.keyConfigured).toBe(false);
+    expect(anthropicRow?.keyConfigured).toBe(true);
+    expect(openrouterRow?.alternatives).toBe(1);
+    expect(anthropicRow?.alternatives).toBe(1);
+    // A model with no siblings has zero alternatives, not `undefined` or `-1`.
+    expect(groqRow?.alternatives).toBe(0);
   });
 });
 

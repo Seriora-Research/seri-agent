@@ -1,12 +1,13 @@
 // The shared-state home the research spec's Constraint 4 requires: driveLoop and all four slash
 // commands dispatch into this one reducer rather than each holding a separate copy. Zero Ink/React
 // import — a plain, standalone reducer, testable without a terminal.
-import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
+import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { toolAllowedLine, toolResultLine } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
 import type { SessionState } from "../session/session";
+import type { ModelPickerEntry } from "./commands";
 
 export type TuiState = {
   session: SessionState<ModelMessage>;
@@ -48,7 +49,7 @@ export type TuiState = {
   // but hidden behind the approval prompt until that resolves, rather than the two ever competing
   // for the screen at once. Whether that is the right UX for a mid-turn /model is not decided by
   // this comment; it is only what the current render order actually does.
-  pendingModelPicker: { entries: ModelCatalogEntry[] } | undefined;
+  pendingModelPicker: { entries: ModelPickerEntry[] } | undefined;
   // Code-review finding: a single pty chunk carrying filter text, a terminator, AND further
   // characters (measured as real on a real terminal, the same class InputBox's own MEDIUM-E fix
   // addressed) used to just discard everything after the terminator when it closed the picker —
@@ -87,7 +88,7 @@ export type TuiAction =
   | { type: "command-error"; message: string }
   | { type: "approval-requested"; toolName: string; args: unknown; offersAlways: boolean }
   | { type: "approval-resolved" }
-  | { type: "model-picker-requested"; entries: ModelCatalogEntry[] }
+  | { type: "model-picker-requested"; entries: ModelPickerEntry[] }
   // `pick`, when present, is the SAME atomic transition as clearing pendingModelPicker — not a
   // second dispatch — so there is never a one-frame render where the session already switched
   // models but the picker is still showing, or the picker is gone but the switch hasn't landed.

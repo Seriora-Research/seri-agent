@@ -1876,7 +1876,9 @@ async function runTui(
       }
       dispatch({
         type: "model-picker-requested",
-        entries: decideModelPickerOpen(prepared.catalog),
+        // D1/D2 (feature-plan.md): re-read fresh on every open, not cached from prepareSession —
+        // a key added mid-session via /setup must show up in the very next /model open.
+        entries: decideModelPickerOpen(prepared.catalog, configuredProviders(configDir)),
       });
       return;
     }

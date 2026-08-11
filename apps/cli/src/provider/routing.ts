@@ -2,6 +2,7 @@ import {
   CATALOG_PROVIDERS,
   findCatalogEntry,
   type ModelCatalog,
+  type ModelCatalogEntry,
   type ModelProvider,
   routesFor,
 } from "@seri/model-catalog";
@@ -17,6 +18,17 @@ export const NATIVE_PROVIDERS: ReadonlySet<ModelProvider> = new Set([
   "openai",
   "google",
 ]);
+
+// The native-then-aggregator, CATALOG_PROVIDERS-tiebroken ordering rule 2 applies — exported so
+// /model's own picker (tui/commands.ts's decideModelPickerOpen) can order a route group's members
+// in the SAME order routing would actually choose them, rather than re-deriving an independent
+// copy of this comparator that could silently drift from it.
+export function byRoutePriority(a: ModelCatalogEntry, b: ModelCatalogEntry): number {
+  const aTier = NATIVE_PROVIDERS.has(a.provider) ? 0 : 1;
+  const bTier = NATIVE_PROVIDERS.has(b.provider) ? 0 : 1;
+  if (aTier !== bTier) return aTier - bTier;
+  return CATALOG_PROVIDERS.indexOf(a.provider) - CATALOG_PROVIDERS.indexOf(b.provider);
+}
 
 export type ResolvedRoute = {
   model: string;
@@ -62,12 +74,7 @@ export function resolveRoute(
 
   // Rule 2: native-direct over aggregator, ties within a tier broken by CATALOG_PROVIDERS order —
   // sorted once rather than a hand-rolled two-pass "find native, else find aggregator" search.
-  const [chosen] = [...candidates].sort((a, b) => {
-    const aTier = NATIVE_PROVIDERS.has(a.provider) ? 0 : 1;
-    const bTier = NATIVE_PROVIDERS.has(b.provider) ? 0 : 1;
-    if (aTier !== bTier) return aTier - bTier;
-    return CATALOG_PROVIDERS.indexOf(a.provider) - CATALOG_PROVIDERS.indexOf(b.provider);
-  });
+  const [chosen] = [...candidates].sort(byRoutePriority);
   // Unreachable given the `candidates.length === 0` guard above — narrows `chosen` for tsc.
   if (chosen === undefined) {
     return { model: requested.model, provider: requested.provider, rerouted: false };

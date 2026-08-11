@@ -5,6 +5,7 @@ import { render } from "ink-testing-library";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { SessionState } from "../../src/session/session";
 import { App, formatContextWindow, formatCost, formatModelRow } from "../../src/tui/App";
+import type { ModelPickerEntry } from "../../src/tui/commands";
 import type { TuiAction } from "../../src/tui/reducer";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -358,10 +359,17 @@ describe("App", () => {
       };
     }
 
+    // D1/D2 (feature-plan.md): the picker's own row shape, ModelPickerEntry — this file's
+    // existing `entry()` fixture still builds the underlying ModelCatalogEntry, wrapped here for
+    // every test that only cares about "some row exists," not routing/key-configuration specifics.
+    function row(overrides: Partial<ModelCatalogEntry> = {}): ModelPickerEntry {
+      return { entry: entry(overrides), keyConfigured: true, alternatives: 0 };
+    }
+
     test("renders in place of the input box once requested", async () => {
       const { instance, dispatch } = await connect();
 
-      dispatch({ type: "model-picker-requested", entries: [entry()] });
+      dispatch({ type: "model-picker-requested", entries: [row()] });
       await flush();
 
       expect(instance.lastFrame()).toContain("Llama 3.3 70B");
@@ -390,8 +398,8 @@ describe("App", () => {
       dispatch({
         type: "model-picker-requested",
         entries: [
-          entry({ id: "llama-3.3-70b-versatile", displayName: "Llama 3.3 70B" }),
-          entry({ id: "llama-3.1-8b-instant", displayName: "Llama 3.1 8B" }),
+          row({ id: "llama-3.3-70b-versatile", displayName: "Llama 3.3 70B" }),
+          row({ id: "llama-3.1-8b-instant", displayName: "Llama 3.1 8B" }),
         ],
       });
       await flush();
@@ -422,7 +430,7 @@ describe("App", () => {
       await flush();
       if (dispatch === undefined) throw new Error("connectDispatch never fired");
 
-      dispatch({ type: "model-picker-requested", entries: [entry()] });
+      dispatch({ type: "model-picker-requested", entries: [row()] });
       await flush();
       instance.stdin.write("\x1b"); // Escape
       // A bare Escape byte is ambiguous with the start of a longer ANSI sequence (an arrow key,
@@ -433,7 +441,7 @@ describe("App", () => {
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(cancelled).toEqual(["cancelled"]);
 
-      dispatch({ type: "model-picker-requested", entries: [entry()] });
+      dispatch({ type: "model-picker-requested", entries: [row()] });
       await flush();
       instance.stdin.write("\x04"); // Ctrl-D
       await flush();
@@ -443,7 +451,7 @@ describe("App", () => {
     test("shows a +N more hint once the filtered list exceeds the visible window", async () => {
       const { instance, dispatch } = await connect();
       const entries = Array.from({ length: 12 }, (_, i) =>
-        entry({ id: `model-${i}`, displayName: `Model ${i}` }),
+        row({ id: `model-${i}`, displayName: `Model ${i}` }),
       );
 
       dispatch({ type: "model-picker-requested", entries });
@@ -474,7 +482,7 @@ describe("App", () => {
       if (dispatch === undefined) throw new Error("connectDispatch never fired");
 
       const entries = Array.from({ length: 20 }, (_, i) =>
-        entry({ id: `model-${i}`, displayName: `Model ${i}` }),
+        row({ id: `model-${i}`, displayName: `Model ${i}` }),
       );
       dispatch({ type: "model-picker-requested", entries });
       await flush();
@@ -515,6 +523,10 @@ describe("App", () => {
       };
     }
 
+    function pickerRow(overrides: Partial<ModelPickerEntry> = {}): ModelPickerEntry {
+      return { entry: entry(), keyConfigured: true, alternatives: 0, ...overrides };
+    }
+
     test("formatContextWindow compacts to binary K/M, matching how a context window is described elsewhere in this repo", () => {
       expect(formatContextWindow(131_072)).toBe("128K");
       expect(formatContextWindow(1_050_000)).toBe("1.0M");
@@ -527,7 +539,7 @@ describe("App", () => {
     });
 
     test("formatModelRow includes name, provider, context and cost, in that order", () => {
-      const row = formatModelRow(entry());
+      const row = formatModelRow(pickerRow());
       const nameIndex = row.indexOf("Llama 3.3 70B");
       const providerIndex = row.indexOf("groq");
       const contextIndex = row.indexOf("128K");
@@ -538,8 +550,27 @@ describe("App", () => {
       expect(costIndex).toBeGreaterThan(contextIndex);
     });
 
+    // D1/D2 (feature-plan.md): the trailing Route column.
+    test("formatModelRow renders 'your key' or 'no key', and a '+N route(s)' suffix only when alternatives > 0", () => {
+      const configured = formatModelRow(pickerRow({ keyConfigured: true, alternatives: 0 }));
+      expect(configured).toContain("your key");
+      expect(configured).not.toContain("no key");
+      expect(configured).not.toContain("route");
+
+      const unconfigured = formatModelRow(pickerRow({ keyConfigured: false, alternatives: 0 }));
+      expect(unconfigured).toContain("no key");
+      expect(unconfigured).not.toContain("your key");
+
+      const withOneAlternative = formatModelRow(pickerRow({ alternatives: 1 }));
+      expect(withOneAlternative).toContain("+1 route");
+      expect(withOneAlternative).not.toContain("+1 routes");
+
+      const withTwoAlternatives = formatModelRow(pickerRow({ alternatives: 2 }));
+      expect(withTwoAlternatives).toContain("+2 routes");
+    });
+
     test("formatModelRow truncates a displayName longer than the name column", () => {
-      const row = formatModelRow(entry({ displayName: "A".repeat(40) }));
+      const row = formatModelRow(pickerRow({ entry: entry({ displayName: "A".repeat(40) }) }));
       expect(row).toContain("…");
       expect(row.indexOf("A".repeat(40))).toBe(-1);
     });

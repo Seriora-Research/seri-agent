@@ -3,6 +3,7 @@ import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import type { LoopEvent } from "../../src/loop/loop";
 import type { SessionState } from "../../src/session/session";
+import type { ModelPickerEntry } from "../../src/tui/commands";
 import { initialTuiState, tuiReducer } from "../../src/tui/reducer";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -232,20 +233,21 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     reasoning: false,
     pricing: undefined,
   };
+  const row: ModelPickerEntry = { entry, keyConfigured: true, alternatives: 0 };
 
   test("model-picker-requested sets pendingModelPicker", () => {
     const state = tuiReducer(initialTuiState(session()), {
       type: "model-picker-requested",
-      entries: [entry],
+      entries: [row],
     });
 
-    expect(state.pendingModelPicker).toEqual({ entries: [entry] });
+    expect(state.pendingModelPicker).toEqual({ entries: [row] });
   });
 
   test("model-picker-resolved with a pick merges model/provider into state.session and clears the picker in the same dispatch", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "model-picker-requested",
-      entries: [entry],
+      entries: [row],
     });
 
     state = tuiReducer(state, {
@@ -266,7 +268,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
   test("model-picker-resolved merges into the CURRENT session, not a stale one captured when the picker opened", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "model-picker-requested",
-      entries: [entry],
+      entries: [row],
     });
     // Simulates a turn's own messages-updated event landing while the picker is still open.
     state = tuiReducer(state, {
@@ -287,7 +289,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
   test("model-picker-resolved with no pick only clears the picker", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "model-picker-requested",
-      entries: [entry],
+      entries: [row],
     });
     const before = state.session;
 
@@ -304,7 +306,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
   test("model-picker-resolved with leftoverInput sets pendingInputPrefill", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "model-picker-requested",
-      entries: [entry],
+      entries: [row],
     });
 
     state = tuiReducer(state, {
@@ -320,7 +322,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
   test("model-picker-resolved without leftoverInput leaves pendingInputPrefill undefined", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "model-picker-requested",
-      entries: [entry],
+      entries: [row],
     });
 
     state = tuiReducer(state, {
@@ -334,7 +336,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
   test("input-prefill-consumed clears pendingInputPrefill", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "model-picker-requested",
-      entries: [entry],
+      entries: [row],
     });
     state = tuiReducer(state, {
       type: "model-picker-resolved",
