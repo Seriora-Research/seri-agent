@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { loadMemoryConfig } from "../../src/config/config";
 import { decideMemoryCommand, memoryCommandAccepts } from "../../src/memory/commands";
-import { stagePendingWrite } from "../../src/memory/pending";
+import { pendingPath, stagePendingWrite } from "../../src/memory/pending";
 import type { MemoryContext } from "../../src/memory/store";
 
 let configDir: string | undefined;
@@ -158,6 +158,43 @@ describe("decideMemoryCommand", () => {
     expect(result.changed).toBe(false);
     expect(result.lines.some((l) => l.includes("a fine entry"))).toBe(true);
     expect(result.lines.some((l) => l.startsWith("Could not diff"))).toBe(true);
+  });
+
+  // rejectPending is a raw unlinkSync with no existence check -- an entry whose underlying file no
+  // longer matches what listPending resolved (a concurrent process rejecting/removing it between
+  // resolution and this call) must not abort the rest of "reject all" with zero output. Simulated
+  // deterministically, cross-platform: a .pending file is written whose OWN "id" field names a
+  // path that does not exist on disk (pendingPath is derived from the record's id, not from the
+  // filename it was read from) -- rejectPending's unlinkSync then throws ENOENT for exactly this
+  // record, the same failure shape a real race produces, without depending on timing.
+  test("reject all still rejects a good entry and reports an inline error for one whose own id resolves to a missing file", () => {
+    const ctx = makeCtx();
+    const good = stagePendingWrite(
+      { scope: "user", action: "add", content: "a fine entry", reason: "r", durable: true },
+      ctx,
+      new Date(),
+    );
+    const staleId = "bbbbbbbbbbbb";
+    const onDiskPath = pendingPath(ctx.configDir, "user", "aaaaaaaaaaaa");
+    mkdirSync(dirname(onDiskPath), { recursive: true });
+    writeFileSync(
+      onDiskPath,
+      JSON.stringify({
+        id: staleId,
+        stagedAt: new Date().toISOString(),
+        scope: "user",
+        action: "add",
+        content: "x",
+        reason: "r",
+        durable: true,
+        entryDate: "2026-08-11",
+      }),
+    );
+
+    const result = decideMemoryCommand(["reject", "all"], ctx);
+    expect(result.changed).toBe(true);
+    expect(result.lines.some((l) => l === `Rejected ${good.id}.`)).toBe(true);
+    expect(result.lines.some((l) => l.startsWith(`Could not reject ${staleId}`))).toBe(true);
   });
 
   test("approve all applies writes staged in all three scopes", () => {

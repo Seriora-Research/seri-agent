@@ -14,6 +14,7 @@ import {
   createArchivistState,
   maybeRunArchivist,
   observeArchivistEvent,
+  resetArchivistForRewind,
   runArchivist,
   shouldRunArchivist,
 } from "../../src/memory/archivist";
@@ -96,6 +97,54 @@ describe("createArchivistState", () => {
     expect(s.messages).toEqual(session.messages);
     expect(s.toolCallsSinceRun).toBe(0);
     expect(s.runs).toBe(0);
+  });
+});
+
+describe("resetArchivistForRewind", () => {
+  // The scenario maybeRunArchivist's own generic out-of-bounds guard (messageCursor >
+  // messages.length -> 0) cannot catch: a rewind truncates the array, but enough NEW messages
+  // land in the SAME turn right after it to push messages.length back past the OLD cursor value
+  // before that guard next runs — at that point `cursor > length` is false again, so the generic
+  // guard is a silent no-op and the archivist would review the wrong slice. Proven directly: apply
+  // ONLY the generic bounds check (no resetArchivistForRewind call) to this exact sequence first,
+  // and show the cursor stays wrong; then show resetArchivistForRewind, called at the rewind site
+  // itself, prevents that.
+  test("resets the cursor even when post-rewind growth would defeat the generic bounds check alone", () => {
+    const preRewindMessages = Array.from({ length: 5 }, (_, i) => ({
+      role: "user" as const,
+      content: `message ${i + 1}`,
+    }));
+    const s = createArchivistState(emptySession());
+    s.messages = preRewindMessages;
+    s.messageCursor = 5; // fully reviewed, pre-rewind
+
+    // /rewind truncates to the first 2 messages.
+    const postRewindMessages = preRewindMessages.slice(0, 2);
+
+    // Negative control: the generic bounds check ALONE, applied to the array as it stands
+    // immediately after growth (see below) with the STALE pre-rewind cursor, does not fire --
+    // this is what the direct reset exists to prevent.
+    const grownWithoutReset = [
+      ...postRewindMessages,
+      { role: "user" as const, content: "new message A" },
+      { role: "user" as const, content: "new message B" },
+      { role: "user" as const, content: "new message C" },
+      { role: "user" as const, content: "new message D" },
+    ];
+    const staleCursor = 5;
+    const genericGuardResult = staleCursor > grownWithoutReset.length ? 0 : staleCursor; // mirrors maybeRunArchivist's own guard
+    expect(genericGuardResult).toBe(5); // still wrong: 5 is not > 6, so the guard never fires
+
+    // The actual fix: resetArchivistForRewind is called AT THE REWIND SITE, before any of the
+    // same-turn growth above happens.
+    resetArchivistForRewind(s, postRewindMessages);
+    expect(s.messageCursor).toBe(0);
+    expect(s.messages).toBe(postRewindMessages);
+
+    // The same same-turn growth now happens on top of the ALREADY-RESET state (observeArchivistEvent
+    // is what would actually update s.messages turn-to-turn; simulated directly here).
+    s.messages = grownWithoutReset;
+    expect(s.messageCursor).toBe(0); // untouched by the growth -- still correct
   });
 });
 
@@ -362,7 +411,15 @@ describe("buildArchivistGoal", () => {
 });
 
 describe("runArchivist", () => {
-  test("a successful run stages a write, reports usage/cost, resets the counter, and advances the cursor", async () => {
+  // The assertion block below (`sentPrompt` — what the child model actually received) is the one
+  // this test previously lacked. Without it: a prior version of this test built `state` with one
+  // messages array and passed a DIFFERENT array as runArchivist's own (now-deleted) `messages`
+  // argument, so the cursor-based slice it computed was `[]` — and replacing the real
+  // `state.messages.slice(cursor)` with `.slice(0)` (deleting the "don't re-review old messages"
+  // behavior entirely) still left this test, and all 24 others in this file, green. Seeding
+  // `state.messages` directly (not a separate argument — the param this test used to mismatch no
+  // longer exists) and asserting on the prompt is what makes this assertion able to fail.
+  test("a successful run reviews only what's past the cursor, stages a write, reports usage/cost, resets the counter, and advances the cursor", async () => {
     const ctx = makeCtx();
     const model = new MockLanguageModelV4({
       doStream: [
@@ -378,22 +435,17 @@ describe("runArchivist", () => {
         streamResult(stopStream()),
       ],
     });
-    const seedMessage = { role: "user", content: "x" } as const;
-    const state = createArchivistState({
-      id: "s",
-      cwd: "/",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [seedMessage, seedMessage],
-    });
+    const state = createArchivistState(emptySession());
+    state.messages = [
+      { role: "user", content: "message one, already reviewed" },
+      { role: "assistant", content: [{ type: "text", text: "message two, already reviewed" }] },
+      { role: "user", content: "message three, brand new" },
+    ];
+    state.messageCursor = 2; // messages 1-2 already reviewed; only message 3 is new
     state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
 
     const controller = new AbortController();
     const report = await runArchivist({
-      messages: [
-        { role: "user", content: "task" },
-        { role: "assistant", content: [{ type: "text", text: "done" }] },
-      ],
       state,
       trigger: "tool-count",
       ctx,
@@ -404,6 +456,11 @@ describe("runArchivist", () => {
       onWarning: () => {},
     });
 
+    const sentPrompt = JSON.stringify(model.doStreamCalls[0]?.prompt);
+    expect(sentPrompt).toContain("message three, brand new");
+    expect(sentPrompt).not.toContain("message one, already reviewed");
+    expect(sentPrompt).not.toContain("message two, already reviewed");
+
     expect(report).toBeDefined();
     expect(report?.trigger).toBe("tool-count");
     expect(report?.usage.inputTokens).toBe(12);
@@ -411,7 +468,7 @@ describe("runArchivist", () => {
     expect(report?.cost?.status).toBe("estimated");
     expect(report?.cost?.amountUsd).toBeGreaterThan(0);
     expect(state.toolCallsSinceRun).toBe(0);
-    expect(state.messageCursor).toBe(2);
+    expect(state.messageCursor).toBe(3);
     expect(state.runs).toBe(1);
   });
 
@@ -437,17 +494,11 @@ describe("runArchivist", () => {
     );
 
     const model = new MockLanguageModelV4({ doStream: [streamResult(stopStream())] });
-    const state = createArchivistState({
-      id: "s",
-      cwd: "/",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [],
-    });
+    const state = createArchivistState(emptySession());
+    state.messages = [{ role: "user", content: "task" }];
     state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
 
     await runArchivist({
-      messages: [{ role: "user", content: "task" }],
       state,
       trigger: "tool-count",
       ctx,
@@ -469,13 +520,7 @@ describe("runArchivist", () => {
   // one — this is what stops that retry storm.
   test("a dispatch that throws resets the counter to 0, returns undefined, and calls onWarning", async () => {
     const ctx = makeCtx();
-    const state = createArchivistState({
-      id: "s",
-      cwd: "/",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [],
-    });
+    const state = createArchivistState(emptySession());
     state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
     const warnings: string[] = [];
     const model = new MockLanguageModelV4({ doStream: [] });
@@ -489,7 +534,6 @@ describe("runArchivist", () => {
     const brokenCatalog = { fetchedAt: "", entries: null } as unknown as ModelCatalog;
 
     const report = await runArchivist({
-      messages: [],
       state,
       trigger: "tool-count",
       ctx,
@@ -511,20 +555,13 @@ describe("runArchivist", () => {
   test("an already-aborted signal returns undefined silently (no onWarning call) and leaves the counter untouched", async () => {
     const ctx = makeCtx();
     const model = new MockLanguageModelV4({ doStream: [] });
-    const state = createArchivistState({
-      id: "s",
-      cwd: "/",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [],
-    });
+    const state = createArchivistState(emptySession());
     state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
     const controller = new AbortController();
     controller.abort();
     const warnings: string[] = [];
 
     const report = await runArchivist({
-      messages: [],
       state,
       trigger: "tool-count",
       ctx,

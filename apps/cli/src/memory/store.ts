@@ -70,7 +70,16 @@ function labelFor(scope: MemoryScope, ctx: MemoryContext): string {
 
 export function loadMemoryFile(scope: MemoryScope, ctx: MemoryContext): MemoryFile {
   const path = memoryFilePath(scope, ctx);
-  const text = existsSync(path) ? readFileSync(path, "utf8") : "";
+  const raw = existsSync(path) ? readFileSync(path, "utf8") : "";
+  // Normalized on load, not left to parseEntries: a CRLF file (any Windows editor's default save)
+  // would blow the char cap differently on Windows than on Linux, and a trailing "\n" (any editor
+  // that adds one on save) would otherwise split into a phantom `{date:"",text:"",line:""}` entry
+  // via text.split("\n") in parseEntries below — inflating `entries.length` in cap-refusal
+  // messages, making section()'s own `entries.length === 0` check miss an otherwise-empty file,
+  // and worst of all getting re-derived by computeWrite's own `text.split("\n")` on the very next
+  // write, permanently baking a blank line into the middle of the file instead of it staying a
+  // harmless trailing artifact.
+  const text = raw.replace(/\r\n/g, "\n").replace(/\n+$/, "");
   return {
     scope,
     path,

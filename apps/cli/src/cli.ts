@@ -56,6 +56,7 @@ import {
   createArchivistState,
   maybeRunArchivist,
   observeArchivistEvent,
+  resetArchivistForRewind,
 } from "./memory/archivist";
 import { decideMemoryCommand, memoryCommandAccepts } from "./memory/commands";
 import { loadMemory, type LoadedMemory } from "./memory/store";
@@ -828,7 +829,11 @@ type RunContext = CommandDirs & {
 };
 
 function dirs(ctx: RunContext): CommandDirs {
-  return { sessionsDir: ctx.sessionsDir, checkpointsDir: ctx.checkpointsDir, configDir: ctx.configDir };
+  return {
+    sessionsDir: ctx.sessionsDir,
+    checkpointsDir: ctx.checkpointsDir,
+    configDir: ctx.configDir,
+  };
 }
 
 // Shared by prepareSession (decides whether to push the initial user message) and runTui's own
@@ -2369,6 +2374,14 @@ async function runTui(
         dirs(ctx),
         tuiPresenter(dispatch, awaitNextPersist),
       );
+      // resetArchivistForRewind's own comment (memory/archivist.ts) explains why this must be
+      // deterministic, at the truncation site, rather than left to maybeRunArchivist's generic
+      // guard. `liveState.session` is already the post-rewind truncation by this point —
+      // `dispatch` (this closure's own wrapper) updates it synchronously, before command.run even
+      // returns.
+      if (name === "/rewind") {
+        resetArchivistForRewind(archivistState, liveState.session.messages);
+      }
     } catch (err) {
       dispatch({
         type: "command-error",

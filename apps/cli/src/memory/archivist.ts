@@ -71,6 +71,20 @@ export function createArchivistState(session: SessionState<ModelMessage>): Archi
   };
 }
 
+// /rewind truncates session.messages directly, between turns (mutatesRunState blocks it while
+// one is in flight) — this must be called right at that truncation site, not left to
+// maybeRunArchivist's own generic out-of-bounds guard (below), which only runs once per turn, at
+// turn END: if enough NEW messages land in the turn right after a rewind to push messages.length
+// back past the OLD cursor before that guard next runs, the bounds check `cursor > length` is
+// simply false again and never fires — the archivist then silently skips every genuinely-new
+// post-rewind message between the rewind point and the stale cursor. cli.ts's own /rewind call
+// site (runTui's onSubmit) is the one place that has both archivistState and the post-rewind
+// array in scope at the moment of truncation, and calls this directly there.
+export function resetArchivistForRewind(state: ArchivistState, messages: ModelMessage[]): void {
+  state.messageCursor = 0;
+  state.messages = messages;
+}
+
 // The archivist's entire view of a turn comes through here — one call per LoopEvent, from
 // driveLoop's own for-await body — so this file, not cli.ts, is where its rules live and can be
 // read on their own. Only a real "usage" event reflects the actual transcript's input-token
@@ -148,7 +162,6 @@ export type ArchivistReport = {
 // already applies to appendBarrier/rememberGrant. An abort is the one exception: it returns
 // undefined silently, with no warning.
 export async function runArchivist(args: {
-  messages: ModelMessage[];
   state: ArchivistState;
   trigger: ArchivistTrigger;
   ctx: MemoryContext;
@@ -160,7 +173,12 @@ export async function runArchivist(args: {
 }): Promise<ArchivistReport | undefined> {
   if (args.signal.aborted) return undefined;
 
-  const transcript = args.messages.slice(args.state.messageCursor);
+  // state.messages, not a separately-passed argument: the two could never legitimately differ
+  // (maybeRunArchivist's only production call always passes the same array as state.messages),
+  // and a redundant parameter is exactly what let a prior version of this file's own test pass a
+  // MISMATCHED pair — reading the transcript off the array a mismatched test can't substitute is
+  // what makes the cursor-based slice below an assertion a broken implementation would fail.
+  const transcript = args.state.messages.slice(args.state.messageCursor);
   // Reloaded live, not the caller's frozen-per-session PreparedRun.memory: that freeze is correct
   // for the PROMPT tier (buildVolatileTier's own contract — a write now takes effect next
   // session, not this one), but the archivist's own goal needs memory as it actually is right
@@ -223,7 +241,7 @@ export async function runArchivist(args: {
   };
   const cost = reportFromCatalogPricing(args.route.model, args.route.provider, usage, args.catalog);
 
-  args.state.messageCursor = args.messages.length;
+  args.state.messageCursor = args.state.messages.length;
   args.state.toolCallsSinceRun = 0;
   args.state.runs++;
 
@@ -274,7 +292,6 @@ export async function maybeRunArchivist(args: {
   if (!trigger) return undefined;
 
   return runArchivist({
-    messages: args.state.messages,
     state: args.state,
     trigger,
     ctx: args.ctx,

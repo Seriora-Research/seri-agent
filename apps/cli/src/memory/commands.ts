@@ -107,8 +107,23 @@ export function decideMemoryCommand(
     const matches = resolvePendingRef(deps.configDir, rest[0]);
     if (matches.length === 0)
       return { lines: [`No staged write matches "${rest[0]}".`], changed: false };
-    for (const p of matches) rejectPending(deps.configDir, p);
-    return { lines: matches.map((p) => `Rejected ${p.id}.`), changed: true };
+    const lines: string[] = [];
+    let changed = false;
+    // Per-entry try/catch, the same shape "approve"/"diff" already use above: rejectPending is a
+    // raw unlinkSync with no existence check, so an entry already removed by a concurrent process
+    // (or a .pending file gone for any other reason) throws — without this, that one throw would
+    // abort "reject all" with zero output, leaving the user unable to tell which of the N entries,
+    // if any, were actually rejected before it.
+    for (const p of matches) {
+      try {
+        rejectPending(deps.configDir, p);
+        lines.push(`Rejected ${p.id}.`);
+        changed = true;
+      } catch (err) {
+        lines.push(`Could not reject ${p.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return { lines, changed };
   }
 
   if (sub === "approval" && ON_OFF_RE.test(rest[0] ?? "")) {

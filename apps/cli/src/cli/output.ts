@@ -397,7 +397,10 @@ function costFragment(cost: CostReport): string {
 // The archivist's usage/cost are reported on their own line, deliberately never summed into
 // printUsage/printCost's own totals (driveLoop's own comment on why: folding them in would
 // silently change what cli.test.ts's existing "(tokens: …)" assertions mean).
-export function archivistLines(report: ArchivistReport, sink: (line: string) => void = console.log): void {
+export function archivistLines(
+  report: ArchivistReport,
+  sink: (line: string) => void = console.log,
+): void {
   const tokenParts: string[] = [];
   if (report.usage.inputTokens !== undefined) tokenParts.push(`${report.usage.inputTokens} in`);
   if (report.usage.outputTokens !== undefined) tokenParts.push(`${report.usage.outputTokens} out`);

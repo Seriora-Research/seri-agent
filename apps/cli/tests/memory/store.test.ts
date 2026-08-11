@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   applyWrite,
   computeWrite,
@@ -83,6 +83,57 @@ describe("loadMemoryFile / loadMemory", () => {
     // basename(worktree), never the hash token or the full path.
     expect(memory.project.label).toBe("harness/MEMORY.md");
     expect(memory.project.path).not.toContain("harness");
+  });
+
+  // A trailing "\n" (any editor's default save behavior) would otherwise split into a phantom
+  // {date:"",text:"",line:""} entry via text.split("\n") — inflating entries.length and making an
+  // otherwise-empty file look non-empty.
+  test("a file written with a trailing newline loads with the correct entry count, no phantom entry", () => {
+    const ctx = makeCtx();
+    const path = memoryFilePath("user", ctx);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "- [2026-08-11] one entry\n");
+    const file = loadMemoryFile("user", ctx);
+    expect(file.entries).toHaveLength(1);
+    expect(file.entries[0].text).toBe("one entry");
+    expect(file.text).toBe("- [2026-08-11] one entry");
+  });
+
+  // The same phantom-entry bug specifically breaks section()'s OWN "(nothing recorded yet)" case
+  // (renderMemoryTier's per-file `entries.length === 0` check — not the whole-tier trim-based
+  // shortcut, which a trailing-newline-only file already satisfies on its own and would mask this
+  // bug if that were the only thing asserted). Reproduced with the user file genuinely non-empty
+  // (so the whole-tier shortcut does NOT short-circuit rendering) and the global file holding
+  // nothing but a trailing newline: its own section must still say "(nothing recorded yet)", not
+  // render a stray blank line for the phantom entry.
+  test("a global file with just a trailing newline still renders '(nothing recorded yet)', not a stray blank line", () => {
+    const ctx = makeCtx();
+    applyWrite(
+      { scope: "user", action: "add", content: "real entry", reason: "r", durable: true },
+      ctx,
+      "2026-08-11",
+    );
+    const globalPath = memoryFilePath("memory-global", ctx);
+    mkdirSync(dirname(globalPath), { recursive: true });
+    writeFileSync(globalPath, "\n");
+
+    const lines = renderMemoryTier(loadMemory(ctx)).split("\n");
+    const headingIndex = lines.findIndex((l) => l.startsWith("## Global notes"));
+    // The bug this guards against: a phantom entry's own `.line` is "", so section() would emit a
+    // literal blank line here instead of "(nothing recorded yet)".
+    expect(lines[headingIndex + 1]).toBe("(nothing recorded yet)");
+  });
+
+  // CRLF would blow the char cap differently on Windows vs Linux (the same class of issue
+  // computeWrite's own \n-only write already avoids); loading normalizes it away.
+  test("a CRLF file loads with LF-only text and the CRLF-inflated char count is not used", () => {
+    const ctx = makeCtx();
+    const path = memoryFilePath("user", ctx);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "- [2026-08-11] one\r\n- [2026-08-11] two\r\n");
+    const file = loadMemoryFile("user", ctx);
+    expect(file.text).toBe("- [2026-08-11] one\n- [2026-08-11] two");
+    expect(file.entries).toHaveLength(2);
   });
 });
 
