@@ -49,15 +49,7 @@ describe("buildSystemPrompt", () => {
   test("the assembled system prompt lists every real tool by its own name", () => {
     const prompt = buildSystemPrompt("");
 
-    for (const name of [
-      "read_file",
-      "write_file",
-      "edit",
-      "grep",
-      "glob",
-      "bash",
-      "powershell",
-    ]) {
+    for (const name of ["read_file", "write_file", "edit", "grep", "glob", "bash", "powershell"]) {
       expect(prompt).toContain(`\`${name}\``);
     }
   });
