@@ -66,7 +66,7 @@ import {
 import { getModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
-import { resolveRoute } from "./provider/routing";
+import { type ResolvedRoute, resolveRoute } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
 import { validateProviderKey } from "./provider/validate";
 import {
@@ -874,6 +874,14 @@ type PreparedRun = {
   route: { model: string; provider: ModelProvider };
 };
 
+// Shared by prepareSession's own non-TTY notice and runTui's runTurn (below) — the two used to
+// hand-duplicate this exact template literal (code-review finding, PR #73, round 2, item #8),
+// differing only by a leading "↻ " on the TUI path (that one repeats per turn, so the arrow marks
+// it as a live event rather than the one-time startup notice prepareSession prints).
+function rerouteNotice(route: ResolvedRoute): string {
+  return `routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`;
+}
+
 async function prepareSession(
   ctx: RunContext,
   deps: CliDeps,
@@ -949,9 +957,7 @@ async function prepareSession(
   // know isTTY), so without the gate a session-start reroute printed twice for the same turn: once
   // here (before Ink even mounts) and again from runTurn.
   if (route.rerouted && !isTTY) {
-    printWarning(
-      `routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`,
-    );
+    printWarning(rerouteNotice(route));
   }
   // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
   // cost and context-window come from the wrong provider's entry.
@@ -1847,7 +1853,7 @@ async function runTui(
     if (route.rerouted) {
       dispatch({
         type: "transcript-append",
-        line: `↻ routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`,
+        line: `↻ ${rerouteNotice(route)}`,
       });
     }
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one.

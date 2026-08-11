@@ -50,11 +50,19 @@ export function resolveRoute(
   requested: { model: string; provider: ModelProvider },
   configured: ReadonlySet<ModelProvider>,
 ): ResolvedRoute {
+  // Every early-return branch below stays on `requested` unchanged (code-review finding, PR #73,
+  // round 2, item #9 — the four branches used to hand-duplicate this identical literal).
+  const noReroute: ResolvedRoute = {
+    model: requested.model,
+    provider: requested.provider,
+    rerouted: false,
+  };
+
   // Rule 1: an explicit pick whose own provider has a key wins, unconditionally — never
   // second-guessed even when a native sibling also has one (MULTI-PROVIDER-BYOK-ROUTING.md:121,
   // "picking the entry IS picking the route").
   if (configured.has(requested.provider)) {
-    return { model: requested.model, provider: requested.provider, rerouted: false };
+    return noReroute;
   }
 
   const entry = findCatalogEntry(catalog, requested.model, requested.provider);
@@ -62,14 +70,14 @@ export function resolveRoute(
   // reroute within — left exactly as requested so getModel throws its own, already-tested
   // missing-key error, not a routing decision about a group that does not exist.
   if (entry === undefined) {
-    return { model: requested.model, provider: requested.provider, rerouted: false };
+    return noReroute;
   }
 
   const candidates = routesFor(catalog.entries, entry).filter(
     (candidate) => candidate.provider !== requested.provider && configured.has(candidate.provider),
   );
   if (candidates.length === 0) {
-    return { model: requested.model, provider: requested.provider, rerouted: false };
+    return noReroute;
   }
 
   // Rule 2: native-direct over aggregator, ties within a tier broken by CATALOG_PROVIDERS order —
@@ -77,7 +85,7 @@ export function resolveRoute(
   const [chosen] = [...candidates].sort(byRoutePriority);
   // Unreachable given the `candidates.length === 0` guard above — narrows `chosen` for tsc.
   if (chosen === undefined) {
-    return { model: requested.model, provider: requested.provider, rerouted: false };
+    return noReroute;
   }
 
   return {
