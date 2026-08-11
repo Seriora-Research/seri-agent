@@ -491,16 +491,32 @@ function SetupList({
       setSelected((current) => Math.min(rows.length - 1, current + 1));
       return;
     }
+    const row = rows[selected];
+    // Bug fixed here (code-review, PR #73, round 3): `key.return`/`key.delete` must be checked
+    // BEFORE the `input.length === 0` guard below, not after — Ink's own key parser sets `input`
+    // to `''` for every named key, Enter and Delete included (confirmed against
+    // node_modules/ink/build/parse-keypress.js and use-input.js), so the empty-input guard used to
+    // return before either of these two branches was ever reached. Every other useInput in this
+    // file (ModelPicker, SetupEnterKey, SetupConfirmRemove) already has the ordering this way —
+    // this was the one holdout, and it made Enter/Delete dead here despite the panel's own hint
+    // text advertising them.
+    if (key.return) {
+      if (row !== undefined) onSetupSelect?.(row.provider);
+      return;
+    }
+    if (key.delete) {
+      if (row !== undefined && row.removable) onSetupRemove?.(row.provider);
+      return;
+    }
     if (key.ctrl || key.meta) return;
     if (input.length === 0) return;
-    const row = rows[selected];
     if (row === undefined) return;
     const typed = input.toLowerCase();
-    if (key.return || typed === "a") {
+    if (typed === "a") {
       onSetupSelect?.(row.provider);
       return;
     }
-    if ((typed === "r" || key.delete) && row.removable) {
+    if (typed === "r" && row.removable) {
       onSetupRemove?.(row.provider);
     }
   });

@@ -565,6 +565,97 @@ describe("App", () => {
       expect(frame).toContain("set by $ANTHROPIC_API_KEY in your environment");
     });
 
+    // Bug fixed here (code-review, PR #73, round 3, item #1): Enter is dead in the real TUI twice
+    // before this test existed — Ink sets `input` to `''` for every named key including Enter, and
+    // SetupList's own `if (input.length === 0) return;` guard used to run BEFORE the `key.return`
+    // check, so Enter never reached it; only the 'a' letter shortcut (a real, non-empty `input`)
+    // worked. `"\r"`, not `"a"` — that's the whole point of this test, per the panel's own hint
+    // text ("Enter/a add or replace") promising both work.
+    test("the list step: Enter (not the 'a' shortcut) selects the highlighted row via onSetupSelect", async () => {
+      const selected: ModelProvider[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupSelect={(provider) => selected.push(provider)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "setup-requested", rows: setupRows() });
+      await flush();
+
+      // One Down reaches openrouter (index 1) — CATALOG_PROVIDERS order matches setupRows() above.
+      instance.stdin.write("\x1b[B");
+      await flush();
+      instance.stdin.write("\r");
+      await flush();
+
+      expect(selected).toEqual(["openrouter"]);
+    });
+
+    // Same bug, the Delete branch: Ink's Delete key is `\x1b[3~` (parse-keypress.js), a DIFFERENT
+    // sequence from backspace's `\x7f` — distinct enough that fixing Enter alone would not have
+    // proven this branch too.
+    test("the list step: Delete (not the 'r' shortcut) requests removal via onSetupRemove, when the row is removable", async () => {
+      const removeRequested: ModelProvider[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupRemove={(provider) => removeRequested.push(provider)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "setup-requested", rows: setupRows() });
+      await flush();
+
+      // openrouter (index 1) is the removable row in setupRows() above.
+      instance.stdin.write("\x1b[B");
+      await flush();
+      instance.stdin.write("\x1b[3~");
+      await flush();
+
+      expect(removeRequested).toEqual(["openrouter"]);
+    });
+
+    // The negative control this pair rests on: a non-removable row's Delete must still be a no-op,
+    // the same guard the 'r' shortcut already had — proving the fix didn't drop that check while
+    // moving the branch earlier.
+    test("the list step: Delete on a non-removable row calls neither onSetupSelect nor onSetupRemove", async () => {
+      const selected: ModelProvider[] = [];
+      const removeRequested: ModelProvider[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupSelect={(provider) => selected.push(provider)}
+          onSetupRemove={(provider) => removeRequested.push(provider)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      // groq (index 0, the default selection) is source: "unset", removable: false.
+      dispatch({ type: "setup-requested", rows: setupRows() });
+      await flush();
+
+      instance.stdin.write("\x1b[3~");
+      await flush();
+
+      expect(selected).toEqual([]);
+      expect(removeRequested).toEqual([]);
+    });
+
     // The key-leak guard, and its negative control: `.claude/rules/code-quality.md` requires this
     // assertion to have been SEEN to fail. Verified by temporarily changing SetupEnterKey's own
     // render from `"*".repeat(value.length)` back to the raw `value` and re-running this exact

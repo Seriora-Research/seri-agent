@@ -2024,6 +2024,62 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
+    // Code-review finding (PR #73, round 3, item #1): Enter and Delete were dead in the real TUI
+    // twice already — App.test.tsx's own unit test for this covers the same fix at the component
+    // level, but "no test exercises this" is exactly what let the ordering bug through the
+    // component-level pty suite twice, so this test uses raw Enter/Delete (never the 'a'/'r' letter
+    // shortcuts every OTHER /setup pty test above uses) end to end against a real terminal.
+    test("Enter opens the enter-key step and Delete requests removal, without using the 'a'/'r' letter shortcuts", async () => {
+      seedConfig(dir, { OPENROUTER_API_KEY: "sk-or-existing" });
+      const scriptPath = join(dir, "child-setup-enter-delete.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+
+        // Down to openrouter (index 1), removable (config-sourced from seedConfig above).
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        // Raw Enter, not "a" — the whole point of this test.
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        // Escape back to the list, re-selecting the same row, rather than typing a new value — add/
+        // replace via Enter is already exercised at the component level (App.test.tsx); this test's
+        // own job is proving Enter/Delete reach the TUI's real useInput wiring, not re-covering the
+        // write path.
+        child.stdin?.write("\x1b");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await wait100ms();
+        await sawLineTimes("/setup — provider API keys", 2);
+
+        // Raw Delete (`\x1b[3~`, parse-keypress.js's own sequence — distinct from backspace's
+        // `\x7f`), not "r".
+        child.stdin?.write("\x1b[3~");
+        await wait100ms();
+        await sawLine("Remove OPENROUTER_API_KEY");
+
+        child.stdin?.write("y");
+        await sawLine("Removed OPENROUTER_API_KEY.");
+
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENROUTER_API_KEY === undefined,
+        );
+        expect(config.OPENROUTER_API_KEY).toBeUndefined();
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
     test("replace: a different value overwrites the existing one, and no other key is touched", async () => {
       seedConfig(dir, {
         OPENROUTER_API_KEY: "sk-or-original-value",
