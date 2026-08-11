@@ -19,6 +19,19 @@ export const PROVIDER_API_KEY_NAMES: Record<ModelProvider, string> = {
   google: "GOOGLE_GENERATIVE_AI_API_KEY",
 };
 
+// Human-facing labels — for TUI-facing messages that are purely informational (tuiMissingKeyMessage
+// below, cli.ts's rerouteNotice). Never for an instruction that embeds the literal env var name as
+// something to type or unset (missingKeyError's `seri config set` command, /setup's own
+// envShadowReason "unset it in your shell"): there, PROVIDER_API_KEY_NAMES's raw constant IS the
+// thing the user has to act on, and humanizing it would make the instruction un-actionable.
+export const PROVIDER_DISPLAY_NAMES: Record<ModelProvider, string> = {
+  groq: "Groq",
+  openrouter: "OpenRouter",
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  google: "Google",
+};
+
 // Tagged with the provider (not just a string to parse) so a caller can build a context-specific
 // message — tuiMissingKeyMessage, below — without matching on this text.
 export type MissingKeyError = Error & { missingKeyProvider: ModelProvider };
@@ -49,7 +62,7 @@ function isMissingKeyError(err: unknown): err is MissingKeyError {
 // one reading this dispatch.
 export function tuiMissingKeyMessage(err: unknown): string {
   if (isMissingKeyError(err)) {
-    return `${PROVIDER_API_KEY_NAMES[err.missingKeyProvider]} is not set. Run /setup to add a key.`;
+    return `No ${PROVIDER_DISPLAY_NAMES[err.missingKeyProvider]} key configured. Run /setup to add one.`;
   }
   return err instanceof Error ? err.message : String(err);
 }

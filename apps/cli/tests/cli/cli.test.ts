@@ -155,7 +155,7 @@ describe("run (task invocation)", () => {
       errors.some(
         (line) =>
           line.includes("routing openai/gpt-oss-120b via openrouter") &&
-          line.includes("no GROQ_API_KEY configured"),
+          line.includes("no Groq key configured"),
       ),
     ).toBe(true);
   });

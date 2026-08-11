@@ -1893,8 +1893,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // Ink wraps this line across the terminal's own column width, landing "configured" on its
       // own following line — the same wrapping App.test.tsx's own approval-prompt assertion
       // already works around.
-      const noticePrefix =
-        "↻ routing claude-sonnet-5 via anthropic (your key) — no OPENROUTER_API_KEY";
+      const noticePrefix = "↻ routing claude-sonnet-5 via anthropic (your key) — no OpenRouter key";
       await sawLine(noticePrefix);
       await sawLine("configured");
       await sawLine("(done: no-tool-call)");

@@ -9,6 +9,7 @@ import {
   configuredProviders,
   missingKeyError,
   PROVIDER_API_KEY_NAMES,
+  PROVIDER_DISPLAY_NAMES,
   providerKeyState,
   tuiMissingKeyMessage,
 } from "../../src/provider/keys";
@@ -52,6 +53,19 @@ describe("PROVIDER_API_KEY_NAMES", () => {
   });
 });
 
+describe("PROVIDER_DISPLAY_NAMES", () => {
+  test("has exactly one entry per CATALOG_PROVIDERS member", () => {
+    expect(Object.keys(PROVIDER_DISPLAY_NAMES).sort()).toEqual([...CATALOG_PROVIDERS].sort());
+  });
+
+  // Negative control: not just a re-casing of the provider id — openrouter/openai are their own
+  // brand capitalizations, not "Openrouter"/"Openai".
+  test("openrouter and openai use their own brand capitalization, not a naive title-case", () => {
+    expect(PROVIDER_DISPLAY_NAMES.openrouter).toBe("OpenRouter");
+    expect(PROVIDER_DISPLAY_NAMES.openai).toBe("OpenAI");
+  });
+});
+
 describe("missingKeyError", () => {
   test("produces the exact legacy message for every provider", () => {
     expect(missingKeyError("groq").message).toBe(
@@ -78,9 +92,9 @@ describe("missingKeyError", () => {
 // this must point at /setup, not the non-interactive `seri config set` instruction the user cannot
 // act on from inside Ink.
 describe("tuiMissingKeyMessage", () => {
-  test("a missingKeyError becomes a /setup instruction naming the provider's own key", () => {
+  test("a missingKeyError becomes a /setup instruction naming the provider's own display name, not the raw env var", () => {
     expect(tuiMissingKeyMessage(missingKeyError("openrouter"))).toBe(
-      "OPENROUTER_API_KEY is not set. Run /setup to add a key.",
+      "No OpenRouter key configured. Run /setup to add one.",
     );
   });
 

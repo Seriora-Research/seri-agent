@@ -60,6 +60,7 @@ import type { getGroqModel as getGroqModelReal } from "./provider/groq";
 import {
   configuredProviders,
   PROVIDER_API_KEY_NAMES,
+  PROVIDER_DISPLAY_NAMES,
   type ProviderKeyState,
   providerKeyState,
   tuiMissingKeyMessage,
@@ -880,8 +881,14 @@ type PreparedRun = {
 // hand-duplicate this exact template literal (code-review finding, PR #73, round 2, item #8),
 // differing only by a leading "↻ " on the TUI path (that one repeats per turn, so the arrow marks
 // it as a live event rather than the one-time startup notice prepareSession prints).
-function rerouteNotice(route: ResolvedRoute): string {
-  return `routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`;
+//
+// `requestedProvider` is a separate parameter, not `route.reason` (still exactly
+// PROVIDER_API_KEY_NAMES[requestedProvider] — resolveRoute's own return value, unchanged, and
+// still what routing.test.ts asserts directly): this notice is purely informational, no embedded
+// command, so it reads better with a display name (PROVIDER_DISPLAY_NAMES) than the raw env var
+// constant — unlike missingKeyError's message, which needs the exact name because it IS one.
+function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider): string {
+  return `routing ${route.model} via ${route.provider} (your key) — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
 }
 
 async function prepareSession(
@@ -964,7 +971,7 @@ async function prepareSession(
   // know isTTY), so without the gate a session-start reroute printed twice for the same turn: once
   // here (before Ink even mounts) and again from runTurn.
   if (route.rerouted && !isTTY) {
-    printWarning(rerouteNotice(route));
+    printWarning(rerouteNotice(route, session.provider));
   }
   // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
   // cost and context-window come from the wrong provider's entry.
@@ -1895,7 +1902,7 @@ async function runTui(
     if (route.rerouted) {
       dispatch({
         type: "transcript-append",
-        line: `↻ ${rerouteNotice(route)}`,
+        line: `↻ ${rerouteNotice(route, requestedProvider)}`,
       });
     }
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one.
