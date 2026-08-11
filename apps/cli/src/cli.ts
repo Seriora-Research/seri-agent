@@ -62,6 +62,7 @@ import {
   PROVIDER_API_KEY_NAMES,
   type ProviderKeyState,
   providerKeyState,
+  tuiMissingKeyMessage,
 } from "./provider/keys";
 import { getModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
@@ -1879,9 +1880,13 @@ async function runTui(
         configDir,
       );
     } catch (err) {
+      // tuiMissingKeyMessage, not a bare err.message: this catch is reachable ONLY from inside an
+      // already-running TUI turn (runTurn, called solely by runTui), where /setup is a keystroke
+      // away — unlike prepareSession's own earlier catch (this function, above) and the
+      // non-interactive path, neither of which can assume a TUI is even mounted.
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: tuiMissingKeyMessage(err),
       });
       turnInFlight = false;
       return;
