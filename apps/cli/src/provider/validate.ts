@@ -8,8 +8,9 @@ import { getOpenRouterModel } from "./openrouter";
 
 // D5 (feature-plan.md): the cheapest model per provider, verified present in the bundled manifest
 // and aligned with nativeProviders.live.test.ts's own choices where they overlap (anthropic,
-// openai, google) — this file's own live round-trip test extends that same shape to groq/
-// openrouter rather than inventing a second probe-model convention.
+// openai, google) — that file's own opt-in `validateProviderKey` round-trips (extending its
+// existing get<X>Model round-trips, all skip-by-default behind SERI_LIVE_PROVIDER_CHECK=1) reuse
+// these same ids for groq/openrouter too, rather than inventing a second probe-model convention.
 export const VALIDATION_MODEL_IDS: Record<ModelProvider, string> = {
   groq: "openai/gpt-oss-20b",
   openrouter: "openai/gpt-oss-20b",
