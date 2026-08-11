@@ -1,6 +1,6 @@
 import { CATALOG_PROVIDERS, type ModelProvider } from "@seri/model-catalog";
 import { maskValue } from "../config/commands";
-import { getApiKey, loadConfig } from "../config/config";
+import { loadConfig } from "../config/config";
 
 // The single source of truth for "which env var/config key does this provider read" — replaces
 // the same literal hand-duplicated across anthropic.ts/openai.ts/google.ts/groq.ts/openrouter.ts.
@@ -41,28 +41,34 @@ export type ProviderKeyState = {
 };
 
 // One provider's key, and where it came from — /setup's own per-row read (decideSetupOpen,
-// tui/commands.ts). Calls `getApiKey` for the resolved value rather than re-deriving its own
-// env-then-config precedence and its deliberate `||` (an env var set to "" reads as unset, not as
-// a valid-looking empty key) a second time — a drift risk if that precedence ever changed and
-// this copy didn't. `process.env[keyName]` is still read directly, once, only to tell WHICH layer
-// `getApiKey`'s result actually came from — `getApiKey` returns just the winning value, not its
-// source, so there is no way around checking the higher-precedence layer directly for that part.
+// tui/commands.ts). `config` is loaded exactly once here (code-review finding, PR #73, round 2:
+// this used to call `loadConfig` directly for `hasConfigEntry` AND call `getApiKey` — which loads
+// it again internally — reading config.json twice per call for no reason). `process.env[keyName]`
+// still wins first, matching `getApiKey`'s own deliberate `||` precedence (an env var set to ""
+// reads as unset, not as a valid-looking empty key) — that precedence is inlined here rather than
+// calling `getApiKey` a second time, the one place in this function it would cost an extra read.
 export function providerKeyState(provider: ModelProvider, configDir?: string): ProviderKeyState {
   const keyName = PROVIDER_API_KEY_NAMES[provider];
-  const hasConfigEntry = Boolean(loadConfig(configDir)[keyName]);
-  const resolved = getApiKey(keyName, configDir);
+  const config = loadConfig(configDir);
+  const hasConfigEntry = Boolean(config[keyName]);
+  const resolved = process.env[keyName] || config[keyName] || undefined;
   if (!resolved) return { provider, keyName, source: "unset", masked: undefined, hasConfigEntry };
   const source = process.env[keyName] ? "env" : "config";
   return { provider, keyName, source, masked: maskValue(resolved), hasConfigEntry };
 }
 
 // The providers routing.ts's resolveRoute is allowed to reroute onto — every CATALOG_PROVIDERS
-// member whose key resolves truthy via getApiKey (env or config, same precedence as every other
-// reader in this layer).
+// member whose key resolves truthy via env or config.json, same precedence as every other reader
+// in this layer. `config` is loaded once for all five providers (code-review finding, PR #73,
+// round 2 — this used to call `getApiKey`, and therefore `loadConfig`, once PER provider: five
+// redundant synchronous reads of the same file on every call, and `resolveRoute` calls this on
+// EVERY turn per cli.ts's own comment on that call site).
 export function configuredProviders(configDir?: string): ReadonlySet<ModelProvider> {
+  const config = loadConfig(configDir);
   const configured = new Set<ModelProvider>();
   for (const provider of CATALOG_PROVIDERS) {
-    if (getApiKey(PROVIDER_API_KEY_NAMES[provider], configDir)) configured.add(provider);
+    const keyName = PROVIDER_API_KEY_NAMES[provider];
+    if (process.env[keyName] || config[keyName]) configured.add(provider);
   }
   return configured;
 }
