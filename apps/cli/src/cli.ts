@@ -1646,13 +1646,15 @@ async function runTui(
     return { step: "list", rows, selected };
   }
 
-  // Every caller of setupListState below goes through this, not the bare dispatch it used to be
-  // (code-review finding, PR #73, round 2): decideSetupOpen reads config.json, and a malformed file
-  // is exactly as reachable once the panel is already open (a racing second `seri` process, a hand
-  // edit) as it is at the /setup-OPEN interceptor above — which the round 1 fix already guarded.
-  // These three call sites (onSetupKeyEntered's success path, onSetupRemove's success path,
-  // onSetupBack) were the ones round 1 missed: reached only from INSIDE an already-open panel, with
-  // nothing above them to catch a throw out of their own `useInput` callback.
+  // A shared "refresh the list, degrade to command-error if that throws" primitive (code-review
+  // finding, PR #73, round 2): decideSetupOpen reads config.json, and a malformed file is exactly
+  // as reachable once the panel is already open (a racing second `seri` process, a hand edit) as it
+  // is at the /setup-OPEN interceptor above — which the round 1 fix already guarded. Used by
+  // onSetupRemove's success path and onSetupBack — round 1 missed both, reached only from INSIDE an
+  // already-open panel, with nothing above them to catch a throw out of their own `useInput`
+  // callback. NOT used by onSetupKeyEntered's own success path (round 3, item #3): that one needs
+  // its OWN inline catch instead, to reset `busy: false` on a refresh failure rather than just
+  // showing a command-error while leaving the panel's own busy gate stuck — see its own comment.
   function dispatchSetupList(selectedProvider?: ModelProvider): void {
     try {
       dispatch({ type: "setup-step", state: setupListState(selectedProvider) });
@@ -1732,7 +1734,28 @@ async function runTui(
           ? `Saved ${keyName}.`
           : `Saved ${keyName}. ⚠ ${result.warning}`,
     });
-    dispatchSetupList(provider);
+    // NOT dispatchSetupList (code-review finding, PR #73, round 3, item #3): that helper's own
+    // catch only dispatches command-error, which never touches `pendingSetup` — leaving THIS
+    // function's own `busy: true` (set above, before the validate/write round-trip) stuck forever
+    // if the refresh read (setupListState -> decideSetupOpen -> config.json) throws, the exact
+    // lockout class the write-failure catch above already fixed, just reached by a different
+    // trigger (the post-write refresh failing, not the write itself). Resetting `busy: false`
+    // here, inline, the same shape that catch already uses, is what actually clears it —
+    // SetupEnterKey's own `if (busy) return;` gate is what makes that necessary.
+    try {
+      dispatch({ type: "setup-step", state: setupListState(provider) });
+    } catch (err) {
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider,
+          keyName,
+          busy: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
+    }
   }
 
   // D8: this is the SAME prop SetupList's own 'r' keypress and SetupConfirmRemove's own 'y'
