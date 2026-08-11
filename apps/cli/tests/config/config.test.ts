@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir, setProfileOverride } from "../../src/config/paths";
@@ -63,23 +63,38 @@ describe("setConfigValues", () => {
     });
   });
 
-  // The atomicity proof itself: writeConfig's own write-then-rename path (its own comment) writes
-  // to `<config.json>.tmp` before renaming it into place — pre-creating that exact path AS A
-  // DIRECTORY makes its writeFileSync throw EISDIR, the same class of failure a read-only config
-  // dir or a full disk would produce. There is no "partially written" state to observe here
-  // because there is only ONE write attempt for the whole batch — this is what a caller updating
-  // several keys together actually needs, and what two independent setConfigValue calls cannot
-  // give: neither key changes when the single write fails, not "whichever call ran first still
-  // landed."
+  // The atomicity proof itself: writeConfig's own write-then-rename path (atomicWriteFile.ts) now
+  // uses a randomized tmp filename (that module's own comment explains why — a fixed name raced
+  // between two concurrent writers), so it can no longer be pre-created and collided with
+  // directly by name. Sabotages the RENAME step instead, via two platform-specific mechanisms
+  // combined, since neither alone is portable: POSIX's rename(2) checks write permission on the
+  // PARENT DIRECTORY, never the target file's own permissions, so chmod on the directory blocks
+  // it there; Windows instead honors the target FILE's own read-only attribute for a rename-over,
+  // and (matching this repo's own chmod-on-a-directory-is-a-no-op-on-Windows precedent,
+  // config/commands.test.ts) chmod on the directory alone does nothing there — verified
+  // empirically: directory-only chmod let the rename through on this repo's own Windows dev box,
+  // and the combination of both reliably blocks it. There is no "partially written" state to
+  // observe here because there is only ONE write attempt for the whole batch — this is what a
+  // caller updating several keys together actually needs, and what two independent
+  // setConfigValue calls cannot give: neither key changes when the single write fails, not
+  // "whichever call ran first still landed."
   test("a sabotaged write leaves every key unchanged — one atomic write, not several", () => {
-    writeFileSync(join(configDir, "config.json"), JSON.stringify({ SERI_MODEL: "old-model" }));
-    mkdirSync(join(configDir, "config.json.tmp"));
+    const path = join(configDir, "config.json");
+    writeFileSync(path, JSON.stringify({ SERI_MODEL: "old-model" }));
+    chmodSync(configDir, 0o555);
+    chmodSync(path, 0o444);
 
-    expect(() =>
-      setConfigValues({ SERI_MODEL: "new-model", SERI_PROVIDER: "openrouter" }),
-    ).toThrow();
+    try {
+      expect(() =>
+        setConfigValues({ SERI_MODEL: "new-model", SERI_PROVIDER: "openrouter" }),
+      ).toThrow();
 
-    expect(loadConfig()).toEqual({ SERI_MODEL: "old-model" });
+      expect(loadConfig()).toEqual({ SERI_MODEL: "old-model" });
+    } finally {
+      // Restored so afterEach's rmSync(tmpRoot, ...) can actually delete it.
+      chmodSync(configDir, 0o755);
+      chmodSync(path, 0o644);
+    }
   });
 });
 

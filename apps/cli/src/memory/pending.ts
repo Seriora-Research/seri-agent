@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
+import { atomicWriteFile } from "../atomicWriteFile";
 import { getPendingDir } from "../config/paths";
 import { projectKey } from "../permissions/store";
-import { atomicWriteFile } from "./atomicWrite";
 import {
   applyWrite,
   computeWrite,
@@ -32,7 +32,7 @@ export function pendingPath(configDir: string, scope: MemoryScope, id: string): 
 
 // JSON, not a bespoke text format (unlike permissions.yaml): this file is the only reader/writer,
 // nothing needs to hand-edit a staged write, and `content` can contain any character. Same
-// atomicWrite.ts helper store.ts's applyWrite uses, for the same reason.
+// atomicWriteFile.ts helper store.ts's applyWrite uses, for the same reason.
 function writePendingFile(path: string, record: PendingWrite): void {
   atomicWriteFile(path, JSON.stringify(record, null, 2));
 }

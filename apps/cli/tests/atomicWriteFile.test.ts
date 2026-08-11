@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { atomicWriteFile } from "../../src/memory/atomicWrite";
+import { atomicWriteFile } from "../src/atomicWriteFile";
 
 let dir: string | undefined;
 afterEach(() => {

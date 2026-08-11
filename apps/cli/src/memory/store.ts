@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { atomicWriteFile } from "../atomicWriteFile";
 import { getMemoriesDir } from "../config/paths";
 import { projectKey } from "../permissions/store";
-import { atomicWriteFile } from "./atomicWrite";
 
 export type MemoryScope = "user" | "memory-global" | "memory-project";
 
@@ -199,9 +199,10 @@ export function computeWrite(file: MemoryFile, req: MemoryWriteRequest, today: s
   return nextText;
 }
 
-// mkdir 0o700 + write-then-rename + chmod 0o600 on non-win32, via atomicWrite.ts's shared helper
-// (that module's own comment covers why the tmp filename is non-colliding) — this file holds the
-// user's own stated preferences, and anything that can append to it steers future sessions.
+// mkdir 0o700 + write-then-rename + chmod 0o600 on non-win32, via atomicWriteFile.ts's shared
+// helper (that module's own comment covers why the tmp filename is non-colliding) — this file
+// holds the user's own stated preferences, and anything that can append to it steers future
+// sessions.
 export function applyWrite(
   req: MemoryWriteRequest,
   ctx: MemoryContext,
