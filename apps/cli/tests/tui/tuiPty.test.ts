@@ -219,6 +219,40 @@ function childScriptModelSwitch(dir: string): string {
   ].join("\n");
 }
 
+// D1/D2 (feature-plan.md, multi-provider-byok-phase-2): plan Test-plan item 8, "/model
+// multi-route" — the end-to-end proof that decideModelPickerOpen's grouping (unit-tested already)
+// and a real picker selection actually round-trip through a live pick to a persisted provider.
+// Both `getGroqModel` and `getAnthropicModel` are injected so the picked route dispatches without
+// needing a real key for either — resolveRoute (D2) leaves an explicit pick unchanged whenever
+// NEITHER sibling in its route group has a configured key, which is the case here (only
+// GROQ_API_KEY is set, and claude-sonnet-5's route group is anthropic/openrouter, not groq).
+function childScriptModelMultiRoute(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " provider=" + opts.provider);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: (id) => ({ id }),`,
+    `  getAnthropicModel: (id) => ({ id }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // MEDIUM finding (code-review re-review on PR #71): loop.ts yields `messages-updated` once per
 // tool call within a SINGLE turn (its own multiple yield sites), not once per turn — so this
 // script's turn 2 yields it three times before `done`, simulating a turn with several tool calls,
@@ -1027,6 +1061,63 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       expect(config.SERI_PROVIDER).toBe("groq");
       // Negative control built in: the pre-switch model must not be the one that landed.
       expect(config.SERI_MODEL).not.toBe("openai/gpt-oss-120b");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // D1/D2 (feature-plan.md): plan Test-plan item 8, "/model multi-route" — filtering to a model
+  // reachable through more than one provider shows every route, and picking one specific route
+  // (not just "a model") is what actually dispatches AND persists.
+  test("/model shows every route to a multi-route model, and picking one persists that specific provider", async () => {
+    const scriptPath = join(dir, "child-model-multiroute.mjs");
+    writeFileSync(scriptPath, childScriptModelMultiRoute(dir));
+
+    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
+      await sawLine("(done: no-tool-call)");
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      // The Route column header — present regardless of catalog ordering, unlike a specific row.
+      await sawLine("Route");
+
+      // Narrows to exactly the two claude-sonnet-5 routes in the bundled manifest (verified
+      // directly against catalog-manifest.json before writing this string): the native Anthropic
+      // entry (bare id "claude-sonnet-5") and the OpenRouter entry ("anthropic/claude-sonnet-5",
+      // which also contains this substring).
+      child.stdin?.write("claude-sonnet-5");
+      await sawLine("claude-sonnet-5");
+      // Both routes visible — the actual proof decideModelPickerOpen's own unit tests can't give:
+      // a real picker, on a real pty, showing both rows for one filtered query.
+      await sawLine("anthropic");
+      await sawLine("openrouter");
+
+      // byRoutePriority (D2) sorts native before aggregator WITHIN a route group, so the
+      // Anthropic row is already the top/default-selected one for this filtered query — no Down
+      // press is needed to reach it. (The plan's own Test-plan item 8 says "Down to the anthropic
+      // row," written before the picker's final ordering rule existed; selecting the
+      // already-highlighted row via Enter directly is the accurate description of this picker's
+      // real behavior, not a weaker test.)
+      child.stdin?.write("\r");
+      // The mandatory wait after any keypress that swaps the mounted component (picker -> input
+      // box) — childScriptModelSwitch's own test has the full measured story for this.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      await sawLine("RUNLOOP_CALL 2 model=claude-sonnet-5 provider=anthropic");
+      await sawLineTimes("(done: no-tool-call)", 2);
+
+      const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+      expect(config.SERI_MODEL).toBe("claude-sonnet-5");
+      expect(config.SERI_PROVIDER).toBe("anthropic");
+      // Negative control: the OTHER route to the same model must not be what persisted.
+      expect(config.SERI_PROVIDER).not.toBe("openrouter");
     } finally {
       child.kill("SIGKILL");
     }
