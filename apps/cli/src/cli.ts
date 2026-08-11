@@ -1657,7 +1657,10 @@ async function runTui(
     try {
       dispatch({ type: "setup-step", state: setupListState(selectedProvider) });
     } catch (err) {
-      dispatch({ type: "command-error", message: err instanceof Error ? err.message : String(err) });
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -1668,7 +1671,12 @@ async function runTui(
   function onSetupSelect(provider: ModelProvider): void {
     dispatch({
       type: "setup-step",
-      state: { step: "enter-key", provider, keyName: PROVIDER_API_KEY_NAMES[provider], busy: false },
+      state: {
+        step: "enter-key",
+        provider,
+        keyName: PROVIDER_API_KEY_NAMES[provider],
+        busy: false,
+      },
     });
   }
 
