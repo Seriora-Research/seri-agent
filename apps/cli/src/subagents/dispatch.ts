@@ -87,7 +87,7 @@ function fallbackSummary(
   if (doneReason === "repeated-denials") {
     return (
       `its tool calls were not permitted (permission mode: ${mode}) — a "code" subagent can only ` +
-      `write in auto mode or for a tool already granted for this run`
+      `write in auto mode or for a tool already granted before this dispatch call`
     );
   }
   return lastError ?? "produced no summary";
