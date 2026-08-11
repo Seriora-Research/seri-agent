@@ -142,6 +142,16 @@ function findUniqueMatch(file: MemoryFile, target: string): MemoryEntry {
   return matches[0];
 }
 
+// Shared by the "add" and "replace" branches below — the one place that decides what counts as a
+// disallowed newline and the one error message string, rather than two copy-pasted checks.
+function assertSingleLine(content: string): void {
+  if (content.includes("\n")) {
+    throw new Error(
+      `memory_write refused: an entry must be a single line. Split this into separate "add" calls.`,
+    );
+  }
+}
+
 // Pure. Returns the file's next full text, or throws — the caller does not branch on a result
 // union, matching tools/edit.ts's own throw-on-ambiguity precedent (edit.ts:109-127). loop.ts
 // already turns a thrown tool error into an `error-text` tool result the model reads in the same
@@ -153,21 +163,13 @@ export function computeWrite(file: MemoryFile, req: MemoryWriteRequest, today: s
     if (req.content === undefined) {
       throw new Error(`memory_write refused: action "add" requires "content".`);
     }
-    if (req.content.includes("\n")) {
-      throw new Error(
-        `memory_write refused: an entry must be a single line. Split this into separate "add" calls.`,
-      );
-    }
+    assertSingleLine(req.content);
     lines.push(`- [${today}] ${req.content}`);
   } else if (req.action === "replace") {
     if (req.target === undefined || req.content === undefined) {
       throw new Error(`memory_write refused: action "replace" requires "target" and "content".`);
     }
-    if (req.content.includes("\n")) {
-      throw new Error(
-        `memory_write refused: an entry must be a single line. Split this into separate "add" calls.`,
-      );
-    }
+    assertSingleLine(req.content);
     const match = findUniqueMatch(file, req.target);
     const index = lines.indexOf(match.line);
     // The date is refreshed, not carried over: a replace is a modification, and staleness should

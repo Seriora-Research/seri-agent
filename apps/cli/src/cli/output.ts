@@ -396,9 +396,16 @@ function costFragment(cost: CostReport): string {
 
 // The archivist's usage/cost are reported on their own line, deliberately never summed into
 // printUsage/printCost's own totals (driveLoop's own comment on why: folding them in would
-// silently change what cli.test.ts's existing "(tokens: …)" assertions mean). Returns the one
-// line it renders rather than taking a sink callback — cli.ts's two call sites (console.log for
-// the non-interactive path, pushTranscriptLine for the TUI) each just wrap the string themselves.
+// silently change what cli.test.ts's existing "(tokens: …)" assertions mean). Takes no sink
+// callback — cli.ts's two call sites (console.log for the non-interactive path,
+// pushTranscriptLine for the TUI) each just wrap the returned string themselves.
+//
+// `report.summary` — the model's own explanation of what it did or decided, its only deliverable
+// (subagents/dispatch.ts's own description: "each subagent's final assistant message is its only
+// deliverable") — used to be computed and paid for but never shown anywhere; the only consumer
+// was a test asserting it was defined. Appended as its own line rather than folded inline with the
+// stats line: undoPlanLines' own sink already carries multi-line content (a git diff) as one
+// transcript entry the same way, so this is not a new shape for either render path.
 export function archivistLine(report: ArchivistReport): string {
   const tokenParts: string[] = [];
   if (report.usage.inputTokens !== undefined) tokenParts.push(`${report.usage.inputTokens} in`);
@@ -406,5 +413,5 @@ export function archivistLine(report: ArchivistReport): string {
   const tokens = tokenParts.length > 0 ? `, tokens: ${tokenParts.join(", ")}` : "";
   const cost = report.cost === undefined ? "" : `, ${costFragment(report.cost)}`;
   const calls = `${report.toolCallsMade} tool call${report.toolCallsMade === 1 ? "" : "s"}`;
-  return `(archivist: ${report.trigger} trigger, ${calls}${tokens}${cost})`;
+  return `(archivist: ${report.trigger} trigger, ${calls}${tokens}${cost})\n  ${report.summary}`;
 }

@@ -109,10 +109,17 @@ export type ArchivistTrigger = "tool-count" | "near-compaction";
 
 // `enabled` (the /memory archivist on|off toggle) is checked FIRST and short-circuits before
 // either trigger is evaluated — a disabled archivist reports no trigger even when both conditions
-// below are independently true.
+// below are independently true. `compactionThreshold` is the same number runLoop's own compaction
+// math is actually running against for this turn (opts.compactionThreshold ?? runLoop's own
+// DEFAULT_COMPACTION_THRESHOLD, loop.ts) — not the module-level DEFAULT_COMPACTION_THRESHOLD
+// constant read directly here, the same class of bug the contextWindowSize fix (below/
+// maybeRunArchivist) already closed: using anything but the identical number would silently
+// desync the trigger from whatever threshold is actually in effect the moment a caller ever
+// passes an override (no caller does today, so this has no observable effect yet).
 export function shouldRunArchivist(
   state: ArchivistState,
   contextWindowSize: number | undefined,
+  compactionThreshold: number,
   enabled: boolean,
 ): ArchivistTrigger | undefined {
   if (!enabled) return undefined;
@@ -121,7 +128,7 @@ export function shouldRunArchivist(
     contextWindowSize !== undefined &&
     state.lastInputTokens !== undefined &&
     state.lastInputTokens / contextWindowSize >=
-      DEFAULT_COMPACTION_THRESHOLD * ARCHIVIST_NEAR_COMPACTION_FRACTION
+      compactionThreshold * ARCHIVIST_NEAR_COMPACTION_FRACTION
   ) {
     return "near-compaction";
   }
@@ -131,10 +138,29 @@ export function shouldRunArchivist(
 // Between two archivist runs, up to ARCHIVIST_TOOL_CALL_INTERVAL tool calls can include large
 // outputs (verbose test runs, big file reads) — serialized uncapped, this can trivially exceed
 // the archivist's own child model's context window, worst of all on exactly the turn where the
-// near-compaction trigger fires (the main session's own context is already largest then). Same
-// truncate-with-a-marker shape as loop.ts's MAX_SERIALISED_ERROR_LENGTH, not a new one invented
-// here.
+// near-compaction trigger fires (the main session's own context is already largest then).
 const MAX_ARCHIVIST_TRANSCRIPT_CHARS = 40_000;
+
+// Head-and-tail, not a head-only cut: same SHAPE as tools/spawnCollect.ts's own truncation (its
+// own comment: "the useful parts of a long run sit at both ends"), for the same reason here — a
+// correction or a fact worth remembering is at least as likely to sit near the END of the window
+// as the start, especially for the near-compaction trigger, where the window is largest and the
+// content right before it fired is the most recent. A head-only cut silently discarded exactly
+// that. Not spawnCollect.ts's own rolling-window machinery: that solves bounding memory while
+// output arrives incrementally over many chunks, which does not apply here — buildArchivistGoal
+// always receives one complete, already-materialized string, sliced once. Also not its
+// surrogate-pair trim at the cut points: that machinery exists there because a live stream is cut
+// repeatedly at arbitrary boundaries as more output arrives, so a stray split pair is a real,
+// recurring risk across a long run; here the string is sliced exactly once, and a stray split
+// pair at one of the two cut points renders as at most one malformed character in a debug-facing
+// transcript slice the archivist's own child model must already tolerate arbitrary content in —
+// a cosmetic edge case, not a correctness one, so no surrogate-aware trimming was added for it.
+function truncateTranscript(serialized: string): string {
+  if (serialized.length <= MAX_ARCHIVIST_TRANSCRIPT_CHARS) return serialized;
+  const half = MAX_ARCHIVIST_TRANSCRIPT_CHARS / 2;
+  const omitted = serialized.length - MAX_ARCHIVIST_TRANSCRIPT_CHARS;
+  return `${serialized.slice(0, half)}\n... [${omitted} characters omitted] ...\n${serialized.slice(-half)}`;
+}
 
 // The archivist has no read_file, and replace/remove operate by substring against the LIVE file —
 // so it must see the three files' current text, not just the transcript, to write correctly.
@@ -144,11 +170,7 @@ export function buildArchivistGoal(
   trigger: ArchivistTrigger,
 ): string {
   const memoryTier = renderMemoryTier(memory);
-  const serializedTranscript = JSON.stringify(transcript);
-  const truncatedTranscript =
-    serializedTranscript.length > MAX_ARCHIVIST_TRANSCRIPT_CHARS
-      ? `${serializedTranscript.slice(0, MAX_ARCHIVIST_TRANSCRIPT_CHARS)}… (truncated from ${serializedTranscript.length} characters)`
-      : serializedTranscript;
+  const truncatedTranscript = truncateTranscript(JSON.stringify(transcript));
   return (
     `Trigger: ${trigger}.\n\n` +
     `Current memory:\n${memoryTier.length > 0 ? memoryTier : "(all three files are empty)"}\n\n` +
@@ -273,6 +295,10 @@ export async function maybeRunArchivist(args: {
   state: ArchivistState;
   ctx: MemoryContext;
   contextWindow: number | undefined;
+  // Mirrors contextWindow exactly: undefined unless a caller ever overrides runLoop's own
+  // compactionThreshold (loop.ts's opts.compactionThreshold — no production caller does today),
+  // in which case shouldRunArchivist must see that same override, not its own default.
+  compactionThreshold?: number;
   model: LanguageModel;
   route: { model: string; provider: ModelProvider };
   catalog: ModelCatalog;
@@ -298,6 +324,7 @@ export async function maybeRunArchivist(args: {
   const trigger = shouldRunArchivist(
     args.state,
     args.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE,
+    args.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD,
     enabled,
   );
   if (!trigger) return undefined;

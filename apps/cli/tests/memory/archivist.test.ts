@@ -7,7 +7,12 @@ import type { ModelCatalog } from "@seri/model-catalog";
 import { MockLanguageModelV4 } from "ai/test";
 import { buildVolatileTier } from "../../src/agents/systemPrompt";
 import { setConfigValue } from "../../src/config/config";
-import { DEFAULT_CONTEXT_WINDOW_SIZE, type LoopEvent, runLoop } from "../../src/loop/loop";
+import {
+  DEFAULT_COMPACTION_THRESHOLD,
+  DEFAULT_CONTEXT_WINDOW_SIZE,
+  type LoopEvent,
+  runLoop,
+} from "../../src/loop/loop";
 import {
   ARCHIVIST_TOOL_CALL_INTERVAL,
   buildArchivistGoal,
@@ -46,27 +51,29 @@ describe("shouldRunArchivist", () => {
   test("undefined below the tool-call interval, with no near-compaction signal", () => {
     const s = state();
     s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL - 1;
-    expect(shouldRunArchivist(s, 100_000, true)).toBeUndefined();
+    expect(shouldRunArchivist(s, 100_000, DEFAULT_COMPACTION_THRESHOLD, true)).toBeUndefined();
   });
 
   test('"tool-count" at the interval', () => {
     const s = state();
     s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
-    expect(shouldRunArchivist(s, 100_000, true)).toBe("tool-count");
+    expect(shouldRunArchivist(s, 100_000, DEFAULT_COMPACTION_THRESHOLD, true)).toBe("tool-count");
   });
 
   test('"near-compaction" fires even at 1 tool call, once input tokens approach the threshold', () => {
     const s = state();
     s.toolCallsSinceRun = 1;
     s.lastInputTokens = 50_000; // 50000/100000 = 0.5 = DEFAULT_COMPACTION_THRESHOLD * 0.9 boundary needs care
-    expect(shouldRunArchivist(s, 100_000, true)).toBe("near-compaction");
+    expect(shouldRunArchivist(s, 100_000, DEFAULT_COMPACTION_THRESHOLD, true)).toBe(
+      "near-compaction",
+    );
   });
 
   test("enabled=false short-circuits before either trigger is evaluated, even when both are independently true", () => {
     const s = state();
     s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
     s.lastInputTokens = 90_000;
-    expect(shouldRunArchivist(s, 100_000, false)).toBeUndefined();
+    expect(shouldRunArchivist(s, 100_000, DEFAULT_COMPACTION_THRESHOLD, false)).toBeUndefined();
   });
 
   // MEDIUM finding (reviewer-verifier): a model absent from the catalog left driveLoop passing
@@ -79,7 +86,24 @@ describe("shouldRunArchivist", () => {
     const s = state();
     s.toolCallsSinceRun = 1;
     s.lastInputTokens = Math.ceil(DEFAULT_CONTEXT_WINDOW_SIZE * 0.5); // crosses 0.5 * 0.9
-    expect(shouldRunArchivist(s, DEFAULT_CONTEXT_WINDOW_SIZE, true)).toBe("near-compaction");
+    expect(
+      shouldRunArchivist(s, DEFAULT_CONTEXT_WINDOW_SIZE, DEFAULT_COMPACTION_THRESHOLD, true),
+    ).toBe("near-compaction");
+  });
+
+  // Round-5 review finding: shouldRunArchivist used to read the module-level
+  // DEFAULT_COMPACTION_THRESHOLD constant directly instead of taking the effective threshold as a
+  // parameter — the same class of bug the contextWindowSize fix above already closed for context
+  // window. Proven the same way: a threshold DIFFERENT from the default changes whether the
+  // trigger fires for input tokens that would (or wouldn't) cross the real default.
+  test("near-compaction fires against a caller-supplied compactionThreshold, not the hardcoded default", () => {
+    const s = state();
+    s.toolCallsSinceRun = 1;
+    s.lastInputTokens = 40_000; // 40000/100000 = 0.4
+    // Default threshold (0.5 * 0.9 = 0.45) would not fire at 0.4 input-token fraction.
+    expect(shouldRunArchivist(s, 100_000, DEFAULT_COMPACTION_THRESHOLD, true)).toBeUndefined();
+    // A lower, explicitly-passed threshold (0.4 * 0.9 = 0.36) fires at the same 0.4 fraction.
+    expect(shouldRunArchivist(s, 100_000, 0.4, true)).toBe("near-compaction");
   });
 });
 
@@ -452,8 +476,24 @@ describe("buildArchivistGoal", () => {
     const memory = loadMemory(ctx);
     const bigTranscript = [{ role: "user" as const, content: "x".repeat(60_000) }];
     const goal = buildArchivistGoal(bigTranscript, memory, "tool-count");
-    expect(goal).toContain("truncated from");
+    expect(goal).toContain("characters omitted");
     expect(goal.length).toBeLessThan(JSON.stringify(bigTranscript).length);
+  });
+
+  // Round-5 review finding: the old head-only slice kept the OLDEST characters and silently
+  // dropped the tail — backwards, since a correction or fact worth remembering is at least as
+  // likely to sit near the END of the reviewed window as the start, especially for the
+  // near-compaction trigger (the largest window, right before it fired). A distinguishing marker
+  // placed near the end must survive truncation; the old head-only slice would have dropped it.
+  test("truncation keeps content near the END of an oversized transcript, not just the start", () => {
+    const ctx = makeCtx();
+    const memory = loadMemory(ctx);
+    const bigTranscript = [
+      { role: "user" as const, content: "x".repeat(60_000) },
+      { role: "user" as const, content: "DISTINCTIVE-MARKER-NEAR-THE-END" },
+    ];
+    const goal = buildArchivistGoal(bigTranscript, memory, "tool-count");
+    expect(goal).toContain("DISTINCTIVE-MARKER-NEAR-THE-END");
   });
 
   // Negative control: a transcript comfortably under the cap is passed through whole, with no
@@ -464,7 +504,7 @@ describe("buildArchivistGoal", () => {
     const memory = loadMemory(ctx);
     const smallTranscript = [{ role: "user" as const, content: "hello" }];
     const goal = buildArchivistGoal(smallTranscript, memory, "tool-count");
-    expect(goal).not.toContain("truncated from");
+    expect(goal).not.toContain("characters omitted");
     expect(goal).toContain('"hello"');
   });
 });

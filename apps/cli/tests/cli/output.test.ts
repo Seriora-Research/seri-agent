@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { printCost, toolResultLine, USAGE } from "../../src/cli/output";
+import { archivistLine, printCost, toolResultLine, USAGE } from "../../src/cli/output";
+import type { ArchivistReport } from "../../src/memory/archivist";
 
 function captureLog(fn: () => void): string[] {
   const lines: string[] = [];
@@ -50,6 +51,38 @@ describe("printCost", () => {
     );
     expect(line).toBe("(cost: ≥ $0.0020, partially unknown)");
     expect(line).not.toBe("(cost: $0.0020)");
+  });
+});
+
+function archivistReport(overrides: Partial<ArchivistReport> = {}): ArchivistReport {
+  return {
+    trigger: "tool-count",
+    summary: "recorded that this repo uses pnpm",
+    usage: {
+      inputTokens: 100,
+      inputTokenDetails: {
+        noCacheTokens: undefined,
+        cacheReadTokens: undefined,
+        cacheWriteTokens: undefined,
+      },
+      outputTokens: 20,
+      outputTokenDetails: { textTokens: 20, reasoningTokens: undefined },
+      totalTokens: 120,
+    },
+    cost: undefined,
+    toolCallsMade: 1,
+    ...overrides,
+  };
+}
+
+describe("archivistLine", () => {
+  // Round-5 review finding: the summary — the model's own explanation of what it did or
+  // decided, its only deliverable — was computed and paid for but never shown anywhere; the only
+  // consumer anywhere in the codebase was a test asserting it was defined.
+  test("includes the archivist's own summary text, not just the trigger/token/cost stats", () => {
+    const line = archivistLine(archivistReport({ summary: "recorded that this repo uses pnpm" }));
+    expect(line).toContain("recorded that this repo uses pnpm");
+    expect(line).toContain("archivist: tool-count trigger");
   });
 });
 
