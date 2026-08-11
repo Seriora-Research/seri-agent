@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ModelCatalog, ModelCatalogEntry } from "@seri/model-catalog";
+import { CATALOG_PROVIDERS, type ModelCatalog, type ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import {
   type CheckpointRecord,
@@ -11,12 +11,14 @@ import {
   readLog,
 } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable } from "../../src/checkpoint/shadowGit";
+import { setConfigValue } from "../../src/config/config";
 import type { SessionState } from "../../src/session/session";
 import {
   decideModeCycle,
   decideModelPickerOpen,
   decideRestore,
   decideRewind,
+  decideSetupOpen,
   decideUndo,
 } from "../../src/tui/commands";
 
@@ -151,6 +153,56 @@ describe("decideModelPickerOpen", () => {
     expect(anthropicRow?.alternatives).toBe(1);
     // A model with no siblings has zero alternatives, not `undefined` or `-1`.
     expect(groqRow?.alternatives).toBe(0);
+  });
+});
+
+const ALL_KEY_NAMES = [
+  "GROQ_API_KEY",
+  "OPENROUTER_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GOOGLE_GENERATIVE_AI_API_KEY",
+];
+const originalKeyEnv = Object.fromEntries(ALL_KEY_NAMES.map((name) => [name, process.env[name]]));
+
+describe("decideSetupOpen", () => {
+  let setupConfigDir: string;
+
+  beforeEach(() => {
+    for (const name of ALL_KEY_NAMES) delete process.env[name];
+    setupConfigDir = mkdtempSync(join(tmpdir(), "seri-setup-commands-test-"));
+  });
+
+  afterEach(() => {
+    for (const name of ALL_KEY_NAMES) {
+      const original = originalKeyEnv[name];
+      if (original === undefined) delete process.env[name];
+      else process.env[name] = original;
+    }
+    rmSync(setupConfigDir, { recursive: true, force: true });
+  });
+
+  test("returns exactly 5 rows, in CATALOG_PROVIDERS order, all unset by default", () => {
+    const rows = decideSetupOpen(setupConfigDir);
+    expect(rows.map((row) => row.provider)).toEqual([...CATALOG_PROVIDERS]);
+    expect(rows.every((row) => row.source === "unset" && row.masked === undefined)).toBe(true);
+    expect(rows.every((row) => row.removable === false)).toBe(true);
+  });
+
+  test("a config-file entry is source: config, masked, and removable", () => {
+    setConfigValue("ANTHROPIC_API_KEY", "sk-fake-config-key", setupConfigDir);
+    const row = decideSetupOpen(setupConfigDir).find((r) => r.provider === "anthropic");
+    expect(row?.source).toBe("config");
+    expect(row?.masked).toBeDefined();
+    expect(row?.removable).toBe(true);
+  });
+
+  // D8: an env-sourced row cannot be removed from here — there is no config.json entry to unset.
+  test("an env-shadowed row (no config entry) is source: env and NOT removable", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-fake-env-key";
+    const row = decideSetupOpen(setupConfigDir).find((r) => r.provider === "anthropic");
+    expect(row?.source).toBe("env");
+    expect(row?.removable).toBe(false);
   });
 });
 

@@ -8,6 +8,7 @@
 // and cli.ts both call through to, rather than cli.ts keeping its own duplicate (it did, briefly,
 // between Phase 2 and the fix that consolidated it here).
 import {
+  CATALOG_PROVIDERS,
   filterCatalogEntries,
   groupRoutes,
   type ModelCatalog,
@@ -26,6 +27,7 @@ import {
 } from "../checkpoint/checkpoint";
 import { projectRoot } from "../checkpoint/shadowGit";
 import { cycleMode } from "../gate/gate";
+import { providerKeyState } from "../provider/keys";
 import { byRoutePriority } from "../provider/routing";
 import type { SessionState } from "../session/session";
 
@@ -94,6 +96,34 @@ export function decideModelPickerOpen(
     }
   }
   return rows;
+}
+
+// One row per provider — /setup's own table (D5-D8, feature-plan.md). `removable` is D8: an
+// env-sourced row has no config.json entry to unset, so /setup cannot offer to remove it (the
+// panel states the reason instead — App.tsx's own SetupPanel).
+export type SetupProviderRow = {
+  provider: ModelProvider;
+  keyName: string;
+  source: "env" | "config" | "unset";
+  masked: string | undefined;
+  removable: boolean;
+};
+
+// The decision half of /setup, mirroring decideModelPickerOpen's own shape: what to show, not how
+// to show it. Unlike decideModelPickerOpen this DOES do real I/O (providerKeyState reads
+// config.json) — the same contract decideUndo/decideRestore already have (this file's own header
+// comment: no saveSession, no console.log/print*, but a read is not a write).
+export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
+  return CATALOG_PROVIDERS.map((provider) => {
+    const state = providerKeyState(provider, configDir);
+    return {
+      provider,
+      keyName: state.keyName,
+      source: state.source,
+      masked: state.masked,
+      removable: state.source === "config",
+    };
+  });
 }
 
 // `onPlan` defaults to a no-op but is meant to be passed through from the caller's own presenter

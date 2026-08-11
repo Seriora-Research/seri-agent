@@ -12,8 +12,8 @@ import { useEffect, useReducer, useState } from "react";
 import { approvalPromptText, truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { SessionState } from "../session/session";
-import type { ModelPickerEntry } from "./commands";
-import { type Dispatch, initialTuiState, tuiReducer } from "./reducer";
+import type { ModelPickerEntry, SetupProviderRow } from "./commands";
+import { type Dispatch, initialTuiState, type SetupState, tuiReducer } from "./reducer";
 import { theme } from "./theme";
 
 export type AppProps = {
@@ -74,6 +74,15 @@ export type AppProps = {
     leftoverInput?: string,
   ) => void;
   onModelPickerCancel?: () => void;
+  // /setup's own five resolutions (D5-D8, feature-plan.md) — mirroring onModelSelected's shape:
+  // each does nothing but call into cli.ts's own handlers, which recompute the whole next
+  // SetupState (rows included) and dispatch it, the same "presentation calls a prop, cli.ts owns
+  // the decision" split every other interactive command in this file already has.
+  onSetupSelect?: (provider: ModelProvider) => void;
+  onSetupKeyEntered?: (provider: ModelProvider, value: string) => void;
+  onSetupRemove?: (provider: ModelProvider) => void;
+  onSetupBack?: () => void;
+  onSetupClose?: (leftoverInput?: string) => void;
 };
 
 // approvalPromptText (cli/output.ts), not a hand-copied template: round 7 code review found this
@@ -384,6 +393,226 @@ function ModelPicker({
   );
 }
 
+// D8: the disabled-remove reason, verbatim — reused by the list row (grayed prompt) and would be
+// reused again by any future surface that needs to explain the same fact, rather than the string
+// being typed out at each call site and risking drift.
+function envShadowReason(keyName: string): string {
+  return `set by $${keyName} in your environment — unset it in your shell`;
+}
+
+// One /setup list row's own text — masked value + source for a config/unset row, D8's own
+// disabled-remove reason for an env row (which is more useful there than a masked value nobody
+// can act on: the fix is in the shell, not in this panel).
+function formatSetupRow(row: SetupProviderRow): string {
+  const name = truncatePad(row.provider, PROVIDER_WIDTH);
+  if (row.source === "unset") return `${name} not set`;
+  if (row.source === "env") return `${name} ${envShadowReason(row.keyName)}`;
+  return `${name} ${row.masked} (config)`;
+}
+
+// /setup's own live state (tui/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-exclusion
+// role, dispatching to one of three step-specific sub-components below rather than one component
+// handling all three at once, since each step has genuinely different input handling and local
+// state (the same reasoning ApprovalBox/ModelPicker are separate components rather than one
+// component branching internally).
+function SetupPanel({
+  pendingSetup,
+  onSetupSelect,
+  onSetupKeyEntered,
+  onSetupRemove,
+  onSetupBack,
+  onSetupClose,
+}: {
+  pendingSetup: SetupState;
+  onSetupSelect?: (provider: ModelProvider) => void;
+  onSetupKeyEntered?: (provider: ModelProvider, value: string) => void;
+  onSetupRemove?: (provider: ModelProvider) => void;
+  onSetupBack?: () => void;
+  onSetupClose?: (leftoverInput?: string) => void;
+}) {
+  if (pendingSetup.step === "enter-key") {
+    return (
+      <SetupEnterKey
+        pendingSetup={pendingSetup}
+        onSetupKeyEntered={onSetupKeyEntered}
+        onSetupBack={onSetupBack}
+        onSetupClose={onSetupClose}
+      />
+    );
+  }
+  if (pendingSetup.step === "confirm-remove") {
+    return (
+      <SetupConfirmRemove
+        pendingSetup={pendingSetup}
+        onSetupRemove={onSetupRemove}
+        onSetupBack={onSetupBack}
+      />
+    );
+  }
+  return (
+    <SetupList
+      pendingSetup={pendingSetup}
+      onSetupSelect={onSetupSelect}
+      onSetupRemove={onSetupRemove}
+      onSetupClose={onSetupClose}
+    />
+  );
+}
+
+function SetupList({
+  pendingSetup,
+  onSetupSelect,
+  onSetupRemove,
+  onSetupClose,
+}: {
+  pendingSetup: Extract<SetupState, { step: "list" }>;
+  onSetupSelect?: (provider: ModelProvider) => void;
+  onSetupRemove?: (provider: ModelProvider) => void;
+  onSetupClose?: (leftoverInput?: string) => void;
+}) {
+  const { rows } = pendingSetup;
+  // Seeded from the reducer's own `selected` (set by whichever handler brought this step back into
+  // view — cli.ts's own onSetupBack/onSetupKeyEntered), then moved locally — the same "reducer
+  // supplies the starting point, the component owns live navigation" split ModelPicker's own
+  // `selectedIndex` already has, for the identical reason (transient UI data with no reason to
+  // round-trip through cli.ts on every arrow key).
+  const [selected, setSelected] = useState(pendingSetup.selected);
+
+  useInput((input, key) => {
+    if (key.escape || (key.ctrl && input === "d")) {
+      onSetupClose?.();
+      return;
+    }
+    if (key.upArrow) {
+      setSelected((current) => Math.max(0, current - 1));
+      return;
+    }
+    if (key.downArrow) {
+      setSelected((current) => Math.min(rows.length - 1, current + 1));
+      return;
+    }
+    if (key.ctrl || key.meta) return;
+    if (input.length === 0) return;
+    const row = rows[selected];
+    if (row === undefined) return;
+    const typed = input.toLowerCase();
+    if (key.return || typed === "a") {
+      onSetupSelect?.(row.provider);
+      return;
+    }
+    if ((typed === "r" || key.delete) && row.removable) {
+      onSetupRemove?.(row.provider);
+    }
+  });
+
+  return (
+    <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+      <Text color={theme.muted}>/setup — provider API keys</Text>
+      {rows.map((row, index) => (
+        <Text key={row.provider} color={index === selected ? theme.accent : undefined}>
+          {index === selected ? "> " : "  "}
+          {formatSetupRow(row)}
+        </Text>
+      ))}
+      <Text color={theme.muted}>↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close</Text>
+    </Box>
+  );
+}
+
+function SetupEnterKey({
+  pendingSetup,
+  onSetupKeyEntered,
+  onSetupBack,
+  onSetupClose,
+}: {
+  pendingSetup: Extract<SetupState, { step: "enter-key" }>;
+  onSetupKeyEntered?: (provider: ModelProvider, value: string) => void;
+  onSetupBack?: () => void;
+  onSetupClose?: (leftoverInput?: string) => void;
+}) {
+  const { provider, keyName, error, busy } = pendingSetup;
+  // The real value lives here, never in anything rendered — the frame below only ever shows
+  // `"*".repeat(value.length)`. This is the one piece of state in this whole file a leaked render
+  // would turn into a credential disclosure, which is why it exists nowhere else: not in
+  // `pendingSetup` (reducer state, visible to anything that reads it), not passed back to cli.ts
+  // until the moment it actually submits.
+  const [value, setValue] = useState("");
+
+  useInput((input, key) => {
+    if (busy) return;
+    if (key.ctrl && input === "d") {
+      onSetupClose?.();
+      return;
+    }
+    if (key.escape) {
+      onSetupBack?.();
+      return;
+    }
+    if (key.return) {
+      onSetupKeyEntered?.(provider, value);
+      return;
+    }
+    if (key.backspace || key.delete) {
+      setValue((current) => current.slice(0, -1));
+      return;
+    }
+    if (key.ctrl || key.meta) return;
+    if (input.length === 0) return;
+    // A bare terminator embedded in a combined pty chunk (MEDIUM-E's own class, InputBox/
+    // ModelPicker above) is not handled beyond stripping it — a pasted key is never expected to
+    // contain a newline, and silently accepting one into a credential is worse than the rare
+    // dropped keystroke this simplification could cost.
+    setValue((current) => current + input.replace(/[\r\n]/g, ""));
+  });
+
+  return (
+    <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+      <Text color={theme.muted}>{`${keyName} for ${provider}`}</Text>
+      <Text>{"*".repeat(value.length)}</Text>
+      {error !== undefined && <Text color={theme.error}>{error}</Text>}
+      {busy ? (
+        <Text color={theme.muted}>Validating…</Text>
+      ) : (
+        <Text color={theme.muted}>Enter submit · Esc back · Ctrl-D close</Text>
+      )}
+    </Box>
+  );
+}
+
+function SetupConfirmRemove({
+  pendingSetup,
+  onSetupRemove,
+  onSetupBack,
+}: {
+  pendingSetup: Extract<SetupState, { step: "confirm-remove" }>;
+  onSetupRemove?: (provider: ModelProvider) => void;
+  onSetupBack?: () => void;
+}) {
+  const { provider, keyName } = pendingSetup;
+
+  useInput((input, key) => {
+    // ApprovalBox's own convention (above): Enter and anything unrecognised both cancel — only an
+    // explicit "y" confirms.
+    if (key.return) {
+      onSetupBack?.();
+      return;
+    }
+    if (key.ctrl || key.meta) return;
+    if (input.length === 0) return;
+    if (input.toLowerCase() === "y") {
+      onSetupRemove?.(provider);
+      return;
+    }
+    onSetupBack?.();
+  });
+
+  return (
+    <Box borderStyle="round" borderColor={theme.warning}>
+      <Text color={theme.warning}>{`Remove ${keyName} (${provider})? [y]es / [N]o`}</Text>
+    </Box>
+  );
+}
+
 function InputBox({
   onSubmit,
   onQuit,
@@ -467,6 +696,11 @@ export function App({
   onApprovalAnswer,
   onModelSelected,
   onModelPickerCancel,
+  onSetupSelect,
+  onSetupKeyEntered,
+  onSetupRemove,
+  onSetupBack,
+  onSetupClose,
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
   const { exit } = useApp();
@@ -511,8 +745,9 @@ export function App({
       {state.commandError !== undefined && <Text color={theme.error}>{state.commandError}</Text>}
       {/* Findings 1+5: mutually exclusive with InputBox — a pending approval question is the only
       thing this run is waiting on, and answering it (not typing a task or slash command) is the
-      only input that means anything until it clears. Extended to a third state for /model: a
-      pending model pick is the same kind of "only this input means anything right now" question. */}
+      only input that means anything until it clears. Extended to a third state for /model, and a
+      fourth for /setup: each is the same kind of "only this input means anything right now"
+      question, checked in this same order (approval, then /model, then /setup, then InputBox). */}
       {state.pendingApproval !== undefined ? (
         <ApprovalBox
           pendingApproval={state.pendingApproval}
@@ -524,6 +759,15 @@ export function App({
           entries={state.pendingModelPicker.entries}
           onModelSelected={onModelSelected}
           onModelPickerCancel={onModelPickerCancel}
+        />
+      ) : state.pendingSetup !== undefined ? (
+        <SetupPanel
+          pendingSetup={state.pendingSetup}
+          onSetupSelect={onSetupSelect}
+          onSetupKeyEntered={onSetupKeyEntered}
+          onSetupRemove={onSetupRemove}
+          onSetupBack={onSetupBack}
+          onSetupClose={onSetupClose}
         />
       ) : (
         <InputBox

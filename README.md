@@ -85,6 +85,20 @@ succeeds now becomes the default for every future brand-new session**, not just 
 it in — it writes `SERI_MODEL`/`SERI_PROVIDER` to `config.json` the same way `seri config set`
 would. A session that never touches `/model` never writes either key.
 
+Inside the TUI, `/setup` is the interactive equivalent of the `seri config set` calls above — it
+lists all five providers, masks whatever is already stored, and lets you add, replace or remove a
+key without leaving the session. A typed key is checked with one minimal, near-free API call before
+it's saved; only an actual auth failure (401/403) is rejected, everything else stores the key
+anyway with a warning, since a network hiccup shouldn't be the thing that stops you from saving a
+key at all.
+
+If a model is reachable through more than one provider (a model available both directly from
+Anthropic and through OpenRouter, say) and the pair you're on has no key, `seri` reroutes to
+whichever configured provider reaches the same model — native providers preferred over an
+aggregator like OpenRouter — and says so once in the transcript. An explicit `/model` pick always
+wins over this if its own provider has a key. `/model`'s own picker groups every route to the same
+model together so you can see which ones are reachable.
+
 `seri --help` prints the usage text, and `seri --version` the installed version.
 `seri --continue` resumes the most recent session, and `seri --resume <id>` a named one; a task
 containing a flag goes after `--` (`seri -- fix the --help output`).

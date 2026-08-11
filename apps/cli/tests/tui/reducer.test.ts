@@ -3,7 +3,7 @@ import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import type { LoopEvent } from "../../src/loop/loop";
 import type { SessionState } from "../../src/session/session";
-import type { ModelPickerEntry } from "../../src/tui/commands";
+import type { ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import { initialTuiState, tuiReducer } from "../../src/tui/reducer";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -350,5 +350,64 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     expect(state.pendingInputPrefill).toBeUndefined();
     // Consuming the prefill must not disturb the session the same dispatch already landed.
     expect(state.session.model).toBe(entry.id);
+  });
+});
+
+describe("tuiReducer: setup-requested / setup-step / setup-resolved", () => {
+  const rows: SetupProviderRow[] = [
+    { provider: "groq", keyName: "GROQ_API_KEY", source: "unset", masked: undefined, removable: false },
+  ];
+
+  test("setup-requested opens at step list with the given rows", () => {
+    const state = tuiReducer(initialTuiState(session()), { type: "setup-requested", rows });
+
+    expect(state.pendingSetup).toEqual({ step: "list", rows, selected: 0 });
+  });
+
+  test("setup-step transitions to a new step", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "setup-requested", rows });
+
+    state = tuiReducer(state, {
+      type: "setup-step",
+      state: { step: "enter-key", rows, provider: "groq", keyName: "GROQ_API_KEY", busy: false },
+    });
+
+    expect(state.pendingSetup).toEqual({
+      step: "enter-key",
+      rows,
+      provider: "groq",
+      keyName: "GROQ_API_KEY",
+      busy: false,
+    });
+  });
+
+  test("setup-resolved clears pendingSetup and carries leftoverInput into pendingInputPrefill", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "setup-requested", rows });
+
+    state = tuiReducer(state, { type: "setup-resolved", leftoverInput: "typed after close" });
+
+    expect(state.pendingSetup).toBeUndefined();
+    expect(state.pendingInputPrefill).toBe("typed after close");
+  });
+
+  test("setup-resolved without leftoverInput leaves pendingInputPrefill undefined", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "setup-requested", rows });
+
+    state = tuiReducer(state, { type: "setup-resolved" });
+
+    expect(state.pendingSetup).toBeUndefined();
+    expect(state.pendingInputPrefill).toBeUndefined();
+  });
+
+  // pendingApproval/pendingModelPicker already coexist deliberately (reducer.ts's own comment on
+  // pendingModelPicker) — pendingSetup joins that same set of independent fields, not a
+  // fourth mutually-exclusive flag the reducer itself enforces (App.tsx's render ternary is what
+  // picks one to actually show).
+  test("pendingSetup and pendingModelPicker can both be set without either clobbering the other", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "setup-requested", rows });
+    state = tuiReducer(state, { type: "model-picker-requested", entries: [] });
+
+    expect(state.pendingSetup).toEqual({ step: "list", rows, selected: 0 });
+    expect(state.pendingModelPicker).toEqual({ entries: [] });
   });
 });

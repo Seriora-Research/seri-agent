@@ -5,7 +5,7 @@ import { render } from "ink-testing-library";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { SessionState } from "../../src/session/session";
 import { App, formatContextWindow, formatCost, formatModelRow } from "../../src/tui/App";
-import type { ModelPickerEntry } from "../../src/tui/commands";
+import type { ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import type { TuiAction } from "../../src/tui/reducer";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -504,6 +504,223 @@ describe("App", () => {
       await flush();
 
       expect(selected).toEqual([{ model: "model-15", provider: "groq" }]);
+    });
+  });
+
+  describe("setup panel", () => {
+    function setupRows(): SetupProviderRow[] {
+      return [
+        { provider: "groq", keyName: "GROQ_API_KEY", source: "unset", masked: undefined, removable: false },
+        {
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+          source: "config",
+          masked: "sk-o...abcd",
+          removable: true,
+        },
+        {
+          provider: "anthropic",
+          keyName: "ANTHROPIC_API_KEY",
+          source: "env",
+          masked: "sk-a...wxyz",
+          removable: false,
+        },
+        { provider: "openai", keyName: "OPENAI_API_KEY", source: "unset", masked: undefined, removable: false },
+        { provider: "google", keyName: "GOOGLE_GENERATIVE_AI_API_KEY", source: "unset", masked: undefined, removable: false },
+      ];
+    }
+
+    test("the list step shows all five provider rows, masked values included", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "setup-requested", rows: setupRows() });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("groq");
+      expect(frame).toContain("openrouter");
+      expect(frame).toContain("anthropic");
+      expect(frame).toContain("openai");
+      expect(frame).toContain("google");
+      expect(frame).toContain("sk-o...abcd");
+      // The env row shows D8's own disabled-remove reason, not a masked value.
+      expect(frame).toContain("set by $ANTHROPIC_API_KEY in your environment");
+    });
+
+    // The key-leak guard, and its negative control: `.claude/rules/code-quality.md` requires this
+    // assertion to have been SEEN to fail. Verified by temporarily changing SetupEnterKey's own
+    // render from `"*".repeat(value.length)` back to the raw `value` and re-running this exact
+    // test: it failed, printing the typed string `sk-distinctive-secret-12345` in `lastFrame()`,
+    // confirming the assertion actually exercises the masking rather than trivially passing
+    // because the string never appeared anywhere for an unrelated reason. Reverted immediately
+    // after — the fix below is what's committed.
+    test("a typed key is masked in the frame, never rendered raw", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "setup-requested", rows: setupRows() });
+      await flush();
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          rows: setupRows(),
+          provider: "groq",
+          keyName: "GROQ_API_KEY",
+          busy: false,
+        },
+      });
+      // Two ticks, not one: measured on WSL (the first character sent after only one `flush()`
+      // was silently dropped, deterministically — SetupEnterKey's own useInput registers a tick
+      // later than the component itself commits, the same class of mount-timing gap this file's
+      // pty suite already needed a much longer, dedicated wait for around a component swap).
+      await flush();
+      await flush();
+
+      const secret = "sk-distinctive-secret-12345";
+      instance.stdin.write(secret);
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).not.toContain(secret);
+      expect(frame).toContain("*".repeat(secret.length));
+    });
+
+    test("Enter on the enter-key step submits the typed value via onSetupKeyEntered", async () => {
+      const entered: Array<{ provider: ModelProvider; value: string }> = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupKeyEntered={(provider, value) => entered.push({ provider, value })}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          rows: setupRows(),
+          provider: "openai",
+          keyName: "OPENAI_API_KEY",
+          busy: false,
+        },
+      });
+      await flush();
+
+      instance.stdin.write("sk-my-key");
+      await flush();
+      instance.stdin.write("\r");
+      await flush();
+
+      expect(entered).toEqual([{ provider: "openai", value: "sk-my-key" }]);
+    });
+
+    test("while busy, the panel renders Validating… and ignores input", async () => {
+      const entered: Array<{ provider: ModelProvider; value: string }> = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupKeyEntered={(provider, value) => entered.push({ provider, value })}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          rows: setupRows(),
+          provider: "openai",
+          keyName: "OPENAI_API_KEY",
+          busy: true,
+        },
+      });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain("Validating…");
+
+      instance.stdin.write("\r");
+      await flush();
+
+      expect(entered).toEqual([]);
+    });
+
+    test("confirm-remove: 'y' confirms via onSetupRemove, anything else cancels back via onSetupBack", async () => {
+      const removed: ModelProvider[] = [];
+      const backCalls: number[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupRemove={(provider) => removed.push(provider)}
+          onSetupBack={() => backCalls.push(backCalls.length)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "confirm-remove",
+          rows: setupRows(),
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+        },
+      });
+      await flush();
+      instance.stdin.write("n");
+      await flush();
+
+      expect(removed).toEqual([]);
+      expect(backCalls).toEqual([0]);
+
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "confirm-remove",
+          rows: setupRows(),
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+        },
+      });
+      await flush();
+      instance.stdin.write("y");
+      await flush();
+
+      expect(removed).toEqual(["openrouter"]);
+    });
+
+    // Render precedence (App.tsx's own render ternary): pendingApproval beats pendingModelPicker
+    // beats pendingSetup beats InputBox.
+    test("pendingApproval takes precedence over pendingSetup, which takes precedence over InputBox", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "setup-requested", rows: setupRows() });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("/setup — provider API keys");
+
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: {},
+        offersAlways: true,
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Approve write_file");
+      expect(frame).not.toContain("/setup — provider API keys");
     });
   });
 

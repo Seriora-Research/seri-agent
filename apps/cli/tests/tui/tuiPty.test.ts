@@ -548,6 +548,64 @@ function childScriptRewindDuringStream(dir: string, flagPath: string): string {
   ].join("\n");
 }
 
+// D5-D8 (feature-plan.md): /setup's own real-pty harness — a never-resolving runLoop (mirrors
+// childScriptInput's own shape) so the TUI stays interactive for as long as a test needs. Every
+// /setup script sets HOME (D9's own reasoning, so a write never touches the developer's real
+// ~/.seri), SERI_DISABLE_MODELS_FETCH (deterministic catalog), and SERI_SKIP_KEY_VALIDATION=1 (D5's
+// own escape hatch — no /setup test ever touches the network). GROQ_API_KEY is set as a real env
+// var, same as every other script in this file — the groq ROW reads `source: "env"` because of it,
+// which some of the tests below rely on precisely because it is NOT the row under test.
+function childScriptSetup(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// The env-shadow scenario's own script (item 7, feature-plan.md): unlike childScriptSetup, this
+// one exports OPENAI_API_KEY as a real env var AND pre-seeds a DIFFERENT value into config.json
+// (below, host-side, before spawn) — D8's own point is that env wins the SOURCE regardless of
+// whether a config entry also exists underneath.
+function childScriptSetupEnvShadow(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.OPENAI_API_KEY = "sk-openai-env-value";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
 // research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
 // identical signature... with zero change to loop.ts/gate.ts") that every earlier round of this
@@ -1557,33 +1615,51 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // D2/D3/D4 (feature-plan.md): the routing-priority reroute end to end — a real turn actually
+  // D2/D3 (feature-plan.md): the routing-priority reroute end to end — a real turn actually
   // dispatches to the rerouted provider's own constructor (`via=anthropic`, not the requested
-  // `or`), the transcript carries exactly the notice D2 requires, and the resolved pair — not the
-  // requested one — is what lands in config.json (D4).
-  test("a routing-priority reroute takes effect on turn 1, announces itself once, and persists the resolved provider", async () => {
+  // `or`), and the transcript carries exactly the notice D2 requires.
+  //
+  // Does NOT assert a config.json write. D3's own fix — confirmedModel/lastPersistedModel
+  // initialize from `prepared.route` (the pair prepareSession already resolved), not
+  // `prepared.session` (what was merely requested) — means a session whose reroute is already
+  // active BEFORE its first turn even runs looks, to the persist guard, identical to a session
+  // that never touched /model at all: turn 1's own re-resolution lands on the SAME pair the guard
+  // already started at, so the inequality never trips and nothing new is written. This is
+  // deliberate, not an oversight: pinning an automatic fallback to the GLOBAL default the instant
+  // it happens once would mean a transient missing key permanently changes what every future
+  // brand-new session uses, even after the key is added back — the tripwire this protects
+  // (tuiPty.test.ts's own "never touched /model never writes config.json" test) applies with equal
+  // force to "never touched /model, only got auto-rerouted." A LIVE /model pick that itself then
+  // gets rerouted (D4's own scenario) is a genuine mid-session CHANGE and persists normally — that
+  // path is exercised by childScriptModelSwitch's own suite of tests already, unmodified by this
+  // loop.
+  test("a routing-priority reroute active from session start takes effect on turn 1 and announces itself once, without touching config.json", async () => {
     const scriptPath = join(dir, "child-reroute.mjs");
     writeFileSync(scriptPath, childScriptReroute(dir));
 
     const { child, sawLine, occurrences } = startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 via=anthropic provider=anthropic");
-      await sawLine(
-        "↻ routing claude-sonnet-5 via anthropic (your key) — no OPENROUTER_API_KEY configured",
-      );
+      // Split across two checks, not one long toContain/sawLine: measured on a real pty (WSL),
+      // Ink wraps this line across the terminal's own column width, landing "configured" on its
+      // own following line — the same wrapping App.test.tsx's own approval-prompt assertion
+      // already works around.
+      const noticePrefix =
+        "↻ routing claude-sonnet-5 via anthropic (your key) — no OPENROUTER_API_KEY";
+      await sawLine(noticePrefix);
+      await sawLine("configured");
       await sawLine("(done: no-tool-call)");
 
       // Exactly one transcript notice for this one turn — the per-turn cap D2's own acceptance
       // criterion names, not a re-print on every messages-updated event within it.
-      expect(
-        occurrences("↻ routing claude-sonnet-5 via anthropic (your key) — no OPENROUTER_API_KEY"),
-      ).toBe(1);
+      expect(occurrences(noticePrefix)).toBe(1);
 
-      const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
-      expect(config.SERI_MODEL).toBe("claude-sonnet-5");
-      expect(config.SERI_PROVIDER).toBe("anthropic");
-      // Negative control: the requested (never-actually-called) pair must not be what persisted.
-      expect(config.SERI_PROVIDER).not.toBe("openrouter");
+      // The negative control this test's own point rests on: verified by first removing D3's own
+      // fix (initializing confirmedModel/lastPersistedModel from `prepared.session` instead of
+      // `prepared.route`) and re-running this exact assertion — it failed, with config.json
+      // present and SERI_PROVIDER: "anthropic" written on turn 1, confirming the assertion below
+      // actually exercises the fix rather than being vacuously true.
+      expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
     } finally {
       child.kill("SIGKILL");
     }
@@ -1605,4 +1681,242 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.kill("SIGKILL");
     }
   }, 60_000);
+
+  // D5-D8 (feature-plan.md): /setup end to end on a real pty. `wait()` is the mandatory 100ms
+  // pause this file's own /model tests already require after any keypress that swaps InputBox for
+  // a different mounted component (or back) — React's own unmount/mount commits a tick after the
+  // dispatch that triggered it (childScriptModelSwitch's own test has the full measured story);
+  // omitting it here would be the identical bug, just for /setup's own panel instead of the picker.
+  function seedConfig(target: string, values: Record<string, string>): void {
+    const configDir = join(target, ".seri");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "config.json"), JSON.stringify(values));
+  }
+
+  function wait100ms(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  describe("/setup", () => {
+    test("lists all five providers with correct source, masked values, and disabled removal for an env row", async () => {
+      seedConfig(dir, { ANTHROPIC_API_KEY: "sk-ant-fake-config-key-abcdefgh" });
+      const scriptPath = join(dir, "child-setup-list.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+
+        await sawLine("sk-a...efgh");
+        await sawLine("set by $GROQ_API_KEY in your environment");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("add: a new key lands in config.json, and the raw value never appears in the pty stdout", async () => {
+      const scriptPath = join(dir, "child-setup-add.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+
+        // CATALOG_PROVIDERS order is groq, openrouter, anthropic, openai, google — one Down
+        // reaches openrouter, unset at this point (only GROQ_API_KEY is set, as an env var).
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        const secret = "sk-or-added-secret-key";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved OPENROUTER_API_KEY.");
+
+        const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+        expect(config.OPENROUTER_API_KEY).toBe(secret);
+
+        // The negative control at the process level: the raw key must never have reached stdout,
+        // masked or otherwise — checked against the WHOLE accumulated transcript, not just the
+        // enter-key step's own frame.
+        child.kill("SIGKILL");
+        const { stdout } = await exited;
+        expect(stdout).not.toContain(secret);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("replace: a different value overwrites the existing one, and no other key is touched", async () => {
+      seedConfig(dir, {
+        OPENROUTER_API_KEY: "sk-or-original-value",
+        ANTHROPIC_API_KEY: "sk-ant-untouched-value",
+      });
+      const scriptPath = join(dir, "child-setup-replace.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        child.stdin?.write("sk-or-replaced-value");
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved OPENROUTER_API_KEY.");
+
+        const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+        expect(config.OPENROUTER_API_KEY).toBe("sk-or-replaced-value");
+        expect(config.ANTHROPIC_API_KEY).toBe("sk-ant-untouched-value");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("remove: the confirmed key is gone, and the other survives", async () => {
+      seedConfig(dir, {
+        OPENROUTER_API_KEY: "sk-or-to-remove",
+        ANTHROPIC_API_KEY: "sk-ant-to-keep",
+      });
+      const scriptPath = join(dir, "child-setup-remove.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+
+        // openrouter (index 1) is config-sourced here, so removable.
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("r");
+        await wait100ms();
+        await sawLine("Remove OPENROUTER_API_KEY");
+
+        child.stdin?.write("y");
+        await sawLine("Removed OPENROUTER_API_KEY.");
+
+        const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+        expect(config.OPENROUTER_API_KEY).toBeUndefined();
+        expect(config.ANTHROPIC_API_KEY).toBe("sk-ant-to-keep");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The negative control opening the panel alone (and closing it again) must not write anything.
+    test("cancel: opening and closing /setup with Escape writes nothing", async () => {
+      const scriptPath = join(dir, "child-setup-cancel.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("\x1b"); // Escape
+        await new Promise((resolve) => setTimeout(resolve, 30)); // Escape's own ambiguity window
+        await wait100ms();
+
+        expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("/setup with an argument is rejected and opens no panel", async () => {
+      const scriptPath = join(dir, "child-setup-bad-args.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup now");
+        await sawLine("/setup now");
+        child.stdin?.write("\r");
+        await sawLine("/setup: invalid arguments.");
+
+        expect(occurrences("/setup — provider API keys")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // D8: an env-sourced row reports the environment as its source and refuses removal, even
+    // though a DIFFERENT value for the same key also sits in config.json underneath it.
+    test("an env-shadowed row reports the environment as the source and refuses removal", async () => {
+      seedConfig(dir, { OPENAI_API_KEY: "sk-openai-config-value-should-not-be-used" });
+      const scriptPath = join(dir, "child-setup-env-shadow.mjs");
+      writeFileSync(scriptPath, childScriptSetupEnvShadow(dir));
+
+      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+        await sawLine("set by $OPENAI_API_KEY in your environment");
+
+        // Down to openrouter, anthropic, openai — three Downs (groq=0, openrouter=1,
+        // anthropic=2, openai=3).
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("r");
+        await wait100ms();
+
+        // Refused — removable is false for an env row, so the confirm-remove step never even
+        // opens: no "Remove OPENAI_API_KEY" prompt anywhere in the transcript, and config.json
+        // (still holding the ORIGINAL, shadowed value) is untouched.
+        expect(occurrences("Remove OPENAI_API_KEY")).toBe(0);
+        const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+        expect(config.OPENAI_API_KEY).toBe("sk-openai-config-value-should-not-be-used");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
 });

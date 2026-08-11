@@ -141,7 +141,18 @@ pre-existing gap, not something this sentence should be read as claiming is clos
 "pin only what worked" confirmation is also what now persists `SERI_MODEL`/`SERI_PROVIDER` to
 `config.json` (`apps/cli/src/provider/defaults.ts`'s `persistDefaultModel`), making a successful
 pick the default for every future brand-new session, not just the current one — a session that
-never touches `/model` never writes either key. All five providers' model metadata (context
+never touches `/model` never writes either key. A requested (model, provider) pair whose own
+provider has no key is resolved ahead of dispatch by `resolveRoute`
+(`apps/cli/src/provider/routing.ts`): if a sibling route to the same logical model (grouped by
+`routeKey`, `packages/model-catalog/src/routes.ts` — vendor-aware, since the same model does not
+share an id across providers) has a key, that sibling is used instead, native providers preferred
+over an aggregator (Groq/OpenRouter); an explicit `/model` pick always wins over this if its own
+provider has a key, and a reroute is announced once per turn in the transcript. `/model`'s picker
+shows every route one model is reachable through, adjacently, with a `your key`/`no key` column.
+`/setup` (inside the TUI) lists, adds, replaces and removes a BYOK key per provider — the
+in-TUI equivalent of `seri config set`, with one lightweight `generateText` probe rejecting a key
+only on a 401/403; everything else stores it anyway with a warning, since an unverifiable-but-wrong
+key still fails loudly on first real use, same as before this existed. All five providers' model metadata (context
 window, pricing, tool-call/reasoning support) comes from a models.dev-sourced catalog
 (`packages/model-catalog`, wrapped for the CLI in `apps/cli/src/provider/catalog.ts`), fetched
 live with a bundled fallback manifest (`catalog-manifest.json`) for a failed fetch or

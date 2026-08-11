@@ -40,7 +40,7 @@ import {
   usageError,
 } from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
-import { loadVerifyConfig } from "./config/config";
+import { loadVerifyConfig, setConfigValue, unsetConfigValue } from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
 import type { PermissionMode } from "./gate/gate";
 import {
@@ -63,6 +63,7 @@ import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
 import { resolveRoute } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
+import { validateProviderKey } from "./provider/validate";
 import {
   findMostRecentSession,
   loadSession,
@@ -79,9 +80,16 @@ import {
   decideModelPickerOpen,
   decideRestore,
   decideRewind,
+  decideSetupOpen,
   decideUndo,
 } from "./tui/commands";
-import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/reducer";
+import {
+  type Dispatch,
+  initialTuiState,
+  type SetupState,
+  type TuiState,
+  tuiReducer,
+} from "./tui/reducer";
 import { withVerification } from "./verify/wrapTools";
 
 type CliDeps = {
@@ -1589,6 +1597,117 @@ async function runTui(
     dispatch({ type: "model-picker-resolved" });
   }
 
+  // D5-D8 (feature-plan.md): /setup's own five handlers, mirroring the /model pair above — each
+  // does nothing but recompute the current truth (decideSetupOpen re-reads config.json/env every
+  // time, never trusting a stale copy) and dispatch it. `setupListState` is the one piece shared
+  // by every path that returns to the list step: fresh rows, plus — when a specific provider is
+  // named — that row's own index, so returning from enter-key/confirm-remove re-highlights the row
+  // the user was just looking at instead of always snapping back to the top.
+  function setupListState(selectedProvider?: ModelProvider): SetupState {
+    const rows = decideSetupOpen(configDir);
+    const selected =
+      selectedProvider === undefined
+        ? 0
+        : Math.max(0, rows.findIndex((row) => row.provider === selectedProvider));
+    return { step: "list", rows, selected };
+  }
+
+  function onSetupSelect(provider: ModelProvider): void {
+    const rows = decideSetupOpen(configDir);
+    const row = rows.find((r) => r.provider === provider);
+    if (row === undefined) return;
+    dispatch({
+      type: "setup-step",
+      state: { step: "enter-key", rows, provider, keyName: row.keyName, busy: false },
+    });
+  }
+
+  // D5's own probe, then D6's own write — `validateProviderKey` never throws (its own contract:
+  // every failure mode resolves to a result, not a rejection), so only the config write itself
+  // needs a try/catch, matching the persist path's degrade-to-a-message posture (onSessionChange's
+  // own comment, above) rather than converting a validated key into a lost one over an unrelated
+  // write failure.
+  async function onSetupKeyEntered(provider: ModelProvider, value: string): Promise<void> {
+    const rows = decideSetupOpen(configDir);
+    const keyName = rows.find((r) => r.provider === provider)?.keyName ?? "";
+    dispatch({
+      type: "setup-step",
+      state: { step: "enter-key", rows, provider, keyName, busy: true },
+    });
+    const result = await validateProviderKey(provider, value);
+    if (!result.ok) {
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          rows: decideSetupOpen(configDir),
+          provider,
+          keyName,
+          busy: false,
+          error: result.message,
+        },
+      });
+      return;
+    }
+    try {
+      setConfigValue(keyName, value, configDir);
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    dispatch({
+      type: "transcript-append",
+      line:
+        result.warning === undefined
+          ? `Saved ${keyName}.`
+          : `Saved ${keyName}. ⚠ ${result.warning}`,
+    });
+    dispatch({ type: "setup-step", state: setupListState(provider) });
+  }
+
+  // D8: this is the SAME prop SetupList's own 'r' keypress and SetupConfirmRemove's own 'y'
+  // keypress both call — App.tsx has only five /setup props total, no separate "request
+  // confirmation" one — so which one this call means is read off the CURRENT live reducer state,
+  // the same "trust liveState, not a caller-captured copy" pattern this closure already uses
+  // throughout (this function's own top comment).
+  function onSetupRemove(provider: ModelProvider): void {
+    if (liveState.pendingSetup?.step === "confirm-remove") {
+      const { keyName } = liveState.pendingSetup;
+      try {
+        unsetConfigValue(keyName, configDir);
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+      dispatch({ type: "transcript-append", line: `Removed ${keyName}.` });
+      dispatch({ type: "setup-step", state: setupListState(provider) });
+      return;
+    }
+    const rows = decideSetupOpen(configDir);
+    const row = rows.find((r) => r.provider === provider);
+    if (row === undefined || !row.removable) return;
+    dispatch({
+      type: "setup-step",
+      state: { step: "confirm-remove", rows, provider, keyName: row.keyName },
+    });
+  }
+
+  function onSetupBack(): void {
+    const current = liveState.pendingSetup;
+    const provider = current !== undefined && current.step !== "list" ? current.provider : undefined;
+    dispatch({ type: "setup-step", state: setupListState(provider) });
+  }
+
+  function onSetupClose(leftoverInput?: string): void {
+    dispatch({ type: "setup-resolved", leftoverInput });
+  }
+
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
   // reducer and driveLoop have always shared. Guarded against overlap: a second Enter press
@@ -1809,6 +1928,11 @@ async function runTui(
           onApprovalAnswer,
           onModelSelected,
           onModelPickerCancel,
+          onSetupSelect,
+          onSetupKeyEntered,
+          onSetupRemove,
+          onSetupBack,
+          onSetupClose,
           connectDispatch: undefined,
         }),
       );
@@ -1880,6 +2004,16 @@ async function runTui(
         // a key added mid-session via /setup must show up in the very next /model open.
         entries: decideModelPickerOpen(prepared.catalog, configuredProviders(configDir)),
       });
+      return;
+    }
+    // /setup, like /model just above, is intercepted here rather than added to SLASH_COMMANDS: it
+    // opens a live panel with nothing to render on the non-interactive path either.
+    if (name === "/setup") {
+      if (args.length > 0) {
+        dispatch({ type: "command-error", message: "/setup: invalid arguments." });
+        return;
+      }
+      dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
       return;
     }
     const command = SLASH_COMMANDS.get(name);
@@ -1954,6 +2088,11 @@ async function runTui(
       onApprovalAnswer,
       onModelSelected,
       onModelPickerCancel,
+      onSetupSelect,
+      onSetupKeyEntered,
+      onSetupRemove,
+      onSetupBack,
+      onSetupClose,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
         // hasNewTask — the same predicate prepareSession (above) uses to decide whether it pushed
