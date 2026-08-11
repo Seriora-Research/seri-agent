@@ -27,7 +27,7 @@ import {
 } from "../checkpoint/checkpoint";
 import { projectRoot } from "../checkpoint/shadowGit";
 import { cycleMode } from "../gate/gate";
-import { providerKeyState } from "../provider/keys";
+import { allProviderKeyStates } from "../provider/keys";
 import { byRoutePriority } from "../provider/routing";
 import type { SessionState } from "../session/session";
 
@@ -117,24 +117,27 @@ export type SetupProviderRow = {
 };
 
 // The decision half of /setup, mirroring decideModelPickerOpen's own shape: what to show, not how
-// to show it. Unlike decideModelPickerOpen this DOES do real I/O (providerKeyState reads
+// to show it. Unlike decideModelPickerOpen this DOES do real I/O (allProviderKeyStates reads
 // config.json) — the same contract decideUndo/decideRestore already have (this file's own header
 // comment: no saveSession, no console.log/print*, but a read is not a write).
+//
+// `allProviderKeyStates`, not five `providerKeyState` calls (code-review finding, PR #73, round 3,
+// item #8): the anti-pattern round 2's own #5 already fixed in `configuredProviders` (keys.ts) —
+// one `providerKeyState` call per CATALOG_PROVIDERS member meant five redundant `loadConfig` reads
+// of the identical file to open /setup, or to refresh it after any add/remove — was never applied
+// here. `allProviderKeyStates` loads config.json exactly once for all five.
 export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
-  return CATALOG_PROVIDERS.map((provider) => {
-    const state = providerKeyState(provider, configDir);
-    return {
-      provider,
-      keyName: state.keyName,
-      source: state.source,
-      masked: state.masked,
-      // Bug fixed here (code-review, PR #73): NOT `state.source === "config"` — that was always
-      // false whenever an env var shadowed a config.json entry, making a previously-saved secret
-      // permanently unremovable from /setup the moment the same-named env var got exported.
-      // `hasConfigEntry` is independent of which source wins for display.
-      removable: state.hasConfigEntry,
-    };
-  });
+  return allProviderKeyStates(configDir).map((state) => ({
+    provider: state.provider,
+    keyName: state.keyName,
+    source: state.source,
+    masked: state.masked,
+    // Bug fixed here (code-review, PR #73): NOT `state.source === "config"` — that was always
+    // false whenever an env var shadowed a config.json entry, making a previously-saved secret
+    // permanently unremovable from /setup the moment the same-named env var got exported.
+    // `hasConfigEntry` is independent of which source wins for display.
+    removable: state.hasConfigEntry,
+  }));
 }
 
 // `onPlan` defaults to a no-op but is meant to be passed through from the caller's own presenter

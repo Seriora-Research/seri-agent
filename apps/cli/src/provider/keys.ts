@@ -40,21 +40,41 @@ export type ProviderKeyState = {
   hasConfigEntry: boolean;
 };
 
-// One provider's key, and where it came from — /setup's own per-row read (decideSetupOpen,
-// tui/commands.ts). `config` is loaded exactly once here (code-review finding, PR #73, round 2:
-// this used to call `loadConfig` directly for `hasConfigEntry` AND call `getApiKey` — which loads
-// it again internally — reading config.json twice per call for no reason). `process.env[keyName]`
-// still wins first, matching `getApiKey`'s own deliberate `||` precedence (an env var set to ""
-// reads as unset, not as a valid-looking empty key) — that precedence is inlined here rather than
-// calling `getApiKey` a second time, the one place in this function it would cost an extra read.
-export function providerKeyState(provider: ModelProvider, configDir?: string): ProviderKeyState {
+// The shared computation `providerKeyState`/`allProviderKeyStates` both reduce to, given a config
+// object EITHER has already loaded once — never calling `loadConfig` itself, so a caller with
+// several providers to resolve (`allProviderKeyStates`) controls exactly how many reads that
+// costs. `process.env[keyName]` wins first, matching `getApiKey`'s own deliberate `||` precedence
+// (an env var set to "" reads as unset, not as a valid-looking empty key) — inlined here rather
+// than calling `getApiKey`, which would load config.json again itself.
+function stateFromConfig(
+  provider: ModelProvider,
+  config: Record<string, string>,
+): ProviderKeyState {
   const keyName = PROVIDER_API_KEY_NAMES[provider];
-  const config = loadConfig(configDir);
   const hasConfigEntry = Boolean(config[keyName]);
   const resolved = process.env[keyName] || config[keyName] || undefined;
   if (!resolved) return { provider, keyName, source: "unset", masked: undefined, hasConfigEntry };
   const source = process.env[keyName] ? "env" : "config";
   return { provider, keyName, source, masked: maskValue(resolved), hasConfigEntry };
+}
+
+// One provider's key, and where it came from — cli.ts's own onSetupRemove (a single row under the
+// cursor). `config` is loaded exactly once here (code-review finding, PR #73, round 2: this used
+// to call `loadConfig` directly for `hasConfigEntry` AND call `getApiKey` — which loads it again
+// internally — reading config.json twice per call for no reason).
+export function providerKeyState(provider: ModelProvider, configDir?: string): ProviderKeyState {
+  return stateFromConfig(provider, loadConfig(configDir));
+}
+
+// Every provider's key state in one pass — /setup's own full-list read (decideSetupOpen,
+// tui/commands.ts). `config` is loaded once for all five providers (code-review finding, PR #73,
+// round 3, item #8 — the SAME anti-pattern round 2's own #5 already fixed in `configuredProviders`
+// below, but never applied here: `decideSetupOpen` mapped `providerKeyState` over all five
+// CATALOG_PROVIDERS, and each call did its own `loadConfig` — five redundant reads to open /setup,
+// or to refresh it after any add/remove).
+export function allProviderKeyStates(configDir?: string): ProviderKeyState[] {
+  const config = loadConfig(configDir);
+  return CATALOG_PROVIDERS.map((provider) => stateFromConfig(provider, config));
 }
 
 // The providers routing.ts's resolveRoute is allowed to reroute onto — every CATALOG_PROVIDERS

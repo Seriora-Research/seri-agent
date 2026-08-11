@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { CATALOG_PROVIDERS } from "@seri/model-catalog";
 import { setConfigValue } from "../../src/config/config";
 import {
+  allProviderKeyStates,
   configuredProviders,
   missingKeyError,
   PROVIDER_API_KEY_NAMES,
@@ -126,5 +127,24 @@ describe("configuredProviders", () => {
 
   test("returns an empty set when nothing is configured", () => {
     expect(configuredProviders(configDir)).toEqual(new Set());
+  });
+});
+
+// Code-review finding (PR #73, round 3, item #8): decideSetupOpen (tui/commands.ts) used to call
+// providerKeyState once per CATALOG_PROVIDERS member -- five separate loadConfig reads. This is
+// the batched replacement, one loadConfig call for all five.
+describe("allProviderKeyStates", () => {
+  test("returns exactly one entry per CATALOG_PROVIDERS member, matching providerKeyState per-provider", () => {
+    setConfigValue("ANTHROPIC_API_KEY", "sk-fake-config-key", configDir);
+    process.env.OPENAI_API_KEY = "sk-fake-env-key";
+
+    const states = allProviderKeyStates(configDir);
+    expect(states.map((s) => s.provider)).toEqual([...CATALOG_PROVIDERS]);
+    // Same result as calling providerKeyState individually for every provider -- proving the
+    // batched read didn't change what each row resolves to, only how many reads it costs.
+    for (const provider of CATALOG_PROVIDERS) {
+      const batched = states.find((s) => s.provider === provider);
+      expect(batched).toEqual(providerKeyState(provider, configDir));
+    }
   });
 });
