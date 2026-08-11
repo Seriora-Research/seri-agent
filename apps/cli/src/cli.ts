@@ -873,6 +873,7 @@ async function prepareSession(
   ctx: RunContext,
   deps: CliDeps,
   skipPermissions: boolean,
+  isTTY: boolean,
 ): Promise<PreparedRun | number> {
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
 
@@ -904,15 +905,17 @@ async function prepareSession(
   // stays a pure, environment-independent switch with its own test file. `configDir` matches
   // `seri config`'s own resolution (D7), so a key `/setup` or `seri config set` just wrote is
   // picked up on the very next run. A rerouted pair is never silent (D2): the piped/non-interactive
-  // path gets the notice here; runTui's own runTurn (below) prints the TUI equivalent into the
-  // transcript once per turn.
+  // path gets the notice here, gated on `!isTTY` — runTui's own runTurn (below) prints the TUI
+  // equivalent into the transcript once per turn, and this call ALSO runs on the TUI path (this
+  // function has no other reason to know isTTY), so without the gate a session-start reroute
+  // printed twice for the same turn: once here (before Ink even mounts) and again from runTurn.
   const configDir = deps.authConfigDir ?? getConfigDir();
   const route = resolveRoute(
     catalog,
     { model: session.model, provider: session.provider },
     configuredProviders(configDir),
   );
-  if (route.rerouted) {
+  if (route.rerouted && !isTTY) {
     printWarning(`routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`);
   }
   let model: LanguageModel;
@@ -2182,17 +2185,18 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const slash = await handleSlashCommand(ctx);
   if (slash !== undefined) return slash;
 
-  const prepared = await prepareSession(ctx, deps, skipPermissions);
-  if (typeof prepared === "number") return prepared;
-
   // TTY-inferred, not a flag (plan Decision 2): a real terminal gets the Ink TUI, driving the
   // exact same driveLoop as the piped/CI path below — only how it reports events differs
   // (dispatch into App.tsx's reducer vs. printEvent called directly). Falsy — piped, CI, a
   // redirected file, or (deliberately) any caller that doesn't pass isTTY at all — takes the
   // untouched path this project has always run: same function, same call order, same output. See
   // CliDeps.isTTY's own comment for why this reads `deps.isTTY`, never process.stdout.isTTY
-  // directly.
+  // directly. Computed here, before prepareSession, so that function's own reroute notice
+  // (prepareSession's own comment) can gate itself to the non-interactive path.
   const isTTY = deps.isTTY ?? false;
+  const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
+  if (typeof prepared === "number") return prepared;
+
   const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning } = isTTY
     ? await runTui(prepared, ctx, deps, maxTurns, skipPermissions)
     : await driveLoop(

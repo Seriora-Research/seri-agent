@@ -1837,6 +1837,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // criterion names, not a re-print on every messages-updated event within it.
       expect(occurrences(noticePrefix)).toBe(1);
 
+      // Bug fixed here (reviewer-verifier, multi-provider-byok-phase-2): prepareSession's own
+      // printWarning (D2's non-interactive-path notice, "⚠ routing…") used to fire unconditionally,
+      // even on the TUI path — printing a SECOND notice for the same session-start reroute
+      // alongside runTurn's own "↻ routing…" transcript line. printWarning's own "⚠ " prefix is
+      // what distinguishes it from the transcript notice's "↻ " prefix, so this asserts the
+      // console-only one never appears once Ink has actually mounted.
+      expect(occurrences("⚠ routing")).toBe(0);
+
       // The negative control this test's own point rests on: verified by first removing D3's own
       // fix (initializing confirmedModel/lastPersistedModel from `prepared.session` instead of
       // `prepared.route`) and re-running this exact assertion — it failed, with config.json
