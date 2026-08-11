@@ -2154,10 +2154,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // D8: an env-sourced row reports the environment as its source and refuses removal, even
-    // though a DIFFERENT value for the same key also sits in config.json underneath it.
-    test("an env-shadowed row reports the environment as the source and refuses removal", async () => {
-      seedConfig(dir, { OPENAI_API_KEY: "sk-openai-config-value-should-not-be-used" });
+    // D8: an env-sourced row with NOTHING saved in config.json underneath it reports the
+    // environment as its source and refuses removal — there is genuinely nothing to unset.
+    test("an env-shadowed row with no config entry reports the environment as the source and refuses removal", async () => {
       const scriptPath = join(dir, "child-setup-env-shadow.mjs");
       writeFileSync(scriptPath, childScriptSetupEnvShadow(dir));
 
@@ -2183,12 +2182,62 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("r");
         await wait100ms();
 
-        // Refused — removable is false for an env row, so the confirm-remove step never even
-        // opens: no "Remove OPENAI_API_KEY" prompt anywhere in the transcript, and config.json
-        // (still holding the ORIGINAL, shadowed value) is untouched.
+        // Refused — removable is false for an env row with NO config.json entry underneath it,
+        // so the confirm-remove step never even opens: no "Remove OPENAI_API_KEY" prompt anywhere
+        // in the transcript, and config.json is never even created (nothing else in this test
+        // writes to it either).
         expect(occurrences("Remove OPENAI_API_KEY")).toBe(0);
-        const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
-        expect(config.OPENAI_API_KEY).toBe("sk-openai-config-value-should-not-be-used");
+        expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Bug fixed here (code-review, PR #73): an env-shadowed row WITH a config.json entry
+    // underneath it (unlike the sibling test above) IS removable — providerKeyState's own
+    // `hasConfigEntry` is independent of which source wins for display. Before the fix, this used
+    // to be silently refused too (removable was read off `source === "config"`, which is always
+    // false in this exact state), making a previously-saved /setup secret permanently unremovable
+    // the moment the same-named env var got exported.
+    test("an env-shadowed row WITH a config entry underneath is removable", async () => {
+      seedConfig(dir, { OPENAI_API_KEY: "sk-openai-config-value" });
+      const scriptPath = join(dir, "child-setup-env-shadow-removable.mjs");
+      writeFileSync(scriptPath, childScriptSetupEnvShadow(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+        await sawLine("set by $OPENAI_API_KEY in your environment");
+
+        // Down to openrouter, anthropic, openai — three Downs (groq=0, openrouter=1,
+        // anthropic=2, openai=3).
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("r");
+        await wait100ms();
+
+        // No longer refused: the confirm-remove step opens, and confirming it removes the
+        // config.json entry — the env var still shadows the (now-absent) config value going
+        // forward, but the stored secret itself is gone, which is the whole point of D8's fix.
+        await sawLine("Remove OPENAI_API_KEY");
+        child.stdin?.write("y");
+        await sawLine("Removed OPENAI_API_KEY.");
+
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENAI_API_KEY === undefined,
+        );
+        expect(config.OPENAI_API_KEY).toBeUndefined();
       } finally {
         child.kill("SIGKILL");
       }

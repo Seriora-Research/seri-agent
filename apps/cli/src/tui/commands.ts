@@ -102,9 +102,12 @@ export function decideModelPickerOpen(
   return rows;
 }
 
-// One row per provider — /setup's own table (D5-D8, feature-plan.md). `removable` is D8: an
-// env-sourced row has no config.json entry to unset, so /setup cannot offer to remove it (the
-// panel states the reason instead — App.tsx's own SetupPanel).
+// One row per provider — /setup's own table (D5-D8, feature-plan.md). `removable` is D8: it is
+// false only when config.json genuinely has nothing to unset for this provider — an env-sourced
+// row IS removable when a config.json entry also sits underneath it (providerKeyState's own
+// `hasConfigEntry`, independent of which source wins for display); only a row with no config
+// entry at all (source "env" with nothing saved, or "unset") has nothing for /setup to remove
+// (the panel states why, for the env case — App.tsx's own SetupPanel).
 export type SetupProviderRow = {
   provider: ModelProvider;
   keyName: string;
@@ -125,7 +128,11 @@ export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
       keyName: state.keyName,
       source: state.source,
       masked: state.masked,
-      removable: state.source === "config",
+      // Bug fixed here (code-review, PR #73): NOT `state.source === "config"` — that was always
+      // false whenever an env var shadowed a config.json entry, making a previously-saved secret
+      // permanently unremovable from /setup the moment the same-named env var got exported.
+      // `hasConfigEntry` is independent of which source wins for display.
+      removable: state.hasConfigEntry,
     };
   });
 }

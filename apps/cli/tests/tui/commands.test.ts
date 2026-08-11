@@ -205,6 +205,19 @@ describe("decideSetupOpen", () => {
     expect(row?.source).toBe("env");
     expect(row?.removable).toBe(false);
   });
+
+  // Bug fixed here (code-review, PR #73): an env-shadowed row WITH a config.json entry
+  // underneath it IS removable — the config entry is genuinely there to unset, even though env
+  // wins for display. The old `removable: source === "config"` was always false in this exact
+  // state, making a previously-saved /setup secret permanently unremovable the moment the
+  // same-named env var got exported.
+  test("an env-shadowed row WITH a config entry underneath is source: env and IS removable", () => {
+    setConfigValue("ANTHROPIC_API_KEY", "sk-fake-config-key", setupConfigDir);
+    process.env.ANTHROPIC_API_KEY = "sk-fake-env-key";
+    const row = decideSetupOpen(setupConfigDir).find((r) => r.provider === "anthropic");
+    expect(row?.source).toBe("env");
+    expect(row?.removable).toBe(true);
+  });
 });
 
 describe.skipIf(!isGitAvailable())("decideUndo", () => {

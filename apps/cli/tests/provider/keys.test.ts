@@ -77,6 +77,7 @@ describe("providerKeyState", () => {
       keyName: "ANTHROPIC_API_KEY",
       source: "unset",
       masked: undefined,
+      hasConfigEntry: false,
     });
   });
 
@@ -85,18 +86,26 @@ describe("providerKeyState", () => {
     const state = providerKeyState("anthropic", configDir);
     expect(state.source).toBe("config");
     expect(state.masked).toBeDefined();
+    expect(state.hasConfigEntry).toBe(true);
   });
 
   test("env when only the environment has the key", () => {
     process.env.ANTHROPIC_API_KEY = "sk-fake-env-key";
     const state = providerKeyState("anthropic", configDir);
     expect(state.source).toBe("env");
+    expect(state.hasConfigEntry).toBe(false);
   });
 
-  test("env shadows a config entry", () => {
+  // Bug fixed here (code-review, PR #73): `hasConfigEntry` must stay true even though `source`
+  // reports "env" (env wins for display/masking, matching getApiKey's own precedence) — this is
+  // the fact /setup's own `removable` needs, and the bug was reading `source === "config"` for
+  // that instead, which is always false in exactly this state.
+  test("env shadows a config entry — source reports env, but hasConfigEntry stays true", () => {
     setConfigValue("ANTHROPIC_API_KEY", "sk-fake-config-key", configDir);
     process.env.ANTHROPIC_API_KEY = "sk-fake-env-key";
-    expect(providerKeyState("anthropic", configDir).source).toBe("env");
+    const state = providerKeyState("anthropic", configDir);
+    expect(state.source).toBe("env");
+    expect(state.hasConfigEntry).toBe(true);
   });
 
   // getApiKey's own deliberate `||`, not `??`: an env var set to "" must fall through to config,
