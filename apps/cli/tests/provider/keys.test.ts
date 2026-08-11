@@ -10,6 +10,7 @@ import {
   missingKeyError,
   PROVIDER_API_KEY_NAMES,
   providerKeyState,
+  tuiMissingKeyMessage,
 } from "../../src/provider/keys";
 
 const ALL_KEY_NAMES = Object.values(PROVIDER_API_KEY_NAMES);
@@ -68,6 +69,29 @@ describe("missingKeyError", () => {
     expect(missingKeyError("google").message).toBe(
       "GOOGLE_GENERATIVE_AI_API_KEY is not set. Run: seri config set GOOGLE_GENERATIVE_AI_API_KEY <your-key>",
     );
+  });
+});
+
+// The TUI-only counterpart (cli.ts's runTurn, the one call site reachable exclusively from inside
+// an already-running TUI session) — a real user hitting the exact scenario a live session produced
+// (picked an OpenRouter model via /model with no OPENROUTER_API_KEY configured, see PR discussion):
+// this must point at /setup, not the non-interactive `seri config set` instruction the user cannot
+// act on from inside Ink.
+describe("tuiMissingKeyMessage", () => {
+  test("a missingKeyError becomes a /setup instruction naming the provider's own key", () => {
+    expect(tuiMissingKeyMessage(missingKeyError("openrouter"))).toBe(
+      "OPENROUTER_API_KEY is not set. Run /setup to add a key.",
+    );
+  });
+
+  // Negative control: the rewrite must not eat every error, only this one shape — an unrelated
+  // failure keeps its own message so the user still sees the real cause.
+  test("an unrelated Error passes through its own message unchanged", () => {
+    expect(tuiMissingKeyMessage(new Error("some other failure"))).toBe("some other failure");
+  });
+
+  test("a non-Error throw still stringifies, matching every other catch site's own fallback", () => {
+    expect(tuiMissingKeyMessage("raw string throw")).toBe("raw string throw");
   });
 });
 

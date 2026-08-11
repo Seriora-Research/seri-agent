@@ -19,11 +19,39 @@ export const PROVIDER_API_KEY_NAMES: Record<ModelProvider, string> = {
   google: "GOOGLE_GENERATIVE_AI_API_KEY",
 };
 
+// Tagged with the provider (not just a string to parse) so a caller can build a context-specific
+// message — tuiMissingKeyMessage, below — without matching on this text.
+export type MissingKeyError = Error & { missingKeyProvider: ModelProvider };
+
 // The exact legacy message every provider file threw inline before this refactor — byte-for-byte,
-// since cli.test.ts and each provider's own test assert it verbatim.
-export function missingKeyError(provider: ModelProvider): Error {
+// since cli.test.ts and each provider's own test assert it verbatim. Still correct as the DEFAULT
+// message: the non-interactive/piped path (cli.ts's prepareSession, and driveLoop's own callers)
+// has no TUI to point at, so "run this shell command" stays the only actionable instruction there.
+export function missingKeyError(provider: ModelProvider): MissingKeyError {
   const keyName = PROVIDER_API_KEY_NAMES[provider];
-  return new Error(`${keyName} is not set. Run: seri config set ${keyName} <your-key>`);
+  const error = new Error(
+    `${keyName} is not set. Run: seri config set ${keyName} <your-key>`,
+  ) as MissingKeyError;
+  error.missingKeyProvider = provider;
+  return error;
+}
+
+function isMissingKeyError(err: unknown): err is MissingKeyError {
+  return err instanceof Error && "missingKeyProvider" in err;
+}
+
+// TUI-only presentation of a turn's caught model-resolution error (cli.ts's runTurn — the one call
+// site reachable exclusively from inside an already-running TUI session; prepareSession's own
+// earlier resolution, before Ink ever mounts, and the whole non-interactive path still need
+// missingKeyError's own message verbatim, so this does not replace it, only the one dispatch that
+// can assume a live /setup is a keystroke away). A user already inside the TUI cannot act on "run
+// this in your shell" without leaving it — that instruction is for a different audience than the
+// one reading this dispatch.
+export function tuiMissingKeyMessage(err: unknown): string {
+  if (isMissingKeyError(err)) {
+    return `${PROVIDER_API_KEY_NAMES[err.missingKeyProvider]} is not set. Run /setup to add a key.`;
+  }
+  return err instanceof Error ? err.message : String(err);
 }
 
 export type ProviderKeyState = {
