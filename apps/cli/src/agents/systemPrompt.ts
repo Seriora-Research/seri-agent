@@ -1,4 +1,5 @@
 import type { ModelProvider } from "@seri/model-catalog";
+import { type LoadedMemory, renderMemoryTier } from "../memory/store";
 
 // One prompt for every model, deliberately: routing a different prompt per model family is what
 // both references do (OpenCode selects a file, Hermes injects a block for GPT/Codex only) and it is
@@ -121,13 +122,20 @@ function buildContextTier(agentsContent: string): string {
 // lookup once and hands this function the result instead of each doing an identical scan.
 // `displayName || modelId`, not `??`: a catalog entry whose `name` came back `""` (present but
 // empty) must still fall back to the raw id — `??` only catches null/undefined, not empty string.
+// `memory` is optional and 4th so every existing call site (including every buildVolatileTier test
+// already written against a 3-arg call) keeps compiling unchanged. Composed through joinTiers, not
+// string-concatenated, so an absent or all-empty LoadedMemory renders "" (renderMemoryTier's own
+// B2 guarantee) and joinTiers' filter(Boolean) drops it — a session with no memory yet gets the
+// exact same identity line as before this parameter existed.
 export function buildVolatileTier(
   modelId: string,
   provider: ModelProvider,
   displayName: string | undefined,
+  memory?: LoadedMemory,
 ): string {
   const label = displayName || modelId;
-  return `You are powered by the model named ${label}. The exact model ID is ${provider}/${modelId}.`;
+  const identityLine = `You are powered by the model named ${label}. The exact model ID is ${provider}/${modelId}.`;
+  return joinTiers(identityLine, renderMemoryTier(memory));
 }
 
 // Shared by buildSystemPrompt (stable+context) and driveLoop (systemPrompt+volatile, cli.ts) so

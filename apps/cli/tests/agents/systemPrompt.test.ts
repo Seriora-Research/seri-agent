@@ -1,5 +1,9 @@
-import { describe, expect, test } from "bun:test";
-import { buildSystemPrompt, buildVolatileTier } from "../../src/agents/systemPrompt";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildSystemPrompt, buildVolatileTier, joinTiers } from "../../src/agents/systemPrompt";
+import { applyWrite, loadMemory, type MemoryContext } from "../../src/memory/store";
 
 // These assert on meaning, not on wording: each check is a phrase the measured failure needs
 // present, matched case-insensitively, so the prompt can be reworded without the test going red
@@ -110,5 +114,53 @@ describe("buildVolatileTier", () => {
 
     expect(line).not.toContain("named . ");
     expect(line).toContain("some-raw-id");
+  });
+
+  // B2: with no memory argument at all, and with an all-empty LoadedMemory, buildVolatileTier
+  // must render byte-identically — this is what keeps a session with no memories yet reading the
+  // exact same prompt it read before Stage 6b existed.
+  describe("memory tier (Stage 6b, B2 no-regression)", () => {
+    let configDir: string | undefined;
+    afterEach(() => {
+      if (configDir !== undefined) rmSync(configDir, { recursive: true, force: true });
+      configDir = undefined;
+    });
+    function emptyMemoryCtx(): MemoryContext {
+      configDir = mkdtempSync(join(tmpdir(), "seri-memory-"));
+      return { configDir, worktree: "/home/x/proj" };
+    }
+
+    test("no memory argument and an all-empty LoadedMemory produce the identical string", () => {
+      const withoutArg = buildVolatileTier("openai/gpt-oss-120b", "groq", "GPT OSS 120B");
+      const withEmptyMemory = buildVolatileTier(
+        "openai/gpt-oss-120b",
+        "groq",
+        "GPT OSS 120B",
+        loadMemory(emptyMemoryCtx()),
+      );
+      expect(withEmptyMemory).toBe(withoutArg);
+    });
+
+    test("joinTiers(session.systemPrompt, volatileTier) is unaffected by an empty memory argument", () => {
+      const systemPrompt = buildSystemPrompt("");
+      const volatileNoMemory = buildVolatileTier("m", "groq", undefined);
+      const volatileEmptyMemory = buildVolatileTier("m", "groq", undefined, loadMemory(emptyMemoryCtx()));
+      expect(joinTiers(systemPrompt, volatileEmptyMemory)).toBe(joinTiers(systemPrompt, volatileNoMemory));
+    });
+
+    // The positive case, and the negative control for the two tests above: a genuinely non-empty
+    // memory file must actually change the rendered tier, or the byte-identity assertions above
+    // would be vacuously true regardless of what renderMemoryTier does.
+    test("negative control: a non-empty memory file changes the output, contains the entry, and the identity line still comes first", () => {
+      const ctx = emptyMemoryCtx();
+      applyWrite({ scope: "user", action: "add", content: "prefers tabs", reason: "r", durable: true }, ctx, "2026-08-11");
+      const line = buildVolatileTier("m", "groq", undefined, loadMemory(ctx));
+
+      expect(line).not.toBe(buildVolatileTier("m", "groq", undefined));
+      expect(line).toContain("# Memory");
+      expect(line).toContain("prefers tabs");
+      expect(line.indexOf("You are powered by")).toBe(0);
+      expect(line.indexOf("# Memory")).toBeGreaterThan(0);
+    });
   });
 });
