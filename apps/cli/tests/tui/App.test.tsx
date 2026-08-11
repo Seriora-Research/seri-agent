@@ -4,7 +4,14 @@ import type { ModelMessage } from "ai";
 import { render } from "ink-testing-library";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { SessionState } from "../../src/session/session";
-import { App, formatContextWindow, formatCost, formatModelRow } from "../../src/tui/App";
+import {
+  App,
+  formatContextWindow,
+  formatCost,
+  formatModelRow,
+  formatSetupRow,
+} from "../../src/tui/App";
+import type { ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import type { TuiAction } from "../../src/tui/reducer";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -358,10 +365,17 @@ describe("App", () => {
       };
     }
 
+    // D1/D2 (feature-plan.md): the picker's own row shape, ModelPickerEntry — this file's
+    // existing `entry()` fixture still builds the underlying ModelCatalogEntry, wrapped here for
+    // every test that only cares about "some row exists," not routing/key-configuration specifics.
+    function row(overrides: Partial<ModelCatalogEntry> = {}): ModelPickerEntry {
+      return { entry: entry(overrides), keyConfigured: true, alternatives: 0 };
+    }
+
     test("renders in place of the input box once requested", async () => {
       const { instance, dispatch } = await connect();
 
-      dispatch({ type: "model-picker-requested", entries: [entry()] });
+      dispatch({ type: "model-picker-requested", entries: [row()] });
       await flush();
 
       expect(instance.lastFrame()).toContain("Llama 3.3 70B");
@@ -390,8 +404,8 @@ describe("App", () => {
       dispatch({
         type: "model-picker-requested",
         entries: [
-          entry({ id: "llama-3.3-70b-versatile", displayName: "Llama 3.3 70B" }),
-          entry({ id: "llama-3.1-8b-instant", displayName: "Llama 3.1 8B" }),
+          row({ id: "llama-3.3-70b-versatile", displayName: "Llama 3.3 70B" }),
+          row({ id: "llama-3.1-8b-instant", displayName: "Llama 3.1 8B" }),
         ],
       });
       await flush();
@@ -422,7 +436,7 @@ describe("App", () => {
       await flush();
       if (dispatch === undefined) throw new Error("connectDispatch never fired");
 
-      dispatch({ type: "model-picker-requested", entries: [entry()] });
+      dispatch({ type: "model-picker-requested", entries: [row()] });
       await flush();
       instance.stdin.write("\x1b"); // Escape
       // A bare Escape byte is ambiguous with the start of a longer ANSI sequence (an arrow key,
@@ -433,7 +447,7 @@ describe("App", () => {
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(cancelled).toEqual(["cancelled"]);
 
-      dispatch({ type: "model-picker-requested", entries: [entry()] });
+      dispatch({ type: "model-picker-requested", entries: [row()] });
       await flush();
       instance.stdin.write("\x04"); // Ctrl-D
       await flush();
@@ -443,7 +457,7 @@ describe("App", () => {
     test("shows a +N more hint once the filtered list exceeds the visible window", async () => {
       const { instance, dispatch } = await connect();
       const entries = Array.from({ length: 12 }, (_, i) =>
-        entry({ id: `model-${i}`, displayName: `Model ${i}` }),
+        row({ id: `model-${i}`, displayName: `Model ${i}` }),
       );
 
       dispatch({ type: "model-picker-requested", entries });
@@ -474,7 +488,7 @@ describe("App", () => {
       if (dispatch === undefined) throw new Error("connectDispatch never fired");
 
       const entries = Array.from({ length: 20 }, (_, i) =>
-        entry({ id: `model-${i}`, displayName: `Model ${i}` }),
+        row({ id: `model-${i}`, displayName: `Model ${i}` }),
       );
       dispatch({ type: "model-picker-requested", entries });
       await flush();
@@ -499,6 +513,371 @@ describe("App", () => {
     });
   });
 
+  describe("setup panel", () => {
+    function setupRows(): SetupProviderRow[] {
+      return [
+        {
+          provider: "groq",
+          keyName: "GROQ_API_KEY",
+          source: "unset",
+          masked: undefined,
+          removable: false,
+        },
+        {
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+          source: "config",
+          masked: "sk-o...abcd",
+          removable: true,
+        },
+        {
+          provider: "anthropic",
+          keyName: "ANTHROPIC_API_KEY",
+          source: "env",
+          masked: "sk-a...wxyz",
+          removable: false,
+        },
+        {
+          provider: "openai",
+          keyName: "OPENAI_API_KEY",
+          source: "unset",
+          masked: undefined,
+          removable: false,
+        },
+        {
+          provider: "google",
+          keyName: "GOOGLE_GENERATIVE_AI_API_KEY",
+          source: "unset",
+          masked: undefined,
+          removable: false,
+        },
+      ];
+    }
+
+    // Code-review finding (PR #73, round 3, item #5): an env row is not always the non-removable
+    // case — `formatSetupRow` used to render the same "unset it in your shell" text for EVERY
+    // env-sourced row regardless of `removable`, telling a user with a real, removable config.json
+    // entry underneath that removal was impossible when it was not.
+    describe("formatSetupRow", () => {
+      function row(overrides: Partial<SetupProviderRow> = {}): SetupProviderRow {
+        return {
+          provider: "anthropic",
+          keyName: "ANTHROPIC_API_KEY",
+          source: "unset",
+          masked: undefined,
+          removable: false,
+          ...overrides,
+        };
+      }
+
+      test("unset: just the provider name and 'not set'", () => {
+        expect(formatSetupRow(row())).toContain("not set");
+      });
+
+      test("config: the masked value, labeled (config)", () => {
+        const text = formatSetupRow(row({ source: "config", masked: "sk-a...wxyz" }));
+        expect(text).toContain("anthropic");
+        expect(text).toContain("sk-a...wxyz (config)");
+      });
+
+      test("env, not removable: the disabled-remove reason, not a masked value", () => {
+        const text = formatSetupRow(
+          row({ source: "env", masked: "sk-a...wxyz", removable: false }),
+        );
+        expect(text).toContain("set by $ANTHROPIC_API_KEY in your environment");
+        expect(text).toContain("unset it in your shell");
+        expect(text).not.toContain("sk-a...wxyz");
+      });
+
+      // The fix itself: env AND removable must say removal is possible, not the disabled reason.
+      test("env, removable: says a config.json entry underneath is removable, not that removal is disabled", () => {
+        const text = formatSetupRow(row({ source: "env", masked: "sk-a...wxyz", removable: true }));
+        expect(text).not.toContain("unset it in your shell");
+        expect(text).toContain("removable");
+        expect(text).toContain("sk-a...wxyz");
+      });
+    });
+
+    test("the list step shows all five provider rows, masked values included", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "setup-requested", rows: setupRows() });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("groq");
+      expect(frame).toContain("openrouter");
+      expect(frame).toContain("anthropic");
+      expect(frame).toContain("openai");
+      expect(frame).toContain("google");
+      expect(frame).toContain("sk-o...abcd");
+      // The env row shows D8's own disabled-remove reason, not a masked value.
+      expect(frame).toContain("set by $ANTHROPIC_API_KEY in your environment");
+    });
+
+    // Bug fixed here (code-review, PR #73, round 3, item #1): Enter is dead in the real TUI twice
+    // before this test existed — Ink sets `input` to `''` for every named key including Enter, and
+    // SetupList's own `if (input.length === 0) return;` guard used to run BEFORE the `key.return`
+    // check, so Enter never reached it; only the 'a' letter shortcut (a real, non-empty `input`)
+    // worked. `"\r"`, not `"a"` — that's the whole point of this test, per the panel's own hint
+    // text ("Enter/a add or replace") promising both work.
+    test("the list step: Enter (not the 'a' shortcut) selects the highlighted row via onSetupSelect", async () => {
+      const selected: ModelProvider[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupSelect={(provider) => selected.push(provider)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "setup-requested", rows: setupRows() });
+      await flush();
+
+      // One Down reaches openrouter (index 1) — CATALOG_PROVIDERS order matches setupRows() above.
+      instance.stdin.write("\x1b[B");
+      await flush();
+      instance.stdin.write("\r");
+      await flush();
+
+      expect(selected).toEqual(["openrouter"]);
+    });
+
+    // Same bug, the Delete branch: Ink's Delete key is `\x1b[3~` (parse-keypress.js), a DIFFERENT
+    // sequence from backspace's `\x7f` — distinct enough that fixing Enter alone would not have
+    // proven this branch too.
+    test("the list step: Delete (not the 'r' shortcut) requests removal via onSetupRemove, when the row is removable", async () => {
+      const removeRequested: ModelProvider[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupRemove={(provider) => removeRequested.push(provider)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "setup-requested", rows: setupRows() });
+      await flush();
+
+      // openrouter (index 1) is the removable row in setupRows() above.
+      instance.stdin.write("\x1b[B");
+      await flush();
+      instance.stdin.write("\x1b[3~");
+      await flush();
+
+      expect(removeRequested).toEqual(["openrouter"]);
+    });
+
+    // The negative control this pair rests on: a non-removable row's Delete must still be a no-op,
+    // the same guard the 'r' shortcut already had — proving the fix didn't drop that check while
+    // moving the branch earlier.
+    test("the list step: Delete on a non-removable row calls neither onSetupSelect nor onSetupRemove", async () => {
+      const selected: ModelProvider[] = [];
+      const removeRequested: ModelProvider[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupSelect={(provider) => selected.push(provider)}
+          onSetupRemove={(provider) => removeRequested.push(provider)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      // groq (index 0, the default selection) is source: "unset", removable: false.
+      dispatch({ type: "setup-requested", rows: setupRows() });
+      await flush();
+
+      instance.stdin.write("\x1b[3~");
+      await flush();
+
+      expect(selected).toEqual([]);
+      expect(removeRequested).toEqual([]);
+    });
+
+    // The key-leak guard, and its negative control: `.claude/rules/code-quality.md` requires this
+    // assertion to have been SEEN to fail. Verified by temporarily changing SetupEnterKey's own
+    // render from `"*".repeat(value.length)` back to the raw `value` and re-running this exact
+    // test: it failed, printing the typed string `sk-distinctive-secret-12345` in `lastFrame()`,
+    // confirming the assertion actually exercises the masking rather than trivially passing
+    // because the string never appeared anywhere for an unrelated reason. Reverted immediately
+    // after — the fix below is what's committed.
+    test("a typed key is masked in the frame, never rendered raw", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "setup-requested", rows: setupRows() });
+      await flush();
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider: "groq",
+          keyName: "GROQ_API_KEY",
+          busy: false,
+        },
+      });
+      // Two ticks, not one: measured on WSL (the first character sent after only one `flush()`
+      // was silently dropped, deterministically — SetupEnterKey's own useInput registers a tick
+      // later than the component itself commits, the same class of mount-timing gap this file's
+      // pty suite already needed a much longer, dedicated wait for around a component swap).
+      await flush();
+      await flush();
+
+      const secret = "sk-distinctive-secret-12345";
+      instance.stdin.write(secret);
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).not.toContain(secret);
+      expect(frame).toContain("*".repeat(secret.length));
+    });
+
+    test("Enter on the enter-key step submits the typed value via onSetupKeyEntered", async () => {
+      const entered: Array<{ provider: ModelProvider; value: string }> = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupKeyEntered={(provider, value) => entered.push({ provider, value })}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider: "openai",
+          keyName: "OPENAI_API_KEY",
+          busy: false,
+        },
+      });
+      await flush();
+
+      instance.stdin.write("sk-my-key");
+      await flush();
+      instance.stdin.write("\r");
+      await flush();
+
+      expect(entered).toEqual([{ provider: "openai", value: "sk-my-key" }]);
+    });
+
+    test("while busy, the panel renders Validating… and ignores input", async () => {
+      const entered: Array<{ provider: ModelProvider; value: string }> = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupKeyEntered={(provider, value) => entered.push({ provider, value })}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider: "openai",
+          keyName: "OPENAI_API_KEY",
+          busy: true,
+        },
+      });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain("Validating…");
+
+      instance.stdin.write("\r");
+      await flush();
+
+      expect(entered).toEqual([]);
+    });
+
+    test("confirm-remove: 'y' confirms via onSetupRemove, anything else cancels back via onSetupBack", async () => {
+      const removed: ModelProvider[] = [];
+      const backCalls: number[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupRemove={(provider) => removed.push(provider)}
+          onSetupBack={() => backCalls.push(backCalls.length)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "confirm-remove",
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+        },
+      });
+      await flush();
+      instance.stdin.write("n");
+      await flush();
+
+      expect(removed).toEqual([]);
+      expect(backCalls).toEqual([0]);
+
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "confirm-remove",
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+        },
+      });
+      await flush();
+      instance.stdin.write("y");
+      await flush();
+
+      expect(removed).toEqual(["openrouter"]);
+    });
+
+    // Render precedence (App.tsx's own render ternary): pendingApproval beats pendingModelPicker
+    // beats pendingSetup beats InputBox.
+    test("pendingApproval takes precedence over pendingSetup, which takes precedence over InputBox", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "setup-requested", rows: setupRows() });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("/setup — provider API keys");
+
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: {},
+        offersAlways: true,
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Approve write_file");
+      expect(frame).not.toContain("/setup — provider API keys");
+    });
+  });
+
   describe("formatModelRow / formatContextWindow / formatCost", () => {
     function entry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
       return {
@@ -515,6 +894,10 @@ describe("App", () => {
       };
     }
 
+    function pickerRow(overrides: Partial<ModelPickerEntry> = {}): ModelPickerEntry {
+      return { entry: entry(), keyConfigured: true, alternatives: 0, ...overrides };
+    }
+
     test("formatContextWindow compacts to binary K/M, matching how a context window is described elsewhere in this repo", () => {
       expect(formatContextWindow(131_072)).toBe("128K");
       expect(formatContextWindow(1_050_000)).toBe("1.0M");
@@ -527,7 +910,7 @@ describe("App", () => {
     });
 
     test("formatModelRow includes name, provider, context and cost, in that order", () => {
-      const row = formatModelRow(entry());
+      const row = formatModelRow(pickerRow());
       const nameIndex = row.indexOf("Llama 3.3 70B");
       const providerIndex = row.indexOf("groq");
       const contextIndex = row.indexOf("128K");
@@ -538,8 +921,27 @@ describe("App", () => {
       expect(costIndex).toBeGreaterThan(contextIndex);
     });
 
+    // D1/D2 (feature-plan.md): the trailing Route column.
+    test("formatModelRow renders 'your key' or 'no key', and a '+N route(s)' suffix only when alternatives > 0", () => {
+      const configured = formatModelRow(pickerRow({ keyConfigured: true, alternatives: 0 }));
+      expect(configured).toContain("your key");
+      expect(configured).not.toContain("no key");
+      expect(configured).not.toContain("route");
+
+      const unconfigured = formatModelRow(pickerRow({ keyConfigured: false, alternatives: 0 }));
+      expect(unconfigured).toContain("no key");
+      expect(unconfigured).not.toContain("your key");
+
+      const withOneAlternative = formatModelRow(pickerRow({ alternatives: 1 }));
+      expect(withOneAlternative).toContain("+1 route");
+      expect(withOneAlternative).not.toContain("+1 routes");
+
+      const withTwoAlternatives = formatModelRow(pickerRow({ alternatives: 2 }));
+      expect(withTwoAlternatives).toContain("+2 routes");
+    });
+
     test("formatModelRow truncates a displayName longer than the name column", () => {
-      const row = formatModelRow(entry({ displayName: "A".repeat(40) }));
+      const row = formatModelRow(pickerRow({ entry: entry({ displayName: "A".repeat(40) }) }));
       expect(row).toContain("…");
       expect(row.indexOf("A".repeat(40))).toBe(-1);
     });

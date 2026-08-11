@@ -40,7 +40,7 @@ import {
   usageError,
 } from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
-import { loadVerifyConfig } from "./config/config";
+import { loadVerifyConfig, setConfigValue, unsetConfigValue } from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
 import type { PermissionMode } from "./gate/gate";
 import {
@@ -57,10 +57,18 @@ import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anth
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
+import {
+  configuredProviders,
+  PROVIDER_API_KEY_NAMES,
+  type ProviderKeyState,
+  providerKeyState,
+} from "./provider/keys";
 import { getModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
+import { type ResolvedRoute, resolveRoute } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
+import { validateProviderKey } from "./provider/validate";
 import {
   findMostRecentSession,
   loadSession,
@@ -77,9 +85,16 @@ import {
   decideModelPickerOpen,
   decideRestore,
   decideRewind,
+  decideSetupOpen,
   decideUndo,
 } from "./tui/commands";
-import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/reducer";
+import {
+  type Dispatch,
+  initialTuiState,
+  type SetupState,
+  type TuiState,
+  tuiReducer,
+} from "./tui/reducer";
 import { withVerification } from "./verify/wrapTools";
 
 type CliDeps = {
@@ -348,6 +363,7 @@ function loadOrCreateSession(
   resumeId: string | undefined,
   sessionsDir: string,
   loadAgentsFileFn: typeof loadAgentsFileReal,
+  configDir: string,
 ): { session: RunSession; modelRecorded: boolean } {
   if (resuming) {
     const id = resumeId ?? findMostRecentSession(sessionsDir);
@@ -390,7 +406,7 @@ function loadOrCreateSession(
     // independent of resolveDefaultModel().
     const { model, provider } =
       loaded.model === undefined
-        ? resolveDefaultModel()
+        ? resolveDefaultModel(configDir)
         : { model: loaded.model, provider: loaded.provider ?? DEFAULT_PROVIDER };
     return {
       session: {
@@ -406,7 +422,7 @@ function loadOrCreateSession(
   // A brand-new session starts on whatever a previously successful `/model` pick persisted
   // (resolveDefaultModel's own comment), falling back to DEFAULT_MODEL/"groq" the same way
   // resolveModelId always has when nothing was ever picked.
-  const { model, provider } = resolveDefaultModel();
+  const { model, provider } = resolveDefaultModel(configDir);
   return {
     session: {
       id: randomUUID(),
@@ -850,14 +866,37 @@ type PreparedRun = {
   // the whole entry rather than just `contextWindow` means driveLoop needs exactly one
   // `findCatalogEntry` call per turn instead of two identical ones for the same (modelId, provider).
   catalogEntry: ModelCatalogEntry | undefined;
+  // The (model, provider) pair the run actually resolved to, per resolveRoute (D2/D3,
+  // feature-plan.md's multi-provider-byok-phase-2) — NOT necessarily `session.model`/`.provider`,
+  // which is what the session merely REQUESTED. runTui's own `confirmedModel`/`lastPersistedModel`
+  // must initialize from this, not from `session`: starting them from the requested pair while
+  // turn 1 actually runs on a rerouted one trips their inequality guards on turn 1 and persists a
+  // switch the session never asked for — see those variables' own comments.
+  route: { model: string; provider: ModelProvider };
 };
+
+// Shared by prepareSession's own non-TTY notice and runTui's runTurn (below) — the two used to
+// hand-duplicate this exact template literal (code-review finding, PR #73, round 2, item #8),
+// differing only by a leading "↻ " on the TUI path (that one repeats per turn, so the arrow marks
+// it as a live event rather than the one-time startup notice prepareSession prints).
+function rerouteNotice(route: ResolvedRoute): string {
+  return `routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`;
+}
 
 async function prepareSession(
   ctx: RunContext,
   deps: CliDeps,
   skipPermissions: boolean,
+  isTTY: boolean,
 ): Promise<PreparedRun | number> {
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
+  // Resolved before loadOrCreateSession, not after (code-review finding, PR #73, round 3, item
+  // #4): that function's own model/provider backfill (resolveDefaultModel) needs the SAME
+  // configDir routing/getModel below already use, not the ambient default — a sandboxed
+  // `authConfigDir` caller used to get session.model/session.provider read from the wrong
+  // config.json entirely. `configDir` matches `seri config`'s own resolution (D7), so a key
+  // `/setup` or `seri config set` just wrote is picked up on the very next run.
+  const configDir = deps.authConfigDir ?? getConfigDir();
 
   let session: RunSession;
   let modelRecorded: boolean;
@@ -867,6 +906,7 @@ async function prepareSession(
       ctx.resumeId,
       ctx.sessionsDir,
       loadAgentsFileFn,
+      configDir,
     ));
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -883,20 +923,51 @@ async function prepareSession(
   // reuses this SAME catalog on every later turn rather than reloading it, but @seri/model-catalog
   // caches for the rest of the process either way (catalog.ts's own loadCatalog).
   const catalog = await getModelCatalog();
+  // D3 (feature-plan.md): resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
+  // stays a pure, environment-independent switch with its own test file.
+  // Bug fixed here (code-review, PR #73): `configuredProviders` (called by `resolveRoute` below)
+  // reads config.json — `getApiKey`'s own `loadConfig` call, which does a bare `JSON.parse` — so a
+  // corrupted config.json throws SYNCHRONOUSLY, the same failure mode `getModel` itself already
+  // guards against below. Before routing-priority resolution existed, that same read only ever
+  // happened INSIDE getAnthropicModel/etc., already inside this try. Moving it inside here too is
+  // what restores "a corrupted config.json prints a clean error and exits 1," not an uncaught
+  // crash on every session start.
+  let route: ReturnType<typeof resolveRoute>;
   let model: LanguageModel;
   try {
-    model = getModel(session.model, session.provider, session.id, {
-      getGroqModel: deps.getGroqModel,
-      getOpenRouterModel: deps.getOpenRouterModel,
-      getAnthropicModel: deps.getAnthropicModel,
-      getOpenAIModel: deps.getOpenAIModel,
-      getGoogleModel: deps.getGoogleModel,
-    });
+    route = resolveRoute(
+      catalog,
+      { model: session.model, provider: session.provider },
+      configuredProviders(configDir),
+    );
+    model = getModel(
+      route.model,
+      route.provider,
+      session.id,
+      {
+        getGroqModel: deps.getGroqModel,
+        getOpenRouterModel: deps.getOpenRouterModel,
+        getAnthropicModel: deps.getAnthropicModel,
+        getOpenAIModel: deps.getOpenAIModel,
+        getGoogleModel: deps.getGoogleModel,
+      },
+      configDir,
+    );
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   }
-  const catalogEntry = findCatalogEntry(catalog, session.model, session.provider);
+  // D2: a rerouted pair is never silent — the piped/non-interactive path gets the notice here,
+  // gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent into the transcript
+  // once per turn, and this call ALSO runs on the TUI path (this function has no other reason to
+  // know isTTY), so without the gate a session-start reroute printed twice for the same turn: once
+  // here (before Ink even mounts) and again from runTurn.
+  if (route.rerouted && !isTTY) {
+    printWarning(rerouteNotice(route));
+  }
+  // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
+  // cost and context-window come from the wrong provider's entry.
+  const catalogEntry = findCatalogEntry(catalog, route.model, route.provider);
 
   // A model this run merely RESOLVED is deliberately left out of the file. getGroqModel accepts any
   // string — an unknown id is not rejected here, it comes back as a provider 404 mid-run — so
@@ -971,6 +1042,7 @@ async function prepareSession(
     allowedTools,
     catalog,
     catalogEntry,
+    route,
   };
 }
 
@@ -1084,7 +1156,7 @@ async function driveLoop(
   persist: (session: SessionState<ModelMessage>) => void,
   approvalPrompt: ApprovalPrompt,
 ): Promise<DriveLoopResult> {
-  const { session, storeDir, tools, model, worktree, allowedTools, catalog, catalogEntry } =
+  const { session, storeDir, tools, model, worktree, allowedTools, catalog, catalogEntry, route } =
     prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
 
@@ -1133,11 +1205,15 @@ async function driveLoop(
       allowedTools,
       approvalPrompt,
       // Recomputed every driveLoop call (once per TUI turn, once per non-interactive process), from
-      // the session's current model/provider — never captured once at session start, so a live
-      // /model switch is reflected on the very next turn instead of confabulated.
+      // the RESOLVED model/provider (`route`, D3/D4 feature-plan.md) — never captured once at
+      // session start, so a live /model switch OR a routing-priority reroute is reflected on the
+      // very next turn instead of confabulated. `route`, not `session.model`/`.provider`:
+      // `session` carries what was REQUESTED, and a rerouted turn's system prompt/cost provenance
+      // must name the model actually being called, not the one that was asked for and silently
+      // rerouted away from.
       system: joinTiers(
         session.systemPrompt,
-        buildVolatileTier(session.model, session.provider, catalogEntry?.displayName),
+        buildVolatileTier(route.model, route.provider, catalogEntry?.displayName),
       ),
       signal: controller.signal,
       maxIterations: maxTurns,
@@ -1145,12 +1221,13 @@ async function driveLoop(
       // / `opts.provider === "groq" && opts.modelId && opts.catalog`) never fires and every `usage`
       // event's `cost` field is silently undefined — the run genuinely never computes a cost, no
       // matter what cost.ts itself does. No `?? "groq"` fallback needed here (a prior version had
-      // one): `session` is destructured from `prepared: PreparedRun`, whose `session` field is
-      // `RunSession` — `provider` is never optional at this point, only at the edges that produce
-      // one (`loadOrCreateSession`'s own backfill is where an absent provider becomes "groq").
-      // `session.model` is the model this call is actually being made against.
-      provider: session.provider,
-      modelId: session.model,
+      // one): `route` (PreparedRun's own field) is never optional — `resolveRoute` always returns a
+      // concrete pair. `route.model`/`.provider`, not `session.model`/`.provider`: this is the
+      // pair the call is ACTUALLY being made against (this function's own comment just above), and
+      // the two can differ from a routing-priority reroute (D2/D3) — using the requested pair here
+      // would mis-tag a rerouted call's cost report with the wrong provider's pricing branch.
+      provider: route.provider,
+      modelId: route.model,
       catalog,
       // The catalog's own contextWindow for whatever model this turn is actually calling — a
       // /model switch to a provider/model with a different limit must change compaction's own
@@ -1294,6 +1371,11 @@ async function runTui(
   const { createElement } = await import("react");
   const { App } = await import("./tui/App");
 
+  // Matches prepareSession's own resolution (D7, feature-plan.md) — routing-priority's per-turn
+  // re-resolution (runTurn, below) and /setup's own reads/writes (a later commit in this loop)
+  // both need it, and both must agree with prepareSession on where "the config dir" is.
+  const configDir = deps.authConfigDir ?? getConfigDir();
+
   // Findings 2/3/4/6 (thermo-nuclear structural review, round 6): `liveState` is a SYNCHRONOUS
   // mirror of the reducer's own state, kept current by running the exact same pure `tuiReducer`
   // function here, in `dispatch` below, every time ANY caller in this closure dispatches an
@@ -1326,11 +1408,16 @@ async function runTui(
   // model whose first turn errors (no working key, an unknown id) leaves this untouched, so the
   // session on disk stays pinned to the model that was last known to work — recoverable on the next
   // `--resume` — instead of a switch nothing ever confirmed.
-  // `prepared.session` is already `RunSession` (PreparedRun's own type, above) — the two casts this
-  // line used to need are gone along with the loose type that forced them.
+  // D3 (feature-plan.md): initialized from `prepared.route` — the pair the run actually RESOLVED
+  // to — not `prepared.session.{model,provider}`, which is only what the session REQUESTED. The
+  // two can differ from turn 1 (a routing-priority reroute, D2), and starting from the requested
+  // pair while turn 1 actually runs on the resolved one would trip this variable's own inequality
+  // guard (below) on turn 1, persisting a switch the session never asked for and breaking the
+  // "a session that never touches /model never writes config.json" invariant
+  // (tuiPty.test.ts's own regression guard for this).
   let confirmedModel: { model: string; provider: ModelProvider } = {
-    model: prepared.session.model,
-    provider: prepared.session.provider,
+    model: prepared.route.model,
+    provider: prepared.route.provider,
   };
   // Tracks what actually LANDED in config.json, separate from `confirmedModel` above — the two
   // used to share one variable for two jobs (code-review finding on PR #71): `confirmedModel`
@@ -1340,9 +1427,11 @@ async function runTui(
   // was never retried, even though every later turn kept succeeding on that exact model. This
   // starts at the same starting pair as `confirmedModel` for the identical reason: turn 1, which
   // runs on the model the session already started on, must not attempt a persist at all.
+  // Same reasoning as `confirmedModel`, just above: starts at `prepared.route`, not
+  // `prepared.session`, for the identical reason.
   let lastPersistedModel: { model: string; provider: ModelProvider } = {
-    model: prepared.session.model,
-    provider: prepared.session.provider,
+    model: prepared.route.model,
+    provider: prepared.route.provider,
   };
   // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
   // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
@@ -1545,6 +1634,189 @@ async function runTui(
     dispatch({ type: "model-picker-resolved" });
   }
 
+  // D5-D8 (feature-plan.md): /setup's own five handlers, mirroring the /model pair above — each
+  // does nothing but recompute the current truth (decideSetupOpen re-reads config.json/env every
+  // time, never trusting a stale copy) and dispatch it. `setupListState` is the one piece shared
+  // by every path that returns to the list step: fresh rows, plus — when a specific provider is
+  // named — that row's own index, so returning from enter-key/confirm-remove re-highlights the row
+  // the user was just looking at instead of always snapping back to the top.
+  function setupListState(selectedProvider?: ModelProvider): SetupState {
+    const rows = decideSetupOpen(configDir);
+    const selected =
+      selectedProvider === undefined
+        ? 0
+        : Math.max(
+            0,
+            rows.findIndex((row) => row.provider === selectedProvider),
+          );
+    return { step: "list", rows, selected };
+  }
+
+  // A shared "refresh the list, degrade to command-error if that throws" primitive (code-review
+  // finding, PR #73, round 2): decideSetupOpen reads config.json, and a malformed file is exactly
+  // as reachable once the panel is already open (a racing second `seri` process, a hand edit) as it
+  // is at the /setup-OPEN interceptor above — which the round 1 fix already guarded. Used by
+  // onSetupRemove's success path and onSetupBack — round 1 missed both, reached only from INSIDE an
+  // already-open panel, with nothing above them to catch a throw out of their own `useInput`
+  // callback. NOT used by onSetupKeyEntered's own success path (round 3, item #3): that one needs
+  // its OWN inline catch instead, to reset `busy: false` on a refresh failure rather than just
+  // showing a command-error while leaving the panel's own busy gate stuck — see its own comment.
+  function dispatchSetupList(selectedProvider?: ModelProvider): void {
+    try {
+      dispatch({ type: "setup-step", state: setupListState(selectedProvider) });
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // No config.json read here at all (code-review finding, PR #73, round 2): a row's `keyName` is a
+  // pure function of `provider` (PROVIDER_API_KEY_NAMES), so the old `decideSetupOpen(configDir).
+  // find(...)` — the full 5-provider scan, just to pull one static field back out of it — was both
+  // slower and a needless crash surface for a value that never needed I/O to produce.
+  function onSetupSelect(provider: ModelProvider): void {
+    dispatch({
+      type: "setup-step",
+      state: {
+        step: "enter-key",
+        provider,
+        keyName: PROVIDER_API_KEY_NAMES[provider],
+        busy: false,
+      },
+    });
+  }
+
+  // D5's own probe, then D6's own write — `validateProviderKey` never throws (its own contract:
+  // every failure mode resolves to a result, not a rejection), so only the config write itself
+  // needs a try/catch, matching the persist path's degrade-to-a-message posture (onSessionChange's
+  // own comment, above) rather than converting a validated key into a lost one over an unrelated
+  // write failure.
+  //
+  // `keyName` is PROVIDER_API_KEY_NAMES[provider] directly, not a decideSetupOpen scan (code-review
+  // finding, PR #73, round 2 — same fix as onSetupSelect just above): no config.json read here at
+  // all, which is also what makes the rest of this function need no crash guard of its own.
+  async function onSetupKeyEntered(provider: ModelProvider, value: string): Promise<void> {
+    const keyName = PROVIDER_API_KEY_NAMES[provider];
+    dispatch({
+      type: "setup-step",
+      state: { step: "enter-key", provider, keyName, busy: true },
+    });
+    const result = await validateProviderKey(provider, value);
+    if (!result.ok) {
+      dispatch({
+        type: "setup-step",
+        state: { step: "enter-key", provider, keyName, busy: false, error: result.message },
+      });
+      return;
+    }
+    try {
+      setConfigValue(keyName, value, configDir);
+    } catch (err) {
+      // Bug fixed here (code-review, PR #73): this used to dispatch a bare command-error and
+      // return, leaving `pendingSetup` stuck at `busy: true` — SetupEnterKey's own useInput
+      // checks `if (busy) return;` BEFORE its Escape/Ctrl-D handling, so a write failure here
+      // (EACCES, disk full, the config dir removed mid-session) permanently locked the /setup
+      // panel with no way out short of a fatal Ctrl-C that kills the whole process. Re-rendering
+      // `enter-key` with `busy: false` and an error, the same shape a validation failure already
+      // uses above, is what actually returns control to the user.
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider,
+          keyName,
+          busy: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
+      return;
+    }
+    dispatch({
+      type: "transcript-append",
+      line:
+        result.warning === undefined
+          ? `Saved ${keyName}.`
+          : `Saved ${keyName}. ⚠ ${result.warning}`,
+    });
+    // NOT dispatchSetupList (code-review finding, PR #73, round 3, item #3): that helper's own
+    // catch only dispatches command-error, which never touches `pendingSetup` — leaving THIS
+    // function's own `busy: true` (set above, before the validate/write round-trip) stuck forever
+    // if the refresh read (setupListState -> decideSetupOpen -> config.json) throws, the exact
+    // lockout class the write-failure catch above already fixed, just reached by a different
+    // trigger (the post-write refresh failing, not the write itself). Resetting `busy: false`
+    // here, inline, the same shape that catch already uses, is what actually clears it —
+    // SetupEnterKey's own `if (busy) return;` gate is what makes that necessary.
+    try {
+      dispatch({ type: "setup-step", state: setupListState(provider) });
+    } catch (err) {
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider,
+          keyName,
+          busy: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
+    }
+  }
+
+  // D8: this is the SAME prop SetupList's own 'r' keypress and SetupConfirmRemove's own 'y'
+  // keypress both call — App.tsx has only five /setup props total, no separate "request
+  // confirmation" one — so which one this call means is read off the CURRENT live reducer state,
+  // the same "trust liveState, not a caller-captured copy" pattern this closure already uses
+  // throughout (this function's own top comment).
+  function onSetupRemove(provider: ModelProvider): void {
+    if (liveState.pendingSetup?.step === "confirm-remove") {
+      const { keyName } = liveState.pendingSetup;
+      try {
+        unsetConfigValue(keyName, configDir);
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+      dispatch({ type: "transcript-append", line: `Removed ${keyName}.` });
+      dispatchSetupList(provider);
+      return;
+    }
+    // `providerKeyState` for the one provider under the cursor, not a decideSetupOpen scan of all
+    // five (code-review finding, PR #73, round 2) — still real I/O (config.json), so still needs
+    // its own guard: a malformed file here used to throw straight out of this `useInput` callback,
+    // the same class of bug round 1 fixed for the /setup-OPEN interceptor but missed here.
+    let state: ProviderKeyState;
+    try {
+      state = providerKeyState(provider, configDir);
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    if (!state.hasConfigEntry) return;
+    dispatch({
+      type: "setup-step",
+      state: { step: "confirm-remove", provider, keyName: state.keyName },
+    });
+  }
+
+  function onSetupBack(): void {
+    const current = liveState.pendingSetup;
+    const provider =
+      current !== undefined && current.step !== "list" ? current.provider : undefined;
+    dispatchSetupList(provider);
+  }
+
+  function onSetupClose(leftoverInput?: string): void {
+    dispatch({ type: "setup-resolved", leftoverInput });
+  }
+
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
   // reducer and driveLoop have always shared. Guarded against overlap: a second Enter press
@@ -1568,16 +1840,44 @@ async function runTui(
     // `SessionState<ModelMessage>` (tui/reducer.ts), so this is the one place that puts it back —
     // the same kind of "this file already knows a stronger invariant tsc can't see" gap
     // `resolveRunTui!`'s own definite-assignment assertion, above, papers over too.
-    const { id: sessionId, model: modelId, provider } = session as RunSession;
+    const {
+      id: sessionId,
+      model: requestedModel,
+      provider: requestedProvider,
+    } = session as RunSession;
+    // D3 (feature-plan.md): re-resolved every turn, same reasoning as the model re-resolution
+    // above — a routing-priority reroute (D2) must be reconsidered on every turn too, not just at
+    // session start, so a key added mid-session via /setup takes effect on the very next turn.
+    //
+    // Bug fixed here (code-review, PR #73): `resolveRoute`/`configuredProviders` used to run
+    // OUTSIDE this try — `configuredProviders` reads config.json via a bare `JSON.parse`, so a
+    // corrupted file threw SYNCHRONOUSLY. `runTurn` is called fire-and-forget
+    // (`currentTurn = runTurn(...)`, no `.catch()` at either call site), so that throw became an
+    // unhandled rejection — a config.json corrupted mid-session (a concurrent /setup write from
+    // another instance, say) crashed the running TUI on the very next turn, losing in-progress
+    // work. Inside the try, it degrades the same way a getModel failure already does: a
+    // command-error the user can see and recover from, not a crash.
+    let route: ReturnType<typeof resolveRoute>;
     let model: LanguageModel;
     try {
-      model = getModel(modelId, provider, sessionId, {
-        getGroqModel: deps.getGroqModel,
-        getOpenRouterModel: deps.getOpenRouterModel,
-        getAnthropicModel: deps.getAnthropicModel,
-        getOpenAIModel: deps.getOpenAIModel,
-        getGoogleModel: deps.getGoogleModel,
-      });
+      route = resolveRoute(
+        prepared.catalog,
+        { model: requestedModel, provider: requestedProvider },
+        configuredProviders(configDir),
+      );
+      model = getModel(
+        route.model,
+        route.provider,
+        sessionId,
+        {
+          getGroqModel: deps.getGroqModel,
+          getOpenRouterModel: deps.getOpenRouterModel,
+          getAnthropicModel: deps.getAnthropicModel,
+          getOpenAIModel: deps.getOpenAIModel,
+          getGoogleModel: deps.getGoogleModel,
+        },
+        configDir,
+      );
     } catch (err) {
       dispatch({
         type: "command-error",
@@ -1586,21 +1886,30 @@ async function runTui(
       turnInFlight = false;
       return;
     }
+    const { model: modelId, provider } = route;
+    if (route.rerouted) {
+      dispatch({
+        type: "transcript-append",
+        line: `↻ ${rerouteNotice(route)}`,
+      });
+    }
+    // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one.
     const catalogEntry = findCatalogEntry(prepared.catalog, modelId, provider);
     // `session as RunSession`, not the raw (reducer-typed) `session`: PreparedRun.session is now
     // RunSession (code-review finding — see PreparedRun's own comment), and this call site already
-    // established the same invariant two lines up for `modelId`/`provider`; reusing it here instead
-    // of casting a second time in one function.
+    // established the same invariant two lines up for `requestedModel`/`requestedProvider`; reusing
+    // it here instead of casting a second time in one function.
     const turnPrepared: PreparedRun = {
       ...prepared,
       session: session as RunSession,
       model,
       catalogEntry,
+      route,
     };
     // Reset once per call to runTurn — i.e. once per turn, not once per `messages-updated` event
-    // (code-review finding on PR #71's own re-review). `modelId`/`provider` are destructured once,
-    // above, and never change for the life of one driveLoop call, so a boolean is all that's
-    // needed: loop.ts can yield `messages-updated` several times in a single turn (once per tool
+    // (code-review finding on PR #71's own re-review). `modelId`/`provider` are resolved once,
+    // above (`route`), and never change for the life of one driveLoop call, so a boolean is all
+    // that's needed: loop.ts can yield `messages-updated` several times in a single turn (once per tool
     // call), and without this, a PERSISTENTLY failing write (a config dir that stays read-only for
     // the whole turn, not a one-off transient blip) would retry — and re-warn — on every one of
     // those events instead of once. `lastPersistedModel`'s own retry-on-a-LATER-turn guarantee is
@@ -1655,7 +1964,7 @@ async function runTui(
             ) {
               persistAttemptedThisTurn = true;
               try {
-                persistDefaultModel({ model: modelId, provider });
+                persistDefaultModel({ model: modelId, provider }, configDir);
                 lastPersistedModel = { model: modelId, provider };
               } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
@@ -1747,6 +2056,11 @@ async function runTui(
           onApprovalAnswer,
           onModelSelected,
           onModelPickerCancel,
+          onSetupSelect,
+          onSetupKeyEntered,
+          onSetupRemove,
+          onSetupBack,
+          onSetupClose,
           connectDispatch: undefined,
         }),
       );
@@ -1812,10 +2126,42 @@ async function runTui(
         dispatch({ type: "command-error", message: "/model: invalid arguments." });
         return;
       }
-      dispatch({
-        type: "model-picker-requested",
-        entries: decideModelPickerOpen(prepared.catalog),
-      });
+      // Bug fixed here (code-review, PR #73, same class as resolveRoute's own fix above):
+      // configuredProviders reads config.json via a bare JSON.parse — a corrupted file threw
+      // synchronously, and onSubmit has no caller-side .catch() (InputBox's own useInput handler
+      // calls it fire-and-forget), so that became an unhandled rejection instead of a visible
+      // command-error the same way every other failure in this function degrades.
+      try {
+        dispatch({
+          type: "model-picker-requested",
+          // D1/D2 (feature-plan.md): re-read fresh on every open, not cached from prepareSession —
+          // a key added mid-session via /setup must show up in the very next /model open.
+          entries: decideModelPickerOpen(prepared.catalog, configuredProviders(configDir)),
+        });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+    // /setup, like /model just above, is intercepted here rather than added to SLASH_COMMANDS: it
+    // opens a live panel with nothing to render on the non-interactive path either.
+    if (name === "/setup") {
+      if (args.length > 0) {
+        dispatch({ type: "command-error", message: "/setup: invalid arguments." });
+        return;
+      }
+      // Same fix as /model just above: decideSetupOpen also reads config.json unguarded.
+      try {
+        dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
       return;
     }
     const command = SLASH_COMMANDS.get(name);
@@ -1890,6 +2236,11 @@ async function runTui(
       onApprovalAnswer,
       onModelSelected,
       onModelPickerCancel,
+      onSetupSelect,
+      onSetupKeyEntered,
+      onSetupRemove,
+      onSetupBack,
+      onSetupClose,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
         // hasNewTask — the same predicate prepareSession (above) uses to decide whether it pushed
@@ -1979,17 +2330,18 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const slash = await handleSlashCommand(ctx);
   if (slash !== undefined) return slash;
 
-  const prepared = await prepareSession(ctx, deps, skipPermissions);
-  if (typeof prepared === "number") return prepared;
-
   // TTY-inferred, not a flag (plan Decision 2): a real terminal gets the Ink TUI, driving the
   // exact same driveLoop as the piped/CI path below — only how it reports events differs
   // (dispatch into App.tsx's reducer vs. printEvent called directly). Falsy — piped, CI, a
   // redirected file, or (deliberately) any caller that doesn't pass isTTY at all — takes the
   // untouched path this project has always run: same function, same call order, same output. See
   // CliDeps.isTTY's own comment for why this reads `deps.isTTY`, never process.stdout.isTTY
-  // directly.
+  // directly. Computed here, before prepareSession, so that function's own reroute notice
+  // (prepareSession's own comment) can gate itself to the non-interactive path.
   const isTTY = deps.isTTY ?? false;
+  const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
+  if (typeof prepared === "number") return prepared;
+
   const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning } = isTTY
     ? await runTui(prepared, ctx, deps, maxTurns, skipPermissions)
     : await driveLoop(

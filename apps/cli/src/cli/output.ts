@@ -25,6 +25,8 @@ export const USAGE = `Usage:
   seri [--resume <id>] /mode      cycle the permission mode
   /model (inside the TUI)         open the model picker — not a seri subcommand, same reasoning
                                     as /exit below: there is no picker to open outside a live TUI
+  /setup (inside the TUI)         add, replace or remove a provider API key — not a seri
+                                    subcommand; seri config set is the non-interactive equivalent
   seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha>
   /exit (inside the TUI)          end the session, or Ctrl-D — not a seri subcommand: it means
                                     nothing outside a live TUI, and "seri /exit" is just a task

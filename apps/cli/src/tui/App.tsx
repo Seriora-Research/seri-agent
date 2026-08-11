@@ -12,7 +12,8 @@ import { useEffect, useReducer, useState } from "react";
 import { approvalPromptText, truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { SessionState } from "../session/session";
-import { type Dispatch, initialTuiState, tuiReducer } from "./reducer";
+import type { ModelPickerEntry, SetupProviderRow } from "./commands";
+import { type Dispatch, initialTuiState, type SetupState, tuiReducer } from "./reducer";
 import { theme } from "./theme";
 
 export type AppProps = {
@@ -73,6 +74,15 @@ export type AppProps = {
     leftoverInput?: string,
   ) => void;
   onModelPickerCancel?: () => void;
+  // /setup's own five resolutions (D5-D8, feature-plan.md) — mirroring onModelSelected's shape:
+  // each does nothing but call into cli.ts's own handlers, which recompute the whole next
+  // SetupState (rows included) and dispatch it, the same "presentation calls a prop, cli.ts owns
+  // the decision" split every other interactive command in this file already has.
+  onSetupSelect?: (provider: ModelProvider) => void;
+  onSetupKeyEntered?: (provider: ModelProvider, value: string) => void;
+  onSetupRemove?: (provider: ModelProvider) => void;
+  onSetupBack?: () => void;
+  onSetupClose?: (leftoverInput?: string) => void;
 };
 
 // approvalPromptText (cli/output.ts), not a hand-copied template: round 7 code review found this
@@ -153,6 +163,16 @@ const MODEL_PICKER_WINDOW = 10;
 const NAME_WIDTH = 22;
 const PROVIDER_WIDTH = 10;
 const CONTEXT_WIDTH = 7;
+// Widest real value is "your key" (8 chars) — 9 leaves one column of breathing room, matching
+// this file's other columns' own generosity over their own widest realistic value.
+const ROUTE_WIDTH = 9;
+// Cost was the table's last column before Route (D1/D2, feature-plan.md) became the new trailing
+// one — formatCost's own output is genuinely variable-width ("—" vs "$150.00/$600.00"), which was
+// fine when nothing followed it, but Route now does, so this pads it too, or Route would drift
+// out of its own column depending on how expensive a given row's model is. 18 covers the widest
+// real pair in the bundled manifest (measured: $150.00/$600.00, 15 characters) with a little room
+// to spare, not the exact minimum.
+const COST_WIDTH = 18;
 
 // Truncates with a trailing ellipsis (never mid-multi-byte-safe beyond what .slice already is —
 // every field this feeds is plain ASCII: a model id/displayName/provider name) or pads with
@@ -180,18 +200,30 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
   return `$${pricing.inputPerMTok.toFixed(2)}/$${pricing.outputPerMTok.toFixed(2)}`;
 }
 
-// One row's worth of columns (name, provider, context, cost), space-joined — the picker's own
-// selection marker ("> "/"  ") is prepended at the call site, not here, matching how the un-columned
-// version already separated "which row is highlighted" from "what the row says". Factored out and
-// exported specifically so column formatting is unit-testable without mounting Ink at all — this
-// file had no pure formatting function of its own before the picker's columns needed one.
-export function formatModelRow(entry: ModelCatalogEntry): string {
-  return [
-    truncatePad(entry.displayName, NAME_WIDTH),
-    truncatePad(entry.provider, PROVIDER_WIDTH),
-    formatContextWindow(entry.contextWindow).padStart(CONTEXT_WIDTH),
-    formatCost(entry.pricing),
-  ].join(" ");
+// One row's worth of columns (name, provider, context, cost, route), space-joined — the picker's
+// own selection marker ("> "/"  ") is prepended at the call site, not here, matching how the
+// un-columned version already separated "which row is highlighted" from "what the row says".
+// Factored out and exported specifically so column formatting is unit-testable without mounting
+// Ink at all — this file had no pure formatting function of its own before the picker's columns
+// needed one.
+//
+// D1/D2 (feature-plan.md): the trailing Route column names whether THIS row's own provider has a
+// key ("your key"/"no key" — the same fact routing-priority resolution would act on) and, when
+// this row is one of several routes to the same logical model (`alternatives > 0`, set by
+// decideModelPickerOpen), how many OTHER routes exist — so a route with no key of its own but a
+// reachable sibling still reads as reachable, not as a dead end.
+export function formatModelRow(row: ModelPickerEntry): string {
+  const { entry, keyConfigured, alternatives } = row;
+  const suffix = alternatives > 0 ? ` +${alternatives} route${alternatives === 1 ? "" : "s"}` : "";
+  return (
+    [
+      truncatePad(entry.displayName, NAME_WIDTH),
+      truncatePad(entry.provider, PROVIDER_WIDTH),
+      formatContextWindow(entry.contextWindow).padStart(CONTEXT_WIDTH),
+      truncatePad(formatCost(entry.pricing), COST_WIDTH),
+      truncatePad(keyConfigured ? "your key" : "no key", ROUTE_WIDTH),
+    ].join(" ") + suffix
+  );
 }
 
 // The picker's own column labels, same widths as formatModelRow's own columns — so the header sits
@@ -200,20 +232,33 @@ const MODEL_PICKER_HEADER = [
   truncatePad("Name", NAME_WIDTH),
   truncatePad("Provider", PROVIDER_WIDTH),
   "Context".padStart(CONTEXT_WIDTH),
-  "Cost",
+  truncatePad("Cost", COST_WIDTH),
+  truncatePad("Route", ROUTE_WIDTH),
 ].join(" ");
 
-function matchesFilter(entry: ModelCatalogEntry, query: string): boolean {
-  const needle = query.toLowerCase();
-  return (
-    entry.id.toLowerCase().includes(needle) ||
-    entry.displayName.toLowerCase().includes(needle) ||
+// Multi-term AND-of-ORs, not a single unsplit substring check: the query is split on whitespace,
+// and EVERY term must match at least one field (id, displayName, family, or — new in this commit —
+// provider), independently. A single-term query behaves exactly as before (id/displayName/family,
+// now also provider); a multi-term one (e.g. "sonnet-5 anthropic") is what lets a query narrow to
+// one specific ROUTE of a multi-route model rather than only ever narrowing by name.
+function matchesFilter(row: ModelPickerEntry, query: string): boolean {
+  const terms = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((term) => term.length > 0);
+  if (terms.length === 0) return true;
+  const { entry } = row;
+  const haystacks = [
+    entry.id.toLowerCase(),
+    entry.displayName.toLowerCase(),
     // `family` is a free-text field lifted verbatim from models.dev (ModelCatalogEntry's own
     // comment, packages/model-catalog/src/types.ts) — some upstream entries carry `null` there
     // rather than an empty string, so this cannot assume it is always safe to call
     // `.toLowerCase()` on directly.
-    (entry.family ?? "").toLowerCase().includes(needle)
-  );
+    (entry.family ?? "").toLowerCase(),
+    entry.provider.toLowerCase(),
+  ];
+  return terms.every((term) => haystacks.some((haystack) => haystack.includes(term)));
 }
 
 // /model's own live state (tui/reducer.ts's pendingModelPicker) — mirrors ApprovalBox's shape
@@ -226,7 +271,7 @@ function ModelPicker({
   onModelSelected,
   onModelPickerCancel,
 }: {
-  entries: ModelCatalogEntry[];
+  entries: ModelPickerEntry[];
   onModelSelected?: (
     pick: { model: string; provider: ModelProvider },
     leftoverInput?: string,
@@ -246,9 +291,7 @@ function ModelPicker({
   const [scrollOffset, setScrollOffset] = useState(0);
 
   const filtered =
-    filterQuery.length === 0
-      ? entries
-      : entries.filter((entry) => matchesFilter(entry, filterQuery));
+    filterQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, filterQuery));
 
   // Moves the selection to `next` (already clamped to `[0, filtered.length - 1]` by the caller)
   // and slides `scrollOffset` only far enough to keep it inside the visible window — the classic
@@ -280,9 +323,9 @@ function ModelPicker({
       return;
     }
     if (key.return) {
-      const entry = filtered[selectedIndex];
-      if (entry !== undefined) {
-        onModelSelected?.({ model: entry.id, provider: entry.provider });
+      const row = filtered[selectedIndex];
+      if (row !== undefined) {
+        onModelSelected?.({ model: row.entry.id, provider: row.entry.provider });
       }
       return;
     }
@@ -319,10 +362,10 @@ function ModelPicker({
     const terminatorLength = input.startsWith("\r\n", terminatorIndex) ? 2 : 1;
     const after = input.slice(terminatorIndex + terminatorLength);
     const nextFiltered =
-      nextQuery.length === 0 ? entries : entries.filter((entry) => matchesFilter(entry, nextQuery));
-    const entry = nextFiltered[0];
-    if (entry !== undefined) {
-      onModelSelected?.({ model: entry.id, provider: entry.provider }, after || undefined);
+      nextQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, nextQuery));
+    const row = nextFiltered[0];
+    if (row !== undefined) {
+      onModelSelected?.({ model: row.entry.id, provider: row.entry.provider }, after || undefined);
     }
   });
 
@@ -333,19 +376,270 @@ function ModelPicker({
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
       <Text>{filterQuery.length > 0 ? filterQuery : " "}</Text>
       <Text color={theme.muted}>{`  ${MODEL_PICKER_HEADER}`}</Text>
-      {visible.map((entry, localIndex) => {
+      {visible.map((row, localIndex) => {
         const index = scrollOffset + localIndex;
         return (
           <Text
-            key={`${entry.provider}/${entry.id}`}
+            key={`${row.entry.provider}/${row.entry.id}`}
             color={index === selectedIndex ? theme.accent : undefined}
           >
             {index === selectedIndex ? "> " : "  "}
-            {formatModelRow(entry)}
+            {formatModelRow(row)}
           </Text>
         );
       })}
       {remaining > 0 && <Text color={theme.muted}>+{remaining} more — keep typing to narrow</Text>}
+    </Box>
+  );
+}
+
+// D8: the disabled-remove reason, verbatim — reused by the list row (grayed prompt) and would be
+// reused again by any future surface that needs to explain the same fact, rather than the string
+// being typed out at each call site and risking drift.
+function envShadowReason(keyName: string): string {
+  return `set by $${keyName} in your environment — unset it in your shell`;
+}
+
+// One /setup list row's own text — masked value + source for a config/unset row, D8's own
+// disabled-remove reason for an env row with nothing removable underneath it (which is more
+// useful there than a masked value nobody can act on: the fix is in the shell, not in this
+// panel).
+//
+// Bug fixed here (code-review, PR #73, round 3, item #5): an env row is not always the
+// non-removable case — `row.removable` (providerKeyState's own `hasConfigEntry`) is true when a
+// config.json entry sits underneath the env var that's shadowing it, and pressing 'r'/Delete on
+// that row genuinely removes it. `envShadowReason`'s "unset it in your shell" text used to render
+// unconditionally for EVERY env row, telling a user with a real, removable entry that removal was
+// impossible when it was not — commands.ts's own comment on `decideSetupOpen` already claimed
+// "the panel states why, for the env case," which was false for exactly this state until now.
+export function formatSetupRow(row: SetupProviderRow): string {
+  const name = truncatePad(row.provider, PROVIDER_WIDTH);
+  if (row.source === "unset") return `${name} not set`;
+  if (row.source === "env") {
+    return row.removable
+      ? `${name} ${row.masked} (env, config entry underneath — removable)`
+      : `${name} ${envShadowReason(row.keyName)}`;
+  }
+  return `${name} ${row.masked} (config)`;
+}
+
+// /setup's own live state (tui/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-exclusion
+// role, dispatching to one of three step-specific sub-components below rather than one component
+// handling all three at once, since each step has genuinely different input handling and local
+// state (the same reasoning ApprovalBox/ModelPicker are separate components rather than one
+// component branching internally).
+function SetupPanel({
+  pendingSetup,
+  onSetupSelect,
+  onSetupKeyEntered,
+  onSetupRemove,
+  onSetupBack,
+  onSetupClose,
+}: {
+  pendingSetup: SetupState;
+  onSetupSelect?: (provider: ModelProvider) => void;
+  onSetupKeyEntered?: (provider: ModelProvider, value: string) => void;
+  onSetupRemove?: (provider: ModelProvider) => void;
+  onSetupBack?: () => void;
+  onSetupClose?: (leftoverInput?: string) => void;
+}) {
+  if (pendingSetup.step === "enter-key") {
+    return (
+      <SetupEnterKey
+        pendingSetup={pendingSetup}
+        onSetupKeyEntered={onSetupKeyEntered}
+        onSetupBack={onSetupBack}
+        onSetupClose={onSetupClose}
+      />
+    );
+  }
+  if (pendingSetup.step === "confirm-remove") {
+    return (
+      <SetupConfirmRemove
+        pendingSetup={pendingSetup}
+        onSetupRemove={onSetupRemove}
+        onSetupBack={onSetupBack}
+      />
+    );
+  }
+  return (
+    <SetupList
+      pendingSetup={pendingSetup}
+      onSetupSelect={onSetupSelect}
+      onSetupRemove={onSetupRemove}
+      onSetupClose={onSetupClose}
+    />
+  );
+}
+
+function SetupList({
+  pendingSetup,
+  onSetupSelect,
+  onSetupRemove,
+  onSetupClose,
+}: {
+  pendingSetup: Extract<SetupState, { step: "list" }>;
+  onSetupSelect?: (provider: ModelProvider) => void;
+  onSetupRemove?: (provider: ModelProvider) => void;
+  onSetupClose?: (leftoverInput?: string) => void;
+}) {
+  const { rows } = pendingSetup;
+  // Seeded from the reducer's own `selected` (set by whichever handler brought this step back into
+  // view — cli.ts's own onSetupBack/onSetupKeyEntered), then moved locally — the same "reducer
+  // supplies the starting point, the component owns live navigation" split ModelPicker's own
+  // `selectedIndex` already has, for the identical reason (transient UI data with no reason to
+  // round-trip through cli.ts on every arrow key).
+  const [selected, setSelected] = useState(pendingSetup.selected);
+
+  useInput((input, key) => {
+    if (key.escape || (key.ctrl && input === "d")) {
+      onSetupClose?.();
+      return;
+    }
+    if (key.upArrow) {
+      setSelected((current) => Math.max(0, current - 1));
+      return;
+    }
+    if (key.downArrow) {
+      setSelected((current) => Math.min(rows.length - 1, current + 1));
+      return;
+    }
+    const row = rows[selected];
+    // Bug fixed here (code-review, PR #73, round 3): `key.return`/`key.delete` must be checked
+    // BEFORE the `input.length === 0` guard below, not after — Ink's own key parser sets `input`
+    // to `''` for every named key, Enter and Delete included (confirmed against
+    // node_modules/ink/build/parse-keypress.js and use-input.js), so the empty-input guard used to
+    // return before either of these two branches was ever reached. Every other useInput in this
+    // file (ModelPicker, SetupEnterKey, SetupConfirmRemove) already has the ordering this way —
+    // this was the one holdout, and it made Enter/Delete dead here despite the panel's own hint
+    // text advertising them.
+    if (key.return) {
+      if (row !== undefined) onSetupSelect?.(row.provider);
+      return;
+    }
+    if (key.delete) {
+      if (row !== undefined && row.removable) onSetupRemove?.(row.provider);
+      return;
+    }
+    if (key.ctrl || key.meta) return;
+    if (input.length === 0) return;
+    if (row === undefined) return;
+    const typed = input.toLowerCase();
+    if (typed === "a") {
+      onSetupSelect?.(row.provider);
+      return;
+    }
+    if (typed === "r" && row.removable) {
+      onSetupRemove?.(row.provider);
+    }
+  });
+
+  return (
+    <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+      <Text color={theme.muted}>/setup — provider API keys</Text>
+      {rows.map((row, index) => (
+        <Text key={row.provider} color={index === selected ? theme.accent : undefined}>
+          {index === selected ? "> " : "  "}
+          {formatSetupRow(row)}
+        </Text>
+      ))}
+      <Text color={theme.muted}>
+        ↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close
+      </Text>
+    </Box>
+  );
+}
+
+function SetupEnterKey({
+  pendingSetup,
+  onSetupKeyEntered,
+  onSetupBack,
+  onSetupClose,
+}: {
+  pendingSetup: Extract<SetupState, { step: "enter-key" }>;
+  onSetupKeyEntered?: (provider: ModelProvider, value: string) => void;
+  onSetupBack?: () => void;
+  onSetupClose?: (leftoverInput?: string) => void;
+}) {
+  const { provider, keyName, error, busy } = pendingSetup;
+  // The real value lives here, never in anything rendered — the frame below only ever shows
+  // `"*".repeat(value.length)`. This is the one piece of state in this whole file a leaked render
+  // would turn into a credential disclosure, which is why it exists nowhere else: not in
+  // `pendingSetup` (reducer state, visible to anything that reads it), not passed back to cli.ts
+  // until the moment it actually submits.
+  const [value, setValue] = useState("");
+
+  useInput((input, key) => {
+    if (busy) return;
+    if (key.ctrl && input === "d") {
+      onSetupClose?.();
+      return;
+    }
+    if (key.escape) {
+      onSetupBack?.();
+      return;
+    }
+    if (key.return) {
+      onSetupKeyEntered?.(provider, value);
+      return;
+    }
+    if (key.backspace || key.delete) {
+      setValue((current) => current.slice(0, -1));
+      return;
+    }
+    if (key.ctrl || key.meta) return;
+    if (input.length === 0) return;
+    // A bare terminator embedded in a combined pty chunk (MEDIUM-E's own class, InputBox/
+    // ModelPicker above) is not handled beyond stripping it — a pasted key is never expected to
+    // contain a newline, and silently accepting one into a credential is worse than the rare
+    // dropped keystroke this simplification could cost.
+    setValue((current) => current + input.replace(/[\r\n]/g, ""));
+  });
+
+  return (
+    <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+      <Text color={theme.muted}>{`${keyName} for ${provider}`}</Text>
+      <Text>{"*".repeat(value.length)}</Text>
+      {error !== undefined && <Text color={theme.error}>{error}</Text>}
+      {busy ? (
+        <Text color={theme.muted}>Validating…</Text>
+      ) : (
+        <Text color={theme.muted}>Enter submit · Esc back · Ctrl-D close</Text>
+      )}
+    </Box>
+  );
+}
+
+function SetupConfirmRemove({
+  pendingSetup,
+  onSetupRemove,
+  onSetupBack,
+}: {
+  pendingSetup: Extract<SetupState, { step: "confirm-remove" }>;
+  onSetupRemove?: (provider: ModelProvider) => void;
+  onSetupBack?: () => void;
+}) {
+  const { provider, keyName } = pendingSetup;
+
+  useInput((input, key) => {
+    // ApprovalBox's own convention (above): Enter and anything unrecognised both cancel — only an
+    // explicit "y" confirms.
+    if (key.return) {
+      onSetupBack?.();
+      return;
+    }
+    if (key.ctrl || key.meta) return;
+    if (input.length === 0) return;
+    if (input.toLowerCase() === "y") {
+      onSetupRemove?.(provider);
+      return;
+    }
+    onSetupBack?.();
+  });
+
+  return (
+    <Box borderStyle="round" borderColor={theme.warning}>
+      <Text color={theme.warning}>{`Remove ${keyName} (${provider})? [y]es / [N]o`}</Text>
     </Box>
   );
 }
@@ -433,6 +727,11 @@ export function App({
   onApprovalAnswer,
   onModelSelected,
   onModelPickerCancel,
+  onSetupSelect,
+  onSetupKeyEntered,
+  onSetupRemove,
+  onSetupBack,
+  onSetupClose,
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
   const { exit } = useApp();
@@ -477,8 +776,9 @@ export function App({
       {state.commandError !== undefined && <Text color={theme.error}>{state.commandError}</Text>}
       {/* Findings 1+5: mutually exclusive with InputBox — a pending approval question is the only
       thing this run is waiting on, and answering it (not typing a task or slash command) is the
-      only input that means anything until it clears. Extended to a third state for /model: a
-      pending model pick is the same kind of "only this input means anything right now" question. */}
+      only input that means anything until it clears. Extended to a third state for /model, and a
+      fourth for /setup: each is the same kind of "only this input means anything right now"
+      question, checked in this same order (approval, then /model, then /setup, then InputBox). */}
       {state.pendingApproval !== undefined ? (
         <ApprovalBox
           pendingApproval={state.pendingApproval}
@@ -490,6 +790,15 @@ export function App({
           entries={state.pendingModelPicker.entries}
           onModelSelected={onModelSelected}
           onModelPickerCancel={onModelPickerCancel}
+        />
+      ) : state.pendingSetup !== undefined ? (
+        <SetupPanel
+          pendingSetup={state.pendingSetup}
+          onSetupSelect={onSetupSelect}
+          onSetupKeyEntered={onSetupKeyEntered}
+          onSetupRemove={onSetupRemove}
+          onSetupBack={onSetupBack}
+          onSetupClose={onSetupClose}
         />
       ) : (
         <InputBox

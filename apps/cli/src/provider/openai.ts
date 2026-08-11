@@ -1,6 +1,7 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { getApiKey } from "../config/config";
+import { missingKeyError, PROVIDER_API_KEY_NAMES } from "./keys";
 
 // No default for modelId, matching groq.ts: the caller (provider/model.ts) is the single
 // authority on what id to construct with.
@@ -11,10 +12,13 @@ import { getApiKey } from "../config/config";
 // `OpenAIChatModelId` and is Chat Completions. This picks the Responses API (the provider's own
 // default surface); `.chat()` is the documented fallback if seri's loop ever needs Chat
 // Completions' different tool-call/streaming shape instead.
-export function getOpenAIModel(modelId: string): LanguageModel {
-  const apiKey = getApiKey("OPENAI_API_KEY");
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is not set. Run: seri config set OPENAI_API_KEY <your-key>");
-  }
+//
+// `apiKey` defaults to today's lookup but can be overridden — see anthropic.ts's own comment on
+// why (validate.ts's probe call, D5).
+export function getOpenAIModel(
+  modelId: string,
+  apiKey = getApiKey(PROVIDER_API_KEY_NAMES.openai),
+): LanguageModel {
+  if (!apiKey) throw missingKeyError("openai");
   return createOpenAI({ apiKey })(modelId);
 }

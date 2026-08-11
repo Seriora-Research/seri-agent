@@ -8,9 +8,12 @@
 // and cli.ts both call through to, rather than cli.ts keeping its own duplicate (it did, briefly,
 // between Phase 2 and the fix that consolidated it here).
 import {
+  CATALOG_PROVIDERS,
   filterCatalogEntries,
+  groupRoutes,
   type ModelCatalog,
   type ModelCatalogEntry,
+  type ModelProvider,
 } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import {
@@ -24,6 +27,8 @@ import {
 } from "../checkpoint/checkpoint";
 import { projectRoot } from "../checkpoint/shadowGit";
 import { cycleMode } from "../gate/gate";
+import { allProviderKeyStates } from "../provider/keys";
+import { byRoutePriority } from "../provider/routing";
 import type { SessionState } from "../session/session";
 
 export type CommandDirs = { sessionsDir: string; checkpointsDir: string };
@@ -55,14 +60,84 @@ export function decideModeCycle(session: SessionState<ModelMessage>): {
   return { next, message: `Session ${next.id}: permission mode is now ${next.permissionMode}` };
 }
 
+// A single picker row: the catalog entry itself, whether ITS OWN provider currently has a key
+// (App.tsx's own "your key"/"no key" column), and how many OTHER routes reach the same logical
+// model (routes.ts's routeKey — the D1 grouping) so the row can say "+N routes" instead of leaving
+// the alternatives scattered elsewhere in a flat list.
+export type ModelPickerEntry = {
+  entry: ModelCatalogEntry;
+  keyConfigured: boolean;
+  alternatives: number;
+};
+
 // The decision half of /model, mirroring decideModeCycle's own pure, no-I/O shape: what to show,
 // not how to show it or what happens once the user picks. `filterCatalogEntries` (already applied
 // once when the catalog was built — catalog.ts's own mapRawCatalog) is re-applied here rather than
 // trusted, so a picker built against a catalog from a different source (a future test fixture, or
 // @seri/model-catalog changing what it bundles) can't silently offer a model with no tool-call
 // support to select.
-export function decideModelPickerOpen(catalog: ModelCatalog): ModelCatalogEntry[] {
-  return filterCatalogEntries(catalog.entries);
+//
+// D1/D2 (feature-plan.md): entries are grouped by route (routeKey/groupRoutes), and each group's
+// members are emitted ADJACENTLY, ordered native-then-aggregator via `byRoutePriority` — the exact
+// same tie-break `resolveRoute` (provider/routing.ts) uses to pick a reroute, so the picker reads
+// in the order routing would actually choose rather than scattering a model's own routes through
+// an otherwise-flat, ~350-row list. Groups themselves stay in first-appearance (catalog) order,
+// same as `groupRoutes` already guarantees.
+export function decideModelPickerOpen(
+  catalog: ModelCatalog,
+  configured: ReadonlySet<ModelProvider>,
+): ModelPickerEntry[] {
+  const groups = groupRoutes(filterCatalogEntries(catalog.entries));
+  const rows: ModelPickerEntry[] = [];
+  for (const group of groups.values()) {
+    const ordered = [...group].sort(byRoutePriority);
+    for (const entry of ordered) {
+      rows.push({
+        entry,
+        keyConfigured: configured.has(entry.provider),
+        alternatives: group.length - 1,
+      });
+    }
+  }
+  return rows;
+}
+
+// One row per provider — /setup's own table (D5-D8, feature-plan.md). `removable` is D8: it is
+// false only when config.json genuinely has nothing to unset for this provider — an env-sourced
+// row IS removable when a config.json entry also sits underneath it (providerKeyState's own
+// `hasConfigEntry`, independent of which source wins for display); only a row with no config
+// entry at all (source "env" with nothing saved, or "unset") has nothing for /setup to remove
+// (the panel states why, for the env case — App.tsx's own SetupPanel).
+export type SetupProviderRow = {
+  provider: ModelProvider;
+  keyName: string;
+  source: "env" | "config" | "unset";
+  masked: string | undefined;
+  removable: boolean;
+};
+
+// The decision half of /setup, mirroring decideModelPickerOpen's own shape: what to show, not how
+// to show it. Unlike decideModelPickerOpen this DOES do real I/O (allProviderKeyStates reads
+// config.json) — the same contract decideUndo/decideRestore already have (this file's own header
+// comment: no saveSession, no console.log/print*, but a read is not a write).
+//
+// `allProviderKeyStates`, not five `providerKeyState` calls (code-review finding, PR #73, round 3,
+// item #8): the anti-pattern round 2's own #5 already fixed in `configuredProviders` (keys.ts) —
+// one `providerKeyState` call per CATALOG_PROVIDERS member meant five redundant `loadConfig` reads
+// of the identical file to open /setup, or to refresh it after any add/remove — was never applied
+// here. `allProviderKeyStates` loads config.json exactly once for all five.
+export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
+  return allProviderKeyStates(configDir).map((state) => ({
+    provider: state.provider,
+    keyName: state.keyName,
+    source: state.source,
+    masked: state.masked,
+    // Bug fixed here (code-review, PR #73): NOT `state.source === "config"` — that was always
+    // false whenever an env var shadowed a config.json entry, making a previously-saved secret
+    // permanently unremovable from /setup the moment the same-named env var got exported.
+    // `hasConfigEntry` is independent of which source wins for display.
+    removable: state.hasConfigEntry,
+  }));
 }
 
 // `onPlan` defaults to a no-op but is meant to be passed through from the caller's own presenter

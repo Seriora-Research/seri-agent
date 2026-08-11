@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { printCost } from "../../src/cli/output";
+import { printCost, USAGE } from "../../src/cli/output";
 
 function captureLog(fn: () => void): string[] {
   const lines: string[] = [];
@@ -12,6 +12,13 @@ function captureLog(fn: () => void): string[] {
   }
   return lines;
 }
+
+describe("USAGE", () => {
+  test("documents /setup and its non-interactive equivalent", () => {
+    expect(USAGE).toContain("/setup");
+    expect(USAGE).toContain("seri config set");
+  });
+});
 
 describe("printCost", () => {
   test("renders actual and estimated as visibly different strings", () => {

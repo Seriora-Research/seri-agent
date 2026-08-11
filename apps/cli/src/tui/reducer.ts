@@ -1,12 +1,34 @@
 // The shared-state home the research spec's Constraint 4 requires: driveLoop and all four slash
 // commands dispatch into this one reducer rather than each holding a separate copy. Zero Ink/React
 // import — a plain, standalone reducer, testable without a terminal.
-import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
+import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { toolAllowedLine, toolResultLine } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
 import type { SessionState } from "../session/session";
+import type { ModelPickerEntry, SetupProviderRow } from "./commands";
+
+// /setup's own live state (D5-D8, feature-plan.md) — a three-step flow, mirrored on the reducer
+// the same way /model's picker is: "list" shows all five providers, "enter-key" is the masked
+// text-entry step (add or replace), "confirm-remove" is a single-keypress y/n. "list" carries its
+// own freshly-recomputed `rows` (SetupList, App.tsx, renders and navigates them) rather than
+// reaching back into a stale copy, so a step transition always renders what config.json/env
+// actually say at that moment. "enter-key" and "confirm-remove" do NOT carry `rows` — neither
+// SetupEnterKey nor SetupConfirmRemove (App.tsx) reads a row list at all, only `provider`/
+// `keyName` and their own step-specific fields; a `rows` field on either used to exist purely to
+// satisfy the type, forcing cli.ts's own handlers to compute-and-thread a row array (a config.json
+// read) nothing ever consumed (code-review, PR #73).
+export type SetupState =
+  | { step: "list"; rows: SetupProviderRow[]; selected: number }
+  | {
+      step: "enter-key";
+      provider: ModelProvider;
+      keyName: string;
+      error?: string;
+      busy: boolean;
+    }
+  | { step: "confirm-remove"; provider: ModelProvider; keyName: string };
 
 export type TuiState = {
   session: SessionState<ModelMessage>;
@@ -48,7 +70,7 @@ export type TuiState = {
   // but hidden behind the approval prompt until that resolves, rather than the two ever competing
   // for the screen at once. Whether that is the right UX for a mid-turn /model is not decided by
   // this comment; it is only what the current render order actually does.
-  pendingModelPicker: { entries: ModelCatalogEntry[] } | undefined;
+  pendingModelPicker: { entries: ModelPickerEntry[] } | undefined;
   // Code-review finding: a single pty chunk carrying filter text, a terminator, AND further
   // characters (measured as real on a real terminal, the same class InputBox's own MEDIUM-E fix
   // addressed) used to just discard everything after the terminator when it closed the picker —
@@ -56,6 +78,11 @@ export type TuiState = {
   // `model-picker-resolved`'s `leftoverInput`, consumed once by InputBox as its own starting
   // value on the very next mount, then cleared — never re-applied to a later, unrelated mount.
   pendingInputPrefill: string | undefined;
+  // /setup's own live state — mirrors `pendingModelPicker`'s shape and mutual-exclusion role
+  // exactly, extended to a fourth render-ternary branch (App.tsx). Can coexist with
+  // `pendingApproval`/`pendingModelPicker` the same way those two already can with each other,
+  // for the identical reason: cli.ts's onSubmit handles /setup before the turnInFlight guard.
+  pendingSetup: SetupState | undefined;
 };
 
 function modeIndicator(mode: PermissionMode): string {
@@ -74,6 +101,7 @@ export function initialTuiState(session: SessionState<ModelMessage>): TuiState {
     pendingApproval: undefined,
     pendingModelPicker: undefined,
     pendingInputPrefill: undefined,
+    pendingSetup: undefined,
   };
 }
 
@@ -87,7 +115,7 @@ export type TuiAction =
   | { type: "command-error"; message: string }
   | { type: "approval-requested"; toolName: string; args: unknown; offersAlways: boolean }
   | { type: "approval-resolved" }
-  | { type: "model-picker-requested"; entries: ModelCatalogEntry[] }
+  | { type: "model-picker-requested"; entries: ModelPickerEntry[] }
   // `pick`, when present, is the SAME atomic transition as clearing pendingModelPicker — not a
   // second dispatch — so there is never a one-frame render where the session already switched
   // models but the picker is still showing, or the picker is gone but the switch hasn't landed.
@@ -109,7 +137,21 @@ export type TuiAction =
     }
   // A one-shot signal: InputBox has read `pendingInputPrefill` as its starting value and it must
   // not be handed to any later, unrelated mount. Dispatched by InputBox itself, once, on mount.
-  | { type: "input-prefill-consumed" };
+  | { type: "input-prefill-consumed" }
+  // /setup's own three actions, mirroring the /model pair above. `setup-requested` always opens on
+  // "list" (decideSetupOpen's own result) — there is no equivalent to a mid-turn open landing on a
+  // different step, since /setup is user-initiated every time, never re-entered from elsewhere.
+  | { type: "setup-requested"; rows: SetupProviderRow[] }
+  // A single action for every step transition (list -> enter-key -> list, list -> confirm-remove
+  // -> list, an error re-rendering the SAME step, …) rather than one action per transition: every
+  // handler in cli.ts already computes the FULL next SetupState itself (recomputing `rows` fresh
+  // each time — decideSetupOpen's own contract), so the reducer has nothing left to decide here,
+  // the same "this is presentation-adjacent plumbing, not a decision" reasoning `session-updated`
+  // already applies to a whole SessionState.
+  | { type: "setup-step"; state: SetupState }
+  // Mirrors `model-picker-resolved`'s own `leftoverInput` handling exactly — /setup's panel can
+  // also close mid-chunk on a real pty.
+  | { type: "setup-resolved"; leftoverInput?: string };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -165,6 +207,12 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           };
     case "input-prefill-consumed":
       return { ...state, pendingInputPrefill: undefined };
+    case "setup-requested":
+      return { ...state, pendingSetup: { step: "list", rows: action.rows, selected: 0 } };
+    case "setup-step":
+      return { ...state, pendingSetup: action.state };
+    case "setup-resolved":
+      return { ...state, pendingSetup: undefined, pendingInputPrefill: action.leftoverInput };
   }
 }
 

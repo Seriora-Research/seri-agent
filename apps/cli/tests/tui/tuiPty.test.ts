@@ -219,6 +219,77 @@ function childScriptModelSwitch(dir: string): string {
   ].join("\n");
 }
 
+// D1/D2 (feature-plan.md, multi-provider-byok-phase-2): plan Test-plan item 8, "/model
+// multi-route" — the end-to-end proof that decideModelPickerOpen's grouping (unit-tested already)
+// and a real picker selection actually round-trip through a live pick to a persisted provider.
+// Both `getGroqModel` and `getAnthropicModel` are injected so the picked route dispatches without
+// needing a real key for either — resolveRoute (D2) leaves an explicit pick unchanged whenever
+// NEITHER sibling in its route group has a configured key, which is the case here (only
+// GROQ_API_KEY is set, and claude-sonnet-5's route group is anthropic/openrouter, not groq).
+function childScriptModelMultiRoute(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " provider=" + opts.provider);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: (id) => ({ id }),`,
+    `  getAnthropicModel: (id) => ({ id }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// D4's own real surviving code path (feature-plan.md): D3's fix makes it structurally impossible
+// for a session that starts already-rerouted to ever persist on turn 1 (see childScriptReroute's
+// own test, above) — so the only place D4 ("persist the RESOLVED pair, not the one requested") can
+// still fire is a LIVE, mid-session /model pick whose own target then gets rerouted on the very
+// next turn. Turn 1 runs on the session's own starting pair (GROQ_API_KEY configured, no reroute).
+// Mid-session, the picker explicitly selects (claude-sonnet-5, openrouter) — OPENROUTER_API_KEY is
+// deliberately never set, and ANTHROPIC_API_KEY is, so resolveRoute reroutes turn 2 to the native
+// sibling instead.
+function childScriptModelPickRerouted(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.ANTHROPIC_API_KEY = "fake-test-key";`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " provider=" + opts.provider);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: (id) => ({ id }),`,
+    `  getAnthropicModel: (id) => ({ id }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // MEDIUM finding (code-review re-review on PR #71): loop.ts yields `messages-updated` once per
 // tool call within a SINGLE turn (its own multiple yield sites), not once per turn — so this
 // script's turn 2 yields it three times before `done`, simulating a turn with several tool calls,
@@ -300,6 +371,80 @@ function childScriptModelSwitchFailure(dir: string): string {
     `  loadAgentsFile: () => "",`,
     `  isTTY: process.stdout.isTTY,`,
     `  sessionsDir: ${JSON.stringify(sessionsDir)},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// D2/D3 (feature-plan.md, multi-provider-byok-phase-2): a session explicitly pinned to
+// (claude-sonnet-5, openrouter) — the design doc's own motivating pair (routes.test.ts's own
+// comment has the full story) — with only ANTHROPIC_API_KEY present and OPENROUTER_API_KEY
+// deleted, so routing-priority resolution must reroute to the native Anthropic sibling on turn 1.
+// The fake runLoop reports `opts.model.via` (which of the two injected constructors was actually
+// called) and `opts.provider` (driveLoop's own resolved-pair argument, D3's fix to what used to
+// read the REQUESTED pair) — two independent signals that the reroute actually took effect, not
+// just that SOME model answered.
+function childScriptReroute(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_MODEL = "anthropic/claude-sonnet-5";`,
+    `process.env.SERI_PROVIDER = "openrouter";`,
+    `process.env.ANTHROPIC_API_KEY = "fake-test-key";`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `delete process.env.GROQ_API_KEY;`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " via=" + opts.model.via + " provider=" + opts.provider);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getOpenRouterModel: (id) => ({ id, via: "or" }),`,
+    `  getAnthropicModel: (id) => ({ id, via: "anthropic" }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// The negative-control sibling of childScriptReroute, just above: identical pinned pair, but
+// OPENROUTER_API_KEY is present too (alongside ANTHROPIC_API_KEY) — D2 rule 1 says an explicit
+// pick with its own key wins even when a native sibling also has one, so this must stay on
+// OpenRouter and never print a reroute notice at all.
+function childScriptNoReroute(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_MODEL = "anthropic/claude-sonnet-5";`,
+    `process.env.SERI_PROVIDER = "openrouter";`,
+    `process.env.ANTHROPIC_API_KEY = "fake-test-key";`,
+    `process.env.OPENROUTER_API_KEY = "fake-test-key";`,
+    `delete process.env.GROQ_API_KEY;`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " via=" + opts.model.via + " provider=" + opts.provider);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getOpenRouterModel: (id) => ({ id, via: "or" }),`,
+    `  getAnthropicModel: (id) => ({ id, via: "anthropic" }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
     `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
     `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
     `});`,
@@ -474,6 +619,64 @@ function childScriptRewindDuringStream(dir: string, flagPath: string): string {
   ].join("\n");
 }
 
+// D5-D8 (feature-plan.md): /setup's own real-pty harness — a never-resolving runLoop (mirrors
+// childScriptInput's own shape) so the TUI stays interactive for as long as a test needs. Every
+// /setup script sets HOME (D9's own reasoning, so a write never touches the developer's real
+// ~/.seri), SERI_DISABLE_MODELS_FETCH (deterministic catalog), and SERI_SKIP_KEY_VALIDATION=1 (D5's
+// own escape hatch — no /setup test ever touches the network). GROQ_API_KEY is set as a real env
+// var, same as every other script in this file — the groq ROW reads `source: "env"` because of it,
+// which some of the tests below rely on precisely because it is NOT the row under test.
+function childScriptSetup(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// The env-shadow scenario's own script (item 7, feature-plan.md): unlike childScriptSetup, this
+// one exports OPENAI_API_KEY as a real env var AND pre-seeds a DIFFERENT value into config.json
+// (below, host-side, before spawn) — D8's own point is that env wins the SOURCE regardless of
+// whether a config entry also exists underneath.
+function childScriptSetupEnvShadow(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.OPENAI_API_KEY = "sk-openai-env-value";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
 // research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
 // identical signature... with zero change to loop.ts/gate.ts") that every earlier round of this
@@ -588,6 +791,42 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   });
+
+  // Polls for config.json to satisfy a predicate on its own PARSED content, rather than a flat
+  // sleep or a bare existence check — measured live (a session-start reroute test, WSL; then
+  // three more sites, macOS CI round 3): a fixed "(done: no-tool-call)"/"Saved …"/"Removed …" line
+  // landing in the captured pty stdout is not a reliable proxy for "the write already happened"
+  // (the file write itself is synchronous once persistDefaultModel/setConfigValue actually runs,
+  // but nothing guarantees a captured stdout line and a DIFFERENT process's own filesystem read
+  // observe that same moment in the same order on every runner — measured to differ on WSL and
+  // again on macOS CI, never on Windows or ubuntu-latest, which is exactly what made this look
+  // fixed after the first occurrence). A bare existence check is NOT enough on its own either:
+  // several call sites here read a config.json that already EXISTS with OLD content (seedConfig's
+  // own pre-write, or an earlier turn's own persist) before the assertion's own write is expected
+  // to land — existence alone would return instantly against the stale content and never actually
+  // wait for the NEW value, silently defeating the whole poll. `predicate` is what closes that
+  // gap: every call site asserts on the SPECIFIC value it's about to check, so the poll can't
+  // return before that value is genuinely present. Mirrors `sawLine`'s own bounded-poll idiom
+  // (20ms interval, a deadline, not a flat sleep) for a file instead of a stdout string. Declared
+  // here, before the first test, rather than lower in the file where it was first added (`function`
+  // hoisting made a later declaration technically reachable from an earlier test too, but every
+  // other helper in this file is declared before its own first use — this one now is too).
+  async function waitForConfig(
+    path: string,
+    predicate: (config: Record<string, string>) => boolean,
+    timeoutMs = 5000,
+  ): Promise<Record<string, string>> {
+    const deadline = Date.now() + timeoutMs;
+    let config: Record<string, string> = {};
+    while (Date.now() < deadline) {
+      if (existsSync(path)) {
+        config = JSON.parse(readFileSync(path, "utf8"));
+        if (predicate(config)) return config;
+      }
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return config;
+  }
 
   // The TUI counterpart of approvalPromptPty.test.ts's "a real Ctrl-C at the prompt cancels the
   // turn" test — same fact (a single press cancels the in-flight turn rather than being silently
@@ -888,13 +1127,137 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // for every future brand-new session, not just this one — proven here on the write side.
       // Waiting for turn 2's own "done" first: it is only dispatched after turn 2's
       // messages-updated has already been processed by cli.ts's onEvent, which is where the
-      // persist (if any) happens, so by the time "done" appears the write is already on disk.
+      // persist (if any) happens — the write itself is synchronous by that point, but a captured
+      // pty stdout line and a DIFFERENT process's own filesystem read are not guaranteed to
+      // observe that moment in the same order on every runner (macOS CI, round 3: this exact
+      // ENOENT). waitForConfig polls for the actual expected value instead of assuming.
       await sawLineTimes("(done: no-tool-call)", 2);
-      const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+      const config = await waitForConfig(
+        join(dir, ".seri", "config.json"),
+        (c) => c.SERI_MODEL === "llama-3.3-70b-versatile",
+      );
       expect(config.SERI_MODEL).toBe("llama-3.3-70b-versatile");
       expect(config.SERI_PROVIDER).toBe("groq");
       // Negative control built in: the pre-switch model must not be the one that landed.
       expect(config.SERI_MODEL).not.toBe("openai/gpt-oss-120b");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // D1/D2 (feature-plan.md): plan Test-plan item 8, "/model multi-route" — filtering to a model
+  // reachable through more than one provider shows every route, and picking one specific route
+  // (not just "a model") is what actually dispatches AND persists.
+  test("/model shows every route to a multi-route model, and picking one persists that specific provider", async () => {
+    const scriptPath = join(dir, "child-model-multiroute.mjs");
+    writeFileSync(scriptPath, childScriptModelMultiRoute(dir));
+
+    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
+      await sawLine("(done: no-tool-call)");
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      // The Route column header — present regardless of catalog ordering, unlike a specific row.
+      await sawLine("Route");
+
+      // Narrows to exactly the two claude-sonnet-5 routes in the bundled manifest (verified
+      // directly against catalog-manifest.json before writing this string): the native Anthropic
+      // entry (bare id "claude-sonnet-5") and the OpenRouter entry ("anthropic/claude-sonnet-5",
+      // which also contains this substring).
+      child.stdin?.write("claude-sonnet-5");
+      await sawLine("claude-sonnet-5");
+      // Both routes visible — the actual proof decideModelPickerOpen's own unit tests can't give:
+      // a real picker, on a real pty, showing both rows for one filtered query.
+      await sawLine("anthropic");
+      await sawLine("openrouter");
+
+      // byRoutePriority (D2) sorts native before aggregator WITHIN a route group, so the
+      // Anthropic row is already the top/default-selected one for this filtered query — no Down
+      // press is needed to reach it. (The plan's own Test-plan item 8 says "Down to the anthropic
+      // row," written before the picker's final ordering rule existed; selecting the
+      // already-highlighted row via Enter directly is the accurate description of this picker's
+      // real behavior, not a weaker test.)
+      child.stdin?.write("\r");
+      // The mandatory wait after any keypress that swaps the mounted component (picker -> input
+      // box) — childScriptModelSwitch's own test has the full measured story for this.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      await sawLine("RUNLOOP_CALL 2 model=claude-sonnet-5 provider=anthropic");
+      await sawLineTimes("(done: no-tool-call)", 2);
+
+      // waitForConfig, not a bare readFileSync right after sawLineTimes — the same race macOS CI
+      // caught elsewhere in this file (waitForConfig's own comment).
+      const config = await waitForConfig(
+        join(dir, ".seri", "config.json"),
+        (c) => c.SERI_MODEL === "claude-sonnet-5",
+      );
+      expect(config.SERI_MODEL).toBe("claude-sonnet-5");
+      expect(config.SERI_PROVIDER).toBe("anthropic");
+      // Negative control: the OTHER route to the same model must not be what persisted.
+      expect(config.SERI_PROVIDER).not.toBe("openrouter");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // D4's own real, still-reachable path — see childScriptModelPickRerouted's own comment for why
+  // this is the ONLY scenario left alive after D3's fix.
+  test("a live /model pick to a route that itself reroutes persists the RESOLVED provider, not the one literally picked (D4)", async () => {
+    const scriptPath = join(dir, "child-model-pick-rerouted.mjs");
+    writeFileSync(scriptPath, childScriptModelPickRerouted(dir));
+
+    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
+      await sawLine("(done: no-tool-call)");
+
+      // Turn 1 ran on the session's own starting pair (GROQ_API_KEY configured, no reroute) — the
+      // pre-condition this test needs: nothing persisted yet, so a later write is provably new.
+      expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      await sawLine("Route");
+
+      // Multi-term filtering (App.tsx's own matchesFilter, D1/D2 commit) narrows to EXACTLY the
+      // openrouter row: "claude-sonnet-5" matches both routes' own id, "openrouter" matches only
+      // this row's own provider field — sidesteps needing an arrow-key press to reach a specific
+      // row within a group, and picks the route that deliberately has NO key, which is the whole
+      // point of this test (proving the LATER reroute, not the literal pick, is what persists).
+      child.stdin?.write("claude-sonnet-5 openrouter");
+      await sawLine("claude-sonnet-5 openrouter");
+      child.stdin?.write("\r");
+      // The mandatory wait after a keypress that swaps the mounted component (picker -> input
+      // box) — childScriptModelSwitch's own test has the full measured story for this.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      // Rerouted: the picked provider (openrouter) has no key, but anthropic — claude-sonnet-5's
+      // native sibling — does, so resolveRoute reroutes turn 2 there (D2).
+      await sawLine("RUNLOOP_CALL 2 model=claude-sonnet-5 provider=anthropic");
+      await sawLineTimes("(done: no-tool-call)", 2);
+      // "(done: no-tool-call)" appearing in the captured pty stdout is not a reliable proxy for
+      // "config.json has already been written" — measured live, waiting on it alone flaked here.
+      // Poll for the actual content instead (waitForConfig's own comment).
+      const config = await waitForConfig(
+        join(dir, ".seri", "config.json"),
+        (c) => c.SERI_MODEL === "claude-sonnet-5",
+      );
+      expect(config.SERI_MODEL).toBe("claude-sonnet-5");
+      // D4: the RESOLVED pair persists, not the one literally selected in the picker.
+      expect(config.SERI_PROVIDER).toBe("anthropic");
+      expect(config.SERI_PROVIDER).not.toBe("openrouter");
     } finally {
       child.kill("SIGKILL");
     }
@@ -959,7 +1322,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         "RUNLOOP_CALL 3 model=llama-3.3-70b-versatile messages=5 systemHasModelId=true",
       );
       await sawLineTimes("(done: no-tool-call)", 3);
-      const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+      // waitForConfig, not a bare readFileSync right after sawLineTimes — the same race macOS CI
+      // caught elsewhere in this file (waitForConfig's own comment).
+      const config = await waitForConfig(
+        join(configDir, "config.json"),
+        (c) => c.SERI_MODEL === "llama-3.3-70b-versatile",
+      );
       expect(config.SERI_MODEL).toBe("llama-3.3-70b-versatile");
       expect(config.SERI_PROVIDER).toBe("groq");
     } finally {
@@ -1010,6 +1378,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // after the generator's three earlier yields have all been consumed in order.
       await sawLineTimes("(done: no-tool-call)", 2);
 
+      // Bug fixed here (macOS CI, round 3): this went straight to `occurrences()` with no
+      // preceding `sawLine` for the SAME text — unlike every other occurrences() check in this
+      // file (the argv-task/second-task echo checks, above), which all wait for the line to
+      // actually land before counting it. `occurrences()` is a synchronous snapshot of whatever is
+      // CURRENTLY captured; "(done: no-tool-call)" appearing is not proof the warning (printed
+      // earlier in the same turn, but via a different stream — printWarning is console.error, the
+      // done line is Ink's own stdout render) has also reached the captured buffer yet. Waiting for
+      // it explicitly first is what makes the count below actually mean something.
+      await sawLine("could not save the default model:");
       // The actual assertion: one warning for the whole turn, not three.
       expect(occurrences("could not save the default model:")).toBe(1);
       expect(existsSync(join(configDir, "config.json"))).toBe(false);
@@ -1333,6 +1710,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       writeFileSync(flagPath, "");
       await sawLine("(done: no-tool-call)");
+      // Bug fixed here (macOS CI, round 3): waited on "(done: …)" but never on "Hello world"
+      // itself before counting it — the same missing-poll shape as the persist-warning occurrences
+      // check above. Explicit wait first, matching every other occurrences() check in this file.
+      await sawLine("Hello world");
 
       expect(occurrences("Hello world")).toBe(1);
     } finally {
@@ -1482,4 +1863,525 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.kill("SIGKILL");
     }
   }, 60_000);
+
+  // D2/D3 (feature-plan.md): the routing-priority reroute end to end — a real turn actually
+  // dispatches to the rerouted provider's own constructor (`via=anthropic`, not the requested
+  // `or`), and the transcript carries exactly the notice D2 requires.
+  //
+  // Does NOT assert a config.json write. D3's own fix — confirmedModel/lastPersistedModel
+  // initialize from `prepared.route` (the pair prepareSession already resolved), not
+  // `prepared.session` (what was merely requested) — means a session whose reroute is already
+  // active BEFORE its first turn even runs looks, to the persist guard, identical to a session
+  // that never touched /model at all: turn 1's own re-resolution lands on the SAME pair the guard
+  // already started at, so the inequality never trips and nothing new is written. This is
+  // deliberate, not an oversight: pinning an automatic fallback to the GLOBAL default the instant
+  // it happens once would mean a transient missing key permanently changes what every future
+  // brand-new session uses, even after the key is added back — the tripwire this protects
+  // (tuiPty.test.ts's own "never touched /model never writes config.json" test) applies with equal
+  // force to "never touched /model, only got auto-rerouted." A LIVE /model pick that itself then
+  // gets rerouted (D4's own scenario) is a genuine mid-session CHANGE and persists normally — that
+  // path is exercised by childScriptModelSwitch's own suite of tests already, unmodified by this
+  // loop.
+  test("a routing-priority reroute active from session start takes effect on turn 1 and announces itself once, without touching config.json", async () => {
+    const scriptPath = join(dir, "child-reroute.mjs");
+    writeFileSync(scriptPath, childScriptReroute(dir));
+
+    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 via=anthropic provider=anthropic");
+      // Split across two checks, not one long toContain/sawLine: measured on a real pty (WSL),
+      // Ink wraps this line across the terminal's own column width, landing "configured" on its
+      // own following line — the same wrapping App.test.tsx's own approval-prompt assertion
+      // already works around.
+      const noticePrefix =
+        "↻ routing claude-sonnet-5 via anthropic (your key) — no OPENROUTER_API_KEY";
+      await sawLine(noticePrefix);
+      await sawLine("configured");
+      await sawLine("(done: no-tool-call)");
+
+      // Exactly one transcript notice for this one turn — the per-turn cap D2's own acceptance
+      // criterion names, not a re-print on every messages-updated event within it.
+      expect(occurrences(noticePrefix)).toBe(1);
+
+      // Bug fixed here (reviewer-verifier, multi-provider-byok-phase-2): prepareSession's own
+      // printWarning (D2's non-interactive-path notice, "⚠ routing…") used to fire unconditionally,
+      // even on the TUI path — printing a SECOND notice for the same session-start reroute
+      // alongside runTurn's own "↻ routing…" transcript line. printWarning's own "⚠ " prefix is
+      // what distinguishes it from the transcript notice's "↻ " prefix, so this asserts the
+      // console-only one never appears once Ink has actually mounted.
+      expect(occurrences("⚠ routing")).toBe(0);
+
+      // The negative control this test's own point rests on: verified by first removing D3's own
+      // fix (initializing confirmedModel/lastPersistedModel from `prepared.session` instead of
+      // `prepared.route`) and re-running this exact assertion — it failed, with config.json
+      // present and SERI_PROVIDER: "anthropic" written on turn 1, confirming the assertion below
+      // actually exercises the fix rather than being vacuously true.
+      expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // The negative-control sibling of the test above: an explicit pick whose own provider HAS a key
+  // wins even when a native sibling also has one (D2 rule 1) — no reroute, and therefore no notice.
+  test("an explicit pick with its own key stays on that provider and never prints a reroute notice", async () => {
+    const scriptPath = join(dir, "child-no-reroute.mjs");
+    writeFileSync(scriptPath, childScriptNoReroute(dir));
+
+    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 via=or provider=openrouter");
+      await sawLine("(done: no-tool-call)");
+
+      expect(occurrences("↻ routing")).toBe(0);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // D5-D8 (feature-plan.md): /setup end to end on a real pty. `wait()` is the mandatory 100ms
+  // pause this file's own /model tests already require after any keypress that swaps InputBox for
+  // a different mounted component (or back) — React's own unmount/mount commits a tick after the
+  // dispatch that triggered it (childScriptModelSwitch's own test has the full measured story);
+  // omitting it here would be the identical bug, just for /setup's own panel instead of the picker.
+  function seedConfig(target: string, values: Record<string, string>): void {
+    const configDir = join(target, ".seri");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "config.json"), JSON.stringify(values));
+  }
+
+  function wait100ms(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  describe("/setup", () => {
+    test("lists all five providers with correct source, masked values, and disabled removal for an env row", async () => {
+      seedConfig(dir, { ANTHROPIC_API_KEY: "sk-ant-fake-config-key-abcdefgh" });
+      const scriptPath = join(dir, "child-setup-list.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+
+        await sawLine("sk-a...efgh");
+        await sawLine("set by $GROQ_API_KEY in your environment");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("add: a new key lands in config.json, and the raw value never appears in the pty stdout", async () => {
+      const scriptPath = join(dir, "child-setup-add.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+
+        // CATALOG_PROVIDERS order is groq, openrouter, anthropic, openai, google — one Down
+        // reaches openrouter, unset at this point (only GROQ_API_KEY is set, as an env var).
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        const secret = "sk-or-added-secret-key";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved OPENROUTER_API_KEY.");
+
+        // waitForConfig, not a bare readFileSync right after sawLine — the same race macOS CI
+        // caught elsewhere in this file (waitForConfig's own comment).
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENROUTER_API_KEY === secret,
+        );
+        expect(config.OPENROUTER_API_KEY).toBe(secret);
+
+        // The negative control at the process level: the raw key must never have reached stdout,
+        // masked or otherwise — checked against the WHOLE accumulated transcript, not just the
+        // enter-key step's own frame.
+        child.kill("SIGKILL");
+        const { stdout } = await exited;
+        expect(stdout).not.toContain(secret);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Code-review finding (PR #73, round 3, item #1): Enter and Delete were dead in the real TUI
+    // twice already — App.test.tsx's own unit test for this covers the same fix at the component
+    // level, but "no test exercises this" is exactly what let the ordering bug through the
+    // component-level pty suite twice, so this test uses raw Enter/Delete (never the 'a'/'r' letter
+    // shortcuts every OTHER /setup pty test above uses) end to end against a real terminal.
+    test("Enter opens the enter-key step and Delete requests removal, without using the 'a'/'r' letter shortcuts", async () => {
+      seedConfig(dir, { OPENROUTER_API_KEY: "sk-or-existing" });
+      const scriptPath = join(dir, "child-setup-enter-delete.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+
+        // Down to openrouter (index 1), removable (config-sourced from seedConfig above).
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        // Raw Enter, not "a" — the whole point of this test.
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        // Escape back to the list, re-selecting the same row, rather than typing a new value — add/
+        // replace via Enter is already exercised at the component level (App.test.tsx); this test's
+        // own job is proving Enter/Delete reach the TUI's real useInput wiring, not re-covering the
+        // write path.
+        child.stdin?.write("\x1b");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await wait100ms();
+        await sawLineTimes("/setup — provider API keys", 2);
+
+        // Raw Delete (`\x1b[3~`, parse-keypress.js's own sequence — distinct from backspace's
+        // `\x7f`), not "r".
+        child.stdin?.write("\x1b[3~");
+        await wait100ms();
+        await sawLine("Remove OPENROUTER_API_KEY");
+
+        child.stdin?.write("y");
+        await sawLine("Removed OPENROUTER_API_KEY.");
+
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENROUTER_API_KEY === undefined,
+        );
+        expect(config.OPENROUTER_API_KEY).toBeUndefined();
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("replace: a different value overwrites the existing one, and no other key is touched", async () => {
+      seedConfig(dir, {
+        OPENROUTER_API_KEY: "sk-or-original-value",
+        ANTHROPIC_API_KEY: "sk-ant-untouched-value",
+      });
+      const scriptPath = join(dir, "child-setup-replace.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        child.stdin?.write("sk-or-replaced-value");
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved OPENROUTER_API_KEY.");
+
+        // waitForConfig, not a bare readFileSync right after sawLine — config.json already EXISTS
+        // here (seedConfig's own pre-write, above), so a bare existence check would return
+        // instantly against the OLD value; the predicate is what actually waits for the replace.
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENROUTER_API_KEY === "sk-or-replaced-value",
+        );
+        expect(config.OPENROUTER_API_KEY).toBe("sk-or-replaced-value");
+        expect(config.ANTHROPIC_API_KEY).toBe("sk-ant-untouched-value");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("remove: the confirmed key is gone, and the other survives", async () => {
+      seedConfig(dir, {
+        OPENROUTER_API_KEY: "sk-or-to-remove",
+        ANTHROPIC_API_KEY: "sk-ant-to-keep",
+      });
+      const scriptPath = join(dir, "child-setup-remove.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+
+        // openrouter (index 1) is config-sourced here, so removable.
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("r");
+        await wait100ms();
+        await sawLine("Remove OPENROUTER_API_KEY");
+
+        child.stdin?.write("y");
+        await sawLine("Removed OPENROUTER_API_KEY.");
+
+        // waitForConfig, not a bare readFileSync right after sawLine — config.json already EXISTS
+        // here (seedConfig's own pre-write, above) WITH the key about to be removed, so a bare
+        // existence check would return instantly against the pre-removal content; the predicate is
+        // what actually waits for the removal to land.
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENROUTER_API_KEY === undefined,
+        );
+        expect(config.OPENROUTER_API_KEY).toBeUndefined();
+        expect(config.ANTHROPIC_API_KEY).toBe("sk-ant-to-keep");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The negative control opening the panel alone (and closing it again) must not write anything.
+    test("cancel: opening and closing /setup with Escape writes nothing", async () => {
+      const scriptPath = join(dir, "child-setup-cancel.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("\x1b"); // Escape
+        await new Promise((resolve) => setTimeout(resolve, 30)); // Escape's own ambiguity window
+        await wait100ms();
+
+        expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("/setup with an argument is rejected and opens no panel", async () => {
+      const scriptPath = join(dir, "child-setup-bad-args.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup now");
+        await sawLine("/setup now");
+        child.stdin?.write("\r");
+        await sawLine("/setup: invalid arguments.");
+
+        expect(occurrences("/setup — provider API keys")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // D8: an env-sourced row with NOTHING saved in config.json underneath it reports the
+    // environment as its source and refuses removal — there is genuinely nothing to unset.
+    test("an env-shadowed row with no config entry reports the environment as the source and refuses removal", async () => {
+      const scriptPath = join(dir, "child-setup-env-shadow.mjs");
+      writeFileSync(scriptPath, childScriptSetupEnvShadow(dir));
+
+      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+        await sawLine("set by $OPENAI_API_KEY in your environment");
+
+        // Down to openrouter, anthropic, openai — three Downs (groq=0, openrouter=1,
+        // anthropic=2, openai=3).
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("r");
+        await wait100ms();
+
+        // Refused — removable is false for an env row with NO config.json entry underneath it,
+        // so the confirm-remove step never even opens: no "Remove OPENAI_API_KEY" prompt anywhere
+        // in the transcript, and config.json is never even created (nothing else in this test
+        // writes to it either).
+        expect(occurrences("Remove OPENAI_API_KEY")).toBe(0);
+        expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Bug fixed here (code-review, PR #73): an env-shadowed row WITH a config.json entry
+    // underneath it (unlike the sibling test above) IS removable — providerKeyState's own
+    // `hasConfigEntry` is independent of which source wins for display. Before the fix, this used
+    // to be silently refused too (removable was read off `source === "config"`, which is always
+    // false in this exact state), making a previously-saved /setup secret permanently unremovable
+    // the moment the same-named env var got exported.
+    test("an env-shadowed row WITH a config entry underneath is removable", async () => {
+      seedConfig(dir, { OPENAI_API_KEY: "sk-openai-config-value" });
+      const scriptPath = join(dir, "child-setup-env-shadow-removable.mjs");
+      writeFileSync(scriptPath, childScriptSetupEnvShadow(dir));
+
+      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+        // Item #5 (round 3): the row's OWN text distinguishes this removable case from the
+        // sibling test's non-removable one — not the old "unset it in your shell" text (which
+        // would be actively wrong here: 'r' genuinely removes the config.json entry underneath).
+        await sawLine("config entry underneath — removable");
+        expect(occurrences("set by $OPENAI_API_KEY in your environment")).toBe(0);
+
+        // Down to openrouter, anthropic, openai — three Downs (groq=0, openrouter=1,
+        // anthropic=2, openai=3).
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("r");
+        await wait100ms();
+
+        // No longer refused: the confirm-remove step opens, and confirming it removes the
+        // config.json entry — the env var still shadows the (now-absent) config value going
+        // forward, but the stored secret itself is gone, which is the whole point of D8's fix.
+        await sawLine("Remove OPENAI_API_KEY");
+        child.stdin?.write("y");
+        await sawLine("Removed OPENAI_API_KEY.");
+
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENAI_API_KEY === undefined,
+        );
+        expect(config.OPENAI_API_KEY).toBeUndefined();
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Code-review finding (PR #73, round 2, item #1): round 1 only guarded the /setup-OPEN
+    // interceptor (cli.ts's onSubmit) against a malformed config.json — this exercises the two
+    // remaining call sites reached only AFTER the panel is already open, which round 1 missed:
+    // onSetupRemove's own request branch (providerKeyState), and onSetupBack (setupListState via
+    // the new dispatchSetupList wrapper). onSetupSelect is deliberately NOT exercised for a crash
+    // here — this round's fix made it a pure PROVIDER_API_KEY_NAMES lookup with no I/O at all, so
+    // it has nothing left to throw on; the "a" step below instead proves exactly that, by using it
+    // successfully while config.json is still malformed.
+    //
+    // Title says "a clean command-error", not "instead of crashing the TUI": measured directly
+    // (temporarily reverting both guards and re-running this test) — on this Bun/Ink combination, an
+    // unguarded synchronous throw out of a `useInput` callback does NOT actually kill the process
+    // (`emitInput`, ink/build/components/App.js's own `internal_eventEmitter.current.emit('input',
+    // ...)`, survives it and the TUI keeps accepting input either way), so "still alive after"
+    // cannot be this test's own discriminator. What the guard actually changes, confirmed by that
+    // same revert: without it, Bun's own uncaught-exception printer dumps a multi-line, ANSI-colored
+    // stack trace (a source excerpt plus "at providerKeyState (...)"/"at onSetupRemove (...)"
+    // frames) straight into the pty, smeared across Ink's own managed screen redraw — which is what
+    // the final assertion below checks is absent.
+    test("a config.json that becomes malformed while /setup is already open degrades to a clean command-error, not a raw stack-trace dump", async () => {
+      seedConfig(dir, { OPENROUTER_API_KEY: "sk-or-value" });
+      const scriptPath = join(dir, "child-setup-malformed-config.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, sawLineTimes, occurrences } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+
+        const configPath = join(dir, ".seri", "config.json");
+        // Corrupted AFTER the panel already opened successfully once — the risk this test targets
+        // is a SECOND read, from a call site reached only once /setup is already open.
+        writeFileSync(configPath, "{not valid json");
+
+        // openrouter (index 1) was removable while config.json was still valid — onSetupRemove's
+        // own request branch (providerKeyState) is what actually hits the malformed file now.
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("r");
+        await sawLine("JSON Parse error");
+
+        // Still on the list step (the failed read never reached a dispatch that would move it) —
+        // "a" on the same row exercises onSetupSelect, which does no I/O after this round's fix and
+        // so must succeed even with config.json still malformed.
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        // Escape from enter-key exercises onSetupBack -> dispatchSetupList -> decideSetupOpen, the
+        // remaining full-scan read — same malformed file, same degrade. sawLineTimes, not sawLine:
+        // the first "JSON Parse error" already satisfies a bare substring check instantly.
+        child.stdin?.write("\x1b");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await sawLineTimes("JSON Parse error", 2);
+
+        // Restoring valid JSON and retrying proves the TUI actually recovered, not just that it
+        // survived one bad read.
+        writeFileSync(configPath, JSON.stringify({ OPENROUTER_API_KEY: "sk-or-value" }));
+        child.stdin?.write("\x1b");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await wait100ms();
+        await sawLineTimes("/setup — provider API keys", 2);
+
+        // The actual negative control this test rests on (this comment block's own top note): both
+        // throws above are caught before either ever reaches a raw stack trace in the captured pty
+        // output. Not "at providerKeyState" — Bun's own colorized frame renderer interleaves ANSI
+        // codes INSIDE function names (confirmed by inspecting the raw, unguarded dump byte-for-byte:
+        // "at " and "providerKeyState" are not contiguous), which would make that substring check
+        // pass vacuously either way. A stack frame's file path is not interleaved the same way
+        // (confirmed the same way), so this checks for that instead.
+        expect(occurrences("provider/keys.ts")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
 });
