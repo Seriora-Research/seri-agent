@@ -114,9 +114,13 @@ permanent store are in `apps/cli/src/permissions/store.ts`'s own comments.
 
 Whether a tool needs permission at all is derived from `WRITE_TOOL_NAMES` in
 `apps/cli/src/provider/tools.ts` — **single source of truth**; a new write-capable tool must be
-added there or it silently bypasses the gate. The AI SDK's automatic tool execution is disabled
-(`execute` stripped before `streamText`); `runLoop` calls each tool's `execute` itself, after the
-gate decides whether it's allowed to run.
+added there or it silently bypasses the gate. The one confirmed exception is `memory_write`
+(`apps/cli/src/memory/tool.ts`): it is genuinely write-capable but deliberately kept out of
+`WRITE_TOOL_NAMES`, because it writes under the profile root, not the worktree, and is gated
+instead by the `/memory` approval-staging system plus the archivist's own hardcoded
+`permissionMode: "auto"` — not by this gate at all. The AI SDK's automatic tool execution is
+disabled (`execute` stripped before `streamText`); `runLoop` calls each tool's `execute` itself,
+after the gate decides whether it's allowed to run.
 
 **Tools are pure functions**, independently testable without a model:
 `read_file`/`write_file`/`edit`/`grep`/`glob` (`apps/cli/src/tools/`), plus `bash` and
