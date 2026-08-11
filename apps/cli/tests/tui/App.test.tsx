@@ -510,7 +510,13 @@ describe("App", () => {
   describe("setup panel", () => {
     function setupRows(): SetupProviderRow[] {
       return [
-        { provider: "groq", keyName: "GROQ_API_KEY", source: "unset", masked: undefined, removable: false },
+        {
+          provider: "groq",
+          keyName: "GROQ_API_KEY",
+          source: "unset",
+          masked: undefined,
+          removable: false,
+        },
         {
           provider: "openrouter",
           keyName: "OPENROUTER_API_KEY",
@@ -525,8 +531,20 @@ describe("App", () => {
           masked: "sk-a...wxyz",
           removable: false,
         },
-        { provider: "openai", keyName: "OPENAI_API_KEY", source: "unset", masked: undefined, removable: false },
-        { provider: "google", keyName: "GOOGLE_GENERATIVE_AI_API_KEY", source: "unset", masked: undefined, removable: false },
+        {
+          provider: "openai",
+          keyName: "OPENAI_API_KEY",
+          source: "unset",
+          masked: undefined,
+          removable: false,
+        },
+        {
+          provider: "google",
+          keyName: "GOOGLE_GENERATIVE_AI_API_KEY",
+          source: "unset",
+          masked: undefined,
+          removable: false,
+        },
       ];
     }
 

@@ -916,7 +916,9 @@ async function prepareSession(
     configuredProviders(configDir),
   );
   if (route.rerouted && !isTTY) {
-    printWarning(`routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`);
+    printWarning(
+      `routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`,
+    );
   }
   let model: LanguageModel;
   try {
@@ -1611,7 +1613,10 @@ async function runTui(
     const selected =
       selectedProvider === undefined
         ? 0
-        : Math.max(0, rows.findIndex((row) => row.provider === selectedProvider));
+        : Math.max(
+            0,
+            rows.findIndex((row) => row.provider === selectedProvider),
+          );
     return { step: "list", rows, selected };
   }
 
@@ -1703,7 +1708,8 @@ async function runTui(
 
   function onSetupBack(): void {
     const current = liveState.pendingSetup;
-    const provider = current !== undefined && current.step !== "list" ? current.provider : undefined;
+    const provider =
+      current !== undefined && current.step !== "list" ? current.provider : undefined;
     dispatch({ type: "setup-step", state: setupListState(provider) });
   }
 
@@ -1734,8 +1740,11 @@ async function runTui(
     // `SessionState<ModelMessage>` (tui/reducer.ts), so this is the one place that puts it back —
     // the same kind of "this file already knows a stronger invariant tsc can't see" gap
     // `resolveRunTui!`'s own definite-assignment assertion, above, papers over too.
-    const { id: sessionId, model: requestedModel, provider: requestedProvider } =
-      session as RunSession;
+    const {
+      id: sessionId,
+      model: requestedModel,
+      provider: requestedProvider,
+    } = session as RunSession;
     // D3 (feature-plan.md): re-resolved every turn, same reasoning as the model re-resolution
     // above — a routing-priority reroute (D2) must be reconsidered on every turn too, not just at
     // session start, so a key added mid-session via /setup takes effect on the very next turn.

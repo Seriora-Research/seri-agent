@@ -102,9 +102,10 @@ describe("decideModelPickerOpen", () => {
       ],
     };
 
-    expect(
-      decideModelPickerOpen(catalog, new Set()).map((row) => row.entry.id),
-    ).toEqual(["a", "c"]);
+    expect(decideModelPickerOpen(catalog, new Set()).map((row) => row.entry.id)).toEqual([
+      "a",
+      "c",
+    ]);
   });
 
   // D1/D2 (feature-plan.md): a model reachable through more than one provider lands as

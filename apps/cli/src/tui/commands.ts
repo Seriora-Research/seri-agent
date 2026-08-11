@@ -92,7 +92,11 @@ export function decideModelPickerOpen(
   for (const group of groups.values()) {
     const ordered = [...group].sort(byRoutePriority);
     for (const entry of ordered) {
-      rows.push({ entry, keyConfigured: configured.has(entry.provider), alternatives: group.length - 1 });
+      rows.push({
+        entry,
+        keyConfigured: configured.has(entry.provider),
+        alternatives: group.length - 1,
+      });
     }
   }
   return rows;

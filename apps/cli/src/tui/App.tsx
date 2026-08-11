@@ -214,8 +214,7 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
 // reachable sibling still reads as reachable, not as a dead end.
 export function formatModelRow(row: ModelPickerEntry): string {
   const { entry, keyConfigured, alternatives } = row;
-  const suffix =
-    alternatives > 0 ? ` +${alternatives} route${alternatives === 1 ? "" : "s"}` : "";
+  const suffix = alternatives > 0 ? ` +${alternatives} route${alternatives === 1 ? "" : "s"}` : "";
   return (
     [
       truncatePad(entry.displayName, NAME_WIDTH),
@@ -243,7 +242,10 @@ const MODEL_PICKER_HEADER = [
 // now also provider); a multi-term one (e.g. "sonnet-5 anthropic") is what lets a query narrow to
 // one specific ROUTE of a multi-route model rather than only ever narrowing by name.
 function matchesFilter(row: ModelPickerEntry, query: string): boolean {
-  const terms = query.toLowerCase().split(/\s+/).filter((term) => term.length > 0);
+  const terms = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((term) => term.length > 0);
   if (terms.length === 0) return true;
   const { entry } = row;
   const haystacks = [
@@ -289,9 +291,7 @@ function ModelPicker({
   const [scrollOffset, setScrollOffset] = useState(0);
 
   const filtered =
-    filterQuery.length === 0
-      ? entries
-      : entries.filter((row) => matchesFilter(row, filterQuery));
+    filterQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, filterQuery));
 
   // Moves the selection to `next` (already clamped to `[0, filtered.length - 1]` by the caller)
   // and slides `scrollOffset` only far enough to keep it inside the visible window — the classic
@@ -514,7 +514,9 @@ function SetupList({
           {formatSetupRow(row)}
         </Text>
       ))}
-      <Text color={theme.muted}>↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close</Text>
+      <Text color={theme.muted}>
+        ↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close
+      </Text>
     </Box>
   );
 }

@@ -134,7 +134,11 @@ describe("run (task invocation)", () => {
 
     let code: number;
     try {
-      code = await run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir });
+      code = await run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      });
     } finally {
       console.error = originalError;
       // Not covered by this describe block's own shared afterEach (which only restores

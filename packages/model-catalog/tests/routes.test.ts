@@ -115,9 +115,6 @@ describe("routesFor", () => {
     const viaOpenRouter = entry({ id: "anthropic/claude-sonnet-5", provider: "openrouter" });
     const unrelated = entry({ id: "gpt-4.1-mini", provider: "openai" });
 
-    expect(routesFor([native, viaOpenRouter, unrelated], native)).toEqual([
-      native,
-      viaOpenRouter,
-    ]);
+    expect(routesFor([native, viaOpenRouter, unrelated], native)).toEqual([native, viaOpenRouter]);
   });
 });
