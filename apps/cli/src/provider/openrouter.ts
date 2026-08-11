@@ -1,6 +1,7 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
 import { getApiKey } from "../config/config";
+import { missingKeyError, PROVIDER_API_KEY_NAMES } from "./keys";
 
 // No default for modelId, matching groq.ts: the caller (provider/model.ts) is the single
 // authority on what id to construct with.
@@ -32,13 +33,14 @@ import { getApiKey } from "../config/config";
 // correct pinning gets backend consistency but not a cache guarantee (2/2 tested backends showed
 // zero cache activity despite a verified-correct pin, 2026-08-10), and no comparable harness has
 // shipped the cache-hit-specific version of this.
-export function getOpenRouterModel(modelId: string, sessionId: string): LanguageModel {
-  const apiKey = getApiKey("OPENROUTER_API_KEY");
-  if (!apiKey) {
-    throw new Error(
-      "OPENROUTER_API_KEY is not set. Run: seri config set OPENROUTER_API_KEY <your-key>",
-    );
-  }
+// `apiKey` defaults to today's lookup but can be overridden — see anthropic.ts's own comment on
+// why (validate.ts's probe call, D5).
+export function getOpenRouterModel(
+  modelId: string,
+  sessionId: string,
+  apiKey = getApiKey(PROVIDER_API_KEY_NAMES.openrouter),
+): LanguageModel {
+  if (!apiKey) throw missingKeyError("openrouter");
   return createOpenRouter({ apiKey, compatibility: "strict" })(modelId, {
     extraBody: { session_id: sessionId },
   });
