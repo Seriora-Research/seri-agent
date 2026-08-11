@@ -57,7 +57,12 @@ import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anth
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
-import { configuredProviders } from "./provider/keys";
+import {
+  configuredProviders,
+  PROVIDER_API_KEY_NAMES,
+  type ProviderKeyState,
+  providerKeyState,
+} from "./provider/keys";
 import { getModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
@@ -1629,12 +1634,29 @@ async function runTui(
     return { step: "list", rows, selected };
   }
 
+  // Every caller of setupListState below goes through this, not the bare dispatch it used to be
+  // (code-review finding, PR #73, round 2): decideSetupOpen reads config.json, and a malformed file
+  // is exactly as reachable once the panel is already open (a racing second `seri` process, a hand
+  // edit) as it is at the /setup-OPEN interceptor above — which the round 1 fix already guarded.
+  // These three call sites (onSetupKeyEntered's success path, onSetupRemove's success path,
+  // onSetupBack) were the ones round 1 missed: reached only from INSIDE an already-open panel, with
+  // nothing above them to catch a throw out of their own `useInput` callback.
+  function dispatchSetupList(selectedProvider?: ModelProvider): void {
+    try {
+      dispatch({ type: "setup-step", state: setupListState(selectedProvider) });
+    } catch (err) {
+      dispatch({ type: "command-error", message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  // No config.json read here at all (code-review finding, PR #73, round 2): a row's `keyName` is a
+  // pure function of `provider` (PROVIDER_API_KEY_NAMES), so the old `decideSetupOpen(configDir).
+  // find(...)` — the full 5-provider scan, just to pull one static field back out of it — was both
+  // slower and a needless crash surface for a value that never needed I/O to produce.
   function onSetupSelect(provider: ModelProvider): void {
-    const row = decideSetupOpen(configDir).find((r) => r.provider === provider);
-    if (row === undefined) return;
     dispatch({
       type: "setup-step",
-      state: { step: "enter-key", provider, keyName: row.keyName, busy: false },
+      state: { step: "enter-key", provider, keyName: PROVIDER_API_KEY_NAMES[provider], busy: false },
     });
   }
 
@@ -1644,12 +1666,11 @@ async function runTui(
   // own comment, above) rather than converting a validated key into a lost one over an unrelated
   // write failure.
   //
-  // One `decideSetupOpen` call, not three (code-review, PR #73): `SetupState`'s own "enter-key"
-  // variant does not carry `rows` (nothing reads it — reducer.ts's own comment), so the two error
-  // branches below no longer need to re-read config.json just to satisfy the type. `keyName` is
-  // resolved once, up front, from the same call this function already needed.
+  // `keyName` is PROVIDER_API_KEY_NAMES[provider] directly, not a decideSetupOpen scan (code-review
+  // finding, PR #73, round 2 — same fix as onSetupSelect just above): no config.json read here at
+  // all, which is also what makes the rest of this function need no crash guard of its own.
   async function onSetupKeyEntered(provider: ModelProvider, value: string): Promise<void> {
-    const keyName = decideSetupOpen(configDir).find((r) => r.provider === provider)?.keyName ?? "";
+    const keyName = PROVIDER_API_KEY_NAMES[provider];
     dispatch({
       type: "setup-step",
       state: { step: "enter-key", provider, keyName, busy: true },
@@ -1691,7 +1712,7 @@ async function runTui(
           ? `Saved ${keyName}.`
           : `Saved ${keyName}. ⚠ ${result.warning}`,
     });
-    dispatch({ type: "setup-step", state: setupListState(provider) });
+    dispatchSetupList(provider);
   }
 
   // D8: this is the SAME prop SetupList's own 'r' keypress and SetupConfirmRemove's own 'y'
@@ -1712,14 +1733,27 @@ async function runTui(
         return;
       }
       dispatch({ type: "transcript-append", line: `Removed ${keyName}.` });
-      dispatch({ type: "setup-step", state: setupListState(provider) });
+      dispatchSetupList(provider);
       return;
     }
-    const row = decideSetupOpen(configDir).find((r) => r.provider === provider);
-    if (row === undefined || !row.removable) return;
+    // `providerKeyState` for the one provider under the cursor, not a decideSetupOpen scan of all
+    // five (code-review finding, PR #73, round 2) — still real I/O (config.json), so still needs
+    // its own guard: a malformed file here used to throw straight out of this `useInput` callback,
+    // the same class of bug round 1 fixed for the /setup-OPEN interceptor but missed here.
+    let state: ProviderKeyState;
+    try {
+      state = providerKeyState(provider, configDir);
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    if (!state.hasConfigEntry) return;
     dispatch({
       type: "setup-step",
-      state: { step: "confirm-remove", provider, keyName: row.keyName },
+      state: { step: "confirm-remove", provider, keyName: state.keyName },
     });
   }
 
@@ -1727,7 +1761,7 @@ async function runTui(
     const current = liveState.pendingSetup;
     const provider =
       current !== undefined && current.step !== "list" ? current.provider : undefined;
-    dispatch({ type: "setup-step", state: setupListState(provider) });
+    dispatchSetupList(provider);
   }
 
   function onSetupClose(leftoverInput?: string): void {
