@@ -47,6 +47,7 @@ import type { PermissionMode } from "./gate/gate";
 import {
   type ApprovalAnswer,
   type ApprovalPrompt,
+  DEFAULT_CONTEXT_WINDOW_SIZE,
   type LoopEvent,
   runLoop as runLoopReal,
 } from "./loop/loop";
@@ -54,6 +55,7 @@ import {
   type ArchivistReport,
   type ArchivistState,
   createArchivistState,
+  resetCursorOnCompaction,
   runArchivist,
   shouldRunArchivist,
 } from "./memory/archivist";
@@ -1421,21 +1423,36 @@ async function driveLoop(
       }
     }
 
+    // A mid-turn compaction splices `latestMessages` down to the compaction summary + preserved
+    // recent messages, so `archivistState.messageCursor` — an index computed against the array
+    // BEFORE that splice — no longer points at the same content; see resetCursorOnCompaction's own
+    // comment for why 0 is the safe, conservative reset. This is what makes `compactedThisTurn`
+    // (set on the `compacted` event above, read here) an actual read, not dead write-only state.
+    resetCursorOnCompaction(archivistState);
     // Inside the same try, before `finally` unregisters the cancel slot: the archivist's own child
     // runLoop must share `controller.signal` while that slot is still registered, per the
     // one-cancel-stops-everything contract every dispatch_subagents child already relies on.
     // `archivistEnabled` is read live from config on every turn (not cached in PreparedRun), so
     // `/memory archivist off` takes effect on the very next turn without a restart.
     const archivistEnabled = loadMemoryConfig(ctx.configDir).archivistEnabled;
+    // `?? DEFAULT_CONTEXT_WINDOW_SIZE`, matching runLoop's own fallback exactly (loop.ts) — without
+    // it, a model absent from the catalog left `contextWindowSize` undefined, and the near-
+    // compaction trigger's own `contextWindowSize !== undefined` guard (archivist.ts) then never
+    // evaluates at all, even though runLoop's compaction math IS running against this same
+    // fallback for that model. The archivist's near-compaction trigger exists precisely so its
+    // save can outrun that flush; it must use the identical number runLoop actually compacts on.
     const trigger = controller.signal.aborted
       ? undefined
-      : shouldRunArchivist(archivistState, catalogEntry?.contextWindow, archivistEnabled);
+      : shouldRunArchivist(
+          archivistState,
+          catalogEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE,
+          archivistEnabled,
+        );
     if (trigger) {
       archivist = await runArchivist({
         messages: latestMessages,
         state: archivistState,
         trigger,
-        memory,
         ctx: { configDir: ctx.configDir, worktree },
         model,
         route,

@@ -5,7 +5,7 @@ import { type CostReport, reportFromCatalogPricing } from "../provider/cost";
 import type { SessionState } from "../session/session";
 import { runSubagent, type SubagentRuntime } from "../subagents/dispatch";
 import { ARCHIVIST_PROMPT, buildRoleToolSet } from "../subagents/roles";
-import { type LoadedMemory, type MemoryContext, renderMemoryTier } from "./store";
+import { type LoadedMemory, loadMemory, type MemoryContext, renderMemoryTier } from "./store";
 import { makeMemoryWriteTool } from "./tool";
 
 // Hermes' own default is ~10 TOOL CALLS, not 10 turns — and turns is the wrong unit here anyway:
@@ -34,6 +34,20 @@ export function createArchivistState(session: SessionState<ModelMessage>): Archi
     compactedThisTurn: false,
     runs: 0,
   };
+}
+
+// A mid-turn compaction splices the transcript array down to the compaction summary + preserved
+// recent messages — `state.messageCursor`, an index computed against the array BEFORE that
+// splice, no longer points at the same content once it has. Left unreset, `buildArchivistGoal`'s
+// `messages.slice(cursor)` (called against the POST-compaction array) could return an empty or
+// truncated slice, or skip content entirely, silently. 0 is the conservative reset: the archivist
+// reviews the whole post-compaction array, worst case re-seeing a little content it partially saw
+// before compaction — harmless, since ARCHIVIST_PROMPT already says never to restate a fact
+// already recorded. driveLoop (cli.ts) calls this once per turn, right before the trigger check,
+// after setting `compactedThisTurn` on the loop's own `compacted` event and before resetting it
+// back to false.
+export function resetCursorOnCompaction(state: ArchivistState): void {
+  if (state.compactedThisTurn) state.messageCursor = 0;
 }
 
 export type ArchivistTrigger = "tool-count" | "near-compaction";
@@ -90,7 +104,6 @@ export async function runArchivist(args: {
   messages: ModelMessage[];
   state: ArchivistState;
   trigger: ArchivistTrigger;
-  memory: LoadedMemory;
   ctx: MemoryContext;
   model: LanguageModel;
   route: { model: string; provider: ModelProvider };
@@ -101,7 +114,13 @@ export async function runArchivist(args: {
   if (args.signal.aborted) return undefined;
 
   const transcript = args.messages.slice(args.state.messageCursor);
-  const goal = buildArchivistGoal(transcript, args.memory, args.trigger);
+  // Reloaded live, not the caller's frozen-per-session PreparedRun.memory: that freeze is correct
+  // for the PROMPT tier (buildVolatileTier's own contract — a write now takes effect next
+  // session, not this one), but the archivist's own goal needs memory as it actually is right
+  // now, especially on a second archivist run in the same session (the approval gate off, or a
+  // mid-session /memory approve) — comparing against stale text would miss a duplicate `add` the
+  // live file already has.
+  const goal = buildArchivistGoal(transcript, loadMemory(args.ctx), args.trigger);
   const runtime: SubagentRuntime = {
     runLoop,
     model: args.model,

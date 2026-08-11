@@ -114,7 +114,7 @@ const MAX_CONSECUTIVE_DENIALS = 3;
 // costs a user who points SERI_MODEL at a smaller window — compaction never fires, then every call
 // 400s — and why the fix waits for Stage 7a's catalog is written up in docs/PROMPT-ROUTING.md.
 // Fully overridable via opts.contextWindowSize.
-const DEFAULT_CONTEXT_WINDOW_SIZE = 131_072;
+export const DEFAULT_CONTEXT_WINDOW_SIZE = 131_072;
 export const DEFAULT_COMPACTION_THRESHOLD = 0.5;
 const DEFAULT_PRESERVE_RECENT_MESSAGES = 20;
 

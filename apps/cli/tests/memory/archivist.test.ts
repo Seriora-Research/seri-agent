@@ -6,15 +6,16 @@ import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { ModelCatalog } from "@seri/model-catalog";
 import { MockLanguageModelV4 } from "ai/test";
 import { buildVolatileTier } from "../../src/agents/systemPrompt";
-import { runLoop } from "../../src/loop/loop";
+import { DEFAULT_CONTEXT_WINDOW_SIZE, runLoop } from "../../src/loop/loop";
 import {
   ARCHIVIST_TOOL_CALL_INTERVAL,
   buildArchivistGoal,
   createArchivistState,
+  resetCursorOnCompaction,
   runArchivist,
   shouldRunArchivist,
 } from "../../src/memory/archivist";
-import { loadMemory, type MemoryContext } from "../../src/memory/store";
+import { applyWrite, loadMemory, type MemoryContext } from "../../src/memory/store";
 import { makeMemoryWriteTool } from "../../src/memory/tool";
 import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
 import { runSubagent, type SubagentRuntime } from "../../src/subagents/dispatch";
@@ -66,6 +67,51 @@ describe("shouldRunArchivist", () => {
     s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
     s.lastInputTokens = 90_000;
     expect(shouldRunArchivist(s, 100_000, false)).toBeUndefined();
+  });
+
+  // MEDIUM finding (reviewer-verifier): a model absent from the catalog left driveLoop passing
+  // `contextWindowSize: undefined` here, so the near-compaction trigger's own `!== undefined`
+  // guard never evaluated at all — even though runLoop's own compaction math was already running
+  // against DEFAULT_CONTEXT_WINDOW_SIZE for that exact model. cli.ts now passes
+  // `catalogEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE`; this pins the fallback value
+  // itself, not a magic number, so a future change to the constant can't silently desync the two.
+  test('"near-compaction" fires against DEFAULT_CONTEXT_WINDOW_SIZE, the real fallback a catalog-absent model gets', () => {
+    const s = state();
+    s.toolCallsSinceRun = 1;
+    s.lastInputTokens = Math.ceil(DEFAULT_CONTEXT_WINDOW_SIZE * 0.5); // crosses 0.5 * 0.9
+    expect(shouldRunArchivist(s, DEFAULT_CONTEXT_WINDOW_SIZE, true)).toBe("near-compaction");
+  });
+});
+
+describe("resetCursorOnCompaction", () => {
+  test("resets messageCursor to 0 when compactedThisTurn is true", () => {
+    const s = createArchivistState({
+      id: "s",
+      cwd: "/",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [],
+    });
+    s.messageCursor = 42;
+    s.compactedThisTurn = true;
+    resetCursorOnCompaction(s);
+    expect(s.messageCursor).toBe(0);
+  });
+
+  // Negative control: an untouched cursor must survive a no-op call — otherwise this couldn't be
+  // told apart from a function that always zeroes the cursor.
+  test("leaves messageCursor untouched when compactedThisTurn is false", () => {
+    const s = createArchivistState({
+      id: "s",
+      cwd: "/",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [],
+    });
+    s.messageCursor = 42;
+    s.compactedThisTurn = false;
+    resetCursorOnCompaction(s);
+    expect(s.messageCursor).toBe(42);
   });
 });
 
@@ -172,7 +218,6 @@ describe("runArchivist", () => {
       ],
       state,
       trigger: "tool-count",
-      memory: loadMemory(ctx),
       ctx,
       model,
       route: { model: "test-model", provider: "groq" },
@@ -190,6 +235,63 @@ describe("runArchivist", () => {
     expect(state.toolCallsSinceRun).toBe(0);
     expect(state.messageCursor).toBe(2);
     expect(state.runs).toBe(1);
+  });
+
+  // MEDIUM finding (reviewer-verifier): runArchivist used to build its goal from the caller's
+  // frozen-per-session memory snapshot. On a second archivist run in the same session (approval
+  // gate off, or a mid-session /memory approve landing between two archivist runs), that snapshot
+  // is stale — a duplicate `add` the live file already has would go undetected. Proven here by
+  // writing directly to the live file (applyWrite, simulating an earlier approve/direct write in
+  // THIS session) immediately before calling runArchivist, then inspecting the prompt the child
+  // model actually received (MockLanguageModelV4's own doStreamCalls) for that live content.
+  test("the goal reflects the LIVE memory file on disk, not a stale snapshot", async () => {
+    const ctx = makeCtx();
+    applyWrite(
+      {
+        scope: "memory-global",
+        action: "add",
+        content: "already-recorded-live-fact",
+        reason: "r",
+        durable: true,
+      },
+      ctx,
+      "2026-08-11",
+    );
+
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult([
+          {
+            type: "finish",
+            finishReason: { unified: "stop", raw: undefined },
+            usage: usageChunk(2, 2),
+          },
+        ]),
+      ],
+    });
+    const state = createArchivistState({
+      id: "s",
+      cwd: "/",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [],
+    });
+    state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+
+    await runArchivist({
+      messages: [{ role: "user", content: "task" }],
+      state,
+      trigger: "tool-count",
+      ctx,
+      model,
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      signal: new AbortController().signal,
+      onWarning: () => {},
+    });
+
+    const sentPrompt = JSON.stringify(model.doStreamCalls[0]?.prompt);
+    expect(sentPrompt).toContain("already-recorded-live-fact");
   });
 
   test("a dispatch that throws returns undefined, calls onWarning, and leaves the counter untouched", async () => {
@@ -217,7 +319,6 @@ describe("runArchivist", () => {
       messages: [],
       state,
       trigger: "tool-count",
-      memory: loadMemory(ctx),
       ctx,
       model,
       route: { model: "test-model", provider: "groq" },
@@ -250,7 +351,6 @@ describe("runArchivist", () => {
       messages: [],
       state,
       trigger: "tool-count",
-      memory: loadMemory(ctx),
       ctx,
       model,
       route: { model: "test-model", provider: "groq" },
