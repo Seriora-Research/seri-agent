@@ -180,7 +180,12 @@ export function buildArchivistGoal(
 
 export type ArchivistReport = {
   trigger: ArchivistTrigger;
-  summary: string;
+  // undefined when the child produced no real closing text of its own — the archivist's own
+  // prompt never explicitly asks it to narrate what it did, so runSubagent's own generic
+  // fallbackSummary filler ("produced no summary", "stopped at the iteration cap…") is
+  // plausibly the common case, and showing that on every archivist line would be noise, not
+  // signal. archivistLine (output.ts) only renders a second line when this is defined.
+  summary: string | undefined;
   usage: LanguageModelUsage;
   cost: CostReport | undefined;
   toolCallsMade: number;
@@ -280,7 +285,7 @@ export async function runArchivist(args: {
 
   return {
     trigger: args.trigger,
-    summary: result.summary,
+    summary: result.summaryIsFallback ? undefined : result.summary,
     usage,
     cost,
     toolCallsMade: result.toolCallsMade,

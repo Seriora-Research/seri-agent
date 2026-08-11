@@ -84,6 +84,18 @@ describe("archivistLine", () => {
     expect(line).toContain("recorded that this repo uses pnpm");
     expect(line).toContain("archivist: tool-count trigger");
   });
+
+  // Coordinator refinement, same round: runSubagent's own generic fallbackSummary filler
+  // ("produced no summary", "stopped at the iteration cap…") is not the model's own explanation
+  // of what it did, and runArchivist (memory/archivist.ts) sets ArchivistReport.summary to
+  // undefined precisely for that case — showing it on every line would be noise, not signal.
+  // Negative control for the test above: no second line is appended when there is nothing real
+  // to say.
+  test("appends nothing when summary is undefined (the child produced only fallback filler)", () => {
+    const line = archivistLine(archivistReport({ summary: undefined }));
+    expect(line).toBe("(archivist: tool-count trigger, 1 tool call, tokens: 100 in, 20 out)");
+    expect(line).not.toContain("\n");
+  });
 });
 
 describe("toolResultLine", () => {
