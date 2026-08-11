@@ -86,41 +86,47 @@ export async function validateProviderKey(
   }
 
   const modelId = VALIDATION_MODEL_IDS[provider];
-  // A five-case switch, mirroring getModel's own dispatch (provider/model.ts) — including that
-  // function's own reasoning for a switch over a ternary/lookup table: an unrecognized value is
-  // unreachable through the real ModelProvider union (this function's own caller reads a value
-  // the panel itself already constrained to CATALOG_PROVIDERS), but unlike getModel's own switch
-  // this function's documented contract is "never throws" (its own callers, cli.ts's
-  // onSetupKeyEntered included, rely on that) — so the default case returns an ok:false result
-  // naming the bad value instead of throwing, dead code today but consistent with the contract
-  // rather than a second, silent way to break it later.
-  let model: ReturnType<typeof getGroqModel>;
-  switch (provider) {
-    case "groq":
-      model = getGroqModel(modelId, apiKey);
-      break;
-    case "openrouter":
-      model = getOpenRouterModel(modelId, VALIDATION_SESSION_ID, apiKey);
-      break;
-    case "anthropic":
-      model = getAnthropicModel(modelId, apiKey);
-      break;
-    case "openai":
-      model = getOpenAIModel(modelId, apiKey);
-      break;
-    case "google":
-      model = getGoogleModel(modelId, apiKey);
-      break;
-    default:
-      return {
-        ok: false,
-        reason: "auth",
-        message: `Unknown model provider: ${JSON.stringify(provider)}`,
-      };
-  }
-
   const generate = deps.generate ?? generateTextReal;
   try {
+    // A five-case switch, mirroring getModel's own dispatch (provider/model.ts) — including that
+    // function's own reasoning for a switch over a ternary/lookup table: an unrecognized value is
+    // unreachable through the real ModelProvider union (this function's own caller reads a value
+    // the panel itself already constrained to CATALOG_PROVIDERS), but unlike getModel's own switch
+    // this function's documented contract is "never throws" (its own callers, cli.ts's
+    // onSetupKeyEntered included, rely on that) — so the default case returns an ok:false result
+    // naming the bad value instead of throwing, dead code today but consistent with the contract
+    // rather than a second, silent way to break it later.
+    //
+    // Inside this try, not above it (code-review finding, PR #73, round 2, item #3): each
+    // get<X>Model constructor has its own `if (!apiKey) throw missingKeyError(...)` guard, and the
+    // empty-key check above this function already closes THAT one known synchronous-throw path —
+    // but if any constructor ever throws for a DIFFERENT reason (a future SDK version validating
+    // key format up front, say), this is what keeps the "never throws" contract intact regardless,
+    // rather than only for the one failure mode anticipated today.
+    let model: ReturnType<typeof getGroqModel>;
+    switch (provider) {
+      case "groq":
+        model = getGroqModel(modelId, apiKey);
+        break;
+      case "openrouter":
+        model = getOpenRouterModel(modelId, VALIDATION_SESSION_ID, apiKey);
+        break;
+      case "anthropic":
+        model = getAnthropicModel(modelId, apiKey);
+        break;
+      case "openai":
+        model = getOpenAIModel(modelId, apiKey);
+        break;
+      case "google":
+        model = getGoogleModel(modelId, apiKey);
+        break;
+      default:
+        return {
+          ok: false,
+          reason: "auth",
+          message: `Unknown model provider: ${JSON.stringify(provider)}`,
+        };
+    }
     await generate({
       model,
       messages: [{ role: "user", content: "hi" }],
