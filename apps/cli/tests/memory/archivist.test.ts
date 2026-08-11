@@ -23,6 +23,7 @@ import { makeMemoryWriteTool } from "../../src/memory/tool";
 import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
 import { runSubagent, type SubagentRuntime } from "../../src/subagents/dispatch";
 import { streamResult, usage as usageChunk } from "../loop/fixtures";
+import { fakeChildLoop } from "../subagents/fakeChildLoop";
 
 let configDir: string | undefined;
 function makeCtx(worktree = "/home/x/harness"): MemoryContext {
@@ -450,6 +451,7 @@ describe("runArchivist", () => {
       model,
       route: { model: "test-model", provider: "groq" },
       catalog: catalogFor(),
+      contextWindow: 100_000,
       signal: controller.signal,
       onWarning: () => {},
     });
@@ -467,6 +469,41 @@ describe("runArchivist", () => {
     expect(report?.cost?.amountUsd).toBeGreaterThan(0);
     expect(state.toolCallsSinceRun).toBe(0);
     expect(state.messageCursor).toBe(3);
+  });
+
+  // Round-4 review finding: runArchivist's own SubagentRuntime used to omit contextWindowSize
+  // entirely, so the child's own runLoop call did its compaction math against runLoop's hardcoded
+  // DEFAULT_CONTEXT_WINDOW_SIZE regardless of the actual model — the trigger (shouldRunArchivist)
+  // got fallback-parity with runLoop's own default, but the number never got threaded one layer
+  // further, into the child loop the trigger exists to protect. Proven via the same fakeChildLoop
+  // seam subagents/dispatch.test.ts already uses: inspect the opts the child runLoop actually
+  // received, rather than the real runLoop's own (opaque, from the outside) compaction behavior.
+  test("threads its own contextWindow into the child runLoop's opts.contextWindowSize", async () => {
+    const ctx = makeCtx();
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [
+        { type: "text-delta", text: "ok" },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    const state = createArchivistState(emptySession());
+    state.messages = [{ role: "user", content: "task" }];
+    state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+
+    await runArchivist({
+      state,
+      trigger: "tool-count",
+      ctx,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      contextWindow: 42_000,
+      signal: new AbortController().signal,
+      onWarning: () => {},
+      runLoop: fake as unknown as typeof runLoop,
+    });
+
+    expect(calls[0]?.opts.contextWindowSize).toBe(42_000);
   });
 
   // MEDIUM finding (reviewer-verifier): runArchivist used to build its goal from the caller's
@@ -502,6 +539,7 @@ describe("runArchivist", () => {
       model,
       route: { model: "test-model", provider: "groq" },
       catalog: catalogFor(),
+      contextWindow: 100_000,
       signal: new AbortController().signal,
       onWarning: () => {},
     });
@@ -537,6 +575,7 @@ describe("runArchivist", () => {
       model,
       route: { model: "test-model", provider: "groq" },
       catalog: brokenCatalog,
+      contextWindow: 100_000,
       signal: controller.signal,
       onWarning: (m) => warnings.push(m),
     });
@@ -565,6 +604,7 @@ describe("runArchivist", () => {
       model,
       route: { model: "test-model", provider: "groq" },
       catalog: catalogFor(),
+      contextWindow: 100_000,
       signal: controller.signal,
       onWarning: (m) => warnings.push(m),
     });

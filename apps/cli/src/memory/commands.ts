@@ -1,16 +1,16 @@
-import { basename } from "node:path";
 import { setConfigValue } from "../config/config";
 import {
   approvePending,
   diffPending,
   listPending,
+  pendingLabel,
   type PendingWrite,
   rejectPending,
   resolvePendingRef,
 } from "./pending";
 import { truncate } from "./store";
 
-export type MemoryCommandDeps = { configDir: string; worktree: string };
+export type MemoryCommandDeps = { configDir: string };
 
 function summaryLine(p: PendingWrite): string {
   const detail =
@@ -19,7 +19,12 @@ function summaryLine(p: PendingWrite): string {
       : p.action === "remove"
         ? `remove "${truncate(p.target ?? "", 60)}"`
         : `replace "${truncate(p.target ?? "", 40)}" -> "${truncate(p.content ?? "", 40)}"`;
-  return `${p.id}  [${p.scope}]  ${detail}`;
+  // The target project only shown for memory-project (labelFor's own comment: "USER.md"/"MEMORY.md"
+  // for the other two scopes name nothing project-specific) — this is the gap a human reviewer
+  // needs closed: a memory-project write staged from a DIFFERENT repo than the one /memory pending
+  // is run from is otherwise indistinguishable from one targeting the current repo.
+  const target = p.scope === "memory-project" ? ` ${pendingLabel(p)}` : "";
+  return `${p.id}  [${p.scope}]${target}  ${detail}`;
 }
 
 const ID_ARG_RE = /^(all|[0-9a-f]{4,40})$/;
@@ -88,8 +93,8 @@ export function decideMemoryCommand(
     let changed = false;
     for (const p of matches) {
       try {
-        const { path } = approvePending(deps.configDir, p);
-        lines.push(`Approved ${p.id}: wrote ${basename(path)}.`);
+        approvePending(deps.configDir, p);
+        lines.push(`Approved ${p.id}: wrote ${pendingLabel(p)}.`);
         changed = true;
       } catch (err) {
         lines.push(

@@ -199,18 +199,6 @@ type SlashCommand = {
   // exact and small, so anything outside them falls through to the model, which is the only
   // direction that cannot silently swallow work.
   accepts: (args: string[]) => boolean;
-  // `presenter` is optional and defaults to consolePresenter at each command's own definition
-  // (below) — handleSlashCommand's call site (unchanged) never passes one; the TUI entry point's
-  // does. `void | Promise<void>`, not just `void`: cycleModeCommand/rewindCommand are `async` now
-  // (they await presenter.sessionUpdated's own promise — CommandPresenter's own comment), undo/
-  // restoreCommand are not and never need to be. Both call sites await this either way, a no-op
-  // for the ones that were never async.
-  run: (
-    session: SessionState<ModelMessage>,
-    args: string[],
-    dirs: CommandDirs,
-    presenter?: CommandPresenter,
-  ) => void | Promise<void>;
   // Whether this command mutates the checkpoint store or truncates session.messages, either of
   // which a still-in-flight turn can silently undo or corrupt (a mid-turn /rewind truncating
   // messages only for the next messages-updated, from that same in-flight turn, to replace the
@@ -224,7 +212,42 @@ type SlashCommand = {
   // place") — a future command that mutates run state can't get silently left ungated by being
   // added here and nowhere else.
   mutatesRunState?: true;
-};
+} & (
+  | {
+      // Every command but /memory: `run` operates on a resumed session, so handleSlashCommand
+      // (below) resolves one — an explicit --resume id or the most recent session — before calling
+      // it, and fails with "No session to run <name> against" when none exists.
+      needsSession?: true;
+      // `presenter` is optional and defaults to consolePresenter at each command's own definition
+      // (below) — handleSlashCommand's call site (unchanged) never passes one; the TUI entry
+      // point's does. `void | Promise<void>`, not just `void`: cycleModeCommand/rewindCommand are
+      // `async` now (they await presenter.sessionUpdated's own promise — CommandPresenter's own
+      // comment), undo/restoreCommand are not and never need to be. Both call sites await this
+      // either way, a no-op for the ones that were never async.
+      run: (
+        session: SessionState<ModelMessage>,
+        args: string[],
+        dirs: CommandDirs,
+        presenter?: CommandPresenter,
+      ) => void | Promise<void>;
+    }
+  | {
+      // /memory: decideMemoryCommand's own I/O (config.json, the pending/ queue) is keyed on
+      // configDir alone, never on a session (memoryCommand's own comment) — round-4 review finding:
+      // routing it through the session-required branch above meant `seri /memory pending` on a
+      // fresh profile, before any session had ever run, failed with "No session to run /memory
+      // against" and exited 1, the same class of bug /exit's own fix (this table's comment, below)
+      // addresses for a command that needs no session at all. This variant's `run` drops the
+      // session parameter entirely rather than accepting one it would never read, so handleSlashCommand
+      // can skip session resolution for it by construction, not by convention.
+      needsSession: false;
+      run: (
+        args: string[],
+        dirs: CommandDirs,
+        presenter?: CommandPresenter,
+      ) => void | Promise<void>;
+    }
+);
 
 // A step count, or nothing at all.
 function isStepCount(args: string[]): boolean {
@@ -261,7 +284,10 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   // block runs before `finally` unregisters the cancel slot). Per-command, not per-subcommand
   // (accepted deliberately — SlashCommand's own field comment explains why a read-only
   // /memory pending shares the gate with a mutating /memory approve).
-  ["/memory", { accepts: memoryCommandAccepts, run: memoryCommand, mutatesRunState: true }],
+  [
+    "/memory",
+    { accepts: memoryCommandAccepts, run: memoryCommand, mutatesRunState: true, needsSession: false },
+  ],
 ]);
 
 // MEDIUM-F: /exit is deliberately NOT a SLASH_COMMANDS entry — it used to be, with a no-op `run`
@@ -371,19 +397,14 @@ async function rewindCommand(
 }
 
 // Unlike /mode, /undo, /rewind and /restore, decideMemoryCommand's own I/O (config.json, the
-// pending/ queue) is keyed on configDir/worktree, not on the session it's handed — session is
-// present only because SlashCommand.run's signature requires one. This is the one caller that
-// actually reads `dirs.configDir`.
+// pending/ queue) is keyed on configDir alone — no session, hence needsSession: false on this
+// entry's own SlashCommand table row and no session parameter here.
 async function memoryCommand(
-  session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
   presenter: CommandPresenter = consolePresenter(dirs),
 ): Promise<void> {
-  const { lines } = decideMemoryCommand(args, {
-    configDir: dirs.configDir,
-    worktree: projectRoot(session.cwd),
-  });
+  const { lines } = decideMemoryCommand(args, { configDir: dirs.configDir });
   for (const line of lines) presenter.message(line);
 }
 
@@ -415,7 +436,8 @@ function loadOrCreateSession(
     // failure that module exists to fix, on precisely the sessions a user upgrading already has.
     // Rebuilding also means an AGENTS.md edited since is picked up. It reads from the session's own
     // cwd rather than the process's, so a resume launched from elsewhere still gets the project's
-    // file — the same reasoning as projectRoot(session.cwd) above.
+    // file, resolved from where the session itself was recorded rather than wherever this resume
+    // happens to run from.
     //
     // Two costs of rebuilding, neither of which the old replay-the-stored-string path had, both
     // accepted rather than guarded: this puts a readFileSync on the resume path, so an AGENTS.md
@@ -847,6 +869,19 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
   const [name = "", ...commandArgs] = ctx.taskText.split(/\s+/).filter(Boolean);
   const command = SLASH_COMMANDS.get(name);
   if (command === undefined || !command.accepts(commandArgs)) return undefined;
+
+  // needsSession: false (today, only /memory — SlashCommand's own comment) skips resume-target
+  // resolution entirely: nothing below it reads a session, so requiring one to already exist would
+  // only make the command fail on a fresh profile for no reason.
+  if (command.needsSession === false) {
+    try {
+      await command.run(commandArgs, dirs(ctx));
+      return 0;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 1;
+    }
+  }
 
   const id = ctx.resumeId ?? findMostRecentSession(ctx.sessionsDir);
   if (!id) {
@@ -2361,12 +2396,16 @@ async function runTui(
       return;
     }
     try {
-      await command.run(
-        liveState.session,
-        args,
-        dirs(ctx),
-        tuiPresenter(dispatch, awaitNextPersist),
-      );
+      if (command.needsSession === false) {
+        await command.run(args, dirs(ctx), tuiPresenter(dispatch, awaitNextPersist));
+      } else {
+        await command.run(
+          liveState.session,
+          args,
+          dirs(ctx),
+          tuiPresenter(dispatch, awaitNextPersist),
+        );
+      }
       // resetArchivistForRewind's own comment (memory/archivist.ts) explains why this must be
       // deterministic, at the truncation site, rather than left to maybeRunArchivist's generic
       // guard. `liveState.session` is already the post-rewind truncation by this point —

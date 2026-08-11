@@ -75,6 +75,36 @@ describe("decideMemoryCommand", () => {
     expect(decideMemoryCommand(["pending"], ctx).lines[0]).toContain("No staged");
   });
 
+  // Round-4 review finding: a memory-project entry's target project was invisible in both
+  // /memory pending's summary line and /memory diff's header — diffPending used to print
+  // basename(file.path), which for a project file is always literally "MEMORY.md" (the project
+  // only appears as a hash-token directory in between, per memoryFilePath). A human reviewing
+  // staged writes from two different repos could not tell a memory-project entry staged in one
+  // apart from one targeting the other before approving it.
+  test("pending/diff show which project a memory-project entry targets, not just MEMORY.md", () => {
+    const ctx = makeCtx("/home/x/other-repo");
+    const staged = stagePendingWrite(
+      {
+        scope: "memory-project",
+        action: "add",
+        content: "uses pnpm here",
+        reason: "r",
+        durable: true,
+      },
+      ctx,
+      new Date(),
+    );
+
+    const pending = decideMemoryCommand(["pending"], ctx);
+    expect(pending.lines[0]).toContain("other-repo/MEMORY.md");
+
+    const diff = decideMemoryCommand(["diff", staged.id], ctx);
+    expect(diff.lines.some((l) => l.includes("other-repo/MEMORY.md"))).toBe(true);
+
+    const approved = decideMemoryCommand(["approve", staged.id], ctx);
+    expect(approved.lines[0]).toContain("other-repo/MEMORY.md");
+  });
+
   test("approve: applies the write and reports success", () => {
     const ctx = makeCtx();
     const staged = stagePendingWrite(

@@ -166,8 +166,13 @@ export async function runArchivist(args: {
   model: LanguageModel;
   route: { model: string; provider: ModelProvider };
   catalog: ModelCatalog;
+  contextWindow: number | undefined;
   signal: AbortSignal;
   onWarning: (message: string) => void;
+  // Overridable only for tests (fakeChildLoop, the same seam subagents/dispatch.test.ts's own
+  // makeRuntime already uses) — every production call (maybeRunArchivist, below) leaves this at
+  // its default, the real runLoop.
+  runLoop?: typeof runLoop;
 }): Promise<ArchivistReport | undefined> {
   if (args.signal.aborted) return undefined;
 
@@ -191,11 +196,16 @@ export async function runArchivist(args: {
   // exactly one tool, so the ToolSet is simplest built inline.
   const tools: ToolSet = { memory_write: makeMemoryWriteTool(args.ctx) };
   const runtime: SubagentRuntime = {
-    runLoop,
+    runLoop: args.runLoop ?? runLoop,
     model: args.model,
     provider: args.route.provider,
     modelId: args.route.model,
     catalog: args.catalog,
+    // The same number shouldRunArchivist's own trigger already used (maybeRunArchivist's own
+    // `?? DEFAULT_CONTEXT_WINDOW_SIZE` comment) — without this, the child's own runLoop call
+    // fell back to runLoop's hardcoded default regardless of the actual model, so its compaction
+    // math could be wrong for exactly the model the trigger was tuned against.
+    contextWindowSize: args.contextWindow,
     permissionMode: () => "auto",
     allowedTools: [],
   };
@@ -290,6 +300,7 @@ export async function maybeRunArchivist(args: {
     model: args.model,
     route: args.route,
     catalog: args.catalog,
+    contextWindow: args.contextWindow,
     signal: args.signal,
     onWarning: args.onWarning,
   });

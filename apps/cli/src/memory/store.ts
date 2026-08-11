@@ -234,8 +234,7 @@ const MEMORY_TIER_INTRO =
 // "" when all three files are empty/whitespace-only — this IS the B2 guarantee: buildVolatileTier
 // (agents/systemPrompt.ts) composes this through joinTiers, whose filter(Boolean) drops an empty
 // string, so a session with no memory yet renders byte-identically to today's prompt.
-export function renderMemoryTier(memory: LoadedMemory | undefined): string {
-  if (memory === undefined) return "";
+export function renderMemoryTier(memory: LoadedMemory): string {
   const isEmpty = (file: MemoryFile): boolean => file.text.trim().length === 0;
   if (isEmpty(memory.user) && isEmpty(memory.global) && isEmpty(memory.project)) return "";
   return [

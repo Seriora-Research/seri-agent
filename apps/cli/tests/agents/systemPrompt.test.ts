@@ -2,8 +2,21 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildSystemPrompt, buildVolatileTier, joinTiers } from "../../src/agents/systemPrompt";
+import { buildSystemPrompt, buildVolatileTier } from "../../src/agents/systemPrompt";
 import { applyWrite, loadMemory, type MemoryContext } from "../../src/memory/store";
+
+let configDir: string | undefined;
+afterEach(() => {
+  if (configDir !== undefined) rmSync(configDir, { recursive: true, force: true });
+  configDir = undefined;
+});
+// buildVolatileTier's memory param is required (round-4 review: it used to be optional only so
+// pre-Stage-6b 3-arg tests kept compiling) — every call below passes an explicit, genuinely empty
+// LoadedMemory built from this rather than omitting the argument.
+function emptyMemoryCtx(): MemoryContext {
+  configDir = mkdtempSync(join(tmpdir(), "seri-memory-"));
+  return { configDir, worktree: "/home/x/proj" };
+}
 
 // These assert on meaning, not on wording: each check is a phrase the measured failure needs
 // present, matched case-insensitively, so the prompt can be reworded without the test going red
@@ -94,14 +107,19 @@ describe("buildSystemPrompt", () => {
 
 describe("buildVolatileTier", () => {
   test("a cataloged model's identity line uses the resolved displayName", () => {
-    const line = buildVolatileTier("openai/gpt-oss-120b", "groq", "GPT OSS 120B");
+    const line = buildVolatileTier(
+      "openai/gpt-oss-120b",
+      "groq",
+      "GPT OSS 120B",
+      loadMemory(emptyMemoryCtx()),
+    );
 
     expect(line).toContain("GPT OSS 120B");
     expect(line).toContain("groq/openai/gpt-oss-120b");
   });
 
   test("an uncataloged model (no displayName) still gets an identity line, using the raw id", () => {
-    const line = buildVolatileTier("some-raw-id", "groq", undefined);
+    const line = buildVolatileTier("some-raw-id", "groq", undefined, loadMemory(emptyMemoryCtx()));
 
     expect(line.length).toBeGreaterThan(0);
     expect(line).toContain("some-raw-id");
@@ -110,57 +128,45 @@ describe("buildVolatileTier", () => {
   // code-review finding on PR #66: a catalog entry whose `name` came back "" (present but empty,
   // not null/undefined) must still fall back to the raw id — `??` doesn't catch that, `||` does.
   test("a catalog entry with an empty-string displayName falls back to the raw id, not a blank label", () => {
-    const line = buildVolatileTier("some-raw-id", "groq", "");
+    const line = buildVolatileTier("some-raw-id", "groq", "", loadMemory(emptyMemoryCtx()));
 
     expect(line).not.toContain("named . ");
     expect(line).toContain("some-raw-id");
   });
 
-  // B2: with no memory argument at all, and with an all-empty LoadedMemory, buildVolatileTier
-  // must render byte-identically — this is what keeps a session with no memories yet reading the
-  // exact same prompt it read before Stage 6b existed.
+  // B2: an all-empty LoadedMemory must render no visible memory section at all — this is what
+  // keeps a session with no memories yet reading the exact same prompt it read before Stage 6b
+  // existed.
   describe("memory tier (Stage 6b, B2 no-regression)", () => {
-    let configDir: string | undefined;
-    afterEach(() => {
-      if (configDir !== undefined) rmSync(configDir, { recursive: true, force: true });
-      configDir = undefined;
-    });
-    function emptyMemoryCtx(): MemoryContext {
-      configDir = mkdtempSync(join(tmpdir(), "seri-memory-"));
-      return { configDir, worktree: "/home/x/proj" };
-    }
-
-    test("no memory argument and an all-empty LoadedMemory produce the identical string", () => {
-      const withoutArg = buildVolatileTier("openai/gpt-oss-120b", "groq", "GPT OSS 120B");
-      const withEmptyMemory = buildVolatileTier(
+    test("an all-empty LoadedMemory renders no memory section — just the identity line", () => {
+      const line = buildVolatileTier(
         "openai/gpt-oss-120b",
         "groq",
         "GPT OSS 120B",
         loadMemory(emptyMemoryCtx()),
       );
-      expect(withEmptyMemory).toBe(withoutArg);
+      expect(line).not.toContain("# Memory");
+      expect(line).toContain("GPT OSS 120B");
     });
 
-    test("joinTiers(session.systemPrompt, volatileTier) is unaffected by an empty memory argument", () => {
-      const systemPrompt = buildSystemPrompt("");
-      const volatileNoMemory = buildVolatileTier("m", "groq", undefined);
-      const volatileEmptyMemory = buildVolatileTier("m", "groq", undefined, loadMemory(emptyMemoryCtx()));
-      expect(joinTiers(systemPrompt, volatileEmptyMemory)).toBe(joinTiers(systemPrompt, volatileNoMemory));
-    });
-
-    // The positive case, and the negative control for the two tests above: a genuinely non-empty
-    // memory file must actually change the rendered tier, or the byte-identity assertions above
-    // would be vacuously true regardless of what renderMemoryTier does.
-    test("negative control: a non-empty memory file changes the output, contains the entry, and the identity line still comes first", () => {
+    // The positive case, and the negative control for the test above: a genuinely non-empty
+    // memory file must actually change the rendered tier, or the assertion above couldn't be told
+    // apart from a function that always drops the memory tier regardless of content.
+    test("a non-empty memory file changes the output, contains the entry, and the identity line still comes first", () => {
       const ctx = emptyMemoryCtx();
-      applyWrite({ scope: "user", action: "add", content: "prefers tabs", reason: "r", durable: true }, ctx, "2026-08-11");
-      const line = buildVolatileTier("m", "groq", undefined, loadMemory(ctx));
+      applyWrite(
+        { scope: "user", action: "add", content: "prefers tabs", reason: "r", durable: true },
+        ctx,
+        "2026-08-11",
+      );
+      const withMemory = buildVolatileTier("m", "groq", undefined, loadMemory(ctx));
+      const withoutMemory = buildVolatileTier("m", "groq", undefined, loadMemory(emptyMemoryCtx()));
 
-      expect(line).not.toBe(buildVolatileTier("m", "groq", undefined));
-      expect(line).toContain("# Memory");
-      expect(line).toContain("prefers tabs");
-      expect(line.indexOf("You are powered by")).toBe(0);
-      expect(line.indexOf("# Memory")).toBeGreaterThan(0);
+      expect(withMemory).not.toBe(withoutMemory);
+      expect(withMemory).toContain("# Memory");
+      expect(withMemory).toContain("prefers tabs");
+      expect(withMemory.indexOf("You are powered by")).toBe(0);
+      expect(withMemory.indexOf("# Memory")).toBeGreaterThan(0);
     });
   });
 });

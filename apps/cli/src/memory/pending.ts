@@ -139,6 +139,19 @@ function ctxForPending(configDir: string, p: PendingWrite): MemoryContext {
   return { configDir, worktree: p.projectPath ?? "" };
 }
 
+// Same shape store.ts's own labelFor produces for a live MemoryFile ("myrepo/MEMORY.md", not just
+// "MEMORY.md") — reconstructed here from p.projectPath rather than read off the live file's own
+// path (which is always .../MEMORY.md, the project only ever appearing as a hash-token directory
+// in between, per memoryFilePath), and never from the caller's own ambient worktree: a pending
+// write can target a DIFFERENT project than whichever one the caller currently stands in, so
+// showing the caller's worktree here would name the wrong project. stagePendingWrite's own
+// comment on why projectPath, not the hash token, is what gets stored.
+export function pendingLabel(p: PendingWrite): string {
+  if (p.scope === "user") return "USER.md";
+  if (p.scope === "memory-global") return "MEMORY.md";
+  return `${basename(p.projectPath ?? "")}/MEMORY.md`;
+}
+
 function toRequest(p: PendingWrite): MemoryWriteRequest {
   return {
     scope: p.scope,
@@ -196,13 +209,14 @@ export function diffPending(configDir: string, p: PendingWrite): { path: string;
   const ctx = ctxForPending(configDir, p);
   const file = loadMemoryFile(p.scope, ctx);
   const after = computeWrite(file, toRequest(p), p.entryDate);
+  const label = pendingLabel(p);
   return {
     path: file.path,
     lines: [
       `Reason: ${p.reason}`,
       `Durable: ${p.durable ? "yes" : "no"}`,
-      `--- ${basename(file.path)} (live, ${file.chars}/${file.cap} chars)`,
-      `+++ ${basename(file.path)} (if approved, ${after.length}/${file.cap} chars)`,
+      `--- ${label} (live, ${file.chars}/${file.cap} chars)`,
+      `+++ ${label} (if approved, ${after.length}/${file.cap} chars)`,
       ...diffLines(file.text, after),
     ],
   };

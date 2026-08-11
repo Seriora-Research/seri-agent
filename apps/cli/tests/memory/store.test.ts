@@ -426,9 +426,8 @@ describe("applyWrite", () => {
 });
 
 describe("renderMemoryTier", () => {
-  test('undefined and an all-empty LoadedMemory both render "" (B2 guarantee)', () => {
+  test('an all-empty LoadedMemory renders "" (B2 guarantee)', () => {
     const ctx = makeCtx();
-    expect(renderMemoryTier(undefined)).toBe("");
     expect(renderMemoryTier(loadMemory(ctx))).toBe("");
   });
 
