@@ -28,7 +28,7 @@ import {
 import { projectRoot } from "../checkpoint/shadowGit";
 import { cycleMode } from "../gate/gate";
 import { allProviderKeyStates } from "../provider/keys";
-import { byRoutePriority } from "../provider/routing";
+import { byRoutePriority, resolveRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 
 export type CommandDirs = { sessionsDir: string; checkpointsDir: string };
@@ -93,22 +93,30 @@ export function decideModelPickerOpen(
   const rows: ModelPickerEntry[] = [];
   for (const group of groups.values()) {
     const ordered = [...group].sort(byRoutePriority);
+    // Computed once per GROUP, not per row: resolveRoute's rule 2 depends only on the group's
+    // siblings and `configured`, never on which keyless member is asking, so every keyless row
+    // in a group shares the same answer — and calling resolveRoute itself, through any one
+    // keyless member as the "requested" pair, ties this display to the actual routing decision
+    // instead of a hand-rolled second copy of its tie-break that could silently drift from it
+    // (code-review finding, PR #75: the earlier per-row `ordered.find` re-derived resolveRoute's
+    // own filter+sort rather than calling it, an O(n^2)-per-group re-derivation of one answer).
+    const firstKeyless = ordered.find((candidate) => !configured.has(candidate.provider));
+    const resolved =
+      firstKeyless === undefined
+        ? undefined
+        : resolveRoute(
+            catalog,
+            { model: firstKeyless.id, provider: firstKeyless.provider },
+            configured,
+          );
+    const rerouteTarget = resolved?.rerouted ? resolved.provider : undefined;
     for (const entry of ordered) {
       const keyConfigured = configured.has(entry.provider);
-      // Same candidate `ordered` already provides, in the same priority order `resolveRoute`
-      // (provider/routing.ts) sorts its own candidates into — so the first configured sibling
-      // found here is byte-for-byte the provider a reroute would actually choose, not a
-      // re-derived guess that could drift from it. `undefined` for a row that has its own key
-      // (nothing to reroute to) or whose siblings are all keyless too (nowhere to send it).
-      const rerouteTo = keyConfigured
-        ? undefined
-        : ordered.find((candidate) => candidate !== entry && configured.has(candidate.provider))
-            ?.provider;
       rows.push({
         entry,
         keyConfigured,
         alternatives: group.length - 1,
-        rerouteTo,
+        rerouteTo: keyConfigured ? undefined : rerouteTarget,
       });
     }
   }
