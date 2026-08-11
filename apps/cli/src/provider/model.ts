@@ -1,13 +1,19 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import type { LanguageModel } from "ai";
+import { getAnthropicModel as getAnthropicModelReal } from "./anthropic";
+import { getGoogleModel as getGoogleModelReal } from "./google";
 import { getGroqModel as getGroqModelReal } from "./groq";
+import { getOpenAIModel as getOpenAIModelReal } from "./openai";
 import { getOpenRouterModel as getOpenRouterModelReal } from "./openrouter";
 
-// Optional injected fns, mirroring cli.ts's own CliDeps pattern — lets tests exercise the
-// dispatch without constructing a real provider.
+// Optional injected fns, mirroring cli.ts's own CliDeps (all five fields, same names) — lets
+// tests exercise the dispatch without constructing a real provider.
 type ModelDeps = {
   getGroqModel?: typeof getGroqModelReal;
   getOpenRouterModel?: typeof getOpenRouterModelReal;
+  getAnthropicModel?: typeof getAnthropicModelReal;
+  getOpenAIModel?: typeof getOpenAIModelReal;
+  getGoogleModel?: typeof getGoogleModelReal;
 };
 
 // The one dispatch point cli.ts's prepareSession/runTurn call instead of getGroqModel directly
@@ -27,14 +33,24 @@ export function getModel(
 ): LanguageModel {
   const getGroqModelFn = deps.getGroqModel ?? getGroqModelReal;
   const getOpenRouterModelFn = deps.getOpenRouterModel ?? getOpenRouterModelReal;
+  const getAnthropicModelFn = deps.getAnthropicModel ?? getAnthropicModelReal;
+  const getOpenAIModelFn = deps.getOpenAIModel ?? getOpenAIModelReal;
+  const getGoogleModelFn = deps.getGoogleModel ?? getGoogleModelReal;
   switch (provider) {
     case "groq":
       return getGroqModelFn(id);
     case "openrouter":
       return getOpenRouterModelFn(id, sessionId);
+    case "anthropic":
+      return getAnthropicModelFn(id);
+    case "openai":
+      return getOpenAIModelFn(id);
+    case "google":
+      return getGoogleModelFn(id);
     default:
-      // provider is `never` here if ModelProvider only ever has "groq"/"openrouter" — but this
-      // value can also come from JSON.parse (session.ts), which no type system can guarantee.
+      // provider is `never` here if it only ever holds the five ModelProvider members above —
+      // but this value can also come from JSON.parse (session.ts), which no type system can
+      // guarantee.
       throw new Error(`Unknown model provider: ${JSON.stringify(provider)}`);
   }
 }

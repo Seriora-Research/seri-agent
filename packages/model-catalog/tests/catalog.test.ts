@@ -43,7 +43,29 @@ function rawApiResponse() {
       },
     },
     openrouter: { models: {} },
-    // Ignored: seri only catalogs groq and openrouter, and mapRawCatalog must not surface this.
+    anthropic: {
+      models: {
+        "claude-model": {
+          id: "claude-model",
+          name: "Claude Model",
+          family: "claude",
+          tool_call: true,
+          reasoning: false,
+          limit: { context: 3000, output: 300 },
+          cost: { input: 3, output: 15 },
+        },
+        "claude-no-tools": {
+          id: "claude-no-tools",
+          name: "Claude No Tools",
+          family: "claude",
+          tool_call: false,
+          reasoning: false,
+          limit: { context: 3000, output: 300 },
+        },
+      },
+    },
+    // Ignored: seri only catalogs groq, openrouter, anthropic, openai and google, and
+    // mapRawCatalog must not surface this.
     "other-provider": {
       models: {
         "ignored-model": {
@@ -77,7 +99,7 @@ describe("loadCatalog", () => {
     else process.env.SERI_DISABLE_MODELS_FETCH = originalDisableFlag;
   });
 
-  test("fetch success: maps and filters live entries from groq/openrouter, ignoring other provider keys", async () => {
+  test("fetch success: maps and filters live entries from the five cataloged providers, ignoring other provider keys", async () => {
     const catalog = await loadCatalog(fallbackManifest, fakeFetch(rawApiResponse()));
 
     expect(catalog.entries).toEqual([
@@ -91,6 +113,17 @@ describe("loadCatalog", () => {
         toolCall: true,
         reasoning: false,
         pricing: { inputPerMTok: 1, outputPerMTok: 2 },
+      },
+      {
+        id: "claude-model",
+        provider: "anthropic",
+        displayName: "Claude Model",
+        family: "claude",
+        contextWindow: 3000,
+        maxOutputTokens: 300,
+        toolCall: true,
+        reasoning: false,
+        pricing: { inputPerMTok: 3, outputPerMTok: 15 },
       },
     ]);
   });

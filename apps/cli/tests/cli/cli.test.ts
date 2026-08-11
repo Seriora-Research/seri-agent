@@ -18,6 +18,7 @@ import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS } from "../../src/cli";
+import { setConfigValue } from "../../src/config/config";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
 import { loadGrants, permissionsPath, projectKey } from "../../src/permissions/store";
 import type { CostReport } from "../../src/provider/cost";
@@ -557,6 +558,95 @@ describe("run (task invocation)", () => {
     expect(askedFor).toEqual([sessionCwd]);
   });
 
+  // Scenario b (feature-plan.md): a brand-new session (no --continue/--resume) starts on whatever
+  // a previously successful /model pick persisted to config.json, not the built-in default.
+  // Negative control in the same test: an empty config still resolves to the built-in
+  // openai/gpt-oss-120b/groq pair — proof a resolver that ignored config entirely would fail one
+  // half of this pair, not silently pass both.
+  test("a brand-new session starts on the persisted model/provider, or the built-in default when none was picked", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const askedOpenRouter: string[] = [];
+    const { code: firstCode } = await captureLogs(() =>
+      run(["a", "task"], {
+        // answeredTurn, not the bare-done default: a model is only recorded on the session file
+        // once a turn actually answered (loadOrCreateSession's own comment above) — this test
+        // needs that recording to check which model/provider a brand-new session resolved to.
+        runLoop: fakeRunLoop(answeredTurn).fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        getOpenRouterModel: (id: string) => {
+          askedOpenRouter.push(id);
+          return getGroqModel("openai/gpt-oss-120b");
+        },
+      }),
+    );
+    // With an empty config, the persisted pair isn't there yet, so this first run must have used
+    // the built-in default.
+    expect(firstCode).toBe(0);
+    expect(askedOpenRouter).toEqual([]);
+    const firstId = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
+    const firstSession = loadSession(firstId, sessionsDir);
+    expect(firstSession.model).toBe("openai/gpt-oss-120b");
+    expect(firstSession.provider).toBe("groq");
+    expect(existsSync(join(tmpConfigRoot, ".seri", "config.json"))).toBe(false);
+
+    // Now persist a pick the way a successful /model switch would (cli.ts's own runTui write
+    // site), and start ANOTHER brand-new session.
+    setConfigValue("SERI_MODEL", "picked-model");
+    setConfigValue("SERI_PROVIDER", "openrouter");
+
+    const { code: secondCode } = await captureLogs(() =>
+      run(["another", "task"], {
+        runLoop: fakeRunLoop(answeredTurn).fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        getOpenRouterModel: (id: string) => {
+          askedOpenRouter.push(id);
+          return getGroqModel("openai/gpt-oss-120b");
+        },
+      }),
+    );
+    expect(secondCode).toBe(0);
+    expect(askedOpenRouter).toEqual(["picked-model"]);
+    const secondId = readdirSync(sessionsDir).find((f) => f.replace(/\.json$/, "") !== firstId);
+    if (secondId === undefined) throw new Error("second session file not found");
+    const secondSession = loadSession(secondId.replace(/\.json$/, ""), sessionsDir);
+    expect(secondSession.model).toBe("picked-model");
+    expect(secondSession.provider).toBe("openrouter");
+  });
+
+  // code-review finding on PR #71: CliDeps was never extended with getAnthropicModel/
+  // getOpenAIModel/getGoogleModel (unlike getGroqModel/getOpenRouterModel, already here) even
+  // though model.ts's own ModelDeps was — so neither of cli.ts's two getModel() call sites could
+  // inject a fake for the 3 new providers, leaving them reachable only through the real,
+  // network-calling implementations from this file's own tests. This is the wiring proof for one
+  // of the three (anthropic); the other two thread through the exact same CliDeps fields.
+  test("a native provider (anthropic) dispatches through its own injected CliDeps fn", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const askedAnthropic: string[] = [];
+    setConfigValue("SERI_MODEL", "claude-picked-model");
+    setConfigValue("SERI_PROVIDER", "anthropic");
+
+    const { code } = await captureLogs(() =>
+      run(["a", "task"], {
+        runLoop: fakeRunLoop(answeredTurn).fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        getAnthropicModel: (id: string) => {
+          askedAnthropic.push(id);
+          return getGroqModel("openai/gpt-oss-120b");
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(askedAnthropic).toEqual(["claude-picked-model"]);
+    const id = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
+    const session = loadSession(id, sessionsDir);
+    expect(session.model).toBe("claude-picked-model");
+    expect(session.provider).toBe("anthropic");
+  });
+
   // The case `loaded.model ?? resolveModelId()` exists for, and the only one the two tests above
   // do not reach: a session file written before `model` was a field. It must still load, and it
   // must acquire a model rather than resuming with none.
@@ -598,6 +688,52 @@ describe("run (task invocation)", () => {
     } finally {
       restoreEnv("SERI_MODEL", originalModel);
     }
+  });
+
+  // HIGH finding (code-review on PR #71): the backfill used to pair resolveModelId() (SERI_MODEL
+  // only) with an independently-hardcoded "groq" provider — so a persisted non-groq
+  // SERI_MODEL/SERI_PROVIDER pair (a normal side effect of any successful /model pick, per
+  // persistDefaultModel) backfilled to a MISMATCHED pair, e.g. an anthropic model id called
+  // through getGroqModel, failing confusingly at the API boundary. The fix backfills model AND
+  // provider together via resolveDefaultModel(), so a legacy session with no `model` field always
+  // backfills to a real, consistent pair — proven here with a persisted non-groq (openrouter) pair.
+  test("a session with no model backfills the persisted non-groq pair, not a mismatch", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const asked: string[] = [];
+
+    setConfigValue("SERI_MODEL", "picked-model");
+    setConfigValue("SERI_PROVIDER", "openrouter");
+
+    // Written the way a pre-`model` seri wrote it: the field is absent, not undefined.
+    const legacy = {
+      id: "legacy-no-provider",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [],
+    };
+    writeFileSync(join(sessionsDir, "legacy-no-provider.json"), JSON.stringify(legacy));
+
+    const { code } = await captureLogs(() =>
+      run(["--resume", "legacy-no-provider", "another", "task"], {
+        runLoop: fakeRunLoop(answeredTurn).fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        getGroqModel: () => {
+          throw new Error("should not be called: the persisted pair is openrouter, not groq");
+        },
+        getOpenRouterModel: (id: string) => {
+          asked.push(id);
+          return getGroqModel("openai/gpt-oss-120b");
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(asked).toEqual(["picked-model"]);
+    const resumed = loadSession("legacy-no-provider", sessionsDir);
+    expect(resumed.model).toBe("picked-model");
+    expect(resumed.provider).toBe("openrouter");
   });
 
   // getGroqModel takes any string, so a typo only surfaces as a provider 404 once the run is under
@@ -1456,10 +1592,10 @@ describe("run (task invocation)", () => {
   });
 
   // HIGH-1: driveLoop used to call runLoopFn with no provider/modelId/catalog at all, which is what
-  // loop.ts's own cost branch (`opts.provider === "openrouter" ? … : opts.provider === "groq" &&
-  // opts.modelId && opts.catalog ? … : undefined`) is gated on — so cost was silently never computed
-  // in production, no matter what cost.ts itself did. This asserts the wiring, not the pricing math
-  // (cost.test.ts already covers reportForGroq/reportForOpenRouter directly).
+  // loop.ts's own cost branch (`opts.provider === "openrouter" ? … : opts.provider && opts.modelId
+  // && opts.catalog ? … : undefined`) is gated on — so cost was silently never computed in
+  // production, no matter what cost.ts itself did. This asserts the wiring, not the pricing math
+  // (cost.test.ts already covers reportFromCatalogPricing/reportForOpenRouter directly).
   test("passes provider, modelId and catalog to runLoop so it can compute a cost", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 

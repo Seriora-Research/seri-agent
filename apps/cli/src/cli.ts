@@ -53,8 +53,12 @@ import { permissionsCommand as permissionsCommandReal } from "./permissions/comm
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
-import { type getGroqModel as getGroqModelReal, resolveModelId } from "./provider/groq";
+import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
+import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
+import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
+import type { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { getModel } from "./provider/model";
+import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
 import { toolDefinitions } from "./provider/tools";
 import {
@@ -81,10 +85,13 @@ import { withVerification } from "./verify/wrapTools";
 type CliDeps = {
   runLoop?: typeof runLoopReal;
   getGroqModel?: typeof getGroqModelReal;
-  // Mirrors getGroqModel exactly — getModel (provider/model.ts) dispatches to whichever of the two
-  // a session's provider names, so a test injecting one but not the other still gets the real
-  // implementation for whichever provider it never exercises.
+  // All five mirror getGroqModel exactly — getModel (provider/model.ts) dispatches to whichever
+  // of the five a session's provider names, so a test injecting some but not others still gets
+  // the real implementation for whichever provider it never exercises.
   getOpenRouterModel?: typeof getOpenRouterModelReal;
+  getAnthropicModel?: typeof getAnthropicModelReal;
+  getOpenAIModel?: typeof getOpenAIModelReal;
+  getGoogleModel?: typeof getGoogleModelReal;
   loadAgentsFile?: typeof loadAgentsFileReal;
   sessionsDir?: string;
   checkpointsDir?: string;
@@ -366,25 +373,40 @@ function loadOrCreateSession(
     // exactly the 29-character string this rebuild exists to stop serving.
     //
     // `model` is backfilled only when absent, so a session that recorded one keeps it and the
-    // environment cannot switch models under a conversation already running on one. Note what that
-    // does NOT protect: a session written before the field existed was really running
-    // llama-3.3-70b-versatile, nothing records that, and this first resume moves it to whatever
-    // resolveModelId returns.
+    // environment cannot switch models under a conversation already running on one. When `model`
+    // is absent, `model`/`provider` are backfilled TOGETHER via resolveDefaultModel() — the same
+    // pair a brand-new session starts on — never independently: resolveModelId() alone can return
+    // a persisted non-groq SERI_MODEL (a successful /model pick on e.g. anthropic, per
+    // persistDefaultModel), and pairing that with a separately-hardcoded "groq" would call the
+    // wrong provider's API and fail confusingly. Note what this does NOT protect: a session
+    // written before the field existed was really running llama-3.3-70b-versatile, nothing
+    // records that, and this first resume moves it to whatever resolveDefaultModel() returns.
     //
-    // `provider` is backfilled the same way, absent meaning "groq" — the only provider that
-    // existed before this field did, so an old session's absence and an explicit "groq" mean the
-    // same thing (SessionState.provider's own comment).
+    // `provider` alone can still be absent on a session that already recorded a `model` — a
+    // session written before the `provider` field existed, back when groq was the only provider —
+    // and that case keeps its own narrower, unconditional backfill: absent means DEFAULT_PROVIDER
+    // (SessionState.provider's own comment; DEFAULT_PROVIDER is "groq" today, the same value this
+    // used to hardcode directly — imported instead so there is one source of truth for it),
+    // independent of resolveDefaultModel().
+    const { model, provider } =
+      loaded.model === undefined
+        ? resolveDefaultModel()
+        : { model: loaded.model, provider: loaded.provider ?? DEFAULT_PROVIDER };
     return {
       session: {
         ...loaded,
         systemPrompt: buildSystemPrompt(loadAgentsFileFn(loaded.cwd)),
-        model: loaded.model ?? resolveModelId(),
-        provider: loaded.provider ?? "groq",
+        model,
+        provider,
       },
       modelRecorded: loaded.model !== undefined,
     };
   }
 
+  // A brand-new session starts on whatever a previously successful `/model` pick persisted
+  // (resolveDefaultModel's own comment), falling back to DEFAULT_MODEL/"groq" the same way
+  // resolveModelId always has when nothing was ever picked.
+  const { model, provider } = resolveDefaultModel();
   return {
     session: {
       id: randomUUID(),
@@ -400,8 +422,8 @@ function loadOrCreateSession(
       // rejected every-call mode — permanent for write_file/edit since permanent-permissions-
       // allowlist, run-scoped for every other write tool the gate ever grows.
       permissionMode: "approve-each",
-      model: resolveModelId(),
-      provider: "groq",
+      model,
+      provider,
       messages: [],
     },
     modelRecorded: false,
@@ -866,6 +888,9 @@ async function prepareSession(
     model = getModel(session.model, session.provider, session.id, {
       getGroqModel: deps.getGroqModel,
       getOpenRouterModel: deps.getOpenRouterModel,
+      getAnthropicModel: deps.getAnthropicModel,
+      getOpenAIModel: deps.getOpenAIModel,
+      getGoogleModel: deps.getGoogleModel,
     });
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -950,6 +975,16 @@ async function prepareSession(
 }
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
+
+// Shared by confirmedModel's and lastPersistedModel's own guards (both inside runTui, below) —
+// hand-duplicating `a.model !== b.model || a.provider !== b.provider` at each site was the same
+// comparison typed twice with two different variable names.
+function modelPairChanged(
+  a: { model: string; provider: ModelProvider },
+  b: { model: string; provider: ModelProvider },
+): boolean {
+  return a.model !== b.model || a.provider !== b.provider;
+}
 
 // undefined + n is n, not NaN, and undefined + undefined stays undefined: a run's total is the sum
 // of the calls that reported, and stays unreported if none did.
@@ -1297,6 +1332,18 @@ async function runTui(
     model: prepared.session.model,
     provider: prepared.session.provider,
   };
+  // Tracks what actually LANDED in config.json, separate from `confirmedModel` above — the two
+  // used to share one variable for two jobs (code-review finding on PR #71): `confirmedModel`
+  // moved to the new pair BEFORE `persistDefaultModel` was even attempted, so once it had moved,
+  // the runTurn's own inequality guard (below) was already satisfied for that pair and a
+  // persist that failed on its first attempt (a transient EACCES/ENOSPC/read-only config dir)
+  // was never retried, even though every later turn kept succeeding on that exact model. This
+  // starts at the same starting pair as `confirmedModel` for the identical reason: turn 1, which
+  // runs on the model the session already started on, must not attempt a persist at all.
+  let lastPersistedModel: { model: string; provider: ModelProvider } = {
+    model: prepared.session.model,
+    provider: prepared.session.provider,
+  };
   // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
   // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
   // what every other function in this closure actually calls now.
@@ -1527,6 +1574,9 @@ async function runTui(
       model = getModel(modelId, provider, sessionId, {
         getGroqModel: deps.getGroqModel,
         getOpenRouterModel: deps.getOpenRouterModel,
+        getAnthropicModel: deps.getAnthropicModel,
+        getOpenAIModel: deps.getOpenAIModel,
+        getGoogleModel: deps.getGoogleModel,
       });
     } catch (err) {
       dispatch({
@@ -1547,6 +1597,16 @@ async function runTui(
       model,
       catalogEntry,
     };
+    // Reset once per call to runTurn — i.e. once per turn, not once per `messages-updated` event
+    // (code-review finding on PR #71's own re-review). `modelId`/`provider` are destructured once,
+    // above, and never change for the life of one driveLoop call, so a boolean is all that's
+    // needed: loop.ts can yield `messages-updated` several times in a single turn (once per tool
+    // call), and without this, a PERSISTENTLY failing write (a config dir that stays read-only for
+    // the whole turn, not a one-off transient blip) would retry — and re-warn — on every one of
+    // those events instead of once. `lastPersistedModel`'s own retry-on-a-LATER-turn guarantee is
+    // untouched: this only caps attempts to at most one per turn, it does not suppress the next
+    // turn's own attempt.
+    let persistAttemptedThisTurn = false;
     try {
       const result = await driveLoop(
         turnPrepared,
@@ -1563,7 +1623,46 @@ async function runTui(
           // picker-driven one, is a no-op for the common case (same value already) and is what
           // makes a picker switch's FIRST successful turn confirm it, with no special-casing for
           // "was this turn a switch."
-          if (event.type === "messages-updated") confirmedModel = { model: modelId, provider };
+          //
+          // Two independent inequality guards below, against two independent variables
+          // (`confirmedModel`'s own comment explains why they're no longer one) — each is still a
+          // three-job guard on its own: (1) turn-switch detection for its own variable; (2)
+          // `messages-updated` fires several times per turn (loop.ts's own multiple yield sites),
+          // so an unguarded check would be one action per tool call; (3) it is what keeps a user
+          // who never picks anything from ever getting DEFAULT_MODEL frozen into config.json,
+          // pinning them to today's default across a binary upgrade — both variables start at the
+          // session's own starting pair, so turn 1 (same model) trips neither.
+          if (event.type === "messages-updated") {
+            if (modelPairChanged(confirmedModel, { model: modelId, provider })) {
+              confirmedModel = { model: modelId, provider };
+            }
+            // Gated on `lastPersistedModel`, not `confirmedModel`: the try/catch + printWarning
+            // mirrors onSessionChange's own pattern above — a config write failure (EACCES,
+            // ENOSPC, a read-only config dir) must degrade to a warning, never convert a turn
+            // that already succeeded into a failure — but unlike `confirmedModel`, this variable
+            // only advances on a SUCCESSFUL persist, so a failed attempt is retried by the next
+            // turn that lands on this same model/provider, instead of being silently and
+            // permanently skipped for the rest of the session. `persistAttemptedThisTurn` (its own
+            // comment, above) is what caps that retry at one ATTEMPT per turn — without it, a
+            // persistently failing write (as opposed to the one-off transient blip the retry above
+            // is for) would re-attempt, and re-warn, on every `messages-updated` a multi-tool-call
+            // turn yields, reintroducing the exact per-tool-call write-amplification the ORIGINAL
+            // (pre-B2-fix, single-variable) inequality guard's comment (2) already promised to
+            // prevent.
+            if (
+              !persistAttemptedThisTurn &&
+              modelPairChanged(lastPersistedModel, { model: modelId, provider })
+            ) {
+              persistAttemptedThisTurn = true;
+              try {
+                persistDefaultModel({ model: modelId, provider });
+                lastPersistedModel = { model: modelId, provider };
+              } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                printWarning(`could not save the default model: ${message}`);
+              }
+            }
+          }
         },
         getPermissionMode,
         () => {},

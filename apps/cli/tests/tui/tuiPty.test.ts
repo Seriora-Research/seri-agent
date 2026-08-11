@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -145,6 +153,11 @@ function childScriptRejects(dir: string): string {
 // exiting after the first turn or a second turn starting from a fresh/stale message list.
 function childScriptMultiTurn(dir: string): string {
   return [
+    // HOME redirection (D9's own reasoning): this script never touches /model, so nothing here
+    // should EVER write config.json — but the sibling test below needs to check the real
+    // location that write would land at, and a bare, unredirected check would either be
+    // meaningless or, if the guard were ever broken, land on the developer's real ~/.seri.
+    `process.env.HOME = ${JSON.stringify(dir)};`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `let calls = 0;`,
@@ -179,6 +192,10 @@ function childScriptMultiTurn(dir: string): string {
 // against.
 function childScriptModelSwitch(dir: string): string {
   return [
+    // D9: without this, a successful /model pick (this script's own point) calls
+    // setConfigValue, whose default configDir is process.env.HOME || homedir() — unredirected,
+    // that would rewrite the developer's REAL ~/.seri/config.json on every test run.
+    `process.env.HOME = ${JSON.stringify(dir)};`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
     `const cli = await import(${JSON.stringify(CLI)});`,
@@ -186,6 +203,46 @@ function childScriptModelSwitch(dir: string): string {
     `async function* runLoopFake(opts) {`,
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " messages=" + opts.messages.length + " systemHasModelId=" + opts.system.includes(opts.model.id));`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: (id) => ({ id }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// MEDIUM finding (code-review re-review on PR #71): loop.ts yields `messages-updated` once per
+// tool call within a SINGLE turn (its own multiple yield sites), not once per turn — so this
+// script's turn 2 yields it three times before `done`, simulating a turn with several tool calls,
+// which the paired test below uses to prove a persistently-failing persist attempt is retried at
+// most ONCE per turn, not once per `messages-updated` event within it.
+function childScriptModelSwitchMultiToolCall(dir: string): string {
+  return [
+    // D9: same HOME redirection as childScriptModelSwitch's own comment — mandatory before
+    // anything else runs.
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id);`,
+    `  if (calls === 2) {`,
+    `    yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "tool-call-1" }] };`,
+    `    yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "tool-call-2" }] };`,
+    `    yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "tool-call-3" }] };`,
+    `    yield { type: "done", reason: "no-tool-call" };`,
+    `    return opts.messages;`,
+    `  }`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -214,6 +271,9 @@ function childScriptModelSwitch(dir: string): string {
 function childScriptModelSwitchFailure(dir: string): string {
   const sessionsDir = join(dir, "sessions");
   return [
+    // D9: same HOME redirection as childScriptModelSwitch's own comment — mandatory before
+    // anything else runs, so a stray persist here could never reach the developer's real config.
+    `process.env.HOME = ${JSON.stringify(dir)};`,
     `import { readdirSync, readFileSync } from "node:fs";`,
     `import { join } from "node:path";`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -756,6 +816,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // without waiting first can race it on a slow/loaded runner.
       await sawLineTimes("> a second task", 1);
       expect(occurrences("> a second task")).toBe(1);
+
+      // Scenario c at the TUI level (feature-plan.md): a session that never invokes /model must
+      // never persist anything to config.json, even after multiple successful turns — the guard
+      // against write-amplification/accidentally-always-persisting. Waiting for turn 2's own
+      // "done" first is what makes this meaningful: it is only dispatched after turn 2's
+      // messages-updated has already been processed (the same ordering childScriptModelSwitch's
+      // own test relies on), so any persist that WOULD have fired already has by this point.
+      await sawLineTimes("(done: no-tool-call)", 2);
+      expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
     } finally {
       child.kill("SIGKILL");
     }
@@ -771,7 +840,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-switch.mjs");
     writeFileSync(scriptPath, childScriptModelSwitch(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
     try {
       // The default model (groq.ts's own DEFAULT_MODEL) — proves the FIRST turn used it, before
       // any switch.
@@ -814,6 +883,136 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine(
         "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 systemHasModelId=true",
       );
+
+      // Scenarios a + e (feature-plan.md): the switch that just worked is now the global default
+      // for every future brand-new session, not just this one — proven here on the write side.
+      // Waiting for turn 2's own "done" first: it is only dispatched after turn 2's
+      // messages-updated has already been processed by cli.ts's onEvent, which is where the
+      // persist (if any) happens, so by the time "done" appears the write is already on disk.
+      await sawLineTimes("(done: no-tool-call)", 2);
+      const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+      expect(config.SERI_MODEL).toBe("llama-3.3-70b-versatile");
+      expect(config.SERI_PROVIDER).toBe("groq");
+      // Negative control built in: the pre-switch model must not be the one that landed.
+      expect(config.SERI_MODEL).not.toBe("openai/gpt-oss-120b");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // MEDIUM finding (code-review on PR #71): `confirmedModel` used to move to the new pair BEFORE
+  // `persistDefaultModel` was even attempted, so a transient write failure (EACCES/ENOSPC/a
+  // read-only config dir) left the inequality guard already satisfied and the write was never
+  // retried, even though every later turn kept succeeding on the exact same model. Reuses
+  // childScriptModelSwitch as-is (its fake runLoop already handles an arbitrary number of turns
+  // generically) — the difference is entirely on the host side: the SECOND turn's persist attempt
+  // is sabotaged, then cleared, and a THIRD turn on the same (already-switched) model proves the
+  // retry.
+  test("a failed default-model persist is retried by a later turn on the same model", async () => {
+    const scriptPath = join(dir, "child-model-switch-persist-retry.mjs");
+    writeFileSync(scriptPath, childScriptModelSwitch(dir));
+
+    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
+      await sawLine("(done: no-tool-call)");
+
+      // Sabotage the NEXT persist attempt before it happens: config/config.ts's own
+      // write-then-rename path (writeConfig) writes to `<config.json>.tmp` before renaming it
+      // into place — pre-creating that exact path AS A DIRECTORY makes its writeFileSync throw
+      // EISDIR, the same class of failure a read-only config dir or a full disk would produce.
+      const configDir = join(dir, ".seri");
+      mkdirSync(configDir, { recursive: true });
+      mkdirSync(join(configDir, "config.json.tmp"));
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      await sawLine("GPT OSS 120B");
+
+      child.stdin?.write("70b-versatile");
+      await sawLine("70b-versatile");
+      child.stdin?.write("\r");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      // The switch DID take effect live, and the turn itself succeeded — this failure is
+      // entirely in the persist attempt behind it, not in the model call.
+      await sawLine(
+        "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 systemHasModelId=true",
+      );
+      await sawLine("could not save the default model:");
+      expect(existsSync(join(configDir, "config.json"))).toBe(false);
+
+      // Clear the sabotage and let the SAME model answer one more turn — the retry this test
+      // exists to prove, not a fresh switch.
+      rmSync(join(configDir, "config.json.tmp"), { recursive: true, force: true });
+
+      child.stdin?.write("a third task");
+      await sawLine("a third task");
+      child.stdin?.write("\r");
+
+      await sawLine(
+        "RUNLOOP_CALL 3 model=llama-3.3-70b-versatile messages=5 systemHasModelId=true",
+      );
+      await sawLineTimes("(done: no-tool-call)", 3);
+      const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+      expect(config.SERI_MODEL).toBe("llama-3.3-70b-versatile");
+      expect(config.SERI_PROVIDER).toBe("groq");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // MEDIUM finding (code-review re-review on PR #71, on the retry test above): a PERSISTENTLY
+  // failing persist — as opposed to the one-off transient blip the retry test above proves gets
+  // retried on a LATER turn — must not re-attempt on every `messages-updated` WITHIN one turn.
+  // childScriptModelSwitchMultiToolCall's own turn 2 yields it three times before `done`,
+  // simulating three tool calls in one turn; the sabotage here is never cleared, so every one of
+  // those three attempts would fail if this test's whole point weren't that only the FIRST one is
+  // even attempted.
+  test("a persistently failing persist is attempted once per turn, not once per tool call", async () => {
+    const scriptPath = join(dir, "child-model-switch-multi-tool-call.mjs");
+    writeFileSync(scriptPath, childScriptModelSwitchMultiToolCall(dir));
+
+    const { child, sawLine, sawLineTimes, occurrences } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
+      await sawLine("(done: no-tool-call)");
+
+      // Sabotaged for the rest of this run — never cleared, unlike the retry test above, since
+      // this test is about how many times ONE turn attempts against a failure that never clears.
+      const configDir = join(dir, ".seri");
+      mkdirSync(configDir, { recursive: true });
+      mkdirSync(join(configDir, "config.json.tmp"));
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      await sawLine("GPT OSS 120B");
+
+      child.stdin?.write("70b-versatile");
+      await sawLine("70b-versatile");
+      child.stdin?.write("\r");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      await sawLine("RUNLOOP_CALL 2 model=llama-3.3-70b-versatile");
+      // Waiting for turn 2's own "done" (the second occurrence) is what guarantees all three of
+      // its messages-updated events — and therefore every persist attempt they could have
+      // triggered — have already been processed: "done" is only yielded, and only dispatched,
+      // after the generator's three earlier yields have all been consumed in order.
+      await sawLineTimes("(done: no-tool-call)", 2);
+
+      // The actual assertion: one warning for the whole turn, not three.
+      expect(occurrences("could not save the default model:")).toBe(1);
+      expect(existsSync(join(configDir, "config.json"))).toBe(false);
     } finally {
       child.kill("SIGKILL");
     }
@@ -851,6 +1050,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // But the file on disk still names the model turn 1 actually completed with, not the one
       // turn 2 merely attempted and failed on.
       await sawLine("MODEL_ON_DISK_AFTER_FAILURE openai/gpt-oss-120b");
+
+      // Scenario d (feature-plan.md): the failed pick must not become the global default either.
+      // Turn 2 never emitted messages-updated at all (it failed straight to `error`), so cli.ts's
+      // persist call — gated on messages-updated — never ran for this switch; turn 1 didn't
+      // trigger it either, since it ran on the model the session already started on (no switch
+      // yet, so the inequality guard never fires). config.json is never written by this run at all.
+      expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
     } finally {
       child.kill("SIGKILL");
     }

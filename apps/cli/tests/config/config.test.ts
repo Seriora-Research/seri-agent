@@ -3,7 +3,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir, setProfileOverride } from "../../src/config/paths";
-import { getApiKey, loadConfig, loadVerifyConfig } from "../../src/config/config";
+import {
+  getApiKey,
+  loadConfig,
+  loadVerifyConfig,
+  setConfigValue,
+  setConfigValues,
+} from "../../src/config/config";
 
 const originalHome = process.env.HOME;
 
@@ -34,6 +40,46 @@ afterEach(() => {
 describe("loadConfig", () => {
   test("returns {} when config.json does not exist", () => {
     expect(loadConfig()).toEqual({});
+  });
+});
+
+describe("setConfigValues", () => {
+  // code-review finding on PR #71: two independent setConfigValue calls for a logically-paired
+  // update (persistDefaultModel's own former shape) can land only one of the two keys if
+  // interrupted between them. setConfigValues exists to make that impossible by construction —
+  // one loadConfig/writeConfig pair for the whole batch.
+  test("writes multiple keys in a single call", () => {
+    setConfigValues({ SERI_MODEL: "picked-model", SERI_PROVIDER: "openrouter" });
+    expect(loadConfig()).toEqual({ SERI_MODEL: "picked-model", SERI_PROVIDER: "openrouter" });
+  });
+
+  test("merges with existing keys rather than replacing the whole file", () => {
+    setConfigValue("GROQ_API_KEY", "existing-key", configDir);
+    setConfigValues({ SERI_MODEL: "picked-model", SERI_PROVIDER: "openrouter" });
+    expect(loadConfig()).toEqual({
+      GROQ_API_KEY: "existing-key",
+      SERI_MODEL: "picked-model",
+      SERI_PROVIDER: "openrouter",
+    });
+  });
+
+  // The atomicity proof itself: writeConfig's own write-then-rename path (its own comment) writes
+  // to `<config.json>.tmp` before renaming it into place — pre-creating that exact path AS A
+  // DIRECTORY makes its writeFileSync throw EISDIR, the same class of failure a read-only config
+  // dir or a full disk would produce. There is no "partially written" state to observe here
+  // because there is only ONE write attempt for the whole batch — this is what a caller updating
+  // several keys together actually needs, and what two independent setConfigValue calls cannot
+  // give: neither key changes when the single write fails, not "whichever call ran first still
+  // landed."
+  test("a sabotaged write leaves every key unchanged — one atomic write, not several", () => {
+    writeFileSync(join(configDir, "config.json"), JSON.stringify({ SERI_MODEL: "old-model" }));
+    mkdirSync(join(configDir, "config.json.tmp"));
+
+    expect(() =>
+      setConfigValues({ SERI_MODEL: "new-model", SERI_PROVIDER: "openrouter" }),
+    ).toThrow();
+
+    expect(loadConfig()).toEqual({ SERI_MODEL: "old-model" });
   });
 });
 

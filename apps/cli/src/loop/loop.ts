@@ -10,7 +10,7 @@ import type {
 } from "ai";
 import { streamText } from "ai";
 import { checkPermission, type PermissionMode } from "../gate/gate";
-import { type CostReport, reportForGroq, reportForOpenRouter } from "../provider/cost";
+import { type CostReport, reportForOpenRouter, reportFromCatalogPricing } from "../provider/cost";
 import {
   type CompactionSummary,
   compactMessages,
@@ -368,8 +368,13 @@ export async function* runLoop(opts: {
                 () => undefined,
               );
               failedCost = reportForOpenRouter(failedUsage, providerMetadata);
-            } else if (opts.provider === "groq" && opts.modelId && opts.catalog) {
-              failedCost = reportForGroq(opts.modelId, failedUsage, opts.catalog);
+            } else if (opts.provider && opts.modelId && opts.catalog) {
+              failedCost = reportFromCatalogPricing(
+                opts.modelId,
+                opts.provider,
+                failedUsage,
+                opts.catalog,
+              );
             }
             yield { type: "usage", usage: failedUsage, cost: failedCost };
           }
@@ -392,8 +397,8 @@ export async function* runLoop(opts: {
           () => undefined,
         );
         cost = reportForOpenRouter(resultUsage, providerMetadata);
-      } else if (opts.provider === "groq" && opts.modelId && opts.catalog) {
-        cost = reportForGroq(opts.modelId, resultUsage, opts.catalog);
+      } else if (opts.provider && opts.modelId && opts.catalog) {
+        cost = reportFromCatalogPricing(opts.modelId, opts.provider, resultUsage, opts.catalog);
       }
       // The whole of it, not the one field the compaction trigger above needs: what the call cost
       // is the consumer's question to answer, and narrowing it here is what made it unanswerable.
