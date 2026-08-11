@@ -11,20 +11,24 @@ import type { ModelPickerEntry, SetupProviderRow } from "./commands";
 
 // /setup's own live state (D5-D8, feature-plan.md) — a three-step flow, mirrored on the reducer
 // the same way /model's picker is: "list" shows all five providers, "enter-key" is the masked
-// text-entry step (add or replace), "confirm-remove" is a single-keypress y/n. Each step carries
-// its own freshly-recomputed `rows` rather than reaching back into a stale copy, so a step
-// transition always renders what config.json/env actually say at that moment.
+// text-entry step (add or replace), "confirm-remove" is a single-keypress y/n. "list" carries its
+// own freshly-recomputed `rows` (SetupList, App.tsx, renders and navigates them) rather than
+// reaching back into a stale copy, so a step transition always renders what config.json/env
+// actually say at that moment. "enter-key" and "confirm-remove" do NOT carry `rows` — neither
+// SetupEnterKey nor SetupConfirmRemove (App.tsx) reads a row list at all, only `provider`/
+// `keyName` and their own step-specific fields; a `rows` field on either used to exist purely to
+// satisfy the type, forcing cli.ts's own handlers to compute-and-thread a row array (a config.json
+// read) nothing ever consumed (code-review, PR #73).
 export type SetupState =
   | { step: "list"; rows: SetupProviderRow[]; selected: number }
   | {
       step: "enter-key";
-      rows: SetupProviderRow[];
       provider: ModelProvider;
       keyName: string;
       error?: string;
       busy: boolean;
     }
-  | { step: "confirm-remove"; rows: SetupProviderRow[]; provider: ModelProvider; keyName: string };
+  | { step: "confirm-remove"; provider: ModelProvider; keyName: string };
 
 export type TuiState = {
   session: SessionState<ModelMessage>;

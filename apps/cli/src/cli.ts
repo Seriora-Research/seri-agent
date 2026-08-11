@@ -904,24 +904,23 @@ async function prepareSession(
   // D3 (feature-plan.md): resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
   // stays a pure, environment-independent switch with its own test file. `configDir` matches
   // `seri config`'s own resolution (D7), so a key `/setup` or `seri config set` just wrote is
-  // picked up on the very next run. A rerouted pair is never silent (D2): the piped/non-interactive
-  // path gets the notice here, gated on `!isTTY` — runTui's own runTurn (below) prints the TUI
-  // equivalent into the transcript once per turn, and this call ALSO runs on the TUI path (this
-  // function has no other reason to know isTTY), so without the gate a session-start reroute
-  // printed twice for the same turn: once here (before Ink even mounts) and again from runTurn.
+  // picked up on the very next run.
   const configDir = deps.authConfigDir ?? getConfigDir();
-  const route = resolveRoute(
-    catalog,
-    { model: session.model, provider: session.provider },
-    configuredProviders(configDir),
-  );
-  if (route.rerouted && !isTTY) {
-    printWarning(
-      `routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`,
-    );
-  }
+  // Bug fixed here (code-review, PR #73): `configuredProviders` (called by `resolveRoute` below)
+  // reads config.json — `getApiKey`'s own `loadConfig` call, which does a bare `JSON.parse` — so a
+  // corrupted config.json throws SYNCHRONOUSLY, the same failure mode `getModel` itself already
+  // guards against below. Before routing-priority resolution existed, that same read only ever
+  // happened INSIDE getAnthropicModel/etc., already inside this try. Moving it inside here too is
+  // what restores "a corrupted config.json prints a clean error and exits 1," not an uncaught
+  // crash on every session start.
+  let route: ReturnType<typeof resolveRoute>;
   let model: LanguageModel;
   try {
+    route = resolveRoute(
+      catalog,
+      { model: session.model, provider: session.provider },
+      configuredProviders(configDir),
+    );
     model = getModel(route.model, route.provider, session.id, {
       getGroqModel: deps.getGroqModel,
       getOpenRouterModel: deps.getOpenRouterModel,
@@ -932,6 +931,16 @@ async function prepareSession(
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
+  }
+  // D2: a rerouted pair is never silent — the piped/non-interactive path gets the notice here,
+  // gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent into the transcript
+  // once per turn, and this call ALSO runs on the TUI path (this function has no other reason to
+  // know isTTY), so without the gate a session-start reroute printed twice for the same turn: once
+  // here (before Ink even mounts) and again from runTurn.
+  if (route.rerouted && !isTTY) {
+    printWarning(
+      `routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`,
+    );
   }
   // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
   // cost and context-window come from the wrong provider's entry.
@@ -1621,12 +1630,11 @@ async function runTui(
   }
 
   function onSetupSelect(provider: ModelProvider): void {
-    const rows = decideSetupOpen(configDir);
-    const row = rows.find((r) => r.provider === provider);
+    const row = decideSetupOpen(configDir).find((r) => r.provider === provider);
     if (row === undefined) return;
     dispatch({
       type: "setup-step",
-      state: { step: "enter-key", rows, provider, keyName: row.keyName, busy: false },
+      state: { step: "enter-key", provider, keyName: row.keyName, busy: false },
     });
   }
 
@@ -1635,34 +1643,44 @@ async function runTui(
   // needs a try/catch, matching the persist path's degrade-to-a-message posture (onSessionChange's
   // own comment, above) rather than converting a validated key into a lost one over an unrelated
   // write failure.
+  //
+  // One `decideSetupOpen` call, not three (code-review, PR #73): `SetupState`'s own "enter-key"
+  // variant does not carry `rows` (nothing reads it — reducer.ts's own comment), so the two error
+  // branches below no longer need to re-read config.json just to satisfy the type. `keyName` is
+  // resolved once, up front, from the same call this function already needed.
   async function onSetupKeyEntered(provider: ModelProvider, value: string): Promise<void> {
-    const rows = decideSetupOpen(configDir);
-    const keyName = rows.find((r) => r.provider === provider)?.keyName ?? "";
+    const keyName = decideSetupOpen(configDir).find((r) => r.provider === provider)?.keyName ?? "";
     dispatch({
       type: "setup-step",
-      state: { step: "enter-key", rows, provider, keyName, busy: true },
+      state: { step: "enter-key", provider, keyName, busy: true },
     });
     const result = await validateProviderKey(provider, value);
     if (!result.ok) {
       dispatch({
         type: "setup-step",
-        state: {
-          step: "enter-key",
-          rows: decideSetupOpen(configDir),
-          provider,
-          keyName,
-          busy: false,
-          error: result.message,
-        },
+        state: { step: "enter-key", provider, keyName, busy: false, error: result.message },
       });
       return;
     }
     try {
       setConfigValue(keyName, value, configDir);
     } catch (err) {
+      // Bug fixed here (code-review, PR #73): this used to dispatch a bare command-error and
+      // return, leaving `pendingSetup` stuck at `busy: true` — SetupEnterKey's own useInput
+      // checks `if (busy) return;` BEFORE its Escape/Ctrl-D handling, so a write failure here
+      // (EACCES, disk full, the config dir removed mid-session) permanently locked the /setup
+      // panel with no way out short of a fatal Ctrl-C that kills the whole process. Re-rendering
+      // `enter-key` with `busy: false` and an error, the same shape a validation failure already
+      // uses above, is what actually returns control to the user.
       dispatch({
-        type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider,
+          keyName,
+          busy: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
       });
       return;
     }
@@ -1697,12 +1715,11 @@ async function runTui(
       dispatch({ type: "setup-step", state: setupListState(provider) });
       return;
     }
-    const rows = decideSetupOpen(configDir);
-    const row = rows.find((r) => r.provider === provider);
+    const row = decideSetupOpen(configDir).find((r) => r.provider === provider);
     if (row === undefined || !row.removable) return;
     dispatch({
       type: "setup-step",
-      state: { step: "confirm-remove", rows, provider, keyName: row.keyName },
+      state: { step: "confirm-remove", provider, keyName: row.keyName },
     });
   }
 
@@ -1748,21 +1765,24 @@ async function runTui(
     // D3 (feature-plan.md): re-resolved every turn, same reasoning as the model re-resolution
     // above — a routing-priority reroute (D2) must be reconsidered on every turn too, not just at
     // session start, so a key added mid-session via /setup takes effect on the very next turn.
-    const route = resolveRoute(
-      prepared.catalog,
-      { model: requestedModel, provider: requestedProvider },
-      configuredProviders(configDir),
-    );
-    const { model: modelId, provider } = route;
-    if (route.rerouted) {
-      dispatch({
-        type: "transcript-append",
-        line: `↻ routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`,
-      });
-    }
+    //
+    // Bug fixed here (code-review, PR #73): `resolveRoute`/`configuredProviders` used to run
+    // OUTSIDE this try — `configuredProviders` reads config.json via a bare `JSON.parse`, so a
+    // corrupted file threw SYNCHRONOUSLY. `runTurn` is called fire-and-forget
+    // (`currentTurn = runTurn(...)`, no `.catch()` at either call site), so that throw became an
+    // unhandled rejection — a config.json corrupted mid-session (a concurrent /setup write from
+    // another instance, say) crashed the running TUI on the very next turn, losing in-progress
+    // work. Inside the try, it degrades the same way a getModel failure already does: a
+    // command-error the user can see and recover from, not a crash.
+    let route: ReturnType<typeof resolveRoute>;
     let model: LanguageModel;
     try {
-      model = getModel(modelId, provider, sessionId, {
+      route = resolveRoute(
+        prepared.catalog,
+        { model: requestedModel, provider: requestedProvider },
+        configuredProviders(configDir),
+      );
+      model = getModel(route.model, route.provider, sessionId, {
         getGroqModel: deps.getGroqModel,
         getOpenRouterModel: deps.getOpenRouterModel,
         getAnthropicModel: deps.getAnthropicModel,
@@ -1776,6 +1796,13 @@ async function runTui(
       });
       turnInFlight = false;
       return;
+    }
+    const { model: modelId, provider } = route;
+    if (route.rerouted) {
+      dispatch({
+        type: "transcript-append",
+        line: `↻ routing ${route.model} via ${route.provider} (your key) — no ${route.reason} configured`,
+      });
     }
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one.
     const catalogEntry = findCatalogEntry(prepared.catalog, modelId, provider);
@@ -2010,12 +2037,24 @@ async function runTui(
         dispatch({ type: "command-error", message: "/model: invalid arguments." });
         return;
       }
-      dispatch({
-        type: "model-picker-requested",
-        // D1/D2 (feature-plan.md): re-read fresh on every open, not cached from prepareSession —
-        // a key added mid-session via /setup must show up in the very next /model open.
-        entries: decideModelPickerOpen(prepared.catalog, configuredProviders(configDir)),
-      });
+      // Bug fixed here (code-review, PR #73, same class as resolveRoute's own fix above):
+      // configuredProviders reads config.json via a bare JSON.parse — a corrupted file threw
+      // synchronously, and onSubmit has no caller-side .catch() (InputBox's own useInput handler
+      // calls it fire-and-forget), so that became an unhandled rejection instead of a visible
+      // command-error the same way every other failure in this function degrades.
+      try {
+        dispatch({
+          type: "model-picker-requested",
+          // D1/D2 (feature-plan.md): re-read fresh on every open, not cached from prepareSession —
+          // a key added mid-session via /setup must show up in the very next /model open.
+          entries: decideModelPickerOpen(prepared.catalog, configuredProviders(configDir)),
+        });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
       return;
     }
     // /setup, like /model just above, is intercepted here rather than added to SLASH_COMMANDS: it
@@ -2025,7 +2064,15 @@ async function runTui(
         dispatch({ type: "command-error", message: "/setup: invalid arguments." });
         return;
       }
-      dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
+      // Same fix as /model just above: decideSetupOpen also reads config.json unguarded.
+      try {
+        dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
       return;
     }
     const command = SLASH_COMMANDS.get(name);

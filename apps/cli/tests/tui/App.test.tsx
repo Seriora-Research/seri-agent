@@ -581,7 +581,6 @@ describe("App", () => {
         type: "setup-step",
         state: {
           step: "enter-key",
-          rows: setupRows(),
           provider: "groq",
           keyName: "GROQ_API_KEY",
           busy: false,
@@ -621,7 +620,6 @@ describe("App", () => {
         type: "setup-step",
         state: {
           step: "enter-key",
-          rows: setupRows(),
           provider: "openai",
           keyName: "OPENAI_API_KEY",
           busy: false,
@@ -655,7 +653,6 @@ describe("App", () => {
         type: "setup-step",
         state: {
           step: "enter-key",
-          rows: setupRows(),
           provider: "openai",
           keyName: "OPENAI_API_KEY",
           busy: true,
@@ -691,7 +688,6 @@ describe("App", () => {
         type: "setup-step",
         state: {
           step: "confirm-remove",
-          rows: setupRows(),
           provider: "openrouter",
           keyName: "OPENROUTER_API_KEY",
         },
@@ -707,7 +703,6 @@ describe("App", () => {
         type: "setup-step",
         state: {
           step: "confirm-remove",
-          rows: setupRows(),
           provider: "openrouter",
           keyName: "OPENROUTER_API_KEY",
         },

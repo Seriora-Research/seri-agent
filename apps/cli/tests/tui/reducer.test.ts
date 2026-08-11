@@ -375,12 +375,11 @@ describe("tuiReducer: setup-requested / setup-step / setup-resolved", () => {
 
     state = tuiReducer(state, {
       type: "setup-step",
-      state: { step: "enter-key", rows, provider: "groq", keyName: "GROQ_API_KEY", busy: false },
+      state: { step: "enter-key", provider: "groq", keyName: "GROQ_API_KEY", busy: false },
     });
 
     expect(state.pendingSetup).toEqual({
       step: "enter-key",
-      rows,
       provider: "groq",
       keyName: "GROQ_API_KEY",
       busy: false,
