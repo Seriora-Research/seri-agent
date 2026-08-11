@@ -54,6 +54,20 @@ describe("makeMemoryWriteTool", () => {
     expect(missingDurable.success).toBe(false);
   });
 
+  // An empty target would match every entry in store.ts's findUniqueMatch (`"".includes()` is
+  // always true) — rejected here, at the schema, before a malformed or hallucinated model call
+  // ever reaches that far.
+  test("schema rejects an empty-string target", () => {
+    const result = memoryWriteInputSchema.safeParse({
+      scope: "user",
+      action: "remove",
+      target: "",
+      reason: "r",
+      durable: true,
+    });
+    expect(result.success).toBe(false);
+  });
+
   test("a well-formed call with both present validates", () => {
     const parsed = memoryWriteInputSchema.safeParse({
       scope: "user",

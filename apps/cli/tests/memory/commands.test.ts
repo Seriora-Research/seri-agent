@@ -22,6 +22,7 @@ describe("memoryCommandAccepts", () => {
   test("accepts the exact command forms", () => {
     expect(memoryCommandAccepts(["pending"])).toBe(true);
     expect(memoryCommandAccepts(["diff", "abcd1234"])).toBe(true);
+    expect(memoryCommandAccepts(["diff", "all"])).toBe(true);
     expect(memoryCommandAccepts(["approve", "all"])).toBe(true);
     expect(memoryCommandAccepts(["approve", "abcd"])).toBe(true);
     expect(memoryCommandAccepts(["reject", "all"])).toBe(true);
@@ -128,11 +129,35 @@ describe("decideMemoryCommand", () => {
     const ctx = makeCtx();
     expect(decideMemoryCommand(["archivist"], ctx)).toEqual({
       lines: [
-        "Usage: /memory pending | diff <id> | approve <id|all> | reject <id|all> | approval on|off | archivist on|off",
+        "Usage: /memory pending | diff <id|all> | approve <id|all> | reject <id|all> | approval on|off | archivist on|off",
       ],
       changed: false,
     });
     expect(decideMemoryCommand(["archivist", "maybe"], ctx).changed).toBe(false);
+  });
+
+  // diffPending re-runs computeWrite against the CURRENT live file (correct — approve-time
+  // re-check), which can throw for one entry without that throw discarding every diff already
+  // collected for entries processed before/after it.
+  test("diff all still shows a good entry's diff plus an inline error for a bad one", () => {
+    const ctx = makeCtx();
+    stagePendingWrite(
+      { scope: "user", action: "add", content: "a fine entry", reason: "r", durable: true },
+      ctx,
+      new Date(),
+    );
+    stagePendingWrite(
+      // Never matches anything in the (empty) live file — diffPending's own computeWrite call
+      // throws "no entry contains" for this one.
+      { scope: "user", action: "remove", target: "does not exist", reason: "r", durable: true },
+      ctx,
+      new Date(),
+    );
+
+    const result = decideMemoryCommand(["diff", "all"], ctx);
+    expect(result.changed).toBe(false);
+    expect(result.lines.some((l) => l.includes("a fine entry"))).toBe(true);
+    expect(result.lines.some((l) => l.startsWith("Could not diff"))).toBe(true);
   });
 
   test("approve all applies writes staged in all three scopes", () => {

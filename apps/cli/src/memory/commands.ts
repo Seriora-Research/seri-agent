@@ -25,7 +25,6 @@ function summaryLine(p: PendingWrite): string {
   return `${p.id}  [${p.scope}]  ${detail}`;
 }
 
-const HEX_REF_RE = /^[0-9a-f]{4,40}$/;
 const ID_ARG_RE = /^(all|[0-9a-f]{4,40})$/;
 const ON_OFF_RE = /^(on|off)$/;
 
@@ -36,8 +35,10 @@ const ON_OFF_RE = /^(on|off)$/;
 export function memoryCommandAccepts(args: string[]): boolean {
   const [sub, ...rest] = args;
   if (sub === "pending") return rest.length === 0;
-  if (sub === "diff") return rest.length === 1 && HEX_REF_RE.test(rest[0] ?? "");
-  if (sub === "approve" || sub === "reject")
+  // Same `all|<hex>` shape as approve/reject, not diff's own older hex-only form: `diff all`
+  // renders every staged write's diff in one call, the same way `approve all`/`reject all`
+  // already act on every staged write.
+  if (sub === "diff" || sub === "approve" || sub === "reject")
     return rest.length === 1 && ID_ARG_RE.test(rest[0] ?? "");
   if (sub === "approval" || sub === "archivist")
     return rest.length === 1 && ON_OFF_RE.test(rest[0] ?? "");
@@ -64,7 +65,21 @@ export function decideMemoryCommand(
     if (matches.length === 0)
       return { lines: [`No staged write matches "${rest[0]}".`], changed: false };
     const lines: string[] = [];
-    for (const p of matches) lines.push(...diffPending(deps.configDir, p).lines, "");
+    // Per-entry try/catch, the same shape "approve" already uses below: diffPending re-runs
+    // computeWrite against the CURRENT live file (correct — approve-time re-check, store.ts's own
+    // comment on approvePending explains why), which can throw for one entry (its target text went
+    // stale, e.g. another pending write for the same scope already consolidated it) without that
+    // throw discarding every diff already collected for entries processed before it in "diff all".
+    for (const p of matches) {
+      try {
+        lines.push(...diffPending(deps.configDir, p).lines, "");
+      } catch (err) {
+        lines.push(
+          `Could not diff ${p.id}: ${err instanceof Error ? err.message : String(err)}`,
+          "",
+        );
+      }
+    }
     return { lines, changed: false };
   }
 
@@ -108,7 +123,7 @@ export function decideMemoryCommand(
 
   return {
     lines: [
-      "Usage: /memory pending | diff <id> | approve <id|all> | reject <id|all> | approval on|off | archivist on|off",
+      "Usage: /memory pending | diff <id|all> | approve <id|all> | reject <id|all> | approval on|off | archivist on|off",
     ],
     changed: false,
   };

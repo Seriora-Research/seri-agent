@@ -19,7 +19,11 @@ import {
 export const memoryWriteInputSchema = z.object({
   scope: z.enum(["user", "memory-global", "memory-project"]),
   action: z.enum(["add", "replace", "remove"]),
-  target: z.string().optional(),
+  // .min(1): an empty target would match every entry in findUniqueMatch's own `.includes(target)`
+  // check (store.ts) — a malformed or hallucinated call with target: "" must fail here, at the
+  // schema, rather than silently matching (and, for replace/remove, mutating) whatever the file's
+  // one existing entry happens to be.
+  target: z.string().min(1).optional(),
   content: z.string().optional(),
   reason: z.string().min(1),
   durable: z.boolean(),

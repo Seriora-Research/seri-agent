@@ -194,6 +194,26 @@ describe("computeWrite: action semantics", () => {
     ).toThrow(/no entry contains/);
   });
 
+  // "".includes() is always true — without this guard, an empty target would match every entry,
+  // and in a file with exactly one entry that match is unique, so remove/replace would silently
+  // succeed against zero genuine match. The schema (memory/tool.ts) already blocks this from a
+  // model call, but computeWrite is also reached from pending.ts's approve/diff re-validation
+  // path against a hand-editable .pending file the schema never sees — this test covers THAT path.
+  test("an empty target throws rather than matching every entry", () => {
+    const file: MemoryFile = {
+      ...emptyFile(),
+      text: "- [2026-01-01] only entry",
+      entries: [{ date: "2026-01-01", text: "only entry", line: "- [2026-01-01] only entry" }],
+    };
+    expect(() =>
+      computeWrite(
+        file,
+        { scope: "user", action: "remove", target: "", reason: "r", durable: true },
+        "2026-08-11",
+      ),
+    ).toThrow(/must not be empty/);
+  });
+
   test.each([
     ["add", { action: "add" as const }],
     ["remove", { action: "remove" as const }],

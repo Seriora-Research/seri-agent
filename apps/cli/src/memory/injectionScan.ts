@@ -46,13 +46,20 @@ const RULES: Rule[] = [
   // invisible-unicode — zero-width/formatting control chars, the Unicode Tags block (ASCII
   // smuggling), and variation selectors. Written as \u escapes, not literal glyphs, so this
   // source file itself stays free of the exact characters it is scanning for.
+  //
+  // control-formatting covers U+2060-U+206F as one continuous range, not two
+  // (U+2060-U+2064 / U+206A-U+206F) with a gap between them: the gap, U+2065-U+2069, includes
+  // the four bidi-isolate control characters (LRI/RLI/FSI/PDI, U+2066-U+2069) used in
+  // "trojan-source" text-direction-spoofing attacks -- a memory_write containing one of those
+  // four passed this scanner unflagged before this range closed the gap. U+2065 itself is an
+  // unassigned reserved codepoint; including it in the range is harmless.
   {
     category: "invisible-unicode",
     name: "control-formatting",
-    pattern: /[­᠎​-‏‪-‮⁠-⁤⁪-⁯﻿]/,
+    pattern: /[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/,
   },
   { category: "invisible-unicode", name: "unicode-tags", pattern: /[\u{E0000}-\u{E007F}]/u },
-  { category: "invisible-unicode", name: "variation-selector", pattern: /[︀-️]/ },
+  { category: "invisible-unicode", name: "variation-selector", pattern: /[\uFE00-\uFE0F]/ },
   // injection-phrasing — the wording a prompt-injected instruction typically uses.
   {
     category: "injection-phrasing",

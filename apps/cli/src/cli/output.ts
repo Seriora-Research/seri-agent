@@ -30,7 +30,7 @@ export const USAGE = `Usage:
   /setup (inside the TUI)         add, replace or remove a provider API key — not a seri
                                     subcommand; seri config set is the non-interactive equivalent
   seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha>
-  seri [--resume <id>] /memory pending | diff <id> | approve <id|all> | reject <id|all>
+  seri [--resume <id>] /memory pending | diff <id|all> | approve <id|all> | reject <id|all>
                                     | approval on|off | archivist on|off
   /exit (inside the TUI)          end the session, or Ctrl-D — not a seri subcommand: it means
                                     nothing outside a live TUI, and "seri /exit" is just a task

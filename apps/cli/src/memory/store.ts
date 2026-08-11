@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { getMemoriesDir } from "../config/paths";
 import { projectKey } from "../permissions/store";
+import { atomicWriteFile } from "./atomicWrite";
 
 export type MemoryScope = "user" | "memory-global" | "memory-project";
 
@@ -112,6 +113,15 @@ function currentEntriesBlock(file: MemoryFile): string {
 }
 
 function findUniqueMatch(file: MemoryFile, target: string): MemoryEntry {
+  // "".includes() is always true, so an unguarded empty target would match every entry — in a
+  // file with exactly one entry, matches.length === 1 would pass silently below and
+  // remove/overwrite it despite no genuine match. The schema (memory/tool.ts) already rejects an
+  // empty target from a model call, but computeWrite is also reached from pending.ts's
+  // approvePending/diffPending re-validation path against a `.pending` file read straight off
+  // disk, which the schema never touches — this is the check that actually covers that path.
+  if (target.length === 0) {
+    throw new Error(`memory_write refused: "target" must not be empty.`);
+  }
   const matches = file.entries.filter((entry) => entry.line.includes(target));
   if (matches.length === 0) {
     throw new Error(
@@ -180,9 +190,9 @@ export function computeWrite(file: MemoryFile, req: MemoryWriteRequest, today: s
   return nextText;
 }
 
-// mkdir 0o700 + write-then-rename + chmod 0o600 on non-win32 — the exact shape of
-// permissions/store.ts's writeDocument, copied for the same reason: this file holds the user's own
-// stated preferences, and anything that can append to it steers future sessions.
+// mkdir 0o700 + write-then-rename + chmod 0o600 on non-win32, via atomicWrite.ts's shared helper
+// (that module's own comment covers why the tmp filename is non-colliding) — this file holds the
+// user's own stated preferences, and anything that can append to it steers future sessions.
 export function applyWrite(
   req: MemoryWriteRequest,
   ctx: MemoryContext,
@@ -190,13 +200,7 @@ export function applyWrite(
 ): { path: string; before: string; after: string } {
   const file = loadMemoryFile(req.scope, ctx);
   const after = computeWrite(file, req, today); // throws before anything below runs
-  const dir = dirname(file.path);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") chmodSync(dir, 0o700);
-  const tmpPath = `${file.path}.tmp`;
-  writeFileSync(tmpPath, after, { mode: 0o600 });
-  if (process.platform !== "win32") chmodSync(tmpPath, 0o600);
-  renameSync(tmpPath, file.path);
+  atomicWriteFile(file.path, after);
   return { path: file.path, before: file.text, after };
 }
 

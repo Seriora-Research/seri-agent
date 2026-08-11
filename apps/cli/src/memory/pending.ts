@@ -1,17 +1,9 @@
 import { randomBytes } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { existsSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
+import { basename, join } from "node:path";
 import { getPendingDir } from "../config/paths";
 import { projectKey } from "../permissions/store";
+import { atomicWriteFile } from "./atomicWrite";
 import {
   applyWrite,
   computeWrite,
@@ -39,16 +31,10 @@ export function pendingPath(configDir: string, scope: MemoryScope, id: string): 
 }
 
 // JSON, not a bespoke text format (unlike permissions.yaml): this file is the only reader/writer,
-// nothing needs to hand-edit a staged write, and `content` can contain any character. Same mkdir
-// 0o700 / write-tmp / rename / chmod 0o600 sequence as store.ts's applyWrite, for the same reason.
+// nothing needs to hand-edit a staged write, and `content` can contain any character. Same
+// atomicWrite.ts helper store.ts's applyWrite uses, for the same reason.
 function writePendingFile(path: string, record: PendingWrite): void {
-  const dir = dirname(path);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") chmodSync(dir, 0o700);
-  const tmpPath = `${path}.tmp`;
-  writeFileSync(tmpPath, JSON.stringify(record, null, 2), { mode: 0o600 });
-  if (process.platform !== "win32") chmodSync(tmpPath, 0o600);
-  renameSync(tmpPath, path);
+  atomicWriteFile(path, JSON.stringify(record, null, 2));
 }
 
 export function stagePendingWrite(
@@ -85,7 +71,14 @@ function isPendingWrite(value: unknown): value is PendingWrite {
     (v.action === "add" || v.action === "replace" || v.action === "remove") &&
     typeof v.reason === "string" &&
     typeof v.durable === "boolean" &&
-    typeof v.entryDate === "string"
+    typeof v.entryDate === "string" &&
+    // A "memory-project" record with no non-empty projectPath is malformed, not merely
+    // unusual: ctxForPending falls back to `worktree: p.projectPath ?? ""`, and an empty
+    // worktree resolves to process.cwd() at approval time — a hand-edited or corrupted
+    // .pending file missing this field would silently read/write into whatever directory seri
+    // happens to be invoked from, rather than failing loudly.
+    (v.scope !== "memory-project" ||
+      (typeof v.projectPath === "string" && v.projectPath.length > 0))
   );
 }
 

@@ -87,6 +87,34 @@ describe("stagePendingWrite / listPending", () => {
     expect(pending).toHaveLength(1);
     expect(warnings.length).toBe(1);
   });
+
+  // ctxForPending falls back to `worktree: p.projectPath ?? ""`, and an empty worktree resolves
+  // to process.cwd() at approval time — a memory-project record missing projectPath must be
+  // skipped, not silently resolved to whatever directory seri happens to be invoked from.
+  test("a memory-project .pending file missing projectPath is skipped with a warning, not resolved to cwd", () => {
+    const ctx = makeCtx();
+    const dir = join(getPendingDir(ctx.configDir), "memory-project");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "aaaaaaaaaaaa.pending"),
+      JSON.stringify({
+        id: "aaaaaaaaaaaa",
+        stagedAt: new Date().toISOString(),
+        scope: "memory-project",
+        action: "add",
+        content: "x",
+        reason: "r",
+        durable: true,
+        entryDate: "2026-08-11",
+        // projectPath deliberately omitted
+      }),
+    );
+    const warnings: string[] = [];
+    const pending = listPending(ctx.configDir, (m) => warnings.push(m));
+    expect(pending).toHaveLength(0);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("not a valid staged write");
+  });
 });
 
 describe("resolvePendingRef", () => {
