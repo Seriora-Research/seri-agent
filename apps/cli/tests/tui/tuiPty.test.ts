@@ -682,7 +682,13 @@ function childScriptSetupEnvShadow(dir: string): string {
 // config.json (childScriptSetup's own dir is always fresh, but every OTHER script in this file
 // still exports GROQ_API_KEY as a real env var; this one explicitly deletes every provider's own
 // key, matching code-quality.md's "the platform matrix does not cover the unset case" guard, since
-// the dev/CI box's own ambient env could otherwise mask run()'s new isTTY-and-zero-keys gate).
+// the dev/CI box's own ambient env could otherwise mask run()'s new isTTY-and-zero-keys gate). No
+// `getGroqModel` override, unlike every other script in this file: injecting one would bypass the
+// REAL groq.ts's own `if (!apiKey) throw missingKeyError("groq")` — the exact throw prepareSession
+// relies on today, pre-fix, to hard-exit before Ink ever mounts. The real getGroqModel only ever
+// constructs an SDK client (`createGroq({ apiKey })(modelId)`, no network I/O at creation), so
+// once /setup writes a fake GROQ_API_KEY, it resolves fine — the injected `runLoopFake` below never
+// touches the model object either way.
 function childScriptGuidedSetup(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -701,7 +707,6 @@ function childScriptGuidedSetup(dir: string): string {
     `}`,
     `const code = await cli.run(["do", "a", "task"], {`,
     `  runLoop: runLoopFake,`,
-    `  getGroqModel: () => ({}),`,
     `  loadAgentsFile: () => "",`,
     `  isTTY: process.stdout.isTTY,`,
     `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
@@ -2486,8 +2491,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\x1b"); // Escape, no key added
         await new Promise((resolve) => setTimeout(resolve, 30));
 
-        const { code } = await exited;
-        expect(code).not.toBe(0);
+        // Asserted on stdout's own EXIT_CODE line, not the pty's own exit status —
+        // childScriptQuit's own sibling tests (above) explain why: the pty allocator (python3)
+        // reports its own exit status, not the grandchild bun process's.
+        const { stdout } = await exited;
+        expect(stdout).toContain("EXIT_CODE 1");
       } finally {
         child.kill("SIGKILL");
       }
