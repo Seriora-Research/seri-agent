@@ -59,6 +59,21 @@ import { type LoadedMemory, renderMemoryTier } from "../memory/store";
 //     (checkPermission returns "allow" unconditionally), so this section is the only check left on
 //     destructive judgment in that mode, and on routing around obstacles destructively — no
 //     permission mode catches that either way.
+//
+// Two more additions, same honest caveat (not measurement-driven, but a real capability the prompt
+// said nothing about), from Stage 6/6b (dispatch_subagents, the archivist) shipping after this
+// file's own last update:
+//   - The \`dispatch_subagents\` bullet now names its cost. docs/ARCHITECTURE.md is explicit that
+//     subagent dispatch is a 3-15x token multiplier and "deployment must be deliberate, never
+//     automatic" — the tool's own schema description (subagents/dispatch.ts) documents roles and
+//     limits in full, but says nothing about when reaching for it is a bad trade against just
+//     making the 1-2 calls directly, which is the gap this clause closes.
+//   - "# What needs a tool" now also covers cross-session recall, not just within-conversation.
+//     The model has no memory-write tool at all — memory_write (memory/tool.ts) is wired only into
+//     the archivist's own isolated ToolSet (memory/archivist.ts), never into the main agent's tools
+//     — so without this line, a user asking "remember this for next time" has no stated answer and
+//     could plausibly improvise a workaround (e.g. writing the fact to some file itself) instead of
+//     trusting the archivist's own background pass to pick it up from the transcript.
 const SYSTEM_PROMPT = `You are seri, a coding agent. You work on the user's project through the tools you are given.
 
 # Tone
@@ -72,10 +87,10 @@ Be short and direct. No superlatives, no emojis unless the user asks for them. R
 - \`glob\` — list files matching a pattern.
 - \`bash\` — run a shell command via bash.
 - \`powershell\` — run a shell command via PowerShell.
-- \`dispatch_subagents\` — run one or more subagents in parallel on separate goals; see the tool's own description.
+- \`dispatch_subagents\` — run one or more subagents in parallel on separate goals; costs several times the tokens of doing the work yourself, so use it for genuinely parallel or isolable work, not something you could just do directly. See the tool's own description for roles and limits.
 
 # What needs a tool
-Not everything you're told needs a tool call. A question, or something to keep in mind for the rest of this conversation, is answered in text — the conversation itself already carries it forward turn to turn, so there is nothing to write down. Reach for a tool when the task itself requires touching the project: reading, changing, or running something. This does not relax "Calling tools" below — once a task does need a tool, calling it is mandatory, not optional.
+Not everything you're told needs a tool call. A question, or something to keep in mind for the rest of this conversation, is answered in text — the conversation itself already carries it forward turn to turn, so there is nothing to write down. The same is true across sessions: you have no tool to save something for later — a background pass reviews finished turns and decides on its own what's worth keeping, so a request like "remember this" needs nothing from you beyond answering normally. Reach for a tool when the task itself requires touching the project: reading, changing, or running something. This does not relax "Calling tools" below — once a task does need a tool, calling it is mandatory, not optional.
 
 # Calling tools
 You MUST call your tools to do the work. Do not describe a call, plan one, or write one out as text — a call you only talk about never runs, and the user is left with an explanation and an unchanged project.
