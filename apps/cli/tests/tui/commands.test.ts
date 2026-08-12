@@ -203,6 +203,7 @@ describe("decideModelPickerOpen", () => {
     };
 
     const rows = decideModelPickerOpen(catalog, new Set(["anthropic"]));
+    expect(rows.length).toBe(2);
     expect(rows.every((row) => row.gatewayReachable === false)).toBe(true);
   });
 
