@@ -53,8 +53,6 @@ export type SubagentRuntime = {
   modelId: string;
   catalog: ModelCatalog;
   contextWindowSize?: number;
-  // The parent's own composed stable+context+volatile tiers; runOne appends the role addendum.
-  system: string;
   // A getter, not a resolved value, so a dispatch started after a live /mode change sees the
   // current mode rather than the one driveLoop composed this runtime with.
   permissionMode: () => PermissionMode;
@@ -113,6 +111,13 @@ export async function runSubagent(opts: {
   signal?: AbortSignal;
 }): Promise<{
   summary: string;
+  // True when `summary` is fallbackSummary's own generic filler ("produced no summary", "stopped
+  // at the iteration cap…", etc.) rather than the child's own trimmed final segment — dispatch_
+  // subagents' own caller (createDispatchTool, below) always wants SOME text to show the parent
+  // model regardless of which one it is, but the archivist's own caller (memory/archivist.ts)
+  // needs to tell the two apart, so a generic fallback never gets rendered to the user as if it
+  // were the model's own explanation.
+  summaryIsFallback: boolean;
   usage: SubagentUsage;
   toolCallsMade: number;
   doneReason: DoneReason | undefined;
@@ -168,9 +173,12 @@ export async function runSubagent(opts: {
   }
 
   const summary = segment.trim();
+  const summaryIsFallback = summary.length === 0;
   return {
-    summary:
-      summary.length > 0 ? summary : fallbackSummary(doneReason, lastError, deniedCount, mode),
+    summary: summaryIsFallback
+      ? fallbackSummary(doneReason, lastError, deniedCount, mode)
+      : summary,
+    summaryIsFallback,
     usage,
     toolCallsMade,
     doneReason,
@@ -192,7 +200,11 @@ const inputSchema = z.object({
   tasks: z.array(z.object({ role: z.enum(DISPATCHABLE_ROLES), goal: z.string().min(1) })).min(1),
 });
 
-export function createDispatchTool(runtime: SubagentRuntime) {
+// `system` (the parent's own composed stable+context+volatile tiers; runOne appends the role
+// addendum) lives on this parameter, not SubagentRuntime itself: the archivist reuses
+// SubagentRuntime + runSubagent directly (this file's own hand-off comment) but never this
+// function, and its own runtime has no such parent system prompt to compose.
+export function createDispatchTool(runtime: SubagentRuntime & { system: string }) {
   return tool({
     description: DISPATCH_DESCRIPTION,
     inputSchema,
@@ -285,6 +297,9 @@ export function createDispatchTool(runtime: SubagentRuntime) {
 
 // The ToolSet -> ToolSet wrapper idiom of withCheckpoints/withVerification — rolling the feature
 // back is deleting the one call site that composes this in (cli.ts's driveLoop).
-export function withSubagents(tools: ToolSet, runtime: SubagentRuntime): ToolSet {
+export function withSubagents(
+  tools: ToolSet,
+  runtime: SubagentRuntime & { system: string },
+): ToolSet {
   return { ...tools, [DISPATCH_TOOL_NAME]: createDispatchTool(runtime) };
 }

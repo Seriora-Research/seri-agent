@@ -58,8 +58,8 @@ function usageEvent(inputTokens?: number, outputTokens?: number): LoopEvent {
 
 function makeRuntime(
   fake: (opts: RunLoopOpts) => AsyncGenerator<LoopEvent>,
-  overrides: Partial<SubagentRuntime> = {},
-): SubagentRuntime {
+  overrides: Partial<SubagentRuntime & { system: string }> = {},
+): SubagentRuntime & { system: string } {
   const catalog: ModelCatalog = { fetchedAt: "", entries: [] };
   return {
     runLoop: fake as unknown as typeof runLoop,
@@ -389,7 +389,6 @@ describe("dispatch_subagents", () => {
       provider: "groq",
       modelId: "test-model",
       catalog: { fetchedAt: "", entries: [] },
-      system: "PARENT SYSTEM",
       permissionMode: () => "approve-each",
       allowedTools: [],
       maxIterations: 3,

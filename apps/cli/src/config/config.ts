@@ -1,5 +1,6 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { atomicWriteFile } from "../atomicWriteFile";
 import { getConfigDir } from "./paths";
 
 export const CONFIG_FILENAME = "config.json";
@@ -20,24 +21,13 @@ export function loadConfig(configDir: string = getConfigDir()): Record<string, s
 }
 
 // config.json holds provider API keys, so it gets the same owner-only treatment as
-// auth.json (see auth/authStore.ts).
+// auth.json (see auth/authStore.ts). atomicWriteFile.ts's shared helper: write-then-rename means
+// a truncating in-place write that is interrupted leaves a partial config.json, which makes every
+// later command throw from JSON.parse — including `seri config` itself, since it reads before
+// writing; the non-colliding tmp name (that module's own comment) is what /memory approval on|off
+// and /memory archivist on|off now need too, as new concurrent writers to this same file.
 function writeConfig(config: Record<string, string>, configDir: string): void {
-  mkdirSync(configDir, { recursive: true, mode: 0o700 });
-  // mkdirSync's and writeFileSync's `mode` are both no-ops when the target already exists
-  // (POSIX mkdir ignores mode for an existing dir; Node applies a file's mode only on
-  // O_CREAT) — and a pre-existing config.json is the common case, since users hand-created
-  // it before this command existed. chmod both explicitly.
-  if (process.platform !== "win32") chmodSync(configDir, 0o700);
-
-  // Write-then-rename: a truncating in-place write that is interrupted leaves a partial
-  // config.json, which makes every later command throw from JSON.parse — including
-  // `seri config` itself, since it reads before writing. rename is atomic, so readers
-  // see either the old file or the new one.
-  const path = configPath(configDir);
-  const tmpPath = `${path}.tmp`;
-  writeFileSync(tmpPath, JSON.stringify(config, null, 2), { mode: 0o600 });
-  if (process.platform !== "win32") chmodSync(tmpPath, 0o600);
-  renameSync(tmpPath, path);
+  atomicWriteFile(configPath(configDir), JSON.stringify(config, null, 2));
 }
 
 export function setConfigValue(
@@ -98,6 +88,21 @@ export function loadVerifyConfig(configDir?: string): VerifyConfig {
     // cost — a user who configured a command needs a way to suspend it without losing it.
     enabled: read("SERI_VERIFY_ENABLED") !== "false",
     command: read("SERI_VERIFY_COMMAND"),
+  };
+}
+
+// Stage 6b: the two /memory-controlled toggles, copying loadVerifyConfig's exact
+// read(...) !== "false" shape (above) so a typo can't silently disable either safe default. Both
+// are read live rather than cached, since either can flip mid-session via /memory approval on|off
+// or /memory archivist on|off and driveLoop re-reads this every turn.
+export type MemoryConfig = { approvalRequired: boolean; archivistEnabled: boolean };
+
+export function loadMemoryConfig(configDir?: string): MemoryConfig {
+  const config = loadConfig(configDir);
+  const read = (name: string): string | undefined => process.env[name] || config[name] || undefined;
+  return {
+    approvalRequired: read("SERI_MEMORY_APPROVAL") !== "false",
+    archivistEnabled: read("SERI_ARCHIVIST_ENABLED") !== "false",
   };
 }
 

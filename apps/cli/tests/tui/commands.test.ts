@@ -274,6 +274,7 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
     const { next, plan, message } = decideUndo(session(), ["2"], {
       sessionsDir: join(root, "sessions"),
       checkpointsDir,
+      configDir: root,
     });
 
     expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
@@ -294,6 +295,7 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
     const { message } = decideUndo(session(), ["1"], {
       sessionsDir: join(root, "sessions"),
       checkpointsDir,
+      configDir: root,
     });
 
     expect(message).toBe("Already at checkpoint 1; no file changed.");
@@ -325,7 +327,7 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
     decideUndo(
       session(),
       ["2"],
-      { sessionsDir: join(root, "sessions"), checkpointsDir },
+      { sessionsDir: join(root, "sessions"), checkpointsDir, configDir: root },
       (plan) => {
         seenDuringOnPlan.push(readFileSync(join(workTree, "a.txt"), "utf8"));
         expect(plan.restored).toEqual(["a.txt"]);
@@ -362,6 +364,7 @@ describe.skipIf(!isGitAvailable())("decideRestore", () => {
     const { plan, message } = decideRestore(session(), [firstCommit], {
       sessionsDir: join(root, "sessions"),
       checkpointsDir,
+      configDir: root,
     });
 
     expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
@@ -390,6 +393,7 @@ describe.skipIf(!isGitAvailable())("decideRewind", () => {
     const { next, message } = decideRewind(before, [], {
       sessionsDir: join(root, "sessions"),
       checkpointsDir,
+      configDir: root,
     });
 
     expect(next.messages).toEqual([{ role: "user", content: "one" }]);
@@ -419,7 +423,7 @@ describe.skipIf(!isGitAvailable())("decideRewind", () => {
         { role: "assistant", content: "two" },
       ],
     });
-    const dirs = { sessionsDir: join(root, "sessions"), checkpointsDir };
+    const dirs = { sessionsDir: join(root, "sessions"), checkpointsDir, configDir: root };
 
     const { recordBarrier } = decideRewind(before, [], dirs);
 

@@ -2234,6 +2234,44 @@ describe("run (/mode)", () => {
   });
 });
 
+describe("run (/memory)", () => {
+  let sessionsDir: string;
+  let configDir: string;
+
+  beforeEach(() => {
+    sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-memory-sessions-"));
+    configDir = mkdtempSync(join(tmpdir(), "seri-cli-test-memory-config-"));
+  });
+
+  afterEach(() => {
+    rmSync(sessionsDir, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  // Round-4 review finding: /memory used to be dispatched through handleSlashCommand's generic
+  // session-resolution path, which requires an existing session before running ANY command in
+  // SLASH_COMMANDS — even though decideMemoryCommand (memoryCommand's own comment) needs nothing
+  // but configDir. `seri /memory pending` on a fresh profile, before any session had ever run
+  // (this test's own case: sessionsDir starts empty), failed with "No session to run /memory
+  // against." and exited 1. needsSession: false on /memory's own SlashCommand table row is what
+  // lets it skip that resolution and reach decideMemoryCommand directly.
+  test("`/memory pending` runs with no session at all, on a fresh profile", async () => {
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["/memory", "pending"], { sessionsDir, authConfigDir: configDir });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("No staged memory writes.");
+    expect(readdirSync(sessionsDir)).toHaveLength(0);
+  });
+});
+
 describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
   const SESSION_ID = "ckpt";
   const messages: ModelMessage[] = [
@@ -2562,7 +2600,13 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
 
     const rewind = SLASH_COMMANDS.get("/rewind");
     if (rewind === undefined) throw new Error("/rewind is not registered");
-    const done = rewind.run(session, [], { sessionsDir, checkpointsDir }, fakePresenter);
+    if (rewind.needsSession === false) throw new Error("/rewind unexpectedly needs no session");
+    const done = rewind.run(
+      session,
+      [],
+      { sessionsDir, checkpointsDir, configDir: root },
+      fakePresenter,
+    );
 
     // sessionUpdated's own promise is still pending — recordBarrier must not have run yet.
     expect(readLog(storeDir, SESSION_ID).some((r) => r.kind === "rewind-barrier")).toBe(false);

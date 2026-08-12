@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CATALOG_PROVIDERS } from "@seri/model-catalog";
+import { CONFIG_FILENAME } from "../../src/config/config";
 import { DEFAULT_MODEL } from "../../src/provider/groq";
 import {
   DEFAULT_PROVIDER,
@@ -122,13 +123,21 @@ describe("persistDefaultModel", () => {
   test("a sabotaged persist leaves the previously persisted pair unchanged, not a mismatch", () => {
     persistDefaultModel({ model: "first-model", provider: "openrouter" });
 
-    const configDir = join(tmpRoot, ".seri");
-    mkdirSync(configDir, { recursive: true });
-    mkdirSync(join(configDir, "config.json.tmp"));
+    // atomicWriteFile.ts's own tmp filename is pid+random, not a fixed name a second write could
+    // pre-create and collide with (that module's own comment explains why) — so sabotage targets
+    // the destination's own writability instead, the same check atomicWriteFile.ts now performs
+    // before its write-tmp-then-rename (config.test.ts's own sabotage test does the same for
+    // setConfigValues directly).
+    const configPath = join(tmpRoot, ".seri", CONFIG_FILENAME);
+    chmodSync(configPath, 0o444);
 
-    expect(() => persistDefaultModel({ model: "second-model", provider: "anthropic" })).toThrow();
-
-    expect(resolveDefaultModel()).toEqual({ model: "first-model", provider: "openrouter" });
+    try {
+      expect(() => persistDefaultModel({ model: "second-model", provider: "anthropic" })).toThrow();
+      expect(resolveDefaultModel()).toEqual({ model: "first-model", provider: "openrouter" });
+    } finally {
+      // Restored so afterEach's rmSync(tmpRoot, ...) can actually delete it.
+      chmodSync(configPath, 0o644);
+    }
   });
 });
 

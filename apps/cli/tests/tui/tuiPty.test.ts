@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -1280,13 +1281,18 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
       await sawLine("(done: no-tool-call)");
 
-      // Sabotage the NEXT persist attempt before it happens: config/config.ts's own
-      // write-then-rename path (writeConfig) writes to `<config.json>.tmp` before renaming it
-      // into place — pre-creating that exact path AS A DIRECTORY makes its writeFileSync throw
-      // EISDIR, the same class of failure a read-only config dir or a full disk would produce.
+      // Sabotage the NEXT persist attempt before it happens: atomicWriteFile.ts (the shared
+      // write-tmp-then-rename helper writeConfig now goes through) checks the destination
+      // DIRECTORY is writable before doing anything else — chmod 0o500 (no write bit) makes that
+      // check throw EACCES, the same class of failure a read-only config dir or a full disk would
+      // produce. Not a pre-created `config.json.tmp` colliding by name (the old mechanism): the
+      // tmp filename is pid+random now (atomicWriteFile.ts's own comment on why), so a fixed name
+      // can no longer collide with anything, and config.json does not exist yet at this point for
+      // a destination-FILE-permission sabotage (atomicWriteFile.ts's own comment on why that check
+      // only applies to an existing destination) to have anything to act on either.
       const configDir = join(dir, ".seri");
       mkdirSync(configDir, { recursive: true });
-      mkdirSync(join(configDir, "config.json.tmp"));
+      chmodSync(configDir, 0o500);
 
       child.stdin?.write("/model");
       await sawLine("/model");
@@ -1312,7 +1318,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       // Clear the sabotage and let the SAME model answer one more turn — the retry this test
       // exists to prove, not a fresh switch.
-      rmSync(join(configDir, "config.json.tmp"), { recursive: true, force: true });
+      chmodSync(configDir, 0o700);
 
       child.stdin?.write("a third task");
       await sawLine("a third task");
@@ -1353,9 +1359,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       // Sabotaged for the rest of this run — never cleared, unlike the retry test above, since
       // this test is about how many times ONE turn attempts against a failure that never clears.
+      // Same mechanism as that test — see its own comment for why this is a directory-writability
+      // chmod rather than a pre-created `config.json.tmp` colliding by name.
       const configDir = join(dir, ".seri");
       mkdirSync(configDir, { recursive: true });
-      mkdirSync(join(configDir, "config.json.tmp"));
+      chmodSync(configDir, 0o500);
 
       child.stdin?.write("/model");
       await sawLine("/model");

@@ -10,6 +10,7 @@
 // free or the sentence above stops being true.
 import type { RestorePlan, RestoreResult } from "../checkpoint/checkpoint";
 import type { LoopEvent } from "../loop/loop";
+import type { ArchivistReport } from "../memory/archivist";
 import type { CostReport } from "../provider/cost";
 import type { DispatchResult } from "../subagents/dispatch";
 import { type CheckOutcome, writeFileVerification } from "../verify/outcome";
@@ -29,6 +30,8 @@ export const USAGE = `Usage:
   /setup (inside the TUI)         add, replace or remove a provider API key — not a seri
                                     subcommand; seri config set is the non-interactive equivalent
   seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha>
+  seri [--resume <id>] /memory pending | diff <id|all> | approve <id|all> | reject <id|all>
+                                    | approval on|off | archivist on|off
   /exit (inside the TUI)          end the session, or Ctrl-D — not a seri subcommand: it means
                                     nothing outside a live TUI, and "seri /exit" is just a task
   seri login | signup | logout
@@ -377,4 +380,42 @@ export function printCost(cost: CostReport): void {
   }
   const amount = `$${cost.amountUsd.toFixed(4)}`;
   console.log(cost.status === "estimated" ? `(cost: ~${amount} (estimated))` : `(cost: ${amount})`);
+}
+
+// The inline half of printCost's own formatting — needed here because archivistLine renders cost
+// on the SAME line as the trigger/token count, not as printCost's own standalone line. Kept
+// minimal (amount + estimated-label only) rather than sharing printCost's full branch structure,
+// since "unknown" never reaches here: reportFromCatalogPricing (archivist.ts's own caller) always
+// returns a defined amountUsd once a catalog entry has pricing, and undefined pricing on the
+// archivist's own model is exactly as reachable as it is for the main turn's cost line.
+function costFragment(cost: CostReport): string {
+  if (cost.amountUsd === undefined) return "cost: unknown";
+  const amount = `$${cost.amountUsd.toFixed(4)}`;
+  return cost.status === "estimated" ? `cost: ~${amount} (estimated)` : `cost: ${amount}`;
+}
+
+// The archivist's usage/cost are reported on their own line, deliberately never summed into
+// printUsage/printCost's own totals (driveLoop's own comment on why: folding them in would
+// silently change what cli.test.ts's existing "(tokens: …)" assertions mean). Takes no sink
+// callback — cli.ts's two call sites (console.log for the non-interactive path,
+// pushTranscriptLine for the TUI) each just wrap the returned string themselves.
+//
+// `report.summary` — the model's own explanation of what it did or decided, its only deliverable
+// (subagents/dispatch.ts's own description: "each subagent's final assistant message is its only
+// deliverable") — used to be computed and paid for but never shown anywhere. Appended as its own
+// line, rather than folded inline with the stats line, when defined: undoPlanLines' own sink
+// already carries multi-line content (a git diff) as one transcript entry the same way, so this
+// is not a new shape for either render path. `undefined` (ArchivistReport's own comment on why)
+// means the child produced no real closing text of its own — runSubagent's own generic
+// fallbackSummary filler, not the model's own explanation — so nothing is appended for those:
+// showing that filler on every line would be noise, not signal.
+export function archivistLine(report: ArchivistReport): string {
+  const tokenParts: string[] = [];
+  if (report.usage.inputTokens !== undefined) tokenParts.push(`${report.usage.inputTokens} in`);
+  if (report.usage.outputTokens !== undefined) tokenParts.push(`${report.usage.outputTokens} out`);
+  const tokens = tokenParts.length > 0 ? `, tokens: ${tokenParts.join(", ")}` : "";
+  const cost = report.cost === undefined ? "" : `, ${costFragment(report.cost)}`;
+  const calls = `${report.toolCallsMade} tool call${report.toolCallsMade === 1 ? "" : "s"}`;
+  const stats = `(archivist: ${report.trigger} trigger, ${calls}${tokens}${cost})`;
+  return report.summary === undefined ? stats : `${stats}\n  ${report.summary}`;
 }
