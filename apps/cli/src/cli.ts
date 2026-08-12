@@ -2651,6 +2651,30 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // directly. Computed here, before prepareSession, so that function's own reroute notice
   // (prepareSession's own comment) can gate itself to the non-interactive path.
   const isTTY = deps.isTTY ?? false;
+
+  // Open 2 (BYOK-KEY-STORAGE-AND-SETUP.md): a genuinely blank config must not hard-exit before the
+  // TUI ever mounts. Reuses ctx.configDir (already `deps.authConfigDir ?? getConfigDir()`, D7) and
+  // the same try/catch shape prepareSession's own configuredProviders call uses below — a corrupted
+  // config.json must still hard-exit cleanly, never be silently treated as "blank".
+  let zeroKeysConfigured: boolean;
+  try {
+    zeroKeysConfigured = configuredProviders(ctx.configDir).size === 0;
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+  if (isTTY && zeroKeysConfigured) {
+    await runGuidedSetup(deps, ctx.configDir);
+    let stillZeroKeys: boolean;
+    try {
+      stillZeroKeys = configuredProviders(ctx.configDir).size === 0;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 1;
+    }
+    if (stillZeroKeys) return 1;
+  }
+
   const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
   if (typeof prepared === "number") return prepared;
 
