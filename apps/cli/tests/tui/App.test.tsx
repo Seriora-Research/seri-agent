@@ -9,6 +9,7 @@ import {
   App,
   formatContextWindow,
   formatCost,
+  formatModeLabel,
   formatModelRow,
   formatRouteLabel,
   formatSetupRow,
@@ -27,6 +28,13 @@ function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionSt
   };
 }
 
+// AppProps.route is required (D3's own invariant: a PreparedRun cannot exist without a resolved
+// route) — every <App> mount in this file needs one, not just the tests that care about its
+// rendered content.
+function route(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
+  return { model: "claude-sonnet-5", provider: "anthropic", rerouted: false, ...overrides };
+}
+
 // A render/dispatch is not reflected in lastFrame() synchronously — same finding as the Phase 3
 // spike for useInput, just needing a macrotask tick here rather than a microtask (Ink's own frame
 // write is throttled independently of React's own update scheduling).
@@ -37,7 +45,12 @@ function flush(): Promise<void> {
 async function connect() {
   let dispatch: ((action: TuiAction) => void) | undefined;
   const instance = render(
-    <App session={session()} connectDispatch={(d) => (dispatch = d)} done={false} />,
+    <App
+      session={session()}
+      route={route()}
+      connectDispatch={(d) => (dispatch = d)}
+      done={false}
+    />,
   );
   await flush();
   if (dispatch === undefined) throw new Error("connectDispatch never fired");
@@ -50,6 +63,7 @@ describe("App", () => {
     const instance = render(
       <App
         session={session({ permissionMode: "read-only" })}
+        route={route()}
         connectDispatch={(d) => (dispatch = d)}
         done={false}
       />,
@@ -104,7 +118,7 @@ describe("App", () => {
   test("a pasted chunk with an embedded newline submits at the first line, not silently swallowing it", async () => {
     const submitted: string[] = [];
     const instance = render(
-      <App session={session()} onSubmit={(v) => submitted.push(v)} done={false} />,
+      <App session={session()} route={route()} onSubmit={(v) => submitted.push(v)} done={false} />,
     );
     await flush();
 
@@ -121,7 +135,7 @@ describe("App", () => {
   test("a pasted chunk with a CRLF terminator does not leave a stray newline in the retained input", async () => {
     const submitted: string[] = [];
     const instance = render(
-      <App session={session()} onSubmit={(v) => submitted.push(v)} done={false} />,
+      <App session={session()} route={route()} onSubmit={(v) => submitted.push(v)} done={false} />,
     );
     await flush();
 
@@ -173,7 +187,9 @@ describe("App", () => {
   // InputBox unconditionally, so this is the same trigger runTui's own quit() attaches to.
   test("Ctrl-D calls onQuit", async () => {
     let quit = false;
-    const instance = render(<App session={session()} onQuit={() => (quit = true)} done={false} />);
+    const instance = render(
+      <App session={session()} route={route()} onQuit={() => (quit = true)} done={false} />,
+    );
     await flush();
 
     instance.stdin.write("\x04");
@@ -213,6 +229,7 @@ describe("App", () => {
       const instance = render(
         <App
           session={session()}
+          route={route()}
           connectDispatch={(d) => (dispatch = d)}
           onApprovalAnswer={(answer) => answers.push(answer)}
           done={false}
@@ -279,6 +296,7 @@ describe("App", () => {
       const instance = render(
         <App
           session={session()}
+          route={route()}
           connectDispatch={(d) => (dispatch = d)}
           onSubmit={(v) => submitted.push(v)}
           onApprovalAnswer={(answer) => answers.push(answer)}
@@ -322,6 +340,7 @@ describe("App", () => {
       const instance = render(
         <App
           session={session()}
+          route={route()}
           connectDispatch={(d) => (dispatch = d)}
           onApprovalAnswer={(answer) => answers.push(answer)}
           done={false}
@@ -371,7 +390,12 @@ describe("App", () => {
     // existing `entry()` fixture still builds the underlying ModelCatalogEntry, wrapped here for
     // every test that only cares about "some row exists," not routing/key-configuration specifics.
     function row(overrides: Partial<ModelCatalogEntry> = {}): ModelPickerEntry {
-      return { entry: entry(overrides), keyConfigured: true, alternatives: 0 };
+      return {
+        entry: entry(overrides),
+        keyConfigured: true,
+        alternatives: 0,
+        gatewayReachable: false,
+      };
     }
 
     test("renders in place of the input box once requested", async () => {
@@ -395,6 +419,7 @@ describe("App", () => {
       const instance = render(
         <App
           session={startingSession}
+          route={route()}
           connectDispatch={(d) => (dispatch = d)}
           onModelSelected={(pick) => selected.push(pick)}
           done={false}
@@ -430,6 +455,7 @@ describe("App", () => {
       const instance = render(
         <App
           session={session()}
+          route={route()}
           connectDispatch={(d) => (dispatch = d)}
           onModelPickerCancel={() => cancelled.push("cancelled")}
           done={false}
@@ -481,6 +507,7 @@ describe("App", () => {
       const instance = render(
         <App
           session={session()}
+          route={route()}
           connectDispatch={(d) => (dispatch = d)}
           onModelSelected={(pick) => selected.push(pick)}
           done={false}
@@ -629,6 +656,7 @@ describe("App", () => {
       const instance = render(
         <App
           session={session()}
+          route={route()}
           connectDispatch={(d) => (dispatch = d)}
           onSetupSelect={(provider) => selected.push(provider)}
           done={false}
@@ -658,6 +686,7 @@ describe("App", () => {
       const instance = render(
         <App
           session={session()}
+          route={route()}
           connectDispatch={(d) => (dispatch = d)}
           onSetupRemove={(provider) => removeRequested.push(provider)}
           done={false}
@@ -688,6 +717,7 @@ describe("App", () => {
       const instance = render(
         <App
           session={session()}
+          route={route()}
           connectDispatch={(d) => (dispatch = d)}
           onSetupSelect={(provider) => selected.push(provider)}
           onSetupRemove={(provider) => removeRequested.push(provider)}
@@ -751,6 +781,7 @@ describe("App", () => {
       const instance = render(
         <App
           session={session()}
+          route={route()}
           connectDispatch={(d) => (dispatch = d)}
           onSetupKeyEntered={(provider, value) => entered.push({ provider, value })}
           done={false}
@@ -784,6 +815,7 @@ describe("App", () => {
       const instance = render(
         <App
           session={session()}
+          route={route()}
           connectDispatch={(d) => (dispatch = d)}
           onSetupKeyEntered={(provider, value) => entered.push({ provider, value })}
           done={false}
@@ -818,6 +850,7 @@ describe("App", () => {
       const instance = render(
         <App
           session={session()}
+          route={route()}
           connectDispatch={(d) => (dispatch = d)}
           onSetupRemove={(provider) => removed.push(provider)}
           onSetupBack={() => backCalls.push(backCalls.length)}
@@ -897,7 +930,13 @@ describe("App", () => {
     }
 
     function pickerRow(overrides: Partial<ModelPickerEntry> = {}): ModelPickerEntry {
-      return { entry: entry(), keyConfigured: true, alternatives: 0, ...overrides };
+      return {
+        entry: entry(),
+        keyConfigured: true,
+        alternatives: 0,
+        gatewayReachable: false,
+        ...overrides,
+      };
     }
 
     test("formatContextWindow compacts to binary K/M, matching how a context window is described elsewhere in this repo", () => {
@@ -1001,79 +1040,60 @@ describe("App", () => {
     });
   });
 
-  // D2-D5 (feature-plan.md): the mode-indicator row, extended with a model+route label sourced
-  // from `PreparedRun.route` (threaded down as `AppProps.route`), width-tiered so it never crowds
-  // out the status/spinner text on the same row.
-  describe("persistent mode+route indicator", () => {
-    function route(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
-      return { model: "claude-sonnet-5", provider: "anthropic", rerouted: false, ...overrides };
-    }
+  // D2-D5 (feature-plan.md): the mode-indicator row's own content, factored out as the pure
+  // `formatModeLabel` (App's own comment explains why: unit-testable without mounting Ink, same
+  // reasoning formatModelRow's own extraction already used). `route` is always defined — D3's own
+  // invariant that a PreparedRun cannot exist without a resolved route, so there is no "no route"
+  // case to test here.
+  describe("formatModeLabel", () => {
+    const nonRerouted = route();
+    const rerouted = route({ provider: "openrouter", rerouted: true, reason: "ANTHROPIC_API_KEY" });
 
-    test("renders 'your key' at full width for a non-rerouted route", async () => {
-      const instance = render(<App session={session()} route={route()} done={false} />);
-      await flush();
-
-      const frame = instance.lastFrame() ?? "";
-      expect(frame).toContain("claude-sonnet-5");
-      expect(frame).toContain("your key");
+    test("full width (>=76 cols): mode indicator, model, and 'your key'", () => {
+      expect(formatModeLabel("[approve-each]", nonRerouted, 76)).toBe(
+        "[approve-each]  claude-sonnet-5 · your key",
+      );
     });
 
-    test("renders '→ <provider>' at full width for a rerouted route", async () => {
-      const instance = render(
-        <App
-          session={session()}
-          route={route({ provider: "openrouter", rerouted: true, reason: "ANTHROPIC_API_KEY" })}
-          done={false}
-        />,
+    test("full width with a rerouted route: '→ <provider>'", () => {
+      expect(formatModeLabel("[approve-each]", rerouted, 100)).toBe(
+        "[approve-each]  claude-sonnet-5 · → openrouter",
       );
-      await flush();
-
-      expect(instance.lastFrame() ?? "").toContain("→ openrouter");
     });
 
     // D5: compact tier (52-75 cols) keeps the model name but drops the route suffix.
-    test("compact width (52-75 cols) shows the model but not the route label", async () => {
-      const instance = render(<App session={session()} route={route()} done={false} />);
-      await flush();
-      Object.defineProperty(instance.stdout, "columns", { value: 60, configurable: true });
-      instance.stdout.emit("resize");
-      await flush();
-
-      const frame = instance.lastFrame() ?? "";
-      expect(frame).toContain("claude-sonnet-5");
-      expect(frame).not.toContain("your key");
+    test("compact width (52-75 cols): mode indicator and model, no route label", () => {
+      expect(formatModeLabel("[approve-each]", nonRerouted, 60)).toBe(
+        "[approve-each]  claude-sonnet-5",
+      );
+      expect(formatModeLabel("[approve-each]", nonRerouted, 75)).toBe(
+        "[approve-each]  claude-sonnet-5",
+      );
     });
 
     // D5's own negative control: below 52 cols the row reverts to EXACTLY today's pre-change
-    // output — mode indicator only — proving the model+route label can never crowd the
-    // spinner/status text off screen at any width. Both instances are resized to the SAME width
-    // before comparing: every other row (e.g. InputBox's border) also scales with terminal width,
-    // so holding width fixed and varying only the `route` prop is what isolates this row's own
-    // behavior rather than an artifact of comparing two different terminal widths.
-    test("minimal width (<52 cols) is byte-identical to the pre-change row: mode indicator only", async () => {
-      const withRoute = render(<App session={session()} route={route()} done={false} />);
-      await flush();
-      Object.defineProperty(withRoute.stdout, "columns", { value: 40, configurable: true });
-      withRoute.stdout.emit("resize");
-      await flush();
-
-      const withoutRoute = render(<App session={session()} done={false} />);
-      await flush();
-      Object.defineProperty(withoutRoute.stdout, "columns", { value: 40, configurable: true });
-      withoutRoute.stdout.emit("resize");
-      await flush();
-
-      expect(withRoute.lastFrame()).toBe(withoutRoute.lastFrame());
-      expect(withRoute.lastFrame() ?? "").not.toContain("claude-sonnet-5");
+    // output — mode indicator only, regardless of what `route` carries — proving the model+route
+    // label can never crowd the spinner/status text off screen at any width.
+    test("minimal width (<52 cols): mode indicator only, byte-identical to the pre-change row", () => {
+      expect(formatModeLabel("[approve-each]", nonRerouted, 51)).toBe("[approve-each]");
+      expect(formatModeLabel("[approve-each]", rerouted, 10)).toBe("[approve-each]");
     });
+  });
 
-    test("omitting the route prop falls back to the mode-indicator-only row, not a crash", async () => {
-      const instance = render(<App session={session()} done={false} />);
+  describe("persistent mode+route indicator (mounted)", () => {
+    // useTerminalWidth's own live-resize wiring — formatModeLabel's tests above already cover the
+    // tier DECISION logic as a pure function, so this is the one Ink-level smoke test needed to
+    // confirm a real stdout `resize` event actually reaches the rendered row end-to-end.
+    test("renders the model+route label at the default width, and drops it after a resize below the compact tier", async () => {
+      const instance = render(<App session={session()} route={route()} done={false} />);
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("your key");
+
+      Object.defineProperty(instance.stdout, "columns", { value: 40, configurable: true });
+      instance.stdout.emit("resize");
       await flush();
 
-      const frame = instance.lastFrame() ?? "";
-      expect(frame).not.toContain("your key");
-      expect(frame).not.toContain("→ ");
+      expect(instance.lastFrame() ?? "").not.toContain("claude-sonnet-5");
     });
   });
 });

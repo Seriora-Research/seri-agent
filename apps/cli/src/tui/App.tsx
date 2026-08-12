@@ -19,11 +19,14 @@ import { theme } from "./theme";
 
 export type AppProps = {
   session: SessionState<ModelMessage>;
-  // D2/D4 (byok-open3-route-indicator feature-plan.md): the persistent mode-indicator's model+route
+  // D2-D4 (byok-open3-route-indicator feature-plan.md): the persistent mode-indicator's model+route
   // label reads this — resolved once at session start (PreparedRun.route, cli.ts) and passed down,
-  // NOT re-derived on a later /model switch (D4's stated scope boundary). Optional so existing tests
-  // that mount <App> without it keep compiling and fall back to today's route-less indicator row.
-  route?: ResolvedRoute;
+  // NOT re-derived on a later /model switch (D4's stated scope boundary). Required, not optional:
+  // D3's own invariant is that a PreparedRun cannot exist without a resolved route, so every real
+  // call site always has one — making the prop optional would let a future call site silently omit
+  // it instead of failing to compile (code-review finding: this is exactly what let the OTHER
+  // `createElement(App, ...)` call site, cli.ts's `finishQuit` re-render, go unnoticed).
+  route: ResolvedRoute;
   // The seam Phase 5 wires driveLoop's dispatch through: called once on mount with the reducer's
   // own dispatch function, the same shape `useReducer` returns. Optional because Phase 4's tests
   // exercise the reducer via `connectDispatch` directly, with no live loop behind it yet.
@@ -181,6 +184,18 @@ const ROUTE_WIDTH = 13;
 // to spare, not the exact minimum.
 const COST_WIDTH = 18;
 
+// D5 (byok-open3-route-indicator feature-plan.md): Hermes Agent's own 3-tier width breakpoints for
+// the persistent mode-indicator row — reused as-is, per the plan's own D5, not a new scheme.
+const MODE_LABEL_FULL_COLS = 76;
+const MODE_LABEL_COMPACT_COLS = 52;
+
+// A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined` —
+// this is what `stdout.columns ?? DEFAULT_COLUMNS` (useTerminalWidth, below) guards against. It is
+// NOT what makes this file's own Ink component tests land in the full tier: ink-testing-library's
+// stub stdout returns a real `columns: 100`, so those tests are already in the full tier on the
+// actual value, not this fallback.
+const DEFAULT_COLUMNS = 80;
+
 // Truncates with a trailing ellipsis (never mid-multi-byte-safe beyond what .slice already is —
 // every field this feeds is plain ASCII: a model id/displayName/provider name) or pads with
 // trailing spaces, so every row's later columns start at the same screen column regardless of an
@@ -241,6 +256,27 @@ export function formatRouteLabel(input: {
   if (input.rerouteTo) return `→ ${input.rerouteTo}`;
   if (input.gatewayReachable) return "provided";
   return "no key";
+}
+
+// D2-D5 (byok-open3-route-indicator feature-plan.md): the persistent mode-indicator row's own
+// content, factored out as a pure function for the same reason formatModelRow's own comment gives
+// — unit-testable without mounting Ink. `route` is always defined here (D3's own invariant: a
+// PreparedRun cannot exist without a resolved route, so AppProps.route is a required prop, not
+// optional) — there is no "no route" branch to model. D4: `route.rerouted` alone disambiguates
+// "your key" from "→ provider"; the "no key at all" branch of formatRouteLabel can never be reached
+// from a live route, so `gatewayReachable` is never passed here.
+export function formatModeLabel(
+  modeIndicator: string,
+  route: ResolvedRoute,
+  width: number,
+): string {
+  if (width < MODE_LABEL_COMPACT_COLS) return modeIndicator;
+  if (width < MODE_LABEL_FULL_COLS) return `${modeIndicator}  ${route.model}`;
+  const routeLabel = formatRouteLabel({
+    keyConfigured: !route.rerouted,
+    rerouteTo: route.rerouted ? route.provider : undefined,
+  });
+  return `${modeIndicator}  ${route.model} · ${routeLabel}`;
 }
 
 export function formatModelRow(row: ModelPickerEntry): string {
@@ -753,15 +789,14 @@ function InputBox({
 
 // D5 (byok-open3-route-indicator feature-plan.md): no such hook existed in this file before — the
 // persistent mode-indicator (App, below) needs to know the terminal's current column width, live,
-// to pick its 3-tier layout. `stdout.columns` is `undefined` in a non-TTY/headless context (this
-// repo's own Ink component tests), so the `?? 80` fallback is what lands those tests in the "full"
-// tier deterministically instead of throwing or rendering `undefined`-driven tiers.
+// to pick its 3-tier layout. See DEFAULT_COLUMNS's own comment for what the `?? DEFAULT_COLUMNS`
+// fallback actually guards (a genuine non-TTY production stdout), and what it does not.
 function useTerminalWidth(): number {
   const { stdout } = useStdout();
-  const [width, setWidth] = useState(stdout.columns ?? 80);
+  const [width, setWidth] = useState(stdout.columns ?? DEFAULT_COLUMNS);
 
   useEffect(() => {
-    const onResize = () => setWidth(stdout.columns ?? 80);
+    const onResize = () => setWidth(stdout.columns ?? DEFAULT_COLUMNS);
     stdout.on("resize", onResize);
     return () => {
       stdout.off("resize", onResize);
@@ -792,18 +827,7 @@ export function App({
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
   const { exit } = useApp();
   const width = useTerminalWidth();
-
-  // D3/D5 (feature-plan.md): `route.rerouted` alone disambiguates "your key" from "→ provider" for
-  // a live PreparedRun.route — the "no key at all" branch can never reach here, since prepareSession
-  // would already have thrown before a PreparedRun existed (D3's own proof). `gatewayReachable` is
-  // left unset here (not threaded from `route`, which has no such field): the persistent indicator
-  // only ever needs the first two branches of formatRouteLabel's vocabulary.
-  const modeLabel =
-    route === undefined || width < 52
-      ? state.modeIndicator
-      : width < 76
-        ? `${state.modeIndicator}  ${route.model}`
-        : `${state.modeIndicator}  ${route.model} · ${formatRouteLabel({ keyConfigured: !route.rerouted, rerouteTo: route.rerouted ? route.provider : undefined })}`;
+  const modeLabel = formatModeLabel(state.modeIndicator, route, width);
 
   useEffect(() => {
     connectDispatch?.(dispatch);

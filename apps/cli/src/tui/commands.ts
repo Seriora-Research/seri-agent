@@ -70,7 +70,11 @@ export type ModelPickerEntry = {
   keyConfigured: boolean;
   alternatives: number;
   rerouteTo?: ModelProvider;
-  gatewayReachable?: boolean;
+  // Not optional: decideModelPickerOpen (below) sets this unconditionally on every row via
+  // `planCoverage(entry.provider)`, which always returns a real boolean (its own default is
+  // `() => false`, never `undefined`) — so every consumer gets a real boolean too, with no
+  // `undefined` case to handle that can't actually occur.
+  gatewayReachable: boolean;
 };
 
 // The decision half of /model, mirroring decideModeCycle's own pure, no-I/O shape: what to show,

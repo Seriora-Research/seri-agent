@@ -2245,6 +2245,7 @@ async function runTui(
           // the prop is required and `liveState.session` is the accurate value if that ever
           // changes.
           session: liveState.session,
+          route: prepared.route,
           done: true,
           onSubmit,
           onCancel: () => deliverSignal("SIGINT"),
