@@ -1078,6 +1078,20 @@ describe("App", () => {
       expect(formatModeLabel("[approve-each]", nonRerouted, 51)).toBe("[approve-each]");
       expect(formatModeLabel("[approve-each]", rerouted, 10)).toBe("[approve-each]");
     });
+
+    // post-review fix: a real catalog id (an OpenRouter id is easily 40+ chars) used to go into
+    // the row unbounded, so it could overflow the exact terminal width the tier boundary assumed
+    // it fit in. Capped to NAME_WIDTH (22, the same width the picker table already truncates
+    // model names to), in both the tiers that render the model name.
+    test("long model id is truncated to NAME_WIDTH in both compact and full tiers", () => {
+      const longModel = route({ model: "openrouter/deepseek/deepseek-r1-distill-llama-70b" });
+      expect(formatModeLabel("[approve-each]", longModel, 60)).toBe(
+        "[approve-each]  openrouter/deepseek/d…",
+      );
+      expect(formatModeLabel("[approve-each]", longModel, 76)).toBe(
+        "[approve-each]  openrouter/deepseek/d… · your key",
+      );
+    });
   });
 
   describe("persistent mode+route indicator (mounted)", () => {

@@ -265,18 +265,24 @@ export function formatRouteLabel(input: {
 // optional) — there is no "no route" branch to model. D4: `route.rerouted` alone disambiguates
 // "your key" from "→ provider"; the "no key at all" branch of formatRouteLabel can never be reached
 // from a live route, so `gatewayReachable` is never passed here.
+// post-review fix: `route.model` is capped to NAME_WIDTH (the same width the picker table already
+// truncates model names to) before it goes into the label — a real catalog id (a long OpenRouter
+// id is well over 40 chars) was otherwise unbounded here, so it could push the row past the very
+// terminal width MODE_LABEL_FULL_COLS/MODE_LABEL_COMPACT_COLS assumed it fit in.
 export function formatModeLabel(
   modeIndicator: string,
   route: ResolvedRoute,
   width: number,
 ): string {
   if (width < MODE_LABEL_COMPACT_COLS) return modeIndicator;
-  if (width < MODE_LABEL_FULL_COLS) return `${modeIndicator}  ${route.model}`;
+  const modelName =
+    route.model.length > NAME_WIDTH ? `${route.model.slice(0, NAME_WIDTH - 1)}…` : route.model;
+  if (width < MODE_LABEL_FULL_COLS) return `${modeIndicator}  ${modelName}`;
   const routeLabel = formatRouteLabel({
     keyConfigured: !route.rerouted,
     rerouteTo: route.rerouted ? route.provider : undefined,
   });
-  return `${modeIndicator}  ${route.model} · ${routeLabel}`;
+  return `${modeIndicator}  ${modelName} · ${routeLabel}`;
 }
 
 export function formatModelRow(row: ModelPickerEntry): string {
