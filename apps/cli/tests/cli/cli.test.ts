@@ -24,6 +24,7 @@ import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
 import { loadGrants, permissionsPath, projectKey } from "../../src/permissions/store";
 import type { CostReport } from "../../src/provider/cost";
 import { getGroqModel } from "../../src/provider/groq";
+import { configuredProviders, PROVIDER_API_KEY_NAMES } from "../../src/provider/keys";
 import { toolDefinitions } from "../../src/provider/tools";
 import { onSignalCancel } from "../../src/signals";
 import { loadSession, saveSession, type SessionState } from "../../src/session/session";
@@ -1910,6 +1911,48 @@ describe("run (task invocation)", () => {
 
     expect(code).toBe(0);
     expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "/exit" });
+  });
+});
+
+// byok-guided-setup, feature-plan.md: covers the exact predicate run()'s new isTTY-and-zero-keys
+// gate depends on — configuredProviders(dir).size === 0 — not configuredProviders itself (already
+// covered elsewhere). Every provider's own key env var is cleared for the duration so a real key
+// already exported on the dev/CI box can never mask the "zero configured" case (code-quality.md's
+// "the platform matrix does not cover the unset case").
+describe("guided setup gate", () => {
+  let configDir: string;
+  const originalEnv: Partial<Record<string, string>> = {};
+
+  function restoreEnv(key: string, original: string | undefined): void {
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
+
+  beforeEach(() => {
+    configDir = mkdtempSync(join(tmpdir(), "seri-cli-test-setup-gate-"));
+    for (const keyName of Object.values(PROVIDER_API_KEY_NAMES)) {
+      originalEnv[keyName] = process.env[keyName];
+      delete process.env[keyName];
+    }
+  });
+
+  afterEach(() => {
+    for (const [keyName, original] of Object.entries(originalEnv)) restoreEnv(keyName, original);
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  test("zero keys configured anywhere: configuredProviders(dir).size === 0 is true", () => {
+    expect(configuredProviders(configDir).size === 0).toBe(true);
+  });
+
+  test("one key configured via config.json: configuredProviders(dir).size === 0 is false", () => {
+    setConfigValue("GROQ_API_KEY", "fake-test-key", configDir);
+    expect(configuredProviders(configDir).size === 0).toBe(false);
+  });
+
+  test("one key configured via env var: configuredProviders(dir).size === 0 is false", () => {
+    process.env.OPENROUTER_API_KEY = "fake-test-key";
+    expect(configuredProviders(configDir).size === 0).toBe(false);
   });
 });
 
