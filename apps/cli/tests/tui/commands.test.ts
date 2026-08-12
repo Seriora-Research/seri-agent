@@ -189,6 +189,39 @@ describe("decideModelPickerOpen", () => {
     expect(openrouterRow?.alternatives).toBe(1);
     expect(openrouterRow?.rerouteTo).toBeUndefined();
   });
+
+  // D7 (feature-plan.md): `planCoverage` is an optional, always-false-by-default seam — the one
+  // production call site never passes a third argument, so this is the negative control proving
+  // that default keeps today's behavior byte-for-byte.
+  test("gatewayReachable is false on every row when planCoverage is omitted", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "anthropic/claude-sonnet-5", provider: "openrouter" }),
+        catalogEntry({ id: "claude-sonnet-5", provider: "anthropic" }),
+      ],
+    };
+
+    const rows = decideModelPickerOpen(catalog, new Set(["anthropic"]));
+    expect(rows.every((row) => row.gatewayReachable === false)).toBe(true);
+  });
+
+  test("gatewayReachable threads a planCoverage predicate through to each row", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "anthropic/claude-sonnet-5", provider: "openrouter" }),
+        catalogEntry({ id: "claude-sonnet-5", provider: "anthropic" }),
+      ],
+    };
+
+    const rows = decideModelPickerOpen(catalog, new Set(), () => true);
+    const openrouterRow = rows.find((row) => row.entry.provider === "openrouter");
+
+    expect(openrouterRow?.keyConfigured).toBe(false);
+    expect(openrouterRow?.rerouteTo).toBeUndefined();
+    expect(openrouterRow?.gatewayReachable).toBe(true);
+  });
 });
 
 const ALL_KEY_NAMES = [
