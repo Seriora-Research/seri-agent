@@ -1729,7 +1729,7 @@ function createSetupHandlers(opts: {
 // type (`SessionState<ModelMessage>`, not the stricter `RunSession` — no `model`/`provider`
 // required), and are never saved to disk or read again once this function resolves — the real
 // session `prepareSession` builds afterward (run()'s own call site) is what the run actually uses.
-async function runGuidedSetup(deps: CliDeps, configDir: string): Promise<void> {
+async function runGuidedSetup(configDir: string): Promise<void> {
   const { render } = await import("ink");
   const { createElement } = await import("react");
   const { App } = await import("./tui/App");
@@ -2664,7 +2664,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     return 1;
   }
   if (isTTY && zeroKeysConfigured) {
-    await runGuidedSetup(deps, ctx.configDir);
+    await runGuidedSetup(ctx.configDir);
     let stillZeroKeys: boolean;
     try {
       stillZeroKeys = configuredProviders(ctx.configDir).size === 0;
