@@ -1801,6 +1801,13 @@ async function runGuidedSetup(configDir: string): Promise<void> {
     { exitOnCtrlC: false, interactive: true },
   );
 
+  // M-2 (runTui's own comment, mirrored here — code-review finding): a fatal Ctrl-C/SIGTERM while
+  // this panel is up has no turn in flight to cancel, so deliverSignal's onCancel wiring above
+  // takes the fatal branch and kills the process by signal without ever reaching `await closed`
+  // below — this is the only thing that puts the terminal's raw-mode/stdin state back before that
+  // happens.
+  onSignalCleanup(() => instance.unmount());
+
   await closed;
   instance.unmount();
 }
