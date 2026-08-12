@@ -3,12 +3,14 @@ import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { render } from "ink-testing-library";
 import type { ApprovalAnswer } from "../../src/loop/loop";
+import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
 import {
   App,
   formatContextWindow,
   formatCost,
   formatModelRow,
+  formatRouteLabel,
   formatSetupRow,
 } from "../../src/tui/App";
 import type { ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
@@ -970,6 +972,108 @@ describe("App", () => {
       const row = formatModelRow(pickerRow({ entry: entry({ displayName: "A".repeat(40) }) }));
       expect(row).toContain("…");
       expect(row.indexOf("A".repeat(40))).toBe(-1);
+    });
+  });
+
+  // D1 (byok-open3-route-indicator feature-plan.md): formatModelRow's own tests above exercise
+  // this indirectly through the picker's Route column; these test the vocabulary function itself,
+  // all 4 branches, so the persistent indicator below (which calls it directly, not through a
+  // ModelPickerEntry) has its own direct coverage too.
+  describe("formatRouteLabel", () => {
+    test("keyConfigured wins outright: 'your key'", () => {
+      expect(formatRouteLabel({ keyConfigured: true, rerouteTo: "openrouter" })).toBe("your key");
+    });
+
+    test("a keyless row with a reroute target: '→ <provider>'", () => {
+      expect(formatRouteLabel({ keyConfigured: false, rerouteTo: "openrouter" })).toBe(
+        "→ openrouter",
+      );
+    });
+
+    // D7: unreachable in production today (decideModelPickerOpen's own `planCoverage` default is
+    // always-false) — exercised here only as a direct unit test of the vocabulary function itself.
+    test("a keyless, no-reroute row with gatewayReachable: 'provided'", () => {
+      expect(formatRouteLabel({ keyConfigured: false, gatewayReachable: true })).toBe("provided");
+    });
+
+    test("the true dead end — no key, no reroute, no gateway: 'no key'", () => {
+      expect(formatRouteLabel({ keyConfigured: false, gatewayReachable: false })).toBe("no key");
+    });
+  });
+
+  // D2-D5 (feature-plan.md): the mode-indicator row, extended with a model+route label sourced
+  // from `PreparedRun.route` (threaded down as `AppProps.route`), width-tiered so it never crowds
+  // out the status/spinner text on the same row.
+  describe("persistent mode+route indicator", () => {
+    function route(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
+      return { model: "claude-sonnet-5", provider: "anthropic", rerouted: false, ...overrides };
+    }
+
+    test("renders 'your key' at full width for a non-rerouted route", async () => {
+      const instance = render(<App session={session()} route={route()} done={false} />);
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("claude-sonnet-5");
+      expect(frame).toContain("your key");
+    });
+
+    test("renders '→ <provider>' at full width for a rerouted route", async () => {
+      const instance = render(
+        <App
+          session={session()}
+          route={route({ provider: "openrouter", rerouted: true, reason: "ANTHROPIC_API_KEY" })}
+          done={false}
+        />,
+      );
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain("→ openrouter");
+    });
+
+    // D5: compact tier (52-75 cols) keeps the model name but drops the route suffix.
+    test("compact width (52-75 cols) shows the model but not the route label", async () => {
+      const instance = render(<App session={session()} route={route()} done={false} />);
+      await flush();
+      Object.defineProperty(instance.stdout, "columns", { value: 60, configurable: true });
+      instance.stdout.emit("resize");
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("claude-sonnet-5");
+      expect(frame).not.toContain("your key");
+    });
+
+    // D5's own negative control: below 52 cols the row reverts to EXACTLY today's pre-change
+    // output — mode indicator only — proving the model+route label can never crowd the
+    // spinner/status text off screen at any width. Both instances are resized to the SAME width
+    // before comparing: every other row (e.g. InputBox's border) also scales with terminal width,
+    // so holding width fixed and varying only the `route` prop is what isolates this row's own
+    // behavior rather than an artifact of comparing two different terminal widths.
+    test("minimal width (<52 cols) is byte-identical to the pre-change row: mode indicator only", async () => {
+      const withRoute = render(<App session={session()} route={route()} done={false} />);
+      await flush();
+      Object.defineProperty(withRoute.stdout, "columns", { value: 40, configurable: true });
+      withRoute.stdout.emit("resize");
+      await flush();
+
+      const withoutRoute = render(<App session={session()} done={false} />);
+      await flush();
+      Object.defineProperty(withoutRoute.stdout, "columns", { value: 40, configurable: true });
+      withoutRoute.stdout.emit("resize");
+      await flush();
+
+      expect(withRoute.lastFrame()).toBe(withoutRoute.lastFrame());
+      expect(withRoute.lastFrame() ?? "").not.toContain("claude-sonnet-5");
+    });
+
+    test("omitting the route prop falls back to the mode-indicator-only row, not a crash", async () => {
+      const instance = render(<App session={session()} done={false} />);
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).not.toContain("your key");
+      expect(frame).not.toContain("→ ");
     });
   });
 });

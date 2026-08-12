@@ -953,7 +953,7 @@ type PreparedRun = {
   // must initialize from this, not from `session`: starting them from the requested pair while
   // turn 1 actually runs on a rerouted one trips their inequality guards on turn 1 and persists a
   // switch the session never asked for — see those variables' own comments.
-  route: { model: string; provider: ModelProvider };
+  route: ResolvedRoute;
   // The same OnBeforeMutation `tools`' own withCheckpoints was built with — driveLoop's
   // withSubagents reuses it for one pre-dispatch snapshot instead of building a second one.
   checkpointer: OnBeforeMutation;
@@ -2430,6 +2430,7 @@ async function runTui(
   const instance = render(
     createElement(App, {
       session: prepared.session,
+      route: prepared.route,
       // H-3: multi-turn — the TUI never sets `done` itself here at mount. Exiting is /exit,
       // Ctrl-D (quit(), above) or Ctrl-C's job (onCancel below and signals.ts), not an implicit
       // "the last turn finished" one.
