@@ -1734,6 +1734,14 @@ async function runGuidedSetup(configDir: string): Promise<void> {
   const { createElement } = await import("react");
   const { App } = await import("./tui/App");
 
+  // Same synchronous-mirror pattern as runTui's own `liveState`/`dispatch` (that function's own
+  // "Findings 2/3/4/6" comment) — kept here, not shared, because runTui's copy is read from ~20
+  // call sites across a much larger closure, where genuinely unifying the two would mean rewriting
+  // every one of those reads (code-review/thermo-nuclear follow-up note, byok-guided-setup loop:
+  // deferred as too much blast radius for this PR). The invariant is the same: `dispatch` updates
+  // `liveState` BEFORE handing the action to React, so anything reading `liveState` right after a
+  // `dispatch` call (this function's own `onSetupClose`, `createSetupHandlers`'s `getPendingSetup`)
+  // sees the post-action state synchronously rather than racing React's own effect-scheduled commit.
   let liveState: TuiState = initialTuiState({
     id: randomUUID(),
     cwd: process.cwd(),
@@ -1775,7 +1783,19 @@ async function runGuidedSetup(configDir: string): Promise<void> {
       onSetupClose,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
-        dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
+        // Guarded like every other decideSetupOpen call site in this file (code-review finding,
+        // byok-guided-setup PR): config.json can be corrupted between run()'s own pre-check and
+        // this effect firing (a racing second `seri` process, a hand edit). Unlike a command-error
+        // dispatch (there is no InputBox/transcript visible here to show one), resolving `closed`
+        // and leaving the key unadded makes run()'s OWN post-runGuidedSetup re-check of
+        // configuredProviders(configDir) hit the identical throw and print/exit through its
+        // existing try/catch — the same clean-exit path a corrupted config already gets everywhere
+        // else, reached here without a second, differently-worded error message.
+        try {
+          dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
+        } catch {
+          resolveClosed();
+        }
       },
     }),
     { exitOnCtrlC: false, interactive: true },
@@ -1783,6 +1803,21 @@ async function runGuidedSetup(configDir: string): Promise<void> {
 
   await closed;
   instance.unmount();
+}
+
+// `boolean | number` mirrors this file's own established convention for a check that's usually a
+// plain result but sometimes an exit code (prepareSession, handleAuthCommand, handleConfigCommand,
+// handlePermissionsCommand, handleSlashCommand all return `T | number` for the identical reason) —
+// callers check `typeof result === "number"` and return it directly on a throw. Used twice by
+// run()'s own guided-setup gate (before and after runGuidedSetup), so the corrupted-config
+// try/catch and its error-formatting live in one place instead of two.
+function checkZeroKeysConfigured(configDir: string): boolean | number {
+  try {
+    return configuredProviders(configDir).size === 0;
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
 }
 
 // Mounted only when deps.isTTY is true (run()'s own branch, above driveLoop's other call site —
@@ -2653,26 +2688,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const isTTY = deps.isTTY ?? false;
 
   // Open 2 (BYOK-KEY-STORAGE-AND-SETUP.md): a genuinely blank config must not hard-exit before the
-  // TUI ever mounts. Reuses ctx.configDir (already `deps.authConfigDir ?? getConfigDir()`, D7) and
-  // the same try/catch shape prepareSession's own configuredProviders call uses below — a corrupted
-  // config.json must still hard-exit cleanly, never be silently treated as "blank".
-  let zeroKeysConfigured: boolean;
-  try {
-    zeroKeysConfigured = configuredProviders(ctx.configDir).size === 0;
-  } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    return 1;
-  }
-  if (isTTY && zeroKeysConfigured) {
-    await runGuidedSetup(ctx.configDir);
-    let stillZeroKeys: boolean;
-    try {
-      stillZeroKeys = configuredProviders(ctx.configDir).size === 0;
-    } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
-      return 1;
+  // TUI ever mounts. Gated on isTTY FIRST (code-review finding): the non-interactive path is the
+  // common case and never uses this check's result, so checking isTTY before reading config.json
+  // at all avoids a wasted read/parse on every piped/CI invocation — prepareSession's own
+  // configuredProviders call moments later is the one that actually needs it on that path.
+  if (isTTY) {
+    const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
+    if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
+    if (zeroKeysConfigured) {
+      await runGuidedSetup(ctx.configDir);
+      const stillZeroKeys = checkZeroKeysConfigured(ctx.configDir);
+      if (typeof stillZeroKeys === "number") return stillZeroKeys;
+      if (stillZeroKeys) return 1;
     }
-    if (stillZeroKeys) return 1;
   }
 
   const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
