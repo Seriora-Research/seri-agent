@@ -286,7 +286,12 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   // /memory pending shares the gate with a mutating /memory approve).
   [
     "/memory",
-    { accepts: memoryCommandAccepts, run: memoryCommand, mutatesRunState: true, needsSession: false },
+    {
+      accepts: memoryCommandAccepts,
+      run: memoryCommand,
+      mutatesRunState: true,
+      needsSession: false,
+    },
   ],
 ]);
 

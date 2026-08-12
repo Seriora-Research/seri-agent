@@ -1,5 +1,15 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 // mkdir 0o700 + write-tmp + chmod 0o600 + rename — the shape permissions/store.ts's own
@@ -15,8 +25,26 @@ import { basename, dirname, join } from "node:path";
 // non-colliding name removes the race outright rather than trying to detect it.
 export function atomicWriteFile(path: string, content: string): void {
   const dir = dirname(path);
+  // Checked BEFORE mkdirSync/chmodSync below, which otherwise reset an existing directory back
+  // to 0o700 unconditionally — chmod'ing a directory to sabotage a brand-new file's write (no
+  // destination file exists yet for the check below to catch) would be silently undone by that
+  // reset if checked any later. Only checked when the directory already exists — mkdirSync itself
+  // is what creates one that doesn't, and there is nothing yet to have restricted permissions on.
+  if (existsSync(dir)) {
+    accessSync(dir, constants.W_OK);
+  }
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (process.platform !== "win32") chmodSync(dir, 0o700);
+  // Checked explicitly, before the write-tmp-then-rename below: rename(2) on POSIX only requires
+  // write permission on the PARENT DIRECTORY, never on the destination file's own inode, so
+  // renaming a tmp file over a chmod'd-read-only destination silently succeeds and overwrites it
+  // — a real regression confirmed by CI (config.test.ts's own sabotage test: chmod 0o444 on
+  // config.json used to make setConfigValues throw, and after the write-tmp-then-rename
+  // consolidation it silently didn't). Only checked when the destination already exists — a
+  // brand-new file has no permissions of its own yet to violate.
+  if (existsSync(path)) {
+    accessSync(path, constants.W_OK);
+  }
   sweepStaleTmp(dir, path);
   const tmpPath = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   writeFileSync(tmpPath, content, { mode: 0o600 });
