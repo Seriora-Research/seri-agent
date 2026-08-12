@@ -1815,9 +1815,11 @@ async function runGuidedSetup(configDir: string): Promise<void> {
 // `boolean | number` mirrors this file's own established convention for a check that's usually a
 // plain result but sometimes an exit code (prepareSession, handleAuthCommand, handleConfigCommand,
 // handlePermissionsCommand, handleSlashCommand all return `T | number` for the identical reason) —
-// callers check `typeof result === "number"` and return it directly on a throw. Used twice by
-// run()'s own guided-setup gate (before and after runGuidedSetup), so the corrupted-config
-// try/catch and its error-formatting live in one place instead of two.
+// callers check `typeof result === "number"` and return it directly on a throw. Used once, by
+// run()'s own guided-setup gate, to decide whether to mount runGuidedSetup at all — no re-check
+// after it returns (round 4): that fell through to prepareSession's own identical
+// configuredProviders/missing-key handling instead, rather than duplicating this corrupted-config
+// try/catch and its error-formatting a second time.
 function checkZeroKeysConfigured(configDir: string): boolean | number {
   try {
     return configuredProviders(configDir).size === 0;
@@ -2699,15 +2701,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // common case and never uses this check's result, so checking isTTY before reading config.json
   // at all avoids a wasted read/parse on every piped/CI invocation — prepareSession's own
   // configuredProviders call moments later is the one that actually needs it on that path.
+  //
+  // No re-check after runGuidedSetup returns (thermo-nuclear finding, round 4): a re-check here
+  // used to `return 1` directly on a still-empty config, silently — every other `return 1` in this
+  // file is preceded by a `console.error`, and this bare one discarded the exact message the user
+  // needs. Falling through unconditionally instead means a decline routes into prepareSession's own
+  // catch below, which throws/prints missingKeyError's own default message ("GROQ_API_KEY is not
+  // set. Run: seri config set GROQ_API_KEY <your-key>") — the SAME code path (not just the same
+  // exit code) the non-interactive missing-key exit already uses, and one fewer
+  // configuredProviders(configDir) read besides.
   if (isTTY) {
     const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
     if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
-    if (zeroKeysConfigured) {
-      await runGuidedSetup(ctx.configDir);
-      const stillZeroKeys = checkZeroKeysConfigured(ctx.configDir);
-      if (typeof stillZeroKeys === "number") return stillZeroKeys;
-      if (stillZeroKeys) return 1;
-    }
+    if (zeroKeysConfigured) await runGuidedSetup(ctx.configDir);
   }
 
   const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);

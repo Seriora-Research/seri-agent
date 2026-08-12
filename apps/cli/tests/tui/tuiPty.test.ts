@@ -2480,7 +2480,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    test("closing /setup with no key added exits with a non-zero code, same as the non-interactive missing-key exit", async () => {
+    test("closing /setup with no key added exits with a non-zero code and prints the same missing-key message as the non-interactive exit", async () => {
       const scriptPath = join(dir, "child-guided-setup-decline.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
@@ -2496,6 +2496,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // reports its own exit status, not the grandchild bun process's.
         const { stdout } = await exited;
         expect(stdout).toContain("EXIT_CODE 1");
+        // Thermo-nuclear finding (round 4): run()'s old re-check `return 1`'d here with no
+        // console.error, silently discarding missingKeyError's own default message. Falling
+        // through to prepareSession's identical catch instead means a decline prints the exact
+        // message a non-interactive missing-key run does — this assertion is the negative
+        // control: it fails against that old silent `return 1`.
+        expect(stdout).toContain(
+          "GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>",
+        );
       } finally {
         child.kill("SIGKILL");
       }
