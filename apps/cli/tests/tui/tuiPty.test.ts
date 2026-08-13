@@ -785,7 +785,7 @@ function childScriptGuidedSetupDelayedFetch(dir: string): string {
     `globalThis.fetch = (url, opts) =>`,
     `  typeof url === "string" && url.includes("models.dev")`,
     `    ? new Promise((resolve) =>`,
-    `        setTimeout(() => resolve(new Response("", { status: 500 })), 400),`,
+    `        setTimeout(() => resolve(new Response("", { status: 500 })), 3000),`,
     `      )`,
     `    : realFetch(url, opts);`,
     `const cli = await import(${JSON.stringify(CLI)});`,
@@ -2666,8 +2666,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // key while the first Escape's catalog wait is still pending must not have that in-progress
     // typing silently discarded when the fetch finally resolves and the picker would otherwise
     // want to mount over it (App.tsx's own render ternary checks pendingModelPicker before
-    // pendingSetup). `childScriptGuidedSetupDelayedFetch` resolves after 400ms — long enough that
-    // pressing 'a' and reaching the enter-key prompt comfortably happens first.
+    // pendingSetup). `childScriptGuidedSetupDelayedFetch` resolves after 3s — measured live to be
+    // comfortably longer than this test's own first-key-save-and-Escape sequence takes (a 400ms
+    // delay was tried first and measured to already have elapsed by the time Escape was pressed,
+    // making the test vacuous — the picker had already opened before the second-key keystrokes
+    // were even sent).
     test("adding a second key while the catalog fetch is still resolving is not discarded by the picker", async () => {
       const scriptPath = join(dir, "child-guided-setup-delayed-fetch.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupDelayedFetch(dir));
@@ -2691,7 +2694,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("Loading available models…");
 
-        // Immediately start adding a SECOND key — well before the 400ms delayed fetch resolves.
+        // Immediately start adding a SECOND key — well before the 3s delayed fetch resolves.
         // CATALOG_PROVIDERS order is groq, openrouter, ... — one Down reaches openrouter.
         child.stdin?.write("\x1b[B");
         await wait100ms();
