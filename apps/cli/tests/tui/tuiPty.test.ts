@@ -717,6 +717,40 @@ function childScriptGuidedSetup(dir: string): string {
   ].join("\n");
 }
 
+// Code-review finding, PR #91: unlike childScriptGuidedSetup, deliberately does NOT set
+// SERI_DISABLE_MODELS_FETCH — that env var makes loadCatalog resolve synchronously (a cache hit
+// against the bundled manifest), which would make this script incapable of ever observing the bug
+// it exists to catch. `globalThis.fetch` is monkey-patched to a promise that never resolves BEFORE
+// cli.ts is imported (so `getModelCatalog()`'s own `fetchFn: typeof fetch = fetch` default parameter
+// — evaluated at call time, not at catalog.ts's own module-load time — picks up the patched
+// version), simulating an offline/hung models.dev exactly as badly as possible: no timeout fires
+// within this script's own short test window.
+function childScriptGuidedSetupSlowFetch(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `delete process.env.GROQ_API_KEY;`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `delete process.env.ANTHROPIC_API_KEY;`,
+    `delete process.env.OPENAI_API_KEY;`,
+    `delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;`,
+    `globalThis.fetch = () => new Promise(() => {});`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
 // research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
 // identical signature... with zero change to loop.ts/gate.ts") that every earlier round of this
@@ -2501,6 +2535,27 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.kill("SIGKILL");
       }
     }, 60_000);
+
+    // Code-review finding, PR #91: run()'s own gate used to `await getModelCatalog()` BEFORE
+    // calling runGuidedSetup, so a slow/offline models.dev blocked /setup's very first paint behind
+    // FETCH_TIMEOUT_MS (10s, model-catalog's own catalog.ts) — a blank terminal on exactly the flow
+    // this feature exists to make instant. childScriptGuidedSetupSlowFetch's own fetch never
+    // resolves at all, so a 5s ceiling (well under that 10s timeout, still generous for a slow
+    // runner) is the negative control: it fails against the pre-fix blocking await and passes once
+    // the fetch is only kicked off, never awaited, ahead of the panel's first render.
+    test("mounts /setup instantly even while the model catalog fetch is still in flight", async () => {
+      const scriptPath = join(dir, "child-guided-setup-slow-fetch.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetupSlowFetch(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        const start = Date.now();
+        await sawLine("/setup — provider API keys");
+        expect(Date.now() - start).toBeLessThan(5000);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 20_000);
 
     // The bug this whole loop exists to fix: an anthropic-only guided setup used to fall through
     // to prepareSession unconditionally, which resolved the untouched default (groq's

@@ -1742,9 +1742,13 @@ const GUIDED_MODEL_REQUIRED = "Pick a model to continue — Ctrl-C to quit witho
 // mandatory model picker (`onGuidedModelSelected`/`onGuidedModelPickerCancel`, below), which is
 // what a completed guided setup actually needs to leave `config.json` in a runnable state
 // (SERI_MODEL/SERI_PROVIDER persisted, not just a key). Declining (no key ever added) still closes
-// immediately, byte-for-byte the old single-step behavior. `catalog` is loaded by `run()`'s own
-// call site, never fetched here — see that call site's own comment for why.
-async function runGuidedSetup(configDir: string, catalog: ModelCatalog): Promise<void> {
+// immediately, byte-for-byte the old single-step behavior. `catalogPromise` is started by `run()`'s
+// own call site but deliberately NOT awaited there (code-review finding, PR #91) — see
+// `onSetupClose`'s own `await catalogPromise` for why.
+async function runGuidedSetup(
+  configDir: string,
+  catalogPromise: Promise<ModelCatalog>,
+): Promise<void> {
   const { render } = await import("ink");
   const { createElement } = await import("react");
   const { App } = await import("./tui/App");
@@ -1812,7 +1816,7 @@ async function runGuidedSetup(configDir: string, catalog: ModelCatalog): Promise
     resolveClosed();
   }
 
-  function onSetupClose(): void {
+  async function onSetupClose(): Promise<void> {
     let configured: ReadonlySet<ModelProvider>;
     try {
       configured = configuredProviders(configDir);
@@ -1832,13 +1836,22 @@ async function runGuidedSetup(configDir: string, catalog: ModelCatalog): Promise
       resolveClosed();
       return;
     }
-    // Reviewer-verifier finding M1: `catalog` here is the LIVE models.dev payload (run()'s own
-    // `getModelCatalog()` call), not the bundled manifest decideGuidedModelPickerOpen's own comment
-    // was measured against — loadCatalog silently drops a provider whose upstream `models` entry is
-    // missing/malformed, so this CAN come back empty for the provider the user just configured. An
-    // empty picker would render zero rows with no way to proceed except a fatal Ctrl-C (Enter is a
-    // no-op with nothing selected, Escape correctly re-prompts into the same empty list) — the same
-    // decline degrade used above is what actually gets the user back to a message they can act on.
+    // Code-review finding, PR #91: awaited HERE, not by run()'s own call site, and not at the top
+    // of this function — `/setup` must paint instantly on a blank first run, not block behind
+    // FETCH_TIMEOUT_MS (10s) of a models.dev round-trip before the user sees anything. The fetch
+    // was still started immediately (run()'s own call site kicks it off, unawaited), so by the time
+    // a real user has picked a provider and typed a key, it has almost always already resolved —
+    // this only actually waits in the rare case it's still in flight, and only after the user has
+    // already gotten UI feedback, never before. `getModelCatalog`'s own cache (catalog.ts) means
+    // `prepareSession`'s later `await getModelCatalog()` is still a cache hit, not a second fetch.
+    const catalog = await catalogPromise;
+    // Reviewer-verifier finding M1: `catalog` here is the LIVE models.dev payload, not the bundled
+    // manifest decideGuidedModelPickerOpen's own comment was measured against — loadCatalog
+    // silently drops a provider whose upstream `models` entry is missing/malformed, so this CAN
+    // come back empty for the provider the user just configured. An empty picker would render zero
+    // rows with no way to proceed except a fatal Ctrl-C (Enter is a no-op with nothing selected,
+    // Escape correctly re-prompts into the same empty list) — the same decline degrade used above
+    // is what actually gets the user back to a message they can act on.
     const entries = decideGuidedModelPickerOpen(catalog, configured);
     if (entries.length === 0) {
       dispatch({ type: "setup-resolved" });
@@ -2812,7 +2825,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (isTTY) {
     const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
     if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
-    if (zeroKeysConfigured) await runGuidedSetup(ctx.configDir, await getModelCatalog());
+    // getModelCatalog() deliberately NOT awaited here (code-review finding, PR #91): awaiting it
+    // before runGuidedSetup blocked /setup from ever painting until the models.dev fetch settled
+    // (up to FETCH_TIMEOUT_MS) — a blank terminal on exactly the flow this feature exists to make
+    // instant. The fetch still starts immediately; runGuidedSetup's own onSetupClose awaits the
+    // promise only once it actually needs the resolved catalog, by which point a real user has
+    // almost always already typed a key and closed the panel.
+    if (zeroKeysConfigured) await runGuidedSetup(ctx.configDir, getModelCatalog());
   }
 
   const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
