@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CATALOG_PROVIDERS, type ModelCatalog, type ModelCatalogEntry } from "@seri/model-catalog";
+import {
+  CATALOG_PROVIDERS,
+  type ModelCatalog,
+  type ModelCatalogEntry,
+  type ModelProvider,
+} from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import {
   type CheckpointRecord,
@@ -12,8 +17,10 @@ import {
 } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable } from "../../src/checkpoint/shadowGit";
 import { setConfigValue } from "../../src/config/config";
+import bundledManifest from "../../src/provider/catalog-manifest.json";
 import type { SessionState } from "../../src/session/session";
 import {
+  decideGuidedModelPickerOpen,
   decideModeCycle,
   decideModelPickerOpen,
   decideRestore,
@@ -222,6 +229,33 @@ describe("decideModelPickerOpen", () => {
     expect(openrouterRow?.keyConfigured).toBe(false);
     expect(openrouterRow?.rerouteTo).toBeUndefined();
     expect(openrouterRow?.gatewayReachable).toBe(true);
+  });
+});
+
+// byok-guided-setup-default-model bugfix report, Decision 3: the guided-setup picker must never
+// offer a row `resolveRoute` cannot actually reach — against the real bundled 350-entry manifest,
+// not a hand-built fixture, since the filter's whole point is a guarantee about that exact catalog.
+describe("decideGuidedModelPickerOpen", () => {
+  const catalog = bundledManifest as ModelCatalog;
+  const configured = new Set<ModelProvider>(["anthropic"]);
+
+  test("every returned row has its own key or a working reroute target", () => {
+    const rows = decideGuidedModelPickerOpen(catalog, configured);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.keyConfigured || row.rerouteTo !== undefined)).toBe(true);
+  });
+
+  test("contains native anthropic rows — the key that was actually configured", () => {
+    const rows = decideGuidedModelPickerOpen(catalog, configured);
+    expect(rows.some((row) => row.entry.provider === "anthropic")).toBe(true);
+  });
+
+  test("is a strict subset of decideModelPickerOpen's output for the same inputs", () => {
+    const all = decideModelPickerOpen(catalog, configured);
+    const guided = decideGuidedModelPickerOpen(catalog, configured);
+    const allKeys = new Set(all.map((row) => `${row.entry.provider}/${row.entry.id}`));
+    expect(guided.length).toBeLessThan(all.length);
+    expect(guided.every((row) => allKeys.has(`${row.entry.provider}/${row.entry.id}`))).toBe(true);
   });
 });
 

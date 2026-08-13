@@ -2438,7 +2438,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   // this exact script/assertion reproduces that exit, with no "/setup — provider API keys" text in
   // the captured stdout at all.
   describe("guided setup on a genuinely blank first run", () => {
-    test("mounts /setup directly instead of hard-exiting, and falls through to the task once a key is added", async () => {
+    // byok-guided-setup-default-model bugfix report: closing /setup with at least one key
+    // configured no longer falls straight through — it opens the mandatory model picker
+    // (Decision 1), and only THAT resolves the panel. "Route" is the picker's own column header
+    // (App.tsx's MODEL_PICKER_HEADER) — present regardless of catalog ordering, unlike any
+    // specific row, so it is a reliable sync point for "the picker actually mounted."
+    test("mounts /setup directly instead of hard-exiting, and falls through to the task once a key is added and the mandatory default model is picked", async () => {
       const scriptPath = join(dir, "child-guided-setup.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
@@ -2467,14 +2472,181 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(config.GROQ_API_KEY).toBe(secret);
 
         // Back at the list step (setupListState re-selects groq) — Escape closes the panel, the
-        // same close path the existing "cancel" /setup test above already exercises.
+        // same close path the existing "cancel" /setup test above already exercises. Unlike
+        // pre-fix, this does NOT fall straight through: a key is now configured, so onSetupClose
+        // opens the mandatory model picker instead.
         child.stdin?.write("\x1b");
         await new Promise((resolve) => setTimeout(resolve, 30));
+        await sawLine("Route");
+
+        // Narrows to exactly one entry across the whole catalog (groq and openrouter both) —
+        // verified directly against the bundled catalog-manifest.json (the /model multi-route
+        // pty test's own comment, above, has the full story on why this exact string).
+        child.stdin?.write("70b-versatile");
+        await sawLine("70b-versatile");
+        child.stdin?.write("\r");
 
         // The fall-through: prepareSession -> runTui -> driveLoop, unchanged, now actually reached.
         await sawLine("> do a task");
         await sawLine("RUNLOOP_READY");
         await sawLine("(done: no-tool-call)");
+
+        const modelConfig = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.SERI_MODEL === "llama-3.3-70b-versatile",
+        );
+        expect(modelConfig.SERI_MODEL).toBe("llama-3.3-70b-versatile");
+        expect(modelConfig.SERI_PROVIDER).toBe("groq");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The bug this whole loop exists to fix: an anthropic-only guided setup used to fall through
+    // to prepareSession unconditionally, which resolved the untouched default (groq's
+    // openai/gpt-oss-120b) and hard-exited on a SECOND missing-key error naming a provider the
+    // user never configured. The mandatory picker (Decision 1) closes that gap.
+    test("a non-groq key added during guided setup lands on the model picked there instead of a second missing-GROQ_API_KEY exit", async () => {
+      const scriptPath = join(dir, "child-guided-setup-non-groq.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetup(dir));
+
+      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        // CATALOG_PROVIDERS order is groq, openrouter, anthropic, openai, google — two Downs
+        // reach anthropic (same navigation the /setup "remove" pty tests above already use).
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
+
+        const secret = "sk-ant-guided-setup-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved ANTHROPIC_API_KEY.");
+
+        child.stdin?.write("\x1b");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await sawLine("Route");
+
+        // Narrows to exactly the two claude-sonnet-5 routes in the bundled manifest (the /model
+        // multi-route pty test's own comment, above, verified this directly against
+        // catalog-manifest.json). byRoutePriority (D2) sorts native before aggregator within a
+        // route group, so the native anthropic row is already the top/default-selected one for
+        // this filtered query — no Down press needed.
+        child.stdin?.write("claude-sonnet-5");
+        await sawLine("claude-sonnet-5");
+        child.stdin?.write("\r");
+
+        await sawLine("> do a task");
+        await sawLine("RUNLOOP_READY");
+        await sawLine("(done: no-tool-call)");
+
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.SERI_MODEL === "claude-sonnet-5",
+        );
+        expect(config.SERI_MODEL).toBe("claude-sonnet-5");
+        expect(config.SERI_PROVIDER).toBe("anthropic");
+        // The negative control this test exists for: the exact string pre-fix code printed here,
+        // naming a provider (groq) the user never configured.
+        expect(occurrences("GROQ_API_KEY is not set")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Decision 2: Esc/Ctrl-D at the mandatory picker re-prompts — it must never resolve the panel
+    // and fall through to a keys-but-no-model run, which is exactly the bug this loop fixes.
+    test("Escape at the mandatory model picker re-prompts instead of returning to a keys-but-no-model run", async () => {
+      const scriptPath = join(dir, "child-guided-setup-picker-escape.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-guided-setup-escape-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        child.stdin?.write("\x1b");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await sawLine("Route");
+
+        // Escape at the picker: must re-prompt, not resolve.
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        await sawLine("Pick a model to continue");
+
+        // The picker is still up: a subsequent filter keystroke still narrows it, and config.json
+        // still has no SERI_MODEL — proof Escape neither closed the picker nor let the run
+        // continue on a keys-but-no-model session.
+        child.stdin?.write("70b-versatile");
+        await sawLine("70b-versatile");
+        const configDuringEscape = JSON.parse(
+          readFileSync(join(dir, ".seri", "config.json"), "utf8"),
+        );
+        expect(configDuringEscape.SERI_MODEL).toBeUndefined();
+
+        // Filter + Enter then falls through normally, proving the picker recovered rather than
+        // being left in some broken half-cancelled state.
+        child.stdin?.write("\r");
+        await sawLine("> do a task");
+        await sawLine("RUNLOOP_READY");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Decision 2's own Ctrl-C carve-out: with no `cancel` slot registered for this mount,
+    // deliverSignal takes the fatal branch and kills the process by signal — never resolving
+    // `closed`, so nothing is ever persisted from a run that dies here.
+    test("Ctrl-C at the mandatory model picker kills the run without persisting a default model", async () => {
+      const scriptPath = join(dir, "child-guided-setup-picker-ctrlc.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetup(dir));
+
+      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-guided-setup-ctrlc-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        child.stdin?.write("\x1b");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await sawLine("Route");
+
+        child.stdin?.write("\x03");
+        const { stdout } = await exited;
+
+        // The child died by signal before childScriptGuidedSetup's own
+        // `console.log("EXIT_CODE " + code)` (helper, above) — and driveLoop/runTui never ran, so
+        // neither line was ever printed.
+        expect(stdout).not.toContain("EXIT_CODE");
+        expect(stdout).not.toContain("RUNLOOP_READY");
+
+        const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+        expect(config.GROQ_API_KEY).toBe(secret);
+        expect(config.SERI_MODEL).toBeUndefined();
       } finally {
         child.kill("SIGKILL");
       }
