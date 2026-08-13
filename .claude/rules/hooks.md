@@ -60,6 +60,20 @@ duplicate bullet: **when adding a lesson that names specific files, the list is
 the weak part** — the next hook written won't be on it. Assume any hook not
 explicitly verified has this bug.
 
+**The 2026-08-06 fix's scope was narrower than it read — corrected 2026-08-13.**
+That fix repaired stdin-parsing for named top-level `Agent` tool dispatches only.
+Measured across four loops on 2026-08-12 (`TRAJECTORY-UNKNOWN-AGENT-LOGGING.md`),
+83-89% of all `subagent:` rows post-fix were still `unknown-agent`: a dispatched
+agent's own internal work (nested Task calls, or WebFetch/WebSearch-backed
+sub-steps it issues itself) fires its own `SubagentStop` event with `agent_type`
+genuinely absent from the payload, not mis-parsed — the earlier fix had no way to
+repair a field that isn't there. `log-trajectory.sh`/`.ps1` now skip appending an
+entry entirely when `agent_type` is empty, instead of writing a
+timestamp-and-opaque-id row with no other information. Confirmed against
+`.claude/agents/retro.md`'s trigger table that no retro trigger keyed on these
+rows (its evidence sources are gate tables, `DECISION:` lines, and quoted
+corrections), so nothing that was actually read is lost by dropping them.
+
 **Still unfixed as of 2026-08-06:** `block-dangerous.sh`, `block-env-read.sh`
 and `format-and-typecheck.sh` continue to read env vars and never read stdin, so
 their guard logic still never runs against real input. Both `block-*` hooks are

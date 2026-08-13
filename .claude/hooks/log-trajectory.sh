@@ -21,6 +21,19 @@
 #    that list and had the same defect. The real fields are `agent_type` and `agent_id`.
 #
 # Fixing only (1) would have produced 671 rows of noise in the correct file.
+#
+# 3. STILL 83-89% NOISE POST-FIX (found 2026-08-12, see
+#    TRAJECTORY-UNKNOWN-AGENT-LOGGING.md). (2) only repaired named top-level `Agent`
+#    dispatches. A dispatched agent's own internal work — nested Task calls, or
+#    WebFetch/WebSearch-backed sub-steps it issues itself — fires its own SubagentStop
+#    event with `agent_type` genuinely absent from the payload, not mis-parsed. Writing
+#    "unknown-agent" for those rows carries zero information beyond a timestamp and an
+#    opaque id, and crowded out the named rows that are actually informative (measured
+#    83-89% of all subagent: lines across four loops). retro's own trigger table
+#    (.claude/agents/retro.md) never keys on these rows — its evidence sources are gate
+#    tables, `DECISION:` lines and quoted corrections — so skipping them loses nothing
+#    it uses. Fixed by not appending an entry at all when `agent_type` is empty, instead
+#    of defaulting to the string "unknown-agent".
 set -uo pipefail
 
 PAYLOAD=$(cat)
@@ -61,7 +74,7 @@ fi
 
 AGENT=$(json_str agent_type)
 AGENT_ID=$(json_str agent_id)
-[ -z "$AGENT" ] && AGENT="unknown-agent"
+[ -z "$AGENT" ] && exit 0
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "unknown-time")
 
 {

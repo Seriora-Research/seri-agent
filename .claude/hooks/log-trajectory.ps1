@@ -1,10 +1,16 @@
 # SubagentStop hook (PowerShell variant) - appends to THIS session's trajectory.md.
-# See log-trajectory.sh for the full rationale. Two defects fixed here on 2026-08-06:
-#   1. WRONG FILE - `Get-ChildItem -Recurse | Select-Object -First 1` returned whichever
-#      loop the filesystem yielded first, not the one this session is running.
-#   2. NOTHING TO SAY - it read $env:CLAUDE_SUBAGENT_NAME / $env:CLAUDE_SUBAGENT_STATUS,
-#      neither of which exists. Hook input arrives as JSON on stdin; the real fields are
-#      `agent_type` and `agent_id`.
+# See log-trajectory.sh for the full rationale. Defects fixed here:
+#   1. WRONG FILE (2026-08-06) - `Get-ChildItem -Recurse | Select-Object -First 1` returned
+#      whichever loop the filesystem yielded first, not the one this session is running.
+#   2. NOTHING TO SAY (2026-08-06) - it read $env:CLAUDE_SUBAGENT_NAME /
+#      $env:CLAUDE_SUBAGENT_STATUS, neither of which exists. Hook input arrives as JSON on
+#      stdin; the real fields are `agent_type` and `agent_id`.
+#   3. STILL MOSTLY NOISE (2026-08-13) - (2) only repaired named top-level `Agent`
+#      dispatches. A dispatched agent's own internal work (nested Task calls, or
+#      WebFetch/WebSearch-backed sub-steps it issues itself) fires its own SubagentStop
+#      event with `agent_type` genuinely absent, not mis-parsed - measured 83-89% of all
+#      subagent: rows across four loops. Skip the entry instead of writing
+#      "unknown-agent"; retro's trigger table never keys on these rows.
 
 $payload = [Console]::In.ReadToEnd()
 $sid = $null; $agent = $null; $agentId = $null
@@ -39,7 +45,7 @@ if (-not $traj) {
 }
 
 if (-not $traj) { exit 0 }
-if (-not $agent) { $agent = "unknown-agent" }
+if (-not $agent) { exit 0 }
 $ts = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
 $lines = "`n### $ts - subagent: $agent"
