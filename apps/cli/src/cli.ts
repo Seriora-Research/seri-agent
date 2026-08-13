@@ -95,6 +95,7 @@ import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import {
   type CommandDirs,
   checkpointTarget,
+  decideGuidedModelPickerOpen,
   decideModeCycle,
   decideModelPickerOpen,
   decideRestore,
@@ -1720,6 +1721,12 @@ function createSetupHandlers(opts: {
   return { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack };
 }
 
+// `runGuidedSetup`'s own mandatory-picker copy (Decision 1/2, byok-guided-setup-default-model
+// bugfix report) — named constants rather than inlined literals, so tuiPty.test.ts's own pty
+// tests can assert a substring of the exact wording without duplicating it by hand.
+const GUIDED_MODEL_PROMPT = "Pick a default model to continue.";
+const GUIDED_MODEL_REQUIRED = "Pick a model to continue — Ctrl-C to quit without saving one.";
+
 // Mounted only when the pre-`prepareSession` gate in `run()` finds a real TTY and zero API keys
 // configured anywhere (env or config.json) — the "genuinely blank first run" case that would
 // otherwise hard-exit before the TUI ever mounts (BYOK-KEY-STORAGE-AND-SETUP.md, Open 2). Mounts
@@ -1729,7 +1736,15 @@ function createSetupHandlers(opts: {
 // type (`SessionState<ModelMessage>`, not the stricter `RunSession` — no `model`/`provider`
 // required), and are never saved to disk or read again once this function resolves — the real
 // session `prepareSession` builds afterward (run()'s own call site) is what the run actually uses.
-async function runGuidedSetup(configDir: string): Promise<void> {
+//
+// A two-step flow, not one (byok-guided-setup-default-model bugfix report, Decision 1): closing
+// /setup with at least one key configured does not resolve `closed` on its own — it opens the
+// mandatory model picker (`onGuidedModelSelected`/`onGuidedModelPickerCancel`, below), which is
+// what a completed guided setup actually needs to leave `config.json` in a runnable state
+// (SERI_MODEL/SERI_PROVIDER persisted, not just a key). Declining (no key ever added) still closes
+// immediately, byte-for-byte the old single-step behavior. `catalog` is loaded by `run()`'s own
+// call site, never fetched here — see that call site's own comment for why.
+async function runGuidedSetup(configDir: string, catalog: ModelCatalog): Promise<void> {
   const { render } = await import("ink");
   const { createElement } = await import("react");
   const { App } = await import("./tui/App");
@@ -1765,9 +1780,68 @@ async function runGuidedSetup(configDir: string): Promise<void> {
   const closed = new Promise<void>((resolve) => {
     resolveClosed = resolve;
   });
-  function onSetupClose(): void {
-    dispatch({ type: "setup-resolved" });
+
+  // Decision 2 (bugfix report): re-prompt, never exit. Because this NEVER dispatches
+  // `model-picker-resolved`, `state.pendingModelPicker` stays set and `ModelPicker` stays mounted
+  // with its own local filter/selection intact — the user gets a visible reason instead of the
+  // panel silently doing nothing. `command-error`, not `transcript-append`: it is a single-slot
+  // field rendered above the picker, so holding Escape replaces one line instead of flooding
+  // `<Static>`. Ctrl-C is still the way out and needs no code here — see `onCancel`, below.
+  function onGuidedModelPickerCancel(): void {
+    dispatch({ type: "command-error", message: GUIDED_MODEL_REQUIRED });
+  }
+
+  // Decision 4: persists synchronously, on selection — not the `messages-updated` path
+  // (`runTurn`'s own `onEvent`), which never fires in this mount (no turn ever runs here). The
+  // write is synchronous (`persistDefaultModel` -> one `setConfigValues` call), so by the time
+  // `await closed` (below) returns, config.json already carries the pair and `prepareSession`'s
+  // own `resolveDefaultModel` reads it instead of falling back to groq's default. The try/catch
+  // mirrors `onSetupKeyEntered`'s own write-failure posture: degrade to a visible message and
+  // leave the user in control, never resolve into a state the next step cannot survive.
+  function onGuidedModelSelected(pick: { model: string; provider: ModelProvider }): void {
+    try {
+      persistDefaultModel(pick, configDir);
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return; // picker stays up; Ctrl-C is the way out
+    }
+    dispatch({ type: "model-picker-resolved", pick });
     resolveClosed();
+  }
+
+  function onSetupClose(): void {
+    let configured: ReadonlySet<ModelProvider>;
+    try {
+      configured = configuredProviders(configDir);
+    } catch {
+      // Same degrade as connectDispatch's own catch, below: a corrupted config.json resolves out
+      // and lets prepareSession print the one canonical message, rather than a second,
+      // differently-worded error here.
+      dispatch({ type: "setup-resolved" });
+      resolveClosed();
+      return;
+    }
+    if (configured.size === 0) {
+      // The decline path — today's behavior, byte-for-byte: no key was ever added (or one was
+      // added then removed), so there is nothing to pick a model FOR. Falls through to
+      // prepareSession's own missing-key message, same as always.
+      dispatch({ type: "setup-resolved" });
+      resolveClosed();
+      return;
+    }
+    // At least one key is configured: a default model pick is now mandatory (Decision 1) before
+    // this mount can resolve. `model-picker-requested` dispatched BEFORE `setup-resolved` is
+    // deliberate — App.tsx's own render ternary checks `pendingModelPicker` before `pendingSetup`,
+    // so no intermediate frame can render a bare `InputBox` even without React batching.
+    dispatch({ type: "transcript-append", line: GUIDED_MODEL_PROMPT });
+    dispatch({
+      type: "model-picker-requested",
+      entries: decideGuidedModelPickerOpen(catalog, configured),
+    });
+    dispatch({ type: "setup-resolved" });
   }
 
   const instance = render(
@@ -1781,6 +1855,8 @@ async function runGuidedSetup(configDir: string): Promise<void> {
       done: false,
       onCancel: () => deliverSignal("SIGINT"), // same idle-Ctrl-C fatal path runTui's own onCancel uses
       onQuit: onSetupClose, // dead in this mount (InputBox/ApprovalBox never show) but wired for safety
+      onModelSelected: onGuidedModelSelected,
+      onModelPickerCancel: onGuidedModelPickerCancel,
       onSetupSelect,
       onSetupKeyEntered,
       onSetupRemove,
@@ -2709,18 +2785,22 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // at all avoids a wasted read/parse on every piped/CI invocation — prepareSession's own
   // configuredProviders call moments later is the one that actually needs it on that path.
   //
-  // No re-check after runGuidedSetup returns (thermo-nuclear finding, round 4): a re-check here
-  // used to `return 1` directly on a still-empty config, silently — every other `return 1` in this
-  // file is preceded by a `console.error`, and this bare one discarded the exact message the user
-  // needs. Falling through unconditionally instead means a decline routes into prepareSession's own
-  // catch below, which throws/prints missingKeyError's own default message ("GROQ_API_KEY is not
-  // set. Run: seri config set GROQ_API_KEY <your-key>") — the SAME code path (not just the same
-  // exit code) the non-interactive missing-key exit already uses, and one fewer
-  // configuredProviders(configDir) read besides.
+  // No re-check after runGuidedSetup returns (thermo-nuclear finding, round 4; invariant updated by
+  // byok-guided-setup-default-model): a re-check here used to `return 1` directly on a still-empty
+  // config, silently — every other `return 1` in this file is preceded by a `console.error`, and
+  // this bare one discarded the exact message the user needs. Falling through unconditionally
+  // instead means a DECLINE (no key ever added) routes into prepareSession's own catch below, which
+  // throws/prints missingKeyError's own default message ("GROQ_API_KEY is not set. Run: seri config
+  // set GROQ_API_KEY <your-key>") — the SAME code path (not just the same exit code) the
+  // non-interactive missing-key exit already uses. A COMPLETED guided setup is different: it now
+  // persists SERI_MODEL/SERI_PROVIDER before `runGuidedSetup` returns (its own mandatory model
+  // picker), so the same unconditional fall-through instead lands `prepareSession`'s
+  // `resolveDefaultModel` read on that freshly-written pair rather than the groq-only fallback —
+  // which is the actual fix this loop exists to ship.
   if (isTTY) {
     const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
     if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
-    if (zeroKeysConfigured) await runGuidedSetup(ctx.configDir);
+    if (zeroKeysConfigured) await runGuidedSetup(ctx.configDir, await getModelCatalog());
   }
 
   const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
