@@ -15,8 +15,11 @@ import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 import { DEFAULT_COLUMNS, formatModeLabel } from "./format";
 import { ApprovalBox } from "./panels/ApprovalBox";
+import { AuthBanner, AuthPanel } from "./panels/AuthPanel";
+import { ConfigPanel } from "./panels/ConfigPanel";
 import { InputBox } from "./panels/InputBox";
 import { ModelPicker } from "./panels/ModelPicker";
+import { PermissionsPanel } from "./panels/PermissionsPanel";
 import { SetupPanel } from "./panels/SetupPanel";
 import { type Dispatch, initialTuiState, tuiReducer } from "./reducer";
 import { theme } from "./theme";
@@ -167,6 +170,11 @@ export function App({
 
   return (
     <Box flexDirection="column">
+      {/* Stage A scaffolding (cli-commands-to-tui feature-plan.md): rendered ABOVE the render
+      ternary below, not as one of its branches — unlike ApprovalBox/ModelPicker/SetupPanel this
+      never replaces InputBox, it sits alongside it. `authOffer` is never set to true yet (Stage
+      C wires that), so this is unreachable in production today. */}
+      <AuthBanner show={state.authOffer} />
       <Static items={state.transcript}>{(line, index) => <Text key={index}>{line}</Text>}</Static>
       {state.streaming.length > 0 && <Text>{state.streaming}</Text>}
       {state.pendingTool !== undefined && (
@@ -186,9 +194,12 @@ export function App({
       {state.commandError !== undefined && <Text color={theme.error}>{state.commandError}</Text>}
       {/* Findings 1+5: mutually exclusive with InputBox — a pending approval question is the only
       thing this run is waiting on, and answering it (not typing a task or slash command) is the
-      only input that means anything until it clears. Extended to a third state for /model, and a
-      fourth for /setup: each is the same kind of "only this input means anything right now"
-      question, checked in this same order (approval, then /model, then /setup, then InputBox). */}
+      only input that means anything until it clears. Extended to a third state for /model, a
+      fourth for /setup, and now (Stage A scaffolding) three more for /login /signup, /config and
+      /permissions: each is the same kind of "only this input means anything right now" question,
+      checked in this same order (approval, /model, /setup, /login /signup, /config, /permissions,
+      then InputBox). The last three are unreachable today — nothing dispatches
+      auth-requested/config-requested/permissions-requested yet (Stages C-D wire that). */}
       {state.pendingApproval !== undefined ? (
         <ApprovalBox
           pendingApproval={state.pendingApproval}
@@ -210,6 +221,12 @@ export function App({
           onSetupBack={onSetupBack}
           onSetupClose={onSetupClose}
         />
+      ) : state.pendingAuth !== undefined ? (
+        <AuthPanel state={state.pendingAuth} />
+      ) : state.pendingConfig !== undefined ? (
+        <ConfigPanel pendingConfig={state.pendingConfig} />
+      ) : state.pendingPermissions !== undefined ? (
+        <PermissionsPanel pendingPermissions={state.pendingPermissions} />
       ) : (
         <InputBox
           onSubmit={onSubmit}
