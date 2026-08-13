@@ -763,6 +763,47 @@ function childScriptGuidedSetupSlowFetch(dir: string): string {
   ].join("\n");
 }
 
+// Code-review finding, PR #91 round 2: unlike childScriptGuidedSetupSlowFetch's own
+// never-resolving fetch (which can only ever exercise the dead-input/re-entrancy half of the
+// blocking bug, since a promise that never settles never reaches onSetupClose's own `.then`),
+// this one resolves the models.dev request after a short, bounded delay — long enough to still be
+// pending when a second key-add is started, short enough to keep the test itself fast. The 500
+// status makes loadCatalog's own `!response.ok` branch throw and fall back to the bundled
+// manifest, so no real models.dev response shape needs to be faked here.
+function childScriptGuidedSetupDelayedFetch(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `delete process.env.GROQ_API_KEY;`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `delete process.env.ANTHROPIC_API_KEY;`,
+    `delete process.env.OPENAI_API_KEY;`,
+    `delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;`,
+    `delete process.env.SERI_DISABLE_MODELS_FETCH;`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) =>`,
+    `  typeof url === "string" && url.includes("models.dev")`,
+    `    ? new Promise((resolve) =>`,
+    `        setTimeout(() => resolve(new Response("", { status: 500 })), 400),`,
+    `      )`,
+    `    : realFetch(url, opts);`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
 // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
 // research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
 // identical signature... with zero change to loop.ts/gate.ts") that every earlier round of this
@@ -2564,6 +2605,120 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         const start = Date.now();
         await sawLine("/setup — provider API keys");
         expect(Date.now() - start).toBeLessThan(5000);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 20_000);
+
+    // Code-review finding (thermo-nuclear round 2, PR #91): making onSetupClose's own catalog wait
+    // async (instead of chained) made it re-entrant — a second Escape press while `catalogPromise`
+    // was still resolving re-ran the whole tail a second time, and the wait itself was silent (no
+    // feedback between the keypress and the picker appearing). Reuses
+    // childScriptGuidedSetupSlowFetch's own permanently-hanging fetch: `catalogPromise` never
+    // settles within this test's own window, so this exercises exactly the dead-input/re-entrancy
+    // half of the bug (the picker itself can never appear here — that half is what
+    // childScriptGuidedSetupDelayedFetch's own test, below, covers).
+    test("Escape during a slow catalog fetch shows visible feedback once, not duplicated by a second press", async () => {
+      const scriptPath = join(dir, "child-guided-setup-slow-fetch-escape.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetupSlowFetch(dir));
+
+      const { child, sawLine, occurrences, exited } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-guided-setup-slow-fetch-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        // First Escape: the visible-feedback line must appear even though catalogPromise never
+        // resolves in this script.
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        await sawLine("Loading available models…");
+
+        // A second Escape while still "closing": the re-entrancy guard must make this a no-op —
+        // NOT a second run of the tail, which (pre-fix) would have re-dispatched the same
+        // transcript line a second time.
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        expect(occurrences("Loading available models…")).toBe(1);
+
+        // The process is still alive and responsive, not deadlocked — Ctrl-C still reaches the
+        // same fatal idle path every other test in this describe block's Ctrl-C test exercises.
+        child.stdin?.write("\x03");
+        const { stdout } = await exited;
+        expect(stdout).not.toContain("EXIT_CODE");
+        expect(stdout).not.toContain("RUNLOOP_READY");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 20_000);
+
+    // The other half of the same bug (see the test just above): a user who starts adding a SECOND
+    // key while the first Escape's catalog wait is still pending must not have that in-progress
+    // typing silently discarded when the fetch finally resolves and the picker would otherwise
+    // want to mount over it (App.tsx's own render ternary checks pendingModelPicker before
+    // pendingSetup). `childScriptGuidedSetupDelayedFetch` resolves after 400ms — long enough that
+    // pressing 'a' and reaching the enter-key prompt comfortably happens first.
+    test("adding a second key while the catalog fetch is still resolving is not discarded by the picker", async () => {
+      const scriptPath = join(dir, "child-guided-setup-delayed-fetch.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetupDelayedFetch(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-guided-setup-delayed-fetch-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        // Escape starts the (still-pending) catalog wait.
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        await sawLine("Loading available models…");
+
+        // Immediately start adding a SECOND key — well before the 400ms delayed fetch resolves.
+        // CATALOG_PROVIDERS order is groq, openrouter, ... — one Down reaches openrouter.
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        // If the picker silently replaced this mid-typing (the bug), the rest of this input would
+        // land in ModelPicker's own filter box instead, and "Saved OPENROUTER_API_KEY." would
+        // never print — sawLine's own bounded poll is what turns that into a real test failure
+        // rather than a hang.
+        const secondSecret = "sk-guided-setup-second-key-secret";
+        child.stdin?.write(secondSecret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved OPENROUTER_API_KEY.");
+
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENROUTER_API_KEY === secondSecret,
+        );
+        expect(config.OPENROUTER_API_KEY).toBe(secondSecret);
+        expect(config.GROQ_API_KEY).toBe(secret);
+
+        // The flow still completes normally afterward: back at the list step, a fresh Escape opens
+        // the picker (catalogPromise is long since resolved by now).
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        await sawLine("Route");
       } finally {
         child.kill("SIGKILL");
       }

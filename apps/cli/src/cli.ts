@@ -1726,6 +1726,9 @@ function createSetupHandlers(opts: {
 // tests can assert a substring of the exact wording without duplicating it by hand.
 const GUIDED_MODEL_PROMPT = "Pick a default model to continue.";
 const GUIDED_MODEL_REQUIRED = "Pick a model to continue — Ctrl-C to quit without saving one.";
+// Code-review finding, PR #91 round 2: the one visible line between an Escape press and the
+// picker actually appearing, whenever `catalogPromise` is still resolving at that point.
+const GUIDED_MODEL_LOADING = "Loading available models…";
 
 // Mounted only when the pre-`prepareSession` gate in `run()` finds a real TTY and zero API keys
 // configured anywhere (env or config.json) — the "genuinely blank first run" case that would
@@ -1743,8 +1746,9 @@ const GUIDED_MODEL_REQUIRED = "Pick a model to continue — Ctrl-C to quit witho
 // what a completed guided setup actually needs to leave `config.json` in a runnable state
 // (SERI_MODEL/SERI_PROVIDER persisted, not just a key). Declining (no key ever added) still closes
 // immediately, byte-for-byte the old single-step behavior. `catalogPromise` is started by `run()`'s
-// own call site but deliberately NOT awaited there (code-review finding, PR #91) — see
-// `onSetupClose`'s own `await catalogPromise` for why.
+// own call site but deliberately NOT awaited there (code-review finding, PR #91) — see that call
+// site's own comment for why, and `onSetupClose`'s own header comment for why it stays synchronous
+// and chains `.then`/`.catch` on that promise rather than awaiting it inline.
 async function runGuidedSetup(
   configDir: string,
   catalogPromise: Promise<ModelCatalog>,
@@ -1816,7 +1820,29 @@ async function runGuidedSetup(
     resolveClosed();
   }
 
-  async function onSetupClose(): Promise<void> {
+  // Code-review finding, PR #91 round 2: `AppProps.onSetupClose` is typed `(leftoverInput?) => void`
+  // — TypeScript silently drops a returned promise there, so an earlier `async function
+  // onSetupClose` awaiting `catalogPromise` inline was, in practice, fire-and-forget from every
+  // caller's point of view: a second Escape press while it was still pending re-entered the
+  // function and both resumes ran the tail (duplicate dispatches); a `throw` out of
+  // `decideGuidedModelPickerOpen` became an unhandled rejection that killed the process before
+  // `instance.unmount()` ever restored raw mode; and the wait itself was silent, with no feedback
+  // between the keypress and the picker appearing. `onSetupClose` stays synchronous now — the wait
+  // is chained with `.then`/`.catch` instead of `await`ed inline — and `closing` guards re-entry.
+  let closing = false;
+
+  // The shared degrade for every path that must resolve this mount WITHOUT ever opening the
+  // mandatory picker (code-review finding, PR #91: this exact three-line body used to be repeated
+  // at three, now four, call sites below).
+  function closeWithoutPicker(): void {
+    dispatch({ type: "setup-resolved" });
+    resolveClosed();
+  }
+
+  function onSetupClose(): void {
+    // Re-entrancy guard: a second Escape press while `catalogPromise` is still resolving must be a
+    // no-op, not a second run of the tail below racing the first on the same promise.
+    if (closing) return;
     let configured: ReadonlySet<ModelProvider>;
     try {
       configured = configuredProviders(configDir);
@@ -1824,48 +1850,68 @@ async function runGuidedSetup(
       // Same degrade as connectDispatch's own catch, above: a corrupted config.json resolves out
       // and falls through to prepareSession's own configuredProviders read, which prints the one
       // canonical message, rather than a second, differently-worded error here.
-      dispatch({ type: "setup-resolved" });
-      resolveClosed();
+      closeWithoutPicker();
       return;
     }
     if (configured.size === 0) {
       // The decline path — today's behavior, byte-for-byte: no key was ever added (or one was
       // added then removed), so there is nothing to pick a model FOR. Falls through to
       // prepareSession's own missing-key message, same as always.
-      dispatch({ type: "setup-resolved" });
-      resolveClosed();
+      closeWithoutPicker();
       return;
     }
-    // Code-review finding, PR #91: awaited HERE, not by run()'s own call site, and not at the top
-    // of this function — `/setup` must paint instantly on a blank first run, not block behind
-    // FETCH_TIMEOUT_MS (10s) of a models.dev round-trip before the user sees anything. The fetch
-    // was still started immediately (run()'s own call site kicks it off, unawaited), so by the time
-    // a real user has picked a provider and typed a key, it has almost always already resolved —
-    // this only actually waits in the rare case it's still in flight, and only after the user has
-    // already gotten UI feedback, never before. `getModelCatalog`'s own cache (catalog.ts) means
-    // `prepareSession`'s later `await getModelCatalog()` is still a cache hit, not a second fetch.
-    const catalog = await catalogPromise;
-    // Reviewer-verifier finding M1: `catalog` here is the LIVE models.dev payload, not the bundled
-    // manifest decideGuidedModelPickerOpen's own comment was measured against — loadCatalog
-    // silently drops a provider whose upstream `models` entry is missing/malformed, so this CAN
-    // come back empty for the provider the user just configured. An empty picker would render zero
-    // rows with no way to proceed except a fatal Ctrl-C (Enter is a no-op with nothing selected,
-    // Escape correctly re-prompts into the same empty list) — the same decline degrade used above
-    // is what actually gets the user back to a message they can act on.
-    const entries = decideGuidedModelPickerOpen(catalog, configured);
-    if (entries.length === 0) {
-      dispatch({ type: "setup-resolved" });
-      resolveClosed();
-      return;
-    }
-    // At least one key is configured and has a runnable model: a default model pick is now
-    // mandatory (Decision 1) before this mount can resolve. `model-picker-requested` dispatched
-    // BEFORE `setup-resolved` is deliberate — App.tsx's own render ternary checks
-    // `pendingModelPicker` before `pendingSetup`, so no intermediate frame can render a bare
-    // `InputBox` even without React batching.
-    dispatch({ type: "transcript-append", line: GUIDED_MODEL_PROMPT });
-    dispatch({ type: "model-picker-requested", entries });
-    dispatch({ type: "setup-resolved" });
+    closing = true;
+    // Visible feedback for the wait that follows (code-review finding, PR #91 round 2): the fetch
+    // started at run()'s own call site can still be in flight here (up to FETCH_TIMEOUT_MS), and
+    // without a line here, Escape looked completely dead for however long that takes.
+    dispatch({ type: "transcript-append", line: GUIDED_MODEL_LOADING });
+    // Chained, not awaited inline (see this function's own header comment for why): the fetch
+    // started at run()'s own call site can still be in flight here, so by the time a real user has
+    // picked a provider and typed a key it has almost always already resolved — this only actually
+    // waits in the rare case it's still pending, and only after the visible line just above.
+    catalogPromise.then(
+      (catalog) => {
+        closing = false;
+        // If the user has since navigated away from the list step — the only step Escape closes
+        // FROM — while this was in flight (e.g. pressed 'a' to add another key), the picker must
+        // not silently overwrite whatever they're doing now: App.tsx's own render ternary checks
+        // `pendingModelPicker` before `pendingSetup`, so an unconditional dispatch here would
+        // discard a key they're mid-typing. Bail out and let their NEXT Escape re-trigger this —
+        // `catalogPromise` is already resolved by then, so `.then` fires on the next tick.
+        if (liveState.pendingSetup?.step !== "list") return;
+        // Reviewer-verifier finding M1: `catalog` here is the LIVE models.dev payload, not the
+        // bundled manifest decideGuidedModelPickerOpen's own comment was measured against —
+        // loadCatalog silently drops a provider whose upstream `models` entry is missing/malformed,
+        // so this CAN come back empty for the provider the user just configured. An empty picker
+        // would render zero rows with no way to proceed except a fatal Ctrl-C (Enter is a no-op
+        // with nothing selected, Escape correctly re-prompts into the same empty list) — the same
+        // decline degrade used above is what actually gets the user back to a message they can act
+        // on.
+        const entries = decideGuidedModelPickerOpen(catalog, configured);
+        if (entries.length === 0) {
+          closeWithoutPicker();
+          return;
+        }
+        // At least one key is configured and has a runnable model: a default model pick is now
+        // mandatory (Decision 1) before this mount can resolve. `model-picker-requested`
+        // dispatched BEFORE `setup-resolved` is deliberate — App.tsx's own render ternary checks
+        // `pendingModelPicker` before `pendingSetup`, so no intermediate frame can render a bare
+        // `InputBox` even without React batching.
+        dispatch({ type: "transcript-append", line: GUIDED_MODEL_PROMPT });
+        dispatch({ type: "model-picker-requested", entries });
+        dispatch({ type: "setup-resolved" });
+      },
+      () => {
+        // `getModelCatalog` never rejects (catalog.ts's own contract: a network failure or timeout
+        // resolves to the fallback manifest instead) and decideGuidedModelPickerOpen is a pure
+        // filter over already-loaded data with no throw path — this handler exists only so a
+        // violation of either contract degrades the same clean way the branches above do, instead
+        // of becoming an unhandled rejection that kills the process before `instance.unmount()`
+        // ever runs, leaving the terminal in raw mode.
+        closing = false;
+        closeWithoutPicker();
+      },
+    );
   }
 
   const instance = render(
@@ -2828,9 +2874,18 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // getModelCatalog() deliberately NOT awaited here (code-review finding, PR #91): awaiting it
     // before runGuidedSetup blocked /setup from ever painting until the models.dev fetch settled
     // (up to FETCH_TIMEOUT_MS) — a blank terminal on exactly the flow this feature exists to make
-    // instant. The fetch still starts immediately; runGuidedSetup's own onSetupClose awaits the
-    // promise only once it actually needs the resolved catalog, by which point a real user has
-    // almost always already typed a key and closed the panel.
+    // instant. The fetch still starts immediately; runGuidedSetup's own onSetupClose only consumes
+    // the resolved catalog once it actually needs it, by which point a real user has almost always
+    // already typed a key and closed the panel.
+    //
+    // This IS a fetch running in parallel with a live Ink render — the exact hazard Decision 5
+    // (byok-guided-setup-default-model bugfix report) originally avoided by construction, loading
+    // the catalog fully BEFORE `runGuidedSetup` ever mounted. It is safe here only because Ink
+    // 7.1.1's `render()` defaults `patchConsole: true` (ink/build/render.js) — `getModelCatalog`'s
+    // own `printWarning` (a `console.error` call, provider/catalog.ts) gets routed above the live
+    // frame instead of corrupting it, on every offline first run. A future Ink upgrade or an
+    // explicit `patchConsole: false` on this `render()` call (there is none today — `runGuidedSetup`
+    // only passes `exitOnCtrlC`/`interactive`) would silently reintroduce that hazard.
     if (zeroKeysConfigured) await runGuidedSetup(ctx.configDir, getModelCatalog());
   }
 
