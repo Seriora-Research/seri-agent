@@ -736,6 +736,11 @@ function childScriptGuidedSetupSlowFetch(dir: string): string {
     `delete process.env.ANTHROPIC_API_KEY;`,
     `delete process.env.OPENAI_API_KEY;`,
     `delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;`,
+    // This suite's own npm script sets SERI_DISABLE_MODELS_FETCH=1 for the WHOLE `bun test`
+    // process (apps/cli/package.json) — inherited by this spawned child unless deleted here, which
+    // would make loadCatalog resolve synchronously and this test vacuous whenever it runs as part
+    // of the full suite rather than in isolation (measured live: passed for the wrong reason).
+    `delete process.env.SERI_DISABLE_MODELS_FETCH;`,
     `const realFetch = globalThis.fetch;`,
     `globalThis.fetch = (url, opts) =>`,
     `  typeof url === "string" && url.includes("models.dev")`,
