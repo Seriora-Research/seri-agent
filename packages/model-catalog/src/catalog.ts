@@ -71,7 +71,15 @@ export function mapRawCatalog(raw: RawCatalogResponse): ModelCatalogEntry[] {
   return filterCatalogEntries(entries);
 }
 
-let cached: ModelCatalog | undefined;
+// Caches the in-flight PROMISE, not just the resolved value (code-review finding, PR #91):
+// caching only the resolved `ModelCatalog` left a window, between a caller's first `loadCatalog`
+// call and that fetch actually settling, where a SECOND concurrent caller (e.g.
+// byok-guided-setup-default-model's own decline path, which can resolve before run()'s own
+// unawaited `getModelCatalog()` call has settled) would see nothing cached yet and start its own,
+// fully independent fetch to models.dev. Assigning `cachedPromise` synchronously, before this
+// function's own first `await`, is what closes that window: two calls in the same tick both see
+// the same promise, not just two calls that happen to already be resolved.
+let cachedPromise: Promise<ModelCatalog> | undefined;
 
 // Test-only reset for the process-lifetime cache below. Exported from index.ts (not just this
 // package's own tests via a direct relative import) so a CONSUMER's test suite — apps/cli's
@@ -80,7 +88,7 @@ let cached: ModelCatalog | undefined;
 // to observe a genuine fetch-fails-and-falls-back path has to clear whatever an earlier test
 // already cached first.
 export function resetCatalogCache(): void {
-  cached = undefined;
+  cachedPromise = undefined;
 }
 
 // Fetches models.dev live and falls back to the caller-supplied `manifest` on timeout, network
@@ -92,26 +100,27 @@ export async function loadCatalog(
   manifest: ModelCatalog,
   fetchFn: typeof fetch = fetch,
 ): Promise<ModelCatalog> {
-  if (cached) return cached;
+  if (cachedPromise) return cachedPromise;
 
-  if (process.env.SERI_DISABLE_MODELS_FETCH) {
-    cached = manifest;
-    return cached;
-  }
+  cachedPromise = (async () => {
+    if (process.env.SERI_DISABLE_MODELS_FETCH) {
+      return manifest;
+    }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const response = await fetchFn(MODELS_DEV_URL, { signal: controller.signal });
-    if (!response.ok) throw new Error(`models.dev returned ${response.status}`);
-    const raw = (await response.json()) as RawCatalogResponse;
-    cached = { fetchedAt: new Date().toISOString(), entries: mapRawCatalog(raw) };
-  } catch {
-    cached = manifest;
-  } finally {
-    clearTimeout(timer);
-  }
-  return cached;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const response = await fetchFn(MODELS_DEV_URL, { signal: controller.signal });
+      if (!response.ok) throw new Error(`models.dev returned ${response.status}`);
+      const raw = (await response.json()) as RawCatalogResponse;
+      return { fetchedAt: new Date().toISOString(), entries: mapRawCatalog(raw) };
+    } catch {
+      return manifest;
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+  return cachedPromise;
 }
 
 export function findCatalogEntry(

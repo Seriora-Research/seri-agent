@@ -170,6 +170,32 @@ describe("loadCatalog", () => {
 
     expect(calls).toBe(1);
   });
+
+  // Code-review finding, PR #91: the test above only proves a SECOND call made AFTER the first one
+  // already resolved is a cache hit — it says nothing about two callers racing before either has
+  // settled, which is the actual bug (a caller like byok-guided-setup-default-model's own decline
+  // path can call loadCatalog again before run()'s own earlier, unawaited call has finished).
+  // Neither `await` here: both calls fire in the same synchronous tick, before `fetchFn`'s own
+  // pending promise resolves.
+  test("two concurrent calls before either resolves share the same in-flight fetch, not two", async () => {
+    let calls = 0;
+    let resolveFetch!: (value: unknown) => void;
+    const fetchFn: typeof fetch = (async () => {
+      calls += 1;
+      return new Promise((resolve) => {
+        resolveFetch = (json) =>
+          resolve({ ok: true, status: 200, json: async () => json } as unknown as Response);
+      });
+    }) as unknown as typeof fetch;
+
+    const first = loadCatalog(fallbackManifest, fetchFn);
+    const second = loadCatalog(fallbackManifest, fetchFn);
+    resolveFetch(rawApiResponse());
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(calls).toBe(1);
+    expect(firstResult).toEqual(secondResult);
+  });
 });
 
 describe("findCatalogEntry", () => {
