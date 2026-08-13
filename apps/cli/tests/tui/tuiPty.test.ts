@@ -731,6 +731,7 @@ function childScriptGuidedSetup(dir: string): string {
 function childScriptGuidedSetupSlowFetch(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
     `delete process.env.GROQ_API_KEY;`,
     `delete process.env.OPENROUTER_API_KEY;`,
     `delete process.env.ANTHROPIC_API_KEY;`,
@@ -773,6 +774,7 @@ function childScriptGuidedSetupSlowFetch(dir: string): string {
 function childScriptGuidedSetupDelayedFetch(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
     `delete process.env.GROQ_API_KEY;`,
     `delete process.env.OPENROUTER_API_KEY;`,
     `delete process.env.ANTHROPIC_API_KEY;`,
