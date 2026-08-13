@@ -720,11 +720,14 @@ function childScriptGuidedSetup(dir: string): string {
 // Code-review finding, PR #91: unlike childScriptGuidedSetup, deliberately does NOT set
 // SERI_DISABLE_MODELS_FETCH — that env var makes loadCatalog resolve synchronously (a cache hit
 // against the bundled manifest), which would make this script incapable of ever observing the bug
-// it exists to catch. `globalThis.fetch` is monkey-patched to a promise that never resolves BEFORE
-// cli.ts is imported (so `getModelCatalog()`'s own `fetchFn: typeof fetch = fetch` default parameter
-// — evaluated at call time, not at catalog.ts's own module-load time — picks up the patched
-// version), simulating an offline/hung models.dev exactly as badly as possible: no timeout fires
-// within this script's own short test window.
+// it exists to catch. `globalThis.fetch` is patched, BEFORE cli.ts is imported (so
+// `getModelCatalog()`'s own `fetchFn: typeof fetch = fetch` default parameter — evaluated at call
+// time, not at catalog.ts's own module-load time — picks up the patched version), to hang forever
+// on the models.dev request specifically and pass every other URL through to the real fetch. NOT a
+// blanket override (measured live): Ink's own yoga-layout dependency loads its WASM binary via a
+// `fetch()` of a `data:` URI at import time, so a blanket-hung fetch made `await import("ink")`
+// itself hang forever too — a false failure with nothing to do with the catalog fetch this script
+// exists to simulate as offline.
 function childScriptGuidedSetupSlowFetch(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -733,7 +736,11 @@ function childScriptGuidedSetupSlowFetch(dir: string): string {
     `delete process.env.ANTHROPIC_API_KEY;`,
     `delete process.env.OPENAI_API_KEY;`,
     `delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;`,
-    `globalThis.fetch = () => new Promise(() => {});`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) =>`,
+    `  typeof url === "string" && url.includes("models.dev")`,
+    `    ? new Promise(() => {})`,
+    `    : realFetch(url, opts);`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `async function* runLoopFake(opts) {`,
     `  console.log("\\nRUNLOOP_READY");`,
