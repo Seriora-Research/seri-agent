@@ -21,12 +21,18 @@ export type AppProps = {
   session: SessionState<ModelMessage>;
   // D2-D4 (byok-open3-route-indicator feature-plan.md): the persistent mode-indicator's model+route
   // label reads this — resolved once at session start (PreparedRun.route, cli.ts) and passed down,
-  // NOT re-derived on a later /model switch (D4's stated scope boundary). Required, not optional:
-  // D3's own invariant is that a PreparedRun cannot exist without a resolved route, so every real
-  // call site always has one — making the prop optional would let a future call site silently omit
-  // it instead of failing to compile (code-review finding: this is exactly what let the OTHER
-  // `createElement(App, ...)` call site, cli.ts's `finishQuit` re-render, go unnoticed).
-  route: ResolvedRoute;
+  // NOT re-derived on a later /model switch (D4's stated scope boundary). The key itself is
+  // required, not optional: making it optional would let a future call site silently omit it
+  // instead of failing to compile (code-review finding: this is exactly what let the OTHER
+  // `createElement(App, ...)` call site, cli.ts's `finishQuit` re-render, go unnoticed). The VALUE
+  // is `| undefined` because a third call site (runGuidedSetup, cli.ts) mounts App before any
+  // provider key exists at all — genuinely no PreparedRun/route to pass (found 2026-08-13: PR #86
+  // made this required assuming only 2 call sites existed, both post-PreparedRun; PR #87 had
+  // already added this third one on a branch that predated #86's route requirement, so neither PR
+  // could see the conflict at review time). formatModeLabel drops the model+route suffix entirely
+  // when this is undefined, rather than showing a fabricated route ("your key" during a flow where
+  // there is provably no key yet would be actively wrong, not just a placeholder).
+  route: ResolvedRoute | undefined;
   // The seam Phase 5 wires driveLoop's dispatch through: called once on mount with the reducer's
   // own dispatch function, the same shape `useReducer` returns. Optional because Phase 4's tests
   // exercise the reducer via `connectDispatch` directly, with no live loop behind it yet.
@@ -260,21 +266,23 @@ export function formatRouteLabel(input: {
 
 // D2-D5 (byok-open3-route-indicator feature-plan.md): the persistent mode-indicator row's own
 // content, factored out as a pure function for the same reason formatModelRow's own comment gives
-// — unit-testable without mounting Ink. `route` is always defined here (D3's own invariant: a
-// PreparedRun cannot exist without a resolved route, so AppProps.route is a required prop, not
-// optional) — there is no "no route" branch to model. D4: `route.rerouted` alone disambiguates
-// "your key" from "→ provider"; the "no key at all" branch of formatRouteLabel can never be reached
-// from a live route, so `gatewayReachable` is never passed here.
+// — unit-testable without mounting Ink. D4: `route.rerouted` alone disambiguates "your key" from
+// "→ provider"; the "no key at all" branch of formatRouteLabel can never be reached from a live
+// route, so `gatewayReachable` is never passed here.
+// `route` can be undefined (found 2026-08-13, AppProps.route's own comment): runGuidedSetup mounts
+// App before any provider key exists, so there is genuinely no route to show yet. Falls back to
+// the bare mode indicator, same as the narrow-terminal branch below — showing a fabricated route
+// would misreport "your key"/"→ provider" during the exact flow where neither is true.
 // post-review fix: `route.model` is capped to NAME_WIDTH (the same width the picker table already
 // truncates model names to) before it goes into the label — a real catalog id (a long OpenRouter
 // id is well over 40 chars) was otherwise unbounded here, so it could push the row past the very
 // terminal width MODE_LABEL_FULL_COLS/MODE_LABEL_COMPACT_COLS assumed it fit in.
 export function formatModeLabel(
   modeIndicator: string,
-  route: ResolvedRoute,
+  route: ResolvedRoute | undefined,
   width: number,
 ): string {
-  if (width < MODE_LABEL_COMPACT_COLS) return modeIndicator;
+  if (route === undefined || width < MODE_LABEL_COMPACT_COLS) return modeIndicator;
   const modelName =
     route.model.length > NAME_WIDTH ? `${route.model.slice(0, NAME_WIDTH - 1)}…` : route.model;
   if (width < MODE_LABEL_FULL_COLS) return `${modeIndicator}  ${modelName}`;

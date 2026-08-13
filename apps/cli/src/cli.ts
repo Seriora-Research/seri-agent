@@ -1773,6 +1773,11 @@ async function runGuidedSetup(configDir: string): Promise<void> {
   const instance = render(
     createElement(App, {
       session: liveState.session,
+      // No PreparedRun exists yet at this point in startup (that's the whole reason this mount
+      // exists — run()'s pre-prepareSession gate found zero configured keys), so there is no
+      // ResolvedRoute to pass. AppProps.route's own comment covers why this is `| undefined`
+      // rather than a fabricated value.
+      route: undefined,
       done: false,
       onCancel: () => deliverSignal("SIGINT"), // same idle-Ctrl-C fatal path runTui's own onCancel uses
       onQuit: onSetupClose, // dead in this mount (InputBox/ApprovalBox never show) but wired for safety

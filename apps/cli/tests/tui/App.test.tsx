@@ -1042,9 +1042,8 @@ describe("App", () => {
 
   // D2-D5 (feature-plan.md): the mode-indicator row's own content, factored out as the pure
   // `formatModeLabel` (App's own comment explains why: unit-testable without mounting Ink, same
-  // reasoning formatModelRow's own extraction already used). `route` is always defined — D3's own
-  // invariant that a PreparedRun cannot exist without a resolved route, so there is no "no route"
-  // case to test here.
+  // reasoning formatModelRow's own extraction already used). `route` can be undefined
+  // (runGuidedSetup, cli.ts, mounts App before any provider key exists) — covered below.
   describe("formatModeLabel", () => {
     const nonRerouted = route();
     const rerouted = route({ provider: "openrouter", rerouted: true, reason: "ANTHROPIC_API_KEY" });
@@ -1092,6 +1091,15 @@ describe("App", () => {
         "[approve-each]  openrouter/deepseek/d… · your key",
       );
     });
+
+    // runGuidedSetup (cli.ts) mounts App with route: undefined before any provider key exists —
+    // the mode indicator must fall back to the bare label at every width, never a fabricated
+    // "your key"/"→ <provider>" for a route that does not exist yet.
+    test("undefined route: mode indicator only, at every width", () => {
+      expect(formatModeLabel("[approve-each]", undefined, 100)).toBe("[approve-each]");
+      expect(formatModeLabel("[approve-each]", undefined, 60)).toBe("[approve-each]");
+      expect(formatModeLabel("[approve-each]", undefined, 10)).toBe("[approve-each]");
+    });
   });
 
   describe("persistent mode+route indicator (mounted)", () => {
@@ -1108,6 +1116,15 @@ describe("App", () => {
       await flush();
 
       expect(instance.lastFrame() ?? "").not.toContain("claude-sonnet-5");
+    });
+
+    // runGuidedSetup's own mount shape (cli.ts): no PreparedRun exists yet, so route is undefined.
+    test("mounts with route undefined and shows no fabricated route text", async () => {
+      const instance = render(<App session={session()} route={undefined} done={false} />);
+      await flush();
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).not.toContain("your key");
+      expect(frame).not.toContain("→");
     });
   });
 });
