@@ -70,6 +70,11 @@ export type ModelPickerEntry = {
   keyConfigured: boolean;
   alternatives: number;
   rerouteTo?: ModelProvider;
+  // Not optional: decideModelPickerOpen (below) sets this unconditionally on every row via
+  // `planCoverage(entry.provider)`, which always returns a real boolean (its own default is
+  // `() => false`, never `undefined`) — so every consumer gets a real boolean too, with no
+  // `undefined` case to handle that can't actually occur.
+  gatewayReachable: boolean;
 };
 
 // The decision half of /model, mirroring decideModeCycle's own pure, no-I/O shape: what to show,
@@ -88,6 +93,10 @@ export type ModelPickerEntry = {
 export function decideModelPickerOpen(
   catalog: ModelCatalog,
   configured: ReadonlySet<ModelProvider>,
+  // Dead-code seam for a future gateway/plan-coverage data source (Open 3, D7 feature-plan.md):
+  // always-false default means the one production call site needs no change, and the Route
+  // column's "provided" state stays unreachable until a real data source replaces this default.
+  planCoverage: (provider: ModelProvider) => boolean = () => false,
 ): ModelPickerEntry[] {
   const groups = groupRoutes(filterCatalogEntries(catalog.entries));
   const rows: ModelPickerEntry[] = [];
@@ -117,6 +126,7 @@ export function decideModelPickerOpen(
         keyConfigured,
         alternatives: group.length - 1,
         rerouteTo: keyConfigured ? undefined : rerouteTarget,
+        gatewayReachable: planCoverage(entry.provider),
       });
     }
   }

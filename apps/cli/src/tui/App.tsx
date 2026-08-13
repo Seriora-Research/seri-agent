@@ -7,10 +7,11 @@
 
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import { Box, Static, Text, useApp, useInput } from "ink";
+import { Box, Static, Text, useApp, useInput, useStdout } from "ink";
 import { useEffect, useReducer, useState } from "react";
 import { approvalPromptText, truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
+import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 import type { ModelPickerEntry, SetupProviderRow } from "./commands";
 import { type Dispatch, initialTuiState, type SetupState, tuiReducer } from "./reducer";
@@ -18,6 +19,14 @@ import { theme } from "./theme";
 
 export type AppProps = {
   session: SessionState<ModelMessage>;
+  // D2-D4 (byok-open3-route-indicator feature-plan.md): the persistent mode-indicator's model+route
+  // label reads this — resolved once at session start (PreparedRun.route, cli.ts) and passed down,
+  // NOT re-derived on a later /model switch (D4's stated scope boundary). Required, not optional:
+  // D3's own invariant is that a PreparedRun cannot exist without a resolved route, so every real
+  // call site always has one — making the prop optional would let a future call site silently omit
+  // it instead of failing to compile (code-review finding: this is exactly what let the OTHER
+  // `createElement(App, ...)` call site, cli.ts's `finishQuit` re-render, go unnoticed).
+  route: ResolvedRoute;
   // The seam Phase 5 wires driveLoop's dispatch through: called once on mount with the reducer's
   // own dispatch function, the same shape `useReducer` returns. Optional because Phase 4's tests
   // exercise the reducer via `connectDispatch` directly, with no live loop behind it yet.
@@ -175,6 +184,18 @@ const ROUTE_WIDTH = 13;
 // to spare, not the exact minimum.
 const COST_WIDTH = 18;
 
+// D5 (byok-open3-route-indicator feature-plan.md): Hermes Agent's own 3-tier width breakpoints for
+// the persistent mode-indicator row — reused as-is, per the plan's own D5, not a new scheme.
+const MODE_LABEL_FULL_COLS = 76;
+const MODE_LABEL_COMPACT_COLS = 52;
+
+// A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined` —
+// this is what `stdout.columns ?? DEFAULT_COLUMNS` (useTerminalWidth, below) guards against. It is
+// NOT what makes this file's own Ink component tests land in the full tier: ink-testing-library's
+// stub stdout returns a real `columns: 100`, so those tests are already in the full tier on the
+// actual value, not this fallback.
+const DEFAULT_COLUMNS = 80;
+
 // Truncates with a trailing ellipsis (never mid-multi-byte-safe beyond what .slice already is —
 // every field this feeds is plain ASCII: a model id/displayName/provider name) or pads with
 // trailing spaces, so every row's later columns start at the same screen column regardless of an
@@ -220,9 +241,53 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
 // row names its reroute target directly, restating a raw sibling count next to it would double up
 // on the same information, or — when none of those siblings has a key either — repeat the original
 // bug of promising a fallback that does not exist.
+// D1 (byok-open3-route-indicator feature-plan.md): extracted out of formatModelRow's own inline
+// ternary so the picker's Route column and the persistent mode-indicator's route label (App's own
+// JSX, below) share ONE vocabulary function — they can never independently drift on what "your
+// key"/"→ provider"/"provided"/"no key" means for the same inputs. `gatewayReachable` (D7) is the
+// dead-code seam's own 4th state: always `false` in production today (decideModelPickerOpen's own
+// `planCoverage` default), so "provided" is unreachable until a real data source exists.
+export function formatRouteLabel(input: {
+  keyConfigured: boolean;
+  rerouteTo?: ModelProvider;
+  gatewayReachable?: boolean;
+}): string {
+  if (input.keyConfigured) return "your key";
+  if (input.rerouteTo) return `→ ${input.rerouteTo}`;
+  if (input.gatewayReachable) return "provided";
+  return "no key";
+}
+
+// D2-D5 (byok-open3-route-indicator feature-plan.md): the persistent mode-indicator row's own
+// content, factored out as a pure function for the same reason formatModelRow's own comment gives
+// — unit-testable without mounting Ink. `route` is always defined here (D3's own invariant: a
+// PreparedRun cannot exist without a resolved route, so AppProps.route is a required prop, not
+// optional) — there is no "no route" branch to model. D4: `route.rerouted` alone disambiguates
+// "your key" from "→ provider"; the "no key at all" branch of formatRouteLabel can never be reached
+// from a live route, so `gatewayReachable` is never passed here.
+// post-review fix: `route.model` is capped to NAME_WIDTH (the same width the picker table already
+// truncates model names to) before it goes into the label — a real catalog id (a long OpenRouter
+// id is well over 40 chars) was otherwise unbounded here, so it could push the row past the very
+// terminal width MODE_LABEL_FULL_COLS/MODE_LABEL_COMPACT_COLS assumed it fit in.
+export function formatModeLabel(
+  modeIndicator: string,
+  route: ResolvedRoute,
+  width: number,
+): string {
+  if (width < MODE_LABEL_COMPACT_COLS) return modeIndicator;
+  const modelName =
+    route.model.length > NAME_WIDTH ? `${route.model.slice(0, NAME_WIDTH - 1)}…` : route.model;
+  if (width < MODE_LABEL_FULL_COLS) return `${modeIndicator}  ${modelName}`;
+  const routeLabel = formatRouteLabel({
+    keyConfigured: !route.rerouted,
+    rerouteTo: route.rerouted ? route.provider : undefined,
+  });
+  return `${modeIndicator}  ${modelName} · ${routeLabel}`;
+}
+
 export function formatModelRow(row: ModelPickerEntry): string {
-  const { entry, keyConfigured, alternatives, rerouteTo } = row;
-  const route = keyConfigured ? "your key" : rerouteTo ? `→ ${rerouteTo}` : "no key";
+  const { entry, keyConfigured, alternatives, rerouteTo, gatewayReachable } = row;
+  const route = formatRouteLabel({ keyConfigured, rerouteTo, gatewayReachable });
   const suffix =
     keyConfigured && alternatives > 0
       ? ` +${alternatives} route${alternatives === 1 ? "" : "s"}`
@@ -728,8 +793,28 @@ function InputBox({
   );
 }
 
+// D5 (byok-open3-route-indicator feature-plan.md): no such hook existed in this file before — the
+// persistent mode-indicator (App, below) needs to know the terminal's current column width, live,
+// to pick its 3-tier layout. See DEFAULT_COLUMNS's own comment for what the `?? DEFAULT_COLUMNS`
+// fallback actually guards (a genuine non-TTY production stdout), and what it does not.
+function useTerminalWidth(): number {
+  const { stdout } = useStdout();
+  const [width, setWidth] = useState(stdout.columns ?? DEFAULT_COLUMNS);
+
+  useEffect(() => {
+    const onResize = () => setWidth(stdout.columns ?? DEFAULT_COLUMNS);
+    stdout.on("resize", onResize);
+    return () => {
+      stdout.off("resize", onResize);
+    };
+  }, [stdout]);
+
+  return width;
+}
+
 export function App({
   session,
+  route,
   connectDispatch,
   onSubmit,
   onCancel,
@@ -747,6 +832,8 @@ export function App({
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
   const { exit } = useApp();
+  const width = useTerminalWidth();
+  const modeLabel = formatModeLabel(state.modeIndicator, route, width);
 
   useEffect(() => {
     connectDispatch?.(dispatch);
@@ -782,7 +869,7 @@ export function App({
         </Box>
       )}
       <Box flexDirection="row" justifyContent="space-between">
-        <Text color={theme.accent}>{state.modeIndicator}</Text>
+        <Text color={theme.accent}>{modeLabel}</Text>
         {state.status.length > 0 && <Text color={theme.muted}>{state.status}</Text>}
       </Box>
       {state.commandError !== undefined && <Text color={theme.error}>{state.commandError}</Text>}

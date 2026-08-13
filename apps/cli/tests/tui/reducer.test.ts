@@ -233,7 +233,12 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     reasoning: false,
     pricing: undefined,
   };
-  const row: ModelPickerEntry = { entry, keyConfigured: true, alternatives: 0 };
+  const row: ModelPickerEntry = {
+    entry,
+    keyConfigured: true,
+    alternatives: 0,
+    gatewayReachable: false,
+  };
 
   test("model-picker-requested sets pendingModelPicker", () => {
     const state = tuiReducer(initialTuiState(session()), {
