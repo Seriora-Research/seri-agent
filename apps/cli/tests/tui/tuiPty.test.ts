@@ -717,6 +717,95 @@ function childScriptGuidedSetup(dir: string): string {
   ].join("\n");
 }
 
+// Code-review finding, PR #91: unlike childScriptGuidedSetup, deliberately does NOT set
+// SERI_DISABLE_MODELS_FETCH — that env var makes loadCatalog resolve synchronously (a cache hit
+// against the bundled manifest), which would make this script incapable of ever observing the bug
+// it exists to catch. `globalThis.fetch` is patched, BEFORE cli.ts is imported (so
+// `getModelCatalog()`'s own `fetchFn: typeof fetch = fetch` default parameter — evaluated at call
+// time, not at catalog.ts's own module-load time — picks up the patched version), to hang forever
+// on the models.dev request specifically and pass every other URL through to the real fetch. NOT a
+// blanket override (measured live): Ink's own yoga-layout dependency loads its WASM binary via a
+// `fetch()` of a `data:` URI at import time, so a blanket-hung fetch made `await import("ink")`
+// itself hang forever too — a false failure with nothing to do with the catalog fetch this script
+// exists to simulate as offline.
+function childScriptGuidedSetupSlowFetch(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `delete process.env.GROQ_API_KEY;`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `delete process.env.ANTHROPIC_API_KEY;`,
+    `delete process.env.OPENAI_API_KEY;`,
+    `delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;`,
+    // This suite's own npm script sets SERI_DISABLE_MODELS_FETCH=1 for the WHOLE `bun test`
+    // process (apps/cli/package.json) — inherited by this spawned child unless deleted here, which
+    // would make loadCatalog resolve synchronously and this test vacuous whenever it runs as part
+    // of the full suite rather than in isolation (measured live: passed for the wrong reason).
+    `delete process.env.SERI_DISABLE_MODELS_FETCH;`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) =>`,
+    `  typeof url === "string" && url.includes("models.dev")`,
+    `    ? new Promise(() => {})`,
+    `    : realFetch(url, opts);`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// Code-review finding, PR #91 round 2: unlike childScriptGuidedSetupSlowFetch's own
+// never-resolving fetch (which can only ever exercise the dead-input/re-entrancy half of the
+// blocking bug, since a promise that never settles never reaches onSetupClose's own `.then`),
+// this one resolves the models.dev request after a short, bounded delay — long enough to still be
+// pending when a second key-add is started, short enough to keep the test itself fast. The 500
+// status makes loadCatalog's own `!response.ok` branch throw and fall back to the bundled
+// manifest, so no real models.dev response shape needs to be faked here.
+function childScriptGuidedSetupDelayedFetch(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `delete process.env.GROQ_API_KEY;`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `delete process.env.ANTHROPIC_API_KEY;`,
+    `delete process.env.OPENAI_API_KEY;`,
+    `delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;`,
+    `delete process.env.SERI_DISABLE_MODELS_FETCH;`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) =>`,
+    `  typeof url === "string" && url.includes("models.dev")`,
+    `    ? new Promise((resolve) =>`,
+    `        setTimeout(() => resolve(new Response("", { status: 500 })), 3000),`,
+    `      )`,
+    `    : realFetch(url, opts);`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
 // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
 // research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
 // identical signature... with zero change to loop.ts/gate.ts") that every earlier round of this
@@ -2438,7 +2527,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   // this exact script/assertion reproduces that exit, with no "/setup — provider API keys" text in
   // the captured stdout at all.
   describe("guided setup on a genuinely blank first run", () => {
-    test("mounts /setup directly instead of hard-exiting, and falls through to the task once a key is added", async () => {
+    // byok-guided-setup-default-model bugfix report: closing /setup with at least one key
+    // configured no longer falls straight through — it opens the mandatory model picker
+    // (Decision 1), and only THAT resolves the panel. "Route" is the picker's own column header
+    // (App.tsx's MODEL_PICKER_HEADER) — present regardless of catalog ordering, unlike any
+    // specific row, so it is a reliable sync point for "the picker actually mounted."
+    test("mounts /setup directly instead of hard-exiting, and falls through to the task once a key is added and the mandatory default model is picked", async () => {
       const scriptPath = join(dir, "child-guided-setup.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
@@ -2467,14 +2561,413 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(config.GROQ_API_KEY).toBe(secret);
 
         // Back at the list step (setupListState re-selects groq) — Escape closes the panel, the
-        // same close path the existing "cancel" /setup test above already exercises.
+        // same close path the existing "cancel" /setup test above already exercises. Unlike
+        // pre-fix, this does NOT fall straight through: a key is now configured, so onSetupClose
+        // opens the mandatory model picker instead.
         child.stdin?.write("\x1b");
         await new Promise((resolve) => setTimeout(resolve, 30));
+        await sawLine("Route");
+
+        // Narrows to exactly one entry across the whole catalog (groq and openrouter both) —
+        // verified directly against the bundled catalog-manifest.json (the /model multi-route
+        // pty test's own comment, above, has the full story on why this exact string).
+        child.stdin?.write("70b-versatile");
+        await sawLine("70b-versatile");
+        child.stdin?.write("\r");
 
         // The fall-through: prepareSession -> runTui -> driveLoop, unchanged, now actually reached.
         await sawLine("> do a task");
         await sawLine("RUNLOOP_READY");
         await sawLine("(done: no-tool-call)");
+
+        const modelConfig = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.SERI_MODEL === "llama-3.3-70b-versatile",
+        );
+        expect(modelConfig.SERI_MODEL).toBe("llama-3.3-70b-versatile");
+        expect(modelConfig.SERI_PROVIDER).toBe("groq");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Code-review finding, PR #91: run()'s own gate used to `await getModelCatalog()` BEFORE
+    // calling runGuidedSetup, so a slow/offline models.dev blocked /setup's very first paint behind
+    // FETCH_TIMEOUT_MS (10s, model-catalog's own catalog.ts) — a blank terminal on exactly the flow
+    // this feature exists to make instant. childScriptGuidedSetupSlowFetch's own fetch never
+    // resolves at all, so a 5s ceiling (well under that 10s timeout, still generous for a slow
+    // runner) is the negative control: it fails against the pre-fix blocking await and passes once
+    // the fetch is only kicked off, never awaited, ahead of the panel's first render.
+    test("mounts /setup instantly even while the model catalog fetch is still in flight", async () => {
+      const scriptPath = join(dir, "child-guided-setup-slow-fetch.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetupSlowFetch(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        const start = Date.now();
+        await sawLine("/setup — provider API keys");
+        expect(Date.now() - start).toBeLessThan(5000);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 20_000);
+
+    // Code-review finding (thermo-nuclear round 2, PR #91): making onSetupClose's own catalog wait
+    // async (instead of chained) made it re-entrant — a second Escape press while `catalogPromise`
+    // was still resolving re-ran the whole tail a second time, and the wait itself was silent (no
+    // feedback between the keypress and the picker appearing). Reuses
+    // childScriptGuidedSetupSlowFetch's own permanently-hanging fetch: `catalogPromise` never
+    // settles within this test's own window, so this exercises exactly the dead-input/re-entrancy
+    // half of the bug (the picker itself can never appear here — that half is what
+    // childScriptGuidedSetupDelayedFetch's own test, below, covers).
+    test("Escape during a slow catalog fetch shows visible feedback once, not duplicated by a second press", async () => {
+      const scriptPath = join(dir, "child-guided-setup-slow-fetch-escape.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetupSlowFetch(dir));
+
+      const { child, sawLine, occurrences, exited } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-guided-setup-slow-fetch-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        // First Escape: the visible-feedback line must appear even though catalogPromise never
+        // resolves in this script.
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        await sawLine("Loading available models…");
+
+        // A second Escape while still "closing": the re-entrancy guard must make this a no-op —
+        // NOT a second run of the tail, which (pre-fix) would have re-dispatched the same
+        // transcript line a second time.
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        expect(occurrences("Loading available models…")).toBe(1);
+
+        // The process is still alive and responsive, not deadlocked — Ctrl-C still reaches the
+        // same fatal idle path every other test in this describe block's Ctrl-C test exercises.
+        child.stdin?.write("\x03");
+        const { stdout } = await exited;
+        expect(stdout).not.toContain("EXIT_CODE");
+        expect(stdout).not.toContain("RUNLOOP_READY");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 20_000);
+
+    // The other half of the same bug (see the test just above): a user who starts adding a SECOND
+    // key while the first Escape's catalog wait is still pending must not have that in-progress
+    // typing silently discarded when the fetch finally resolves and the picker would otherwise
+    // want to mount over it (App.tsx's own render ternary checks pendingModelPicker before
+    // pendingSetup). `childScriptGuidedSetupDelayedFetch` resolves after 3s — measured live to be
+    // comfortably longer than this test's own first-key-save-and-Escape sequence takes (a 400ms
+    // delay was tried first and measured to already have elapsed by the time Escape was pressed,
+    // making the test vacuous — the picker had already opened before the second-key keystrokes
+    // were even sent).
+    test("adding a second key while the catalog fetch is still resolving is not discarded by the picker", async () => {
+      const scriptPath = join(dir, "child-guided-setup-delayed-fetch.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetupDelayedFetch(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-guided-setup-delayed-fetch-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        // Escape starts the (still-pending) catalog wait.
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        await sawLine("Loading available models…");
+
+        // Immediately start adding a SECOND key — well before the 3s delayed fetch resolves.
+        // CATALOG_PROVIDERS order is groq, openrouter, ... — one Down reaches openrouter.
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        // If the picker silently replaced this mid-typing (the bug), the rest of this input would
+        // land in ModelPicker's own filter box instead, and "Saved OPENROUTER_API_KEY." would
+        // never print — sawLine's own bounded poll is what turns that into a real test failure
+        // rather than a hang.
+        const secondSecret = "sk-guided-setup-second-key-secret";
+        child.stdin?.write(secondSecret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved OPENROUTER_API_KEY.");
+
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENROUTER_API_KEY === secondSecret,
+        );
+        expect(config.OPENROUTER_API_KEY).toBe(secondSecret);
+        expect(config.GROQ_API_KEY).toBe(secret);
+
+        // The flow still completes normally afterward: back at the list step, a fresh Escape opens
+        // the picker (catalogPromise is long since resolved by now).
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        await sawLine("Route");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 20_000);
+
+    // Code-review finding, PR #91 round 3: `onSetupClose`'s own `configured` snapshot was captured
+    // BEFORE this wait, then reused once the catalog resolved — a remove-then-confirm round-trip
+    // during the wait returns to the "list" step (the only thing the re-entrancy guard above
+    // checks) without ever tripping it, so the stale snapshot could still show the just-removed
+    // provider as configured. Negative control: pre-fix, this test's own final assertions fail —
+    // the mandatory picker opens instead, offering a model for a provider with no key left.
+    test("removing the only key while the catalog fetch is still resolving does not open the picker for it", async () => {
+      const scriptPath = join(dir, "child-guided-setup-remove-during-wait.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetupDelayedFetch(dir));
+
+      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-guided-setup-remove-during-wait-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        // Escape starts the (still-pending, 3s) catalog wait.
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        await sawLine("Loading available models…");
+
+        // Remove the only configured key well before the 3s delayed fetch resolves — 'r' then 'y'
+        // returns to the "list" step without ever tripping the guard above.
+        child.stdin?.write("r");
+        await wait100ms();
+        child.stdin?.write("y");
+        await sawLine("Removed GROQ_API_KEY.");
+
+        // Once the delayed fetch resolves, the mandatory picker must NOT open for a provider that
+        // no longer has a key — this falls through to the same decline/missing-key path a genuine
+        // zero-key close takes.
+        const { stdout } = await exited;
+        expect(stdout).toContain("EXIT_CODE 1");
+        expect(stdout).toContain(
+          "GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>",
+        );
+        expect(stdout).not.toContain("Pick a default model to continue.");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 20_000);
+
+    // Code-review finding, PR #91 round 3: from the "enter-key" step, Ctrl-D calls onSetupClose
+    // directly (SetupEnterKey's own useInput) — while the wait's `closing` guard was a bare no-op,
+    // this looked like a completely dead key with zero feedback. Negative control: pre-fix, this
+    // test's own final assertion (the "still loading" message) never appears.
+    test("Ctrl-D from the enter-key step during the catalog wait gives visible feedback, not a dead key", async () => {
+      const scriptPath = join(dir, "child-guided-setup-ctrld-during-wait.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetupDelayedFetch(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-guided-setup-ctrld-during-wait-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        // Escape starts the (still-pending, 3s) catalog wait.
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        await sawLine("Loading available models…");
+
+        // Navigate to "enter-key" for a second provider, still well before the 3s delayed fetch
+        // resolves.
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        // Ctrl-D here reaches onSetupClose directly (SetupEnterKey's own useInput) while `closing`
+        // is still true.
+        child.stdin?.write("\x04");
+        await sawLine("Still loading available models");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 20_000);
+
+    // The bug this whole loop exists to fix: an anthropic-only guided setup used to fall through
+    // to prepareSession unconditionally, which resolved the untouched default (groq's
+    // openai/gpt-oss-120b) and hard-exited on a SECOND missing-key error naming a provider the
+    // user never configured. The mandatory picker (Decision 1) closes that gap.
+    test("a non-groq key added during guided setup lands on the model picked there instead of a second missing-GROQ_API_KEY exit", async () => {
+      const scriptPath = join(dir, "child-guided-setup-non-groq.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetup(dir));
+
+      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        // CATALOG_PROVIDERS order is groq, openrouter, anthropic, openai, google — two Downs
+        // reach anthropic (same navigation the /setup "remove" pty tests above already use).
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
+
+        const secret = "sk-ant-guided-setup-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved ANTHROPIC_API_KEY.");
+
+        child.stdin?.write("\x1b");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await sawLine("Route");
+
+        // Narrows to exactly the two claude-sonnet-5 routes in the bundled manifest (the /model
+        // multi-route pty test's own comment, above, verified this directly against
+        // catalog-manifest.json). byRoutePriority (D2) sorts native before aggregator within a
+        // route group, so the native anthropic row is already the top/default-selected one for
+        // this filtered query — no Down press needed.
+        child.stdin?.write("claude-sonnet-5");
+        await sawLine("claude-sonnet-5");
+        child.stdin?.write("\r");
+
+        await sawLine("> do a task");
+        await sawLine("RUNLOOP_READY");
+        await sawLine("(done: no-tool-call)");
+
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.SERI_MODEL === "claude-sonnet-5",
+        );
+        expect(config.SERI_MODEL).toBe("claude-sonnet-5");
+        expect(config.SERI_PROVIDER).toBe("anthropic");
+        // The negative control this test exists for: the exact string pre-fix code printed here,
+        // naming a provider (groq) the user never configured.
+        expect(occurrences("GROQ_API_KEY is not set")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Decision 2: Esc/Ctrl-D at the mandatory picker re-prompts — it must never resolve the panel
+    // and fall through to a keys-but-no-model run, which is exactly the bug this loop fixes.
+    test("Escape at the mandatory model picker re-prompts instead of returning to a keys-but-no-model run", async () => {
+      const scriptPath = join(dir, "child-guided-setup-picker-escape.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-guided-setup-escape-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        child.stdin?.write("\x1b");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await sawLine("Route");
+
+        // Escape at the picker: must re-prompt, not resolve.
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        await sawLine("Pick a model to continue");
+
+        // The picker is still up: a subsequent filter keystroke still narrows it, and config.json
+        // still has no SERI_MODEL — proof Escape neither closed the picker nor let the run
+        // continue on a keys-but-no-model session.
+        child.stdin?.write("70b-versatile");
+        await sawLine("70b-versatile");
+        const configDuringEscape = JSON.parse(
+          readFileSync(join(dir, ".seri", "config.json"), "utf8"),
+        );
+        expect(configDuringEscape.SERI_MODEL).toBeUndefined();
+
+        // Filter + Enter then falls through normally, proving the picker recovered rather than
+        // being left in some broken half-cancelled state.
+        child.stdin?.write("\r");
+        await sawLine("> do a task");
+        await sawLine("RUNLOOP_READY");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Decision 2's own Ctrl-C carve-out: with no `cancel` slot registered for this mount,
+    // deliverSignal takes the fatal branch and kills the process by signal — never resolving
+    // `closed`, so nothing is ever persisted from a run that dies here.
+    test("Ctrl-C at the mandatory model picker kills the run without persisting a default model", async () => {
+      const scriptPath = join(dir, "child-guided-setup-picker-ctrlc.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetup(dir));
+
+      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-guided-setup-ctrlc-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        child.stdin?.write("\x1b");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await sawLine("Route");
+
+        child.stdin?.write("\x03");
+        const { stdout } = await exited;
+
+        // The child died by signal before childScriptGuidedSetup's own
+        // `console.log("EXIT_CODE " + code)` (helper, above) — and driveLoop/runTui never ran, so
+        // neither line was ever printed.
+        expect(stdout).not.toContain("EXIT_CODE");
+        expect(stdout).not.toContain("RUNLOOP_READY");
+
+        const config = JSON.parse(readFileSync(join(dir, ".seri", "config.json"), "utf8"));
+        expect(config.GROQ_API_KEY).toBe(secret);
+        expect(config.SERI_MODEL).toBeUndefined();
       } finally {
         child.kill("SIGKILL");
       }

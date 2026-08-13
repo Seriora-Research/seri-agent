@@ -133,6 +133,22 @@ export function decideModelPickerOpen(
   return rows;
 }
 
+// Guided setup's own picker (byok-guided-setup-default-model bugfix report, Decision 3):
+// `decideModelPickerOpen` filtered to rows `resolveRoute` will actually reach — its own key
+// configured, or a reroute target it computed for this exact `configured` set. Offering a
+// dead-end row here would let the ONE mandatory model pick of a blank first run still end in
+// `missingKeyError`, one step later than the bug this loop fixes but the same exit. `/model`'s own
+// picker (runTui) is deliberately NOT filtered this way — picking a keyless model there is a
+// power-user act with a working session already underneath it.
+export function decideGuidedModelPickerOpen(
+  catalog: ModelCatalog,
+  configured: ReadonlySet<ModelProvider>,
+): ModelPickerEntry[] {
+  return decideModelPickerOpen(catalog, configured).filter(
+    (row) => row.keyConfigured || row.rerouteTo !== undefined,
+  );
+}
+
 // One row per provider — /setup's own table (D5-D8, feature-plan.md). `removable` is D8: it is
 // false only when config.json genuinely has nothing to unset for this provider — an env-sourced
 // row IS removable when a config.json entry also sits underneath it (providerKeyState's own

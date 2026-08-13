@@ -102,6 +102,7 @@ import {
   decideSetupOpen,
   decideUndo,
 } from "./tui/commands";
+import { runGuidedSetup } from "./tui/guidedSetup";
 import {
   type Dispatch,
   initialTuiState,
@@ -1527,10 +1528,11 @@ function tuiPresenter(dispatch: Dispatch, awaitPersist: () => Promise<void>): Co
 // the user was just looking at instead of always snapping back to the top.
 //
 // Extracted (byok-guided-setup, feature-plan.md) so both `runTui` and the blank-first-run
-// bootstrap (`runGuidedSetup`, below) share one copy of this logic rather than diverging over
-// time. `getPendingSetup` is a live accessor (not a captured snapshot) — each caller passes in a
-// closure that reads its own current reducer state, matching the semantics `liveState.pendingSetup`
-// had before this extraction.
+// bootstrap (`runGuidedSetup`, tui/guidedSetup.ts — threaded this factory in as a parameter rather
+// than importing it there, code-review finding PR #91 round 2) share one copy of this logic rather
+// than diverging over time. `getPendingSetup` is a live accessor (not a captured snapshot) — each
+// caller passes in a closure that reads its own current reducer state, matching the semantics
+// `liveState.pendingSetup` had before this extraction.
 function createSetupHandlers(opts: {
   dispatch: Dispatch;
   getPendingSetup: () => SetupState | undefined;
@@ -1718,103 +1720,6 @@ function createSetupHandlers(opts: {
   }
 
   return { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack };
-}
-
-// Mounted only when the pre-`prepareSession` gate in `run()` finds a real TTY and zero API keys
-// configured anywhere (env or config.json) — the "genuinely blank first run" case that would
-// otherwise hard-exit before the TUI ever mounts (BYOK-KEY-STORAGE-AND-SETUP.md, Open 2). Mounts
-// `App` seeded directly into the `/setup` panel via a `connectDispatch`-fired `setup-requested`
-// action, reusing `createSetupHandlers` so this shares byte-identical /setup logic with `runTui`.
-// The session passed to `App` is a throwaway: `id`/`cwd` only need to satisfy `AppProps.session`'s
-// type (`SessionState<ModelMessage>`, not the stricter `RunSession` — no `model`/`provider`
-// required), and are never saved to disk or read again once this function resolves — the real
-// session `prepareSession` builds afterward (run()'s own call site) is what the run actually uses.
-async function runGuidedSetup(configDir: string): Promise<void> {
-  const { render } = await import("ink");
-  const { createElement } = await import("react");
-  const { App } = await import("./tui/App");
-
-  // Same synchronous-mirror pattern as runTui's own `liveState`/`dispatch` (that function's own
-  // "Findings 2/3/4/6" comment) — kept here, not shared, because runTui's copy is read from ~20
-  // call sites across a much larger closure, where genuinely unifying the two would mean rewriting
-  // every one of those reads (code-review/thermo-nuclear follow-up note, byok-guided-setup loop:
-  // deferred as too much blast radius for this PR). The invariant is the same: `dispatch` updates
-  // `liveState` BEFORE handing the action to React, so anything reading `liveState` right after a
-  // `dispatch` call (this function's own `onSetupClose`, `createSetupHandlers`'s `getPendingSetup`)
-  // sees the post-action state synchronously rather than racing React's own effect-scheduled commit.
-  let liveState: TuiState = initialTuiState({
-    id: randomUUID(),
-    cwd: process.cwd(),
-    systemPrompt: "",
-    permissionMode: "approve-each",
-    messages: [],
-  });
-  let reactDispatch: Dispatch | undefined;
-  const dispatch: Dispatch = (action) => {
-    liveState = tuiReducer(liveState, action);
-    reactDispatch?.(action);
-  };
-
-  const { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack } = createSetupHandlers({
-    dispatch,
-    getPendingSetup: () => liveState.pendingSetup,
-    configDir,
-  });
-
-  let resolveClosed!: () => void;
-  const closed = new Promise<void>((resolve) => {
-    resolveClosed = resolve;
-  });
-  function onSetupClose(): void {
-    dispatch({ type: "setup-resolved" });
-    resolveClosed();
-  }
-
-  const instance = render(
-    createElement(App, {
-      session: liveState.session,
-      // No PreparedRun exists yet at this point in startup (that's the whole reason this mount
-      // exists — run()'s pre-prepareSession gate found zero configured keys), so there is no
-      // ResolvedRoute to pass. AppProps.route's own comment covers why this is `| undefined`
-      // rather than a fabricated value.
-      route: undefined,
-      done: false,
-      onCancel: () => deliverSignal("SIGINT"), // same idle-Ctrl-C fatal path runTui's own onCancel uses
-      onQuit: onSetupClose, // dead in this mount (InputBox/ApprovalBox never show) but wired for safety
-      onSetupSelect,
-      onSetupKeyEntered,
-      onSetupRemove,
-      onSetupBack,
-      onSetupClose,
-      connectDispatch: (reducerDispatch: Dispatch) => {
-        reactDispatch = reducerDispatch;
-        // Guarded like every other decideSetupOpen call site in this file (code-review finding,
-        // byok-guided-setup PR): config.json can be corrupted between run()'s own pre-check and
-        // this effect firing (a racing second `seri` process, a hand edit). Unlike a command-error
-        // dispatch (there is no InputBox/transcript visible here to show one), resolving `closed`
-        // and leaving the key unadded makes run()'s OWN post-runGuidedSetup re-check of
-        // configuredProviders(configDir) hit the identical throw and print/exit through its
-        // existing try/catch — the same clean-exit path a corrupted config already gets everywhere
-        // else, reached here without a second, differently-worded error message.
-        try {
-          dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
-        } catch {
-          resolveClosed();
-        }
-      },
-    }),
-    { exitOnCtrlC: false, interactive: true },
-  );
-
-  // M-2 (runTui's own comment, mirrored here — code-review finding): a fatal Ctrl-C/SIGTERM while
-  // this panel is up has no turn in flight to cancel, so deliverSignal's onCancel wiring above
-  // takes the fatal branch and kills the process by signal without ever reaching `await closed`
-  // below — this is the only thing that puts the terminal's raw-mode/stdin state back before that
-  // happens.
-  onSignalCleanup(() => instance.unmount());
-
-  await closed;
-  instance.unmount();
 }
 
 // `boolean | number` mirrors this file's own established convention for a check that's usually a
@@ -2709,18 +2614,39 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // at all avoids a wasted read/parse on every piped/CI invocation — prepareSession's own
   // configuredProviders call moments later is the one that actually needs it on that path.
   //
-  // No re-check after runGuidedSetup returns (thermo-nuclear finding, round 4): a re-check here
-  // used to `return 1` directly on a still-empty config, silently — every other `return 1` in this
-  // file is preceded by a `console.error`, and this bare one discarded the exact message the user
-  // needs. Falling through unconditionally instead means a decline routes into prepareSession's own
-  // catch below, which throws/prints missingKeyError's own default message ("GROQ_API_KEY is not
-  // set. Run: seri config set GROQ_API_KEY <your-key>") — the SAME code path (not just the same
-  // exit code) the non-interactive missing-key exit already uses, and one fewer
-  // configuredProviders(configDir) read besides.
+  // No re-check after runGuidedSetup returns (thermo-nuclear finding, round 4; invariant updated by
+  // byok-guided-setup-default-model): a re-check here used to `return 1` directly on a still-empty
+  // config, silently — every other `return 1` in this file is preceded by a `console.error`, and
+  // this bare one discarded the exact message the user needs. Falling through unconditionally
+  // instead means a DECLINE (no key ever added) routes into prepareSession's own catch below, which
+  // throws/prints missingKeyError's own default message ("GROQ_API_KEY is not set. Run: seri config
+  // set GROQ_API_KEY <your-key>") — the SAME code path (not just the same exit code) the
+  // non-interactive missing-key exit already uses. A COMPLETED guided setup is different: it now
+  // persists SERI_MODEL/SERI_PROVIDER before `runGuidedSetup` returns (its own mandatory model
+  // picker), so the same unconditional fall-through instead lands `prepareSession`'s
+  // `resolveDefaultModel` read on that freshly-written pair rather than the groq-only fallback —
+  // which is the actual fix this loop exists to ship.
   if (isTTY) {
     const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
     if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
-    if (zeroKeysConfigured) await runGuidedSetup(ctx.configDir);
+    // getModelCatalog() deliberately NOT awaited here (code-review finding, PR #91): awaiting it
+    // before runGuidedSetup blocked /setup from ever painting until the models.dev fetch settled
+    // (up to FETCH_TIMEOUT_MS) — a blank terminal on exactly the flow this feature exists to make
+    // instant. The fetch still starts immediately; runGuidedSetup's own onSetupClose only consumes
+    // the resolved catalog once it actually needs it, by which point a real user has almost always
+    // already typed a key and closed the panel.
+    //
+    // This IS a fetch running in parallel with a live Ink render — the exact hazard Decision 5
+    // (byok-guided-setup-default-model bugfix report) originally avoided by construction, loading
+    // the catalog fully BEFORE `runGuidedSetup` ever mounted. It is safe here only because Ink
+    // 7.1.1's `render()` defaults `patchConsole: true` (ink/build/render.js) — `getModelCatalog`'s
+    // own `printWarning` (a `console.error` call, provider/catalog.ts) gets routed above the live
+    // frame instead of corrupting it, on every offline first run. A future Ink upgrade or an
+    // explicit `patchConsole: false` on this `render()` call (there is none today — `runGuidedSetup`
+    // only passes `exitOnCtrlC`/`interactive`) would silently reintroduce that hazard.
+    if (zeroKeysConfigured) {
+      await runGuidedSetup(ctx.configDir, getModelCatalog(), createSetupHandlers);
+    }
   }
 
   const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
