@@ -9,24 +9,30 @@ import bundledManifest from "./catalog-manifest.json";
 // `with { type: "file" }` to survive inside the compiled binary.
 const FALLBACK_MANIFEST = bundledManifest as ModelCatalog;
 
-// Tracks which `loadCatalog` promise has already been warned about (code-review finding, PR #91
-// round 3): `run()` and `prepareSession` both call `getModelCatalog()` independently on the same
-// guided-setup run, and `loadCatalog`'s own promise cache dedupes the FETCH across both calls, but
-// each caller used to still do its own `catalog === FALLBACK_MANIFEST` check and print its own
-// warning — so one failed fetch printed the same message twice. Comparing against the promise
-// object itself (not a plain boolean) piggybacks on `loadCatalog`'s existing cache-reset identity:
-// after a test's `resetCatalogCache()`, `loadCatalog` returns a NEW promise, so this naturally
-// warns again for a genuinely new fetch attempt without needing its own separate reset.
-let warnedForCatalog: Promise<ModelCatalog> | undefined;
+// Warns at most once per process (code-review finding, PR #91 round 3): `run()` and
+// `prepareSession` both call `getModelCatalog()` independently on the same guided-setup run, and
+// `loadCatalog`'s own promise cache dedupes the FETCH across both calls, but each caller used to
+// still do its own `catalog === FALLBACK_MANIFEST` check and print its own warning — one failed
+// fetch, two identical lines. A plain boolean, not a promise-identity check: `loadCatalog` is
+// itself declared `async function`, so every call returns a freshly wrapped Promise even when it
+// resolves the SAME cached inner promise — the outer promise's own identity can't distinguish "the
+// same fetch" from "a different call".
+let warnedFallback = false;
+
+// Test-only reset, mirroring `resetCatalogCache`'s own contract (@seri/model-catalog): a test that
+// exercises the fetch-fails-and-falls-back path more than once in the same `bun test` process needs
+// to clear this alongside that cache, or only the first call in the whole process would ever warn.
+export function resetFallbackWarning(): void {
+  warnedFallback = false;
+}
 
 // The one dispatch point apps/cli calls to get the model catalog: @seri/model-catalog does the
 // fetch-with-fallback and the in-memory caching, this just supplies the CLI's own bundled
 // fallback and warns once when that fallback is what actually got used.
 export async function getModelCatalog(fetchFn: typeof fetch = fetch): Promise<ModelCatalog> {
-  const catalogPromise = loadCatalog(FALLBACK_MANIFEST, fetchFn);
-  const catalog = await catalogPromise;
-  if (catalog === FALLBACK_MANIFEST && warnedForCatalog !== catalogPromise) {
-    warnedForCatalog = catalogPromise;
+  const catalog = await loadCatalog(FALLBACK_MANIFEST, fetchFn);
+  if (catalog === FALLBACK_MANIFEST && !warnedFallback) {
+    warnedFallback = true;
     printWarning("could not reach models.dev; using the bundled model catalog");
   }
   return catalog;

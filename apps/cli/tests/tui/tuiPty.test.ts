@@ -2729,6 +2729,100 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 20_000);
 
+    // Code-review finding, PR #91 round 3: `onSetupClose`'s own `configured` snapshot was captured
+    // BEFORE this wait, then reused once the catalog resolved — a remove-then-confirm round-trip
+    // during the wait returns to the "list" step (the only thing the re-entrancy guard above
+    // checks) without ever tripping it, so the stale snapshot could still show the just-removed
+    // provider as configured. Negative control: pre-fix, this test's own final assertions fail —
+    // the mandatory picker opens instead, offering a model for a provider with no key left.
+    test("removing the only key while the catalog fetch is still resolving does not open the picker for it", async () => {
+      const scriptPath = join(dir, "child-guided-setup-remove-during-wait.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetupDelayedFetch(dir));
+
+      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-guided-setup-remove-during-wait-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        // Escape starts the (still-pending, 3s) catalog wait.
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        await sawLine("Loading available models…");
+
+        // Remove the only configured key well before the 3s delayed fetch resolves — 'r' then 'y'
+        // returns to the "list" step without ever tripping the guard above.
+        child.stdin?.write("r");
+        await wait100ms();
+        child.stdin?.write("y");
+        await sawLine("Removed GROQ_API_KEY.");
+
+        // Once the delayed fetch resolves, the mandatory picker must NOT open for a provider that
+        // no longer has a key — this falls through to the same decline/missing-key path a genuine
+        // zero-key close takes.
+        const { stdout } = await exited;
+        expect(stdout).toContain("EXIT_CODE 1");
+        expect(stdout).toContain(
+          "GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>",
+        );
+        expect(stdout).not.toContain("Pick a default model to continue.");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 20_000);
+
+    // Code-review finding, PR #91 round 3: from the "enter-key" step, Ctrl-D calls onSetupClose
+    // directly (SetupEnterKey's own useInput) — while the wait's `closing` guard was a bare no-op,
+    // this looked like a completely dead key with zero feedback. Negative control: pre-fix, this
+    // test's own final assertion (the "still loading" message) never appears.
+    test("Ctrl-D from the enter-key step during the catalog wait gives visible feedback, not a dead key", async () => {
+      const scriptPath = join(dir, "child-guided-setup-ctrld-during-wait.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetupDelayedFetch(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-guided-setup-ctrld-during-wait-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        // Escape starts the (still-pending, 3s) catalog wait.
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        await sawLine("Loading available models…");
+
+        // Navigate to "enter-key" for a second provider, still well before the 3s delayed fetch
+        // resolves.
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        // Ctrl-D here reaches onSetupClose directly (SetupEnterKey's own useInput) while `closing`
+        // is still true.
+        child.stdin?.write("\x04");
+        await sawLine("Still loading available models");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 20_000);
+
     // The bug this whole loop exists to fix: an anthropic-only guided setup used to fall through
     // to prepareSession unconditionally, which resolved the untouched default (groq's
     // openai/gpt-oss-120b) and hard-exited on a SECOND missing-key error naming a provider the

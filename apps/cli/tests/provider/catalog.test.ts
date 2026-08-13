@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { resetCatalogCache } from "@seri/model-catalog";
-import { getModelCatalog } from "../../src/provider/catalog";
+import { getModelCatalog, resetFallbackWarning } from "../../src/provider/catalog";
 
 // In-process, not a spawned child (M-2/M-3 fix): a spawned child inherits this package's own test
 // script env (apps/cli/package.json's `"test": "SERI_DISABLE_MODELS_FETCH=1 bun test"`), which made
@@ -16,6 +16,7 @@ describe("getModelCatalog", () => {
 
   beforeEach(() => {
     resetCatalogCache();
+    resetFallbackWarning();
     delete process.env.SERI_DISABLE_MODELS_FETCH;
   });
 
@@ -49,5 +50,28 @@ describe("getModelCatalog", () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain("models.dev");
     expect(catalog.entries.length).toBeGreaterThan(0);
+  });
+
+  // Code-review finding, PR #91 round 3: cli.ts's own `run()` and `prepareSession` both call
+  // `getModelCatalog()` independently on a guided-setup run. `loadCatalog`'s promise cache dedupes
+  // the underlying FETCH across both calls, but each caller used to still do its own
+  // `catalog === FALLBACK_MANIFEST` check and print its own warning — one failed fetch, two
+  // identical lines. Negative control: pre-fix, `errors` here has length 2.
+  test("two independent callers sharing one failed fetch see the warning only once", async () => {
+    const failingFetch: typeof fetch = (async () => {
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    try {
+      await getModelCatalog(failingFetch);
+      await getModelCatalog(failingFetch);
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(errors).toHaveLength(1);
   });
 });
