@@ -257,6 +257,21 @@ describe("decideGuidedModelPickerOpen", () => {
     expect(guided.length).toBeLessThan(all.length);
     expect(guided.every((row) => allKeys.has(`${row.entry.provider}/${row.entry.id}`))).toBe(true);
   });
+
+  // Reviewer-verifier finding M1: this function's own guarantee was measured against the bundled
+  // manifest (every provider has entries there), but its real production input is the LIVE
+  // models.dev payload — `loadCatalog` silently drops any provider missing/malformed in that
+  // response, so a catalog with zero entries for the configured provider is a reachable input, not
+  // a theoretical one. `onSetupClose` (cli.ts) guards against exactly this — an empty result must
+  // degrade to the decline path rather than open a picker with nothing to select — this test proves
+  // the input that guard exists for is real.
+  test("returns [] when the catalog has no entries at all for the configured provider", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [catalogEntry({ id: "a", provider: "groq" })],
+    };
+    expect(decideGuidedModelPickerOpen(catalog, new Set(["anthropic"]))).toEqual([]);
+  });
 });
 
 const ALL_KEY_NAMES = [

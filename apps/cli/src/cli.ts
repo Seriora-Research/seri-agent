@@ -1817,9 +1817,9 @@ async function runGuidedSetup(configDir: string, catalog: ModelCatalog): Promise
     try {
       configured = configuredProviders(configDir);
     } catch {
-      // Same degrade as connectDispatch's own catch, below: a corrupted config.json resolves out
-      // and lets prepareSession print the one canonical message, rather than a second,
-      // differently-worded error here.
+      // Same degrade as connectDispatch's own catch, above: a corrupted config.json resolves out
+      // and falls through to prepareSession's own configuredProviders read, which prints the one
+      // canonical message, rather than a second, differently-worded error here.
       dispatch({ type: "setup-resolved" });
       resolveClosed();
       return;
@@ -1832,15 +1832,26 @@ async function runGuidedSetup(configDir: string, catalog: ModelCatalog): Promise
       resolveClosed();
       return;
     }
-    // At least one key is configured: a default model pick is now mandatory (Decision 1) before
-    // this mount can resolve. `model-picker-requested` dispatched BEFORE `setup-resolved` is
-    // deliberate — App.tsx's own render ternary checks `pendingModelPicker` before `pendingSetup`,
-    // so no intermediate frame can render a bare `InputBox` even without React batching.
+    // Reviewer-verifier finding M1: `catalog` here is the LIVE models.dev payload (run()'s own
+    // `getModelCatalog()` call), not the bundled manifest decideGuidedModelPickerOpen's own comment
+    // was measured against — loadCatalog silently drops a provider whose upstream `models` entry is
+    // missing/malformed, so this CAN come back empty for the provider the user just configured. An
+    // empty picker would render zero rows with no way to proceed except a fatal Ctrl-C (Enter is a
+    // no-op with nothing selected, Escape correctly re-prompts into the same empty list) — the same
+    // decline degrade used above is what actually gets the user back to a message they can act on.
+    const entries = decideGuidedModelPickerOpen(catalog, configured);
+    if (entries.length === 0) {
+      dispatch({ type: "setup-resolved" });
+      resolveClosed();
+      return;
+    }
+    // At least one key is configured and has a runnable model: a default model pick is now
+    // mandatory (Decision 1) before this mount can resolve. `model-picker-requested` dispatched
+    // BEFORE `setup-resolved` is deliberate — App.tsx's own render ternary checks
+    // `pendingModelPicker` before `pendingSetup`, so no intermediate frame can render a bare
+    // `InputBox` even without React batching.
     dispatch({ type: "transcript-append", line: GUIDED_MODEL_PROMPT });
-    dispatch({
-      type: "model-picker-requested",
-      entries: decideGuidedModelPickerOpen(catalog, configured),
-    });
+    dispatch({ type: "model-picker-requested", entries });
     dispatch({ type: "setup-resolved" });
   }
 
@@ -1868,10 +1879,11 @@ async function runGuidedSetup(configDir: string, catalog: ModelCatalog): Promise
         // byok-guided-setup PR): config.json can be corrupted between run()'s own pre-check and
         // this effect firing (a racing second `seri` process, a hand edit). Unlike a command-error
         // dispatch (there is no InputBox/transcript visible here to show one), resolving `closed`
-        // and leaving the key unadded makes run()'s OWN post-runGuidedSetup re-check of
-        // configuredProviders(configDir) hit the identical throw and print/exit through its
-        // existing try/catch — the same clean-exit path a corrupted config already gets everywhere
-        // else, reached here without a second, differently-worded error message.
+        // and leaving the key unadded makes `run()` fall through unconditionally (its own
+        // "No re-check after runGuidedSetup returns" comment, below) into `prepareSession`'s OWN
+        // `configuredProviders(configDir)` read (that function's own try/catch, above) hitting the
+        // identical throw and print/exit — the same clean-exit path a corrupted config already gets
+        // everywhere else, reached here without a second, differently-worded error message.
         try {
           dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
         } catch {
