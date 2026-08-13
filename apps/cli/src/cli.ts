@@ -1519,6 +1519,316 @@ function tuiPresenter(dispatch: Dispatch, awaitPersist: () => Promise<void>): Co
   };
 }
 
+// D5-D8 (feature-plan.md): /setup's own five handlers, mirroring the /model pair above — each
+// does nothing but recompute the current truth (decideSetupOpen re-reads config.json/env every
+// time, never trusting a stale copy) and dispatch it. `setupListState` is the one piece shared
+// by every path that returns to the list step: fresh rows, plus — when a specific provider is
+// named — that row's own index, so returning from enter-key/confirm-remove re-highlights the row
+// the user was just looking at instead of always snapping back to the top.
+//
+// Extracted (byok-guided-setup, feature-plan.md) so both `runTui` and the blank-first-run
+// bootstrap (`runGuidedSetup`, below) share one copy of this logic rather than diverging over
+// time. `getPendingSetup` is a live accessor (not a captured snapshot) — each caller passes in a
+// closure that reads its own current reducer state, matching the semantics `liveState.pendingSetup`
+// had before this extraction.
+function createSetupHandlers(opts: {
+  dispatch: Dispatch;
+  getPendingSetup: () => SetupState | undefined;
+  configDir: string;
+}): {
+  onSetupSelect: (provider: ModelProvider) => void;
+  onSetupKeyEntered: (provider: ModelProvider, value: string) => Promise<void>;
+  onSetupRemove: (provider: ModelProvider) => void;
+  onSetupBack: () => void;
+} {
+  const { dispatch, getPendingSetup, configDir } = opts;
+
+  function setupListState(selectedProvider?: ModelProvider): SetupState {
+    const rows = decideSetupOpen(configDir);
+    const selected =
+      selectedProvider === undefined
+        ? 0
+        : Math.max(
+            0,
+            rows.findIndex((row) => row.provider === selectedProvider),
+          );
+    return { step: "list", rows, selected };
+  }
+
+  // A shared "refresh the list, degrade to command-error if that throws" primitive (code-review
+  // finding, PR #73, round 2): decideSetupOpen reads config.json, and a malformed file is exactly
+  // as reachable once the panel is already open (a racing second `seri` process, a hand edit) as it
+  // is at the /setup-OPEN interceptor above — which the round 1 fix already guarded. Used by
+  // onSetupRemove's success path and onSetupBack — round 1 missed both, reached only from INSIDE an
+  // already-open panel, with nothing above them to catch a throw out of their own `useInput`
+  // callback. NOT used by onSetupKeyEntered's own success path (round 3, item #3): that one needs
+  // its OWN inline catch instead, to reset `busy: false` on a refresh failure rather than just
+  // showing a command-error while leaving the panel's own busy gate stuck — see its own comment.
+  function dispatchSetupList(selectedProvider?: ModelProvider): void {
+    try {
+      dispatch({ type: "setup-step", state: setupListState(selectedProvider) });
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // No config.json read here at all (code-review finding, PR #73, round 2): a row's `keyName` is a
+  // pure function of `provider` (PROVIDER_API_KEY_NAMES), so the old `decideSetupOpen(configDir).
+  // find(...)` — the full 5-provider scan, just to pull one static field back out of it — was both
+  // slower and a needless crash surface for a value that never needed I/O to produce.
+  function onSetupSelect(provider: ModelProvider): void {
+    dispatch({
+      type: "setup-step",
+      state: {
+        step: "enter-key",
+        provider,
+        keyName: PROVIDER_API_KEY_NAMES[provider],
+        busy: false,
+      },
+    });
+  }
+
+  // D5's own probe, then D6's own write — `validateProviderKey` never throws (its own contract:
+  // every failure mode resolves to a result, not a rejection), so only the config write itself
+  // needs a try/catch, matching the persist path's degrade-to-a-message posture (onSessionChange's
+  // own comment, above) rather than converting a validated key into a lost one over an unrelated
+  // write failure.
+  //
+  // `keyName` is PROVIDER_API_KEY_NAMES[provider] directly, not a decideSetupOpen scan (code-review
+  // finding, PR #73, round 2 — same fix as onSetupSelect just above): no config.json read here at
+  // all, which is also what makes the rest of this function need no crash guard of its own.
+  async function onSetupKeyEntered(provider: ModelProvider, value: string): Promise<void> {
+    const keyName = PROVIDER_API_KEY_NAMES[provider];
+    dispatch({
+      type: "setup-step",
+      state: { step: "enter-key", provider, keyName, busy: true },
+    });
+    const result = await validateProviderKey(provider, value);
+    if (!result.ok) {
+      dispatch({
+        type: "setup-step",
+        state: { step: "enter-key", provider, keyName, busy: false, error: result.message },
+      });
+      return;
+    }
+    try {
+      setConfigValue(keyName, value, configDir);
+    } catch (err) {
+      // Bug fixed here (code-review, PR #73): this used to dispatch a bare command-error and
+      // return, leaving `pendingSetup` stuck at `busy: true` — SetupEnterKey's own useInput
+      // checks `if (busy) return;` BEFORE its Escape/Ctrl-D handling, so a write failure here
+      // (EACCES, disk full, the config dir removed mid-session) permanently locked the /setup
+      // panel with no way out short of a fatal Ctrl-C that kills the whole process. Re-rendering
+      // `enter-key` with `busy: false` and an error, the same shape a validation failure already
+      // uses above, is what actually returns control to the user.
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider,
+          keyName,
+          busy: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
+      return;
+    }
+    dispatch({
+      type: "transcript-append",
+      line:
+        result.warning === undefined
+          ? `Saved ${keyName}.`
+          : `Saved ${keyName}. ⚠ ${result.warning}`,
+    });
+    // NOT dispatchSetupList (code-review finding, PR #73, round 3, item #3): that helper's own
+    // catch only dispatches command-error, which never touches `pendingSetup` — leaving THIS
+    // function's own `busy: true` (set above, before the validate/write round-trip) stuck forever
+    // if the refresh read (setupListState -> decideSetupOpen -> config.json) throws, the exact
+    // lockout class the write-failure catch above already fixed, just reached by a different
+    // trigger (the post-write refresh failing, not the write itself). Resetting `busy: false`
+    // here, inline, the same shape that catch already uses, is what actually clears it —
+    // SetupEnterKey's own `if (busy) return;` gate is what makes that necessary.
+    try {
+      dispatch({ type: "setup-step", state: setupListState(provider) });
+    } catch (err) {
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider,
+          keyName,
+          busy: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
+    }
+  }
+
+  // D8: this is the SAME prop SetupList's own 'r' keypress and SetupConfirmRemove's own 'y'
+  // keypress both call — App.tsx has only five /setup props total, no separate "request
+  // confirmation" one — so which one this call means is read off the CURRENT live reducer state,
+  // the same "trust liveState, not a caller-captured copy" pattern this closure already uses
+  // throughout (this function's own top comment).
+  function onSetupRemove(provider: ModelProvider): void {
+    const pending = getPendingSetup();
+    if (pending?.step === "confirm-remove") {
+      const { keyName } = pending;
+      try {
+        unsetConfigValue(keyName, configDir);
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+      dispatch({ type: "transcript-append", line: `Removed ${keyName}.` });
+      dispatchSetupList(provider);
+      return;
+    }
+    // `providerKeyState` for the one provider under the cursor, not a decideSetupOpen scan of all
+    // five (code-review finding, PR #73, round 2) — still real I/O (config.json), so still needs
+    // its own guard: a malformed file here used to throw straight out of this `useInput` callback,
+    // the same class of bug round 1 fixed for the /setup-OPEN interceptor but missed here.
+    let state: ProviderKeyState;
+    try {
+      state = providerKeyState(provider, configDir);
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    if (!state.hasConfigEntry) return;
+    dispatch({
+      type: "setup-step",
+      state: { step: "confirm-remove", provider, keyName: state.keyName },
+    });
+  }
+
+  function onSetupBack(): void {
+    const current = getPendingSetup();
+    const provider =
+      current !== undefined && current.step !== "list" ? current.provider : undefined;
+    dispatchSetupList(provider);
+  }
+
+  return { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack };
+}
+
+// Mounted only when the pre-`prepareSession` gate in `run()` finds a real TTY and zero API keys
+// configured anywhere (env or config.json) — the "genuinely blank first run" case that would
+// otherwise hard-exit before the TUI ever mounts (BYOK-KEY-STORAGE-AND-SETUP.md, Open 2). Mounts
+// `App` seeded directly into the `/setup` panel via a `connectDispatch`-fired `setup-requested`
+// action, reusing `createSetupHandlers` so this shares byte-identical /setup logic with `runTui`.
+// The session passed to `App` is a throwaway: `id`/`cwd` only need to satisfy `AppProps.session`'s
+// type (`SessionState<ModelMessage>`, not the stricter `RunSession` — no `model`/`provider`
+// required), and are never saved to disk or read again once this function resolves — the real
+// session `prepareSession` builds afterward (run()'s own call site) is what the run actually uses.
+async function runGuidedSetup(configDir: string): Promise<void> {
+  const { render } = await import("ink");
+  const { createElement } = await import("react");
+  const { App } = await import("./tui/App");
+
+  // Same synchronous-mirror pattern as runTui's own `liveState`/`dispatch` (that function's own
+  // "Findings 2/3/4/6" comment) — kept here, not shared, because runTui's copy is read from ~20
+  // call sites across a much larger closure, where genuinely unifying the two would mean rewriting
+  // every one of those reads (code-review/thermo-nuclear follow-up note, byok-guided-setup loop:
+  // deferred as too much blast radius for this PR). The invariant is the same: `dispatch` updates
+  // `liveState` BEFORE handing the action to React, so anything reading `liveState` right after a
+  // `dispatch` call (this function's own `onSetupClose`, `createSetupHandlers`'s `getPendingSetup`)
+  // sees the post-action state synchronously rather than racing React's own effect-scheduled commit.
+  let liveState: TuiState = initialTuiState({
+    id: randomUUID(),
+    cwd: process.cwd(),
+    systemPrompt: "",
+    permissionMode: "approve-each",
+    messages: [],
+  });
+  let reactDispatch: Dispatch | undefined;
+  const dispatch: Dispatch = (action) => {
+    liveState = tuiReducer(liveState, action);
+    reactDispatch?.(action);
+  };
+
+  const { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack } = createSetupHandlers({
+    dispatch,
+    getPendingSetup: () => liveState.pendingSetup,
+    configDir,
+  });
+
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+  function onSetupClose(): void {
+    dispatch({ type: "setup-resolved" });
+    resolveClosed();
+  }
+
+  const instance = render(
+    createElement(App, {
+      session: liveState.session,
+      done: false,
+      onCancel: () => deliverSignal("SIGINT"), // same idle-Ctrl-C fatal path runTui's own onCancel uses
+      onQuit: onSetupClose, // dead in this mount (InputBox/ApprovalBox never show) but wired for safety
+      onSetupSelect,
+      onSetupKeyEntered,
+      onSetupRemove,
+      onSetupBack,
+      onSetupClose,
+      connectDispatch: (reducerDispatch: Dispatch) => {
+        reactDispatch = reducerDispatch;
+        // Guarded like every other decideSetupOpen call site in this file (code-review finding,
+        // byok-guided-setup PR): config.json can be corrupted between run()'s own pre-check and
+        // this effect firing (a racing second `seri` process, a hand edit). Unlike a command-error
+        // dispatch (there is no InputBox/transcript visible here to show one), resolving `closed`
+        // and leaving the key unadded makes run()'s OWN post-runGuidedSetup re-check of
+        // configuredProviders(configDir) hit the identical throw and print/exit through its
+        // existing try/catch — the same clean-exit path a corrupted config already gets everywhere
+        // else, reached here without a second, differently-worded error message.
+        try {
+          dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
+        } catch {
+          resolveClosed();
+        }
+      },
+    }),
+    { exitOnCtrlC: false, interactive: true },
+  );
+
+  // M-2 (runTui's own comment, mirrored here — code-review finding): a fatal Ctrl-C/SIGTERM while
+  // this panel is up has no turn in flight to cancel, so deliverSignal's onCancel wiring above
+  // takes the fatal branch and kills the process by signal without ever reaching `await closed`
+  // below — this is the only thing that puts the terminal's raw-mode/stdin state back before that
+  // happens.
+  onSignalCleanup(() => instance.unmount());
+
+  await closed;
+  instance.unmount();
+}
+
+// `boolean | number` mirrors this file's own established convention for a check that's usually a
+// plain result but sometimes an exit code (prepareSession, handleAuthCommand, handleConfigCommand,
+// handlePermissionsCommand, handleSlashCommand all return `T | number` for the identical reason) —
+// callers check `typeof result === "number"` and return it directly on a throw. Used once, by
+// run()'s own guided-setup gate, to decide whether to mount runGuidedSetup at all — no re-check
+// after it returns (round 4): that fell through to prepareSession's own identical
+// configuredProviders/missing-key handling instead, rather than duplicating this corrupted-config
+// try/catch and its error-formatting a second time.
+function checkZeroKeysConfigured(configDir: string): boolean | number {
+  try {
+    return configuredProviders(configDir).size === 0;
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+}
+
 // Mounted only when deps.isTTY is true (run()'s own branch, above driveLoop's other call site —
 // see CliDeps.isTTY's own comment for why that reads a passed-in flag, not a live
 // process.stdout.isTTY). Drives the SAME driveLoop the non-interactive path uses for the initial
@@ -1818,184 +2128,11 @@ async function runTui(
     dispatch({ type: "model-picker-resolved" });
   }
 
-  // D5-D8 (feature-plan.md): /setup's own five handlers, mirroring the /model pair above — each
-  // does nothing but recompute the current truth (decideSetupOpen re-reads config.json/env every
-  // time, never trusting a stale copy) and dispatch it. `setupListState` is the one piece shared
-  // by every path that returns to the list step: fresh rows, plus — when a specific provider is
-  // named — that row's own index, so returning from enter-key/confirm-remove re-highlights the row
-  // the user was just looking at instead of always snapping back to the top.
-  function setupListState(selectedProvider?: ModelProvider): SetupState {
-    const rows = decideSetupOpen(configDir);
-    const selected =
-      selectedProvider === undefined
-        ? 0
-        : Math.max(
-            0,
-            rows.findIndex((row) => row.provider === selectedProvider),
-          );
-    return { step: "list", rows, selected };
-  }
-
-  // A shared "refresh the list, degrade to command-error if that throws" primitive (code-review
-  // finding, PR #73, round 2): decideSetupOpen reads config.json, and a malformed file is exactly
-  // as reachable once the panel is already open (a racing second `seri` process, a hand edit) as it
-  // is at the /setup-OPEN interceptor above — which the round 1 fix already guarded. Used by
-  // onSetupRemove's success path and onSetupBack — round 1 missed both, reached only from INSIDE an
-  // already-open panel, with nothing above them to catch a throw out of their own `useInput`
-  // callback. NOT used by onSetupKeyEntered's own success path (round 3, item #3): that one needs
-  // its OWN inline catch instead, to reset `busy: false` on a refresh failure rather than just
-  // showing a command-error while leaving the panel's own busy gate stuck — see its own comment.
-  function dispatchSetupList(selectedProvider?: ModelProvider): void {
-    try {
-      dispatch({ type: "setup-step", state: setupListState(selectedProvider) });
-    } catch (err) {
-      dispatch({
-        type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  // No config.json read here at all (code-review finding, PR #73, round 2): a row's `keyName` is a
-  // pure function of `provider` (PROVIDER_API_KEY_NAMES), so the old `decideSetupOpen(configDir).
-  // find(...)` — the full 5-provider scan, just to pull one static field back out of it — was both
-  // slower and a needless crash surface for a value that never needed I/O to produce.
-  function onSetupSelect(provider: ModelProvider): void {
-    dispatch({
-      type: "setup-step",
-      state: {
-        step: "enter-key",
-        provider,
-        keyName: PROVIDER_API_KEY_NAMES[provider],
-        busy: false,
-      },
-    });
-  }
-
-  // D5's own probe, then D6's own write — `validateProviderKey` never throws (its own contract:
-  // every failure mode resolves to a result, not a rejection), so only the config write itself
-  // needs a try/catch, matching the persist path's degrade-to-a-message posture (onSessionChange's
-  // own comment, above) rather than converting a validated key into a lost one over an unrelated
-  // write failure.
-  //
-  // `keyName` is PROVIDER_API_KEY_NAMES[provider] directly, not a decideSetupOpen scan (code-review
-  // finding, PR #73, round 2 — same fix as onSetupSelect just above): no config.json read here at
-  // all, which is also what makes the rest of this function need no crash guard of its own.
-  async function onSetupKeyEntered(provider: ModelProvider, value: string): Promise<void> {
-    const keyName = PROVIDER_API_KEY_NAMES[provider];
-    dispatch({
-      type: "setup-step",
-      state: { step: "enter-key", provider, keyName, busy: true },
-    });
-    const result = await validateProviderKey(provider, value);
-    if (!result.ok) {
-      dispatch({
-        type: "setup-step",
-        state: { step: "enter-key", provider, keyName, busy: false, error: result.message },
-      });
-      return;
-    }
-    try {
-      setConfigValue(keyName, value, configDir);
-    } catch (err) {
-      // Bug fixed here (code-review, PR #73): this used to dispatch a bare command-error and
-      // return, leaving `pendingSetup` stuck at `busy: true` — SetupEnterKey's own useInput
-      // checks `if (busy) return;` BEFORE its Escape/Ctrl-D handling, so a write failure here
-      // (EACCES, disk full, the config dir removed mid-session) permanently locked the /setup
-      // panel with no way out short of a fatal Ctrl-C that kills the whole process. Re-rendering
-      // `enter-key` with `busy: false` and an error, the same shape a validation failure already
-      // uses above, is what actually returns control to the user.
-      dispatch({
-        type: "setup-step",
-        state: {
-          step: "enter-key",
-          provider,
-          keyName,
-          busy: false,
-          error: err instanceof Error ? err.message : String(err),
-        },
-      });
-      return;
-    }
-    dispatch({
-      type: "transcript-append",
-      line:
-        result.warning === undefined
-          ? `Saved ${keyName}.`
-          : `Saved ${keyName}. ⚠ ${result.warning}`,
-    });
-    // NOT dispatchSetupList (code-review finding, PR #73, round 3, item #3): that helper's own
-    // catch only dispatches command-error, which never touches `pendingSetup` — leaving THIS
-    // function's own `busy: true` (set above, before the validate/write round-trip) stuck forever
-    // if the refresh read (setupListState -> decideSetupOpen -> config.json) throws, the exact
-    // lockout class the write-failure catch above already fixed, just reached by a different
-    // trigger (the post-write refresh failing, not the write itself). Resetting `busy: false`
-    // here, inline, the same shape that catch already uses, is what actually clears it —
-    // SetupEnterKey's own `if (busy) return;` gate is what makes that necessary.
-    try {
-      dispatch({ type: "setup-step", state: setupListState(provider) });
-    } catch (err) {
-      dispatch({
-        type: "setup-step",
-        state: {
-          step: "enter-key",
-          provider,
-          keyName,
-          busy: false,
-          error: err instanceof Error ? err.message : String(err),
-        },
-      });
-    }
-  }
-
-  // D8: this is the SAME prop SetupList's own 'r' keypress and SetupConfirmRemove's own 'y'
-  // keypress both call — App.tsx has only five /setup props total, no separate "request
-  // confirmation" one — so which one this call means is read off the CURRENT live reducer state,
-  // the same "trust liveState, not a caller-captured copy" pattern this closure already uses
-  // throughout (this function's own top comment).
-  function onSetupRemove(provider: ModelProvider): void {
-    if (liveState.pendingSetup?.step === "confirm-remove") {
-      const { keyName } = liveState.pendingSetup;
-      try {
-        unsetConfigValue(keyName, configDir);
-      } catch (err) {
-        dispatch({
-          type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
-        });
-        return;
-      }
-      dispatch({ type: "transcript-append", line: `Removed ${keyName}.` });
-      dispatchSetupList(provider);
-      return;
-    }
-    // `providerKeyState` for the one provider under the cursor, not a decideSetupOpen scan of all
-    // five (code-review finding, PR #73, round 2) — still real I/O (config.json), so still needs
-    // its own guard: a malformed file here used to throw straight out of this `useInput` callback,
-    // the same class of bug round 1 fixed for the /setup-OPEN interceptor but missed here.
-    let state: ProviderKeyState;
-    try {
-      state = providerKeyState(provider, configDir);
-    } catch (err) {
-      dispatch({
-        type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-      return;
-    }
-    if (!state.hasConfigEntry) return;
-    dispatch({
-      type: "setup-step",
-      state: { step: "confirm-remove", provider, keyName: state.keyName },
-    });
-  }
-
-  function onSetupBack(): void {
-    const current = liveState.pendingSetup;
-    const provider =
-      current !== undefined && current.step !== "list" ? current.provider : undefined;
-    dispatchSetupList(provider);
-  }
+  const { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack } = createSetupHandlers({
+    dispatch,
+    getPendingSetup: () => liveState.pendingSetup,
+    configDir,
+  });
 
   function onSetupClose(leftoverInput?: string): void {
     dispatch({ type: "setup-resolved", leftoverInput });
@@ -2558,6 +2695,27 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // directly. Computed here, before prepareSession, so that function's own reroute notice
   // (prepareSession's own comment) can gate itself to the non-interactive path.
   const isTTY = deps.isTTY ?? false;
+
+  // Open 2 (BYOK-KEY-STORAGE-AND-SETUP.md): a genuinely blank config must not hard-exit before the
+  // TUI ever mounts. Gated on isTTY FIRST (code-review finding): the non-interactive path is the
+  // common case and never uses this check's result, so checking isTTY before reading config.json
+  // at all avoids a wasted read/parse on every piped/CI invocation — prepareSession's own
+  // configuredProviders call moments later is the one that actually needs it on that path.
+  //
+  // No re-check after runGuidedSetup returns (thermo-nuclear finding, round 4): a re-check here
+  // used to `return 1` directly on a still-empty config, silently — every other `return 1` in this
+  // file is preceded by a `console.error`, and this bare one discarded the exact message the user
+  // needs. Falling through unconditionally instead means a decline routes into prepareSession's own
+  // catch below, which throws/prints missingKeyError's own default message ("GROQ_API_KEY is not
+  // set. Run: seri config set GROQ_API_KEY <your-key>") — the SAME code path (not just the same
+  // exit code) the non-interactive missing-key exit already uses, and one fewer
+  // configuredProviders(configDir) read besides.
+  if (isTTY) {
+    const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
+    if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
+    if (zeroKeysConfigured) await runGuidedSetup(ctx.configDir);
+  }
+
   const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
   if (typeof prepared === "number") return prepared;
 

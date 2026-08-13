@@ -678,6 +678,45 @@ function childScriptSetupEnvShadow(dir: string): string {
   ].join("\n");
 }
 
+// byok-guided-setup, feature-plan.md: the "genuinely blank first run" scenario — a real TTY, no
+// config.json (childScriptSetup's own dir is always fresh, but every OTHER script in this file
+// still exports GROQ_API_KEY as a real env var; this one explicitly deletes every provider's own
+// key, matching code-quality.md's "the platform matrix does not cover the unset case" guard, since
+// the dev/CI box's own ambient env could otherwise mask run()'s new isTTY-and-zero-keys gate). No
+// `getGroqModel` override, unlike every other script in this file: injecting one would bypass the
+// REAL groq.ts's own `if (!apiKey) throw missingKeyError("groq")` — the exact throw prepareSession
+// relies on today, pre-fix, to hard-exit before Ink ever mounts. The real getGroqModel only ever
+// constructs an SDK client (`createGroq({ apiKey })(modelId)`, no network I/O at creation), so
+// once /setup writes a fake GROQ_API_KEY, it resolves fine — the injected `runLoopFake` below never
+// touches the model object either way.
+function childScriptGuidedSetup(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `delete process.env.GROQ_API_KEY;`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `delete process.env.ANTHROPIC_API_KEY;`,
+    `delete process.env.OPENAI_API_KEY;`,
+    `delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
 // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
 // research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
 // identical signature... with zero change to loop.ts/gate.ts") that every earlier round of this
@@ -2386,6 +2425,85 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // pass vacuously either way. A stack frame's file path is not interleaved the same way
         // (confirmed the same way), so this checks for that instead.
         expect(occurrences("provider/keys.ts")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
+
+  // byok-guided-setup, feature-plan.md (Open 2, BYOK-KEY-STORAGE-AND-SETUP.md): before this fix,
+  // run() called prepareSession unconditionally on a real TTY, which threw and hard-exited the
+  // process (code 1) before Ink ever mounted whenever zero keys were configured anywhere — the
+  // negative control (code-quality.md's "seen to fail" rule): reverting cli.ts's run() gate against
+  // this exact script/assertion reproduces that exit, with no "/setup — provider API keys" text in
+  // the captured stdout at all.
+  describe("guided setup on a genuinely blank first run", () => {
+    test("mounts /setup directly instead of hard-exiting, and falls through to the task once a key is added", async () => {
+      const scriptPath = join(dir, "child-guided-setup.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        // No "/setup" keystroke sent — this must appear on its own, unlike every other /setup test
+        // in this file, which types the command first.
+        await sawLine("/setup — provider API keys");
+
+        // Default cursor is groq (index 0, CATALOG_PROVIDERS order) — "a" opens its enter-key step,
+        // the same shortcut the existing /setup "add" pty test above uses.
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-guided-setup-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.GROQ_API_KEY === secret,
+        );
+        expect(config.GROQ_API_KEY).toBe(secret);
+
+        // Back at the list step (setupListState re-selects groq) — Escape closes the panel, the
+        // same close path the existing "cancel" /setup test above already exercises.
+        child.stdin?.write("\x1b");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+
+        // The fall-through: prepareSession -> runTui -> driveLoop, unchanged, now actually reached.
+        await sawLine("> do a task");
+        await sawLine("RUNLOOP_READY");
+        await sawLine("(done: no-tool-call)");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("closing /setup with no key added exits with a non-zero code and prints the same missing-key message as the non-interactive exit", async () => {
+      const scriptPath = join(dir, "child-guided-setup-decline.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetup(dir));
+
+      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        child.stdin?.write("\x1b"); // Escape, no key added
+        await new Promise((resolve) => setTimeout(resolve, 30));
+
+        // Asserted on stdout's own EXIT_CODE line, not the pty's own exit status —
+        // childScriptQuit's own sibling tests (above) explain why: the pty allocator (python3)
+        // reports its own exit status, not the grandchild bun process's.
+        const { stdout } = await exited;
+        expect(stdout).toContain("EXIT_CODE 1");
+        // Thermo-nuclear finding (round 4): run()'s old re-check `return 1`'d here with no
+        // console.error, silently discarding missingKeyError's own default message. Falling
+        // through to prepareSession's identical catch instead means a decline prints the exact
+        // message a non-interactive missing-key run does — this assertion is the negative
+        // control: it fails against that old silent `return 1`.
+        expect(stdout).toContain(
+          "GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>",
+        );
       } finally {
         child.kill("SIGKILL");
       }
