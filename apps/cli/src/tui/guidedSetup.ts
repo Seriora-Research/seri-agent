@@ -26,6 +26,10 @@ const GUIDED_MODEL_REQUIRED = "Pick a model to continue — Ctrl-C to quit witho
 // Code-review finding, PR #91 round 2: the one visible line between an Escape press and the
 // picker actually appearing, whenever `catalogPromise` is still resolving at that point.
 const GUIDED_MODEL_LOADING = "Loading available models…";
+// Code-review finding, PR #91 round 3: Escape/Ctrl-D pressed again while still "closing" used to
+// be a bare, silent no-op — indistinguishable from a dead key, especially from the "enter-key"
+// step (SetupEnterKey's own Ctrl-D goes straight to onSetupClose, not through onSetupBack).
+const GUIDED_MODEL_STILL_LOADING = "Still loading available models — one moment.";
 
 // The shape `cli.ts`'s own `createSetupHandlers` factory returns — described here structurally
 // rather than imported, so this file stays free of any import from cli.ts.
@@ -135,11 +139,12 @@ export async function runGuidedSetup(
   // — TypeScript silently drops a returned promise there, so an earlier `async function
   // onSetupClose` awaiting `catalogPromise` inline was, in practice, fire-and-forget from every
   // caller's point of view: a second Escape press while it was still pending re-entered the
-  // function and both resumes ran the tail (duplicate dispatches); a `throw` out of
-  // `decideGuidedModelPickerOpen` became an unhandled rejection that killed the process before
-  // `instance.unmount()` ever restored raw mode; and the wait itself was silent, with no feedback
-  // between the keypress and the picker appearing. `onSetupClose` stays synchronous now — the wait
-  // is chained with `.then`/`.catch` instead of `await`ed inline — and `closing` guards re-entry.
+  // function and both resumes ran the tail (duplicate dispatches); and the wait itself was silent,
+  // with no feedback between the keypress and the picker appearing. `onSetupClose` stays
+  // synchronous now — the wait is chained with `.then`/`.catch` instead of `await`ed inline, which
+  // fixes both of those — and `closing` guards re-entry. `.then`'s second argument only catches
+  // `catalogPromise` itself rejecting, though, not a throw from inside the first argument's own
+  // body — that half needed its own try/catch, added in round 3 (below).
   let closing = false;
 
   // The shared degrade for every path that must resolve this mount WITHOUT ever opening the
@@ -151,9 +156,14 @@ export async function runGuidedSetup(
   }
 
   function onSetupClose(): void {
-    // Re-entrancy guard: a second Escape press while `catalogPromise` is still resolving must be a
-    // no-op, not a second run of the tail below racing the first on the same promise.
-    if (closing) return;
+    // Re-entrancy guard: a second Escape/Ctrl-D press while `catalogPromise` is still resolving
+    // must not re-run the tail below racing the first on the same promise — but it still needs
+    // visible feedback (code-review finding, PR #91 round 3), not a silent no-op that looks like a
+    // dead key from the "enter-key" step, where Ctrl-D reaches onSetupClose directly.
+    if (closing) {
+      dispatch({ type: "command-error", message: GUIDED_MODEL_STILL_LOADING });
+      return;
+    }
     let configured: ReadonlySet<ModelProvider>;
     try {
       configured = configuredProviders(configDir);
@@ -190,27 +200,45 @@ export async function runGuidedSetup(
         // discard a key they're mid-typing. Bail out and let their NEXT Escape re-trigger this —
         // `catalogPromise` is already resolved by then, so `.then` fires on the next tick.
         if (liveState.pendingSetup?.step !== "list") return;
-        // Reviewer-verifier finding M1: `catalog` here is the LIVE models.dev payload, not the
-        // bundled manifest decideGuidedModelPickerOpen's own comment was measured against —
-        // loadCatalog silently drops a provider whose upstream `models` entry is missing/malformed,
-        // so this CAN come back empty for the provider the user just configured. An empty picker
-        // would render zero rows with no way to proceed except a fatal Ctrl-C (Enter is a no-op
-        // with nothing selected, Escape correctly re-prompts into the same empty list) — the same
-        // decline degrade used above is what actually gets the user back to a message they can act
-        // on.
-        const entries = decideGuidedModelPickerOpen(catalog, configured);
-        if (entries.length === 0) {
+        try {
+          // Re-read, not the `configured` snapshot captured above (code-review finding, PR #91
+          // round 3): this wait can take up to FETCH_TIMEOUT_MS, and a remove-then-re-add
+          // round-trip (`r`→`y`, then `a`) returns to the "list" step — the only thing the guard
+          // above checks — without ever tripping it. Reusing the stale snapshot here could offer
+          // (and persist) a default model for a provider whose key was removed in the meantime,
+          // reproducing the exact missing-key bug this feature exists to prevent.
+          const freshConfigured = configuredProviders(configDir);
+          // Reviewer-verifier finding M1: `catalog` here is the LIVE models.dev payload, not the
+          // bundled manifest decideGuidedModelPickerOpen's own comment was measured against —
+          // loadCatalog silently drops a provider whose upstream `models` entry is missing/malformed,
+          // so this CAN come back empty for the provider the user just configured. An empty picker
+          // would render zero rows with no way to proceed except a fatal Ctrl-C (Enter is a no-op
+          // with nothing selected, Escape correctly re-prompts into the same empty list) — the same
+          // decline degrade used above is what actually gets the user back to a message they can act
+          // on. The same empty-picker guard also covers a provider removed during the wait: with no
+          // keys left, every row filters out and `entries.length === 0` degrades the same way.
+          const entries = decideGuidedModelPickerOpen(catalog, freshConfigured);
+          if (entries.length === 0) {
+            closeWithoutPicker();
+            return;
+          }
+          // At least one key is configured and has a runnable model: a default model pick is now
+          // mandatory (Decision 1) before this mount can resolve. `model-picker-requested`
+          // dispatched BEFORE `setup-resolved` is deliberate — App.tsx's own render ternary checks
+          // `pendingModelPicker` before `pendingSetup`, so no intermediate frame can render a bare
+          // `InputBox` even without React batching.
+          dispatch({ type: "transcript-append", line: GUIDED_MODEL_PROMPT });
+          dispatch({ type: "model-picker-requested", entries });
+          dispatch({ type: "setup-resolved" });
+        } catch {
+          // Code-review finding, PR #91 round 3: this callback's own body can throw (the fresh
+          // `configuredProviders` read above, a future change to `decideGuidedModelPickerOpen` or
+          // `dispatch`) — `.then`'s second argument only catches `catalogPromise` REJECTING, not a
+          // throw from inside this first argument, so an uncaught one here would become an
+          // unhandled rejection that can kill the process before `instance.unmount()` ever restores
+          // the terminal. Degrade the same clean way every other failure path in this function does.
           closeWithoutPicker();
-          return;
         }
-        // At least one key is configured and has a runnable model: a default model pick is now
-        // mandatory (Decision 1) before this mount can resolve. `model-picker-requested`
-        // dispatched BEFORE `setup-resolved` is deliberate — App.tsx's own render ternary checks
-        // `pendingModelPicker` before `pendingSetup`, so no intermediate frame can render a bare
-        // `InputBox` even without React batching.
-        dispatch({ type: "transcript-append", line: GUIDED_MODEL_PROMPT });
-        dispatch({ type: "model-picker-requested", entries });
-        dispatch({ type: "setup-resolved" });
       },
       () => {
         // `getModelCatalog` never rejects (catalog.ts's own contract: a network failure or timeout
