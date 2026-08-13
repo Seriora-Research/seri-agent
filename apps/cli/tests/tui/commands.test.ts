@@ -9,6 +9,7 @@ import {
   type ModelProvider,
 } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
+import { saveAuthSession } from "../../src/auth/authStore";
 import {
   type CheckpointRecord,
   checkpointStoreDir,
@@ -17,12 +18,19 @@ import {
 } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable } from "../../src/checkpoint/shadowGit";
 import { setConfigValue } from "../../src/config/config";
+import { getBaseConfigDir } from "../../src/config/paths";
+import { rememberGrant } from "../../src/permissions/store";
 import bundledManifest from "../../src/provider/catalog-manifest.json";
 import type { SessionState } from "../../src/session/session";
 import {
+  decideAuthOffer,
+  decideConfigOpen,
   decideGuidedModelPickerOpen,
+  decideMaxTurns,
   decideModeCycle,
   decideModelPickerOpen,
+  decidePermissionsOpen,
+  decideProfileCreate,
   decideRestore,
   decideRewind,
   decideSetupOpen,
@@ -514,4 +522,165 @@ describe.skipIf(!isGitAvailable())("decideRewind", () => {
     recordBarrier();
     expect(readLog(storeDir, SESSION).some((r) => r.kind === "rewind-barrier")).toBe(true);
   }, 30_000);
+});
+
+// Stage A scaffolding (cli-commands-to-tui feature-plan.md): these five decide* functions have no
+// caller yet — Stages B-E wire /login, /signup, /config, /permissions, /max-turns and /profile new
+// to them.
+describe("decideAuthOffer", () => {
+  let authConfigDir: string;
+
+  beforeEach(() => {
+    authConfigDir = mkdtempSync(join(tmpdir(), "seri-auth-offer-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(authConfigDir, { recursive: true, force: true });
+  });
+
+  test("true when no auth session is saved", () => {
+    expect(decideAuthOffer(authConfigDir)).toBe(true);
+  });
+
+  test("false once an auth session is saved", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-08-13T00:00:00.000Z",
+      },
+      authConfigDir,
+    );
+
+    expect(decideAuthOffer(authConfigDir)).toBe(false);
+  });
+});
+
+describe("decideConfigOpen", () => {
+  let configConfigDir: string;
+  const originalWorkosClientId = process.env.SERI_WORKOS_CLIENT_ID;
+
+  beforeEach(() => {
+    configConfigDir = mkdtempSync(join(tmpdir(), "seri-config-open-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(configConfigDir, { recursive: true, force: true });
+    // Teardown must `delete`, never reassign `undefined` — Bun/Node coerce
+    // `process.env.X = undefined` to the literal string "undefined" (code-quality.md's own
+    // cross-platform env-var lesson).
+    if (originalWorkosClientId === undefined) delete process.env.SERI_WORKOS_CLIENT_ID;
+    else process.env.SERI_WORKOS_CLIENT_ID = originalWorkosClientId;
+  });
+
+  test("all three known keys are source: unset on an empty config dir", () => {
+    const rows = decideConfigOpen(configConfigDir);
+    expect(rows.map((row) => row.key)).toEqual([
+      "SERI_WORKOS_CLIENT_ID",
+      "SERI_VERIFY_ENABLED",
+      "SERI_VERIFY_COMMAND",
+    ]);
+    expect(rows.every((row) => row.source === "unset" && row.removable === false)).toBe(true);
+  });
+
+  test("a key written via config.json is source: config, masked, and removable", () => {
+    setConfigValue("SERI_VERIFY_COMMAND", "bun run typecheck", configConfigDir);
+    const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_COMMAND");
+    expect(row?.source).toBe("config");
+    expect(row?.masked).not.toBe("");
+    expect(row?.masked).not.toBe("bun run typecheck");
+    expect(row?.removable).toBe(true);
+  });
+
+  test("a key set via env var is source: env", () => {
+    process.env.SERI_WORKOS_CLIENT_ID = "client-from-env";
+    const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_WORKOS_CLIENT_ID");
+    expect(row?.source).toBe("env");
+  });
+
+  test("a provider API key written to config.json is absent from the returned rows", () => {
+    setConfigValue("GROQ_API_KEY", "sk-fake-groq-key", configConfigDir);
+    const rows = decideConfigOpen(configConfigDir);
+    expect(rows.some((row) => row.key === "GROQ_API_KEY")).toBe(false);
+  });
+
+  test("a non-provider hand-added key in config.json is present", () => {
+    setConfigValue("SERI_SOME_OTHER_KEY", "value", configConfigDir);
+    const rows = decideConfigOpen(configConfigDir);
+    expect(rows.some((row) => row.key === "SERI_SOME_OTHER_KEY")).toBe(true);
+  });
+});
+
+describe("decidePermissionsOpen", () => {
+  let permissionsConfigDir: string;
+  let permissionsWorktree: string;
+
+  beforeEach(() => {
+    permissionsConfigDir = mkdtempSync(join(tmpdir(), "seri-permissions-open-test-"));
+    permissionsWorktree = mkdtempSync(join(tmpdir(), "seri-permissions-worktree-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(permissionsConfigDir, { recursive: true, force: true });
+    rmSync(permissionsWorktree, { recursive: true, force: true });
+  });
+
+  test("[] on an empty permissions dir", () => {
+    expect(decidePermissionsOpen(permissionsConfigDir, permissionsWorktree)).toEqual([]);
+  });
+
+  test("a project-tier grant (rememberGrant) is source: persisted, removable", () => {
+    rememberGrant(permissionsConfigDir, permissionsWorktree, "write_file");
+
+    expect(decidePermissionsOpen(permissionsConfigDir, permissionsWorktree)).toEqual([
+      { tool: "write_file", source: "persisted", removable: true },
+    ]);
+  });
+
+  // rememberGrant only ever writes to the `projects` tier — a `global` entry (approved for every
+  // project) is written directly here to stand in for one a user promoted by hand, per that
+  // tier's own documented "seri never writes here" contract (permissions/store.ts's TEMPLATE).
+  test("a global-tier grant is source: pre-approved, not removable", () => {
+    writeFileSync(
+      join(permissionsConfigDir, "permissions.yaml"),
+      "global: [write_file]\nprojects: {}\n",
+    );
+
+    expect(decidePermissionsOpen(permissionsConfigDir, permissionsWorktree)).toEqual([
+      { tool: "write_file", source: "pre-approved", removable: false },
+    ]);
+  });
+});
+
+describe("decideMaxTurns", () => {
+  test("a valid positive integer string returns the parsed number", () => {
+    expect(decideMaxTurns(["3"])).toBe(3);
+  });
+
+  test("throws on zero, non-numeric, missing, or extra arguments", () => {
+    expect(() => decideMaxTurns(["0"])).toThrow();
+    expect(() => decideMaxTurns(["abc"])).toThrow();
+    expect(() => decideMaxTurns([])).toThrow();
+    expect(() => decideMaxTurns(["1", "2"])).toThrow();
+  });
+});
+
+describe("decideProfileCreate", () => {
+  test("returns the absolute profile directory path, without creating it", () => {
+    const path = decideProfileCreate(["new", "work"]);
+    expect(path).toBe(join(getBaseConfigDir(), "work"));
+    expect(existsSync(path)).toBe(false);
+  });
+
+  test("throws on a path-traversal name", () => {
+    expect(() => decideProfileCreate(["new", "../etc"])).toThrow();
+  });
+
+  // "sessions" collides with the sessions/ directory every profile root already has
+  // (config/paths.ts's getReservedProfileNames).
+  test("throws on a reserved name", () => {
+    expect(() => decideProfileCreate(["new", "sessions"])).toThrow();
+  });
 });
