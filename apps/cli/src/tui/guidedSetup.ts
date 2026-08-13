@@ -10,7 +10,13 @@ import { persistDefaultModel } from "../provider/defaults";
 import { configuredProviders } from "../provider/keys";
 import { deliverSignal, onSignalCleanup } from "../signals";
 import { decideGuidedModelPickerOpen, decideSetupOpen } from "./commands";
-import { type Dispatch, initialTuiState, type SetupState, type TuiState, tuiReducer } from "./reducer";
+import {
+  type Dispatch,
+  initialTuiState,
+  type SetupState,
+  type TuiState,
+  tuiReducer,
+} from "./reducer";
 
 // `runGuidedSetup`'s own mandatory-picker copy (Decision 1/2, byok-guided-setup-default-model
 // bugfix report) — named constants rather than inlined literals, so tuiPty.test.ts's own pty
