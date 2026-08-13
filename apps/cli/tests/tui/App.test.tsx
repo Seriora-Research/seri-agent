@@ -5,16 +5,16 @@ import { render } from "ink-testing-library";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
+import { App } from "../../src/tui/App";
+import type { ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import {
-  App,
   formatContextWindow,
   formatCost,
   formatModeLabel,
   formatModelRow,
   formatRouteLabel,
   formatSetupRow,
-} from "../../src/tui/App";
-import type { ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
+} from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
