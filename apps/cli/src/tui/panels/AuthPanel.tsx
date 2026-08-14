@@ -60,7 +60,11 @@ export function AuthPanel({
     );
   }
   return (
-    <Box borderStyle="round" borderColor={state.error ? theme.error : theme.accent} flexDirection="column">
+    <Box
+      borderStyle="round"
+      borderColor={state.error ? theme.error : theme.accent}
+      flexDirection="column"
+    >
       <Text color={state.error ? theme.error : theme.accent}>{state.message}</Text>
       <Text color={theme.muted}>Enter/Esc continue</Text>
     </Box>

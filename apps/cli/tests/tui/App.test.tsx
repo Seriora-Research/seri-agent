@@ -1186,6 +1186,29 @@ describe("App", () => {
       expect(frame).toContain("/login");
       expect(frame).toContain("/setup — provider API keys");
     });
+
+    // Bug fix (coordinator follow-up, PR #94 code-review): `authOffer` and `pendingAuth` are
+    // independent reducer fields (TuiState's own comment) — before this, the banner stayed up
+    // telling the user to /login while the device-code panel (or a failed attempt's error) was
+    // already showing right below it, telling them to do the thing they were already mid-way
+    // through. `auth-requested` alone does NOT clear it (the reducer's own case never touches
+    // `authOffer`) — createAuthHandlers.onLogin (cli.ts) dispatches the two actions below in
+    // exactly this sequence, which is what this test reproduces.
+    test("clears once a login attempt actually starts (auth-requested), while AuthPanel is showing", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-offer", show: true });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("/login");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      dispatch({ type: "auth-offer", show: false });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Starting login");
+      expect(frame).not.toContain("Sign in with /login, or create an account with /signup");
+    });
   });
 
   describe("auth panel", () => {

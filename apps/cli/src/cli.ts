@@ -1765,6 +1765,12 @@ function createAuthHandlers(opts: {
 
   async function onLogin(mode: "login" | "signup"): Promise<void> {
     dispatch({ type: "auth-requested", mode });
+    // Bug fix (coordinator follow-up, PR #94 code-review): the banner (`state.authOffer`) is
+    // independent of `pendingAuth` (TuiState's own comment) — without this, it stayed up telling
+    // the user to /login while the device-code panel (or a failed attempt's error panel) was
+    // already showing right below it. `onAuthResolved` (App.tsx) recomputes it fresh once this
+    // flow ends, either way — see that wiring's own comment.
+    dispatch({ type: "auth-offer", show: false });
     try {
       const clientId = getWorkosClientId(configDir);
       await loginFn(mode, clientId, configDir, {
@@ -2628,7 +2634,16 @@ async function runTui(
       onSetupRemove,
       onSetupBack,
       onSetupClose,
-      onAuthResolved: () => dispatch({ type: "auth-resolved" }),
+      // Bug fix (coordinator follow-up, PR #94 code-review): recomputes the banner fresh from disk
+      // once this flow ends, rather than leaving it hidden forever after onLogin's own `auth-offer:
+      // false` (above) — the same "recompute fresh, never trust a stale copy" contract every other
+      // auth-offer call site already has. A failed attempt (no session saved) correctly brings it
+      // back; a successful one (session already saved by the time onMessage dispatched this) keeps
+      // it hidden — either way this is reading the true current state, not assuming which happened.
+      onAuthResolved: () => {
+        dispatch({ type: "auth-resolved" });
+        dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
+      },
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
         // Stage C: the non-blocking login/signup offer (AuthBanner) — true iff no auth session is

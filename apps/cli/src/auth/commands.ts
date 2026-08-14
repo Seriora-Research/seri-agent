@@ -66,7 +66,10 @@ export async function login(
   );
 }
 
-export function logout(configDir: string, onMessage: (message: string) => void = console.log): void {
+export function logout(
+  configDir: string,
+  onMessage: (message: string) => void = console.log,
+): void {
   const existing = loadAuthSession(configDir);
   clearAuthSession(configDir);
   onMessage(existing ? "Logged out." : "Not logged in.");
