@@ -3633,8 +3633,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await sawLine("Max turns set to 1");
 
+        // The typed-box render, un-prefixed — "> do a task" is echoUserInput's OWN prefix,
+        // produced only after submit (Enter), so waiting for it before pressing Enter would never
+        // resolve. Same wait-then-submit shape as "/max-turns 1" just above.
         child.stdin?.write("do a task");
-        await sawLine("> do a task");
+        await sawLine("do a task");
         child.stdin?.write("\r");
         await sawLine("RUNLOOP_MAXITERATIONS 1");
       } finally {
@@ -3653,8 +3656,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("[approve-each]");
 
+        // Same un-prefixed wait-then-submit shape as the positive case above.
         child.stdin?.write("do a task");
-        await sawLine("> do a task");
+        await sawLine("do a task");
         child.stdin?.write("\r");
         await sawLine("RUNLOOP_MAXITERATIONS 5");
       } finally {
@@ -3675,8 +3679,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("/profile new work");
         await sawLine("/profile new work");
         child.stdin?.write("\r");
-        await sawLine("Created profile directory");
-        await sawLine("does not switch the running session's profile");
+        await sawLine("Profile directory");
+        // A short fragment, not the whole sentence: the full line wraps at Ink's 80-column
+        // width between "does not" and "switch", so a longer substring straddling that wrap
+        // would never appear on one rendered line and this would time out.
+        await sawLine("switch the running session's profile");
 
         // waitForConfig's own reasoning, applied to a directory instead of a file: a bare
         // existsSync right after sawLine races the mkdirSync a DIFFERENT process (this test) is
@@ -3705,6 +3712,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("may only contain letters, numbers");
 
         await wait100ms();
+        // The actual path a successful traversal would create: join(getBaseConfigDir(), "../etc")
+        // NORMALIZES to a sibling of .seri, not something under it — so `.seri` not existing
+        // proves nothing on its own (it would be equally absent whether or not the traversal was
+        // blocked, since even an unblocked mkdirSync never targets a path under .seri here). This
+        // is the primary assertion; `.seri` itself is also checked, but only as a secondary one.
+        expect(existsSync(join(dir, "etc"))).toBe(false);
         expect(existsSync(join(dir, ".seri"))).toBe(false);
       } finally {
         child.kill("SIGKILL");
