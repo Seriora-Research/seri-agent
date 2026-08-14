@@ -2407,6 +2407,28 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // present and SERI_PROVIDER: "anthropic" written on turn 1, confirming the assertion below
       // actually exercises the fix rather than being vacuously true.
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+
+      // Same on-disk invariant the round-4 regression test (the /model-pick-to-a-keyless-provider
+      // one, above) enforces, applied here to a session that starts already-rerouted: this
+      // session's own `requestedProvider` (env SERI_PROVIDER="openrouter") names a DIFFERENT
+      // provider than the one turn 1 actually resolved to and persisted (anthropic) — exactly the
+      // pairing `confirmedModel`'s own comment in cli.ts warns must never reach disk mismatched.
+      const sessionsDir = join(dir, "sessions");
+      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".json"));
+      if (sessionFile === undefined) throw new Error("no session file written yet");
+      const sessionPath = join(sessionsDir, sessionFile);
+      const deadline = Date.now() + 5_000;
+      let onDisk: { provider?: string; requestedProvider?: string };
+      do {
+        onDisk = JSON.parse(readFileSync(sessionPath, "utf8"));
+      } while (onDisk.provider === undefined && Date.now() < deadline);
+      if (onDisk.provider === undefined) throw new Error("no provider persisted yet");
+      if (onDisk.requestedProvider !== undefined) {
+        expect(onDisk.requestedProvider).toBe(onDisk.provider);
+      }
+      // Negative control built into the assertion above would pass vacuously if the on-disk
+      // provider never advanced from the pre-rerouted default — rule that out directly.
+      expect(onDisk.provider).toBe("anthropic");
     } finally {
       child.kill("SIGKILL");
     }

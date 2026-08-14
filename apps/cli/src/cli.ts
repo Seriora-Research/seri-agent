@@ -2296,6 +2296,13 @@ async function runTui(
   // guard (below) on turn 1, persisting a switch the session never asked for and breaking the
   // "a session that never touches /model never writes config.json" invariant
   // (tuiPty.test.ts's own regression guard for this).
+  // `requestedProvider` only carries forward when it still names the same provider as `provider`
+  // above: `prepared.session.requestedProvider` is what the session asked for BEFORE this
+  // resolution ran, and a reroute (`prepared.route.rerouted`) can leave that naming a provider
+  // this resolution didn't resolve to. Pairing an unrelated requested name with the resolved
+  // `provider` is exactly the mismatch `resolveDefaultModel`'s own comment on `requestedProvider`
+  // warns against, so a mismatch resets to `undefined` — no known request — instead of following
+  // the stale provider name forward.
   let confirmedModel: {
     model: string;
     provider: ModelProvider;
@@ -2303,7 +2310,10 @@ async function runTui(
   } = {
     model: prepared.route.model,
     provider: prepared.route.provider,
-    requestedProvider: prepared.session.requestedProvider,
+    requestedProvider:
+      prepared.session.requestedProvider === prepared.route.provider
+        ? prepared.session.requestedProvider
+        : undefined,
   };
   // Tracks what actually LANDED in config.json, separate from `confirmedModel` above — the two
   // used to share one variable for two jobs (code-review finding on PR #71): `confirmedModel`
@@ -2709,7 +2719,16 @@ async function runTui(
           // session's own starting pair, so turn 1 (same model) trips neither.
           if (event.type === "messages-updated") {
             if (modelPairChanged(confirmedModel, { model: modelId, provider })) {
-              confirmedModel = { model: modelId, provider, requestedProvider };
+              // `requestedProvider` here is this turn's session-requested provider (destructured
+              // above from `session as RunSession`), not necessarily what THIS turn actually
+              // resolved to (`provider` = `route.provider`) — a reroute can make the two differ,
+              // same mismatch `confirmedModel`'s own comment guards against at session start. Only
+              // carry it forward when it still names the provider actually landing here.
+              confirmedModel = {
+                model: modelId,
+                provider,
+                requestedProvider: requestedProvider === provider ? requestedProvider : undefined,
+              };
             }
             // Gated on `lastPersistedModel`, not `confirmedModel`: the try/catch + printWarning
             // mirrors onSessionChange's own pattern above — a config write failure (EACCES,
