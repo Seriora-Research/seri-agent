@@ -1564,6 +1564,62 @@ describe("App", () => {
 
       expect(closed).toEqual([0]);
     });
+
+    // ConfigConfirmUnset's own convention (mirroring SetupConfirmRemove's confirm-remove test
+    // above): the [y]es/[N]o prompt renders, and only an explicit "y" confirms via onConfigUnset —
+    // Enter and any other unrecognised key both cancel back via onConfigBack.
+    test("confirm-unset: '[y]es / [N]o' renders; Enter and an unrecognised key both cancel, 'y' confirms", async () => {
+      const unset: string[] = [];
+      const backCalls: number[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onConfigUnset={(key) => unset.push(key)}
+          onConfigBack={() => backCalls.push(backCalls.length)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({
+        type: "config-step",
+        state: { step: "confirm-unset", key: "SERI_SOME_OTHER_KEY" },
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("[y]es");
+      expect(frame).toContain("[N]o");
+
+      instance.stdin.write("z"); // unrecognised key
+      await flush();
+      expect(unset).toEqual([]);
+      expect(backCalls).toEqual([0]);
+
+      dispatch({
+        type: "config-step",
+        state: { step: "confirm-unset", key: "SERI_SOME_OTHER_KEY" },
+      });
+      await flush();
+      instance.stdin.write("\r"); // Enter
+      await flush();
+      expect(unset).toEqual([]);
+      expect(backCalls).toEqual([0, 1]);
+
+      dispatch({
+        type: "config-step",
+        state: { step: "confirm-unset", key: "SERI_SOME_OTHER_KEY" },
+      });
+      await flush();
+      instance.stdin.write("y");
+      await flush();
+
+      expect(unset).toEqual(["SERI_SOME_OTHER_KEY"]);
+    });
   });
 
   describe("permissions panel", () => {
