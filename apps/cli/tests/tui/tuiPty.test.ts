@@ -806,6 +806,36 @@ function childScriptGuidedSetupDelayedFetch(dir: string): string {
   ].join("\n");
 }
 
+// cli-tui-stage-b-bare-seri, feature-plan.md Stage B: a real TTY, no positionals, no --continue/
+// --resume — the exact case that used to hard-exit with USAGE before this stage and now mounts the
+// TUI idle instead. GROQ_API_KEY is set (unlike childScriptGuidedSetup) so the zero-keys gate never
+// fires and the only thing under test is bare seri's own idle-mount/no-auto-start behavior, not the
+// gate composition (already covered by the guided-setup describe block above).
+function childScriptBare(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run([], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
 // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
 // research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
 // identical signature... with zero change to loop.ts/gate.ts") that every earlier round of this
@@ -2997,6 +3027,87 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(stdout).toContain(
           "GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>",
         );
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
+
+  // cli-tui-stage-b-bare-seri, feature-plan.md Stage B acceptance criteria: bare `seri` in a real
+  // TTY mounts the TUI idle (no positionals, no --continue/--resume) instead of hard-exiting with
+  // USAGE, and does not auto-start a turn the way `seri --continue` still does.
+  describe("bare seri", () => {
+    test("mounts idle with no auto-started turn; a typed task starts one; Ctrl-D then exits 0", async () => {
+      const scriptPath = join(dir, "child-bare.mjs");
+      writeFileSync(scriptPath, childScriptBare(dir));
+
+      const { child, sawLine, exited, occurrences } = startChild(scriptPath, dir);
+      try {
+        // The mode-indicator/input box's own default-session label (modeIndicator, reducer.ts) —
+        // proof the TUI actually mounted rather than the process just sitting there.
+        await sawLine("[approve-each]");
+        // Negative control: nothing auto-started a turn. wait100ms first, matching every other
+        // occurrences()-based negative control in this file (the seedConfig-adjacent /setup tests
+        // above) — occurrences() is a synchronous snapshot, so it has to be given time to be wrong
+        // before it can prove RUNLOOP_READY genuinely never printed.
+        await wait100ms();
+        expect(occurrences("RUNLOOP_READY")).toBe(0);
+
+        child.stdin?.write("do a task");
+        await sawLine("do a task");
+        child.stdin?.write("\r");
+        await sawLine("RUNLOOP_READY");
+        await sawLine("> do a task");
+        expect(occurrences("RUNLOOP_READY")).toBe(1);
+
+        child.stdin?.write("\x04");
+        const result = await Promise.race([
+          exited,
+          new Promise<"the run never settled">((r) =>
+            setTimeout(() => r("the run never settled"), 15_000),
+          ),
+        ]);
+        expect(result).not.toBe("the run never settled");
+        const { stdout } = result as Exit;
+        expect(stdout).toContain("EXIT_CODE 0");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The spec's own named acceptance test (feature-plan.md finding #7): a fresh, non-resuming,
+    // task-less TTY invocation must persist NO empty-content user message — the latent
+    // `hasNewTask`/`prepareSession` bug bare-seri-mounts-the-TUI exists to fix, not just the
+    // positionals.length===0 hard exit. Asserted on the session JSON's own `messages` array, not a
+    // rendered line — a rendered transcript has nothing to show for a message that was pushed to
+    // `session.messages` in memory but never echoed (echoUserInput is gated on `hasNewTask` too, so
+    // the old bug wouldn't have shown up as a rendered line either).
+    test("quitting immediately, with nothing ever typed, persists no empty-content user message", async () => {
+      const scriptPath = join(dir, "child-bare-quit.mjs");
+      writeFileSync(scriptPath, childScriptBare(dir));
+
+      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      try {
+        await sawLine("[approve-each]");
+        await wait100ms();
+
+        child.stdin?.write("\x04");
+        const result = await Promise.race([
+          exited,
+          new Promise<"the run never settled">((r) =>
+            setTimeout(() => r("the run never settled"), 15_000),
+          ),
+        ]);
+        expect(result).not.toBe("the run never settled");
+        const { stdout } = result as Exit;
+        expect(stdout).toContain("EXIT_CODE 0");
+
+        const sessionsDir = join(dir, "sessions");
+        const sessionFiles = existsSync(sessionsDir) ? readdirSync(sessionsDir) : [];
+        expect(sessionFiles).toHaveLength(1);
+        const session = JSON.parse(readFileSync(join(sessionsDir, sessionFiles[0]!), "utf8"));
+        expect(session.messages).not.toContainEqual({ role: "user", content: "" });
+        expect(session.messages).toEqual([]);
       } finally {
         child.kill("SIGKILL");
       }
