@@ -11,7 +11,7 @@ import type { ModelPickerEntry, SetupProviderRow } from "./commands";
 // rendering all of them would scroll the picker itself out of view, the same reasoning
 // truncateArgsDisplay already applies to a single long line. `selectedIndex` can move past this
 // many rows (arrow-key navigation over the full filtered list, not just what's on screen) — see
-// `scrollOffset`, below, for how the visible window slides to keep it in view.
+// `scrollOffset` (panels/ModelPicker.tsx) for how the visible window slides to keep it in view.
 export const MODEL_PICKER_WINDOW = 10;
 
 // Column widths for formatModelRow/MODEL_PICKER_HEADER below — plain padded strings, not a table
@@ -39,9 +39,9 @@ export const MODE_LABEL_COMPACT_COLS = 52;
 
 // A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined` —
 // this is what `stdout.columns ?? DEFAULT_COLUMNS` (useTerminalWidth, App.tsx) guards against. It
-// is NOT what makes this file's own Ink component tests land in the full tier: ink-testing-library's
-// stub stdout returns a real `columns: 100`, so those tests are already in the full tier on the
-// actual value, not this fallback.
+// is NOT what makes App.test.tsx's own Ink component tests land in the full tier:
+// ink-testing-library's stub stdout returns a real `columns: 100`, so those tests are already in
+// the full tier on the actual value, not this fallback.
 export const DEFAULT_COLUMNS = 80;
 
 // Truncates with a trailing ellipsis (never mid-multi-byte-safe beyond what .slice already is —
@@ -90,8 +90,8 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
 // on the same information, or — when none of those siblings has a key either — repeat the original
 // bug of promising a fallback that does not exist.
 // D1 (byok-open3-route-indicator feature-plan.md): extracted out of formatModelRow's own inline
-// ternary so the picker's Route column and the persistent mode-indicator's route label (App's own
-// JSX, below) share ONE vocabulary function — they can never independently drift on what "your
+// ternary so the picker's Route column and the persistent mode-indicator's route label (App.tsx's
+// own JSX) share ONE vocabulary function — they can never independently drift on what "your
 // key"/"→ provider"/"provided"/"no key" means for the same inputs. `gatewayReachable` (D7) is the
 // dead-code seam's own 4th state: always `false` in production today (decideModelPickerOpen's own
 // `planCoverage` default), so "provided" is unreachable until a real data source exists.
