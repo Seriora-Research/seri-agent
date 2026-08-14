@@ -1232,12 +1232,19 @@ describe("App", () => {
   describe("config panel", () => {
     function configRows(): ConfigRow[] {
       return [
-        { key: "SERI_WORKOS_CLIENT_ID", masked: "", source: "unset", removable: false },
+        {
+          key: "SERI_WORKOS_CLIENT_ID",
+          masked: "",
+          source: "unset",
+          removable: false,
+          secret: false,
+        },
         {
           key: "SERI_VERIFY_COMMAND",
           masked: "sk-d...2345",
           source: "config",
           removable: true,
+          secret: true,
         },
       ];
     }
@@ -1268,6 +1275,7 @@ describe("App", () => {
             masked: "sk-d...2345",
             source: "config",
             removable: true,
+            secret: true,
           },
         ],
       });
@@ -1322,10 +1330,11 @@ describe("App", () => {
     });
   });
 
-  // Render-ternary precedence (App.tsx's own comment): pendingApproval beats every later branch,
-  // pendingAuth included — extends the existing pendingSetup-vs-InputBox precedence test above with
-  // the new Stage A branches.
-  describe("render precedence: pendingApproval over the new auth/config/permissions branches", () => {
+  // Render-ternary precedence (App.tsx's own comment): pendingApproval → pendingModelPicker →
+  // pendingSetup → pendingAuth → pendingConfig → pendingPermissions → InputBox. Each test below
+  // seeds one adjacent pair at once and checks the earlier-in-the-chain branch wins, extending the
+  // existing pendingSetup-vs-InputBox precedence test above to the three new Stage A branches.
+  describe("render precedence: pendingApproval / pendingSetup / pendingAuth / pendingConfig / pendingPermissions", () => {
     test("pendingApproval wins over pendingAuth", async () => {
       const { instance, dispatch } = await connect();
 
@@ -1344,6 +1353,76 @@ describe("App", () => {
       const frame = instance.lastFrame() ?? "";
       expect(frame).toContain("Approve write_file");
       expect(frame).not.toContain("Starting login");
+    });
+
+    test("pendingSetup wins over pendingAuth", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("Starting login");
+
+      dispatch({ type: "setup-requested", rows: [] });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("/setup — provider API keys");
+      expect(frame).not.toContain("Starting login");
+    });
+
+    test("pendingAuth wins over pendingConfig", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "config-requested",
+        rows: [
+          {
+            key: "SERI_VERIFY_COMMAND",
+            masked: "bun check",
+            source: "config",
+            removable: true,
+            secret: false,
+          },
+        ],
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("/config — settings");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Starting login");
+      expect(frame).not.toContain("/config — settings");
+    });
+
+    test("pendingConfig wins over pendingPermissions", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "permissions-requested",
+        rows: [{ tool: "write_file", source: "persisted", removable: true }],
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("/permissions — tools approved permanently");
+
+      dispatch({
+        type: "config-requested",
+        rows: [
+          {
+            key: "SERI_VERIFY_COMMAND",
+            masked: "bun check",
+            source: "config",
+            removable: true,
+            secret: false,
+          },
+        ],
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("/config — settings");
+      expect(frame).not.toContain("/permissions — tools approved permanently");
     });
   });
 });
