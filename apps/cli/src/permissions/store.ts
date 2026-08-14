@@ -1,6 +1,7 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Document, parseDocument, Scalar, YAMLMap, YAMLSeq } from "yaml";
+import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { foldsCase } from "../caseFold";
 
 // NOT derived from WRITE_TOOL_NAMES, on purpose: a tool added to the gate must be opted IN here
@@ -175,8 +176,7 @@ export function effectiveTools(grants: Grants): string[] {
 // but a world-writable allowlist is a local privilege-escalation vector on its own — anything that
 // can append `write_file` to it makes seri stop asking, in every future run.
 function writeDocument(doc: Document, configDir: string): void {
-  mkdirSync(configDir, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") chmodSync(configDir, 0o700);
+  ensureOwnerOnlyDir(configDir);
   const path = permissionsPath(configDir);
   const tmpPath = `${path}.tmp`;
   writeFileSync(tmpPath, String(doc), { mode: 0o600 });

@@ -52,8 +52,14 @@ export const USAGE = `Usage:
 
 Options:
   --max-turns <n>                 stop after n model turns (default 500)
+  /max-turns <n> (inside the TUI) override --max-turns for the rest of the session, taking
+                                    effect on the next turn — not a seri subcommand
   --profile <name>                use the named profile's config, auth, permissions, sessions
                                     and checkpoints (or SERI_PROFILE; the flag wins)
+  /profile new <name> (inside the TUI)
+                                    create a new profile's directory — not a seri subcommand;
+                                    does not switch the running session's profile, restart with
+                                    --profile <name> or SERI_PROFILE to use it
   --dangerously-skip-permissions  run every tool with no approval prompt (attended use only)
   --                              everything after this is the task, flags included:
                                     seri -- fix the --help output`;

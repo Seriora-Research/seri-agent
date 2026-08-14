@@ -15,6 +15,7 @@ import pkg from "../package.json";
 import { onAbort } from "./abort";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
+import { ensureOwnerOnlyDir } from "./atomicWriteFile";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
 import { getWorkosClientId } from "./auth/deviceFlow";
 import {
@@ -103,9 +104,11 @@ import {
   checkpointTarget,
   decideAuthOffer,
   decideConfigOpen,
+  decideMaxTurns,
   decideModeCycle,
   decideModelPickerOpen,
   decidePermissionsOpen,
+  decideProfileCreate,
   decideRestore,
   decideRewind,
   decideSetupOpen,
@@ -2347,6 +2350,10 @@ async function runTui(
   // true the moment runTurn actually starts a turn (not on the early-return guard below it), so an
   // idle session the user quit without ever submitting a task never flips it.
   let ranAnyTurn = false;
+  // `maxTurns` (the `--max-turns` startup flag) seeds this, but `/max-turns <n>` (onSubmit, below)
+  // reassigns it live — runTurn's own driveLoop call reads THIS, not the parameter, so an override
+  // takes effect on the next turn with no restart.
+  let liveMaxTurns = maxTurns;
   // Created ONCE per run, outside the per-turn loop, so the tool-call counter accumulates across
   // every turn of this TUI session rather than resetting each time runTurn calls driveLoop.
   const archivistState = createArchivistState(prepared.session);
@@ -2648,7 +2655,7 @@ async function runTui(
         turnPrepared,
         ctx,
         deps,
-        maxTurns,
+        liveMaxTurns,
         (event) => {
           dispatch({ type: "loop-event", event });
           // B2 fix: `messages-updated` is loop.ts's own signal that a model call actually
@@ -2966,6 +2973,50 @@ async function runTui(
             checkpointTarget(liveState.session, dirs(ctx)).worktree,
             (message) => dispatch({ type: "command-error", message }),
           ),
+        });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+    // /max-turns and /profile new (Stage E, feature-plan.md): one-shot commands, no panel and no
+    // new reducer state — they confirm via transcript-append or fail via command-error, same as
+    // every other interception in this chain.
+    if (name === "/max-turns") {
+      try {
+        liveMaxTurns = decideMaxTurns(args);
+        dispatch({
+          type: "transcript-append",
+          line: `Max turns set to ${liveMaxTurns} — takes effect on the next turn.`,
+        });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+    if (name === "/profile") {
+      try {
+        const { dir, name: profileName } = decideProfileCreate(args);
+        // This directory will hold auth.json/config.json/permissions.yaml once the profile is
+        // used, so it is owner-only like every other secrets-holding directory this codebase
+        // creates (ensureOwnerOnlyDir, atomicWriteFile.ts). `created` comes from the mkdir call
+        // itself (code-review round 3) rather than a separate `existsSync(dir)` probe beforehand
+        // — a probe-then-create pair races two concurrent `/profile new work` invocations into
+        // both observing "doesn't exist yet" and both claiming "created" for a directory only one
+        // of them actually made.
+        const created = ensureOwnerOnlyDir(dir);
+        dispatch({
+          type: "transcript-append",
+          // `profileName`, not basename(dir): decideProfileCreate already validated it, and for
+          // a name whose resolved `dir` has no trailing segment equal to it, basename(dir) would
+          // be wrong (decideProfileCreate's own comment explains when that happens).
+          line: `Profile directory ${dir} ${created ? "created" : "already exists"}. This does not switch the running session's profile — restart with --profile ${profileName} or SERI_PROFILE to use it.`,
         });
       } catch (err) {
         dispatch({
