@@ -695,6 +695,22 @@ describe("decidePermissionsOpen", () => {
       { tool: "write_file", source: "pre-approved", removable: false },
     ]);
   });
+
+  // /code-review, round 3: loadGrants never throws on a malformed store — it degrades to []
+  // and reports through onWarning instead, unlike decideConfigOpen's loadConfig (which does
+  // throw). decidePermissionsOpen used to drop that callback entirely, so a corrupted
+  // permissions.yaml silently rendered as "nothing approved" with no way to tell the two apart.
+  // This pins that decidePermissionsOpen actually forwards onWarning to loadGrants, not just
+  // that loadGrants itself does (permissions/store.test.ts already covers that half).
+  test("a malformed store degrades to [] and reports through onWarning", () => {
+    writeFileSync(join(permissionsConfigDir, "permissions.yaml"), ":::not yaml:::");
+
+    const warnings: string[] = [];
+    expect(
+      decidePermissionsOpen(permissionsConfigDir, permissionsWorktree, (m) => warnings.push(m)),
+    ).toEqual([]);
+    expect(warnings).toHaveLength(1);
+  });
 });
 
 describe("decideMaxTurns", () => {

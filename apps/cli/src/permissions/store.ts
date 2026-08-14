@@ -233,10 +233,17 @@ export function rememberGrant(
   return true;
 }
 
+// `scope` is required, not defaulted: "project" is for a caller (the TUI's /permissions panel)
+// that only ever showed the project-tier entry as removable — a tool granted in both tiers must
+// keep its global pre-approval when removed from there, or the removal contradicts what the row
+// told the user. `seri permissions remove <tool>` (permissions/commands.ts) wants "both": its own
+// message already reports each tier it actually touched, so there is nothing left for it to
+// contradict.
 export function forgetGrant(
   configDir: string,
   worktree: string,
   tool: string,
+  scope: "project" | "both",
   onWarning?: (message: string) => void,
 ): { global: boolean; project: boolean } {
   const path = permissionsPath(configDir);
@@ -250,7 +257,8 @@ export function forgetGrant(
   const { doc } = state;
   const key = projectKey(worktree);
   const global = doc.get("global");
-  const removedGlobal = global instanceof YAMLSeq ? removeFromSeq(global, tool) : false;
+  const removedGlobal =
+    scope === "both" && global instanceof YAMLSeq ? removeFromSeq(global, tool) : false;
   const projectsNode = doc.get("projects");
   const list = doc.getIn(["projects", key]);
   const removedProject = list instanceof YAMLSeq ? removeFromSeq(list, tool) : false;

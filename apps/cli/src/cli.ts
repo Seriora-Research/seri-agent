@@ -42,7 +42,7 @@ import {
   usageError,
 } from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
-import { loadVerifyConfig, setConfigValue, unsetConfigValue } from "./config/config";
+import { loadConfig, loadVerifyConfig, setConfigValue, unsetConfigValue } from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
 import type { PermissionMode } from "./gate/gate";
 import {
@@ -62,7 +62,13 @@ import {
 import { decideMemoryCommand, memoryCommandAccepts } from "./memory/commands";
 import { loadMemory, type LoadedMemory } from "./memory/store";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
-import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
+import {
+  effectiveTools,
+  forgetGrant,
+  loadGrants,
+  PERSISTABLE_TOOLS,
+  rememberGrant,
+} from "./permissions/store";
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
@@ -97,9 +103,11 @@ import {
   type CommandDirs,
   checkpointTarget,
   decideAuthOffer,
+  decideConfigOpen,
   decideMaxTurns,
   decideModeCycle,
   decideModelPickerOpen,
+  decidePermissionsOpen,
   decideProfileCreate,
   decideRestore,
   decideRewind,
@@ -108,8 +116,10 @@ import {
 } from "./tui/commands";
 import { runGuidedSetup } from "./tui/guidedSetup";
 import {
+  type ConfigPanelState,
   type Dispatch,
   initialTuiState,
+  type PermissionsPanelState,
   type SetupState,
   type TuiState,
   tuiReducer,
@@ -1857,6 +1867,327 @@ function createAuthHandlers(opts: { dispatch: Dispatch; deps: CliDeps; configDir
   return { onLogin, onLogout, onAbandon };
 }
 
+// Reviewer finding (Stage D round 1, MEDIUM-1): SERI_VERIFY_ENABLED and SERI_VERIFY_COMMAND are
+// only ever read once, at prepareSession's own `loadVerifyConfig()` call (above), baked into
+// `withVerification(...)` for the lifetime of the running process — unlike SERI_WORKOS_CLIENT_ID,
+// which /login re-resolves live via getWorkosClientId on every attempt. A /config write to either
+// of these two keys lands in config.json correctly but has no effect on the CURRENT session, only
+// the next one — this note is what keeps the confirmation honest about that.
+function verifyConfigTakesEffectNote(key: string): string {
+  return key === "SERI_VERIFY_ENABLED" || key === "SERI_VERIFY_COMMAND"
+    ? " (takes effect on the next run)"
+    : "";
+}
+
+// Stage D (cli-commands-to-tui feature-plan.md): /config's own two handlers, mirroring
+// createSetupHandlers's exact shape (dispatch/getPendingConfig/configDir in). Calls the DATA
+// functions directly — loadConfig/setConfigValue/unsetConfigValue (config/config.ts) — never
+// configCommand (config/commands.ts), which is console/exit-code shaped for the non-interactive
+// path. Every recompute-and-dispatch is wrapped in try/catch degrading to command-error: config.json
+// can be hand-edited or corrupted mid-session, same reachable-anytime failure dispatchSetupList's
+// own comment already documents for /setup.
+function createConfigHandlers(opts: {
+  dispatch: Dispatch;
+  getPendingConfig: () => ConfigPanelState | undefined;
+  configDir: string;
+}): {
+  onConfigSelect: (key: string) => void;
+  onConfigValueEntered: (key: string, value: string) => void;
+  onConfigUnset: (key: string) => void;
+  onConfigBack: () => void;
+} {
+  const { dispatch, getPendingConfig, configDir } = opts;
+
+  function configListState(selectedKey?: string): ConfigPanelState {
+    const rows = decideConfigOpen(configDir);
+    const selected =
+      selectedKey === undefined
+        ? 0
+        : Math.max(
+            0,
+            rows.findIndex((row) => row.key === selectedKey),
+          );
+    return { step: "list", rows, selected };
+  }
+
+  // Same "refresh the list, degrade to command-error" shape dispatchSetupList uses — and, like the
+  // post-write refreshes below, closes the panel on that error rather than leaving `pendingConfig`
+  // on whatever step it was: this is `onConfigBack`'s own refresh too, so a throwing
+  // decideConfigOpen (a corrupted config.json) while sitting on confirm-unset used to leave that
+  // step showing forever, since command-error alone never touches `pendingConfig`.
+  function dispatchConfigList(selectedKey?: string): void {
+    try {
+      dispatch({ type: "config-step", state: configListState(selectedKey) });
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      dispatch({ type: "config-resolved" });
+    }
+  }
+
+  // No config.json read here — mirrors onSetupSelect: `key` alone is enough to open the entry step.
+  function onConfigSelect(key: string): void {
+    dispatch({ type: "config-step", state: { step: "enter-value", key, busy: false } });
+  }
+
+  function onConfigValueEntered(key: string, value: string): void {
+    dispatch({ type: "config-step", state: { step: "enter-value", key, busy: true } });
+    try {
+      setConfigValue(key, value, configDir);
+    } catch (err) {
+      dispatch({
+        type: "config-step",
+        state: {
+          step: "enter-value",
+          key,
+          busy: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
+      return;
+    }
+    dispatch({
+      type: "transcript-append",
+      line: `Saved ${key}.${verifyConfigTakesEffectNote(key)}`,
+    });
+    // NOT dispatchConfigList (thermo-nuclear, round 3 — the stale version of this comment claimed
+    // dispatchConfigList's catch leaves `pendingConfig` untouched, which stopped being true once
+    // its catch started dispatching config-resolved): kept inline anyway, because closing the
+    // panel here would be the wrong recovery — the user is mid-edit on a config.json write that
+    // just wrote fine and only the REFRESH after it failed, so resetting `busy: false` and
+    // showing the error on this same key lets them retry or Esc out, instead of losing the step
+    // they were on for a failure in the read that happened after their write already succeeded.
+    try {
+      dispatch({ type: "config-step", state: configListState(key) });
+    } catch (err) {
+      dispatch({
+        type: "config-step",
+        state: {
+          step: "enter-value",
+          key,
+          busy: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
+    }
+  }
+
+  // Dual-purpose (mirrors onSetupRemove's own comment): the SAME prop the list step's 'r'/Delete
+  // and the confirm-unset step's 'y' both call — which one this call means is read off the CURRENT
+  // live reducer state. The confirm branch reads `key` from `pending` itself, not the argument the
+  // caller passed — same reasoning as onSetupRemove's own `pending.keyName`, not trusted from its
+  // own `provider` argument either.
+  function onConfigUnset(key: string): void {
+    const pending = getPendingConfig();
+    if (pending?.step === "confirm-unset") {
+      const { key: confirmedKey } = pending;
+      // Reviewer finding (round 1, LOW-4): unsetConfigValue's boolean return is checked, not
+      // discarded — a concurrent write (another `seri` process, a hand edit) between the confirm
+      // prompt opening and 'y' can already have removed this key, and this is what stops that race
+      // from claiming "Removed" falsely.
+      let removed: boolean;
+      try {
+        removed = unsetConfigValue(confirmedKey, configDir);
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+      dispatch({
+        type: "transcript-append",
+        line: removed
+          ? `Removed ${confirmedKey}.${verifyConfigTakesEffectNote(confirmedKey)}`
+          : `${confirmedKey} was not set.`,
+      });
+      dispatchConfigList(confirmedKey);
+      return;
+    }
+    // Same reasoning as onSetupRemove's own re-check: ConfigList's own useInput already gated this
+    // on `row.removable`, but that row can be stale (a concurrent /config write, another `seri`
+    // process) — a fresh, guarded read is what actually decides whether to offer the confirm step.
+    let hasConfigEntry: boolean;
+    try {
+      hasConfigEntry = key in loadConfig(configDir);
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    if (!hasConfigEntry) return;
+    dispatch({ type: "config-step", state: { step: "confirm-unset", key } });
+  }
+
+  function onConfigBack(): void {
+    const current = getPendingConfig();
+    const key = current !== undefined && current.step !== "list" ? current.key : undefined;
+    dispatchConfigList(key);
+  }
+
+  return { onConfigSelect, onConfigValueEntered, onConfigUnset, onConfigBack };
+}
+
+// Stage D (cli-commands-to-tui feature-plan.md): /permissions' own two handlers, mirroring
+// createConfigHandlers just above (itself mirroring createSetupHandlers). `permissionsDir`, not
+// `configDir`: permissions.yaml lives in `ctx.permissionsDir` (RunContext's own field, `deps.
+// permissionsDir ?? getConfigDir()` — independently overridable from config.json's own dir), the
+// same directory runTurn's own approval-grant read/write (loadGrants/rememberGrant, above) already
+// uses — reusing `configDir` here would read/write the wrong directory whenever a caller sets the
+// two independently, exactly what this repo's own pty tests do. `getWorktree` is a closure, not a
+// captured value, for the same "trust live state" reason `getPendingPermissions` is — runTui's own
+// call site resolves it via checkpointTarget(liveState.session, dirs(ctx)), the exact pattern
+// runTurn already uses.
+function createPermissionsHandlers(opts: {
+  dispatch: Dispatch;
+  getPendingPermissions: () => PermissionsPanelState | undefined;
+  permissionsDir: string;
+  getWorktree: () => string;
+}): {
+  onPermissionsRemove: (tool: string) => void;
+  onPermissionsBack: () => void;
+} {
+  const { dispatch, getPendingPermissions, permissionsDir, getWorktree } = opts;
+
+  // /code-review, round 3: loadGrants never THROWS on a malformed permissions.yaml — it degrades
+  // to an empty result and reports through this callback instead, which every call site in this
+  // file was previously dropping (unlike decideConfigOpen's loadConfig, which does throw, so
+  // /config's try/catch guards actually catch something). Without this, a malformed store
+  // rendered as a silently-empty "nothing approved" panel instead of a visible error.
+  const warnOnMalformedStore = (message: string) => dispatch({ type: "command-error", message });
+
+  function permissionsListState(selectedTool?: string): PermissionsPanelState {
+    const rows = decidePermissionsOpen(permissionsDir, getWorktree(), warnOnMalformedStore);
+    const selected =
+      selectedTool === undefined
+        ? 0
+        : Math.max(
+            0,
+            rows.findIndex((row) => row.tool === selectedTool),
+          );
+    return { step: "list", rows, selected };
+  }
+
+  // Same "refresh, and close the panel rather than leave it stuck" fix as dispatchConfigList's own
+  // comment — `onPermissionsBack`'s own refresh, so a throw here used to leave `pendingPermissions`
+  // on confirm-remove forever.
+  function dispatchPermissionsList(selectedTool?: string): void {
+    try {
+      dispatch({ type: "permissions-step", state: permissionsListState(selectedTool) });
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      dispatch({ type: "permissions-resolved" });
+    }
+  }
+
+  // Dual-purpose, same shape as onConfigUnset just above: the list step's 'r'/Delete and the
+  // confirm-remove step's 'y' both call this prop. The confirm branch reads `tool` from `pending`
+  // itself, not the argument the caller passed — same reasoning as onConfigUnset's own comment.
+  function onPermissionsRemove(tool: string): void {
+    const pending = getPendingPermissions();
+    if (pending?.step === "confirm-remove") {
+      const { tool: confirmedTool } = pending;
+      // Reviewer finding (round 1, MEDIUM-2): loadGrants/forgetGrant do NOT throw on a malformed
+      // permissions.yaml — they degrade to an empty/no-op result and an optional `onWarning`
+      // callback instead (permissions/store.ts's own comment: the file is hand-editable, so a
+      // caller must not risk overwriting content it could not make sense of). The non-interactive
+      // removeCommand (permissions/commands.ts:68-91) already treats that as a real failure, not a
+      // silent no-op — `warned` and the branch on `result` below mirror it, instead of
+      // unconditionally claiming "Removed" the way this used to.
+      //
+      // scope: "project" (fixed here, /code-review + thermo-nuclear on this PR): a tool granted in
+      // BOTH tiers still renders as a single "persisted"/removable row (decidePermissionsOpen,
+      // tui/commands.ts) — the global grant is never shown, and `removable` just above only ever
+      // checked the project tier. Passing "both" here used to strip the invisible global
+      // pre-approval too, silently, on a panel whose own comment says only the project tier is
+      // removable from here.
+      // Hoisted, not called again below (thermo-nuclear, round 3): getWorktree() spawns a
+      // synchronous `git rev-parse` — calling it three times in one keypress handler was three
+      // subprocess spawns for a value that cannot change mid-handler.
+      const worktree = getWorktree();
+      let warned: string | undefined;
+      let result: { global: boolean; project: boolean };
+      try {
+        result = forgetGrant(permissionsDir, worktree, confirmedTool, "project", (m) => {
+          warned = m;
+        });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+      if (warned !== undefined) {
+        // Same "close the panel too" fix as dispatchPermissionsList's own comment (/code-review,
+        // round 3): command-error alone never touches `pendingPermissions`, so a malformed
+        // permissions.yaml discovered here (forgetGrant degrades to a warning rather than a throw)
+        // used to leave the confirm-remove prompt stuck showing a tool that can no longer be
+        // resolved from this state.
+        dispatch({ type: "command-error", message: warned });
+        dispatch({ type: "permissions-resolved" });
+        return;
+      }
+      // Read unconditionally, not gated on `result.project` (thermo-nuclear, round 3): a
+      // concurrent write between the `removable` re-check above and this 'y' press can already
+      // have cleared the project entry by the time forgetGrant runs, independently of whether the
+      // tool is still globally granted — gating this check on result.project made that race
+      // report "was not permanently approved" even while the tool stayed auto-approved globally,
+      // the exact false claim removeCommand's own comment (permissions/commands.ts:78-80) refuses
+      // to make for the non-interactive path. Not try/catch-guarded, on purpose: loadGrants cannot
+      // throw (store.ts's own readStore degrades every failure mode to a status instead), and this
+      // file already carries guards on that call that can't fire — not adding another rather than
+      // resolving the standing one.
+      const stillGlobal = loadGrants(permissionsDir, worktree).global.includes(confirmedTool);
+      let line: string;
+      if (result.project && stillGlobal) {
+        line = `Removed ${confirmedTool} from this project — still pre-approved globally.`;
+      } else if (result.project) {
+        line = `Removed ${confirmedTool}.`;
+      } else if (stillGlobal) {
+        line = `${confirmedTool} is still pre-approved globally.`;
+      } else {
+        line = `${confirmedTool} was not permanently approved.`;
+      }
+      dispatch({ type: "transcript-append", line });
+      dispatchPermissionsList();
+      return;
+    }
+    // Same reasoning as onConfigUnset's own re-check just above: PermissionsList's own useInput
+    // already gated this on `row.removable`, but a fresh, guarded read is what actually decides —
+    // only a project-tier (persisted) grant is removable from here.
+    let removable: boolean;
+    try {
+      removable = loadGrants(permissionsDir, getWorktree(), warnOnMalformedStore).project.includes(
+        tool,
+      );
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    if (!removable) return;
+    dispatch({ type: "permissions-step", state: { step: "confirm-remove", tool } });
+  }
+
+  function onPermissionsBack(): void {
+    const current = getPendingPermissions();
+    const tool = current !== undefined && current.step !== "list" ? current.tool : undefined;
+    dispatchPermissionsList(tool);
+  }
+
+  return { onPermissionsRemove, onPermissionsBack };
+}
+
 // `boolean | number` mirrors this file's own established convention for a check that's usually a
 // plain result but sometimes an exit code (prepareSession, handleAuthCommand, handleConfigCommand,
 // handlePermissionsCommand, handleSlashCommand all return `T | number` for the identical reason) —
@@ -2192,6 +2523,28 @@ async function runTui(
   }
 
   const { onLogin, onLogout, onAbandon } = createAuthHandlers({ dispatch, deps, configDir });
+
+  const { onConfigSelect, onConfigValueEntered, onConfigUnset, onConfigBack } =
+    createConfigHandlers({
+      dispatch,
+      getPendingConfig: () => liveState.pendingConfig,
+      configDir,
+    });
+
+  function onConfigClose(leftoverInput?: string): void {
+    dispatch({ type: "config-resolved", leftoverInput });
+  }
+
+  const { onPermissionsRemove, onPermissionsBack } = createPermissionsHandlers({
+    dispatch,
+    getPendingPermissions: () => liveState.pendingPermissions,
+    permissionsDir: ctx.permissionsDir,
+    getWorktree: () => checkpointTarget(liveState.session, dirs(ctx)).worktree,
+  });
+
+  function onPermissionsClose(leftoverInput?: string): void {
+    dispatch({ type: "permissions-resolved", leftoverInput });
+  }
 
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
@@ -2582,6 +2935,53 @@ async function runTui(
       await onLogout();
       return;
     }
+    // /config and /permissions, like /login, /signup and /logout just above: intercepted here rather
+    // than added to SLASH_COMMANDS, since they drive blocking panels the non-interactive path has
+    // no screen for.
+    if (name === "/config") {
+      if (args.length > 0) {
+        dispatch({ type: "command-error", message: "/config: invalid arguments." });
+        return;
+      }
+      // Same fix as /model and /setup above: decideConfigOpen also reads config.json unguarded.
+      try {
+        dispatch({ type: "config-requested", rows: decideConfigOpen(configDir) });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+    if (name === "/permissions") {
+      if (args.length > 0) {
+        dispatch({ type: "command-error", message: "/permissions: invalid arguments." });
+        return;
+      }
+      // Unlike /config just above (decideConfigOpen's loadConfig genuinely throws via
+      // JSON.parse), decidePermissionsOpen's loadGrants never throws for a malformed store — it
+      // degrades to an empty list and reports through onWarning instead (/code-review, round 3:
+      // this call previously dropped that callback, so a corrupted permissions.yaml opened as a
+      // silently-empty panel with no indication anything was wrong). `ctx.permissionsDir`, not
+      // `configDir` — see createPermissionsHandlers' own comment.
+      try {
+        dispatch({
+          type: "permissions-requested",
+          rows: decidePermissionsOpen(
+            ctx.permissionsDir,
+            checkpointTarget(liveState.session, dirs(ctx)).worktree,
+            (message) => dispatch({ type: "command-error", message }),
+          ),
+        });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
     // /max-turns and /profile new (Stage E, feature-plan.md): one-shot commands, no panel and no
     // new reducer state — they confirm via transcript-append or fail via command-error, same as
     // every other interception in this chain.
@@ -2716,6 +3116,18 @@ async function runTui(
       onSetupRemove,
       onSetupBack,
       onSetupClose,
+      // Stage D: /config and /permissions' own handlers — wired here, runTui's own mount, only
+      // (not runGuidedSetup's, same reasoning as onLogin/onLogout/onAuthResolved's own comment on
+      // this file's Stage C row: that mount always has `pendingSetup` set, so these panels are
+      // structurally unreachable there).
+      onConfigSelect,
+      onConfigValueEntered,
+      onConfigUnset,
+      onConfigBack,
+      onConfigClose,
+      onPermissionsRemove,
+      onPermissionsBack,
+      onPermissionsClose,
       // No auth-offer recompute here (thermo-nuclear, round 5 — proven redundant): every path
       // that reaches this (Escape on "starting"/"device", Enter/Esc on a login-failure result, or
       // a logout-failure result) never changed the auth-session file between when it was last

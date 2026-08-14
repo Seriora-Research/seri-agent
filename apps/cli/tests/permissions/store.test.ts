@@ -121,9 +121,23 @@ describe("permissions store", () => {
       `global: [edit]\nprojects:\n  '${projectKey("/w")}':\n    - edit\n`,
     );
 
-    expect(forgetGrant(dir, "/w", "edit")).toEqual({ global: true, project: true });
-    expect(forgetGrant(dir, "/w", "edit")).toEqual({ global: false, project: false });
+    expect(forgetGrant(dir, "/w", "edit", "both")).toEqual({ global: true, project: true });
+    expect(forgetGrant(dir, "/w", "edit", "both")).toEqual({ global: false, project: false });
     expect(loadGrants(dir, "/w")).toEqual({ global: [], project: [], otherProjects: 0 });
+  });
+
+  // scope: "project" leaves an existing global grant of the same tool untouched — the TUI's
+  // /permissions panel only ever shows a project-tier grant as removable (decidePermissionsOpen
+  // collapses a tool present in both tiers into a single "persisted" row), so its removal must not
+  // silently take the invisible global pre-approval with it.
+  test("forgetGrant with scope 'project' clears only the project section, leaving global intact", () => {
+    writeFileSync(
+      permissionsPath(dir),
+      `global: [edit]\nprojects:\n  '${projectKey("/w")}':\n    - edit\n`,
+    );
+
+    expect(forgetGrant(dir, "/w", "edit", "project")).toEqual({ global: false, project: true });
+    expect(loadGrants(dir, "/w")).toEqual({ global: ["edit"], project: [], otherProjects: 0 });
   });
 
   // Bug 1: forgetGrant must warn on a malformed/unreadable store instead of silently reporting
@@ -132,7 +146,7 @@ describe("permissions store", () => {
     writeFileSync(permissionsPath(dir), ":::not yaml:::");
 
     const warnings: string[] = [];
-    expect(forgetGrant(dir, "/w", "write_file", (m) => warnings.push(m))).toEqual({
+    expect(forgetGrant(dir, "/w", "write_file", "both", (m) => warnings.push(m))).toEqual({
       global: false,
       project: false,
     });
@@ -144,7 +158,7 @@ describe("permissions store", () => {
   test("forgetGrant deletes the project's key once its list is empty, instead of leaving []", () => {
     rememberGrant(dir, "/w", "write_file");
 
-    expect(forgetGrant(dir, "/w", "write_file")).toEqual({ global: false, project: true });
+    expect(forgetGrant(dir, "/w", "write_file", "both")).toEqual({ global: false, project: true });
 
     expect(readFileSync(permissionsPath(dir), "utf8")).not.toContain(projectKey("/w"));
   });
@@ -153,7 +167,7 @@ describe("permissions store", () => {
   // project A seeing a phantom "other project" forever.
   test("otherProjects does not count a project whose only grant was fully revoked", () => {
     rememberGrant(dir, "/b", "write_file");
-    forgetGrant(dir, "/b", "write_file");
+    forgetGrant(dir, "/b", "write_file", "both");
 
     expect(loadGrants(dir, "/a").otherProjects).toBe(0);
   });

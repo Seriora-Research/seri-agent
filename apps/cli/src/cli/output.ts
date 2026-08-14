@@ -39,6 +39,12 @@ export const USAGE = `Usage:
                                     sign in, create an account, or sign out — not seri
                                     subcommands; seri login | signup | logout below is the
                                     non-interactive equivalent
+  /config (inside the TUI)        view or edit non-provider settings — not a seri subcommand;
+                                    seri config set|list|unset below is the non-interactive
+                                    equivalent
+  /permissions (inside the TUI)   view or revoke permanently approved tools — not a seri
+                                    subcommand; seri permissions list|remove <tool> below is the
+                                    non-interactive equivalent
   seri login | signup | logout
   seri config set|list|unset
   seri permissions list|remove <tool>

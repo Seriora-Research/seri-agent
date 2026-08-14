@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -1160,7 +1161,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "seri-pty-tui-"));
+    // realpathSync, not the raw mkdtempSync path (macOS CI, discovered by the /permissions
+    // tests below): os.tmpdir() on macOS resolves under /var/folders/…, itself a symlink to
+    // /private/var/folders/… — the CHILD's own process.cwd() (spawned with cwd: dir) comes back
+    // through the OS's getcwd(), which follows that symlink, so a projectKey computed here from
+    // the unresolved `dir` never matches the one the child computes from its own resolved cwd.
+    // Harmless for real usage (both grant and lookup share one process's already-resolved cwd);
+    // only bites a test that computes a worktree-keyed path in one process and reads it back via
+    // a different, spawned one — which is every test in this file that seeds permissions.yaml or
+    // checkpoints before starting the child.
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "seri-pty-tui-")));
   });
 
   afterEach(() => {
@@ -3507,6 +3517,180 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(stdout).toContain(
           "GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>",
         );
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
+
+  // Stage D (cli-commands-to-tui feature-plan.md): /config end to end on a real pty. Reuses
+  // childScriptSetup's exact env/deps (HOME=dir, so config.json lands at <dir>/.seri/config.json,
+  // the same place waitForConfig already polls for /setup) — /config reads/writes config.json
+  // through the identical `configDir` resolution /setup does.
+  describe("/config", () => {
+    test("add a value for a known key, then unset it — the typed value never leaks while being entered", async () => {
+      const scriptPath = join(dir, "child-config.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/config");
+        await sawLine("/config");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/config — settings");
+
+        // KNOWN_CONFIG_KEYS order (tui/commands.ts): SERI_WORKOS_CLIENT_ID, SERI_VERIFY_ENABLED,
+        // SERI_VERIFY_COMMAND — two Down presses reach the third.
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("value for SERI_VERIFY_COMMAND");
+
+        const value = "bun run check";
+        child.stdin?.write(value);
+        await wait100ms();
+        // Negative control: while the value is still only ConfigEnterValue's own local state, the
+        // typed characters render as asterisks (its own credential-disclosure guard, applied
+        // unconditionally, not just for secret-shaped keys) — so the raw string must not have
+        // reached the pty's stdout yet. Not asserted after Enter too: SERI_VERIFY_COMMAND's own
+        // `secret: false` (decideConfigOpen's own comment — a command a user should be able to
+        // read back, not see as asterisks) means the list's post-save refresh legitimately shows
+        // it, by design, so a whole-run negative control would be asserting against the code's own
+        // documented behavior rather than a leak.
+        expect(occurrences(value)).toBe(0);
+
+        child.stdin?.write("\r");
+        await sawLine("Saved SERI_VERIFY_COMMAND.");
+
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.SERI_VERIFY_COMMAND === value,
+        );
+        expect(config.SERI_VERIFY_COMMAND).toBe(value);
+
+        child.stdin?.write("r");
+        await wait100ms();
+        await sawLine("Unset SERI_VERIFY_COMMAND");
+
+        child.stdin?.write("y");
+        await sawLine("Removed SERI_VERIFY_COMMAND.");
+
+        const afterRemoval = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.SERI_VERIFY_COMMAND === undefined,
+        );
+        expect(afterRemoval.SERI_VERIFY_COMMAND).toBeUndefined();
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
+
+  // Stage D (cli-commands-to-tui feature-plan.md): /permissions end to end on a real pty. Unlike
+  // every other seed helper in this file (seedConfig writes raw JSON), permissions.yaml's exact
+  // shape (comments, flow style — permissions/store.ts's own writeDocument comment) is a real
+  // dependency contract, not something worth hand-rolling here: `rememberGrant`/`loadGrants` are
+  // imported for real, the same injection-free "call the actual function" choice childScriptAuth's
+  // own comment already makes for auth.json. `worktree` is `dir` itself, matching what the CHILD
+  // resolves via checkpointTarget → projectRoot(process.cwd()): `dir` is a fresh tmpdir with no
+  // enclosing git repo, so projectRoot falls back to `resolve(dir)`, the same value projectKey
+  // resolves here.
+  describe("/permissions", () => {
+    test("a persisted write_file grant renders, and 'r'/'y' removes it", async () => {
+      const permissionsDir = join(dir, "config");
+      const { rememberGrant, loadGrants } = await import("../../src/permissions/store");
+      rememberGrant(permissionsDir, dir, "write_file");
+
+      const scriptPath = join(dir, "child-permissions.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/permissions");
+        await sawLine("/permissions");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/permissions — tools approved permanently");
+        await sawLine("write_file (persisted)");
+
+        child.stdin?.write("r");
+        await wait100ms();
+        await sawLine("Remove write_file");
+
+        child.stdin?.write("y");
+        await sawLine("Removed write_file.");
+
+        // Polling, not a bare synchronous read right after sawLine — the same file-vs-stdout race
+        // waitForConfig's own comment documents for config.json, here for permissions.yaml instead.
+        const deadline = Date.now() + 5000;
+        let grants = loadGrants(permissionsDir, dir);
+        while (grants.project.includes("write_file") && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 20));
+          grants = loadGrants(permissionsDir, dir);
+        }
+        expect(grants.project).not.toContain("write_file");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Regression test for the bug /code-review and thermo-nuclear both found on this PR: removing
+    // the "persisted" row used to call forgetGrant unscoped, which strips a same-tool GLOBAL grant
+    // too — even though decidePermissionsOpen only ever shows this row as removable because of its
+    // PROJECT-tier membership. The store-level test (permissions/store.test.ts) pins forgetGrant's
+    // own scope handling; this is the one that pins the call site that actually had the bug —
+    // cli.ts's onPermissionsRemove passing "project" rather than "both" — which nothing else here
+    // exercises (confirmed: reverting that one argument keeps every other test in this suite green).
+    test("a global grant survives removing the same tool's project-tier entry", async () => {
+      const permissionsDir = join(dir, "config");
+      const { loadGrants, permissionsPath, projectKey } = await import(
+        "../../src/permissions/store"
+      );
+      // Hand-written, not rememberGrant after a global seed: rememberGrant's own dedup
+      // (toolsInDoc) checks the tool's presence across BOTH tiers before writing, so seeding
+      // global first would make it silently refuse to also add the project entry.
+      mkdirSync(permissionsDir, { recursive: true });
+      writeFileSync(
+        permissionsPath(permissionsDir),
+        `global: [write_file]\nprojects:\n  '${projectKey(dir)}':\n    - write_file\n`,
+      );
+
+      const scriptPath = join(dir, "child-permissions-global.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/permissions");
+        await sawLine("/permissions");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("write_file (persisted)");
+
+        child.stdin?.write("r");
+        await wait100ms();
+        await sawLine("Remove write_file");
+
+        child.stdin?.write("y");
+        await sawLine("still pre-approved globally");
+
+        const deadline = Date.now() + 5000;
+        let grants = loadGrants(permissionsDir, dir);
+        while (grants.project.includes("write_file") && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 20));
+          grants = loadGrants(permissionsDir, dir);
+        }
+        expect(grants.project).not.toContain("write_file");
+        expect(grants.global).toContain("write_file");
       } finally {
         child.kill("SIGKILL");
       }
