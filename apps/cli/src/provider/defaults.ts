@@ -44,41 +44,31 @@ export function isModelProvider(value: string): value is ModelProvider {
 // session.model/session.provider backfilled from the wrong (real) config.json, and a successful
 // turn's persist wrote back into the real user's config.json even though the run was meant to stay
 // inside `authConfigDir`.
-// `requestedProvider` carries the actual provider name the user named (via env or persisted
-// config), or `undefined` if none was — captured HERE, at the single point the pair is resolved,
-// rather than re-derived later from config.json/env at display time: a re-read of a mutable
-// external source after the fact can no longer see what THIS resolution actually saw (a
-// concurrent `seri config set`, or a live /model pick that never touches config.json at all —
-// see SessionState.requestedProvider's own comment) and produces the wrong answer for the exact
-// case it exists to get right. It is deliberately an optional provider value rather than a
-// boolean sibling of `provider`: a boolean can drift out of sync with the `provider` it describes
-// (a stale `true` paired with a since-changed `provider`), producing a mismatched pair that
-// blames the wrong provider downstream. An optional value that either names the same provider as
-// `provider` or is absent cannot express that mismatch — when defined it is always exactly the
-// provider this same resolution chose.
+// `provider` here is the provider actually named by the user (via env or persisted config), or
+// `undefined` if none was — captured HERE, at the single point the pair is resolved, rather than
+// re-derived later from config.json/env at display time: a re-read of a mutable external source
+// after the fact can no longer see what THIS resolution actually saw (a concurrent
+// `seri config set`, or a live /model pick that never touches config.json at all — see
+// SessionState.provider's own comment) and produces the wrong answer for the exact case it exists
+// to get right. This function never manufactures a "request" that didn't happen: DEFAULT_PROVIDER
+// is applied only by callers that actually need a concrete provider for routing, not baked in here.
 export function resolveDefaultModel(configDir?: string): {
   model: string;
-  provider: ModelProvider;
-  requestedProvider: ModelProvider | undefined;
+  provider: ModelProvider | undefined;
 } {
   const envModel = process.env.SERI_MODEL;
   if (envModel) {
     const envProvider = process.env.SERI_PROVIDER;
-    const requestedProvider = envProvider && isModelProvider(envProvider) ? envProvider : undefined;
     return {
       model: envModel,
-      provider: requestedProvider ?? DEFAULT_PROVIDER,
-      requestedProvider,
+      provider: envProvider && isModelProvider(envProvider) ? envProvider : undefined,
     };
   }
   const config = loadConfig(configDir);
   const configProvider = config.SERI_PROVIDER;
-  const requestedProvider =
-    configProvider && isModelProvider(configProvider) ? configProvider : undefined;
   return {
     model: config.SERI_MODEL || DEFAULT_MODEL,
-    provider: requestedProvider ?? DEFAULT_PROVIDER,
-    requestedProvider,
+    provider: configProvider && isModelProvider(configProvider) ? configProvider : undefined,
   };
 }
 

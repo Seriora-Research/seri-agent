@@ -429,12 +429,13 @@ async function memoryCommand(
 }
 
 // `model`/`provider` are optional on SessionState so that sessions written before either field
-// existed still load, but every session this function hands back has both — which is what lets the
-// rest of the run stop asking, and getModel drop a default parameter for either.
+// existed still load, but every session this function hands back has the `model` key — which is
+// what lets the rest of the run stop asking, and getModel drop a default parameter for it.
+// `provider` can still legitimately be `undefined` here: it means no provider was ever explicitly
+// requested, not that one is missing.
 type RunSession = SessionState<ModelMessage> & {
   model: string;
-  provider: ModelProvider;
-  requestedProvider: ModelProvider | undefined;
+  provider: ModelProvider | undefined;
 };
 
 // `modelRecorded` says where the model came from: true if the session file already had one, false
@@ -482,26 +483,20 @@ function loadOrCreateSession(
     // records that, and this first resume moves it to whatever resolveDefaultModel() returns.
     //
     // `provider` alone can still be absent on a session that already recorded a `model` — a
-    // session written before the `provider` field existed, back when groq was the only provider —
-    // and that case keeps its own narrower, unconditional backfill: absent means DEFAULT_PROVIDER
-    // (SessionState.provider's own comment; DEFAULT_PROVIDER is "groq" today, the same value this
-    // used to hardcode directly — imported instead so there is one source of truth for it),
-    // independent of resolveDefaultModel().
-    const { model, provider, requestedProvider } =
+    // session written before the `provider` field existed, or one where nothing was ever
+    // explicitly picked. That's just passed through as-is: absence stays absence, since `provider`
+    // can now legitimately be `undefined` all the way through (DEFAULT_PROVIDER is applied only
+    // where a concrete provider is actually needed for routing, not backfilled here).
+    const { model, provider } =
       loaded.model === undefined
         ? resolveDefaultModel(configDir)
-        : {
-            model: loaded.model,
-            provider: loaded.provider ?? DEFAULT_PROVIDER,
-            requestedProvider: loaded.requestedProvider,
-          };
+        : { model: loaded.model, provider: loaded.provider };
     return {
       session: {
         ...loaded,
         systemPrompt: buildSystemPrompt(loadAgentsFileFn(loaded.cwd)),
         model,
         provider,
-        requestedProvider,
       },
       modelRecorded: loaded.model !== undefined,
     };
@@ -510,7 +505,7 @@ function loadOrCreateSession(
   // A brand-new session starts on whatever a previously successful `/model` pick persisted
   // (resolveDefaultModel's own comment), falling back to DEFAULT_MODEL/"groq" the same way
   // resolveModelId always has when nothing was ever picked.
-  const { model, provider, requestedProvider } = resolveDefaultModel(configDir);
+  const { model, provider } = resolveDefaultModel(configDir);
   return {
     session: {
       id: randomUUID(),
@@ -528,7 +523,6 @@ function loadOrCreateSession(
       permissionMode: "approve-each",
       model,
       provider,
-      requestedProvider,
       messages: [],
     },
     modelRecorded: false,
@@ -1008,13 +1002,14 @@ type PreparedRun = {
 // still what routing.test.ts asserts directly): this notice is purely informational, no embedded
 // command, so it reads better with a display name (PROVIDER_DISPLAY_NAMES) than the raw env var
 // constant — unlike missingKeyError's message, which needs the exact name because it IS one.
-// It is `ModelProvider | undefined`, not paired with a separate boolean, so this can tell "the
-// user actually named a provider" apart from resolveDefaultModel's own DEFAULT_PROVIDER fallback
-// masquerading as one — a genuinely blank first run reroutes off that fallback with no
-// configured/requested provider at all, and blaming a provider the user never named is worse than
-// naming none. Captured on `session` at the point the pair was resolved (resolveDefaultModel/the
-// model picker), not re-read here from config.json — see SessionState.requestedProvider's own
-// comment for why.
+// `requestedProvider` here is literally the session's own `provider` field (itself
+// `ModelProvider | undefined`) — there is no separate field to keep in sync with it, so it cannot
+// drift out of sync with what was actually requested. `undefined` means a genuinely blank first
+// run (or resume of one), which reroutes off resolveDefaultModel's own DEFAULT_PROVIDER fallback
+// with no configured/requested provider at all — blaming a provider the user never named is worse
+// than naming none. Captured on `session` at the point the pair was resolved (resolveDefaultModel/
+// the model picker), not re-read here from config.json — see SessionState.provider's own comment
+// for why.
 function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider | undefined): string {
   if (requestedProvider === undefined) {
     return `routing ${route.model} via ${route.provider} (your key)`;
@@ -1076,7 +1071,7 @@ async function prepareSession(
   try {
     route = resolveRoute(
       catalog,
-      { model: session.model, provider: session.provider },
+      { model: session.model, provider: session.provider ?? DEFAULT_PROVIDER },
       configuredProviders(configDir),
     );
     model = getModel(
@@ -1102,7 +1097,7 @@ async function prepareSession(
   // know isTTY), so without the gate a session-start reroute printed twice for the same turn: once
   // here (before Ink even mounts) and again from runTurn.
   if (route.rerouted && !isTTY) {
-    printWarning(rerouteNotice(route, session.requestedProvider));
+    printWarning(rerouteNotice(route, session.provider));
   }
   // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
   // cost and context-window come from the wrong provider's entry.
@@ -2296,24 +2291,9 @@ async function runTui(
   // guard (below) on turn 1, persisting a switch the session never asked for and breaking the
   // "a session that never touches /model never writes config.json" invariant
   // (tuiPty.test.ts's own regression guard for this).
-  // `requestedProvider` only carries forward when it still names the same provider as `provider`
-  // above: `prepared.session.requestedProvider` is what the session asked for BEFORE this
-  // resolution ran, and a reroute (`prepared.route.rerouted`) can leave that naming a provider
-  // this resolution didn't resolve to. Pairing an unrelated requested name with the resolved
-  // `provider` is exactly the mismatch `resolveDefaultModel`'s own comment on `requestedProvider`
-  // warns against, so a mismatch resets to `undefined` — no known request — instead of following
-  // the stale provider name forward.
-  let confirmedModel: {
-    model: string;
-    provider: ModelProvider;
-    requestedProvider: ModelProvider | undefined;
-  } = {
+  let confirmedModel: { model: string; provider: ModelProvider } = {
     model: prepared.route.model,
     provider: prepared.route.provider,
-    requestedProvider:
-      prepared.session.requestedProvider === prepared.route.provider
-        ? prepared.session.requestedProvider
-        : undefined,
   };
   // Tracks what actually LANDED in config.json, separate from `confirmedModel` above — the two
   // used to share one variable for two jobs (code-review finding on PR #71): `confirmedModel`
@@ -2430,17 +2410,11 @@ async function runTui(
     pendingPersistResolvers = [];
     // B2 fix: writes `confirmedModel`, not `session`'s own live model/provider — see
     // `confirmedModel`'s own comment above. Every other field of `session` (messages,
-    // permissionMode, …) is unaffected; only these three are ever substituted. `requestedProvider`
-    // travels with the confirmed pair rather than being read live off `session` because the live
-    // session's own requestedProvider can be ahead of what actually ran — a /model pick updates it
-    // synchronously, before any turn confirms the pick — and persisting it unpaired from the
-    // model/provider it describes is exactly the corrupted state (a requestedProvider naming a
-    // provider other than the persisted provider) this pairing exists to prevent.
+    // permissionMode, …) is unaffected; only these two are ever substituted.
     const toPersist = {
       ...session,
       model: confirmedModel.model,
       provider: confirmedModel.provider,
-      requestedProvider: confirmedModel.requestedProvider,
     };
     try {
       saveSession(toPersist, ctx.sessionsDir);
@@ -2614,8 +2588,7 @@ async function runTui(
     const {
       id: sessionId,
       model: requestedModel,
-      provider: sessionProvider,
-      requestedProvider,
+      provider: requestedProvider,
     } = session as RunSession;
     // D3 (feature-plan.md): re-resolved every turn, same reasoning as the model re-resolution
     // above — a routing-priority reroute (D2) must be reconsidered on every turn too, not just at
@@ -2634,7 +2607,7 @@ async function runTui(
     try {
       route = resolveRoute(
         prepared.catalog,
-        { model: requestedModel, provider: sessionProvider },
+        { model: requestedModel, provider: requestedProvider ?? DEFAULT_PROVIDER },
         configuredProviders(configDir),
       );
       model = getModel(
@@ -2673,7 +2646,7 @@ async function runTui(
     const catalogEntry = findCatalogEntry(prepared.catalog, modelId, provider);
     // `session as RunSession`, not the raw (reducer-typed) `session`: PreparedRun.session is now
     // RunSession (code-review finding — see PreparedRun's own comment), and this call site already
-    // established the same invariant two lines up for `requestedModel`/`sessionProvider`; reusing
+    // established the same invariant two lines up for `requestedModel`/`requestedProvider`; reusing
     // it here instead of casting a second time in one function.
     const turnPrepared: PreparedRun = {
       ...prepared,
@@ -2719,16 +2692,7 @@ async function runTui(
           // session's own starting pair, so turn 1 (same model) trips neither.
           if (event.type === "messages-updated") {
             if (modelPairChanged(confirmedModel, { model: modelId, provider })) {
-              // `requestedProvider` here is this turn's session-requested provider (destructured
-              // above from `session as RunSession`), not necessarily what THIS turn actually
-              // resolved to (`provider` = `route.provider`) — a reroute can make the two differ,
-              // same mismatch `confirmedModel`'s own comment guards against at session start. Only
-              // carry it forward when it still names the provider actually landing here.
-              confirmedModel = {
-                model: modelId,
-                provider,
-                requestedProvider: requestedProvider === provider ? requestedProvider : undefined,
-              };
+              confirmedModel = { model: modelId, provider };
             }
             // Gated on `lastPersistedModel`, not `confirmedModel`: the try/catch + printWarning
             // mirrors onSessionChange's own pattern above — a config write failure (EACCES,
