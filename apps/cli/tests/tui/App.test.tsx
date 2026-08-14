@@ -1240,7 +1240,7 @@ describe("App", () => {
           secret: false,
         },
         {
-          key: "SERI_VERIFY_COMMAND",
+          key: "SERI_SOME_OTHER_KEY",
           masked: "sk-d...2345",
           source: "config",
           removable: true,
@@ -1257,7 +1257,7 @@ describe("App", () => {
 
       const frame = instance.lastFrame() ?? "";
       expect(frame).toContain("SERI_WORKOS_CLIENT_ID");
-      expect(frame).toContain("SERI_VERIFY_COMMAND");
+      expect(frame).toContain("SERI_SOME_OTHER_KEY");
       expect(frame).toContain("sk-d...2345");
     });
 
@@ -1271,7 +1271,7 @@ describe("App", () => {
         type: "config-requested",
         rows: [
           {
-            key: "SERI_VERIFY_COMMAND",
+            key: "SERI_SOME_OTHER_KEY",
             masked: "sk-d...2345",
             source: "config",
             removable: true,
@@ -1285,7 +1285,7 @@ describe("App", () => {
 
       dispatch({
         type: "config-step",
-        state: { step: "enter-value", key: "SERI_VERIFY_COMMAND", busy: false },
+        state: { step: "enter-value", key: "SERI_SOME_OTHER_KEY", busy: false },
       });
       await flush();
       await flush();
@@ -1297,6 +1297,37 @@ describe("App", () => {
       const frame = instance.lastFrame() ?? "";
       expect(frame).not.toContain(secret);
       expect(frame).toContain("*".repeat(secret.length));
+    });
+
+    // Review round 3 finding (MEDIUM-1's own test coverage gap): onConfigClose is an optional
+    // AppProps handler with nothing that goes red if App.tsx's own render call stopped passing it
+    // through to ConfigPanel — this proves the wiring, not just that ConfigList's own Esc handling
+    // works (that's this component's own concern, already implicit in it having a prop at all).
+    test("Esc on the list step calls onConfigClose", async () => {
+      const closed: number[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onConfigClose={() => closed.push(closed.length)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "config-requested", rows: configRows() });
+      await flush();
+
+      instance.stdin.write("\x1b"); // Escape
+      // A bare Escape byte is ambiguous with the start of a longer ANSI sequence — Ink's own
+      // input parser holds it for a short window before treating it as standalone (the model
+      // picker's own Escape test above needs the same wait for the same reason).
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      expect(closed).toEqual([0]);
     });
   });
 
@@ -1327,6 +1358,41 @@ describe("App", () => {
       const frame = instance.lastFrame() ?? "";
       expect(frame).toContain("write_file");
       expect(frame).not.toContain("not removable");
+    });
+
+    // Review round 3 finding (MEDIUM-1's own test coverage gap), mirroring SetupPanel's own
+    // confirm-remove test above: proves App.tsx's render call actually threads onPermissionsRemove
+    // through to PermissionsPanel, not just that PermissionsConfirmRemove's own 'y' handling works.
+    test("confirm-remove: 'y' calls onPermissionsRemove", async () => {
+      const removed: string[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onPermissionsRemove={(tool) => removed.push(tool)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      // A single dispatch straight to confirm-remove (matching SetupPanel's own confirm-remove
+      // test above), not permissions-requested then permissions-step: the latter swaps
+      // PermissionsList for PermissionsConfirmRemove mid-test, and that component swap's own
+      // useInput needs an extra tick to register (the same mount-timing gap SetupEnterKey's own
+      // key-leak test already needed two flush() calls for).
+      dispatch({
+        type: "permissions-step",
+        state: { step: "confirm-remove", tool: "write_file" },
+      });
+      await flush();
+
+      instance.stdin.write("y");
+      await flush();
+
+      expect(removed).toEqual(["write_file"]);
     });
   });
 
