@@ -32,13 +32,7 @@ export function AuthBanner({ show }: { show: boolean }) {
 // at the error with InputBox gone and no keyboard path back at all, not even Ctrl-C (that's wired
 // to onCancel, not to clearing pendingAuth). SetupConfirmRemove's own Esc-cancels convention
 // (SetupPanel.tsx) is the closest precedent for "either key just closes it."
-export function AuthPanel({
-  state,
-  onDismiss,
-}: {
-  state: AuthPanelState;
-  onDismiss?: () => void;
-}) {
+export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismiss?: () => void }) {
   useInput((_input, key) => {
     if (state.step !== "result") return;
     if (key.return || key.escape) onDismiss?.();
