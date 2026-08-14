@@ -1978,23 +1978,28 @@ function createConfigHandlers(opts: {
 }
 
 // Stage D (cli-commands-to-tui feature-plan.md): /permissions' own two handlers, mirroring
-// createConfigHandlers just above (itself mirroring createSetupHandlers). `getWorktree` is a
-// closure, not a captured value, for the same "trust live state" reason `getPendingPermissions`
-// is — runTui's own call site resolves it via checkpointTarget(liveState.session, dirs(ctx)), the
-// exact pattern runTurn already uses.
+// createConfigHandlers just above (itself mirroring createSetupHandlers). `permissionsDir`, not
+// `configDir`: permissions.yaml lives in `ctx.permissionsDir` (RunContext's own field, `deps.
+// permissionsDir ?? getConfigDir()` — independently overridable from config.json's own dir), the
+// same directory runTurn's own approval-grant read/write (loadGrants/rememberGrant, above) already
+// uses — reusing `configDir` here would read/write the wrong directory whenever a caller sets the
+// two independently, exactly what this repo's own pty tests do. `getWorktree` is a closure, not a
+// captured value, for the same "trust live state" reason `getPendingPermissions` is — runTui's own
+// call site resolves it via checkpointTarget(liveState.session, dirs(ctx)), the exact pattern
+// runTurn already uses.
 function createPermissionsHandlers(opts: {
   dispatch: Dispatch;
   getPendingPermissions: () => PermissionsPanelState | undefined;
-  configDir: string;
+  permissionsDir: string;
   getWorktree: () => string;
 }): {
   onPermissionsRemove: (tool: string) => void;
   onPermissionsBack: () => void;
 } {
-  const { dispatch, getPendingPermissions, configDir, getWorktree } = opts;
+  const { dispatch, getPendingPermissions, permissionsDir, getWorktree } = opts;
 
   function permissionsListState(selectedTool?: string): PermissionsPanelState {
-    const rows = decidePermissionsOpen(configDir, getWorktree());
+    const rows = decidePermissionsOpen(permissionsDir, getWorktree());
     const selected =
       selectedTool === undefined
         ? 0
@@ -2022,7 +2027,7 @@ function createPermissionsHandlers(opts: {
     const pending = getPendingPermissions();
     if (pending?.step === "confirm-remove") {
       try {
-        forgetGrant(configDir, getWorktree(), tool);
+        forgetGrant(permissionsDir, getWorktree(), tool);
       } catch (err) {
         dispatch({
           type: "command-error",
@@ -2039,7 +2044,7 @@ function createPermissionsHandlers(opts: {
     // only a project-tier (persisted) grant is removable from here.
     let removable: boolean;
     try {
-      removable = loadGrants(configDir, getWorktree()).project.includes(tool);
+      removable = loadGrants(permissionsDir, getWorktree()).project.includes(tool);
     } catch (err) {
       dispatch({
         type: "command-error",
@@ -2406,7 +2411,7 @@ async function runTui(
   const { onPermissionsRemove, onPermissionsBack } = createPermissionsHandlers({
     dispatch,
     getPendingPermissions: () => liveState.pendingPermissions,
-    configDir,
+    permissionsDir: ctx.permissionsDir,
     getWorktree: () => checkpointTarget(liveState.session, dirs(ctx)).worktree,
   });
 
@@ -2828,10 +2833,14 @@ async function runTui(
         return;
       }
       // Same fix as /config just above: decidePermissionsOpen reads permissions.yaml unguarded.
+      // `ctx.permissionsDir`, not `configDir` — see createPermissionsHandlers' own comment.
       try {
         dispatch({
           type: "permissions-requested",
-          rows: decidePermissionsOpen(configDir, checkpointTarget(liveState.session, dirs(ctx)).worktree),
+          rows: decidePermissionsOpen(
+            ctx.permissionsDir,
+            checkpointTarget(liveState.session, dirs(ctx)).worktree,
+          ),
         });
       } catch (err) {
         dispatch({
