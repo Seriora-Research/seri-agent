@@ -9,7 +9,7 @@ import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
 import { persistDefaultModel } from "../provider/defaults";
 import { configuredProviders } from "../provider/keys";
 import { deliverSignal, onSignalCleanup } from "../signals";
-import { decideGuidedModelPickerOpen, decideSetupOpen } from "./commands";
+import { decideAuthOffer, decideGuidedModelPickerOpen, decideSetupOpen } from "./commands";
 import {
   type Dispatch,
   initialTuiState,
@@ -284,6 +284,10 @@ export async function runGuidedSetup(
         // everywhere else, reached here without a second, differently-worded error message.
         try {
           dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
+          // Stage C: the passive AuthBanner only — this mount's own `pendingAuth` is unreachable
+          // regardless (no createAuthHandlers here, by design; see this function's own header
+          // comment), but the banner is independent of that (TuiState.authOffer's own comment).
+          dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
         } catch {
           resolveClosed();
         }

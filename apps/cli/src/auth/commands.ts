@@ -10,16 +10,30 @@ export async function login(
     requestDeviceCode?: typeof requestDeviceCode;
     openBrowser?: typeof openBrowser;
     pollForToken?: typeof pollForToken;
+    // The TUI's own presentation seam (Stage C, cli-commands-to-tui feature-plan.md): the two
+    // callbacks below let the TUI dispatch into its reducer instead of this function printing
+    // straight into Ink's own frame with a bare console.log, which the non-interactive CLI path
+    // still gets by default (`?? console.log`) — the same decision/presentation split every
+    // tui/commands.ts `decide*` function already has, just inlined here since login/logout are
+    // the only two auth entry points, and the console.log defaults ARE the console presentation.
+    onDeviceCode?: (device: { verificationUri: string; userCode: string }) => void;
+    onMessage?: (message: string) => void;
   } = {},
 ): Promise<void> {
   const requestDeviceCodeFn = deps.requestDeviceCode ?? requestDeviceCode;
   const openBrowserFn = deps.openBrowser ?? openBrowser;
   const pollForTokenFn = deps.pollForToken ?? pollForToken;
+  const onDeviceCode =
+    deps.onDeviceCode ??
+    ((device: { verificationUri: string; userCode: string }) => {
+      console.log(`To continue, open: ${device.verificationUri}`);
+      console.log(`And enter code: ${device.userCode}`);
+    });
+  const onMessage = deps.onMessage ?? console.log;
 
   const device = await requestDeviceCodeFn(clientId);
 
-  console.log(`To continue, open: ${device.verificationUri}`);
-  console.log(`And enter code: ${device.userCode}`);
+  onDeviceCode({ verificationUri: device.verificationUri, userCode: device.userCode });
   openBrowserFn(device.verificationUriComplete);
 
   const result = await pollForTokenFn(clientId, device);
@@ -45,15 +59,15 @@ export async function login(
     configDir,
   );
 
-  console.log(
+  onMessage(
     mode === "signup"
       ? `Account created — logged in as ${result.user.email}`
       : `Logged in as ${result.user.email}`,
   );
 }
 
-export function logout(configDir: string): void {
+export function logout(configDir: string, onMessage: (message: string) => void = console.log): void {
   const existing = loadAuthSession(configDir);
   clearAuthSession(configDir);
-  console.log(existing ? "Logged out." : "Not logged in.");
+  onMessage(existing ? "Logged out." : "Not logged in.");
 }
