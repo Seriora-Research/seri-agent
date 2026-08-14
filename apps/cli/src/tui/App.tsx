@@ -105,6 +105,13 @@ export type AppProps = {
   onSetupRemove?: (provider: ModelProvider) => void;
   onSetupBack?: () => void;
   onSetupClose?: (leftoverInput?: string) => void;
+  // Bug fix (coordinator follow-up on Stage C): AuthPanel's own "result" step (a device-flow
+  // failure — a denied/expired code, a network error, degraded by cli.ts's createAuthHandlers'
+  // own catch block) had no way back to InputBox at all before this — not even Ctrl-C, which is
+  // wired to onCancel, not to clearing pendingAuth. Called from AuthPanel's own Enter/Esc handler
+  // on that step only; the success path never reaches here (auth-resolved is dispatched directly
+  // by createAuthHandlers' own onMessage callback, with no user keypress involved).
+  onAuthResolved?: () => void;
   // Stage A scaffolding (cli-commands-to-tui feature-plan.md): /config's own resolutions, mirroring
   // onSetupSelect's own five-prop shape — ConfigPanel.tsx's own step-dispatcher needs a real prop to
   // route Esc/Ctrl-D/Enter to once Stage D wires config-requested, rather than a panel silently
@@ -163,6 +170,7 @@ export function App({
   onSetupRemove,
   onSetupBack,
   onSetupClose,
+  onAuthResolved,
   onConfigSelect,
   onConfigValueEntered,
   onConfigUnset,
@@ -250,7 +258,7 @@ export function App({
           onSetupClose={onSetupClose}
         />
       ) : state.pendingAuth !== undefined ? (
-        <AuthPanel state={state.pendingAuth} />
+        <AuthPanel state={state.pendingAuth} onDismiss={onAuthResolved} />
       ) : state.pendingConfig !== undefined ? (
         <ConfigPanel
           pendingConfig={state.pendingConfig}

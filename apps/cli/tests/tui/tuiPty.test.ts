@@ -737,6 +737,41 @@ function childScriptAuth(dir: string): string {
   ].join("\n");
 }
 
+// Bug fix (coordinator follow-up on Stage C): the failure round-trip childScriptAuth's own
+// describe block never exercised — `loginFake` here rejects the way the real device flow does on
+// a denied/expired code, driving createAuthHandlers' own catch branch (cli.ts) in a real process,
+// not just at the reducer level (App.test.tsx already covers that half).
+function childScriptAuthLoginFails(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `async function loginFake(mode, clientId, configDir, handlerDeps) {`,
+    `  handlerDeps?.onDeviceCode?.({`,
+    `    verificationUri: "https://example.com/device",`,
+    `    userCode: "ABCD-1234",`,
+    `  });`,
+    `  await new Promise((resolve) => setTimeout(resolve, 50));`,
+    `  throw new Error("Authorization was denied.");`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  login: loginFake,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // byok-guided-setup, feature-plan.md: the "genuinely blank first run" scenario — a real TTY, no
 // config.json (childScriptSetup's own dir is always fresh, but every OTHER script in this file
 // still exports GROQ_API_KEY as a real env var; this one explicitly deletes every provider's own
@@ -2686,6 +2721,41 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.kill("SIGKILL");
         const { stdout } = await exited;
         expect(stdout).not.toContain("fake-access-token-must-never-print");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The regression this locks (coordinator follow-up on Stage C): before AuthPanel's own
+    // useInput existed, a denied/expired device code left this exact screen up with no keyboard
+    // path back at all — no press, Enter included, ever returned the input box. `childScriptAuth`'s
+    // own /login test above only exercises the SUCCESS round-trip; this one drives
+    // createAuthHandlers' own catch branch (cli.ts) in a real process.
+    test("a failed /login shows the error, and a keypress returns to the ordinary input box", async () => {
+      const scriptPath = join(dir, "child-auth-login-fails.mjs");
+      writeFileSync(scriptPath, childScriptAuthLoginFails(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/login");
+        await sawLine("/login");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("https://example.com/device");
+        await sawLine("ABCD-1234");
+
+        await sawLine("Authorization was denied.");
+
+        child.stdin?.write("\r");
+        await wait100ms();
+
+        // Proves InputBox is actually back and accepting input, not merely that the process
+        // survived — the same "still typing" convention this file's own auth-banner test above
+        // uses for the identical claim.
+        child.stdin?.write("still here");
+        await sawLine("still here");
       } finally {
         child.kill("SIGKILL");
       }

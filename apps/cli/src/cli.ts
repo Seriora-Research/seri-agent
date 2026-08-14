@@ -2628,6 +2628,7 @@ async function runTui(
       onSetupRemove,
       onSetupBack,
       onSetupClose,
+      onAuthResolved: () => dispatch({ type: "auth-resolved" }),
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
         // Stage C: the non-blocking login/signup offer (AuthBanner) — true iff no auth session is

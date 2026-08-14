@@ -1286,6 +1286,77 @@ describe("App", () => {
       await flush();
       expect(submitted).toEqual(["back to typing"]);
     });
+
+    // Bug fix (coordinator follow-up on Stage C): before AuthPanel's own useInput existed, a
+    // failed login/signup (createAuthHandlers' own catch, cli.ts — a denied/expired code, a
+    // network error) left the "result" step up with no keyboard path back at all, not even
+    // Ctrl-C. Presses a REAL key (not a direct auth-resolved dispatch, which "clears the panel
+    // entirely" above already covers) to prove AuthPanel's own Enter/Esc handling is actually
+    // wired through App.tsx's onAuthResolved prop — the same wiring-proof shape ConfigPanel's own
+    // "Esc on the list step calls onConfigClose" test uses.
+    test("Enter on the result step calls onAuthResolved and returns to InputBox", async () => {
+      const resolved: number[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onAuthResolved={() => resolved.push(resolved.length)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: { step: "result", message: "Authorization was denied.", error: true },
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("Authorization was denied.");
+
+      instance.stdin.write("\r");
+      await flush();
+
+      expect(resolved).toEqual([0]);
+    });
+
+    // Escape, mirroring SetupConfirmRemove's own Esc-cancels convention (SetupPanel.tsx) — the
+    // dismissal precedent this fix follows.
+    test("Escape on the result step also calls onAuthResolved", async () => {
+      const resolved: number[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onAuthResolved={() => resolved.push(resolved.length)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: { step: "result", message: "The login request expired.", error: true },
+      });
+      await flush();
+
+      instance.stdin.write("\x1b"); // Escape
+      // A bare Escape byte is ambiguous with the start of a longer ANSI sequence — Ink's own
+      // input parser holds it for a short window before treating it as standalone (ConfigPanel's
+      // own Escape test below needs the same wait for the same reason).
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      expect(resolved).toEqual([0]);
+    });
   });
 
   describe("config panel", () => {

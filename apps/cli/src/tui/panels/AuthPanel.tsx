@@ -2,7 +2,7 @@
 // dispatcher wired to them yet — Stage C wires /login and /signup to fire `auth-offer` and
 // `auth-requested`/`auth-step`/`auth-resolved`. New code, not a move.
 
-import { Box, Text } from "ink";
+import { Box, Text, useInput } from "ink";
 import type { AuthPanelState } from "../reducer";
 import { theme } from "../theme";
 
@@ -22,8 +22,28 @@ export function AuthBanner({ show }: { show: boolean }) {
 }
 
 // /login and /signup's own blocking device-flow panel — mirrors SetupPanel's step-dispatcher
-// shape, one branch per step.
-export function AuthPanel({ state }: { state: AuthPanelState }) {
+// shape, one branch per step. `onDismiss` is only ever listened for on the "result" step: the
+// "starting"/"device" steps already have their own resolution path (the success dispatch chain
+// in cli.ts's createAuthHandlers — auth-step "device" then straight to auth-resolved via
+// onMessage), so there is nothing here for the user to dismiss until a result is actually shown.
+// Bug fix (coordinator follow-up on Stage C): createAuthHandlers' own catch block degrades a
+// thrown login()/logout() (a denied/expired device code, a network error) to an auth-step
+// "result" with no dispatch after it — before this useInput existed, that left the user staring
+// at the error with InputBox gone and no keyboard path back at all, not even Ctrl-C (that's wired
+// to onCancel, not to clearing pendingAuth). SetupConfirmRemove's own Esc-cancels convention
+// (SetupPanel.tsx) is the closest precedent for "either key just closes it."
+export function AuthPanel({
+  state,
+  onDismiss,
+}: {
+  state: AuthPanelState;
+  onDismiss?: () => void;
+}) {
+  useInput((_input, key) => {
+    if (state.step !== "result") return;
+    if (key.return || key.escape) onDismiss?.();
+  });
+
   if (state.step === "starting") {
     return (
       <Box borderStyle="round" borderColor={theme.accent}>
@@ -40,8 +60,9 @@ export function AuthPanel({ state }: { state: AuthPanelState }) {
     );
   }
   return (
-    <Box borderStyle="round" borderColor={state.error ? theme.error : theme.accent}>
+    <Box borderStyle="round" borderColor={state.error ? theme.error : theme.accent} flexDirection="column">
       <Text color={state.error ? theme.error : theme.accent}>{state.message}</Text>
+      <Text color={theme.muted}>Enter/Esc continue</Text>
     </Box>
   );
 }
