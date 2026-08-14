@@ -5,12 +5,7 @@ import { join } from "node:path";
 import { CATALOG_PROVIDERS } from "@seri/model-catalog";
 import { CONFIG_FILENAME } from "../../src/config/config";
 import { DEFAULT_MODEL } from "../../src/provider/groq";
-import {
-  DEFAULT_PROVIDER,
-  isModelProvider,
-  persistDefaultModel,
-  resolveDefaultModel,
-} from "../../src/provider/defaults";
+import { isModelProvider, persistDefaultModel, resolveDefaultModel } from "../../src/provider/defaults";
 
 const originalModel = process.env.SERI_MODEL;
 const originalProvider = process.env.SERI_PROVIDER;
@@ -58,11 +53,10 @@ describe("isModelProvider", () => {
 });
 
 describe("resolveDefaultModel", () => {
-  test("nothing set: falls back to DEFAULT_MODEL/groq", () => {
+  test("nothing set: falls back to DEFAULT_MODEL, no provider requested", () => {
     expect(resolveDefaultModel()).toEqual({
       model: DEFAULT_MODEL,
-      provider: "groq",
-      requestedProvider: undefined,
+      provider: undefined,
     });
   });
 
@@ -71,7 +65,6 @@ describe("resolveDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({
       model: "picked-model",
       provider: "openrouter",
-      requestedProvider: "openrouter",
     });
   });
 
@@ -82,7 +75,6 @@ describe("resolveDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({
       model: "env-model",
       provider: "anthropic",
-      requestedProvider: "anthropic",
     });
   });
 
@@ -98,8 +90,7 @@ describe("resolveDefaultModel", () => {
     process.env.SERI_MODEL = "llama-3.3-70b-versatile";
     expect(resolveDefaultModel()).toEqual({
       model: "llama-3.3-70b-versatile",
-      provider: DEFAULT_PROVIDER,
-      requestedProvider: undefined,
+      provider: undefined,
     });
   });
 
@@ -109,25 +100,22 @@ describe("resolveDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({
       model: "picked-model",
       provider: "openrouter",
-      requestedProvider: "openrouter",
     });
   });
 
-  test("SERI_PROVIDER='bogus' falls back to DEFAULT_PROVIDER, does not throw", () => {
+  test("SERI_PROVIDER='bogus' is not a request, provider is undefined, does not throw", () => {
     process.env.SERI_PROVIDER = "bogus";
     expect(resolveDefaultModel()).toEqual({
       model: DEFAULT_MODEL,
-      provider: DEFAULT_PROVIDER,
-      requestedProvider: undefined,
+      provider: undefined,
     });
   });
 
-  test("SERI_MODEL set with no SERI_PROVIDER: provider still defaults to groq", () => {
+  test("SERI_MODEL set with no SERI_PROVIDER: no provider requested", () => {
     process.env.SERI_MODEL = "env-model";
     expect(resolveDefaultModel()).toEqual({
       model: "env-model",
-      provider: "groq",
-      requestedProvider: undefined,
+      provider: undefined,
     });
   });
 });
@@ -138,7 +126,6 @@ describe("persistDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({
       model: "written-model",
       provider: "google",
-      requestedProvider: "google",
     });
   });
 
@@ -165,7 +152,6 @@ describe("persistDefaultModel", () => {
       expect(resolveDefaultModel()).toEqual({
         model: "first-model",
         provider: "openrouter",
-        requestedProvider: "openrouter",
       });
     } finally {
       // Restored so afterEach's rmSync(tmpRoot, ...) can actually delete it.
@@ -193,7 +179,6 @@ describe("configDir isolation", () => {
       expect(resolveDefaultModel(callerDir)).toEqual({
         model: "caller-model",
         provider: "anthropic",
-        requestedProvider: "anthropic",
       });
       // The negative control this test's own point rests on: the ambient default's own pair is
       // untouched by the caller-scoped write above, and still resolves independently — proving
@@ -202,7 +187,6 @@ describe("configDir isolation", () => {
       expect(resolveDefaultModel()).toEqual({
         model: "ambient-model",
         provider: "openrouter",
-        requestedProvider: "openrouter",
       });
     } finally {
       rmSync(callerDir, { recursive: true, force: true });

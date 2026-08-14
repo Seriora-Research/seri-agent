@@ -1866,9 +1866,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   // Regression: onSessionChange fires on every state.session change, including a /model pick
   // itself — before any turn confirms it. Picking a keyless provider and letting the turn fail
   // (no messages-updated, so confirmedModel never advances) is what proves a persist landing in
-  // that window pairs `requestedProvider` with the model/provider it actually describes (the
-  // still-confirmed starting pair), not the newer, unconfirmed pick session's own live fields.
-  test("a /model pick to a keyless provider never persists a requestedProvider that names a different provider than the persisted one", async () => {
+  // that window writes the still-confirmed starting provider, not the newer, unconfirmed pick's
+  // own live session field — the live picker's value never overwrites `confirmedModel` until a
+  // turn actually succeeds on it.
+  test("a /model pick to a keyless provider that fails never persists that provider as confirmed", async () => {
     const scriptPath = join(dir, "child-model-pick-keyless.mjs");
     writeFileSync(scriptPath, childScriptModelPickKeyless(dir));
     const sessionsDir = join(dir, "sessions");
@@ -1910,20 +1911,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // onSessionChange effect, which fires after the dispatch above, not synchronously with the
       // keypress — same reasoning as the /mode disk-poll test above.
       const deadline = Date.now() + 5_000;
-      let onDisk: { provider?: string; requestedProvider?: string };
+      let onDisk: { provider?: string };
       do {
         onDisk = JSON.parse(readFileSync(sessionPath, "utf8"));
       } while (onDisk.provider === undefined && Date.now() < deadline);
       if (onDisk.provider === undefined) throw new Error("no provider persisted yet");
 
-      // The actual invariant: an on-disk requestedProvider, if present at all, must name the SAME
-      // provider as the on-disk provider it was persisted alongside — never a provider from a
-      // newer, unconfirmed pick that the persisted provider does not reflect.
-      if (onDisk.requestedProvider !== undefined) {
-        expect(onDisk.requestedProvider).toBe(onDisk.provider);
-      }
-      // Negative control built into the assertion above would pass vacuously if the pick's own
-      // persist never actually reached disk at all — rule that out directly.
+      // The actual invariant: the persisted provider is still "groq" — turn 1's confirmed pair —
+      // never "anthropic", the picked-but-never-confirmed provider whose turn failed.
       expect(onDisk.provider).toBe("groq");
     } finally {
       child.kill("SIGKILL");
@@ -2408,26 +2403,21 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // actually exercises the fix rather than being vacuously true.
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
 
-      // Same on-disk invariant the round-4 regression test (the /model-pick-to-a-keyless-provider
-      // one, above) enforces, applied here to a session that starts already-rerouted: this
-      // session's own `requestedProvider` (env SERI_PROVIDER="openrouter") names a DIFFERENT
-      // provider than the one turn 1 actually resolved to and persisted (anthropic) — exactly the
-      // pairing `confirmedModel`'s own comment in cli.ts warns must never reach disk mismatched.
+      // The session persists the RESOLVED provider (anthropic), not the originally env-requested
+      // one (openrouter, which never had a key) — proof `confirmedModel` initializes from
+      // `prepared.route`, not `prepared.session`, even on a session that starts already-rerouted.
+      // This is also what a later resume reads back as `session.provider`: see cli.test.ts's own
+      // "a resumed session's reroute notice blames the last-confirmed provider" test for the
+      // end-to-end consequence of that on the notice text.
       const sessionsDir = join(dir, "sessions");
       const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".json"));
       if (sessionFile === undefined) throw new Error("no session file written yet");
       const sessionPath = join(sessionsDir, sessionFile);
       const deadline = Date.now() + 5_000;
-      let onDisk: { provider?: string; requestedProvider?: string };
+      let onDisk: { provider?: string };
       do {
         onDisk = JSON.parse(readFileSync(sessionPath, "utf8"));
       } while (onDisk.provider === undefined && Date.now() < deadline);
-      if (onDisk.provider === undefined) throw new Error("no provider persisted yet");
-      if (onDisk.requestedProvider !== undefined) {
-        expect(onDisk.requestedProvider).toBe(onDisk.provider);
-      }
-      // Negative control built into the assertion above would pass vacuously if the on-disk
-      // provider never advanced from the pre-rerouted default — rule that out directly.
       expect(onDisk.provider).toBe("anthropic");
     } finally {
       child.kill("SIGKILL");

@@ -266,9 +266,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     });
 
     expect(state.pendingModelPicker).toBeUndefined();
-    expect(state.session).toEqual(
-      session({ model: entry.id, provider: entry.provider, requestedProvider: entry.provider }),
-    );
+    expect(state.session).toEqual(session({ model: entry.id, provider: entry.provider }));
   });
 
   // B4/MEDIUM-4: the bug this closes. `model-picker-resolved` used to carry a whole SessionState
