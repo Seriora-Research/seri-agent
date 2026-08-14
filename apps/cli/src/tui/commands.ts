@@ -7,6 +7,7 @@
 // checkpointTarget is exported and reused by cli.ts's prepareSession — the one copy this module
 // and cli.ts both call through to, rather than cli.ts keeping its own duplicate (it did, briefly,
 // between Phase 2 and the fix that consolidated it here).
+import { join } from "node:path";
 import {
   CATALOG_PROVIDERS,
   filterCatalogEntries,
@@ -16,6 +17,7 @@ import {
   type ModelProvider,
 } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
+import { loadAuthSession } from "../auth/authStore";
 import {
   appendBarrier,
   checkpointStoreDir,
@@ -26,8 +28,12 @@ import {
   undoFiles,
 } from "../checkpoint/checkpoint";
 import { projectRoot } from "../checkpoint/shadowGit";
+import { maskValue } from "../config/commands";
+import { loadConfig } from "../config/config";
+import { getBaseConfigDir, profileNameError } from "../config/paths";
 import { cycleMode } from "../gate/gate";
-import { allProviderKeyStates } from "../provider/keys";
+import { loadGrants, PERSISTABLE_TOOL_NAMES } from "../permissions/store";
+import { allProviderKeyStates, PROVIDER_API_KEY_NAMES } from "../provider/keys";
 import { byRoutePriority, resolveRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 
@@ -185,6 +191,115 @@ export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
     // `hasConfigEntry` is independent of which source wins for display.
     removable: state.hasConfigEntry,
   }));
+}
+
+// Stage A scaffolding (cli-commands-to-tui feature-plan.md): the five decide* functions below have
+// no caller yet — Stages B-E wire /login, /signup, /config, /permissions, /max-turns and /profile
+// new into the reducer these decide. Same contract as every decide* function above: recompute
+// fresh from disk on every call, plain functions, no Ink import, no saveSession/console.log/print*,
+// let a bad input throw for the (not-yet-written) caller's try/catch to turn into a command-error.
+
+// /login and /signup's own non-blocking offer (AuthBanner, App.tsx): true iff no auth session is
+// saved yet, so a first-run user sees the offer without it blocking anything they're already doing.
+export function decideAuthOffer(configDir: string): boolean {
+  return loadAuthSession(configDir) === undefined;
+}
+
+// One /config list row per known key, plus any other config.json key that isn't a provider API
+// key — provider keys are entirely /setup's, not /config's. `masked` is the raw value when
+// `secret` is false (code review, round 2: none of the three known keys are secrets —
+// SERI_VERIFY_COMMAND might be "bun check", which a user should be able to read back, not see as
+// asterisks) — only actually masked (maskValue's own output) when `secret` is true.
+export type ConfigRow = {
+  key: string;
+  masked: string;
+  source: "config" | "env" | "unset";
+  removable: boolean;
+  secret: boolean;
+};
+
+// The three keys /config always shows, in this order, regardless of whether config.json has them
+// — none of these are secrets, unlike an unrecognized key, which defaults to secret (conservative:
+// an unknown key could be provider-shaped in spirit even though provider keys themselves are
+// filtered out above).
+const KNOWN_CONFIG_KEYS = ["SERI_WORKOS_CLIENT_ID", "SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
+
+// The decision half of /config, mirroring decideSetupOpen's own shape. Provider API keys
+// (PROVIDER_API_KEY_NAMES) are excluded from the "other keys" tail even when present in
+// config.json — /setup already owns those, and showing them here too would let /config unset a
+// provider key /setup itself never offers to.
+export function decideConfigOpen(configDir: string): ConfigRow[] {
+  const config = loadConfig(configDir);
+  const providerKeyNames = new Set<string>(Object.values(PROVIDER_API_KEY_NAMES));
+  const otherKeys = Object.keys(config)
+    .filter((key) => !KNOWN_CONFIG_KEYS.includes(key) && !providerKeyNames.has(key))
+    .sort();
+  return [...KNOWN_CONFIG_KEYS, ...otherKeys].map((key) => {
+    const hasConfigEntry = key in config;
+    // Read once, not twice (code review, round 2): `source` used to check
+    // `process.env[key] !== undefined` while the value read used `process.env[key] || config[key]`
+    // — an env var deliberately set to "" (falsy, but not undefined) reported `source: "env"` while
+    // actually reading the config.json value underneath it, disagreeing with its own `source`.
+    const envValue = process.env[key];
+    const hasEnvEntry = envValue !== undefined;
+    const source: ConfigRow["source"] = hasEnvEntry ? "env" : hasConfigEntry ? "config" : "unset";
+    const value = envValue ?? config[key];
+    const secret = !KNOWN_CONFIG_KEYS.includes(key);
+    return {
+      key,
+      masked: value === undefined ? "" : secret ? maskValue(value) : value,
+      source,
+      removable: hasConfigEntry,
+      secret,
+    };
+  });
+}
+
+// One /permissions list row per PERSISTABLE_TOOL_NAMES member currently in effect for this
+// worktree: a project-tier grant (rememberGrant's only write target) is "persisted" and
+// removable; a global-tier grant (approved for every project, hand-edited or moved up by the
+// user — rememberGrant never writes there) is "pre-approved" and not removable from here. A tool
+// with no grant at all in either tier is omitted, not shown as a third state.
+export type PermissionRow = {
+  tool: string;
+  source: "persisted" | "pre-approved";
+  removable: boolean;
+};
+
+export function decidePermissionsOpen(configDir: string, worktree: string): PermissionRow[] {
+  const grants = loadGrants(configDir, worktree);
+  const rows: PermissionRow[] = [];
+  for (const tool of PERSISTABLE_TOOL_NAMES) {
+    if (grants.project.includes(tool)) {
+      rows.push({ tool, source: "persisted", removable: true });
+    } else if (grants.global.includes(tool)) {
+      rows.push({ tool, source: "pre-approved", removable: false });
+    }
+  }
+  return rows;
+}
+
+// /max-turns's own decision: a single positive-integer argument, the same shape --max-turns
+// already validates in cli.ts (identical regex, so a value valid on the command line is valid here
+// too, and vice versa).
+export function decideMaxTurns(args: string[]): number {
+  const raw = args[0];
+  if (args.length !== 1 || raw === undefined || !/^[1-9]\d*$/.test(raw)) {
+    throw new Error("Usage: /max-turns <N>, where N is a positive integer");
+  }
+  return Number(raw);
+}
+
+// /profile new's own decision: validates the name and returns where its directory WOULD live —
+// this function does not create it, that is the (not-yet-written) caller's job.
+export function decideProfileCreate(args: string[]): string {
+  const [subcommand, name] = args;
+  if (subcommand !== "new" || name === undefined || args.length !== 2) {
+    throw new Error("Usage: /profile new <name>");
+  }
+  const error = profileNameError(name);
+  if (error !== undefined) throw new Error(error);
+  return join(getBaseConfigDir(), name);
 }
 
 // `onPlan` defaults to a no-op but is meant to be passed through from the caller's own presenter

@@ -5,16 +5,16 @@ import { render } from "ink-testing-library";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
+import { App } from "../../src/tui/App";
+import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import {
-  App,
   formatContextWindow,
   formatCost,
   formatModeLabel,
   formatModelRow,
   formatRouteLabel,
   formatSetupRow,
-} from "../../src/tui/App";
-import type { ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
+} from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -1125,6 +1125,370 @@ describe("App", () => {
       const frame = instance.lastFrame() ?? "";
       expect(frame).not.toContain("your key");
       expect(frame).not.toContain("→");
+    });
+  });
+
+  // Stage A scaffolding (cli-commands-to-tui feature-plan.md): nothing dispatches
+  // auth-requested/config-requested/permissions-requested yet — these tests seed the reducer's
+  // state directly (auth-offer/auth-step/config-step/permissions-step) to prove the render wiring
+  // itself is correct ahead of Stages C-D's dispatchers.
+  describe("auth banner", () => {
+    test("show: true renders the offer alongside InputBox, not in place of it", async () => {
+      const submitted: string[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSubmit={(v) => submitted.push(v)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "auth-offer", show: true });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("/login");
+      expect(frame).toContain("/signup");
+      // Non-blocking proof: InputBox is still mounted (not replaced) — typing still reaches
+      // onSubmit, exactly as it would with the banner absent.
+      instance.stdin.write("still typing\r");
+      await flush();
+      expect(submitted).toEqual(["still typing"]);
+    });
+
+    test("show: false renders nothing extra", async () => {
+      const { instance, dispatch } = await connect();
+      const before = instance.lastFrame() ?? "";
+
+      dispatch({ type: "auth-offer", show: false });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toBe(before);
+    });
+  });
+
+  describe("auth panel", () => {
+    test("starting step shows a brief starting message for the given mode", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-requested", mode: "signup" });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain("signup");
+    });
+
+    test("device step shows the verification URL and user code", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: {
+          step: "device",
+          mode: "login",
+          verificationUri: "https://example.com/device",
+          userCode: "ABCD-1234",
+        },
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("https://example.com/device");
+      expect(frame).toContain("ABCD-1234");
+    });
+
+    // Color (theme.error) is not asserted: ink-testing-library's lastFrame() in this test
+    // environment carries no ANSI codes (measured against a plain <Text color="red">) — the same
+    // reason no other test in this file asserts on a theme color, only on rendered text.
+    test("result step shows the message, for both a success and an error result", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: { step: "result", message: "Signed in as a@example.com", error: false },
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("Signed in as a@example.com");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: { step: "result", message: "Login failed: expired code", error: true },
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("Login failed: expired code");
+    });
+  });
+
+  describe("config panel", () => {
+    function configRows(): ConfigRow[] {
+      return [
+        {
+          key: "SERI_WORKOS_CLIENT_ID",
+          masked: "",
+          source: "unset",
+          removable: false,
+          secret: false,
+        },
+        {
+          key: "SERI_SOME_OTHER_KEY",
+          masked: "sk-d...2345",
+          source: "config",
+          removable: true,
+          secret: true,
+        },
+      ];
+    }
+
+    test("the list step shows each row's key and masked value", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "config-requested", rows: configRows() });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("SERI_WORKOS_CLIENT_ID");
+      expect(frame).toContain("SERI_SOME_OTHER_KEY");
+      expect(frame).toContain("sk-d...2345");
+    });
+
+    // The key-leak guard, mirroring SetupEnterKey's own test above: a raw secret-shaped value must
+    // never appear in the frame, on the list step (only the already-masked value is shown) or the
+    // enter-value step (typed characters render as "*").
+    test("a raw secret-shaped value never appears in the frame", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "config-requested",
+        rows: [
+          {
+            key: "SERI_SOME_OTHER_KEY",
+            masked: "sk-d...2345",
+            source: "config",
+            removable: true,
+            secret: true,
+          },
+        ],
+      });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").not.toContain("sk-distinctive-secret-12345");
+
+      dispatch({
+        type: "config-step",
+        state: { step: "enter-value", key: "SERI_SOME_OTHER_KEY", busy: false },
+      });
+      await flush();
+      await flush();
+
+      const secret = "sk-distinctive-secret-12345";
+      instance.stdin.write(secret);
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).not.toContain(secret);
+      expect(frame).toContain("*".repeat(secret.length));
+    });
+
+    // Review round 3 finding (MEDIUM-1's own test coverage gap): onConfigClose is an optional
+    // AppProps handler with nothing that goes red if App.tsx's own render call stopped passing it
+    // through to ConfigPanel — this proves the wiring, not just that ConfigList's own Esc handling
+    // works (that's this component's own concern, already implicit in it having a prop at all).
+    test("Esc on the list step calls onConfigClose", async () => {
+      const closed: number[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onConfigClose={() => closed.push(closed.length)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "config-requested", rows: configRows() });
+      await flush();
+
+      instance.stdin.write("\x1b"); // Escape
+      // A bare Escape byte is ambiguous with the start of a longer ANSI sequence — Ink's own
+      // input parser holds it for a short window before treating it as standalone (the model
+      // picker's own Escape test above needs the same wait for the same reason).
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      expect(closed).toEqual([0]);
+    });
+  });
+
+  describe("permissions panel", () => {
+    test("a removable: false row does not show a remove affordance in the frame", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "permissions-requested",
+        rows: [{ tool: "read_file", source: "pre-approved", removable: false }],
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("read_file");
+      expect(frame).toContain("not removable");
+    });
+
+    test("a removable: true row shows normally, without the not-removable note", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "permissions-requested",
+        rows: [{ tool: "write_file", source: "persisted", removable: true }],
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("write_file");
+      expect(frame).not.toContain("not removable");
+    });
+
+    // Review round 3 finding (MEDIUM-1's own test coverage gap), mirroring SetupPanel's own
+    // confirm-remove test above: proves App.tsx's render call actually threads onPermissionsRemove
+    // through to PermissionsPanel, not just that PermissionsConfirmRemove's own 'y' handling works.
+    test("confirm-remove: 'y' calls onPermissionsRemove", async () => {
+      const removed: string[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onPermissionsRemove={(tool) => removed.push(tool)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      // A single dispatch straight to confirm-remove (matching SetupPanel's own confirm-remove
+      // test above), not permissions-requested then permissions-step: the latter swaps
+      // PermissionsList for PermissionsConfirmRemove mid-test, and that component swap's own
+      // useInput needs an extra tick to register (the same mount-timing gap SetupEnterKey's own
+      // key-leak test already needed two flush() calls for).
+      dispatch({
+        type: "permissions-step",
+        state: { step: "confirm-remove", tool: "write_file" },
+      });
+      await flush();
+
+      instance.stdin.write("y");
+      await flush();
+
+      expect(removed).toEqual(["write_file"]);
+    });
+  });
+
+  // Render-ternary precedence (App.tsx's own comment): pendingApproval → pendingModelPicker →
+  // pendingSetup → pendingAuth → pendingConfig → pendingPermissions → InputBox. Each test below
+  // seeds one adjacent pair at once and checks the earlier-in-the-chain branch wins, extending the
+  // existing pendingSetup-vs-InputBox precedence test above to the three new Stage A branches.
+  describe("render precedence: pendingApproval / pendingSetup / pendingAuth / pendingConfig / pendingPermissions", () => {
+    test("pendingApproval wins over pendingAuth", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("Starting login");
+
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: {},
+        offersAlways: true,
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Approve write_file");
+      expect(frame).not.toContain("Starting login");
+    });
+
+    test("pendingSetup wins over pendingAuth", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("Starting login");
+
+      dispatch({ type: "setup-requested", rows: [] });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("/setup — provider API keys");
+      expect(frame).not.toContain("Starting login");
+    });
+
+    test("pendingAuth wins over pendingConfig", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "config-requested",
+        rows: [
+          {
+            key: "SERI_VERIFY_COMMAND",
+            masked: "bun check",
+            source: "config",
+            removable: true,
+            secret: false,
+          },
+        ],
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("/config — settings");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Starting login");
+      expect(frame).not.toContain("/config — settings");
+    });
+
+    test("pendingConfig wins over pendingPermissions", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "permissions-requested",
+        rows: [{ tool: "write_file", source: "persisted", removable: true }],
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("/permissions — tools approved permanently");
+
+      dispatch({
+        type: "config-requested",
+        rows: [
+          {
+            key: "SERI_VERIFY_COMMAND",
+            masked: "bun check",
+            source: "config",
+            removable: true,
+            secret: false,
+          },
+        ],
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("/config — settings");
+      expect(frame).not.toContain("/permissions — tools approved permanently");
     });
   });
 });

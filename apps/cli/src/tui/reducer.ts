@@ -7,7 +7,12 @@ import { toolAllowedLine, toolResultLine } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
 import type { SessionState } from "../session/session";
-import type { ModelPickerEntry, SetupProviderRow } from "./commands";
+import type {
+  ConfigRow,
+  ModelPickerEntry,
+  PermissionRow,
+  SetupProviderRow,
+} from "./commands";
 
 // /setup's own live state (D5-D8, feature-plan.md) — a three-step flow, mirrored on the reducer
 // the same way /model's picker is: "list" shows all five providers, "enter-key" is the masked
@@ -29,6 +34,33 @@ export type SetupState =
       busy: boolean;
     }
   | { step: "confirm-remove"; provider: ModelProvider; keyName: string };
+
+// Stage A (cli-commands-to-tui feature-plan.md): scaffolding only — this state has no dispatcher
+// wired to it yet (no `auth-requested`/`config-requested`/`permissions-requested` caller exists
+// until Stages B-D). Shaped now, alongside SetupState above, so those stages land as additive
+// wiring rather than a reducer-state redesign.
+//
+// /login and /signup's own live state — the device-flow OAuth panel (Stage C). "starting" is the
+// brief moment before the provider returns a verification URL/code; "device" shows that URL+code
+// for the user to open in a browser; "result" is the terminal state (success or failure).
+export type AuthPanelState =
+  | { step: "starting"; mode: "login" | "signup" }
+  | { step: "device"; mode: "login" | "signup"; verificationUri: string; userCode: string }
+  | { step: "result"; message: string; error: boolean };
+
+// /config's own live state (Stage D) — structurally identical to SetupState above (list ->
+// enter-value -> list, list -> confirm-unset -> list), since /config edits arbitrary config.json
+// keys the same way /setup edits provider API keys.
+export type ConfigPanelState =
+  | { step: "list"; rows: ConfigRow[]; selected: number }
+  | { step: "enter-value"; key: string; error?: string; busy: boolean }
+  | { step: "confirm-unset"; key: string };
+
+// /permissions' own live state (Stage D) — a flat list with only a remove step, no value-entry
+// step: there is nothing to type, only tools to revoke.
+export type PermissionsPanelState =
+  | { step: "list"; rows: PermissionRow[]; selected: number }
+  | { step: "confirm-remove"; tool: string };
 
 export type TuiState = {
   session: SessionState<ModelMessage>;
@@ -83,6 +115,18 @@ export type TuiState = {
   // `pendingApproval`/`pendingModelPicker` the same way those two already can with each other,
   // for the identical reason: cli.ts's onSubmit handles /setup before the turnInFlight guard.
   pendingSetup: SetupState | undefined;
+  // Stage A scaffolding (cli-commands-to-tui feature-plan.md): the non-blocking login/signup
+  // offer (AuthBanner, App.tsx) — independent of `pendingAuth` below, not a fourth mutually
+  // exclusive render-ternary state. Nothing sets this to `true` yet (Stage C wires the offer).
+  authOffer: boolean;
+  // /login and /signup's own blocking panel (Stage C). Mirrors `pendingSetup`'s mutual-exclusion
+  // role in the render ternary once wired; unreachable until then.
+  pendingAuth: AuthPanelState | undefined;
+  // /config's own blocking panel (Stage D). Mirrors `pendingSetup`'s role; unreachable until wired.
+  pendingConfig: ConfigPanelState | undefined;
+  // /permissions' own blocking panel (Stage D). Mirrors `pendingSetup`'s role; unreachable until
+  // wired.
+  pendingPermissions: PermissionsPanelState | undefined;
 };
 
 function modeIndicator(mode: PermissionMode): string {
@@ -102,6 +146,10 @@ export function initialTuiState(session: SessionState<ModelMessage>): TuiState {
     pendingModelPicker: undefined,
     pendingInputPrefill: undefined,
     pendingSetup: undefined,
+    authOffer: false,
+    pendingAuth: undefined,
+    pendingConfig: undefined,
+    pendingPermissions: undefined,
   };
 }
 
@@ -151,7 +199,21 @@ export type TuiAction =
   | { type: "setup-step"; state: SetupState }
   // Mirrors `model-picker-resolved`'s own `leftoverInput` handling exactly — /setup's panel can
   // also close mid-chunk on a real pty.
-  | { type: "setup-resolved"; leftoverInput?: string };
+  | { type: "setup-resolved"; leftoverInput?: string }
+  // Stage A scaffolding: no dispatcher fires any of these ten yet (Stages B-D wire them). Shaped
+  // now so `pendingAuth`/`pendingConfig`/`pendingPermissions`'s own step transitions have a
+  // reducer contract to land on. `auth-offer` toggles the independent, non-blocking banner —
+  // deliberately NOT `pendingAuth`, which is the blocking panel (see TuiState's own comment).
+  | { type: "auth-offer"; show: boolean }
+  | { type: "auth-requested"; mode: "login" | "signup" }
+  | { type: "auth-step"; state: AuthPanelState }
+  | { type: "auth-resolved"; leftoverInput?: string }
+  | { type: "config-requested"; rows: ConfigRow[] }
+  | { type: "config-step"; state: ConfigPanelState }
+  | { type: "config-resolved"; leftoverInput?: string }
+  | { type: "permissions-requested"; rows: PermissionRow[] }
+  | { type: "permissions-step"; state: PermissionsPanelState }
+  | { type: "permissions-resolved"; leftoverInput?: string };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -213,6 +275,33 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return { ...state, pendingSetup: action.state };
     case "setup-resolved":
       return { ...state, pendingSetup: undefined, pendingInputPrefill: action.leftoverInput };
+    case "auth-offer":
+      return { ...state, authOffer: action.show };
+    case "auth-requested":
+      return { ...state, pendingAuth: { step: "starting", mode: action.mode } };
+    case "auth-step":
+      return { ...state, pendingAuth: action.state };
+    case "auth-resolved":
+      return { ...state, pendingAuth: undefined, pendingInputPrefill: action.leftoverInput };
+    case "config-requested":
+      return { ...state, pendingConfig: { step: "list", rows: action.rows, selected: 0 } };
+    case "config-step":
+      return { ...state, pendingConfig: action.state };
+    case "config-resolved":
+      return { ...state, pendingConfig: undefined, pendingInputPrefill: action.leftoverInput };
+    case "permissions-requested":
+      return {
+        ...state,
+        pendingPermissions: { step: "list", rows: action.rows, selected: 0 },
+      };
+    case "permissions-step":
+      return { ...state, pendingPermissions: action.state };
+    case "permissions-resolved":
+      return {
+        ...state,
+        pendingPermissions: undefined,
+        pendingInputPrefill: action.leftoverInput,
+      };
   }
 }
 

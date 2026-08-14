@@ -3,7 +3,12 @@ import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import type { LoopEvent } from "../../src/loop/loop";
 import type { SessionState } from "../../src/session/session";
-import type { ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
+import type {
+  ConfigRow,
+  ModelPickerEntry,
+  PermissionRow,
+  SetupProviderRow,
+} from "../../src/tui/commands";
 import { initialTuiState, tuiReducer } from "../../src/tui/reducer";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -419,5 +424,184 @@ describe("tuiReducer: setup-requested / setup-step / setup-resolved", () => {
 
     expect(state.pendingSetup).toEqual({ step: "list", rows, selected: 0 });
     expect(state.pendingModelPicker).toEqual({ entries: [] });
+  });
+});
+
+// Stage A scaffolding (cli-commands-to-tui feature-plan.md): these ten actions have no dispatcher
+// yet — Stages B-D wire /login, /signup, /config and /permissions to fire them. Each case below
+// asserts the WHOLE resulting state against `{ ...initialTuiState(session()), ...expected }`, not
+// just the touched field, so a future change that leaks into an unrelated field (the same class of
+// bug pendingSetup's own coexistence test above guards against) fails here too.
+describe("tuiReducer: auth-offer / auth-requested / auth-step / auth-resolved", () => {
+  test("auth-offer sets authOffer without touching pendingAuth", () => {
+    const state = tuiReducer(initialTuiState(session()), { type: "auth-offer", show: true });
+
+    expect(state).toEqual({ ...initialTuiState(session()), authOffer: true });
+  });
+
+  test("auth-offer: false does not clear an already-set pendingAuth", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "auth-requested",
+      mode: "login",
+    });
+    state = tuiReducer(state, { type: "auth-offer", show: false });
+
+    expect(state).toEqual({
+      ...initialTuiState(session()),
+      authOffer: false,
+      pendingAuth: { step: "starting", mode: "login" },
+    });
+  });
+
+  test("auth-requested opens at step starting with the given mode", () => {
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "auth-requested",
+      mode: "signup",
+    });
+
+    expect(state).toEqual({
+      ...initialTuiState(session()),
+      pendingAuth: { step: "starting", mode: "signup" },
+    });
+  });
+
+  test("auth-step transitions to a new step", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "auth-requested", mode: "login" });
+
+    state = tuiReducer(state, {
+      type: "auth-step",
+      state: { step: "device", mode: "login", verificationUri: "https://x", userCode: "AB-12" },
+    });
+
+    expect(state).toEqual({
+      ...initialTuiState(session()),
+      pendingAuth: {
+        step: "device",
+        mode: "login",
+        verificationUri: "https://x",
+        userCode: "AB-12",
+      },
+    });
+  });
+
+  test("auth-resolved clears pendingAuth and carries leftoverInput into pendingInputPrefill", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "auth-requested", mode: "login" });
+
+    state = tuiReducer(state, { type: "auth-resolved", leftoverInput: "typed after close" });
+
+    expect(state).toEqual({
+      ...initialTuiState(session()),
+      pendingInputPrefill: "typed after close",
+    });
+  });
+
+  test("auth-resolved without leftoverInput leaves pendingInputPrefill undefined", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "auth-requested", mode: "login" });
+
+    state = tuiReducer(state, { type: "auth-resolved" });
+
+    expect(state).toEqual(initialTuiState(session()));
+  });
+});
+
+describe("tuiReducer: config-requested / config-step / config-resolved", () => {
+  const rows: ConfigRow[] = [
+    { key: "SERI_VERIFY_ENABLED", masked: "", source: "unset", removable: false, secret: false },
+  ];
+
+  test("config-requested opens at step list with the given rows", () => {
+    const state = tuiReducer(initialTuiState(session()), { type: "config-requested", rows });
+
+    expect(state).toEqual({
+      ...initialTuiState(session()),
+      pendingConfig: { step: "list", rows, selected: 0 },
+    });
+  });
+
+  test("config-step transitions to a new step", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "config-requested", rows });
+
+    state = tuiReducer(state, {
+      type: "config-step",
+      state: { step: "enter-value", key: "SERI_VERIFY_ENABLED", busy: false },
+    });
+
+    expect(state).toEqual({
+      ...initialTuiState(session()),
+      pendingConfig: { step: "enter-value", key: "SERI_VERIFY_ENABLED", busy: false },
+    });
+  });
+
+  test("config-resolved clears pendingConfig and carries leftoverInput into pendingInputPrefill", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "config-requested", rows });
+
+    state = tuiReducer(state, { type: "config-resolved", leftoverInput: "typed after close" });
+
+    expect(state).toEqual({
+      ...initialTuiState(session()),
+      pendingInputPrefill: "typed after close",
+    });
+  });
+
+  test("config-resolved without leftoverInput leaves pendingInputPrefill undefined", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "config-requested", rows });
+
+    state = tuiReducer(state, { type: "config-resolved" });
+
+    expect(state).toEqual(initialTuiState(session()));
+  });
+});
+
+describe("tuiReducer: permissions-requested / permissions-step / permissions-resolved", () => {
+  const rows: PermissionRow[] = [
+    { tool: "write_file", source: "persisted", removable: true },
+  ];
+
+  test("permissions-requested opens at step list with the given rows", () => {
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "permissions-requested",
+      rows,
+    });
+
+    expect(state).toEqual({
+      ...initialTuiState(session()),
+      pendingPermissions: { step: "list", rows, selected: 0 },
+    });
+  });
+
+  test("permissions-step transitions to a new step", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "permissions-requested", rows });
+
+    state = tuiReducer(state, {
+      type: "permissions-step",
+      state: { step: "confirm-remove", tool: "write_file" },
+    });
+
+    expect(state).toEqual({
+      ...initialTuiState(session()),
+      pendingPermissions: { step: "confirm-remove", tool: "write_file" },
+    });
+  });
+
+  test("permissions-resolved clears pendingPermissions and carries leftoverInput into pendingInputPrefill", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "permissions-requested", rows });
+
+    state = tuiReducer(state, {
+      type: "permissions-resolved",
+      leftoverInput: "typed after close",
+    });
+
+    expect(state).toEqual({
+      ...initialTuiState(session()),
+      pendingInputPrefill: "typed after close",
+    });
+  });
+
+  test("permissions-resolved without leftoverInput leaves pendingInputPrefill undefined", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "permissions-requested", rows });
+
+    state = tuiReducer(state, { type: "permissions-resolved" });
+
+    expect(state).toEqual(initialTuiState(session()));
   });
 });
