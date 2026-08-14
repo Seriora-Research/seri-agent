@@ -506,7 +506,7 @@ describe("tuiReducer: auth-offer / auth-requested / auth-step / auth-resolved", 
 
 describe("tuiReducer: config-requested / config-step / config-resolved", () => {
   const rows: ConfigRow[] = [
-    { key: "SERI_VERIFY_ENABLED", masked: "", source: "unset", removable: false },
+    { key: "SERI_VERIFY_ENABLED", masked: "", source: "unset", removable: false, secret: false },
   ];
 
   test("config-requested opens at step list with the given rows", () => {

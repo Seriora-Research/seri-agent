@@ -206,15 +206,22 @@ export function decideAuthOffer(configDir: string): boolean {
 }
 
 // One /config list row per known key, plus any other config.json key that isn't a provider API
-// key — provider keys are entirely /setup's, not /config's.
+// key — provider keys are entirely /setup's, not /config's. `masked` is the raw value when
+// `secret` is false (code review, round 2: none of the three known keys are secrets —
+// SERI_VERIFY_COMMAND might be "bun check", which a user should be able to read back, not see as
+// asterisks) — only actually masked (maskValue's own output) when `secret` is true.
 export type ConfigRow = {
   key: string;
   masked: string;
   source: "config" | "env" | "unset";
   removable: boolean;
+  secret: boolean;
 };
 
-// The three keys /config always shows, in this order, regardless of whether config.json has them.
+// The three keys /config always shows, in this order, regardless of whether config.json has them
+// — none of these are secrets, unlike an unrecognized key, which defaults to secret (conservative:
+// an unknown key could be provider-shaped in spirit even though provider keys themselves are
+// filtered out above).
 const KNOWN_CONFIG_KEYS = ["SERI_WORKOS_CLIENT_ID", "SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
 
 // The decision half of /config, mirroring decideSetupOpen's own shape. Provider API keys
@@ -229,14 +236,21 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
     .sort();
   return [...KNOWN_CONFIG_KEYS, ...otherKeys].map((key) => {
     const hasConfigEntry = key in config;
-    const source: ConfigRow["source"] =
-      process.env[key] !== undefined ? "env" : hasConfigEntry ? "config" : "unset";
-    const value = process.env[key] || config[key];
+    // Read once, not twice (code review, round 2): `source` used to check
+    // `process.env[key] !== undefined` while the value read used `process.env[key] || config[key]`
+    // — an env var deliberately set to "" (falsy, but not undefined) reported `source: "env"` while
+    // actually reading the config.json value underneath it, disagreeing with its own `source`.
+    const envValue = process.env[key];
+    const hasEnvEntry = envValue !== undefined;
+    const source: ConfigRow["source"] = hasEnvEntry ? "env" : hasConfigEntry ? "config" : "unset";
+    const value = envValue ?? config[key];
+    const secret = !KNOWN_CONFIG_KEYS.includes(key);
     return {
       key,
-      masked: value === undefined ? "" : maskValue(value),
+      masked: value === undefined ? "" : secret ? maskValue(value) : value,
       source,
       removable: hasConfigEntry,
+      secret,
     };
   });
 }

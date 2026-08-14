@@ -560,9 +560,14 @@ describe("decideAuthOffer", () => {
 
 describe("decideConfigOpen", () => {
   let configConfigDir: string;
-  const originalWorkosClientId = process.env.SERI_WORKOS_CLIENT_ID;
+  // All three known keys, not just SERI_WORKOS_CLIENT_ID (code review, round 2): any dev box or
+  // CI runner with SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND genuinely exported would otherwise
+  // silently fail the "all three are unset" assertion below.
+  const KNOWN_KEYS = ["SERI_WORKOS_CLIENT_ID", "SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
+  const originalEnv = Object.fromEntries(KNOWN_KEYS.map((name) => [name, process.env[name]]));
 
   beforeEach(() => {
+    for (const name of KNOWN_KEYS) delete process.env[name];
     configConfigDir = mkdtempSync(join(tmpdir(), "seri-config-open-test-"));
   });
 
@@ -571,8 +576,11 @@ describe("decideConfigOpen", () => {
     // Teardown must `delete`, never reassign `undefined` — Bun/Node coerce
     // `process.env.X = undefined` to the literal string "undefined" (code-quality.md's own
     // cross-platform env-var lesson).
-    if (originalWorkosClientId === undefined) delete process.env.SERI_WORKOS_CLIENT_ID;
-    else process.env.SERI_WORKOS_CLIENT_ID = originalWorkosClientId;
+    for (const name of KNOWN_KEYS) {
+      const original = originalEnv[name];
+      if (original === undefined) delete process.env[name];
+      else process.env[name] = original;
+    }
   });
 
   test("all three known keys are source: unset on an empty config dir", () => {
@@ -585,19 +593,41 @@ describe("decideConfigOpen", () => {
     expect(rows.every((row) => row.source === "unset" && row.removable === false)).toBe(true);
   });
 
-  test("a key written via config.json is source: config, masked, and removable", () => {
+  // None of the three known keys are secrets (code review, round 2) — SERI_VERIFY_COMMAND might
+  // be "bun check", which a user should be able to read back verbatim, not see as asterisks.
+  test("a known key written via config.json is source: config, removable, and NOT masked", () => {
     setConfigValue("SERI_VERIFY_COMMAND", "bun run typecheck", configConfigDir);
     const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_COMMAND");
     expect(row?.source).toBe("config");
-    expect(row?.masked).not.toBe("");
-    expect(row?.masked).not.toBe("bun run typecheck");
     expect(row?.removable).toBe(true);
+    expect(row?.secret).toBe(false);
+    expect(row?.masked).toBe("bun run typecheck");
+  });
+
+  // An unrecognized key defaults to secret: true (conservative) and is genuinely masked.
+  test("an unknown key written via config.json is secret: true and masked, not the raw value", () => {
+    setConfigValue("SERI_SOME_OTHER_KEY", "sk-fake-secret-value", configConfigDir);
+    const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_SOME_OTHER_KEY");
+    expect(row?.secret).toBe(true);
+    expect(row?.masked).not.toBe("");
+    expect(row?.masked).not.toBe("sk-fake-secret-value");
   });
 
   test("a key set via env var is source: env", () => {
     process.env.SERI_WORKOS_CLIENT_ID = "client-from-env";
     const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_WORKOS_CLIENT_ID");
     expect(row?.source).toBe("env");
+  });
+
+  // Code review, round 2: `source`/value used to disagree on an env var set to "" — `source`
+  // read `!== undefined` (true for ""), the value read `||` (falls through to config.json for the
+  // falsy ""). Both must now agree: env wins for `source` AND for the value read.
+  test("an env var set to the empty string is source: env, not source: config", () => {
+    setConfigValue("SERI_VERIFY_COMMAND", "bun run typecheck", configConfigDir);
+    process.env.SERI_VERIFY_COMMAND = "";
+    const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_COMMAND");
+    expect(row?.source).toBe("env");
+    expect(row?.masked).toBe("");
   });
 
   test("a provider API key written to config.json is absent from the returned rows", () => {
