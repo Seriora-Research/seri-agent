@@ -6,7 +6,7 @@ import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
 import { App } from "../../src/tui/App";
-import type { ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
+import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import {
   formatContextWindow,
   formatCost,
@@ -1125,6 +1125,225 @@ describe("App", () => {
       const frame = instance.lastFrame() ?? "";
       expect(frame).not.toContain("your key");
       expect(frame).not.toContain("→");
+    });
+  });
+
+  // Stage A scaffolding (cli-commands-to-tui feature-plan.md): nothing dispatches
+  // auth-requested/config-requested/permissions-requested yet — these tests seed the reducer's
+  // state directly (auth-offer/auth-step/config-step/permissions-step) to prove the render wiring
+  // itself is correct ahead of Stages C-D's dispatchers.
+  describe("auth banner", () => {
+    test("show: true renders the offer alongside InputBox, not in place of it", async () => {
+      const submitted: string[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSubmit={(v) => submitted.push(v)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "auth-offer", show: true });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("/login");
+      expect(frame).toContain("/signup");
+      // Non-blocking proof: InputBox is still mounted (not replaced) — typing still reaches
+      // onSubmit, exactly as it would with the banner absent.
+      instance.stdin.write("still typing\r");
+      await flush();
+      expect(submitted).toEqual(["still typing"]);
+    });
+
+    test("show: false renders nothing extra", async () => {
+      const { instance, dispatch } = await connect();
+      const before = instance.lastFrame() ?? "";
+
+      dispatch({ type: "auth-offer", show: false });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toBe(before);
+    });
+  });
+
+  describe("auth panel", () => {
+    test("starting step shows a brief starting message for the given mode", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-requested", mode: "signup" });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain("signup");
+    });
+
+    test("device step shows the verification URL and user code", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: {
+          step: "device",
+          mode: "login",
+          verificationUri: "https://example.com/device",
+          userCode: "ABCD-1234",
+        },
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("https://example.com/device");
+      expect(frame).toContain("ABCD-1234");
+    });
+
+    // Color (theme.error) is not asserted: ink-testing-library's lastFrame() in this test
+    // environment carries no ANSI codes (measured against a plain <Text color="red">) — the same
+    // reason no other test in this file asserts on a theme color, only on rendered text.
+    test("result step shows the message, for both a success and an error result", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: { step: "result", message: "Signed in as a@example.com", error: false },
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("Signed in as a@example.com");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: { step: "result", message: "Login failed: expired code", error: true },
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("Login failed: expired code");
+    });
+  });
+
+  describe("config panel", () => {
+    function configRows(): ConfigRow[] {
+      return [
+        { key: "SERI_WORKOS_CLIENT_ID", masked: "", source: "unset", removable: false },
+        {
+          key: "SERI_VERIFY_COMMAND",
+          masked: "sk-d...2345",
+          source: "config",
+          removable: true,
+        },
+      ];
+    }
+
+    test("the list step shows each row's key and masked value", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "config-requested", rows: configRows() });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("SERI_WORKOS_CLIENT_ID");
+      expect(frame).toContain("SERI_VERIFY_COMMAND");
+      expect(frame).toContain("sk-d...2345");
+    });
+
+    // The key-leak guard, mirroring SetupEnterKey's own test above: a raw secret-shaped value must
+    // never appear in the frame, on the list step (only the already-masked value is shown) or the
+    // enter-value step (typed characters render as "*").
+    test("a raw secret-shaped value never appears in the frame", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "config-requested",
+        rows: [
+          {
+            key: "SERI_VERIFY_COMMAND",
+            masked: "sk-d...2345",
+            source: "config",
+            removable: true,
+          },
+        ],
+      });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").not.toContain("sk-distinctive-secret-12345");
+
+      dispatch({
+        type: "config-step",
+        state: { step: "enter-value", key: "SERI_VERIFY_COMMAND", busy: false },
+      });
+      await flush();
+      await flush();
+
+      const secret = "sk-distinctive-secret-12345";
+      instance.stdin.write(secret);
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).not.toContain(secret);
+      expect(frame).toContain("*".repeat(secret.length));
+    });
+  });
+
+  describe("permissions panel", () => {
+    test("a removable: false row does not show a remove affordance in the frame", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "permissions-requested",
+        rows: [{ tool: "read_file", source: "pre-approved", removable: false }],
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("read_file");
+      expect(frame).toContain("not removable");
+    });
+
+    test("a removable: true row shows normally, without the not-removable note", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "permissions-requested",
+        rows: [{ tool: "write_file", source: "persisted", removable: true }],
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("write_file");
+      expect(frame).not.toContain("not removable");
+    });
+  });
+
+  // Render-ternary precedence (App.tsx's own comment): pendingApproval beats every later branch,
+  // pendingAuth included — extends the existing pendingSetup-vs-InputBox precedence test above with
+  // the new Stage A branches.
+  describe("render precedence: pendingApproval over the new auth/config/permissions branches", () => {
+    test("pendingApproval wins over pendingAuth", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("Starting login");
+
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: {},
+        offersAlways: true,
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Approve write_file");
+      expect(frame).not.toContain("Starting login");
     });
   });
 });
