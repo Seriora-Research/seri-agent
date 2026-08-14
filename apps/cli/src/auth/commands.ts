@@ -38,6 +38,16 @@ export async function login(
 
   const device = await requestDeviceCodeFn(clientId);
 
+  // Bug fix (code-review, round 6): an abort landing during the "starting" step — before the
+  // device code even arrives — used to fall through both checks below unnoticed (pollForTokenFn's
+  // own `{status:"aborted"}` only fires once IT starts, which is after this point) and still pop
+  // the browser open for a login the user already cancelled. Same early-return shape as the
+  // `"aborted"` branch after pollForTokenFn, just reached before ever opening the browser or
+  // starting the poll.
+  if (deps.signal?.aborted === true) {
+    return;
+  }
+
   onDeviceCode({ verificationUri: device.verificationUri, userCode: device.userCode });
   openBrowserFn(device.verificationUriComplete);
 

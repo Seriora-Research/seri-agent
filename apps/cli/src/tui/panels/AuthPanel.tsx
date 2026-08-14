@@ -31,9 +31,10 @@ export function AuthBanner({ show }: { show: boolean }) {
 // nor Ctrl-C (wired to onCancel, not to clearing pendingAuth — a raw Ctrl-C during "starting"/
 // "device" fell through to a hard process kill, no turn being in flight to arm the cancel slot)
 // gave the user any way out of a mistyped /login or a WorkOS device flow just sitting there for
-// however long the code stays valid. Dismissing here does NOT cancel the in-flight HTTP poll
-// itself (createAuthHandlers' own per-attempt counter, cli.ts, is what makes that attempt's late
-// dispatches no-ops instead) — this only stops the UI from waiting on it.
+// however long the code stays valid. Dismissing here DOES cancel the in-flight HTTP poll itself
+// (round 5): onDismiss -> onAuthResolved's own onAbandon call (App.tsx/cli.ts) aborts the current
+// attempt's AbortController, which pollForToken (deviceFlow.ts) actually checks and stops on —
+// not just a dispatch guard muting whatever that attempt eventually does in the background.
 export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismiss?: () => void }) {
   useInput((_input, key) => {
     if (key.escape) {
