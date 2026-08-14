@@ -379,6 +379,38 @@ function childScriptModelSwitchFailure(dir: string): string {
   ].join("\n");
 }
 
+// Regression for a corrupted persisted pair: unlike childScriptModelMultiRoute, this deliberately
+// does NOT inject getAnthropicModel — getModel's own real (uninjected) branch is what checks for
+// an API key and throws, so picking the anthropic route with no ANTHROPIC_API_KEY set fails the
+// turn before driveLoop is ever called (no messages-updated, so confirmedModel never advances).
+function childScriptModelPickKeyless(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `delete process.env.ANTHROPIC_API_KEY;`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok" }] };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: (id) => ({ id }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // D2/D3 (feature-plan.md, multi-provider-byok-phase-2): a session explicitly pinned to
 // (claude-sonnet-5, openrouter) — the design doc's own motivating pair (routes.test.ts's own
 // comment has the full story) — with only ANTHROPIC_API_KEY present and OPENROUTER_API_KEY
@@ -1622,6 +1654,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // Rerouted: the picked provider (openrouter) has no key, but anthropic — claude-sonnet-5's
       // native sibling — does, so resolveRoute reroutes turn 2 there (D2).
       await sawLine("RUNLOOP_CALL 2 model=claude-sonnet-5 provider=anthropic");
+      // The transcript notice must name the PICKED provider (openrouter, the one actually
+      // missing a key), not stay silent about it — proof that `session.provider`, set by the
+      // live picker pick (reducer.ts's own "model-picker-resolved" case), actually reached this
+      // turn's reroute notice rather than a re-derived undefined. Split across two checks, not
+      // one long toContain: Ink wraps this line across the terminal's own column width (measured
+      // the same way on the "a routing-priority reroute active from session start" test, below).
+      const noticePrefix = "↻ routing claude-sonnet-5 via anthropic (your key) — no OpenRouter key";
+      await sawLine(noticePrefix);
+      await sawLine("configured");
       await sawLineTimes("(done: no-tool-call)", 2);
       // "(done: no-tool-call)" appearing in the captured pty stdout is not a reliable proxy for
       // "config.json has already been written" — measured live, waiting on it alone flaked here.
@@ -1817,6 +1858,68 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // trigger it either, since it ran on the model the session already started on (no switch
       // yet, so the inequality guard never fires). config.json is never written by this run at all.
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // Regression: onSessionChange fires on every state.session change, including a /model pick
+  // itself — before any turn confirms it. Picking a keyless provider and letting the turn fail
+  // (no messages-updated, so confirmedModel never advances) is what proves a persist landing in
+  // that window writes the still-confirmed starting provider, not the newer, unconfirmed pick's
+  // own live session field — the live picker's value never overwrites `confirmedModel` until a
+  // turn actually succeeds on it.
+  test("a /model pick to a keyless provider that fails never persists that provider as confirmed", async () => {
+    const scriptPath = join(dir, "child-model-pick-keyless.mjs");
+    writeFileSync(scriptPath, childScriptModelPickKeyless(dir));
+    const sessionsDir = join(dir, "sessions");
+
+    const { child, sawLine } = startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
+      await sawLine("(done: no-tool-call)");
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      await sawLine("GPT OSS 120B");
+
+      // Narrows to exactly the two claude-sonnet-5 routes (same fixture as
+      // childScriptModelMultiRoute's own test) — the native Anthropic row sorts first (byRoutePriority),
+      // so it is already the highlighted row this Enter picks, same as that test's own comment explains.
+      child.stdin?.write("claude-sonnet-5");
+      await sawLine("claude-sonnet-5");
+      await sawLine("anthropic");
+      child.stdin?.write("\r");
+      // The mandatory wait after any keypress that swaps the mounted component (picker -> input
+      // box) — childScriptModelSwitch's own test has the full measured story for this.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      // getModel's own real (uninjected) branch throwing missingKeyError — proof the turn actually
+      // failed on the missing key rather than succeeding some other way.
+      await sawLine("No Anthropic key configured. Run /setup to add one.");
+
+      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".json"));
+      if (sessionFile === undefined) throw new Error("no session file written yet");
+      const sessionPath = join(sessionsDir, sessionFile);
+
+      // Polled, not asserted immediately: the pick's own persist happens in App.tsx's own
+      // onSessionChange effect, which fires after the dispatch above, not synchronously with the
+      // keypress — same reasoning as the /mode disk-poll test above.
+      const deadline = Date.now() + 5_000;
+      let onDisk: { provider?: string };
+      do {
+        onDisk = JSON.parse(readFileSync(sessionPath, "utf8"));
+      } while (onDisk.provider === undefined && Date.now() < deadline);
+      if (onDisk.provider === undefined) throw new Error("no provider persisted yet");
+
+      // The actual invariant: the persisted provider is still "groq" — turn 1's confirmed pair —
+      // never "anthropic", the picked-but-never-confirmed provider whose turn failed.
+      expect(onDisk.provider).toBe("groq");
     } finally {
       child.kill("SIGKILL");
     }
@@ -2299,6 +2402,23 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // present and SERI_PROVIDER: "anthropic" written on turn 1, confirming the assertion below
       // actually exercises the fix rather than being vacuously true.
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+
+      // The session persists the RESOLVED provider (anthropic), not the originally env-requested
+      // one (openrouter, which never had a key) — proof `confirmedModel` initializes from
+      // `prepared.route`, not `prepared.session`, even on a session that starts already-rerouted.
+      // This is also what a later resume reads back as `session.provider`: see cli.test.ts's own
+      // "a resumed session's reroute notice blames the last-confirmed provider" test for the
+      // end-to-end consequence of that on the notice text.
+      const sessionsDir = join(dir, "sessions");
+      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".json"));
+      if (sessionFile === undefined) throw new Error("no session file written yet");
+      const sessionPath = join(sessionsDir, sessionFile);
+      const deadline = Date.now() + 5_000;
+      let onDisk: { provider?: string };
+      do {
+        onDisk = JSON.parse(readFileSync(sessionPath, "utf8"));
+      } while (onDisk.provider === undefined && Date.now() < deadline);
+      expect(onDisk.provider).toBe("anthropic");
     } finally {
       child.kill("SIGKILL");
     }

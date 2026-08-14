@@ -260,7 +260,11 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
             ...state,
             pendingModelPicker: undefined,
             pendingInputPrefill: action.leftoverInput,
-            session: { ...state.session, model: action.pick.model, provider: action.pick.provider },
+            session: {
+              ...state.session,
+              model: action.pick.model,
+              provider: action.pick.provider,
+            },
           };
     case "input-prefill-consumed":
       return { ...state, pendingInputPrefill: undefined };

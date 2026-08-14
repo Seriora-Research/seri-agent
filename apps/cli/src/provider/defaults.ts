@@ -24,12 +24,11 @@ export function isModelProvider(value: string): value is ModelProvider {
 // documents — could pick up a STALE persisted SERI_PROVIDER from config.json (an earlier /model
 // pick on e.g. anthropic), producing a model id dispatched to the wrong provider's API. The rule:
 // whichever source supplies `model` also supplies `provider` — they are never mixed. An
-// unrecognized or missing SERI_PROVIDER value from that SAME source falls back to
-// DEFAULT_PROVIDER rather than throwing or reaching into the other source: config.json is
-// hand-editable, every other reader in this layer already degrades silently on a malformed value
-// (loadConfig drops non-strings, loadVerifyConfig treats anything but "false" as enabled,
-// getApiKey's own deliberate `||`), and a startup crash for a typo is a worse failure than a
-// documented fallback.
+// unrecognized or missing SERI_PROVIDER value from that SAME source resolves to `undefined`
+// rather than throwing or reaching into the other source: config.json is hand-editable, every
+// other reader in this layer already degrades silently on a malformed value (loadConfig drops
+// non-strings, loadVerifyConfig treats anything but "false" as enabled, getApiKey's own
+// deliberate `||`), and a startup crash for a typo is a worse failure than an unrequested provider.
 //
 // Not delegated to a shared resolver: the earlier resolveModelId() (groq.ts) couldn't express
 // "which source did this come from," only the final resolved string, and this needs to branch on
@@ -44,23 +43,31 @@ export function isModelProvider(value: string): value is ModelProvider {
 // session.model/session.provider backfilled from the wrong (real) config.json, and a successful
 // turn's persist wrote back into the real user's config.json even though the run was meant to stay
 // inside `authConfigDir`.
+// `provider` here is the provider actually named by the user (via env or persisted config), or
+// `undefined` if none was — captured HERE, at the single point the pair is resolved, rather than
+// re-derived later from config.json/env at display time: a re-read of a mutable external source
+// after the fact can no longer see what THIS resolution actually saw (a concurrent
+// `seri config set`, or a live /model pick that never touches config.json at all — see
+// SessionState.provider's own comment) and produces the wrong answer for the exact case it exists
+// to get right. This function never manufactures a "request" that didn't happen: DEFAULT_PROVIDER
+// is applied only by callers that actually need a concrete provider for routing, not baked in here.
 export function resolveDefaultModel(configDir?: string): {
   model: string;
-  provider: ModelProvider;
+  provider: ModelProvider | undefined;
 } {
   const envModel = process.env.SERI_MODEL;
   if (envModel) {
     const envProvider = process.env.SERI_PROVIDER;
     return {
       model: envModel,
-      provider: envProvider && isModelProvider(envProvider) ? envProvider : DEFAULT_PROVIDER,
+      provider: envProvider && isModelProvider(envProvider) ? envProvider : undefined,
     };
   }
   const config = loadConfig(configDir);
   const configProvider = config.SERI_PROVIDER;
   return {
     model: config.SERI_MODEL || DEFAULT_MODEL,
-    provider: configProvider && isModelProvider(configProvider) ? configProvider : DEFAULT_PROVIDER,
+    provider: configProvider && isModelProvider(configProvider) ? configProvider : undefined,
   };
 }
 

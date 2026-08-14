@@ -60,7 +60,7 @@ import {
   resetArchivistForRewind,
 } from "./memory/archivist";
 import { decideMemoryCommand, memoryCommandAccepts } from "./memory/commands";
-import { loadMemory, type LoadedMemory } from "./memory/store";
+import { type LoadedMemory, loadMemory } from "./memory/store";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
 import {
   effectiveTools,
@@ -69,9 +69,9 @@ import {
   PERSISTABLE_TOOLS,
   rememberGrant,
 } from "./permissions/store";
+import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
-import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
@@ -429,9 +429,14 @@ async function memoryCommand(
 }
 
 // `model`/`provider` are optional on SessionState so that sessions written before either field
-// existed still load, but every session this function hands back has both — which is what lets the
-// rest of the run stop asking, and getModel drop a default parameter for either.
-type RunSession = SessionState<ModelMessage> & { model: string; provider: ModelProvider };
+// existed still load, but every session this function hands back has the `model` key — which is
+// what lets the rest of the run stop asking, and getModel drop a default parameter for it.
+// `provider` can still legitimately be `undefined` here: it means no provider was ever explicitly
+// requested, not that one is missing.
+type RunSession = SessionState<ModelMessage> & {
+  model: string;
+  provider: ModelProvider | undefined;
+};
 
 // `modelRecorded` says where the model came from: true if the session file already had one, false
 // if it was just resolved from the environment and no provider call has confirmed it exists.
@@ -478,15 +483,14 @@ function loadOrCreateSession(
     // records that, and this first resume moves it to whatever resolveDefaultModel() returns.
     //
     // `provider` alone can still be absent on a session that already recorded a `model` — a
-    // session written before the `provider` field existed, back when groq was the only provider —
-    // and that case keeps its own narrower, unconditional backfill: absent means DEFAULT_PROVIDER
-    // (SessionState.provider's own comment; DEFAULT_PROVIDER is "groq" today, the same value this
-    // used to hardcode directly — imported instead so there is one source of truth for it),
-    // independent of resolveDefaultModel().
+    // session written before the `provider` field existed, or one where nothing was ever
+    // explicitly picked. That's just passed through as-is: absence stays absence, since `provider`
+    // can now legitimately be `undefined` all the way through (DEFAULT_PROVIDER is applied only
+    // where a concrete provider is actually needed for routing, not backfilled here).
     const { model, provider } =
       loaded.model === undefined
         ? resolveDefaultModel(configDir)
-        : { model: loaded.model, provider: loaded.provider ?? DEFAULT_PROVIDER };
+        : { model: loaded.model, provider: loaded.provider };
     return {
       session: {
         ...loaded,
@@ -998,7 +1002,18 @@ type PreparedRun = {
 // still what routing.test.ts asserts directly): this notice is purely informational, no embedded
 // command, so it reads better with a display name (PROVIDER_DISPLAY_NAMES) than the raw env var
 // constant — unlike missingKeyError's message, which needs the exact name because it IS one.
-function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider): string {
+// `requestedProvider` here is literally the session's own `provider` field (itself
+// `ModelProvider | undefined`) — there is no separate field to keep in sync with it, so it cannot
+// drift out of sync with what was actually requested. `undefined` means a genuinely blank first
+// run (or resume of one), which reroutes off resolveDefaultModel's own DEFAULT_PROVIDER fallback
+// with no configured/requested provider at all — blaming a provider the user never named is worse
+// than naming none. Captured on `session` at the point the pair was resolved (resolveDefaultModel/
+// the model picker), not re-read here from config.json — see SessionState.provider's own comment
+// for why.
+function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider | undefined): string {
+  if (requestedProvider === undefined) {
+    return `routing ${route.model} via ${route.provider} (your key)`;
+  }
   return `routing ${route.model} via ${route.provider} (your key) — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
 }
 
@@ -1056,7 +1071,7 @@ async function prepareSession(
   try {
     route = resolveRoute(
       catalog,
-      { model: session.model, provider: session.provider },
+      { model: session.model, provider: session.provider ?? DEFAULT_PROVIDER },
       configuredProviders(configDir),
     );
     model = getModel(
@@ -2592,7 +2607,7 @@ async function runTui(
     try {
       route = resolveRoute(
         prepared.catalog,
-        { model: requestedModel, provider: requestedProvider },
+        { model: requestedModel, provider: requestedProvider ?? DEFAULT_PROVIDER },
         configuredProviders(configDir),
       );
       model = getModel(

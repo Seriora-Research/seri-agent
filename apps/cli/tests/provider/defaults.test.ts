@@ -4,13 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CATALOG_PROVIDERS } from "@seri/model-catalog";
 import { CONFIG_FILENAME } from "../../src/config/config";
-import { DEFAULT_MODEL } from "../../src/provider/groq";
 import {
-  DEFAULT_PROVIDER,
   isModelProvider,
   persistDefaultModel,
   resolveDefaultModel,
 } from "../../src/provider/defaults";
+import { DEFAULT_MODEL } from "../../src/provider/groq";
 
 const originalModel = process.env.SERI_MODEL;
 const originalProvider = process.env.SERI_PROVIDER;
@@ -58,20 +57,29 @@ describe("isModelProvider", () => {
 });
 
 describe("resolveDefaultModel", () => {
-  test("nothing set: falls back to DEFAULT_MODEL/groq", () => {
-    expect(resolveDefaultModel()).toEqual({ model: DEFAULT_MODEL, provider: "groq" });
+  test("nothing set: falls back to DEFAULT_MODEL, no provider requested", () => {
+    expect(resolveDefaultModel()).toEqual({
+      model: DEFAULT_MODEL,
+      provider: undefined,
+    });
   });
 
   test("config-only: returns the persisted pair", () => {
     persistDefaultModel({ model: "picked-model", provider: "openrouter" });
-    expect(resolveDefaultModel()).toEqual({ model: "picked-model", provider: "openrouter" });
+    expect(resolveDefaultModel()).toEqual({
+      model: "picked-model",
+      provider: "openrouter",
+    });
   });
 
   test("env beats config for both keys", () => {
     persistDefaultModel({ model: "config-model", provider: "openrouter" });
     process.env.SERI_MODEL = "env-model";
     process.env.SERI_PROVIDER = "anthropic";
-    expect(resolveDefaultModel()).toEqual({ model: "env-model", provider: "anthropic" });
+    expect(resolveDefaultModel()).toEqual({
+      model: "env-model",
+      provider: "anthropic",
+    });
   });
 
   // code-review finding on PR #71 (round 2): model and provider used to resolve independently,
@@ -79,38 +87,50 @@ describe("resolveDefaultModel", () => {
   // exact `SERI_MODEL=<id> seri "task"` workflow README.md documents — picked up a STALE
   // persisted SERI_PROVIDER from an earlier /model pick, mixing a model id from one source with a
   // provider from another. Whichever source supplies the model must also supply the provider:
-  // overriding only SERI_MODEL via env must fall back to DEFAULT_PROVIDER, not reach into
+  // overriding only SERI_MODEL via env must resolve to no requested provider, not reach into
   // config.json's persisted (and here, wrong) provider.
   test("env overriding only SERI_MODEL ignores a stale persisted provider, not mixes it in", () => {
     persistDefaultModel({ model: "claude-sonnet-4-5", provider: "anthropic" });
     process.env.SERI_MODEL = "llama-3.3-70b-versatile";
     expect(resolveDefaultModel()).toEqual({
       model: "llama-3.3-70b-versatile",
-      provider: DEFAULT_PROVIDER,
+      provider: undefined,
     });
   });
 
   test("SERI_PROVIDER='' falls through to the config/default, the deliberate ||", () => {
     persistDefaultModel({ model: "picked-model", provider: "openrouter" });
     process.env.SERI_PROVIDER = "";
-    expect(resolveDefaultModel()).toEqual({ model: "picked-model", provider: "openrouter" });
+    expect(resolveDefaultModel()).toEqual({
+      model: "picked-model",
+      provider: "openrouter",
+    });
   });
 
-  test("SERI_PROVIDER='bogus' falls back to DEFAULT_PROVIDER, does not throw", () => {
+  test("SERI_PROVIDER='bogus' is not a request, provider is undefined, does not throw", () => {
     process.env.SERI_PROVIDER = "bogus";
-    expect(resolveDefaultModel()).toEqual({ model: DEFAULT_MODEL, provider: DEFAULT_PROVIDER });
+    expect(resolveDefaultModel()).toEqual({
+      model: DEFAULT_MODEL,
+      provider: undefined,
+    });
   });
 
-  test("SERI_MODEL set with no SERI_PROVIDER: provider still defaults to groq", () => {
+  test("SERI_MODEL set with no SERI_PROVIDER: no provider requested", () => {
     process.env.SERI_MODEL = "env-model";
-    expect(resolveDefaultModel()).toEqual({ model: "env-model", provider: "groq" });
+    expect(resolveDefaultModel()).toEqual({
+      model: "env-model",
+      provider: undefined,
+    });
   });
 });
 
 describe("persistDefaultModel", () => {
   test("writes both keys, readable back by a subsequent resolveDefaultModel", () => {
     persistDefaultModel({ model: "written-model", provider: "google" });
-    expect(resolveDefaultModel()).toEqual({ model: "written-model", provider: "google" });
+    expect(resolveDefaultModel()).toEqual({
+      model: "written-model",
+      provider: "google",
+    });
   });
 
   // code-review finding on PR #71: persistDefaultModel used to call setConfigValue twice — an
@@ -133,7 +153,10 @@ describe("persistDefaultModel", () => {
 
     try {
       expect(() => persistDefaultModel({ model: "second-model", provider: "anthropic" })).toThrow();
-      expect(resolveDefaultModel()).toEqual({ model: "first-model", provider: "openrouter" });
+      expect(resolveDefaultModel()).toEqual({
+        model: "first-model",
+        provider: "openrouter",
+      });
     } finally {
       // Restored so afterEach's rmSync(tmpRoot, ...) can actually delete it.
       chmodSync(configPath, 0o644);
@@ -165,7 +188,10 @@ describe("configDir isolation", () => {
       // untouched by the caller-scoped write above, and still resolves independently — proving
       // the two directories are genuinely isolated, not that resolveDefaultModel(callerDir)
       // happened to return the right answer by coincidence.
-      expect(resolveDefaultModel()).toEqual({ model: "ambient-model", provider: "openrouter" });
+      expect(resolveDefaultModel()).toEqual({
+        model: "ambient-model",
+        provider: "openrouter",
+      });
     } finally {
       rmSync(callerDir, { recursive: true, force: true });
     }

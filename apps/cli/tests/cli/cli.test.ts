@@ -27,8 +27,8 @@ import type { CostReport } from "../../src/provider/cost";
 import { getGroqModel } from "../../src/provider/groq";
 import { configuredProviders, PROVIDER_API_KEY_NAMES } from "../../src/provider/keys";
 import { toolDefinitions } from "../../src/provider/tools";
+import { loadSession, type SessionState, saveSession } from "../../src/session/session";
 import { onSignalCancel } from "../../src/signals";
-import { loadSession, saveSession, type SessionState } from "../../src/session/session";
 import type { CheckOutcome } from "../../src/verify/run";
 import { fakeRunLoop } from "./fakeRunLoop";
 
@@ -152,12 +152,94 @@ describe("run (task invocation)", () => {
     // D4: the call is actually made against the RESOLVED pair, not the requested one.
     expect(capture()?.provider).toBe("openrouter");
     expect(capture()?.modelId).toBe("openai/gpt-oss-120b");
-    // D2's own transparency rule: never silent.
+    // D2's own transparency rule: never silent. But since no provider was ever actually
+    // requested (DEFAULT_PROVIDER is a synthetic fallback, not a user choice), the notice must
+    // not blame a provider the user never named.
+    expect(errors.some((line) => line.includes("routing openai/gpt-oss-120b via openrouter"))).toBe(
+      true,
+    );
+    expect(errors.some((line) => /groq/i.test(line))).toBe(false);
+  });
+
+  // The counterpart of the reroute test just above: here the provider was actually named (a
+  // persisted SERI_PROVIDER, the config-write side of a prior /model pick), not merely
+  // resolveDefaultModel's own DEFAULT_PROVIDER fallback — so the notice must name it.
+  test("reroutes to a sibling provider with a key when an EXPLICITLY requested one has none, and blames it by name (non-interactive path)", async () => {
+    delete process.env.GROQ_API_KEY;
+    process.env.OPENROUTER_API_KEY = "fake-test-key";
+    setConfigValue("SERI_PROVIDER", "groq");
+    const { fake, capture } = fakeRunLoop();
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+
+    let code: number;
+    try {
+      code = await run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      });
+    } finally {
+      console.error = originalError;
+      delete process.env.OPENROUTER_API_KEY;
+    }
+
+    expect(code).toBe(0);
+    expect(capture()?.provider).toBe("openrouter");
+    expect(capture()?.modelId).toBe("openai/gpt-oss-120b");
     expect(
       errors.some(
         (line) =>
           line.includes("routing openai/gpt-oss-120b via openrouter") &&
           line.includes("no Groq key configured"),
+      ),
+    ).toBe(true);
+  });
+
+  // A resumed session's reroute notice must blame whichever provider it is ACTUALLY routing away
+  // from on THIS turn, read straight off the session's own persisted `provider` — not a request
+  // from before the session was ever created. `provider` here is seeded directly as "openrouter"
+  // (simulating what an earlier turn confirmed, the same value loadOrCreateSession's resume branch
+  // passes straight through, unmodified), then the keys are swapped so openrouter now has none and
+  // groq does — proving the notice names openrouter (what this resume is actually routing away
+  // from), not groq (which merely happens to be where it reroutes to).
+  test("a resumed session's reroute notice blames its own persisted provider, not the one it reroutes to", async () => {
+    delete process.env.GROQ_API_KEY;
+    const seeded: SessionState = {
+      id: "reroute-on-resume",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      model: "openai/gpt-oss-120b",
+      provider: "openrouter",
+      messages: [],
+    };
+    saveSession(seeded, sessionsDir);
+
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake } = fakeRunLoop();
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+
+    let code: number;
+    try {
+      code = await run(["--resume", "reroute-on-resume", "another", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      });
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(code).toBe(0);
+    expect(
+      errors.some(
+        (line) =>
+          line.includes("routing openai/gpt-oss-120b via groq") &&
+          line.includes("no OpenRouter key configured"),
       ),
     ).toBe(true);
   });
@@ -653,7 +735,9 @@ describe("run (task invocation)", () => {
     const firstId = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
     const firstSession = loadSession(firstId, sessionsDir);
     expect(firstSession.model).toBe("openai/gpt-oss-120b");
-    expect(firstSession.provider).toBe("groq");
+    // No provider was ever explicitly requested here (no SERI_PROVIDER, no /model pick), so
+    // `provider` stays undefined rather than recording the routing default as if it had been.
+    expect(firstSession.provider).toBeUndefined();
     expect(existsSync(join(tmpConfigRoot, ".seri", "config.json"))).toBe(false);
 
     // Now persist a pick the way a successful /model switch would (cli.ts's own runTui write
