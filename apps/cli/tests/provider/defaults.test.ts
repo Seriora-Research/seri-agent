@@ -83,7 +83,7 @@ describe("resolveDefaultModel", () => {
   // exact `SERI_MODEL=<id> seri "task"` workflow README.md documents — picked up a STALE
   // persisted SERI_PROVIDER from an earlier /model pick, mixing a model id from one source with a
   // provider from another. Whichever source supplies the model must also supply the provider:
-  // overriding only SERI_MODEL via env must fall back to DEFAULT_PROVIDER, not reach into
+  // overriding only SERI_MODEL via env must resolve to no requested provider, not reach into
   // config.json's persisted (and here, wrong) provider.
   test("env overriding only SERI_MODEL ignores a stale persisted provider, not mixes it in", () => {
     persistDefaultModel({ model: "claude-sonnet-4-5", provider: "anthropic" });

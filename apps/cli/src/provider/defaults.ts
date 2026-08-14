@@ -24,12 +24,11 @@ export function isModelProvider(value: string): value is ModelProvider {
 // documents — could pick up a STALE persisted SERI_PROVIDER from config.json (an earlier /model
 // pick on e.g. anthropic), producing a model id dispatched to the wrong provider's API. The rule:
 // whichever source supplies `model` also supplies `provider` — they are never mixed. An
-// unrecognized or missing SERI_PROVIDER value from that SAME source falls back to
-// DEFAULT_PROVIDER rather than throwing or reaching into the other source: config.json is
-// hand-editable, every other reader in this layer already degrades silently on a malformed value
-// (loadConfig drops non-strings, loadVerifyConfig treats anything but "false" as enabled,
-// getApiKey's own deliberate `||`), and a startup crash for a typo is a worse failure than a
-// documented fallback.
+// unrecognized or missing SERI_PROVIDER value from that SAME source resolves to `undefined`
+// rather than throwing or reaching into the other source: config.json is hand-editable, every
+// other reader in this layer already degrades silently on a malformed value (loadConfig drops
+// non-strings, loadVerifyConfig treats anything but "false" as enabled, getApiKey's own
+// deliberate `||`), and a startup crash for a typo is a worse failure than an unrequested provider.
 //
 // Not delegated to a shared resolver: the earlier resolveModelId() (groq.ts) couldn't express
 // "which source did this come from," only the final resolved string, and this needs to branch on
