@@ -41,7 +41,7 @@ import {
   usageError,
 } from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
-import { loadVerifyConfig, setConfigValue, unsetConfigValue } from "./config/config";
+import { loadConfig, loadVerifyConfig, setConfigValue, unsetConfigValue } from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
 import type { PermissionMode } from "./gate/gate";
 import {
@@ -61,7 +61,13 @@ import {
 import { decideMemoryCommand, memoryCommandAccepts } from "./memory/commands";
 import { loadMemory, type LoadedMemory } from "./memory/store";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
-import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
+import {
+  effectiveTools,
+  forgetGrant,
+  loadGrants,
+  PERSISTABLE_TOOLS,
+  rememberGrant,
+} from "./permissions/store";
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
@@ -96,8 +102,10 @@ import {
   type CommandDirs,
   checkpointTarget,
   decideAuthOffer,
+  decideConfigOpen,
   decideModeCycle,
   decideModelPickerOpen,
+  decidePermissionsOpen,
   decideRestore,
   decideRewind,
   decideSetupOpen,
@@ -105,8 +113,10 @@ import {
 } from "./tui/commands";
 import { runGuidedSetup } from "./tui/guidedSetup";
 import {
+  type ConfigPanelState,
   type Dispatch,
   initialTuiState,
+  type PermissionsPanelState,
   type SetupState,
   type TuiState,
   tuiReducer,
@@ -1854,6 +1864,202 @@ function createAuthHandlers(opts: { dispatch: Dispatch; deps: CliDeps; configDir
   return { onLogin, onLogout, onAbandon };
 }
 
+// Stage D (cli-commands-to-tui feature-plan.md): /config's own two handlers, mirroring
+// createSetupHandlers's exact shape (dispatch/getPendingConfig/configDir in). Calls the DATA
+// functions directly — loadConfig/setConfigValue/unsetConfigValue (config/config.ts) — never
+// configCommand (config/commands.ts), which is console/exit-code shaped for the non-interactive
+// path. Every recompute-and-dispatch is wrapped in try/catch degrading to command-error: config.json
+// can be hand-edited or corrupted mid-session, same reachable-anytime failure dispatchSetupList's
+// own comment already documents for /setup.
+function createConfigHandlers(opts: {
+  dispatch: Dispatch;
+  getPendingConfig: () => ConfigPanelState | undefined;
+  configDir: string;
+}): {
+  onConfigSelect: (key: string) => void;
+  onConfigValueEntered: (key: string, value: string) => void;
+  onConfigUnset: (key: string) => void;
+  onConfigBack: () => void;
+} {
+  const { dispatch, getPendingConfig, configDir } = opts;
+
+  function configListState(selectedKey?: string): ConfigPanelState {
+    const rows = decideConfigOpen(configDir);
+    const selected =
+      selectedKey === undefined
+        ? 0
+        : Math.max(
+            0,
+            rows.findIndex((row) => row.key === selectedKey),
+          );
+    return { step: "list", rows, selected };
+  }
+
+  // Same "refresh the list, degrade to command-error if that throws" shape dispatchSetupList uses.
+  function dispatchConfigList(selectedKey?: string): void {
+    try {
+      dispatch({ type: "config-step", state: configListState(selectedKey) });
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // No config.json read here — mirrors onSetupSelect: `key` alone is enough to open the entry step.
+  function onConfigSelect(key: string): void {
+    dispatch({ type: "config-step", state: { step: "enter-value", key, busy: false } });
+  }
+
+  function onConfigValueEntered(key: string, value: string): void {
+    dispatch({ type: "config-step", state: { step: "enter-value", key, busy: true } });
+    try {
+      setConfigValue(key, value, configDir);
+    } catch (err) {
+      dispatch({
+        type: "config-step",
+        state: {
+          step: "enter-value",
+          key,
+          busy: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
+      return;
+    }
+    dispatch({ type: "transcript-append", line: `Saved ${key}.` });
+    dispatchConfigList(key);
+  }
+
+  // Dual-purpose (mirrors onSetupRemove's own comment): the SAME prop the list step's 'r'/Delete
+  // and the confirm-unset step's 'y' both call — which one this call means is read off the CURRENT
+  // live reducer state.
+  function onConfigUnset(key: string): void {
+    const pending = getPendingConfig();
+    if (pending?.step === "confirm-unset") {
+      try {
+        unsetConfigValue(key, configDir);
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+      dispatch({ type: "transcript-append", line: `Removed ${key}.` });
+      dispatchConfigList(key);
+      return;
+    }
+    // Same reasoning as onSetupRemove's own re-check: ConfigList's own useInput already gated this
+    // on `row.removable`, but that row can be stale (a concurrent /config write, another `seri`
+    // process) — a fresh, guarded read is what actually decides whether to offer the confirm step.
+    let hasConfigEntry: boolean;
+    try {
+      hasConfigEntry = key in loadConfig(configDir);
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    if (!hasConfigEntry) return;
+    dispatch({ type: "config-step", state: { step: "confirm-unset", key } });
+  }
+
+  function onConfigBack(): void {
+    const current = getPendingConfig();
+    const key = current !== undefined && current.step !== "list" ? current.key : undefined;
+    dispatchConfigList(key);
+  }
+
+  return { onConfigSelect, onConfigValueEntered, onConfigUnset, onConfigBack };
+}
+
+// Stage D (cli-commands-to-tui feature-plan.md): /permissions' own two handlers, mirroring
+// createConfigHandlers just above (itself mirroring createSetupHandlers). `getWorktree` is a
+// closure, not a captured value, for the same "trust live state" reason `getPendingPermissions`
+// is — runTui's own call site resolves it via checkpointTarget(liveState.session, dirs(ctx)), the
+// exact pattern runTurn already uses.
+function createPermissionsHandlers(opts: {
+  dispatch: Dispatch;
+  getPendingPermissions: () => PermissionsPanelState | undefined;
+  configDir: string;
+  getWorktree: () => string;
+}): {
+  onPermissionsRemove: (tool: string) => void;
+  onPermissionsBack: () => void;
+} {
+  const { dispatch, getPendingPermissions, configDir, getWorktree } = opts;
+
+  function permissionsListState(selectedTool?: string): PermissionsPanelState {
+    const rows = decidePermissionsOpen(configDir, getWorktree());
+    const selected =
+      selectedTool === undefined
+        ? 0
+        : Math.max(
+            0,
+            rows.findIndex((row) => row.tool === selectedTool),
+          );
+    return { step: "list", rows, selected };
+  }
+
+  function dispatchPermissionsList(selectedTool?: string): void {
+    try {
+      dispatch({ type: "permissions-step", state: permissionsListState(selectedTool) });
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Dual-purpose, same shape as onConfigUnset just above: the list step's 'r'/Delete and the
+  // confirm-remove step's 'y' both call this prop.
+  function onPermissionsRemove(tool: string): void {
+    const pending = getPendingPermissions();
+    if (pending?.step === "confirm-remove") {
+      try {
+        forgetGrant(configDir, getWorktree(), tool);
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+      dispatch({ type: "transcript-append", line: `Removed ${tool}.` });
+      dispatchPermissionsList();
+      return;
+    }
+    // Same reasoning as onConfigUnset's own re-check just above: PermissionsList's own useInput
+    // already gated this on `row.removable`, but a fresh, guarded read is what actually decides —
+    // only a project-tier (persisted) grant is removable from here.
+    let removable: boolean;
+    try {
+      removable = loadGrants(configDir, getWorktree()).project.includes(tool);
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    if (!removable) return;
+    dispatch({ type: "permissions-step", state: { step: "confirm-remove", tool } });
+  }
+
+  function onPermissionsBack(): void {
+    const current = getPendingPermissions();
+    const tool = current !== undefined && current.step !== "list" ? current.tool : undefined;
+    dispatchPermissionsList(tool);
+  }
+
+  return { onPermissionsRemove, onPermissionsBack };
+}
+
 // `boolean | number` mirrors this file's own established convention for a check that's usually a
 // plain result but sometimes an exit code (prepareSession, handleAuthCommand, handleConfigCommand,
 // handlePermissionsCommand, handleSlashCommand all return `T | number` for the identical reason) —
@@ -2185,6 +2391,28 @@ async function runTui(
   }
 
   const { onLogin, onLogout, onAbandon } = createAuthHandlers({ dispatch, deps, configDir });
+
+  const { onConfigSelect, onConfigValueEntered, onConfigUnset, onConfigBack } =
+    createConfigHandlers({
+      dispatch,
+      getPendingConfig: () => liveState.pendingConfig,
+      configDir,
+    });
+
+  function onConfigClose(leftoverInput?: string): void {
+    dispatch({ type: "config-resolved", leftoverInput });
+  }
+
+  const { onPermissionsRemove, onPermissionsBack } = createPermissionsHandlers({
+    dispatch,
+    getPendingPermissions: () => liveState.pendingPermissions,
+    configDir,
+    getWorktree: () => checkpointTarget(liveState.session, dirs(ctx)).worktree,
+  });
+
+  function onPermissionsClose(leftoverInput?: string): void {
+    dispatch({ type: "permissions-resolved", leftoverInput });
+  }
 
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
@@ -2575,6 +2803,44 @@ async function runTui(
       await onLogout();
       return;
     }
+    // /config and /permissions, like /login/​/signup/​/logout just above: intercepted here rather
+    // than added to SLASH_COMMANDS, since they drive blocking panels the non-interactive path has
+    // no screen for.
+    if (name === "/config") {
+      if (args.length > 0) {
+        dispatch({ type: "command-error", message: "/config: invalid arguments." });
+        return;
+      }
+      // Same fix as /model and /setup above: decideConfigOpen also reads config.json unguarded.
+      try {
+        dispatch({ type: "config-requested", rows: decideConfigOpen(configDir) });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+    if (name === "/permissions") {
+      if (args.length > 0) {
+        dispatch({ type: "command-error", message: "/permissions: invalid arguments." });
+        return;
+      }
+      // Same fix as /config just above: decidePermissionsOpen reads permissions.yaml unguarded.
+      try {
+        dispatch({
+          type: "permissions-requested",
+          rows: decidePermissionsOpen(configDir, checkpointTarget(liveState.session, dirs(ctx)).worktree),
+        });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
     const command = SLASH_COMMANDS.get(name);
     if (command === undefined) {
       if (name.startsWith("/")) {
@@ -2665,6 +2931,18 @@ async function runTui(
       onSetupRemove,
       onSetupBack,
       onSetupClose,
+      // Stage D: /config and /permissions' own handlers — wired here, runTui's own mount, only
+      // (not runGuidedSetup's, same reasoning as onLogin/onLogout/onAuthResolved's own comment on
+      // this file's Stage C row: that mount always has `pendingSetup` set, so these panels are
+      // structurally unreachable there).
+      onConfigSelect,
+      onConfigValueEntered,
+      onConfigUnset,
+      onConfigBack,
+      onConfigClose,
+      onPermissionsRemove,
+      onPermissionsBack,
+      onPermissionsClose,
       // No auth-offer recompute here (thermo-nuclear, round 5 — proven redundant): every path
       // that reaches this (Escape on "starting"/"device", Enter/Esc on a login-failure result, or
       // a logout-failure result) never changed the auth-session file between when it was last
