@@ -88,6 +88,28 @@ OSes) as the actual source of truth for this class of bug, not a local re-run.
   (`getConfigDir()`, a config dir that can be read-only), the required test deletes the variable or
   makes the directory unwritable and asserts the fallback.
 
+## Comments must not name planning artifacts outside the codebase
+A comment must never cite a stage/phase number ("Stage D", "Phase 3"), a plan document
+("feature-plan.md", "cli-commands-to-tui"), a loop/branch slug, a PR number, or a review round
+("code-review round 2", "thermo-nuclear round 7") — anything that isn't a file or symbol that
+actually exists in the codebase.
+
+**Why:** Verified live in this repo: `cli.ts` accumulated comments like "Stage D
+(cli-commands-to-tui feature-plan.md)" and four incompatible round counters ("code-review round
+2", "/code-review, round 3", "thermo-nuclear, round 7", "round 1, MEDIUM-2") across the same
+file — some numbering one PR's rounds, some a different PR's, none disambiguated. None of these
+are checkable from the source tree: the plan doc may already be deleted or archived, and a
+review "round" means nothing to anyone who wasn't in that conversation. A stale one of these is
+worse than no comment, because a reader trusts it and stops checking.
+
+**How to apply:** A comment explains WHY the code is shaped this way using terms the code itself
+provides — an invariant, a bug it guards against, a measured constraint — never by pointing at
+an external plan, stage, phase, PR, or review round. If a comment currently leans on one of
+these to make sense, rewrite it to state the actual reasoning instead. Stage numbers, PR
+numbers, and review provenance belong in the commit message / PR description, which is where
+that context is supposed to live and rot gracefully — not in a comment that ships permanently in
+the source.
+
 ## A comment that documents an intention rather than a behaviour is worse than none
 This repo's long why-comments carrying real measurements are its main asset, and that is exactly
 what makes a false one expensive: a reviewer reads the guarantee, believes it, and stops checking.
