@@ -1622,6 +1622,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // Rerouted: the picked provider (openrouter) has no key, but anthropic — claude-sonnet-5's
       // native sibling — does, so resolveRoute reroutes turn 2 there (D2).
       await sawLine("RUNLOOP_CALL 2 model=claude-sonnet-5 provider=anthropic");
+      // The transcript notice must name the PICKED provider (openrouter, the one actually
+      // missing a key), not stay silent about it — proof that `providerRequested`, set true by
+      // the live picker pick (reducer.ts's own "model-picker-resolved" case), actually reached
+      // this turn's reroute notice rather than a re-derived false. Split across two checks, not
+      // one long toContain: Ink wraps this line across the terminal's own column width (measured
+      // the same way on the "a routing-priority reroute active from session start" test, below).
+      const noticePrefix = "↻ routing claude-sonnet-5 via anthropic (your key) — no OpenRouter key";
+      await sawLine(noticePrefix);
+      await sawLine("configured");
       await sawLineTimes("(done: no-tool-call)", 2);
       // "(done: no-tool-call)" appearing in the captured pty stdout is not a reliable proxy for
       // "config.json has already been written" — measured live, waiting on it alone flaked here.

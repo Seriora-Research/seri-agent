@@ -493,7 +493,7 @@ function loadOrCreateSession(
         : {
             model: loaded.model,
             provider: loaded.provider ?? DEFAULT_PROVIDER,
-            providerRequested: loaded.provider !== undefined,
+            providerRequested: loaded.providerRequested ?? loaded.provider !== undefined,
           };
     return {
       session: {
