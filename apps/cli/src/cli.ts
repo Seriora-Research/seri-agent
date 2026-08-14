@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
@@ -96,8 +96,10 @@ import {
   type CommandDirs,
   checkpointTarget,
   decideAuthOffer,
+  decideMaxTurns,
   decideModeCycle,
   decideModelPickerOpen,
+  decideProfileCreate,
   decideRestore,
   decideRewind,
   decideSetupOpen,
@@ -2016,6 +2018,10 @@ async function runTui(
   // true the moment runTurn actually starts a turn (not on the early-return guard below it), so an
   // idle session the user quit without ever submitting a task never flips it.
   let ranAnyTurn = false;
+  // `maxTurns` (the `--max-turns` startup flag) seeds this, but `/max-turns <n>` (onSubmit, below)
+  // reassigns it live — runTurn's own driveLoop call reads THIS, not the parameter, so an override
+  // takes effect on the next turn with no restart.
+  let liveMaxTurns = maxTurns;
   // Created ONCE per run, outside the per-turn loop, so the tool-call counter accumulates across
   // every turn of this TUI session rather than resetting each time runTurn calls driveLoop.
   const archivistState = createArchivistState(prepared.session);
@@ -2295,7 +2301,7 @@ async function runTui(
         turnPrepared,
         ctx,
         deps,
-        maxTurns,
+        liveMaxTurns,
         (event) => {
           dispatch({ type: "loop-event", event });
           // B2 fix: `messages-updated` is loop.ts's own signal that a model call actually
@@ -2573,6 +2579,40 @@ async function runTui(
         return;
       }
       await onLogout();
+      return;
+    }
+    // /max-turns and /profile new (Stage E, feature-plan.md): one-shot commands, no panel and no
+    // new reducer state — they confirm via transcript-append or fail via command-error, same as
+    // every other interception in this chain.
+    if (name === "/max-turns") {
+      try {
+        liveMaxTurns = decideMaxTurns(args);
+        dispatch({
+          type: "transcript-append",
+          line: `Max turns set to ${liveMaxTurns} — takes effect on the next turn.`,
+        });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+    if (name === "/profile") {
+      try {
+        const dir = decideProfileCreate(args);
+        mkdirSync(dir, { recursive: true });
+        dispatch({
+          type: "transcript-append",
+          line: `Created profile directory ${dir}. This does not switch the running session's profile — restart with --profile ${args[1]} or SERI_PROFILE to use it.`,
+        });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
       return;
     }
     const command = SLASH_COMMANDS.get(name);
