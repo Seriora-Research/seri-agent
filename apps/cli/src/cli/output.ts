@@ -22,6 +22,7 @@ import { type CheckOutcome, writeFileVerification } from "../verify/outcome";
 // `--selftest` is left out on purpose — cli.ts calls it an undocumented build-verification flag.
 export const USAGE = `Usage:
   seri <task>                     send a task to the model
+  seri                            (in a terminal) open the TUI with an empty input box
   seri --continue [task]          continue the most recent session
   seri --resume <id> [task]       continue that session
   seri [--resume <id>] /mode      cycle the permission mode
