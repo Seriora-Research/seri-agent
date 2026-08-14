@@ -7,12 +7,7 @@ import { toolAllowedLine, toolResultLine } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
 import type { SessionState } from "../session/session";
-import type {
-  ConfigRow,
-  ModelPickerEntry,
-  PermissionRow,
-  SetupProviderRow,
-} from "./commands";
+import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
 
 // /setup's own live state (D5-D8, feature-plan.md) — a three-step flow, mirrored on the reducer
 // the same way /model's picker is: "list" shows all five providers, "enter-key" is the masked
