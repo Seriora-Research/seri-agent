@@ -161,7 +161,7 @@ describe("run (task invocation)", () => {
     expect(errors.some((line) => /groq/i.test(line))).toBe(false);
   });
 
-  // The `providerRequested: true` sibling of the reroute test just above: here the provider was
+  // The `requestedProvider` sibling of the reroute test just above: here the provider was
   // actually named (a persisted SERI_PROVIDER, the config-write side of a prior /model pick), not
   // merely resolveDefaultModel's own DEFAULT_PROVIDER fallback — so the notice must name it.
   test("reroutes to a sibling provider with a key when an EXPLICITLY requested one has none, and blames it by name (non-interactive path)", async () => {

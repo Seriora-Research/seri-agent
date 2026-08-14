@@ -62,7 +62,7 @@ describe("resolveDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({
       model: DEFAULT_MODEL,
       provider: "groq",
-      providerRequested: false,
+      requestedProvider: undefined,
     });
   });
 
@@ -71,7 +71,7 @@ describe("resolveDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({
       model: "picked-model",
       provider: "openrouter",
-      providerRequested: true,
+      requestedProvider: "openrouter",
     });
   });
 
@@ -82,7 +82,7 @@ describe("resolveDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({
       model: "env-model",
       provider: "anthropic",
-      providerRequested: true,
+      requestedProvider: "anthropic",
     });
   });
 
@@ -99,7 +99,7 @@ describe("resolveDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({
       model: "llama-3.3-70b-versatile",
       provider: DEFAULT_PROVIDER,
-      providerRequested: false,
+      requestedProvider: undefined,
     });
   });
 
@@ -109,7 +109,7 @@ describe("resolveDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({
       model: "picked-model",
       provider: "openrouter",
-      providerRequested: true,
+      requestedProvider: "openrouter",
     });
   });
 
@@ -118,7 +118,7 @@ describe("resolveDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({
       model: DEFAULT_MODEL,
       provider: DEFAULT_PROVIDER,
-      providerRequested: false,
+      requestedProvider: undefined,
     });
   });
 
@@ -127,7 +127,7 @@ describe("resolveDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({
       model: "env-model",
       provider: "groq",
-      providerRequested: false,
+      requestedProvider: undefined,
     });
   });
 });
@@ -138,7 +138,7 @@ describe("persistDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({
       model: "written-model",
       provider: "google",
-      providerRequested: true,
+      requestedProvider: "google",
     });
   });
 
@@ -165,7 +165,7 @@ describe("persistDefaultModel", () => {
       expect(resolveDefaultModel()).toEqual({
         model: "first-model",
         provider: "openrouter",
-        providerRequested: true,
+        requestedProvider: "openrouter",
       });
     } finally {
       // Restored so afterEach's rmSync(tmpRoot, ...) can actually delete it.
@@ -193,7 +193,7 @@ describe("configDir isolation", () => {
       expect(resolveDefaultModel(callerDir)).toEqual({
         model: "caller-model",
         provider: "anthropic",
-        providerRequested: true,
+        requestedProvider: "anthropic",
       });
       // The negative control this test's own point rests on: the ambient default's own pair is
       // untouched by the caller-scoped write above, and still resolves independently — proving
@@ -202,7 +202,7 @@ describe("configDir isolation", () => {
       expect(resolveDefaultModel()).toEqual({
         model: "ambient-model",
         provider: "openrouter",
-        providerRequested: true,
+        requestedProvider: "openrouter",
       });
     } finally {
       rmSync(callerDir, { recursive: true, force: true });

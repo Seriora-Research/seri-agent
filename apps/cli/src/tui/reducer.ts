@@ -264,7 +264,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
               ...state.session,
               model: action.pick.model,
               provider: action.pick.provider,
-              providerRequested: true,
+              requestedProvider: action.pick.provider,
             },
           };
     case "input-prefill-consumed":

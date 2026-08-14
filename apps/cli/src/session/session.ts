@@ -20,7 +20,7 @@ export type SessionState<TMessage = unknown> = {
   // Same optionality reasoning as `model`/`provider`, just above: a session written before this
   // field existed still loads, and absence must be treated as "not requested" — the same synthetic-
   // fallback situation as a blank first run, not a genuine user choice worth blaming in a notice.
-  providerRequested?: boolean;
+  requestedProvider?: ModelProvider;
   messages: TMessage[];
 };
 

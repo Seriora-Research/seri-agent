@@ -267,7 +267,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
 
     expect(state.pendingModelPicker).toBeUndefined();
     expect(state.session).toEqual(
-      session({ model: entry.id, provider: entry.provider, providerRequested: true }),
+      session({ model: entry.id, provider: entry.provider, requestedProvider: entry.provider }),
     );
   });
 
