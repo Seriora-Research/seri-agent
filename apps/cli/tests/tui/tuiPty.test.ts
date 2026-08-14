@@ -1016,6 +1016,67 @@ function childScriptBare(dir: string): string {
   ].join("\n");
 }
 
+// Stage E (cli-commands-to-tui feature-plan.md): --max-turns 5 as the startup default, bare-mount
+// idle (like childScriptBare, above) so a command can be typed BEFORE any task is submitted. The
+// fake runLoop reports opts.maxIterations, the same "have the fake loop print the field under
+// test" convention childScriptModelSwitch's own runLoopFake uses for opts.model/opts.provider —
+// so a live /max-turns override (typed before the task) can be proven to reach the very next
+// driveLoop call, with no restart.
+function childScriptMaxTurns(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_MAXITERATIONS " + opts.maxIterations);`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run(["--max-turns", "5"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
+// Stage E: /profile new's own end-to-end proof — bare-mount idle, same shape as childScriptBare
+// above. HOME is redirected (D9's own reasoning, childScriptModelSwitch's comment) so
+// decideProfileCreate's getBaseConfigDir() — unprofiled, unlike the deps.sessionsDir/
+// checkpointsDir/permissionsDir overrides below — resolves under this test's own tmpdir rather
+// than the developer's real ~/.seri.
+function childScriptProfile(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run([], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
 // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
 // research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
 // identical signature... with zero change to loop.ts/gate.ts") that every earlier round of this
@@ -3552,6 +3613,99 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         const session = JSON.parse(readFileSync(join(sessionsDir, sessionFiles[0]!), "utf8"));
         expect(session.messages).not.toContainEqual({ role: "user", content: "" });
         expect(session.messages).toEqual([]);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
+
+  describe("/max-turns", () => {
+    test("typed live before a task, the next turn's driveLoop call receives the override", async () => {
+      const scriptPath = join(dir, "child-max-turns.mjs");
+      writeFileSync(scriptPath, childScriptMaxTurns(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("[approve-each]");
+
+        child.stdin?.write("/max-turns 1");
+        await sawLine("/max-turns 1");
+        child.stdin?.write("\r");
+        await sawLine("Max turns set to 1");
+
+        child.stdin?.write("do a task");
+        await sawLine("> do a task");
+        child.stdin?.write("\r");
+        await sawLine("RUNLOOP_MAXITERATIONS 1");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Negative control: the identical script, minus the /max-turns line — proves the override
+    // above actually changed something, rather than the fake runLoop always printing the same
+    // value regardless of what --max-turns was given.
+    test("without a live override, the next turn's driveLoop call receives the --max-turns startup default", async () => {
+      const scriptPath = join(dir, "child-max-turns-default.mjs");
+      writeFileSync(scriptPath, childScriptMaxTurns(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("[approve-each]");
+
+        child.stdin?.write("do a task");
+        await sawLine("> do a task");
+        child.stdin?.write("\r");
+        await sawLine("RUNLOOP_MAXITERATIONS 5");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
+
+  describe("/profile new", () => {
+    test("creates the profile directory and confirms without switching the running session", async () => {
+      const scriptPath = join(dir, "child-profile-new.mjs");
+      writeFileSync(scriptPath, childScriptProfile(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("[approve-each]");
+
+        child.stdin?.write("/profile new work");
+        await sawLine("/profile new work");
+        child.stdin?.write("\r");
+        await sawLine("Created profile directory");
+        await sawLine("does not switch the running session's profile");
+
+        // waitForConfig's own reasoning, applied to a directory instead of a file: a bare
+        // existsSync right after sawLine races the mkdirSync a DIFFERENT process (this test) is
+        // reading, the same class of race macOS CI caught for config.json elsewhere in this file.
+        const profileDir = join(dir, ".seri", "work");
+        const deadline = Date.now() + 5000;
+        while (!existsSync(profileDir) && Date.now() < deadline)
+          await new Promise((r) => setTimeout(r, 20));
+        expect(existsSync(profileDir)).toBe(true);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("a path-traversal name renders a command-error and creates nothing", async () => {
+      const scriptPath = join(dir, "child-profile-new-traversal.mjs");
+      writeFileSync(scriptPath, childScriptProfile(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("[approve-each]");
+
+        child.stdin?.write("/profile new ../etc");
+        await sawLine("/profile new ../etc");
+        child.stdin?.write("\r");
+        await sawLine("may only contain letters, numbers");
+
+        await wait100ms();
+        expect(existsSync(join(dir, ".seri"))).toBe(false);
       } finally {
         child.kill("SIGKILL");
       }
