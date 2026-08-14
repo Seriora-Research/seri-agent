@@ -105,6 +105,26 @@ export type AppProps = {
   onSetupRemove?: (provider: ModelProvider) => void;
   onSetupBack?: () => void;
   onSetupClose?: (leftoverInput?: string) => void;
+  // Stage A scaffolding (cli-commands-to-tui feature-plan.md): /config's own resolutions, mirroring
+  // onSetupSelect's own five-prop shape — ConfigPanel.tsx's own step-dispatcher needs a real prop to
+  // route Esc/Ctrl-D/Enter to once Stage D wires config-requested, rather than a panel silently
+  // stranding the user with no way back to InputBox. Optional, matching every other handler prop on
+  // this type (onSetupSelect included) — cli.ts's two mount sites and guidedSetup.ts's mount site
+  // each already supply only the subset of handlers their own mount actually uses, so making these
+  // two required would force edits to all three, outside this stage's own stated file boundary
+  // (cli.ts/guidedSetup.ts are explicitly not touched in Stage A). Unreachable today: nothing
+  // dispatches config-requested/permissions-requested yet.
+  onConfigSelect?: (key: string) => void;
+  onConfigValueEntered?: (key: string, value: string) => void;
+  onConfigUnset?: (key: string) => void;
+  onConfigBack?: () => void;
+  onConfigClose?: (leftoverInput?: string) => void;
+  // /permissions' own resolutions — one fewer than /config's (PermissionsPanel.tsx has no
+  // value-entry step, so no onPermissionsSelect: 'r'/Delete on the list step calls
+  // onPermissionsRemove directly, the same way SetupList's own 'r' calls onSetupRemove).
+  onPermissionsRemove?: (tool: string) => void;
+  onPermissionsBack?: () => void;
+  onPermissionsClose?: (leftoverInput?: string) => void;
 };
 
 // D5 (byok-open3-route-indicator feature-plan.md): no such hook existed in this file before — the
@@ -143,6 +163,14 @@ export function App({
   onSetupRemove,
   onSetupBack,
   onSetupClose,
+  onConfigSelect,
+  onConfigValueEntered,
+  onConfigUnset,
+  onConfigBack,
+  onConfigClose,
+  onPermissionsRemove,
+  onPermissionsBack,
+  onPermissionsClose,
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
   const { exit } = useApp();
@@ -224,9 +252,21 @@ export function App({
       ) : state.pendingAuth !== undefined ? (
         <AuthPanel state={state.pendingAuth} />
       ) : state.pendingConfig !== undefined ? (
-        <ConfigPanel pendingConfig={state.pendingConfig} />
+        <ConfigPanel
+          pendingConfig={state.pendingConfig}
+          onConfigSelect={onConfigSelect}
+          onConfigValueEntered={onConfigValueEntered}
+          onConfigUnset={onConfigUnset}
+          onConfigBack={onConfigBack}
+          onConfigClose={onConfigClose}
+        />
       ) : state.pendingPermissions !== undefined ? (
-        <PermissionsPanel pendingPermissions={state.pendingPermissions} />
+        <PermissionsPanel
+          pendingPermissions={state.pendingPermissions}
+          onPermissionsRemove={onPermissionsRemove}
+          onPermissionsBack={onPermissionsBack}
+          onPermissionsClose={onPermissionsClose}
+        />
       ) : (
         <InputBox
           onSubmit={onSubmit}
