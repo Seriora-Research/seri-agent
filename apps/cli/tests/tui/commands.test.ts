@@ -711,10 +711,11 @@ describe("decideMaxTurns", () => {
 });
 
 describe("decideProfileCreate", () => {
-  test("returns the absolute profile directory path, without creating it", () => {
-    const path = decideProfileCreate(["new", "work"]);
-    expect(path).toBe(join(getBaseConfigDir(), "work"));
-    expect(existsSync(path)).toBe(false);
+  test("returns the absolute profile directory path and the validated name, without creating it", () => {
+    const { dir, name } = decideProfileCreate(["new", "work"]);
+    expect(dir).toBe(join(getBaseConfigDir(), "work"));
+    expect(name).toBe("work");
+    expect(existsSync(dir)).toBe(false);
   });
 
   test("throws on a path-traversal name", () => {
@@ -725,5 +726,16 @@ describe("decideProfileCreate", () => {
   // (config/paths.ts's getReservedProfileNames).
   test("throws on a reserved name", () => {
     expect(() => decideProfileCreate(["new", "sessions"])).toThrow();
+  });
+
+  // Regression test (thermo-nuclear + code-review, round 2): "default" isn't rejected by
+  // profileNameError (it's absent from getReservedProfileNames), but getConfigDir() folds it
+  // onto the base root with no `default/` segment — so the OLD `join(getBaseConfigDir(), name)`
+  // resolution created a directory `--profile default` could never select. `dir` must equal
+  // getBaseConfigDir() itself here, not a `default` subdirectory of it.
+  test("'default' resolves to the base config dir, not a default/ subdirectory", () => {
+    const { dir, name } = decideProfileCreate(["new", "default"]);
+    expect(dir).toBe(getBaseConfigDir());
+    expect(name).toBe("default");
   });
 });

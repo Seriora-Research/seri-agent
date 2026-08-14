@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
 import {
@@ -15,6 +15,7 @@ import pkg from "../package.json";
 import { onAbort } from "./abort";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
+import { ensureOwnerOnlyDir } from "./atomicWriteFile";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
 import { getWorkosClientId } from "./auth/deviceFlow";
 import {
@@ -2601,22 +2602,21 @@ async function runTui(
     }
     if (name === "/profile") {
       try {
-        const dir = decideProfileCreate(args);
+        const { dir, name: profileName } = decideProfileCreate(args);
         // mkdirSync's own recursive:true silently no-ops on an existing dir, so a repeat
         // /profile new for the same name must not claim it just created one — checked BEFORE
         // the call, not derived from its (nonexistent) return value.
         const alreadyExisted = existsSync(dir);
-        // 0o700 plus an explicit chmod, following authStore.ts: mkdirSync's mode is a no-op when
-        // the directory already exists, which existsSync above shows is possible here too. This
-        // directory will hold auth.json/config.json/permissions.yaml once the profile is used, so
-        // it is owner-only like every other secrets-holding directory this codebase creates.
-        mkdirSync(dir, { recursive: true, mode: 0o700 });
-        if (process.platform !== "win32") chmodSync(dir, 0o700);
+        // This directory will hold auth.json/config.json/permissions.yaml once the profile is
+        // used, so it is owner-only like every other secrets-holding directory this codebase
+        // creates (ensureOwnerOnlyDir, atomicWriteFile.ts).
+        ensureOwnerOnlyDir(dir);
         dispatch({
           type: "transcript-append",
-          // basename(dir), not the raw typed arg: dir is what decideProfileCreate actually
-          // validated and returned, and this hint should name that, not re-echo unvalidated input.
-          line: `Profile directory ${dir}${alreadyExisted ? " already exists" : " created"}. This does not switch the running session's profile — restart with --profile ${basename(dir)} or SERI_PROFILE to use it.`,
+          // `profileName`, not basename(dir): decideProfileCreate already validated it, and for
+          // the "default" profile `dir` has no trailing segment equal to the name at all (see
+          // decideProfileCreate's own comment) — basename(dir) would be wrong there specifically.
+          line: `Profile directory ${dir}${alreadyExisted ? " already exists" : " created"}. This does not switch the running session's profile — restart with --profile ${profileName} or SERI_PROFILE to use it.`,
         });
       } catch (err) {
         dispatch({

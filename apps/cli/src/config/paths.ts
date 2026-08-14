@@ -112,10 +112,12 @@ export function profileNameError(name: string): string | undefined {
   return undefined;
 }
 
-// The profile root. Identical to getBaseConfigDir() under the default profile — no `default/`
-// segment, so no existing user's data moves.
-export function getConfigDir(): string {
-  const profile = activeProfile();
+// A profile's root directory, given the profile name directly rather than reading
+// activeProfile() itself — getConfigDir() below is this called with the ACTIVE profile;
+// decideProfileCreate (tui/commands.ts) calls this with a candidate name that isn't active yet.
+// Both need the identical fold+join logic, so it lives here once rather than each caller
+// reimplementing (and risking drifting from) the default-profile special case below.
+export function profileDir(profile: string): string {
   const base = getBaseConfigDir();
   // Same fold as profileNameError above: --profile Default must resolve to the base root on
   // win32/darwin exactly like --profile default does, not silently create a separate `Default/`
@@ -125,6 +127,12 @@ export function getConfigDir(): string {
     ? profile.toLowerCase() === DEFAULT_PROFILE
     : profile === DEFAULT_PROFILE;
   return isDefault ? base : join(base, profile);
+}
+
+// The profile root. Identical to getBaseConfigDir() under the default profile — no `default/`
+// segment, so no existing user's data moves.
+export function getConfigDir(): string {
+  return profileDir(activeProfile());
 }
 
 // Stage 6b: where the three persistent-memory files (USER.md, MEMORY.md, <project>/MEMORY.md)

@@ -1047,35 +1047,10 @@ function childScriptMaxTurns(dir: string): string {
   ].join("\n");
 }
 
-// Stage E: /profile new's own end-to-end proof — bare-mount idle, same shape as childScriptBare
-// above. HOME is redirected (D9's own reasoning, childScriptModelSwitch's comment) so
-// decideProfileCreate's getBaseConfigDir() — unprofiled, unlike the deps.sessionsDir/
-// checkpointsDir/permissionsDir overrides below — resolves under this test's own tmpdir rather
-// than the developer's real ~/.seri.
-function childScriptProfile(dir: string): string {
-  return [
-    `process.env.HOME = ${JSON.stringify(dir)};`,
-    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
-    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
-    `process.env.GROQ_API_KEY = "fake-test-key";`,
-    `const cli = await import(${JSON.stringify(CLI)});`,
-    `async function* runLoopFake(opts) {`,
-    `  console.log("\\nRUNLOOP_READY");`,
-    `  yield { type: "done", reason: "no-tool-call" };`,
-    `  return opts.messages;`,
-    `}`,
-    `const code = await cli.run([], {`,
-    `  runLoop: runLoopFake,`,
-    `  getGroqModel: () => ({}),`,
-    `  loadAgentsFile: () => "",`,
-    `  isTTY: process.stdout.isTTY,`,
-    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
-    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
-    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
-    `});`,
-    `console.log("\\nEXIT_CODE " + code);`,
-  ].join("\n");
-}
+// Stage E's own /profile new end-to-end proof reuses childScriptBare directly (code-review round
+// 2: the two were byte-for-byte identical function bodies under a different name — a bare-mount
+// idle TUI is exactly what /profile new's own test needs too, since HOME redirection is already
+// childScriptBare's job, and decideProfileCreate's getBaseConfigDir() reads that same HOME).
 
 // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
 // research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
@@ -3670,7 +3645,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   describe("/profile new", () => {
     test("creates the profile directory and confirms without switching the running session", async () => {
       const scriptPath = join(dir, "child-profile-new.mjs");
-      writeFileSync(scriptPath, childScriptProfile(dir));
+      writeFileSync(scriptPath, childScriptBare(dir));
 
       const { child, sawLine } = startChild(scriptPath, dir);
       try {
@@ -3700,7 +3675,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
     test("a path-traversal name renders a command-error and creates nothing", async () => {
       const scriptPath = join(dir, "child-profile-new-traversal.mjs");
-      writeFileSync(scriptPath, childScriptProfile(dir));
+      writeFileSync(scriptPath, childScriptBare(dir));
 
       const { child, sawLine } = startChild(scriptPath, dir);
       try {

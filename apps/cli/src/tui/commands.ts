@@ -30,7 +30,7 @@ import {
 import { projectRoot } from "../checkpoint/shadowGit";
 import { maskValue } from "../config/commands";
 import { loadConfig } from "../config/config";
-import { getBaseConfigDir, profileNameError } from "../config/paths";
+import { profileDir, profileNameError } from "../config/paths";
 import { cycleMode } from "../gate/gate";
 import { loadGrants, PERSISTABLE_TOOL_NAMES } from "../permissions/store";
 import { allProviderKeyStates, PROVIDER_API_KEY_NAMES } from "../provider/keys";
@@ -291,15 +291,22 @@ export function decideMaxTurns(args: string[]): number {
 }
 
 // /profile new's own decision: validates the name and returns where its directory WOULD live —
-// this function does not create it, that is the (not-yet-written) caller's job.
-export function decideProfileCreate(args: string[]): string {
+// this function does not create it, that is the caller's job. `profileDir`, not a raw
+// `join(getBaseConfigDir(), name)` (bug fixed here, code-review round 2): getConfigDir() folds
+// the profile name "default" (or its case-insensitive spellings on win32/darwin) onto the base
+// root with no `default/` segment — reusing that same fold here is what stops
+// `/profile new default` from creating an orphaned directory `--profile default` can never
+// select. Returns `name` alongside `dir` rather than making the caller reverse-engineer it via
+// `basename(dir)`, which would itself be wrong for exactly this "default" case, where `dir` has
+// no trailing segment equal to the validated name at all.
+export function decideProfileCreate(args: string[]): { dir: string; name: string } {
   const [subcommand, name] = args;
   if (subcommand !== "new" || name === undefined || args.length !== 2) {
     throw new Error("Usage: /profile new <name>");
   }
   const error = profileNameError(name);
   if (error !== undefined) throw new Error(error);
-  return join(getBaseConfigDir(), name);
+  return { dir: profileDir(name), name };
 }
 
 // `onPlan` defaults to a no-op but is meant to be passed through from the caller's own presenter
