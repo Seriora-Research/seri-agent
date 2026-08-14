@@ -1949,13 +1949,13 @@ function createConfigHandlers(opts: {
       type: "transcript-append",
       line: `Saved ${key}.${verifyConfigTakesEffectNote(key)}`,
     });
-    // NOT dispatchConfigList (bug fixed here, code-review round 2 — the exact class
-    // onSetupKeyEntered's own comment already fixed for /setup): that helper's own catch only
-    // dispatches command-error, which never touches `pendingConfig` — leaving THIS function's own
-    // `busy: true` (set above, before the write) stuck forever if the refresh read
-    // (configListState -> decideConfigOpen -> config.json) throws. ConfigEnterValue's own
-    // `if (busy) return;` gate is what turns that into a full lockout with no way out short of
-    // killing the process. Resetting `busy: false` here, inline, is what actually clears it.
+    // NOT dispatchConfigList (thermo-nuclear, round 3 — the stale version of this comment claimed
+    // dispatchConfigList's catch leaves `pendingConfig` untouched, which stopped being true once
+    // its catch started dispatching config-resolved): kept inline anyway, because closing the
+    // panel here would be the wrong recovery — the user is mid-edit on a config.json write that
+    // just wrote fine and only the REFRESH after it failed, so resetting `busy: false` and
+    // showing the error on this same key lets them retry or Esc out, instead of losing the step
+    // they were on for a failure in the read that happened after their write already succeeded.
     try {
       dispatch({ type: "config-step", state: configListState(key) });
     } catch (err) {
@@ -2098,10 +2098,14 @@ function createPermissionsHandlers(opts: {
       // checked the project tier. Passing "both" here used to strip the invisible global
       // pre-approval too, silently, on a panel whose own comment says only the project tier is
       // removable from here.
+      // Hoisted, not called again below (thermo-nuclear, round 3): getWorktree() spawns a
+      // synchronous `git rev-parse` — calling it three times in one keypress handler was three
+      // subprocess spawns for a value that cannot change mid-handler.
+      const worktree = getWorktree();
       let warned: string | undefined;
       let result: { global: boolean; project: boolean };
       try {
-        result = forgetGrant(permissionsDir, getWorktree(), confirmedTool, "project", (m) => {
+        result = forgetGrant(permissionsDir, worktree, confirmedTool, "project", (m) => {
           warned = m;
         });
       } catch (err) {
@@ -2121,21 +2125,28 @@ function createPermissionsHandlers(opts: {
         dispatch({ type: "permissions-resolved" });
         return;
       }
-      // Still pre-approved globally? (thermo-nuclear, round 7): scope "project" above never
-      // touches the global tier, so `result.global` is statically false here and cannot answer
-      // this — only a fresh read can. Without this check "Removed x." would flatly contradict a
-      // surviving global grant, the exact false claim removeCommand's own comment (permissions/
-      // commands.ts:78-80) refuses to make for the non-interactive path.
-      const stillGlobal =
-        result.project && loadGrants(permissionsDir, getWorktree()).global.includes(confirmedTool);
-      dispatch({
-        type: "transcript-append",
-        line: result.project
-          ? stillGlobal
-            ? `Removed ${confirmedTool} from this project — still pre-approved globally.`
-            : `Removed ${confirmedTool}.`
-          : `${confirmedTool} was not permanently approved.`,
-      });
+      // Read unconditionally, not gated on `result.project` (thermo-nuclear, round 3): a
+      // concurrent write between the `removable` re-check above and this 'y' press can already
+      // have cleared the project entry by the time forgetGrant runs, independently of whether the
+      // tool is still globally granted — gating this check on result.project made that race
+      // report "was not permanently approved" even while the tool stayed auto-approved globally,
+      // the exact false claim removeCommand's own comment (permissions/commands.ts:78-80) refuses
+      // to make for the non-interactive path. Not try/catch-guarded, on purpose: loadGrants cannot
+      // throw (store.ts's own readStore degrades every failure mode to a status instead), and this
+      // file already carries guards on that call that can't fire — not adding another rather than
+      // resolving the standing one.
+      const stillGlobal = loadGrants(permissionsDir, worktree).global.includes(confirmedTool);
+      let line: string;
+      if (result.project && stillGlobal) {
+        line = `Removed ${confirmedTool} from this project — still pre-approved globally.`;
+      } else if (result.project) {
+        line = `Removed ${confirmedTool}.`;
+      } else if (stillGlobal) {
+        line = `${confirmedTool} is still pre-approved globally.`;
+      } else {
+        line = `${confirmedTool} was not permanently approved.`;
+      }
+      dispatch({ type: "transcript-append", line });
       dispatchPermissionsList();
       return;
     }
