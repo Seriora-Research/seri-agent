@@ -35,6 +35,10 @@ export const USAGE = `Usage:
                                     | approval on|off | archivist on|off
   /exit (inside the TUI)          end the session, or Ctrl-D — not a seri subcommand: it means
                                     nothing outside a live TUI, and "seri /exit" is just a task
+  /login | /signup | /logout (inside the TUI)
+                                    sign in, create an account, or sign out — not seri
+                                    subcommands; seri login | signup | logout below is the
+                                    non-interactive equivalent
   seri login | signup | logout
   seri config set|list|unset
   seri permissions list|remove <tool>

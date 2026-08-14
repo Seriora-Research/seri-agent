@@ -241,4 +241,54 @@ describe("pollForToken", () => {
     expect(result).toEqual({ status: "expired" });
     expect(calls).toBe(1);
   });
+
+  // Bug fix (thermo-nuclear, round 5): real cancellation — createAuthHandlers' own AbortController
+  // (cli.ts) is what makes an abandoned login actually stop polling, instead of the poll running
+  // to completion unseen (and possibly still calling saveAuthSession, even past an explicit
+  // /logout) with only its own DISPATCHES muted.
+  test("returns {status: 'aborted'} without polling at all when the signal is already aborted", async () => {
+    let calls = 0;
+    const fetchFn = (async () => {
+      calls += 1;
+      return fakeResponse(false, { error: "authorization_pending" });
+    }) as unknown as typeof fetch;
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await pollForToken("client_123", device, {
+      fetchFn,
+      sleep: async () => {},
+      now: () => 0,
+      signal: controller.signal,
+    });
+
+    expect(result).toEqual({ status: "aborted" });
+    expect(calls).toBe(0);
+  });
+
+  // The race this round's own bug was in: a poll already in flight (sleep/fetch already started)
+  // when abort() fires must still discard whatever it resolves to — even a genuine success —
+  // rather than acting on it because the abort landed one check too late.
+  test("discards an in-flight poll's own success once aborted mid-flight, rather than acting on it a tick late", async () => {
+    const controller = new AbortController();
+    const fetchFn = (async () => {
+      // The signal flips to aborted WHILE this "network call" is in flight — the exact race a
+      // real WorkOS poll can hit, since a device code stays valid for minutes.
+      controller.abort();
+      return fakeResponse(true, {
+        access_token: "at-1",
+        refresh_token: "rt-1",
+        user: { id: "user_1", email: "a@example.com" },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await pollForToken("client_123", device, {
+      fetchFn,
+      sleep: async () => {},
+      now: () => 0,
+      signal: controller.signal,
+    });
+
+    expect(result).toEqual({ status: "aborted" });
+  });
 });

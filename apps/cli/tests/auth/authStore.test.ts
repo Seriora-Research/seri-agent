@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  AUTH_FILENAME,
   type AuthSession,
   clearAuthSession,
   loadAuthSession,
@@ -35,6 +36,17 @@ describe("authStore", () => {
   });
 
   test("loadAuthSession returns undefined when no auth.json exists", () => {
+    expect(loadAuthSession(configDir)).toBeUndefined();
+  });
+
+  // Thermo-nuclear review + code-review, PR #94: this file's own deliberate exception to
+  // loadConfig's (config/config.ts) "let it throw, every caller wraps its own try/catch"
+  // convention — a corrupted auth.json degrades to the exact same "not authenticated" state as no
+  // file at all, in the one place that reads it, rather than a fourth call site somewhere
+  // upstream needing its own guard against this exact throw.
+  test("loadAuthSession returns undefined, not a throw, when auth.json is corrupted", () => {
+    writeFileSync(join(configDir, AUTH_FILENAME), "{not valid json");
+
     expect(loadAuthSession(configDir)).toBeUndefined();
   });
 

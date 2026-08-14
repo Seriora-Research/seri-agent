@@ -2,7 +2,7 @@
 // dispatcher wired to them yet — Stage C wires /login and /signup to fire `auth-offer` and
 // `auth-requested`/`auth-step`/`auth-resolved`. New code, not a move.
 
-import { Box, Text } from "ink";
+import { Box, Text, useInput } from "ink";
 import type { AuthPanelState } from "../reducer";
 import { theme } from "../theme";
 
@@ -22,12 +22,33 @@ export function AuthBanner({ show }: { show: boolean }) {
 }
 
 // /login and /signup's own blocking device-flow panel — mirrors SetupPanel's step-dispatcher
-// shape, one branch per step.
-export function AuthPanel({ state }: { state: AuthPanelState }) {
+// shape, one branch per step. `onDismiss` is called from Escape on every step, plus Enter on
+// "result" (SetupConfirmRemove's own Esc-cancels convention, SetupPanel.tsx, is the closest
+// precedent for "either key just closes it" — used on "result" only, where an explicit
+// confirmation reads naturally; Escape alone covers "starting"/"device").
+//
+// Bug fix (thermo-nuclear + code-review, round 4): before Escape worked here at all, neither it
+// nor Ctrl-C (wired to onCancel, not to clearing pendingAuth — a raw Ctrl-C during "starting"/
+// "device" fell through to a hard process kill, no turn being in flight to arm the cancel slot)
+// gave the user any way out of a mistyped /login or a WorkOS device flow just sitting there for
+// however long the code stays valid. Dismissing here DOES cancel the in-flight HTTP poll itself
+// (round 5): onDismiss -> onAuthResolved's own onAbandon call (App.tsx/cli.ts) aborts the current
+// attempt's AbortController, which pollForToken (deviceFlow.ts) actually checks and stops on —
+// not just a dispatch guard muting whatever that attempt eventually does in the background.
+export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismiss?: () => void }) {
+  useInput((_input, key) => {
+    if (key.escape) {
+      onDismiss?.();
+      return;
+    }
+    if (state.step === "result" && key.return) onDismiss?.();
+  });
+
   if (state.step === "starting") {
     return (
-      <Box borderStyle="round" borderColor={theme.accent}>
+      <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
         <Text color={theme.muted}>{`Starting ${state.mode}…`}</Text>
+        <Text color={theme.muted}>Esc cancel</Text>
       </Box>
     );
   }
@@ -36,12 +57,18 @@ export function AuthPanel({ state }: { state: AuthPanelState }) {
       <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
         <Text color={theme.muted}>{`Open ${state.verificationUri} and enter this code:`}</Text>
         <Text color={theme.accent}>{state.userCode}</Text>
+        <Text color={theme.muted}>Esc cancel</Text>
       </Box>
     );
   }
   return (
-    <Box borderStyle="round" borderColor={state.error ? theme.error : theme.accent}>
+    <Box
+      borderStyle="round"
+      borderColor={state.error ? theme.error : theme.accent}
+      flexDirection="column"
+    >
       <Text color={state.error ? theme.error : theme.accent}>{state.message}</Text>
+      <Text color={theme.muted}>Enter/Esc continue</Text>
     </Box>
   );
 }

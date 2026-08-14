@@ -105,6 +105,14 @@ export type AppProps = {
   onSetupRemove?: (provider: ModelProvider) => void;
   onSetupBack?: () => void;
   onSetupClose?: (leftoverInput?: string) => void;
+  // Bug fix (coordinator follow-up on Stage C; extended round 4): AuthPanel's own "result" step
+  // (a device-flow failure — a denied/expired code, a network error, degraded by cli.ts's
+  // createAuthHandlers' own catch block) had no way back to InputBox at all before this — not
+  // even Ctrl-C, which is wired to onCancel, not to clearing pendingAuth. Called from AuthPanel's
+  // own Escape handler on every step, plus Enter on "result" — a successful login never reaches
+  // here: createAuthHandlers.onLogin (cli.ts) dispatches auth-resolved itself, right after its own
+  // `await loginFn(...)` returns, with no user keypress involved.
+  onAuthResolved?: () => void;
   // Stage A scaffolding (cli-commands-to-tui feature-plan.md): /config's own resolutions, mirroring
   // onSetupSelect's own five-prop shape — ConfigPanel.tsx's own step-dispatcher needs a real prop to
   // route Esc/Ctrl-D/Enter to once Stage D wires config-requested, rather than a panel silently
@@ -163,6 +171,7 @@ export function App({
   onSetupRemove,
   onSetupBack,
   onSetupClose,
+  onAuthResolved,
   onConfigSelect,
   onConfigValueEntered,
   onConfigUnset,
@@ -198,11 +207,15 @@ export function App({
 
   return (
     <Box flexDirection="column">
-      {/* Stage A scaffolding (cli-commands-to-tui feature-plan.md): rendered ABOVE the render
-      ternary below, not as one of its branches — unlike ApprovalBox/ModelPicker/SetupPanel this
-      never replaces InputBox, it sits alongside it. `authOffer` is never set to true yet (Stage
-      C wires that), so this is unreachable in production today. */}
-      <AuthBanner show={state.authOffer} />
+      {/* Rendered ABOVE the render ternary below, not as one of its branches — unlike
+      ApprovalBox/ModelPicker/SetupPanel this never replaces InputBox, it sits alongside it.
+      `state.pendingAuth === undefined` (not just `state.authOffer`) is the derived half of the
+      fix (thermo-nuclear + code-review, round 4): `authOffer` alone used to need a matching
+      `auth-offer: false` dispatch at every point the auth panel opened, and round 2's whole bug
+      class was a call site that forgot one. The reducer already owns `pendingAuth` — "is the
+      panel currently open" is exactly what should gate "hide the redundant banner," derived here
+      instead of commanded from cli.ts. */}
+      <AuthBanner show={state.authOffer && state.pendingAuth === undefined} />
       <Static items={state.transcript}>{(line, index) => <Text key={index}>{line}</Text>}</Static>
       {state.streaming.length > 0 && <Text>{state.streaming}</Text>}
       {state.pendingTool !== undefined && (
@@ -250,7 +263,7 @@ export function App({
           onSetupClose={onSetupClose}
         />
       ) : state.pendingAuth !== undefined ? (
-        <AuthPanel state={state.pendingAuth} />
+        <AuthPanel state={state.pendingAuth} onDismiss={onAuthResolved} />
       ) : state.pendingConfig !== undefined ? (
         <ConfigPanel
           pendingConfig={state.pendingConfig}

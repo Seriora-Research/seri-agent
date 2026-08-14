@@ -556,6 +556,19 @@ describe("decideAuthOffer", () => {
 
     expect(decideAuthOffer(authConfigDir)).toBe(false);
   });
+
+  // Thermo-nuclear review + code-review, PR #94 (root-cause round): decideAuthOffer no longer
+  // throws on a corrupted auth.json — loadAuthSession (authStore.ts) itself now degrades a
+  // read/parse failure to `undefined`, the same "not authenticated" state as no file at all,
+  // fixing this at the one place that reads the file rather than every caller needing its own
+  // try/catch (the earlier version of this test asserted the opposite: that this threw, which is
+  // exactly the "wrap every call site" pattern this fix replaces). Mirrors the pty suite's own
+  // malformed-config convention (tuiPty.test.ts: `writeFileSync(configPath, "{not valid json")`).
+  test("returns true (not-authenticated) on a corrupted auth.json, rather than throwing", () => {
+    writeFileSync(join(authConfigDir, "auth.json"), "{not valid json");
+
+    expect(decideAuthOffer(authConfigDir)).toBe(true);
+  });
 });
 
 describe("decideConfigOpen", () => {

@@ -553,9 +553,7 @@ describe("tuiReducer: config-requested / config-step / config-resolved", () => {
 });
 
 describe("tuiReducer: permissions-requested / permissions-step / permissions-resolved", () => {
-  const rows: PermissionRow[] = [
-    { tool: "write_file", source: "persisted", removable: true },
-  ];
+  const rows: PermissionRow[] = [{ tool: "write_file", source: "persisted", removable: true }];
 
   test("permissions-requested opens at step list with the given rows", () => {
     const state = tuiReducer(initialTuiState(session()), {

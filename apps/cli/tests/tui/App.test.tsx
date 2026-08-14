@@ -1170,6 +1170,69 @@ describe("App", () => {
 
       expect(instance.lastFrame() ?? "").toBe(before);
     });
+
+    // Stage C: the banner sits ABOVE the render ternary (App.tsx's own comment) rather than as one
+    // of its branches — the zeroKeys x noAuth "both at once" cell, component level: a first run
+    // with no provider key opens /setup's own panel, and the banner must still render alongside it
+    // rather than being replaced the way ApprovalBox/ModelPicker/SetupPanel replace each other.
+    test("renders alongside a pendingSetup panel, not replaced by it", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-offer", show: true });
+      dispatch({ type: "setup-requested", rows: [] });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("/login");
+      expect(frame).toContain("/setup — provider API keys");
+    });
+
+    // Bug fix (thermo-nuclear + code-review, round 4 — the root-cause fix): three earlier rounds
+    // all patched a new place that forgot to dispatch `auth-offer: false` the moment a login
+    // attempt opened; the actual fix is deriving the banner from `pendingAuth` (App.tsx's own
+    // `state.authOffer && state.pendingAuth === undefined`) instead of commanding it. This test
+    // dispatches ONLY `auth-requested` — no manual `auth-offer` dispatch at all, unlike the old
+    // version of this test — and the banner still hides, because `authOffer` itself is
+    // deliberately left `true` here: the derivation is what's doing the work, not a stale flag
+    // that happens to already be false.
+    test("hides while AuthPanel is showing, purely from pendingAuth being set — authOffer itself stays true", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-offer", show: true });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("/login");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Starting login");
+      expect(frame).not.toContain("Sign in with /login, or create an account with /signup");
+    });
+
+    // Bug fix (this same round): the derivation above only covers "hide while the panel is open"
+    // — the instant a successful login's own `auth-resolved` clears `pendingAuth` again, the
+    // derivation reduces to bare `authOffer`, which was never updated to reflect the session that
+    // just got saved. createAuthHandlers.onLogin's own success path (cli.ts) recomputes it fresh
+    // right after, exactly like onLogout's `show: true` and the mount/onAuthResolved recomputes
+    // already do for their own real state changes — this reproduces that exact three-dispatch
+    // sequence and checks the banner does NOT flash back on.
+    test("stays hidden after a successful login, not just while the panel is open", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-offer", show: true });
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+
+      dispatch({ type: "transcript-append", line: "Logged in as a@example.com" });
+      dispatch({ type: "auth-resolved" });
+      dispatch({ type: "auth-offer", show: false });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").not.toContain(
+        "Sign in with /login, or create an account with /signup",
+      );
+    });
   });
 
   describe("auth panel", () => {
@@ -1226,6 +1289,178 @@ describe("App", () => {
       });
       await flush();
       expect(instance.lastFrame() ?? "").toContain("Login failed: expired code");
+    });
+
+    // auth-resolved is the reducer action createAuthHandlers' own onLogin/onLogout (cli.ts) fire
+    // once a device-flow result lands — proves the panel's own text (including the result step's
+    // message, the closest thing this panel has to hint text) is fully gone afterward, not just
+    // that SOME frame changed, and that InputBox is genuinely back (accepts input), not merely
+    // that nothing matched the render ternary's earlier branches.
+    test("clears the panel entirely, restoring InputBox", async () => {
+      const submitted: string[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSubmit={(v) => submitted.push(v)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: { step: "result", message: "Signed in as a@example.com", error: false },
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("Signed in as a@example.com");
+
+      dispatch({ type: "auth-resolved" });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).not.toContain("Signed in as a@example.com");
+      // A second flush: InputBox is a fresh mount here (swapped in for AuthPanel), and its own
+      // useInput needs an extra tick to register — the same mount-timing gap PermissionsPanel's
+      // own confirm-remove test above already needed for an identical component swap.
+      await flush();
+      instance.stdin.write("back to typing\r");
+      await flush();
+      expect(submitted).toEqual(["back to typing"]);
+    });
+
+    // Bug fix (coordinator follow-up on Stage C): before AuthPanel's own useInput existed, a
+    // failed login/signup (createAuthHandlers' own catch, cli.ts — a denied/expired code, a
+    // network error) left the "result" step up with no keyboard path back at all, not even
+    // Ctrl-C. Presses a REAL key (not a direct auth-resolved dispatch, which "clears the panel
+    // entirely" above already covers) to prove AuthPanel's own Enter/Esc handling is actually
+    // wired through App.tsx's onAuthResolved prop — the same wiring-proof shape ConfigPanel's own
+    // "Esc on the list step calls onConfigClose" test uses.
+    test("Enter on the result step calls onAuthResolved and returns to InputBox", async () => {
+      const resolved: number[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onAuthResolved={() => resolved.push(resolved.length)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: { step: "result", message: "Authorization was denied.", error: true },
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("Authorization was denied.");
+
+      instance.stdin.write("\r");
+      await flush();
+
+      expect(resolved).toEqual([0]);
+    });
+
+    // Escape, mirroring SetupConfirmRemove's own Esc-cancels convention (SetupPanel.tsx) — the
+    // dismissal precedent this fix follows.
+    test("Escape on the result step also calls onAuthResolved", async () => {
+      const resolved: number[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onAuthResolved={() => resolved.push(resolved.length)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: { step: "result", message: "The login request expired.", error: true },
+      });
+      await flush();
+
+      instance.stdin.write("\x1b"); // Escape
+      // A bare Escape byte is ambiguous with the start of a longer ANSI sequence — Ink's own
+      // input parser holds it for a short window before treating it as standalone (ConfigPanel's
+      // own Escape test below needs the same wait for the same reason).
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      expect(resolved).toEqual([0]);
+    });
+
+    // The real soft-lock this fix closes (thermo-nuclear + code-review, round 4): before this,
+    // NOTHING dismissed "starting"/"device" — no useInput handling on either step, and Ctrl-C
+    // routes to onCancel (a hard process kill with no turn in flight to arm the cancel slot), not
+    // to clearing pendingAuth. A mistyped /login or a slow WorkOS device flow used to cost the
+    // whole TUI session.
+    test("Escape on the device step also calls onAuthResolved and returns to InputBox", async () => {
+      const resolved: number[] = [];
+      const submitted: string[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          // Unlike the two result-step tests above (which only prove the prop fires), this one
+          // also dispatches auth-resolved itself — cli.ts's own onAuthResolved wiring does the
+          // same (its own comment) — so the frame assertions below observe the real end-to-end
+          // effect, not just that the callback ran.
+          onAuthResolved={() => {
+            resolved.push(resolved.length);
+            dispatch?.({ type: "auth-resolved" });
+          }}
+          onSubmit={(v) => submitted.push(v)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: {
+          step: "device",
+          mode: "login",
+          verificationUri: "https://example.com/device",
+          userCode: "ABCD-1234",
+        },
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("ABCD-1234");
+
+      instance.stdin.write("\x1b"); // Escape
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      expect(resolved).toEqual([0]);
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).not.toContain("ABCD-1234");
+      // A second flush: InputBox is a fresh mount here (swapped in for AuthPanel), and its own
+      // useInput needs an extra tick to register — the same mount-timing gap this describe
+      // block's own "clears the panel entirely" test above already needed for an identical swap.
+      await flush();
+      instance.stdin.write("back to typing\r");
+      await flush();
+      expect(submitted).toEqual(["back to typing"]);
     });
   });
 

@@ -678,6 +678,186 @@ function childScriptSetupEnvShadow(dir: string): string {
   ].join("\n");
 }
 
+// Stage C (cli-commands-to-tui feature-plan.md): /login, /signup and /logout's own script.
+// `login`/`logout` are faked via the SAME injection seam `handleAuthCommand` already uses for the
+// non-interactive `seri login`/`seri logout` (argv.test.ts's own "run (login/signup/logout)"
+// describe block) — the fake stands in for the real WorkOS device flow the way every other
+// runLoopFake in this file stands in for a real model round-trip, and calls the real
+// saveAuthSession/loadAuthSession/clearAuthSession (dynamically imported below) so auth.json on
+// disk is genuinely written/read/cleared, not merely asserted on captured stdout.
+function childScriptAuth(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const authStore = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/auth/authStore.ts")).href)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    // The negative control's own subject (below, host-side): must never reach stdout, masked or
+    // otherwise — the same "the raw value never appears in the pty stdout" guarantee /setup's own
+    // "add" pty test already holds itself to, applied to an access token instead of a provider key.
+    `const FAKE_ACCESS_TOKEN = "fake-access-token-must-never-print";`,
+    `async function loginFake(mode, clientId, configDir, handlerDeps) {`,
+    `  handlerDeps?.onDeviceCode?.({`,
+    `    verificationUri: "https://example.com/device",`,
+    `    userCode: "ABCD-1234",`,
+    `  });`,
+    `  await new Promise((resolve) => setTimeout(resolve, 50));`,
+    `  authStore.saveAuthSession(`,
+    `    {`,
+    `      accessToken: FAKE_ACCESS_TOKEN,`,
+    `      refreshToken: "fake-refresh-token",`,
+    `      userId: "user-1",`,
+    `      email: "fake@example.com",`,
+    `      obtainedAt: new Date().toISOString(),`,
+    `    },`,
+    `    configDir,`,
+    `  );`,
+    `  handlerDeps?.onMessage?.("Logged in as fake@example.com");`,
+    `}`,
+    `function logoutFake(configDir, onMessage) {`,
+    `  const existing = authStore.loadAuthSession(configDir);`,
+    `  authStore.clearAuthSession(configDir);`,
+    `  (onMessage ?? console.log)(existing ? "Logged out." : "Not logged in.");`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  login: loginFake,`,
+    `  logout: logoutFake,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// Bug fix (coordinator follow-up on Stage C): the failure round-trip childScriptAuth's own
+// describe block never exercised — `loginFake` here rejects the way the real device flow does on
+// a denied/expired code, driving createAuthHandlers' own catch branch (cli.ts) in a real process,
+// not just at the reducer level (App.test.tsx already covers that half).
+function childScriptAuthLoginFails(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `async function loginFake(mode, clientId, configDir, handlerDeps) {`,
+    `  handlerDeps?.onDeviceCode?.({`,
+    `    verificationUri: "https://example.com/device",`,
+    `    userCode: "ABCD-1234",`,
+    `  });`,
+    `  await new Promise((resolve) => setTimeout(resolve, 50));`,
+    `  throw new Error("Authorization was denied.");`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  login: loginFake,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// Bug fix (thermo-nuclear + code-review, round 4): the real soft-lock this round closes — before
+// it, nothing dismissed the "starting"/"device" steps at all, and Ctrl-C fell through to a hard
+// process kill (no turn in flight to arm the cancel slot). `loginFake` here hangs indefinitely
+// past the device-code callback (the same "never resolves" idiom `runLoopFake` itself already
+// uses throughout this file), standing in for a real device code that stays valid for minutes
+// with the user never completing it in a browser.
+function childScriptAuthLoginHangs(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `async function loginFake(mode, clientId, configDir, handlerDeps) {`,
+    `  handlerDeps?.onDeviceCode?.({`,
+    `    verificationUri: "https://example.com/device",`,
+    `    userCode: "ABCD-1234",`,
+    `  });`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  login: loginFake,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// Bug fix (thermo-nuclear, round 5): unlike childScriptAuthLoginHangs (whose fake never resolves
+// at all, so it can only prove Escape returns the UI — it can't distinguish "the poll was really
+// cancelled" from "cancellation doesn't exist and we just stopped listening"), this fake's own
+// poll resolves ~1s AFTER Escape, checking `handlerDeps.signal?.aborted` itself — the exact same
+// AbortSignal `createAuthHandlers.onLogin` (cli.ts) threads through the real `loginFn`'s 4th
+// argument. This is what proves the real plumbing: onAbandon's own `.abort()` call actually
+// reaches this fake in time, not just that createAuthHandlers stopped honoring its dispatches.
+function childScriptAuthLoginRace(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const authStore = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/auth/authStore.ts")).href)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `async function loginFake(mode, clientId, configDir, handlerDeps) {`,
+    `  handlerDeps?.onDeviceCode?.({`,
+    `    verificationUri: "https://example.com/device",`,
+    `    userCode: "ABCD-1234",`,
+    `  });`,
+    `  await new Promise((resolve) => setTimeout(resolve, 1000));`,
+    `  if (handlerDeps?.signal?.aborted) return;`,
+    `  authStore.saveAuthSession(`,
+    `    {`,
+    `      accessToken: "fake-access-token-must-never-print",`,
+    `      refreshToken: "fake-refresh-token",`,
+    `      userId: "user-1",`,
+    `      email: "fake@example.com",`,
+    `      obtainedAt: new Date().toISOString(),`,
+    `    },`,
+    `    configDir,`,
+    `  );`,
+    `  handlerDeps?.onMessage?.("Logged in as fake@example.com");`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  login: loginFake,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // byok-guided-setup, feature-plan.md: the "genuinely blank first run" scenario — a real TTY, no
 // config.json (childScriptSetup's own dir is always fresh, but every OTHER script in this file
 // still exports GROQ_API_KEY as a real env var; this one explicitly deletes every provider's own
@@ -2544,6 +2724,270 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // pass vacuously either way. A stack frame's file path is not interleaved the same way
         // (confirmed the same way), so this checks for that instead.
         expect(occurrences("provider/keys.ts")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
+
+  // Stage C (cli-commands-to-tui feature-plan.md): /login, /signup and /logout end to end on a
+  // real pty. `seedAuth`, mirroring `seedConfig`'s own host-side pre-write above, so the /logout
+  // test starts with a real session already on disk rather than exercising createAuthHandlers'
+  // own "Not logged in." branch instead of the one it means to test.
+  function seedAuth(target: string): void {
+    const configDir = join(target, ".seri");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, "auth.json"),
+      JSON.stringify({
+        accessToken: "seeded-access-token",
+        refreshToken: "seeded-refresh-token",
+        userId: "user-0",
+        email: "seeded@example.com",
+        obtainedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  describe("/login, /signup, /logout", () => {
+    test("the banner appears at mount when no auth.json exists, alongside the ordinary input box", async () => {
+      const scriptPath = join(dir, "child-auth-banner.mjs");
+      writeFileSync(scriptPath, childScriptAuth(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        await sawLine("Sign in with /login, or create an account with /signup");
+
+        // Non-blocking proof: the ordinary input box still accepts a task, exactly as it would
+        // with the banner absent — the pty counterpart of App.test.tsx's own "still typing" test.
+        child.stdin?.write("still typing");
+        await sawLine("still typing");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // "The banner is gone from the newest frame" (App.test.tsx's own "clears the panel entirely,
+    // restoring InputBox" test) is asserted there, at the component level, via lastFrame() — this
+    // harness's `sawLine`/`occurrences` only see the WHOLE accumulated pty stdout, which still
+    // contains the banner's original bytes from mount even after Ink redraws without it (every
+    // other "X disappeared" case in this file — /setup's own cancel test — checks a FILE, not
+    // stdout, for the same reason). This test's own job is end to end: the real login()/logout()
+    // deps seam, the real reducer dispatches, and auth.json actually landing on disk.
+    test("/login shows the device panel, then resolves: 'Logged in as …' lands in the transcript, auth.json exists, and the raw access token never reaches stdout", async () => {
+      const scriptPath = join(dir, "child-auth-login.mjs");
+      writeFileSync(scriptPath, childScriptAuth(dir));
+
+      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        await sawLine("Sign in with /login, or create an account with /signup");
+
+        child.stdin?.write("/login");
+        await sawLine("/login");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("https://example.com/device");
+        await sawLine("ABCD-1234");
+
+        await sawLine("Logged in as fake@example.com");
+
+        // waitForConfig, not a bare readFileSync right after sawLine — the same race macOS CI
+        // caught elsewhere in this file (waitForConfig's own comment); auth.json's shape
+        // (AuthSession) is all strings, same as the Record<string, string> that helper expects.
+        const auth = await waitForConfig(
+          join(dir, ".seri", "auth.json"),
+          (c) => c.email === "fake@example.com",
+        );
+        expect(auth.email).toBe("fake@example.com");
+
+        // The negative control at the process level: the raw access token must never have
+        // reached stdout, checked against the WHOLE accumulated transcript.
+        child.kill("SIGKILL");
+        const { stdout } = await exited;
+        expect(stdout).not.toContain("fake-access-token-must-never-print");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The regression this locks (coordinator follow-up on Stage C): before AuthPanel's own
+    // useInput existed, a denied/expired device code left this exact screen up with no keyboard
+    // path back at all — no press, Enter included, ever returned the input box. `childScriptAuth`'s
+    // own /login test above only exercises the SUCCESS round-trip; this one drives
+    // createAuthHandlers' own catch branch (cli.ts) in a real process.
+    test("a failed /login shows the error, and a keypress returns to the ordinary input box", async () => {
+      const scriptPath = join(dir, "child-auth-login-fails.mjs");
+      writeFileSync(scriptPath, childScriptAuthLoginFails(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/login");
+        await sawLine("/login");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("https://example.com/device");
+        await sawLine("ABCD-1234");
+
+        await sawLine("Authorization was denied.");
+
+        child.stdin?.write("\r");
+        await wait100ms();
+
+        // Proves InputBox is actually back and accepting input, not merely that the process
+        // survived — the same "still typing" convention this file's own auth-banner test above
+        // uses for the identical claim.
+        child.stdin?.write("still here");
+        await sawLine("still here");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The real soft-lock this round closes, end to end (thermo-nuclear + code-review, round 4):
+    // Escape on the device step, while the fake login's own poll never resolves at all — before
+    // this, NOTHING dismissed "starting"/"device" and Ctrl-C fell through to a hard process kill.
+    test("Escape abandons a stuck /login and returns to the ordinary input box", async () => {
+      const scriptPath = join(dir, "child-auth-login-hangs.mjs");
+      writeFileSync(scriptPath, childScriptAuthLoginHangs(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/login");
+        await sawLine("/login");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("https://example.com/device");
+        await sawLine("ABCD-1234");
+
+        child.stdin?.write("\x1b"); // Escape
+        // Escape's own ambiguity window — this file's own convention (the /setup cancel test's
+        // own comment).
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await wait100ms();
+
+        // Proves InputBox is actually back and accepting input, not merely that the process
+        // survived — the fake's own poll is still hanging in the background at this point, so
+        // this is also proof the abandoned attempt's own dispatches never landed on top of it.
+        child.stdin?.write("abandoned, typing something else");
+        await sawLine("abandoned, typing something else");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The actual regression lock for the round 5 bug (thermo-nuclear): childScriptAuthLoginRace's
+    // own poll resolves ~1s AFTER Escape, checking the real AbortSignal itself — this is what
+    // distinguishes "the poll was genuinely cancelled" from "cancellation doesn't exist and we
+    // just stopped listening" (the previous hangs-forever fake could only prove the latter kind
+    // of thing, never the former — reviewer's own framing). Before the round 5 fix, the fake's own
+    // late resolution would have written auth.json and flipped the banner regardless of Escape.
+    test("Escape really cancels a stuck /login: the poll's late resolution ~1s later never writes auth.json or logs in", async () => {
+      const scriptPath = join(dir, "child-auth-login-race.mjs");
+      writeFileSync(scriptPath, childScriptAuthLoginRace(dir));
+
+      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/login");
+        await sawLine("/login");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("https://example.com/device");
+        await sawLine("ABCD-1234");
+
+        child.stdin?.write("\x1b"); // Escape — well before the fake's own 1000ms delay resolves
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await wait100ms();
+
+        // InputBox is back immediately, same as the hangs-forever test above.
+        child.stdin?.write("still fine");
+        await sawLine("still fine");
+
+        // Now wait PAST the fake's own 1000ms delay, so its late resolution — aborted or not —
+        // has had time to land either way, then assert it never acted.
+        await new Promise((resolve) => setTimeout(resolve, 1300));
+
+        expect(existsSync(join(dir, ".seri", "auth.json"))).toBe(false);
+        // "Logged in as …" is a <Static> transcript line (App.tsx) — committed at most once, ever,
+        // never reprinted by an unrelated redraw the way a live region (the banner) can be, so
+        // occurrences() is a reliable absence check here specifically, unlike the banner text
+        // itself (measured live: it redraws multiple times over the course of this test for
+        // reasons unrelated to auth state, so a raw occurrence count on it can't tell "flipped
+        // back on" apart from "just redrew" — the auth.json check above is this test's own proof
+        // the banner's underlying STATE never flipped, which is the thing that actually matters).
+        expect(occurrences("Logged in as fake@example.com")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("/logout signs out: 'Logged out.' lands in the transcript, auth.json is cleared, and the banner returns", async () => {
+      seedAuth(dir);
+      const scriptPath = join(dir, "child-auth-logout.mjs");
+      writeFileSync(scriptPath, childScriptAuth(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        // seedAuth already wrote auth.json before spawn — decideAuthOffer is false at mount, so no
+        // banner line is expected yet here.
+
+        child.stdin?.write("/logout");
+        await sawLine("/logout");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("Logged out.");
+
+        expect(existsSync(join(dir, ".seri", "auth.json"))).toBe(false);
+        await sawLine("Sign in with /login, or create an account with /signup");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The gate-composition matrix's own zeroKeys x noAuth "both at once" cell, end to end:
+    // reuses childScriptGuidedSetup (no key, no auth.json — the same script the "genuinely blank
+    // first run" describe block below already uses) rather than a new script, since the scenario
+    // is identical; only the assertions differ.
+    test("gate composition: zero keys and no auth.json show both /setup and the auth banner; adding a key falls through to the main view with the banner still showing", async () => {
+      const scriptPath = join(dir, "child-auth-gate-matrix.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+        await sawLine("Sign in with /login, or create an account with /signup");
+
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("GROQ_API_KEY for groq");
+
+        const secret = "sk-gate-matrix-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved GROQ_API_KEY.");
+
+        child.stdin?.write("\x1b");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await sawLine("Route");
+
+        child.stdin?.write("70b-versatile");
+        await sawLine("70b-versatile");
+        child.stdin?.write("\r");
+
+        // The fall-through to the main view (prepareSession -> runTui), same sync point
+        // childScriptGuidedSetup's own describe block below uses — and the banner is still
+        // showing there too, since no /login has happened in this run.
+        await sawLine("RUNLOOP_READY");
+        await sawLine("Sign in with /login, or create an account with /signup");
       } finally {
         child.kill("SIGKILL");
       }

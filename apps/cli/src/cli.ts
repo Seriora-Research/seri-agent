@@ -95,6 +95,7 @@ import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import {
   type CommandDirs,
   checkpointTarget,
+  decideAuthOffer,
   decideModeCycle,
   decideModelPickerOpen,
   decideRestore,
@@ -1740,6 +1741,119 @@ function createSetupHandlers(opts: {
   return { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack };
 }
 
+// Stage C (cli-commands-to-tui feature-plan.md): /login, /signup and /logout's own two handlers,
+// mirroring createSetupHandlers's exact shape (dispatch/deps/configDir in). `deps.login ?? loginReal`
+// / `deps.logout ?? logoutReal` is the SAME injection seam handleAuthCommand already uses for the
+// non-interactive `seri login`/`seri logout` — so a pty test can fake the device flow here exactly
+// the way argv.test.ts already fakes it there. Every recompute-and-dispatch is wrapped so a failure
+// (a network error, a denied/expired device code, a bad WorkOS client id) degrades to a rendered
+// `auth-step` result rather than an unhandled rejection out of onSubmit's own fire-and-forget
+// caller (InputBox's own useInput handler) — the same "never throw/crash" contract dispatchSetupList
+// already has, just landing on `auth-step`/result instead of a bare command-error, since login/logout
+// are a blocking panel (pendingAuth), not a list this file can just re-show.
+function createAuthHandlers(opts: { dispatch: Dispatch; deps: CliDeps; configDir: string }): {
+  onLogin: (mode: "login" | "signup") => Promise<void>;
+  onLogout: () => void;
+  onAbandon: () => void;
+} {
+  const { dispatch, deps, configDir } = opts;
+  const loginFn = deps.login ?? loginReal;
+  const logoutFn = deps.logout ?? logoutReal;
+  // Bug fix (thermo-nuclear, round 5): `attemptCounter` alone (round 4) only muted a dismissed
+  // attempt's own DISPATCHES — the underlying login() kept polling in the background regardless
+  // (a device code stays valid for minutes) and could still call saveAuthSession later, with zero
+  // UI trace since the dispatches were suppressed; worse, past even an explicit /logout, since
+  // nothing else stopped it either. `currentController` is real cancellation: `onAbandon` aborts
+  // it, `pollForToken` (deviceFlow.ts) actually stops polling and returns `{status:"aborted"}`
+  // instead of eventually succeeding unseen. `attemptCounter` stays too — it still correctly
+  // guards the (much narrower, now purely UI-timing) dispatch race even with real cancellation
+  // backing it up, mirroring this file's own `turnInFlight`-style "ignore a stale async result"
+  // pattern elsewhere.
+  let attemptCounter = 0;
+  let currentController: AbortController | undefined;
+
+  async function onLogin(mode: "login" | "signup"): Promise<void> {
+    const myAttempt = ++attemptCounter;
+    const controller = new AbortController();
+    currentController = controller;
+    dispatch({ type: "auth-requested", mode });
+    try {
+      const clientId = getWorkosClientId(configDir);
+      await loginFn(mode, clientId, configDir, {
+        onDeviceCode: (device) => {
+          if (myAttempt !== attemptCounter) return;
+          dispatch({
+            type: "auth-step",
+            state: {
+              step: "device",
+              mode,
+              verificationUri: device.verificationUri,
+              userCode: device.userCode,
+            },
+          });
+        },
+        // Presentation only (this file's own header comment) — the state-machine dispatches
+        // (auth-resolved, the auth-offer recompute) moved out to right after the `await` below,
+        // run once rather than from inside a callback login() may or may not ever call.
+        onMessage: (message) => {
+          if (myAttempt !== attemptCounter) return;
+          dispatch({ type: "transcript-append", line: message });
+        },
+        signal: controller.signal,
+      });
+      // Reached on a genuine success AND on an abort (login() returns normally either way — see
+      // its own comment) — the guard is what tells them apart: an abort already bumped
+      // `attemptCounter` (onAbandon) and already dispatched auth-resolved itself (onAuthResolved,
+      // App.tsx), so this becomes a no-op rather than a second, redundant pair of dispatches.
+      if (myAttempt !== attemptCounter) return;
+      dispatch({ type: "auth-resolved" });
+      dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
+    } catch (err) {
+      if (myAttempt !== attemptCounter) return;
+      dispatch({
+        type: "auth-step",
+        state: {
+          step: "result",
+          message: err instanceof Error ? err.message : String(err),
+          error: true,
+        },
+      });
+    }
+  }
+
+  // Sync, not async — logoutFn (typeof logoutReal) is fully synchronous; the call site already
+  // just `await`s this either way, which works fine on a non-async function too.
+  function onLogout(): void {
+    try {
+      logoutFn(configDir, (message) => {
+        dispatch({ type: "transcript-append", line: message });
+      });
+    } catch (err) {
+      dispatch({
+        type: "auth-step",
+        state: {
+          step: "result",
+          message: err instanceof Error ? err.message : String(err),
+          error: true,
+        },
+      });
+    }
+    // One recompute either way (collapsed from two: a hardcoded `show: true` in the success path
+    // and a recompute in the catch) — success or failure, this is the true current state, not an
+    // assumption about which branch ran.
+    dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
+  }
+
+  // Real cancellation (see `currentController`'s own comment) plus the existing dispatch guard —
+  // called from onAuthResolved (App.tsx) whenever the user dismisses "starting"/"device"/"result".
+  function onAbandon(): void {
+    attemptCounter += 1;
+    currentController?.abort();
+  }
+
+  return { onLogin, onLogout, onAbandon };
+}
+
 // `boolean | number` mirrors this file's own established convention for a check that's usually a
 // plain result but sometimes an exit code (prepareSession, handleAuthCommand, handleConfigCommand,
 // handlePermissionsCommand, handleSlashCommand all return `T | number` for the identical reason) —
@@ -2069,6 +2183,8 @@ async function runTui(
   function onSetupClose(leftoverInput?: string): void {
     dispatch({ type: "setup-resolved", leftoverInput });
   }
+
+  const { onLogin, onLogout, onAbandon } = createAuthHandlers({ dispatch, deps, configDir });
 
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
@@ -2440,6 +2556,25 @@ async function runTui(
       }
       return;
     }
+    // /login, /signup and /logout, like /model and /setup just above: intercepted here rather than
+    // added to SLASH_COMMANDS, since they drive the blocking pendingAuth panel (createAuthHandlers,
+    // above) rather than anything the non-interactive path has a screen for.
+    if (name === "/login" || name === "/signup") {
+      if (args.length > 0) {
+        dispatch({ type: "command-error", message: `${name}: invalid arguments.` });
+        return;
+      }
+      await onLogin(name === "/signup" ? "signup" : "login");
+      return;
+    }
+    if (name === "/logout") {
+      if (args.length > 0) {
+        dispatch({ type: "command-error", message: "/logout: invalid arguments." });
+        return;
+      }
+      await onLogout();
+      return;
+    }
     const command = SLASH_COMMANDS.get(name);
     if (command === undefined) {
       if (name.startsWith("/")) {
@@ -2530,8 +2665,24 @@ async function runTui(
       onSetupRemove,
       onSetupBack,
       onSetupClose,
+      // No auth-offer recompute here (thermo-nuclear, round 5 — proven redundant): every path
+      // that reaches this (Escape on "starting"/"device", Enter/Esc on a login-failure result, or
+      // a logout-failure result) never changed the auth-session file between when it was last
+      // read and this firing — a login failure means saveAuthSession never ran, and a logout
+      // failure's own result panel already got a truthful recompute from onLogout's own single
+      // post-try/catch dispatch (createAuthHandlers' own comment). `onAbandon` still runs first:
+      // a still-in-flight login dismissed from "starting"/"device" must actually cancel (real
+      // AbortController, not just a dispatch guard) before anything else here runs.
+      onAuthResolved: () => {
+        onAbandon();
+        dispatch({ type: "auth-resolved" });
+      },
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
+        // Stage C: the non-blocking login/signup offer (AuthBanner) — true iff no auth session is
+        // saved yet, computed fresh at mount the same way decideSetupOpen/decideModelPickerOpen are
+        // computed fresh on their own open, not cached from prepareSession.
+        dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
         // runStart — the same three-state predicate prepareSession (above) uses to decide whether
         // it pushed the initial user message at all: "task" echoes and starts a turn on it,
         // "resume" (a bare `--continue`/`--resume`) starts a turn on the resumed session with
