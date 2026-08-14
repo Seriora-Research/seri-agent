@@ -17,6 +17,10 @@ export type SessionState<TMessage = unknown> = {
   // still loads, and absence means "groq" — the only provider that existed before Stage 7a added
   // OpenRouter, so an old session's absent field and an explicit "groq" mean the same thing.
   provider?: ModelProvider;
+  // Same optionality reasoning as `model`/`provider`, just above: a session written before this
+  // field existed still loads, and absence must be treated as "not requested" — the same synthetic-
+  // fallback situation as a blank first run, not a genuine user choice worth blaming in a notice.
+  providerRequested?: boolean;
   messages: TMessage[];
 };
 

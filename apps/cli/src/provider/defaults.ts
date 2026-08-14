@@ -44,36 +44,36 @@ export function isModelProvider(value: string): value is ModelProvider {
 // session.model/session.provider backfilled from the wrong (real) config.json, and a successful
 // turn's persist wrote back into the real user's config.json even though the run was meant to stay
 // inside `authConfigDir`.
+// `providerRequested` says whether `provider`, above, is something the user actually named (via
+// env or persisted config) as opposed to merely being this function's own DEFAULT_PROVIDER
+// fallback — captured HERE, at the single point the pair is resolved, rather than re-derived
+// later from config.json/env at display time: a re-read of a mutable external source after the
+// fact can no longer see what THIS resolution actually saw (a concurrent `seri config set`, or a
+// live /model pick that never touches config.json at all — see SessionState.providerRequested's
+// own comment) and produces the wrong answer for the exact case it exists to get right.
 export function resolveDefaultModel(configDir?: string): {
   model: string;
   provider: ModelProvider;
+  providerRequested: boolean;
 } {
   const envModel = process.env.SERI_MODEL;
   if (envModel) {
     const envProvider = process.env.SERI_PROVIDER;
+    const providerRequested = Boolean(envProvider && isModelProvider(envProvider));
     return {
       model: envModel,
-      provider: envProvider && isModelProvider(envProvider) ? envProvider : DEFAULT_PROVIDER,
+      provider: providerRequested ? (envProvider as ModelProvider) : DEFAULT_PROVIDER,
+      providerRequested,
     };
   }
   const config = loadConfig(configDir);
   const configProvider = config.SERI_PROVIDER;
+  const providerRequested = Boolean(configProvider && isModelProvider(configProvider));
   return {
     model: config.SERI_MODEL || DEFAULT_MODEL,
-    provider: configProvider && isModelProvider(configProvider) ? configProvider : DEFAULT_PROVIDER,
+    provider: providerRequested ? (configProvider as ModelProvider) : DEFAULT_PROVIDER,
+    providerRequested,
   };
-}
-
-// Answers "did the user actually name this provider" (via env or persisted config), as opposed to
-// it merely being resolveDefaultModel's own DEFAULT_PROVIDER fallback — mirrors that function's
-// env-then-config precedence and isModelProvider validity check, without duplicating its return
-// shape (rerouteNotice, cli.ts, needs only the yes/no, not the resolved pair).
-export function isRequestedProvider(provider: ModelProvider, configDir?: string): boolean {
-  if (process.env.SERI_MODEL) {
-    return process.env.SERI_PROVIDER === provider && isModelProvider(process.env.SERI_PROVIDER);
-  }
-  const config = loadConfig(configDir);
-  return config.SERI_PROVIDER === provider && isModelProvider(config.SERI_PROVIDER);
 }
 
 // One setConfigValues call, not two setConfigValue calls: SERI_MODEL and SERI_PROVIDER are a

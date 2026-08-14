@@ -72,12 +72,7 @@ import {
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
-import {
-  DEFAULT_PROVIDER,
-  isRequestedProvider,
-  persistDefaultModel,
-  resolveDefaultModel,
-} from "./provider/defaults";
+import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
 import {
@@ -436,7 +431,11 @@ async function memoryCommand(
 // `model`/`provider` are optional on SessionState so that sessions written before either field
 // existed still load, but every session this function hands back has both — which is what lets the
 // rest of the run stop asking, and getModel drop a default parameter for either.
-type RunSession = SessionState<ModelMessage> & { model: string; provider: ModelProvider };
+type RunSession = SessionState<ModelMessage> & {
+  model: string;
+  provider: ModelProvider;
+  providerRequested: boolean;
+};
 
 // `modelRecorded` says where the model came from: true if the session file already had one, false
 // if it was just resolved from the environment and no provider call has confirmed it exists.
@@ -488,16 +487,21 @@ function loadOrCreateSession(
     // (SessionState.provider's own comment; DEFAULT_PROVIDER is "groq" today, the same value this
     // used to hardcode directly — imported instead so there is one source of truth for it),
     // independent of resolveDefaultModel().
-    const { model, provider } =
+    const { model, provider, providerRequested } =
       loaded.model === undefined
         ? resolveDefaultModel(configDir)
-        : { model: loaded.model, provider: loaded.provider ?? DEFAULT_PROVIDER };
+        : {
+            model: loaded.model,
+            provider: loaded.provider ?? DEFAULT_PROVIDER,
+            providerRequested: loaded.provider !== undefined,
+          };
     return {
       session: {
         ...loaded,
         systemPrompt: buildSystemPrompt(loadAgentsFileFn(loaded.cwd)),
         model,
         provider,
+        providerRequested,
       },
       modelRecorded: loaded.model !== undefined,
     };
@@ -506,7 +510,7 @@ function loadOrCreateSession(
   // A brand-new session starts on whatever a previously successful `/model` pick persisted
   // (resolveDefaultModel's own comment), falling back to DEFAULT_MODEL/"groq" the same way
   // resolveModelId always has when nothing was ever picked.
-  const { model, provider } = resolveDefaultModel(configDir);
+  const { model, provider, providerRequested } = resolveDefaultModel(configDir);
   return {
     session: {
       id: randomUUID(),
@@ -524,6 +528,7 @@ function loadOrCreateSession(
       permissionMode: "approve-each",
       model,
       provider,
+      providerRequested,
       messages: [],
     },
     modelRecorded: false,
@@ -1003,12 +1008,18 @@ type PreparedRun = {
 // still what routing.test.ts asserts directly): this notice is purely informational, no embedded
 // command, so it reads better with a display name (PROVIDER_DISPLAY_NAMES) than the raw env var
 // constant — unlike missingKeyError's message, which needs the exact name because it IS one.
-// `configDir` lets this tell "the user actually named requestedProvider" (isRequestedProvider)
-// apart from resolveDefaultModel's own DEFAULT_PROVIDER fallback masquerading as one — a genuinely
-// blank first run reroutes off that fallback with no configured/requested provider at all, and
-// blaming a provider the user never named is worse than naming none.
-function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider, configDir?: string): string {
-  if (!isRequestedProvider(requestedProvider, configDir)) {
+// `providerRequested` lets this tell "the user actually named requestedProvider" apart from
+// resolveDefaultModel's own DEFAULT_PROVIDER fallback masquerading as one — a genuinely blank
+// first run reroutes off that fallback with no configured/requested provider at all, and blaming
+// a provider the user never named is worse than naming none. Captured on `session` at the point
+// the pair was resolved (resolveDefaultModel/the model picker), not re-read here from config.json
+// — see SessionState.providerRequested's own comment for why.
+function rerouteNotice(
+  route: ResolvedRoute,
+  requestedProvider: ModelProvider,
+  providerRequested: boolean,
+): string {
+  if (!providerRequested) {
     return `routing ${route.model} via ${route.provider} (your key)`;
   }
   return `routing ${route.model} via ${route.provider} (your key) — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
@@ -1094,7 +1105,7 @@ async function prepareSession(
   // know isTTY), so without the gate a session-start reroute printed twice for the same turn: once
   // here (before Ink even mounts) and again from runTurn.
   if (route.rerouted && !isTTY) {
-    printWarning(rerouteNotice(route, session.provider, configDir));
+    printWarning(rerouteNotice(route, session.provider, session.providerRequested));
   }
   // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
   // cost and context-window come from the wrong provider's entry.
@@ -2586,6 +2597,7 @@ async function runTui(
       id: sessionId,
       model: requestedModel,
       provider: requestedProvider,
+      providerRequested,
     } = session as RunSession;
     // D3 (feature-plan.md): re-resolved every turn, same reasoning as the model re-resolution
     // above — a routing-priority reroute (D2) must be reconsidered on every turn too, not just at
@@ -2636,7 +2648,7 @@ async function runTui(
     if (route.rerouted) {
       dispatch({
         type: "transcript-append",
-        line: `↻ ${rerouteNotice(route, requestedProvider, configDir)}`,
+        line: `↻ ${rerouteNotice(route, requestedProvider, providerRequested)}`,
       });
     }
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one.

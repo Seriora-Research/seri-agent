@@ -2,13 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CATALOG_PROVIDERS, type ModelProvider } from "@seri/model-catalog";
+import { CATALOG_PROVIDERS } from "@seri/model-catalog";
 import { CONFIG_FILENAME } from "../../src/config/config";
 import { DEFAULT_MODEL } from "../../src/provider/groq";
 import {
   DEFAULT_PROVIDER,
   isModelProvider,
-  isRequestedProvider,
   persistDefaultModel,
   resolveDefaultModel,
 } from "../../src/provider/defaults";
@@ -60,19 +59,31 @@ describe("isModelProvider", () => {
 
 describe("resolveDefaultModel", () => {
   test("nothing set: falls back to DEFAULT_MODEL/groq", () => {
-    expect(resolveDefaultModel()).toEqual({ model: DEFAULT_MODEL, provider: "groq" });
+    expect(resolveDefaultModel()).toEqual({
+      model: DEFAULT_MODEL,
+      provider: "groq",
+      providerRequested: false,
+    });
   });
 
   test("config-only: returns the persisted pair", () => {
     persistDefaultModel({ model: "picked-model", provider: "openrouter" });
-    expect(resolveDefaultModel()).toEqual({ model: "picked-model", provider: "openrouter" });
+    expect(resolveDefaultModel()).toEqual({
+      model: "picked-model",
+      provider: "openrouter",
+      providerRequested: true,
+    });
   });
 
   test("env beats config for both keys", () => {
     persistDefaultModel({ model: "config-model", provider: "openrouter" });
     process.env.SERI_MODEL = "env-model";
     process.env.SERI_PROVIDER = "anthropic";
-    expect(resolveDefaultModel()).toEqual({ model: "env-model", provider: "anthropic" });
+    expect(resolveDefaultModel()).toEqual({
+      model: "env-model",
+      provider: "anthropic",
+      providerRequested: true,
+    });
   });
 
   // code-review finding on PR #71 (round 2): model and provider used to resolve independently,
@@ -88,53 +99,47 @@ describe("resolveDefaultModel", () => {
     expect(resolveDefaultModel()).toEqual({
       model: "llama-3.3-70b-versatile",
       provider: DEFAULT_PROVIDER,
+      providerRequested: false,
     });
   });
 
   test("SERI_PROVIDER='' falls through to the config/default, the deliberate ||", () => {
     persistDefaultModel({ model: "picked-model", provider: "openrouter" });
     process.env.SERI_PROVIDER = "";
-    expect(resolveDefaultModel()).toEqual({ model: "picked-model", provider: "openrouter" });
+    expect(resolveDefaultModel()).toEqual({
+      model: "picked-model",
+      provider: "openrouter",
+      providerRequested: true,
+    });
   });
 
   test("SERI_PROVIDER='bogus' falls back to DEFAULT_PROVIDER, does not throw", () => {
     process.env.SERI_PROVIDER = "bogus";
-    expect(resolveDefaultModel()).toEqual({ model: DEFAULT_MODEL, provider: DEFAULT_PROVIDER });
+    expect(resolveDefaultModel()).toEqual({
+      model: DEFAULT_MODEL,
+      provider: DEFAULT_PROVIDER,
+      providerRequested: false,
+    });
   });
 
   test("SERI_MODEL set with no SERI_PROVIDER: provider still defaults to groq", () => {
     process.env.SERI_MODEL = "env-model";
-    expect(resolveDefaultModel()).toEqual({ model: "env-model", provider: "groq" });
-  });
-});
-
-describe("isRequestedProvider", () => {
-  test("nothing set: false", () => {
-    expect(isRequestedProvider("groq")).toBe(false);
-  });
-
-  test("explicit SERI_MODEL+SERI_PROVIDER env pair: true", () => {
-    process.env.SERI_MODEL = "env-model";
-    process.env.SERI_PROVIDER = "openrouter";
-    expect(isRequestedProvider("openrouter")).toBe(true);
-  });
-
-  test("explicit persisted SERI_PROVIDER: true", () => {
-    persistDefaultModel({ model: "picked-model", provider: "openrouter" });
-    expect(isRequestedProvider("openrouter")).toBe(true);
-  });
-
-  test("bogus/unrecognized SERI_PROVIDER value: false", () => {
-    process.env.SERI_MODEL = "env-model";
-    process.env.SERI_PROVIDER = "bogus";
-    expect(isRequestedProvider("bogus" as unknown as ModelProvider)).toBe(false);
+    expect(resolveDefaultModel()).toEqual({
+      model: "env-model",
+      provider: "groq",
+      providerRequested: false,
+    });
   });
 });
 
 describe("persistDefaultModel", () => {
   test("writes both keys, readable back by a subsequent resolveDefaultModel", () => {
     persistDefaultModel({ model: "written-model", provider: "google" });
-    expect(resolveDefaultModel()).toEqual({ model: "written-model", provider: "google" });
+    expect(resolveDefaultModel()).toEqual({
+      model: "written-model",
+      provider: "google",
+      providerRequested: true,
+    });
   });
 
   // code-review finding on PR #71: persistDefaultModel used to call setConfigValue twice — an
@@ -157,7 +162,11 @@ describe("persistDefaultModel", () => {
 
     try {
       expect(() => persistDefaultModel({ model: "second-model", provider: "anthropic" })).toThrow();
-      expect(resolveDefaultModel()).toEqual({ model: "first-model", provider: "openrouter" });
+      expect(resolveDefaultModel()).toEqual({
+        model: "first-model",
+        provider: "openrouter",
+        providerRequested: true,
+      });
     } finally {
       // Restored so afterEach's rmSync(tmpRoot, ...) can actually delete it.
       chmodSync(configPath, 0o644);
@@ -184,12 +193,17 @@ describe("configDir isolation", () => {
       expect(resolveDefaultModel(callerDir)).toEqual({
         model: "caller-model",
         provider: "anthropic",
+        providerRequested: true,
       });
       // The negative control this test's own point rests on: the ambient default's own pair is
       // untouched by the caller-scoped write above, and still resolves independently — proving
       // the two directories are genuinely isolated, not that resolveDefaultModel(callerDir)
       // happened to return the right answer by coincidence.
-      expect(resolveDefaultModel()).toEqual({ model: "ambient-model", provider: "openrouter" });
+      expect(resolveDefaultModel()).toEqual({
+        model: "ambient-model",
+        provider: "openrouter",
+        providerRequested: true,
+      });
     } finally {
       rmSync(callerDir, { recursive: true, force: true });
     }

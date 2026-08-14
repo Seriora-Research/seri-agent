@@ -161,6 +161,42 @@ describe("run (task invocation)", () => {
     expect(errors.some((line) => /groq/i.test(line))).toBe(false);
   });
 
+  // The `providerRequested: true` sibling of the reroute test just above: here the provider was
+  // actually named (a persisted SERI_PROVIDER, the config-write side of a prior /model pick), not
+  // merely resolveDefaultModel's own DEFAULT_PROVIDER fallback — so the notice must name it.
+  test("reroutes to a sibling provider with a key when an EXPLICITLY requested one has none, and blames it by name (non-interactive path)", async () => {
+    delete process.env.GROQ_API_KEY;
+    process.env.OPENROUTER_API_KEY = "fake-test-key";
+    setConfigValue("SERI_PROVIDER", "groq");
+    const { fake, capture } = fakeRunLoop();
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+
+    let code: number;
+    try {
+      code = await run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      });
+    } finally {
+      console.error = originalError;
+      delete process.env.OPENROUTER_API_KEY;
+    }
+
+    expect(code).toBe(0);
+    expect(capture()?.provider).toBe("openrouter");
+    expect(capture()?.modelId).toBe("openai/gpt-oss-120b");
+    expect(
+      errors.some(
+        (line) =>
+          line.includes("routing openai/gpt-oss-120b via openrouter") &&
+          line.includes("no Groq key configured"),
+      ),
+    ).toBe(true);
+  });
+
   test("`--continue` with no task resumes the most recent session without appending a message", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const older: SessionState = {
