@@ -865,7 +865,7 @@ function dirs(ctx: RunContext): CommandDirs {
 // not the same expression repeated at both call sites, so the two can't silently drift out of sync
 // with each other.
 function hasNewTask(ctx: RunContext): boolean {
-  return !ctx.resuming || ctx.taskText.length > 0;
+  return ctx.taskText.length > 0;
 }
 
 // Whether a TUI session should mount with nothing to do yet — no resume target and no task text.
