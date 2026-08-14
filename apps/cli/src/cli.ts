@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
@@ -2606,7 +2606,12 @@ async function runTui(
         // /profile new for the same name must not claim it just created one — checked BEFORE
         // the call, not derived from its (nonexistent) return value.
         const alreadyExisted = existsSync(dir);
-        mkdirSync(dir, { recursive: true });
+        // 0o700 plus an explicit chmod, following authStore.ts: mkdirSync's mode is a no-op when
+        // the directory already exists, which existsSync above shows is possible here too. This
+        // directory will hold auth.json/config.json/permissions.yaml once the profile is used, so
+        // it is owner-only like every other secrets-holding directory this codebase creates.
+        mkdirSync(dir, { recursive: true, mode: 0o700 });
+        if (process.platform !== "win32") chmodSync(dir, 0o700);
         dispatch({
           type: "transcript-append",
           // basename(dir), not the raw typed arg: dir is what decideProfileCreate actually
