@@ -7,7 +7,6 @@
 // checkpointTarget is exported and reused by cli.ts's prepareSession — the one copy this module
 // and cli.ts both call through to, rather than cli.ts keeping its own duplicate (it did, briefly,
 // between Phase 2 and the fix that consolidated it here).
-import { join } from "node:path";
 import {
   CATALOG_PROVIDERS,
   filterCatalogEntries,
