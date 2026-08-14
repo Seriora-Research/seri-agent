@@ -12,6 +12,27 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
+// mkdir 0o700 + explicit chmod: mkdirSync's own `mode` is a no-op when the directory already
+// exists, so the chmod is what actually (re-)hardens a pre-existing directory, not just a
+// freshly-created one. This file's own `atomicWriteFile` (below) calls it as one step of writing
+// a file; `auth/authStore.ts`, `checkpoint/checkpoint.ts` and `permissions/store.ts` call it
+// directly (code-review round 3 consolidated their own hand-copies of the same two lines) for a
+// secrets-holding directory they harden without necessarily writing into it in the same call.
+//
+// Returns whether THIS call created `dir` (bug fixed here, code-review round 3): with
+// `recursive: true`, `mkdirSync` returns the first path it actually created, or `undefined` if
+// `dir` already existed and nothing needed creating — Node's own atomic answer to "did I just
+// create this," read directly off the one syscall that already has to know, rather than a
+// caller doing its own `existsSync(dir)` immediately before calling this. That separate check
+// raced two concurrent callers targeting the same directory (`/profile new work` run from two
+// terminals at once): both could observe `existsSync === false` before either had created
+// anything, and both would then report "created" for a directory only one of them made.
+export function ensureOwnerOnlyDir(dir: string): boolean {
+  const created = mkdirSync(dir, { recursive: true, mode: 0o700 }) !== undefined;
+  if (process.platform !== "win32") chmodSync(dir, 0o700);
+  return created;
+}
+
 // mkdir 0o700 + write-tmp + chmod 0o600 + rename — the shape permissions/store.ts's own
 // writeDocument, config.ts's writeConfig, and memory/store.ts's applyWrite / memory/pending.ts's
 // writePendingFile all independently reimplemented; the three memory/config writers share this
@@ -25,16 +46,15 @@ import { basename, dirname, join } from "node:path";
 // non-colliding name removes the race outright rather than trying to detect it.
 export function atomicWriteFile(path: string, content: string): void {
   const dir = dirname(path);
-  // Checked BEFORE mkdirSync/chmodSync below, which otherwise reset an existing directory back
+  // Checked BEFORE ensureOwnerOnlyDir below, which otherwise resets an existing directory back
   // to 0o700 unconditionally — chmod'ing a directory to sabotage a brand-new file's write (no
   // destination file exists yet for the check below to catch) would be silently undone by that
-  // reset if checked any later. Only checked when the directory already exists — mkdirSync itself
-  // is what creates one that doesn't, and there is nothing yet to have restricted permissions on.
+  // reset if checked any later. Only checked when the directory already exists — ensureOwnerOnlyDir
+  // itself is what creates one that doesn't, and there is nothing yet to have restricted permissions on.
   if (existsSync(dir)) {
     accessSync(dir, constants.W_OK);
   }
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") chmodSync(dir, 0o700);
+  ensureOwnerOnlyDir(dir);
   // Checked explicitly, before the write-tmp-then-rename below: rename(2) on POSIX only requires
   // write permission on the PARENT DIRECTORY, never on the destination file's own inode, so
   // renaming a tmp file over a chmod'd-read-only destination silently succeeds and overwrites it

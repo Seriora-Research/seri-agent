@@ -112,19 +112,30 @@ export function profileNameError(name: string): string | undefined {
   return undefined;
 }
 
+// Same fold profileDir below needs, exposed separately so a caller that needs to know WHETHER a
+// name is the default profile (not just resolve where it lives) — decideProfileCreate's own
+// rejection of `/profile new default`, see its comment — doesn't reimplement the fold itself.
+export function isDefaultProfile(profile: string): boolean {
+  // Case-folded only on win32/darwin — see caseFold.ts. NTFS and APFS are case-insensitive by
+  // default, so --profile Default must resolve to the base root there exactly like --profile
+  // default does, but ext4 is case-sensitive and folding unconditionally would treat a genuinely
+  // distinct Linux profile name as the default one.
+  return foldsCase() ? profile.toLowerCase() === DEFAULT_PROFILE : profile === DEFAULT_PROFILE;
+}
+
+// A profile's root directory, given the profile name directly rather than reading
+// activeProfile() itself — getConfigDir() below is this called with the ACTIVE profile;
+// decideProfileCreate (tui/commands.ts) calls this with a candidate name that isn't active yet.
+// Both need the identical fold+join logic, so it lives here once rather than each caller
+// reimplementing (and risking drifting from) the default-profile special case below.
+export function profileDir(profile: string): string {
+  return isDefaultProfile(profile) ? getBaseConfigDir() : join(getBaseConfigDir(), profile);
+}
+
 // The profile root. Identical to getBaseConfigDir() under the default profile — no `default/`
 // segment, so no existing user's data moves.
 export function getConfigDir(): string {
-  const profile = activeProfile();
-  const base = getBaseConfigDir();
-  // Same fold as profileNameError above: --profile Default must resolve to the base root on
-  // win32/darwin exactly like --profile default does, not silently create a separate `Default/`
-  // directory because this comparison forgot the case-insensitivity the reserved-name check
-  // already accounts for.
-  const isDefault = foldsCase()
-    ? profile.toLowerCase() === DEFAULT_PROFILE
-    : profile === DEFAULT_PROFILE;
-  return isDefault ? base : join(base, profile);
+  return profileDir(activeProfile());
 }
 
 // Stage 6b: where the three persistent-memory files (USER.md, MEMORY.md, <project>/MEMORY.md)

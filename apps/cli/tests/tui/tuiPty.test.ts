@@ -1016,6 +1016,42 @@ function childScriptBare(dir: string): string {
   ].join("\n");
 }
 
+// Stage E (cli-commands-to-tui feature-plan.md): --max-turns 5 as the startup default, bare-mount
+// idle (like childScriptBare, above) so a command can be typed BEFORE any task is submitted. The
+// fake runLoop reports opts.maxIterations, the same "have the fake loop print the field under
+// test" convention childScriptModelSwitch's own runLoopFake uses for opts.model/opts.provider —
+// so a live /max-turns override (typed before the task) can be proven to reach the very next
+// driveLoop call, with no restart.
+function childScriptMaxTurns(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_MAXITERATIONS " + opts.maxIterations);`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run(["--max-turns", "5"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
+// Stage E's own /profile new end-to-end proof reuses childScriptBare directly (code-review round
+// 2: the two were byte-for-byte identical function bodies under a different name — a bare-mount
+// idle TUI is exactly what /profile new's own test needs too, since HOME redirection is already
+// childScriptBare's job, and decideProfileCreate's getBaseConfigDir() reads that same HOME).
+
 // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
 // research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
 // identical signature... with zero change to loop.ts/gate.ts") that every earlier round of this
@@ -3552,6 +3588,122 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         const session = JSON.parse(readFileSync(join(sessionsDir, sessionFiles[0]!), "utf8"));
         expect(session.messages).not.toContainEqual({ role: "user", content: "" });
         expect(session.messages).toEqual([]);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
+
+  describe("/max-turns", () => {
+    test("typed live before a task, the next turn's driveLoop call receives the override", async () => {
+      const scriptPath = join(dir, "child-max-turns.mjs");
+      writeFileSync(scriptPath, childScriptMaxTurns(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("[approve-each]");
+
+        child.stdin?.write("/max-turns 1");
+        await sawLine("/max-turns 1");
+        child.stdin?.write("\r");
+        await sawLine("Max turns set to 1");
+
+        // The typed-box render, un-prefixed — "> do a task" is echoUserInput's OWN prefix,
+        // produced only after submit (Enter), so waiting for it before pressing Enter would never
+        // resolve. Same wait-then-submit shape as "/max-turns 1" just above.
+        child.stdin?.write("do a task");
+        await sawLine("do a task");
+        child.stdin?.write("\r");
+        await sawLine("RUNLOOP_MAXITERATIONS 1");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Negative control: the identical script, minus the /max-turns line — proves the override
+    // above actually changed something, rather than the fake runLoop always printing the same
+    // value regardless of what --max-turns was given.
+    test("without a live override, the next turn's driveLoop call receives the --max-turns startup default", async () => {
+      const scriptPath = join(dir, "child-max-turns-default.mjs");
+      writeFileSync(scriptPath, childScriptMaxTurns(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("[approve-each]");
+
+        // Same un-prefixed wait-then-submit shape as the positive case above.
+        child.stdin?.write("do a task");
+        await sawLine("do a task");
+        child.stdin?.write("\r");
+        await sawLine("RUNLOOP_MAXITERATIONS 5");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
+
+  describe("/profile new", () => {
+    test("creates the profile directory and confirms without switching the running session", async () => {
+      const scriptPath = join(dir, "child-profile-new.mjs");
+      writeFileSync(scriptPath, childScriptBare(dir));
+
+      const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+      try {
+        await sawLine("[approve-each]");
+
+        child.stdin?.write("/profile new work");
+        await sawLine("/profile new work");
+        child.stdin?.write("\r");
+        await sawLine("Profile directory");
+        // A short fragment, not the whole sentence: the full line wraps at Ink's 80-column
+        // width between "does not" and "switch", so a longer substring straddling that wrap
+        // would never appear on one rendered line and this would time out.
+        await sawLine("switch the running session's profile");
+
+        // waitForConfig's own reasoning, applied to a directory instead of a file: a bare
+        // existsSync right after sawLine races the mkdirSync a DIFFERENT process (this test) is
+        // reading, the same class of race macOS CI caught for config.json elsewhere in this file.
+        const profileDir = join(dir, ".seri", "work");
+        const deadline = Date.now() + 5000;
+        while (!existsSync(profileDir) && Date.now() < deadline)
+          await new Promise((r) => setTimeout(r, 20));
+        expect(existsSync(profileDir)).toBe(true);
+
+        // Round 3's own fix: `ensureOwnerOnlyDir`'s "did I create it" answer comes from mkdirSync's
+        // own return value, not a separate existsSync probe beforehand — this is the "already
+        // exists" branch of that answer, exercised by asking for the SAME name a second time.
+        // sawLineTimes, not sawLine, for the typed-echo: "/profile new work" already appeared once
+        // above, so a plain sawLine would resolve immediately against that first occurrence.
+        child.stdin?.write("/profile new work");
+        await sawLineTimes("/profile new work", 2);
+        child.stdin?.write("\r");
+        await sawLine("already exists");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("a path-traversal name renders a command-error and creates nothing", async () => {
+      const scriptPath = join(dir, "child-profile-new-traversal.mjs");
+      writeFileSync(scriptPath, childScriptBare(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("[approve-each]");
+
+        child.stdin?.write("/profile new ../etc");
+        await sawLine("/profile new ../etc");
+        child.stdin?.write("\r");
+        await sawLine("may only contain letters, numbers");
+
+        await wait100ms();
+        // The actual path a successful traversal would create: join(getBaseConfigDir(), "../etc")
+        // NORMALIZES to a sibling of .seri, not something under it — so `.seri` not existing
+        // proves nothing on its own (it would be equally absent whether or not the traversal was
+        // blocked, since even an unblocked mkdirSync never targets a path under .seri here). This
+        // is the primary assertion; `.seri` itself is also checked, but only as a secondary one.
+        expect(existsSync(join(dir, "etc"))).toBe(false);
+        expect(existsSync(join(dir, ".seri"))).toBe(false);
       } finally {
         child.kill("SIGKILL");
       }
