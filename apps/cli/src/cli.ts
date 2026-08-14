@@ -1864,6 +1864,18 @@ function createAuthHandlers(opts: { dispatch: Dispatch; deps: CliDeps; configDir
   return { onLogin, onLogout, onAbandon };
 }
 
+// Reviewer finding (Stage D round 1, MEDIUM-1): SERI_VERIFY_ENABLED and SERI_VERIFY_COMMAND are
+// only ever read once, at prepareSession's own `loadVerifyConfig()` call (above), baked into
+// `withVerification(...)` for the lifetime of the running process — unlike SERI_WORKOS_CLIENT_ID,
+// which /login re-resolves live via getWorkosClientId on every attempt. A /config write to either
+// of these two keys lands in config.json correctly but has no effect on the CURRENT session, only
+// the next one — this note is what keeps the confirmation honest about that.
+function verifyConfigTakesEffectNote(key: string): string {
+  return key === "SERI_VERIFY_ENABLED" || key === "SERI_VERIFY_COMMAND"
+    ? " (takes effect on the next run)"
+    : "";
+}
+
 // Stage D (cli-commands-to-tui feature-plan.md): /config's own two handlers, mirroring
 // createSetupHandlers's exact shape (dispatch/getPendingConfig/configDir in). Calls the DATA
 // functions directly — loadConfig/setConfigValue/unsetConfigValue (config/config.ts) — never
@@ -1928,18 +1940,29 @@ function createConfigHandlers(opts: {
       });
       return;
     }
-    dispatch({ type: "transcript-append", line: `Saved ${key}.` });
+    dispatch({
+      type: "transcript-append",
+      line: `Saved ${key}.${verifyConfigTakesEffectNote(key)}`,
+    });
     dispatchConfigList(key);
   }
 
   // Dual-purpose (mirrors onSetupRemove's own comment): the SAME prop the list step's 'r'/Delete
   // and the confirm-unset step's 'y' both call — which one this call means is read off the CURRENT
-  // live reducer state.
+  // live reducer state. The confirm branch reads `key` from `pending` itself, not the argument the
+  // caller passed — same reasoning as onSetupRemove's own `pending.keyName`, not trusted from its
+  // own `provider` argument either.
   function onConfigUnset(key: string): void {
     const pending = getPendingConfig();
     if (pending?.step === "confirm-unset") {
+      const { key: confirmedKey } = pending;
+      // Reviewer finding (round 1, LOW-4): unsetConfigValue's boolean return is checked, not
+      // discarded — a concurrent write (another `seri` process, a hand edit) between the confirm
+      // prompt opening and 'y' can already have removed this key, and this is what stops that race
+      // from claiming "Removed" falsely.
+      let removed: boolean;
       try {
-        unsetConfigValue(key, configDir);
+        removed = unsetConfigValue(confirmedKey, configDir);
       } catch (err) {
         dispatch({
           type: "command-error",
@@ -1947,8 +1970,13 @@ function createConfigHandlers(opts: {
         });
         return;
       }
-      dispatch({ type: "transcript-append", line: `Removed ${key}.` });
-      dispatchConfigList(key);
+      dispatch({
+        type: "transcript-append",
+        line: removed
+          ? `Removed ${confirmedKey}.${verifyConfigTakesEffectNote(confirmedKey)}`
+          : `${confirmedKey} was not set.`,
+      });
+      dispatchConfigList(confirmedKey);
       return;
     }
     // Same reasoning as onSetupRemove's own re-check: ConfigList's own useInput already gated this
@@ -2022,12 +2050,25 @@ function createPermissionsHandlers(opts: {
   }
 
   // Dual-purpose, same shape as onConfigUnset just above: the list step's 'r'/Delete and the
-  // confirm-remove step's 'y' both call this prop.
+  // confirm-remove step's 'y' both call this prop. The confirm branch reads `tool` from `pending`
+  // itself, not the argument the caller passed — same reasoning as onConfigUnset's own comment.
   function onPermissionsRemove(tool: string): void {
     const pending = getPendingPermissions();
     if (pending?.step === "confirm-remove") {
+      const { tool: confirmedTool } = pending;
+      // Reviewer finding (round 1, MEDIUM-2): loadGrants/forgetGrant do NOT throw on a malformed
+      // permissions.yaml — they degrade to an empty/no-op result and an optional `onWarning`
+      // callback instead (permissions/store.ts's own comment: the file is hand-editable, so a
+      // caller must not risk overwriting content it could not make sense of). The non-interactive
+      // removeCommand (permissions/commands.ts:68-91) already treats that as a real failure, not a
+      // silent no-op — `warned` and the branch on `result` below mirror it, instead of
+      // unconditionally claiming "Removed" the way this used to.
+      let warned: string | undefined;
+      let result: { global: boolean; project: boolean };
       try {
-        forgetGrant(permissionsDir, getWorktree(), tool);
+        result = forgetGrant(permissionsDir, getWorktree(), confirmedTool, (m) => {
+          warned = m;
+        });
       } catch (err) {
         dispatch({
           type: "command-error",
@@ -2035,7 +2076,17 @@ function createPermissionsHandlers(opts: {
         });
         return;
       }
-      dispatch({ type: "transcript-append", line: `Removed ${tool}.` });
+      if (warned !== undefined) {
+        dispatch({ type: "command-error", message: warned });
+        return;
+      }
+      dispatch({
+        type: "transcript-append",
+        line:
+          result.global || result.project
+            ? `Removed ${confirmedTool}.`
+            : `${confirmedTool} was not permanently approved.`,
+      });
       dispatchPermissionsList();
       return;
     }
@@ -2808,7 +2859,7 @@ async function runTui(
       await onLogout();
       return;
     }
-    // /config and /permissions, like /login/​/signup/​/logout just above: intercepted here rather
+    // /config and /permissions, like /login, /signup and /logout just above: intercepted here rather
     // than added to SLASH_COMMANDS, since they drive blocking panels the non-interactive path has
     // no screen for.
     if (name === "/config") {
