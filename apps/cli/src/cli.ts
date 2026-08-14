@@ -1751,11 +1751,7 @@ function createSetupHandlers(opts: {
 // caller (InputBox's own useInput handler) — the same "never throw/crash" contract dispatchSetupList
 // already has, just landing on `auth-step`/result instead of a bare command-error, since login/logout
 // are a blocking panel (pendingAuth), not a list this file can just re-show.
-function createAuthHandlers(opts: {
-  dispatch: Dispatch;
-  deps: CliDeps;
-  configDir: string;
-}): {
+function createAuthHandlers(opts: { dispatch: Dispatch; deps: CliDeps; configDir: string }): {
   onLogin: (mode: "login" | "signup") => Promise<void>;
   onLogout: () => Promise<void>;
 } {
