@@ -858,12 +858,22 @@ function dirs(ctx: RunContext): CommandDirs {
 }
 
 // Shared by prepareSession (decides whether to push the initial user message) and runTui's own
-// connectDispatch (decides whether to echo it) — a brand-new session always gets one, even with an
-// empty taskText, but a resumed session only does if there is actually new text. Kept as one
-// function, not the same expression repeated at both call sites, so the two can't silently drift
-// out of sync with each other.
+// connectDispatch (decides whether to echo it) — true only when there is actual task text,
+// regardless of whether this is a resumed or brand-new session. A brand-new, task-less session no
+// longer gets an empty `{role:"user",content:""}` pushed (bare `seri` mounts the TUI idle instead
+// of hard-exiting — see startsIdle below, and the "Bare-seri" plan section). Kept as one function,
+// not the same expression repeated at both call sites, so the two can't silently drift out of sync
+// with each other.
 function hasNewTask(ctx: RunContext): boolean {
   return !ctx.resuming || ctx.taskText.length > 0;
+}
+
+// Whether a TUI session should mount with nothing to do yet — no resume target and no task text.
+// Deliberately NOT `!hasNewTask(ctx)`: `seri --continue` with no new task (resuming, no task text)
+// must keep auto-starting a turn on the resumed session, same as it always has — only the genuinely
+// fresh, task-less case is new behavior.
+function startsIdle(ctx: RunContext): boolean {
+  return !ctx.resuming && ctx.taskText.length === 0;
 }
 
 // A slash command always operates on the resume target — an explicit --resume id, or the most
@@ -1211,6 +1221,11 @@ type DriveLoopResult = {
   // distinguishable from the main turn's, and summing it in would silently change what this file's
   // own printUsage/printCost assertions mean.
   archivist: ArchivistReport | undefined;
+  // Optional: only runTui sets this (driveLoop's own non-interactive callers never populate it).
+  // True the moment a turn actually starts (runTui's runTurn), so run() can tell "an idle TUI
+  // session the user quit without ever giving it a task" (false) apart from "a turn ran and this
+  // is its outcome" (true) — the two need different exit-code treatment.
+  ranAnyTurn?: boolean;
 };
 
 // `maxTurns` is an argument rather than a field of ctx: it is neither the resume target nor where
@@ -1880,6 +1895,10 @@ async function runTui(
   // copy is what lets the FINAL resolveRunTui result carry one too, printed once more after Ink
   // unmounts, the same way `usage`/`cost` already print again there.
   let archivist: ArchivistReport | undefined;
+  // Set true the moment runTurn actually starts a turn (not on the early-return guard below it) —
+  // an idle session the user quit without ever submitting a task never flips this, which is what
+  // lets run() tell that apart from a turn that ran and finished/errored/was cancelled.
+  let ranAnyTurn = false;
   // Created ONCE per run, outside the per-turn loop, so the tool-call counter accumulates across
   // every turn of this TUI session rather than resetting each time runTurn calls driveLoop.
   const archivistState = createArchivistState(prepared.session);
@@ -2057,6 +2076,7 @@ async function runTui(
   async function runTurn(session: SessionState<ModelMessage>): Promise<void> {
     if (reactDispatch === undefined || turnInFlight) return;
     turnInFlight = true;
+    ranAnyTurn = true;
     // Re-resolved from the CURRENT session on every turn — the actual /model fix. Before this,
     // every turn reused `prepared.model`, the LanguageModel prepareSession built once from
     // whatever session.model/provider were at the very start of the run, so a live switch
@@ -2317,6 +2337,7 @@ async function runTui(
           cost,
           refusedWithoutRunning,
           archivist,
+          ranAnyTurn,
         });
       });
     };
@@ -2510,9 +2531,12 @@ async function runTui(
         reactDispatch = reducerDispatch;
         // hasNewTask — the same predicate prepareSession (above) uses to decide whether it pushed
         // the initial user message at all — a bare `--resume` with no new task has nothing to
-        // echo, but a brand-new session always gets one (even an empty taskText).
+        // echo, and neither does a bare `seri` with no task, but any other case does.
         if (hasNewTask(ctx)) echoUserInput(ctx.taskText);
-        currentTurn = runTurn(prepared.session);
+        // startsIdle, NOT hasNewTask: a bare `seri` (no resume, no task) mounts idle instead of
+        // auto-starting a turn, but `seri --continue` with no new task must keep auto-starting a
+        // turn on the resumed session, exactly as it always has.
+        if (!startsIdle(ctx)) currentTurn = runTurn(prepared.session);
       },
     }),
     // `interactive: true` — without it, Ink's own auto-detection (`ink.js`'s `resolveInteractiveOption`,
@@ -2559,12 +2583,28 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   if (values.selftest === true) return runSelftest(deps);
 
-  // Bare `seri` is a placeholder for the interactive TUI that gates the v0.1.0 release. Until then
-  // it prints the same usage as --help rather than exiting silently — a line the TUI entry point
-  // replaces, not a decision that bare `seri` means "print usage". Any other flags-but-no-task
-  // invocation (`seri --max-turns 5`) is a usage error instead: unlike bare `seri`, it named an
-  // intention and cannot be silently taken as "show usage".
-  if (positionals.length === 0 && values.continue !== true && values.resume === undefined) {
+  // TTY-inferred, not a flag (plan Decision 2): a real terminal gets the Ink TUI, driving the
+  // exact same driveLoop as the piped/CI path below — only how it reports events differs
+  // (dispatch into App.tsx's reducer vs. printEvent called directly). Falsy — piped, CI, a
+  // redirected file, or (deliberately) any caller that doesn't pass isTTY at all — takes the
+  // untouched path this project has always run: same function, same call order, same output. See
+  // CliDeps.isTTY's own comment for why this reads `deps.isTTY`, never process.stdout.isTTY
+  // directly. Computed here, above the positionals.length===0 gate right below, so that gate can
+  // fall through to the TUI on a TTY instead of hard-exiting.
+  const isTTY = deps.isTTY ?? false;
+
+  // Bare `seri` in a TTY mounts the TUI directly (idle, empty input box) instead of printing
+  // usage — this gate's non-interactive behavior (USAGE / "No task given.") is otherwise
+  // byte-for-byte unchanged: every existing caller that never passes isTTY still hits it exactly
+  // as before. Any other flags-but-no-task invocation (`seri --max-turns 5`) on a non-TTY caller
+  // is still a usage error: unlike bare `seri`, it named an intention and cannot be silently taken
+  // as "show usage".
+  if (
+    positionals.length === 0 &&
+    values.continue !== true &&
+    values.resume === undefined &&
+    !isTTY
+  ) {
     if (argv.length === 0) {
       console.log(USAGE);
       return 0;
@@ -2597,16 +2637,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // mint a session to act on.
   const slash = await handleSlashCommand(ctx);
   if (slash !== undefined) return slash;
-
-  // TTY-inferred, not a flag (plan Decision 2): a real terminal gets the Ink TUI, driving the
-  // exact same driveLoop as the piped/CI path below — only how it reports events differs
-  // (dispatch into App.tsx's reducer vs. printEvent called directly). Falsy — piped, CI, a
-  // redirected file, or (deliberately) any caller that doesn't pass isTTY at all — takes the
-  // untouched path this project has always run: same function, same call order, same output. See
-  // CliDeps.isTTY's own comment for why this reads `deps.isTTY`, never process.stdout.isTTY
-  // directly. Computed here, before prepareSession, so that function's own reroute notice
-  // (prepareSession's own comment) can gate itself to the non-interactive path.
-  const isTTY = deps.isTTY ?? false;
 
   // Open 2 (BYOK-KEY-STORAGE-AND-SETUP.md): a genuinely blank config must not hard-exit before the
   // TUI ever mounts. Gated on isTTY FIRST (code-review finding): the non-interactive path is the
@@ -2652,19 +2682,20 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
   if (typeof prepared === "number") return prepared;
 
-  const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning, archivist } = isTTY
-    ? await runTui(prepared, ctx, deps, maxTurns, skipPermissions)
-    : await driveLoop(
-        prepared,
-        ctx,
-        deps,
-        maxTurns,
-        printEvent,
-        () => prepared.permissionMode,
-        (session) => saveSession(session, ctx.sessionsDir),
-        makeApprovalPrompt(deps.createInterface),
-        createArchivistState(prepared.session),
-      );
+  const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning, archivist, ranAnyTurn } =
+    isTTY
+      ? await runTui(prepared, ctx, deps, maxTurns, skipPermissions)
+      : await driveLoop(
+          prepared,
+          ctx,
+          deps,
+          maxTurns,
+          printEvent,
+          () => prepared.permissionMode,
+          (session) => saveSession(session, ctx.sessionsDir),
+          makeApprovalPrompt(deps.createInterface),
+          createArchivistState(prepared.session),
+        );
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are
@@ -2731,6 +2762,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // lands on the `1` below instead of dying by signal, same as the displaced-slot case
   // tests/cli/cli.test.ts already records. signals.ts still names Stage 6's subagents as a
   // second aborter this same fallback would also cover, unchanged.
+  //
+  // `ranAnyTurn === false` (bare `seri`, quit before ever submitting a task) is checked before all
+  // of the above: `doneReason` stays `undefined` for that session, and the mapping below would
+  // otherwise fall through to the final `return 1` and call an idle session the user simply closed
+  // a failure. `ranAnyTurn` is `undefined` (not `false`) on the non-interactive path, where this
+  // never applies.
+  if (ranAnyTurn === false) return 0;
   if (doneReason === "no-tool-call") return refusedWithoutRunning ? 1 : 0;
   return 1;
 }
