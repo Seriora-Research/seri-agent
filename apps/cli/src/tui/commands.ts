@@ -266,8 +266,12 @@ export type PermissionRow = {
   removable: boolean;
 };
 
-export function decidePermissionsOpen(configDir: string, worktree: string): PermissionRow[] {
-  const grants = loadGrants(configDir, worktree);
+export function decidePermissionsOpen(
+  configDir: string,
+  worktree: string,
+  onWarning?: (message: string) => void,
+): PermissionRow[] {
+  const grants = loadGrants(configDir, worktree, onWarning);
   const rows: PermissionRow[] = [];
   for (const tool of PERSISTABLE_TOOL_NAMES) {
     if (grants.project.includes(tool)) {

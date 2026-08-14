@@ -2050,8 +2050,15 @@ function createPermissionsHandlers(opts: {
 } {
   const { dispatch, getPendingPermissions, permissionsDir, getWorktree } = opts;
 
+  // /code-review, round 3: loadGrants never THROWS on a malformed permissions.yaml — it degrades
+  // to an empty result and reports through this callback instead, which every call site in this
+  // file was previously dropping (unlike decideConfigOpen's loadConfig, which does throw, so
+  // /config's try/catch guards actually catch something). Without this, a malformed store
+  // rendered as a silently-empty "nothing approved" panel instead of a visible error.
+  const warnOnMalformedStore = (message: string) => dispatch({ type: "command-error", message });
+
   function permissionsListState(selectedTool?: string): PermissionsPanelState {
-    const rows = decidePermissionsOpen(permissionsDir, getWorktree());
+    const rows = decidePermissionsOpen(permissionsDir, getWorktree(), warnOnMalformedStore);
     const selected =
       selectedTool === undefined
         ? 0
@@ -2155,7 +2162,9 @@ function createPermissionsHandlers(opts: {
     // only a project-tier (persisted) grant is removable from here.
     let removable: boolean;
     try {
-      removable = loadGrants(permissionsDir, getWorktree()).project.includes(tool);
+      removable = loadGrants(permissionsDir, getWorktree(), warnOnMalformedStore).project.includes(
+        tool,
+      );
     } catch (err) {
       dispatch({
         type: "command-error",
@@ -2943,14 +2952,19 @@ async function runTui(
         dispatch({ type: "command-error", message: "/permissions: invalid arguments." });
         return;
       }
-      // Same fix as /config just above: decidePermissionsOpen reads permissions.yaml unguarded.
-      // `ctx.permissionsDir`, not `configDir` — see createPermissionsHandlers' own comment.
+      // Unlike /config just above (decideConfigOpen's loadConfig genuinely throws via
+      // JSON.parse), decidePermissionsOpen's loadGrants never throws for a malformed store — it
+      // degrades to an empty list and reports through onWarning instead (/code-review, round 3:
+      // this call previously dropped that callback, so a corrupted permissions.yaml opened as a
+      // silently-empty panel with no indication anything was wrong). `ctx.permissionsDir`, not
+      // `configDir` — see createPermissionsHandlers' own comment.
       try {
         dispatch({
           type: "permissions-requested",
           rows: decidePermissionsOpen(
             ctx.permissionsDir,
             checkpointTarget(liveState.session, dirs(ctx)).worktree,
+            (message) => dispatch({ type: "command-error", message }),
           ),
         });
       } catch (err) {
