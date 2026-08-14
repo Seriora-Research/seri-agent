@@ -3595,6 +3595,54 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.kill("SIGKILL");
       }
     }, 60_000);
+
+    // Regression test for the bug /code-review and thermo-nuclear both found on this PR: removing
+    // the "persisted" row used to call forgetGrant unscoped, which strips a same-tool GLOBAL grant
+    // too — even though decidePermissionsOpen only ever shows this row as removable because of its
+    // PROJECT-tier membership. The store-level test (permissions/store.test.ts) pins forgetGrant's
+    // own scope handling; this is the one that pins the call site that actually had the bug —
+    // cli.ts's onPermissionsRemove passing "project" rather than "both" — which nothing else here
+    // exercises (confirmed: reverting that one argument keeps every other test in this suite green).
+    test("a global grant survives removing the same tool's project-tier entry", async () => {
+      const permissionsDir = join(dir, "config");
+      const { rememberGrant, loadGrants, permissionsPath } = await import(
+        "../../src/permissions/store"
+      );
+      writeFileSync(permissionsPath(permissionsDir), "global: [write_file]\nprojects: {}\n");
+      rememberGrant(permissionsDir, dir, "write_file");
+
+      const scriptPath = join(dir, "child-permissions-global.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/permissions");
+        await sawLine("/permissions");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("write_file (persisted)");
+
+        child.stdin?.write("r");
+        await wait100ms();
+        await sawLine("Remove write_file");
+
+        child.stdin?.write("y");
+        await sawLine("still pre-approved globally");
+
+        const deadline = Date.now() + 5000;
+        let grants = loadGrants(permissionsDir, dir);
+        while (grants.project.includes("write_file") && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 20));
+          grants = loadGrants(permissionsDir, dir);
+        }
+        expect(grants.project).not.toContain("write_file");
+        expect(grants.global).toContain("write_file");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
   });
 
   // cli-tui-stage-b-bare-seri, feature-plan.md Stage B acceptance criteria: bare `seri` in a real

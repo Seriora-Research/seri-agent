@@ -2000,22 +2000,7 @@ function createConfigHandlers(opts: {
           ? `Removed ${confirmedKey}.${verifyConfigTakesEffectNote(confirmedKey)}`
           : `${confirmedKey} was not set.`,
       });
-      // NOT dispatchConfigList (bug fixed here, code-review round 2 — same shape as
-      // onConfigValueEntered's own fix above, without a `busy` gate to unstick since confirm-unset
-      // has none): that helper's own catch only dispatches command-error, never touching
-      // `pendingConfig` — leaving it stuck at "confirm-unset" naming a key that (whichever branch
-      // above just ran) no longer needs confirming. Pressing 'y' again would be a harmless no-op,
-      // but any other key looped back into the same broken refresh. Closing the panel instead is
-      // what actually gets the user unstuck — the transcript line above already said what happened.
-      try {
-        dispatch({ type: "config-step", state: configListState(confirmedKey) });
-      } catch (err) {
-        dispatch({
-          type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
-        });
-        dispatch({ type: "config-resolved" });
-      }
+      dispatchConfigList(confirmedKey);
       return;
     }
     // Same reasoning as onSetupRemove's own re-check: ConfigList's own useInput already gated this
@@ -2127,30 +2112,31 @@ function createPermissionsHandlers(opts: {
         return;
       }
       if (warned !== undefined) {
+        // Same "close the panel too" fix as dispatchPermissionsList's own comment (/code-review,
+        // round 3): command-error alone never touches `pendingPermissions`, so a malformed
+        // permissions.yaml discovered here (forgetGrant degrades to a warning rather than a throw)
+        // used to leave the confirm-remove prompt stuck showing a tool that can no longer be
+        // resolved from this state.
         dispatch({ type: "command-error", message: warned });
+        dispatch({ type: "permissions-resolved" });
         return;
       }
+      // Still pre-approved globally? (thermo-nuclear, round 7): scope "project" above never
+      // touches the global tier, so `result.global` is statically false here and cannot answer
+      // this — only a fresh read can. Without this check "Removed x." would flatly contradict a
+      // surviving global grant, the exact false claim removeCommand's own comment (permissions/
+      // commands.ts:78-80) refuses to make for the non-interactive path.
+      const stillGlobal =
+        result.project && loadGrants(permissionsDir, getWorktree()).global.includes(confirmedTool);
       dispatch({
         type: "transcript-append",
         line: result.project
-          ? `Removed ${confirmedTool}.`
+          ? stillGlobal
+            ? `Removed ${confirmedTool} from this project — still pre-approved globally.`
+            : `Removed ${confirmedTool}.`
           : `${confirmedTool} was not permanently approved.`,
       });
-      // NOT dispatchPermissionsList (bug fixed here, code-review round 2 — same shape as
-      // onConfigUnset's own fix above): that helper's own catch only dispatches command-error,
-      // never touching `pendingPermissions` — leaving it stuck at "confirm-remove" naming a tool
-      // that (whichever branch above just ran) no longer needs confirming. Closing the panel
-      // instead is what actually gets the user unstuck — the transcript line above already said
-      // what happened.
-      try {
-        dispatch({ type: "permissions-step", state: permissionsListState() });
-      } catch (err) {
-        dispatch({
-          type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
-        });
-        dispatch({ type: "permissions-resolved" });
-      }
+      dispatchPermissionsList();
       return;
     }
     // Same reasoning as onConfigUnset's own re-check just above: PermissionsList's own useInput
