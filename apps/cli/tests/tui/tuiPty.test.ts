@@ -1161,16 +1161,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   let dir: string;
 
   beforeEach(() => {
-    // realpathSync, not the raw mkdtempSync path (macOS CI, discovered by the /permissions
-    // tests below): os.tmpdir() on macOS resolves under /var/folders/…, itself a symlink to
-    // /private/var/folders/… — the CHILD's own process.cwd() (spawned with cwd: dir) comes back
-    // through the OS's getcwd(), which follows that symlink, so a projectKey computed here from
-    // the unresolved `dir` never matches the one the child computes from its own resolved cwd.
-    // Harmless for real usage (both grant and lookup share one process's already-resolved cwd);
-    // only bites a test that computes a worktree-keyed path in one process and reads it back via
-    // a different, spawned one — which is every test in this file that seeds permissions.yaml or
-    // checkpoints before starting the child.
-    dir = realpathSync(mkdtempSync(join(tmpdir(), "seri-pty-tui-")));
+    dir = mkdtempSync(join(tmpdir(), "seri-pty-tui-"));
   });
 
   afterEach(() => {
@@ -3604,8 +3595,18 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   describe("/permissions", () => {
     test("a persisted write_file grant renders, and 'r'/'y' removes it", async () => {
       const permissionsDir = join(dir, "config");
+      // realpathSync, not the raw mkdtempSync path: os.tmpdir() on macOS resolves under
+      // /var/folders/…, itself a symlink to /private/var/folders/… — the CHILD's own
+      // process.cwd() (spawned with cwd: dir) comes back through the OS's getcwd(), which
+      // follows that symlink, so a projectKey computed here from the unresolved `dir` never
+      // matches the one the child computes from its own resolved cwd. Scoped to this local
+      // `worktree`, not applied to the shared `dir` itself: `dir` also feeds childScriptSetup's
+      // HOME (a literal env-var string, never OS-resolved) and this describe block's other
+      // tests, and lengthening it broke /profile new's own pty test via terminal line-wrapping
+      // on macOS CI (measured: the confirmation line's word boundary moved mid-sentence).
+      const worktree = realpathSync(dir);
       const { rememberGrant, loadGrants } = await import("../../src/permissions/store");
-      rememberGrant(permissionsDir, dir, "write_file");
+      rememberGrant(permissionsDir, worktree, "write_file");
 
       const scriptPath = join(dir, "child-permissions.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
@@ -3631,10 +3632,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // Polling, not a bare synchronous read right after sawLine — the same file-vs-stdout race
         // waitForConfig's own comment documents for config.json, here for permissions.yaml instead.
         const deadline = Date.now() + 5000;
-        let grants = loadGrants(permissionsDir, dir);
+        let grants = loadGrants(permissionsDir, worktree);
         while (grants.project.includes("write_file") && Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 20));
-          grants = loadGrants(permissionsDir, dir);
+          grants = loadGrants(permissionsDir, worktree);
         }
         expect(grants.project).not.toContain("write_file");
       } finally {
@@ -3651,6 +3652,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // exercises (confirmed: reverting that one argument keeps every other test in this suite green).
     test("a global grant survives removing the same tool's project-tier entry", async () => {
       const permissionsDir = join(dir, "config");
+      // realpathSync — see the sibling test's own comment just above for why this is scoped to
+      // a local `worktree` rather than the shared `dir`.
+      const worktree = realpathSync(dir);
       const { loadGrants, permissionsPath, projectKey } = await import(
         "../../src/permissions/store"
       );
@@ -3660,7 +3664,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       mkdirSync(permissionsDir, { recursive: true });
       writeFileSync(
         permissionsPath(permissionsDir),
-        `global: [write_file]\nprojects:\n  '${projectKey(dir)}':\n    - write_file\n`,
+        `global: [write_file]\nprojects:\n  '${projectKey(worktree)}':\n    - write_file\n`,
       );
 
       const scriptPath = join(dir, "child-permissions-global.mjs");
@@ -3684,10 +3688,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("still pre-approved globally");
 
         const deadline = Date.now() + 5000;
-        let grants = loadGrants(permissionsDir, dir);
+        let grants = loadGrants(permissionsDir, worktree);
         while (grants.project.includes("write_file") && Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 20));
-          grants = loadGrants(permissionsDir, dir);
+          grants = loadGrants(permissionsDir, worktree);
         }
         expect(grants.project).not.toContain("write_file");
         expect(grants.global).toContain("write_file");
