@@ -1907,7 +1907,11 @@ function createConfigHandlers(opts: {
     return { step: "list", rows, selected };
   }
 
-  // Same "refresh the list, degrade to command-error if that throws" shape dispatchSetupList uses.
+  // Same "refresh the list, degrade to command-error" shape dispatchSetupList uses — and, like the
+  // post-write refreshes below, closes the panel on that error rather than leaving `pendingConfig`
+  // on whatever step it was: this is `onConfigBack`'s own refresh too, so a throwing
+  // decideConfigOpen (a corrupted config.json) while sitting on confirm-unset used to leave that
+  // step showing forever, since command-error alone never touches `pendingConfig`.
   function dispatchConfigList(selectedKey?: string): void {
     try {
       dispatch({ type: "config-step", state: configListState(selectedKey) });
@@ -1916,6 +1920,7 @@ function createConfigHandlers(opts: {
         type: "command-error",
         message: err instanceof Error ? err.message : String(err),
       });
+      dispatch({ type: "config-resolved" });
     }
   }
 
@@ -2072,6 +2077,9 @@ function createPermissionsHandlers(opts: {
     return { step: "list", rows, selected };
   }
 
+  // Same "refresh, and close the panel rather than leave it stuck" fix as dispatchConfigList's own
+  // comment — `onPermissionsBack`'s own refresh, so a throw here used to leave `pendingPermissions`
+  // on confirm-remove forever.
   function dispatchPermissionsList(selectedTool?: string): void {
     try {
       dispatch({ type: "permissions-step", state: permissionsListState(selectedTool) });
@@ -2080,6 +2088,7 @@ function createPermissionsHandlers(opts: {
         type: "command-error",
         message: err instanceof Error ? err.message : String(err),
       });
+      dispatch({ type: "permissions-resolved" });
     }
   }
 
@@ -2097,10 +2106,17 @@ function createPermissionsHandlers(opts: {
       // removeCommand (permissions/commands.ts:68-91) already treats that as a real failure, not a
       // silent no-op — `warned` and the branch on `result` below mirror it, instead of
       // unconditionally claiming "Removed" the way this used to.
+      //
+      // scope: "project" (fixed here, /code-review + thermo-nuclear on this PR): a tool granted in
+      // BOTH tiers still renders as a single "persisted"/removable row (decidePermissionsOpen,
+      // tui/commands.ts) — the global grant is never shown, and `removable` just above only ever
+      // checked the project tier. Passing "both" here used to strip the invisible global
+      // pre-approval too, silently, on a panel whose own comment says only the project tier is
+      // removable from here.
       let warned: string | undefined;
       let result: { global: boolean; project: boolean };
       try {
-        result = forgetGrant(permissionsDir, getWorktree(), confirmedTool, (m) => {
+        result = forgetGrant(permissionsDir, getWorktree(), confirmedTool, "project", (m) => {
           warned = m;
         });
       } catch (err) {
@@ -2116,10 +2132,9 @@ function createPermissionsHandlers(opts: {
       }
       dispatch({
         type: "transcript-append",
-        line:
-          result.global || result.project
-            ? `Removed ${confirmedTool}.`
-            : `${confirmedTool} was not permanently approved.`,
+        line: result.project
+          ? `Removed ${confirmedTool}.`
+          : `${confirmedTool} was not permanently approved.`,
       });
       // NOT dispatchPermissionsList (bug fixed here, code-review round 2 — same shape as
       // onConfigUnset's own fix above): that helper's own catch only dispatches command-error,
