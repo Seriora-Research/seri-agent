@@ -1741,6 +1741,25 @@ function createSetupHandlers(opts: {
   return { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack };
 }
 
+// Bug fix (coordinator follow-up, PR #94 code-review verification): decideAuthOffer reads
+// auth.json (loadAuthSession -> JSON.parse) unguarded — a corrupted file (a partial write,
+// concurrent access, a manual edit) used to throw synchronously out of every call site below,
+// crashing the TUI at mount and inside a keypress handler. Fails closed (`show: false`): if auth
+// state can't be determined, showing a banner that might be actively wrong is worse than showing
+// none — mirrors this file's own "never crash, degrade to something inert" contract
+// (dispatchSetupList, createAuthHandlers' own try/catch below), NOT guidedSetup.ts's own
+// `resolveClosed()` fallback, which is specific to that mount's own close flow and doesn't apply
+// here.
+function dispatchAuthOffer(dispatch: Dispatch, configDir: string): void {
+  let show: boolean;
+  try {
+    show = decideAuthOffer(configDir);
+  } catch {
+    show = false;
+  }
+  dispatch({ type: "auth-offer", show });
+}
+
 // Stage C (cli-commands-to-tui feature-plan.md): /login, /signup and /logout's own two handlers,
 // mirroring createSetupHandlers's exact shape (dispatch/deps/configDir in). `deps.login ?? loginReal`
 // / `deps.logout ?? logoutReal` is the SAME injection seam handleAuthCommand already uses for the
@@ -1813,6 +1832,13 @@ function createAuthHandlers(opts: { dispatch: Dispatch; deps: CliDeps; configDir
           error: true,
         },
       });
+      // Bug fix (coordinator follow-up, PR #94 code-review verification): unlike onLogin, this
+      // never touched `authOffer` at all before — if it was already showing (a /logout typed
+      // while already logged out, which is allowed) and logoutFn then threw, the banner and this
+      // error panel could render at once. dispatchAuthOffer, not a bare `show: true` (the file
+      // might still be corrupted, same as it was moments ago inside the try above): recompute,
+      // don't assume.
+      dispatchAuthOffer(dispatch, configDir);
     }
   }
 
@@ -2638,14 +2664,16 @@ async function runTui(
       // it hidden — either way this is reading the true current state, not assuming which happened.
       onAuthResolved: () => {
         dispatch({ type: "auth-resolved" });
-        dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
+        dispatchAuthOffer(dispatch, configDir);
       },
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
         // Stage C: the non-blocking login/signup offer (AuthBanner) — true iff no auth session is
         // saved yet, computed fresh at mount the same way decideSetupOpen/decideModelPickerOpen are
-        // computed fresh on their own open, not cached from prepareSession.
-        dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
+        // computed fresh on their own open, not cached from prepareSession. dispatchAuthOffer, not a
+        // bare decideAuthOffer call: this is mount time, before anything else here has a chance to
+        // guard against a corrupted auth.json.
+        dispatchAuthOffer(dispatch, configDir);
         // runStart — the same three-state predicate prepareSession (above) uses to decide whether
         // it pushed the initial user message at all: "task" echoes and starts a turn on it,
         // "resume" (a bare `--continue`/`--resume`) starts a turn on the resumed session with

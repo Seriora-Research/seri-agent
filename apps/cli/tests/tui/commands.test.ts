@@ -556,6 +556,23 @@ describe("decideAuthOffer", () => {
 
     expect(decideAuthOffer(authConfigDir)).toBe(false);
   });
+
+  // The precondition cli.ts's own dispatchAuthOffer wrapper (unexported — cli.ts's internal
+  // dispatch logic gets pty-level coverage in this repo, not direct unit exports) guards against:
+  // this file's own header comment says every decide* function "let[s] a bad input throw for the
+  // (not-yet-written) caller's try/catch to turn into a command-error" — decideAuthOffer is no
+  // exception, so a corrupted auth.json (a partial write, concurrent access, a manual edit) throws
+  // here rather than silently returning `false`. Coordinator follow-up (PR #94 code-review
+  // verification): this used to reach `runTui`'s own `connectDispatch`/`onAuthResolved`
+  // unguarded, crashing the TUI at mount and inside a keypress handler — the fix wraps every call
+  // site in cli.ts, degrading to `show: false` on catch, but nothing here previously locked in
+  // WHY that guard is load-bearing. Mirrors the pty suite's own malformed-config convention
+  // (tuiPty.test.ts: `writeFileSync(configPath, "{not valid json")`).
+  test("throws on a corrupted auth.json, rather than silently returning a boolean", () => {
+    writeFileSync(join(authConfigDir, "auth.json"), "{not valid json");
+
+    expect(() => decideAuthOffer(authConfigDir)).toThrow();
+  });
 });
 
 describe("decideConfigOpen", () => {
