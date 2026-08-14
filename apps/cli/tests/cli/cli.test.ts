@@ -19,6 +19,7 @@ import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS } from "../../src/cli";
+import { USAGE } from "../../src/cli/output";
 import { setConfigValue } from "../../src/config/config";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
 import { loadGrants, permissionsPath, projectKey } from "../../src/permissions/store";
@@ -1911,6 +1912,150 @@ describe("run (task invocation)", () => {
 
     expect(code).toBe(0);
     expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "/exit" });
+  });
+});
+
+// cli-tui-stage-b-bare-seri, feature-plan.md Stage B: covers the non-interactive path only — bare
+// `seri` in a real TTY mounts the TUI instead (tests/tui/tuiPty.test.ts's own "bare seri" describe,
+// skipIf win32). Every case here passes no `isTTY`, so it exercises exactly what every existing
+// caller of `run()` in this file already gets: the positionals.length===0 gate's non-interactive
+// behavior (USAGE / "No task given.") must stay byte-for-byte unchanged by Stage B's `&& !isTTY`
+// addition to that gate.
+describe("bare seri", () => {
+  const originalKey = process.env.GROQ_API_KEY;
+  const originalHome = process.env.HOME;
+  let sessionsDir: string;
+  let tmpConfigRoot: string;
+
+  function restoreEnv(key: string, original: string | undefined): void {
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
+
+  async function captureLogs(
+    invoke: () => Promise<number>,
+  ): Promise<{ code: number; logs: string[]; errors: string[] }> {
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const originalLog = console.log;
+    const originalError = console.error;
+    console.log = (msg: string) => logs.push(String(msg));
+    console.error = (msg: string) => errors.push(String(msg));
+    try {
+      return { code: await invoke(), logs, errors };
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+  }
+
+  // The Stage B narrowing/negative-control tests below need a real, appended-to session on disk —
+  // a fake that echoes `opts.messages` back through a `messages-updated` event, the same event
+  // driveLoop's own persist callback writes to disk on, so the assertions read genuinely persisted
+  // JSON rather than merely what was passed to runLoop.
+  async function* echoRunLoop(
+    opts: RunLoopOpts,
+  ): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+    yield { type: "messages-updated", messages: opts.messages };
+    yield { type: "done", reason: "no-tool-call" };
+    return opts.messages;
+  }
+
+  beforeEach(() => {
+    sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-bare-sessions-"));
+    tmpConfigRoot = mkdtempSync(join(tmpdir(), "seri-cli-test-bare-config-"));
+    process.env.HOME = tmpConfigRoot;
+    resetCatalogCache();
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+  });
+
+  afterEach(() => {
+    restoreEnv("GROQ_API_KEY", originalKey);
+    restoreEnv("HOME", originalHome);
+    resetCatalogCache();
+    rmSync(sessionsDir, { recursive: true, force: true });
+    rmSync(tmpConfigRoot, { recursive: true, force: true });
+  });
+
+  test("`run([], {})` with no isTTY prints USAGE and returns 0, unchanged", async () => {
+    const { code, logs } = await captureLogs(() => run([], {}));
+
+    expect(code).toBe(0);
+    expect(logs).toContain(USAGE);
+  });
+
+  test("`run([\"--max-turns\", \"5\"], {})` with no isTTY is still a usage error", async () => {
+    const { code, errors } = await captureLogs(() => run(["--max-turns", "5"], {}));
+
+    expect(code).toBe(2);
+    expect(errors.some((line) => line.includes("No task given."))).toBe(true);
+  });
+
+  test("`hasNewTask` narrowing: `--continue \"new task\"` appends it, `--continue` alone appends nothing", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const existing: SessionState = {
+      id: "abc",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [{ role: "user", content: "old task" }],
+    };
+    saveSession(existing, sessionsDir);
+
+    await captureLogs(() =>
+      run(["--continue", "new", "task"], {
+        runLoop: echoRunLoop,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
+    );
+    expect(loadSession("abc", sessionsDir).messages).toEqual([
+      { role: "user", content: "old task" },
+      { role: "user", content: "new task" },
+    ]);
+
+    await captureLogs(() =>
+      run(["--continue"], {
+        runLoop: echoRunLoop,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
+    );
+    // Unchanged from the assertion above: a bare `--continue` appends nothing new.
+    expect(loadSession("abc", sessionsDir).messages).toEqual([
+      { role: "user", content: "old task" },
+      { role: "user", content: "new task" },
+    ]);
+  });
+
+  // The non-interactive-path negative control matching tuiPty.test.ts's own bare-seri acceptance
+  // test: `--resume <id>` with no task must not persist an empty-content user message. `--resume`
+  // (unlike bare `seri`, which now mounts the TUI on a TTY) still reaches this same non-interactive
+  // driveLoop path when isTTY is falsy, and this is the case the old, un-narrowed `hasNewTask`
+  // (`!ctx.resuming || ...`) already handled correctly for --resume/--continue — this pins it as a
+  // regression lock now that the predicate is a single, narrower expression.
+  test("`--resume <id>` with no task appends no empty-content user message", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const existing: SessionState = {
+      id: "abc",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [{ role: "user", content: "old task" }],
+    };
+    saveSession(existing, sessionsDir);
+
+    await captureLogs(() =>
+      run(["--resume", "abc"], {
+        runLoop: echoRunLoop,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
+    );
+
+    const messages = loadSession("abc", sessionsDir).messages;
+    expect(messages).not.toContainEqual({ role: "user", content: "" });
+    expect(messages).toEqual([{ role: "user", content: "old task" }]);
   });
 });
 
