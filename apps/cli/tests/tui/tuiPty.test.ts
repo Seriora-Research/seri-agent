@@ -3605,12 +3605,17 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // exercises (confirmed: reverting that one argument keeps every other test in this suite green).
     test("a global grant survives removing the same tool's project-tier entry", async () => {
       const permissionsDir = join(dir, "config");
-      const { rememberGrant, loadGrants, permissionsPath } = await import(
+      const { loadGrants, permissionsPath, projectKey } = await import(
         "../../src/permissions/store"
       );
+      // Hand-written, not rememberGrant after a global seed: rememberGrant's own dedup
+      // (toolsInDoc) checks the tool's presence across BOTH tiers before writing, so seeding
+      // global first would make it silently refuse to also add the project entry.
       mkdirSync(permissionsDir, { recursive: true });
-      writeFileSync(permissionsPath(permissionsDir), "global: [write_file]\nprojects: {}\n");
-      rememberGrant(permissionsDir, dir, "write_file");
+      writeFileSync(
+        permissionsPath(permissionsDir),
+        `global: [write_file]\nprojects:\n  '${projectKey(dir)}':\n    - write_file\n`,
+      );
 
       const scriptPath = join(dir, "child-permissions-global.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
