@@ -152,14 +152,13 @@ describe("run (task invocation)", () => {
     // D4: the call is actually made against the RESOLVED pair, not the requested one.
     expect(capture()?.provider).toBe("openrouter");
     expect(capture()?.modelId).toBe("openai/gpt-oss-120b");
-    // D2's own transparency rule: never silent.
+    // D2's own transparency rule: never silent. But since no provider was ever actually
+    // requested (DEFAULT_PROVIDER is a synthetic fallback, not a user choice), the notice must
+    // not blame a provider the user never named.
     expect(
-      errors.some(
-        (line) =>
-          line.includes("routing openai/gpt-oss-120b via openrouter") &&
-          line.includes("no Groq key configured"),
-      ),
+      errors.some((line) => line.includes("routing openai/gpt-oss-120b via openrouter")),
     ).toBe(true);
+    expect(errors.some((line) => /groq/i.test(line))).toBe(false);
   });
 
   test("`--continue` with no task resumes the most recent session without appending a message", async () => {
