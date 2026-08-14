@@ -23,7 +23,20 @@ jobs:
       # before any step runs — is reported as three, pointing at platforms that were fine.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macOS runs on main only, not on PRs. The repo went private on 2026-08-14, which
+        # ends unlimited Actions minutes and starts billing them against a monthly quota at
+        # per-OS multipliers: Linux x1, Windows x2, macOS x10. At ~10 min a job the full
+        # three-OS matrix bills ~130 minutes a run, which exhausts the Free tier's 2,000 in
+        # about fifteen runs. Dropping macOS from PRs takes that to ~30.
+        #
+        # The trade: a macOS-only regression is caught on the merge to main rather than in
+        # the PR. Acceptable because Linux still runs on every PR and covers POSIX, and
+        # Windows covers the case-insensitive filesystem — the two axes that produce almost
+        # all of this project's cross-platform bugs. Release builds are unaffected;
+        # release.yml keeps its own full matrix.
+        #
+        # `push` is main-only (see the `on:` block above), so event_name is the whole test.
+        os: ${{ github.event_name == 'push' && fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') || fromJSON('["ubuntu-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     # Comfortably above the slowest real run measured on this matrix (windows, ~11 min). The
     # default is 360, so a hung job otherwise holds a runner for six hours.
