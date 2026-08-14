@@ -1753,25 +1753,29 @@ function createSetupHandlers(opts: {
 // are a blocking panel (pendingAuth), not a list this file can just re-show.
 function createAuthHandlers(opts: { dispatch: Dispatch; deps: CliDeps; configDir: string }): {
   onLogin: (mode: "login" | "signup") => Promise<void>;
-  onLogout: () => Promise<void>;
+  onLogout: () => void;
   onAbandon: () => void;
 } {
   const { dispatch, deps, configDir } = opts;
   const loginFn = deps.login ?? loginReal;
   const logoutFn = deps.logout ?? logoutReal;
-  // Bug fix (thermo-nuclear + code-review, round 4): dismissing an in-flight attempt (Escape on
-  // "starting"/"device" — AuthPanel's own useInput) does not cancel the underlying HTTP poll
-  // (pollForToken can legitimately run for minutes, per the device code's own expiry), so its
-  // late-arriving dispatches — a device code that resolves after the user already gave up, or the
-  // eventual success/failure — must become no-ops instead of silently reopening `pendingAuth` or
-  // clobbering whatever the user is doing by then. Mirrors this file's own `turnInFlight`-style
-  // "ignore a stale async result" pattern: every dispatch inside one `onLogin` call is guarded by
-  // its own captured `myAttempt`, checked against this live counter, which `onAbandon` (called
-  // from `onAuthResolved`, App.tsx) bumps past whatever attempt was current when dismissed.
+  // Bug fix (thermo-nuclear, round 5): `attemptCounter` alone (round 4) only muted a dismissed
+  // attempt's own DISPATCHES — the underlying login() kept polling in the background regardless
+  // (a device code stays valid for minutes) and could still call saveAuthSession later, with zero
+  // UI trace since the dispatches were suppressed; worse, past even an explicit /logout, since
+  // nothing else stopped it either. `currentController` is real cancellation: `onAbandon` aborts
+  // it, `pollForToken` (deviceFlow.ts) actually stops polling and returns `{status:"aborted"}`
+  // instead of eventually succeeding unseen. `attemptCounter` stays too — it still correctly
+  // guards the (much narrower, now purely UI-timing) dispatch race even with real cancellation
+  // backing it up, mirroring this file's own `turnInFlight`-style "ignore a stale async result"
+  // pattern elsewhere.
   let attemptCounter = 0;
+  let currentController: AbortController | undefined;
 
   async function onLogin(mode: "login" | "signup"): Promise<void> {
     const myAttempt = ++attemptCounter;
+    const controller = new AbortController();
+    currentController = controller;
     dispatch({ type: "auth-requested", mode });
     try {
       const clientId = getWorkosClientId(configDir);
@@ -1788,21 +1792,22 @@ function createAuthHandlers(opts: { dispatch: Dispatch; deps: CliDeps; configDir
             },
           });
         },
+        // Presentation only (this file's own header comment) — the state-machine dispatches
+        // (auth-resolved, the auth-offer recompute) moved out to right after the `await` below,
+        // run once rather than from inside a callback login() may or may not ever call.
         onMessage: (message) => {
           if (myAttempt !== attemptCounter) return;
           dispatch({ type: "transcript-append", line: message });
-          dispatch({ type: "auth-resolved" });
-          // NOT redundant with the derived banner (App.tsx's own `state.pendingAuth === undefined`
-          // check): that derivation only covers "hide the banner while the panel is open" — the
-          // instant auth-resolved above clears `pendingAuth`, the derivation reduces to bare
-          // `authOffer`, which is still whatever it was BEFORE this login (`true`, since the offer
-          // only shows when logged out) and nothing else updates it. A real state change (a
-          // session was just saved) needs the same recompute mount/onLogout/onAuthResolved already
-          // get, or the banner would reappear immediately after a successful login telling an
-          // already-logged-in user to log in.
-          dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
         },
+        signal: controller.signal,
       });
+      // Reached on a genuine success AND on an abort (login() returns normally either way — see
+      // its own comment) — the guard is what tells them apart: an abort already bumped
+      // `attemptCounter` (onAbandon) and already dispatched auth-resolved itself (onAuthResolved,
+      // App.tsx), so this becomes a no-op rather than a second, redundant pair of dispatches.
+      if (myAttempt !== attemptCounter) return;
+      dispatch({ type: "auth-resolved" });
+      dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
     } catch (err) {
       if (myAttempt !== attemptCounter) return;
       dispatch({
@@ -1816,11 +1821,12 @@ function createAuthHandlers(opts: { dispatch: Dispatch; deps: CliDeps; configDir
     }
   }
 
-  async function onLogout(): Promise<void> {
+  // Sync, not async — logoutFn (typeof logoutReal) is fully synchronous; the call site already
+  // just `await`s this either way, which works fine on a non-async function too.
+  function onLogout(): void {
     try {
       logoutFn(configDir, (message) => {
         dispatch({ type: "transcript-append", line: message });
-        dispatch({ type: "auth-offer", show: true });
       });
     } catch (err) {
       dispatch({
@@ -1831,12 +1837,18 @@ function createAuthHandlers(opts: { dispatch: Dispatch; deps: CliDeps; configDir
           error: true,
         },
       });
-      dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
     }
+    // One recompute either way (collapsed from two: a hardcoded `show: true` in the success path
+    // and a recompute in the catch) — success or failure, this is the true current state, not an
+    // assumption about which branch ran.
+    dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
   }
 
+  // Real cancellation (see `currentController`'s own comment) plus the existing dispatch guard —
+  // called from onAuthResolved (App.tsx) whenever the user dismisses "starting"/"device"/"result".
   function onAbandon(): void {
     attemptCounter += 1;
+    currentController?.abort();
   }
 
   return { onLogin, onLogout, onAbandon };
@@ -2653,18 +2665,17 @@ async function runTui(
       onSetupRemove,
       onSetupBack,
       onSetupClose,
-      // Recomputes the banner fresh from disk once this flow ends, for the two ways it can end
-      // that DON'T already reflect the true state: a dismissed "starting"/"device" step (no
-      // session was ever saved) and a shown "result" (App.tsx's own render ternary now derives
-      // the banner from `pendingAuth` for the common case — see AuthBanner's own prop below — but
-      // a LOGOUT failure's own result panel, dismissed here too, needs this same recompute, since
-      // onLogout's catch already showed the banner optimistically). `onAbandon` first: a
-      // still-in-flight attempt dismissed from "starting"/"device" must stop honoring its own
-      // late dispatches before anything else runs (createAuthHandlers' own comment).
+      // No auth-offer recompute here (thermo-nuclear, round 5 — proven redundant): every path
+      // that reaches this (Escape on "starting"/"device", Enter/Esc on a login-failure result, or
+      // a logout-failure result) never changed the auth-session file between when it was last
+      // read and this firing — a login failure means saveAuthSession never ran, and a logout
+      // failure's own result panel already got a truthful recompute from onLogout's own single
+      // post-try/catch dispatch (createAuthHandlers' own comment). `onAbandon` still runs first:
+      // a still-in-flight login dismissed from "starting"/"device" must actually cancel (real
+      // AbortController, not just a dispatch guard) before anything else here runs.
       onAuthResolved: () => {
         onAbandon();
         dispatch({ type: "auth-resolved" });
-        dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
       },
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;

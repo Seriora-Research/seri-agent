@@ -18,6 +18,11 @@ export async function login(
     // the only two auth entry points, and the console.log defaults ARE the console presentation.
     onDeviceCode?: (device: { verificationUri: string; userCode: string }) => void;
     onMessage?: (message: string) => void;
+    // Bug fix (thermo-nuclear, round 5): threaded straight through to pollForTokenFn — the TUI's
+    // own createAuthHandlers (cli.ts) passes one per attempt so abandoning "starting"/"device"
+    // (Escape) actually stops the poll, instead of merely muting its eventual dispatches while it
+    // keeps running in the background and could still call saveAuthSession later.
+    signal?: AbortSignal;
   } = {},
 ): Promise<void> {
   const requestDeviceCodeFn = deps.requestDeviceCode ?? requestDeviceCode;
@@ -36,8 +41,13 @@ export async function login(
   onDeviceCode({ verificationUri: device.verificationUri, userCode: device.userCode });
   openBrowserFn(device.verificationUriComplete);
 
-  const result = await pollForTokenFn(clientId, device);
+  const result = await pollForTokenFn(clientId, device, { signal: deps.signal });
 
+  // An abort is an intentional cancellation, not a failure — no error message, no session write,
+  // just a plain return (the caller already knows it abandoned this attempt).
+  if (result.status === "aborted") {
+    return;
+  }
   if (result.status === "denied") {
     throw new Error("Authorization was denied.");
   }

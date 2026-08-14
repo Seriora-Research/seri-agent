@@ -38,4 +38,20 @@ describe("login", () => {
       login("login", "client_123", "fake-config-dir", deps({ status: "error", message })),
     ).rejects.toThrow(message);
   });
+
+  // Bug fix (thermo-nuclear, round 5): distinct from denied/expired/error above — an abort is a
+  // deliberate cancellation (Escape on "starting"/"device", cli.ts's own AuthPanel), not a
+  // failure, so it must resolve cleanly with no error message and no onMessage call (which would
+  // otherwise read as a successful sign-in that never happened).
+  test("resolves cleanly, without throwing or calling onMessage, when pollForToken resolves aborted", async () => {
+    const messages: string[] = [];
+
+    await expect(
+      login("login", "client_123", "fake-config-dir", {
+        ...deps({ status: "aborted" }),
+        onMessage: (message) => messages.push(message),
+      }),
+    ).resolves.toBeUndefined();
+    expect(messages).toEqual([]);
+  });
 });

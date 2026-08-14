@@ -808,6 +808,56 @@ function childScriptAuthLoginHangs(dir: string): string {
   ].join("\n");
 }
 
+// Bug fix (thermo-nuclear, round 5): unlike childScriptAuthLoginHangs (whose fake never resolves
+// at all, so it can only prove Escape returns the UI — it can't distinguish "the poll was really
+// cancelled" from "cancellation doesn't exist and we just stopped listening"), this fake's own
+// poll resolves ~1s AFTER Escape, checking `handlerDeps.signal?.aborted` itself — the exact same
+// AbortSignal `createAuthHandlers.onLogin` (cli.ts) threads through the real `loginFn`'s 4th
+// argument. This is what proves the real plumbing: onAbandon's own `.abort()` call actually
+// reaches this fake in time, not just that createAuthHandlers stopped honoring its dispatches.
+function childScriptAuthLoginRace(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const authStore = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/auth/authStore.ts")).href)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `async function loginFake(mode, clientId, configDir, handlerDeps) {`,
+    `  handlerDeps?.onDeviceCode?.({`,
+    `    verificationUri: "https://example.com/device",`,
+    `    userCode: "ABCD-1234",`,
+    `  });`,
+    `  await new Promise((resolve) => setTimeout(resolve, 1000));`,
+    `  if (handlerDeps?.signal?.aborted) return;`,
+    `  authStore.saveAuthSession(`,
+    `    {`,
+    `      accessToken: "fake-access-token-must-never-print",`,
+    `      refreshToken: "fake-refresh-token",`,
+    `      userId: "user-1",`,
+    `      email: "fake@example.com",`,
+    `      obtainedAt: new Date().toISOString(),`,
+    `    },`,
+    `    configDir,`,
+    `  );`,
+    `  handlerDeps?.onMessage?.("Logged in as fake@example.com");`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  login: loginFake,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // byok-guided-setup, feature-plan.md: the "genuinely blank first run" scenario — a real TTY, no
 // config.json (childScriptSetup's own dir is always fresh, but every OTHER script in this file
 // still exports GROQ_API_KEY as a real env var; this one explicitly deletes every provider's own
@@ -2826,6 +2876,53 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // this is also proof the abandoned attempt's own dispatches never landed on top of it.
         child.stdin?.write("abandoned, typing something else");
         await sawLine("abandoned, typing something else");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The actual regression lock for the round 5 bug (thermo-nuclear): childScriptAuthLoginRace's
+    // own poll resolves ~1s AFTER Escape, checking the real AbortSignal itself — this is what
+    // distinguishes "the poll was genuinely cancelled" from "cancellation doesn't exist and we
+    // just stopped listening" (the previous hangs-forever fake could only prove the latter kind
+    // of thing, never the former — reviewer's own framing). Before the round 5 fix, the fake's own
+    // late resolution would have written auth.json and flipped the banner regardless of Escape.
+    test("Escape really cancels a stuck /login: the poll's late resolution ~1s later never writes auth.json or logs in", async () => {
+      const scriptPath = join(dir, "child-auth-login-race.mjs");
+      writeFileSync(scriptPath, childScriptAuthLoginRace(dir));
+
+      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/login");
+        await sawLine("/login");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("https://example.com/device");
+        await sawLine("ABCD-1234");
+
+        child.stdin?.write("\x1b"); // Escape — well before the fake's own 1000ms delay resolves
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await wait100ms();
+
+        // InputBox is back immediately, same as the hangs-forever test above.
+        child.stdin?.write("still fine");
+        await sawLine("still fine");
+
+        // Now wait PAST the fake's own 1000ms delay, so its late resolution — aborted or not —
+        // has had time to land either way, then assert it never acted.
+        await new Promise((resolve) => setTimeout(resolve, 1300));
+
+        expect(existsSync(join(dir, ".seri", "auth.json"))).toBe(false);
+        // "Logged in as …" is a <Static> transcript line (App.tsx) — committed at most once, ever,
+        // never reprinted by an unrelated redraw the way a live region (the banner) can be, so
+        // occurrences() is a reliable absence check here specifically, unlike the banner text
+        // itself (measured live: it redraws multiple times over the course of this test for
+        // reasons unrelated to auth state, so a raw occurrence count on it can't tell "flipped
+        // back on" apart from "just redrew" — the auth.json check above is this test's own proof
+        // the banner's underlying STATE never flipped, which is the thing that actually matters).
+        expect(occurrences("Logged in as fake@example.com")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }

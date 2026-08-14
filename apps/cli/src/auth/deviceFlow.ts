@@ -37,7 +37,12 @@ export type TokenResult =
     }
   | { status: "denied" }
   | { status: "expired" }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string }
+  // Bug fix (thermo-nuclear, round 5): distinct from every other terminal status above — an
+  // abandoned login (Escape on "starting"/"device", cli.ts's own AuthPanel) is a deliberate
+  // cancellation, not a failure, so it must never reach saveAuthSession NOR produce an error
+  // message the way "denied"/"expired"/"error" all do (createAuthHandlers' own catch, cli.ts).
+  | { status: "aborted" };
 
 async function parseResponseBody(response: Response): Promise<any> {
   const text = await response.text();
@@ -77,20 +82,40 @@ function realSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// A function, not an inlined `signal?.aborted === true` at each call site: TS's control-flow
+// narrowing treats a property read as stable across an `await` within the same scope (it isn't,
+// for a mutable external AbortSignal — `.aborted` can flip between either check below) and
+// narrows the second read to `false | undefined`, a real type error, not just an unnecessary
+// check. A function call is an opaque boundary narrowing can't see through.
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
 export async function pollForToken(
   clientId: string,
   device: DeviceAuthorization,
-  opts: { fetchFn?: typeof fetch; sleep?: (ms: number) => Promise<void>; now?: () => number } = {},
+  opts: {
+    fetchFn?: typeof fetch;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+    // Bug fix (thermo-nuclear, round 5): real cancellation, not just a caller-side "ignore the
+    // eventual result" guard — without this, an abandoned login kept polling in the background
+    // (a device code stays valid for minutes) and could still call saveAuthSession later, past
+    // even an explicit /logout, since nothing else ever stopped it.
+    signal?: AbortSignal;
+  } = {},
 ): Promise<TokenResult> {
   const fetchFn = opts.fetchFn ?? fetch;
   const sleep = opts.sleep ?? realSleep;
   const now = opts.now ?? Date.now;
+  const signal = opts.signal;
 
   let interval = device.interval;
   const deadline = now() + device.expiresIn * 1000;
 
   while (true) {
     if (now() >= deadline) return { status: "expired" };
+    if (isAborted(signal)) return { status: "aborted" };
 
     await sleep(interval * 1000);
 
@@ -104,6 +129,11 @@ export async function pollForToken(
       }).toString(),
     });
     const body = await parseResponseBody(response);
+    // Re-checked here, not just at the top of the loop: an abort that lands WHILE this iteration's
+    // own sleep+fetch is already in flight (the exact race a real WorkOS poll can hit, since a
+    // device code stays valid for minutes) must still discard whatever this poll just resolved to
+    // — including a genuine "success" — rather than acting on it one iteration late.
+    if (isAborted(signal)) return { status: "aborted" };
 
     if (response.ok) {
       return {
