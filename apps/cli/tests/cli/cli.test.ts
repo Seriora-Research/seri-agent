@@ -1984,7 +1984,7 @@ describe("bare seri", () => {
     expect(logs).toContain(USAGE);
   });
 
-  test("`run([\"--max-turns\", \"5\"], {})` with no isTTY is still a usage error", async () => {
+  test('`run(["--max-turns", "5"], {})` with no isTTY is still a usage error', async () => {
     const { code, errors } = await captureLogs(() => run(["--max-turns", "5"], {}));
 
     expect(code).toBe(2);
@@ -1998,7 +1998,7 @@ describe("bare seri", () => {
   // treats a whitespace-only or empty-string positional the same as no task at all, so it never
   // reaches prepareSession — this asserts that on the strongest possible level: no session is ever
   // created, so there is nothing on disk for an empty-content message to appear in.
-  test("`run([\"   \"], {})` with no isTTY is a usage error, not a persisted empty-content message", async () => {
+  test('`run(["   "], {})` with no isTTY is a usage error, not a persisted empty-content message', async () => {
     const { code, errors } = await captureLogs(() => run(["   "], { sessionsDir }));
 
     expect(code).toBe(2);
@@ -2006,7 +2006,7 @@ describe("bare seri", () => {
     expect(readdirSync(sessionsDir)).toHaveLength(0);
   });
 
-  test("`run([\"\"], {})` with no isTTY is a usage error, not a persisted empty-content message", async () => {
+  test('`run([""], {})` with no isTTY is a usage error, not a persisted empty-content message', async () => {
     const { code, errors } = await captureLogs(() => run([""], { sessionsDir }));
 
     expect(code).toBe(2);
@@ -2014,7 +2014,7 @@ describe("bare seri", () => {
     expect(readdirSync(sessionsDir)).toHaveLength(0);
   });
 
-  test("runStart narrowing: `--continue \"new task\"` appends it, `--continue` alone appends nothing", async () => {
+  test('runStart narrowing: `--continue "new task"` appends it, `--continue` alone appends nothing', async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const existing: SessionState = {
       id: "abc",
