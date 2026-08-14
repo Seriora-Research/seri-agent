@@ -557,21 +557,17 @@ describe("decideAuthOffer", () => {
     expect(decideAuthOffer(authConfigDir)).toBe(false);
   });
 
-  // The precondition cli.ts's own dispatchAuthOffer wrapper (unexported — cli.ts's internal
-  // dispatch logic gets pty-level coverage in this repo, not direct unit exports) guards against:
-  // this file's own header comment says every decide* function "let[s] a bad input throw for the
-  // (not-yet-written) caller's try/catch to turn into a command-error" — decideAuthOffer is no
-  // exception, so a corrupted auth.json (a partial write, concurrent access, a manual edit) throws
-  // here rather than silently returning `false`. Coordinator follow-up (PR #94 code-review
-  // verification): this used to reach `runTui`'s own `connectDispatch`/`onAuthResolved`
-  // unguarded, crashing the TUI at mount and inside a keypress handler — the fix wraps every call
-  // site in cli.ts, degrading to `show: false` on catch, but nothing here previously locked in
-  // WHY that guard is load-bearing. Mirrors the pty suite's own malformed-config convention
-  // (tuiPty.test.ts: `writeFileSync(configPath, "{not valid json")`).
-  test("throws on a corrupted auth.json, rather than silently returning a boolean", () => {
+  // Thermo-nuclear review + code-review, PR #94 (root-cause round): decideAuthOffer no longer
+  // throws on a corrupted auth.json — loadAuthSession (authStore.ts) itself now degrades a
+  // read/parse failure to `undefined`, the same "not authenticated" state as no file at all,
+  // fixing this at the one place that reads the file rather than every caller needing its own
+  // try/catch (the earlier version of this test asserted the opposite: that this threw, which is
+  // exactly the "wrap every call site" pattern this fix replaces). Mirrors the pty suite's own
+  // malformed-config convention (tuiPty.test.ts: `writeFileSync(configPath, "{not valid json")`).
+  test("returns true (not-authenticated) on a corrupted auth.json, rather than throwing", () => {
     writeFileSync(join(authConfigDir, "auth.json"), "{not valid json");
 
-    expect(() => decideAuthOffer(authConfigDir)).toThrow();
+    expect(decideAuthOffer(authConfigDir)).toBe(true);
   });
 });
 

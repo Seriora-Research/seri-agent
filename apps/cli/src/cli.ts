@@ -1741,25 +1741,6 @@ function createSetupHandlers(opts: {
   return { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack };
 }
 
-// Bug fix (coordinator follow-up, PR #94 code-review verification): decideAuthOffer reads
-// auth.json (loadAuthSession -> JSON.parse) unguarded — a corrupted file (a partial write,
-// concurrent access, a manual edit) used to throw synchronously out of every call site below,
-// crashing the TUI at mount and inside a keypress handler. Fails closed (`show: false`): if auth
-// state can't be determined, showing a banner that might be actively wrong is worse than showing
-// none — mirrors this file's own "never crash, degrade to something inert" contract
-// (dispatchSetupList, createAuthHandlers' own try/catch below), NOT guidedSetup.ts's own
-// `resolveClosed()` fallback, which is specific to that mount's own close flow and doesn't apply
-// here.
-function dispatchAuthOffer(dispatch: Dispatch, configDir: string): void {
-  let show: boolean;
-  try {
-    show = decideAuthOffer(configDir);
-  } catch {
-    show = false;
-  }
-  dispatch({ type: "auth-offer", show });
-}
-
 // Stage C (cli-commands-to-tui feature-plan.md): /login, /signup and /logout's own two handlers,
 // mirroring createSetupHandlers's exact shape (dispatch/deps/configDir in). `deps.login ?? loginReal`
 // / `deps.logout ?? logoutReal` is the SAME injection seam handleAuthCommand already uses for the
@@ -1773,23 +1754,30 @@ function dispatchAuthOffer(dispatch: Dispatch, configDir: string): void {
 function createAuthHandlers(opts: { dispatch: Dispatch; deps: CliDeps; configDir: string }): {
   onLogin: (mode: "login" | "signup") => Promise<void>;
   onLogout: () => Promise<void>;
+  onAbandon: () => void;
 } {
   const { dispatch, deps, configDir } = opts;
   const loginFn = deps.login ?? loginReal;
   const logoutFn = deps.logout ?? logoutReal;
+  // Bug fix (thermo-nuclear + code-review, round 4): dismissing an in-flight attempt (Escape on
+  // "starting"/"device" — AuthPanel's own useInput) does not cancel the underlying HTTP poll
+  // (pollForToken can legitimately run for minutes, per the device code's own expiry), so its
+  // late-arriving dispatches — a device code that resolves after the user already gave up, or the
+  // eventual success/failure — must become no-ops instead of silently reopening `pendingAuth` or
+  // clobbering whatever the user is doing by then. Mirrors this file's own `turnInFlight`-style
+  // "ignore a stale async result" pattern: every dispatch inside one `onLogin` call is guarded by
+  // its own captured `myAttempt`, checked against this live counter, which `onAbandon` (called
+  // from `onAuthResolved`, App.tsx) bumps past whatever attempt was current when dismissed.
+  let attemptCounter = 0;
 
   async function onLogin(mode: "login" | "signup"): Promise<void> {
+    const myAttempt = ++attemptCounter;
     dispatch({ type: "auth-requested", mode });
-    // Bug fix (coordinator follow-up, PR #94 code-review): the banner (`state.authOffer`) is
-    // independent of `pendingAuth` (TuiState's own comment) — without this, it stayed up telling
-    // the user to /login while the device-code panel (or a failed attempt's error panel) was
-    // already showing right below it. `onAuthResolved` (App.tsx) recomputes it fresh once this
-    // flow ends, either way — see that wiring's own comment.
-    dispatch({ type: "auth-offer", show: false });
     try {
       const clientId = getWorkosClientId(configDir);
       await loginFn(mode, clientId, configDir, {
-        onDeviceCode: (device) =>
+        onDeviceCode: (device) => {
+          if (myAttempt !== attemptCounter) return;
           dispatch({
             type: "auth-step",
             state: {
@@ -1798,14 +1786,25 @@ function createAuthHandlers(opts: { dispatch: Dispatch; deps: CliDeps; configDir
               verificationUri: device.verificationUri,
               userCode: device.userCode,
             },
-          }),
+          });
+        },
         onMessage: (message) => {
+          if (myAttempt !== attemptCounter) return;
           dispatch({ type: "transcript-append", line: message });
-          dispatch({ type: "auth-offer", show: false });
           dispatch({ type: "auth-resolved" });
+          // NOT redundant with the derived banner (App.tsx's own `state.pendingAuth === undefined`
+          // check): that derivation only covers "hide the banner while the panel is open" — the
+          // instant auth-resolved above clears `pendingAuth`, the derivation reduces to bare
+          // `authOffer`, which is still whatever it was BEFORE this login (`true`, since the offer
+          // only shows when logged out) and nothing else updates it. A real state change (a
+          // session was just saved) needs the same recompute mount/onLogout/onAuthResolved already
+          // get, or the banner would reappear immediately after a successful login telling an
+          // already-logged-in user to log in.
+          dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
         },
       });
     } catch (err) {
+      if (myAttempt !== attemptCounter) return;
       dispatch({
         type: "auth-step",
         state: {
@@ -1832,17 +1831,15 @@ function createAuthHandlers(opts: { dispatch: Dispatch; deps: CliDeps; configDir
           error: true,
         },
       });
-      // Bug fix (coordinator follow-up, PR #94 code-review verification): unlike onLogin, this
-      // never touched `authOffer` at all before — if it was already showing (a /logout typed
-      // while already logged out, which is allowed) and logoutFn then threw, the banner and this
-      // error panel could render at once. dispatchAuthOffer, not a bare `show: true` (the file
-      // might still be corrupted, same as it was moments ago inside the try above): recompute,
-      // don't assume.
-      dispatchAuthOffer(dispatch, configDir);
+      dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
     }
   }
 
-  return { onLogin, onLogout };
+  function onAbandon(): void {
+    attemptCounter += 1;
+  }
+
+  return { onLogin, onLogout, onAbandon };
 }
 
 // `boolean | number` mirrors this file's own established convention for a check that's usually a
@@ -2175,7 +2172,7 @@ async function runTui(
     dispatch({ type: "setup-resolved", leftoverInput });
   }
 
-  const { onLogin, onLogout } = createAuthHandlers({ dispatch, deps, configDir });
+  const { onLogin, onLogout, onAbandon } = createAuthHandlers({ dispatch, deps, configDir });
 
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
@@ -2656,24 +2653,25 @@ async function runTui(
       onSetupRemove,
       onSetupBack,
       onSetupClose,
-      // Bug fix (coordinator follow-up, PR #94 code-review): recomputes the banner fresh from disk
-      // once this flow ends, rather than leaving it hidden forever after onLogin's own `auth-offer:
-      // false` (above) — the same "recompute fresh, never trust a stale copy" contract every other
-      // auth-offer call site already has. A failed attempt (no session saved) correctly brings it
-      // back; a successful one (session already saved by the time onMessage dispatched this) keeps
-      // it hidden — either way this is reading the true current state, not assuming which happened.
+      // Recomputes the banner fresh from disk once this flow ends, for the two ways it can end
+      // that DON'T already reflect the true state: a dismissed "starting"/"device" step (no
+      // session was ever saved) and a shown "result" (App.tsx's own render ternary now derives
+      // the banner from `pendingAuth` for the common case — see AuthBanner's own prop below — but
+      // a LOGOUT failure's own result panel, dismissed here too, needs this same recompute, since
+      // onLogout's catch already showed the banner optimistically). `onAbandon` first: a
+      // still-in-flight attempt dismissed from "starting"/"device" must stop honoring its own
+      // late dispatches before anything else runs (createAuthHandlers' own comment).
       onAuthResolved: () => {
+        onAbandon();
         dispatch({ type: "auth-resolved" });
-        dispatchAuthOffer(dispatch, configDir);
+        dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
       },
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
         // Stage C: the non-blocking login/signup offer (AuthBanner) — true iff no auth session is
         // saved yet, computed fresh at mount the same way decideSetupOpen/decideModelPickerOpen are
-        // computed fresh on their own open, not cached from prepareSession. dispatchAuthOffer, not a
-        // bare decideAuthOffer call: this is mount time, before anything else here has a chance to
-        // guard against a corrupted auth.json.
-        dispatchAuthOffer(dispatch, configDir);
+        // computed fresh on their own open, not cached from prepareSession.
+        dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
         // runStart — the same three-state predicate prepareSession (above) uses to decide whether
         // it pushed the initial user message at all: "task" echoes and starts a turn on it,
         // "resume" (a bare `--continue`/`--resume`) starts a turn on the resumed session with

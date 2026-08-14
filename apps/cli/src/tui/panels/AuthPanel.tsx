@@ -22,26 +22,32 @@ export function AuthBanner({ show }: { show: boolean }) {
 }
 
 // /login and /signup's own blocking device-flow panel — mirrors SetupPanel's step-dispatcher
-// shape, one branch per step. `onDismiss` is only ever listened for on the "result" step: the
-// "starting"/"device" steps already have their own resolution path (the success dispatch chain
-// in cli.ts's createAuthHandlers — auth-step "device" then straight to auth-resolved via
-// onMessage), so there is nothing here for the user to dismiss until a result is actually shown.
-// Bug fix (coordinator follow-up on Stage C): createAuthHandlers' own catch block degrades a
-// thrown login()/logout() (a denied/expired device code, a network error) to an auth-step
-// "result" with no dispatch after it — before this useInput existed, that left the user staring
-// at the error with InputBox gone and no keyboard path back at all, not even Ctrl-C (that's wired
-// to onCancel, not to clearing pendingAuth). SetupConfirmRemove's own Esc-cancels convention
-// (SetupPanel.tsx) is the closest precedent for "either key just closes it."
+// shape, one branch per step. `onDismiss` is called from Escape on every step, plus Enter on
+// "result" (SetupConfirmRemove's own Esc-cancels convention, SetupPanel.tsx, is the closest
+// precedent for "either key just closes it" — used on "result" only, where an explicit
+// confirmation reads naturally; Escape alone covers "starting"/"device").
+//
+// Bug fix (thermo-nuclear + code-review, round 4): before Escape worked here at all, neither it
+// nor Ctrl-C (wired to onCancel, not to clearing pendingAuth — a raw Ctrl-C during "starting"/
+// "device" fell through to a hard process kill, no turn being in flight to arm the cancel slot)
+// gave the user any way out of a mistyped /login or a WorkOS device flow just sitting there for
+// however long the code stays valid. Dismissing here does NOT cancel the in-flight HTTP poll
+// itself (createAuthHandlers' own per-attempt counter, cli.ts, is what makes that attempt's late
+// dispatches no-ops instead) — this only stops the UI from waiting on it.
 export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismiss?: () => void }) {
   useInput((_input, key) => {
-    if (state.step !== "result") return;
-    if (key.return || key.escape) onDismiss?.();
+    if (key.escape) {
+      onDismiss?.();
+      return;
+    }
+    if (state.step === "result" && key.return) onDismiss?.();
   });
 
   if (state.step === "starting") {
     return (
-      <Box borderStyle="round" borderColor={theme.accent}>
+      <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
         <Text color={theme.muted}>{`Starting ${state.mode}…`}</Text>
+        <Text color={theme.muted}>Esc cancel</Text>
       </Box>
     );
   }
@@ -50,6 +56,7 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
       <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
         <Text color={theme.muted}>{`Open ${state.verificationUri} and enter this code:`}</Text>
         <Text color={theme.accent}>{state.userCode}</Text>
+        <Text color={theme.muted}>Esc cancel</Text>
       </Box>
     );
   }

@@ -1187,14 +1187,15 @@ describe("App", () => {
       expect(frame).toContain("/setup — provider API keys");
     });
 
-    // Bug fix (coordinator follow-up, PR #94 code-review): `authOffer` and `pendingAuth` are
-    // independent reducer fields (TuiState's own comment) — before this, the banner stayed up
-    // telling the user to /login while the device-code panel (or a failed attempt's error) was
-    // already showing right below it, telling them to do the thing they were already mid-way
-    // through. `auth-requested` alone does NOT clear it (the reducer's own case never touches
-    // `authOffer`) — createAuthHandlers.onLogin (cli.ts) dispatches the two actions below in
-    // exactly this sequence, which is what this test reproduces.
-    test("clears once a login attempt actually starts (auth-requested), while AuthPanel is showing", async () => {
+    // Bug fix (thermo-nuclear + code-review, round 4 — the root-cause fix): three earlier rounds
+    // all patched a new place that forgot to dispatch `auth-offer: false` the moment a login
+    // attempt opened; the actual fix is deriving the banner from `pendingAuth` (App.tsx's own
+    // `state.authOffer && state.pendingAuth === undefined`) instead of commanding it. This test
+    // dispatches ONLY `auth-requested` — no manual `auth-offer` dispatch at all, unlike the old
+    // version of this test — and the banner still hides, because `authOffer` itself is
+    // deliberately left `true` here: the derivation is what's doing the work, not a stale flag
+    // that happens to already be false.
+    test("hides while AuthPanel is showing, purely from pendingAuth being set — authOffer itself stays true", async () => {
       const { instance, dispatch } = await connect();
 
       dispatch({ type: "auth-offer", show: true });
@@ -1202,12 +1203,35 @@ describe("App", () => {
       expect(instance.lastFrame() ?? "").toContain("/login");
 
       dispatch({ type: "auth-requested", mode: "login" });
-      dispatch({ type: "auth-offer", show: false });
       await flush();
 
       const frame = instance.lastFrame() ?? "";
       expect(frame).toContain("Starting login");
       expect(frame).not.toContain("Sign in with /login, or create an account with /signup");
+    });
+
+    // Bug fix (this same round): the derivation above only covers "hide while the panel is open"
+    // — the instant a successful login's own `auth-resolved` clears `pendingAuth` again, the
+    // derivation reduces to bare `authOffer`, which was never updated to reflect the session that
+    // just got saved. createAuthHandlers.onLogin's own success path (cli.ts) recomputes it fresh
+    // right after, exactly like onLogout's `show: true` and the mount/onAuthResolved recomputes
+    // already do for their own real state changes — this reproduces that exact three-dispatch
+    // sequence and checks the banner does NOT flash back on.
+    test("stays hidden after a successful login, not just while the panel is open", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-offer", show: true });
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+
+      dispatch({ type: "transcript-append", line: "Logged in as a@example.com" });
+      dispatch({ type: "auth-resolved" });
+      dispatch({ type: "auth-offer", show: false });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").not.toContain(
+        "Sign in with /login, or create an account with /signup",
+      );
     });
   });
 
@@ -1379,6 +1403,64 @@ describe("App", () => {
       await new Promise((resolve) => setTimeout(resolve, 30));
 
       expect(resolved).toEqual([0]);
+    });
+
+    // The real soft-lock this fix closes (thermo-nuclear + code-review, round 4): before this,
+    // NOTHING dismissed "starting"/"device" — no useInput handling on either step, and Ctrl-C
+    // routes to onCancel (a hard process kill with no turn in flight to arm the cancel slot), not
+    // to clearing pendingAuth. A mistyped /login or a slow WorkOS device flow used to cost the
+    // whole TUI session.
+    test("Escape on the device step also calls onAuthResolved and returns to InputBox", async () => {
+      const resolved: number[] = [];
+      const submitted: string[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          // Unlike the two result-step tests above (which only prove the prop fires), this one
+          // also dispatches auth-resolved itself — cli.ts's own onAuthResolved wiring does the
+          // same (its own comment) — so the frame assertions below observe the real end-to-end
+          // effect, not just that the callback ran.
+          onAuthResolved={() => {
+            resolved.push(resolved.length);
+            dispatch?.({ type: "auth-resolved" });
+          }}
+          onSubmit={(v) => submitted.push(v)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: {
+          step: "device",
+          mode: "login",
+          verificationUri: "https://example.com/device",
+          userCode: "ABCD-1234",
+        },
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("ABCD-1234");
+
+      instance.stdin.write("\x1b"); // Escape
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      expect(resolved).toEqual([0]);
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).not.toContain("ABCD-1234");
+      // A second flush: InputBox is a fresh mount here (swapped in for AuthPanel), and its own
+      // useInput needs an extra tick to register — the same mount-timing gap this describe
+      // block's own "clears the panel entirely" test above already needed for an identical swap.
+      await flush();
+      instance.stdin.write("back to typing\r");
+      await flush();
+      expect(submitted).toEqual(["back to typing"]);
     });
   });
 

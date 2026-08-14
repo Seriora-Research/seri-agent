@@ -772,6 +772,42 @@ function childScriptAuthLoginFails(dir: string): string {
   ].join("\n");
 }
 
+// Bug fix (thermo-nuclear + code-review, round 4): the real soft-lock this round closes — before
+// it, nothing dismissed the "starting"/"device" steps at all, and Ctrl-C fell through to a hard
+// process kill (no turn in flight to arm the cancel slot). `loginFake` here hangs indefinitely
+// past the device-code callback (the same "never resolves" idiom `runLoopFake` itself already
+// uses throughout this file), standing in for a real device code that stays valid for minutes
+// with the user never completing it in a browser.
+function childScriptAuthLoginHangs(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `async function loginFake(mode, clientId, configDir, handlerDeps) {`,
+    `  handlerDeps?.onDeviceCode?.({`,
+    `    verificationUri: "https://example.com/device",`,
+    `    userCode: "ABCD-1234",`,
+    `  });`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  login: loginFake,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // byok-guided-setup, feature-plan.md: the "genuinely blank first run" scenario — a real TTY, no
 // config.json (childScriptSetup's own dir is always fresh, but every OTHER script in this file
 // still exports GROQ_API_KEY as a real env var; this one explicitly deletes every provider's own
@@ -2756,6 +2792,40 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // uses for the identical claim.
         child.stdin?.write("still here");
         await sawLine("still here");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The real soft-lock this round closes, end to end (thermo-nuclear + code-review, round 4):
+    // Escape on the device step, while the fake login's own poll never resolves at all — before
+    // this, NOTHING dismissed "starting"/"device" and Ctrl-C fell through to a hard process kill.
+    test("Escape abandons a stuck /login and returns to the ordinary input box", async () => {
+      const scriptPath = join(dir, "child-auth-login-hangs.mjs");
+      writeFileSync(scriptPath, childScriptAuthLoginHangs(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/login");
+        await sawLine("/login");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("https://example.com/device");
+        await sawLine("ABCD-1234");
+
+        child.stdin?.write("\x1b"); // Escape
+        // Escape's own ambiguity window — this file's own convention (the /setup cancel test's
+        // own comment).
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await wait100ms();
+
+        // Proves InputBox is actually back and accepting input, not merely that the process
+        // survived — the fake's own poll is still hanging in the background at this point, so
+        // this is also proof the abandoned attempt's own dispatches never landed on top of it.
+        child.stdin?.write("abandoned, typing something else");
+        await sawLine("abandoned, typing something else");
       } finally {
         child.kill("SIGKILL");
       }

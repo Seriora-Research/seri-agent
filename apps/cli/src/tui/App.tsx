@@ -206,11 +206,15 @@ export function App({
 
   return (
     <Box flexDirection="column">
-      {/* Stage A scaffolding (cli-commands-to-tui feature-plan.md): rendered ABOVE the render
-      ternary below, not as one of its branches — unlike ApprovalBox/ModelPicker/SetupPanel this
-      never replaces InputBox, it sits alongside it. `authOffer` is never set to true yet (Stage
-      C wires that), so this is unreachable in production today. */}
-      <AuthBanner show={state.authOffer} />
+      {/* Rendered ABOVE the render ternary below, not as one of its branches — unlike
+      ApprovalBox/ModelPicker/SetupPanel this never replaces InputBox, it sits alongside it.
+      `state.pendingAuth === undefined` (not just `state.authOffer`) is the derived half of the
+      fix (thermo-nuclear + code-review, round 4): `authOffer` alone used to need a matching
+      `auth-offer: false` dispatch at every point the auth panel opened, and round 2's whole bug
+      class was a call site that forgot one. The reducer already owns `pendingAuth` — "is the
+      panel currently open" is exactly what should gate "hide the redundant banner," derived here
+      instead of commanded from cli.ts. */}
+      <AuthBanner show={state.authOffer && state.pendingAuth === undefined} />
       <Static items={state.transcript}>{(line, index) => <Text key={index}>{line}</Text>}</Static>
       {state.streaming.length > 0 && <Text>{state.streaming}</Text>}
       {state.pendingTool !== undefined && (
