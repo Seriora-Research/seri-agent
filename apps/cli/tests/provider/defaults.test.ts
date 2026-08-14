@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CATALOG_PROVIDERS } from "@seri/model-catalog";
+import { CATALOG_PROVIDERS, type ModelProvider } from "@seri/model-catalog";
 import { CONFIG_FILENAME } from "../../src/config/config";
 import { DEFAULT_MODEL } from "../../src/provider/groq";
 import {
   DEFAULT_PROVIDER,
   isModelProvider,
+  isRequestedProvider,
   persistDefaultModel,
   resolveDefaultModel,
 } from "../../src/provider/defaults";
@@ -104,6 +105,29 @@ describe("resolveDefaultModel", () => {
   test("SERI_MODEL set with no SERI_PROVIDER: provider still defaults to groq", () => {
     process.env.SERI_MODEL = "env-model";
     expect(resolveDefaultModel()).toEqual({ model: "env-model", provider: "groq" });
+  });
+});
+
+describe("isRequestedProvider", () => {
+  test("nothing set: false", () => {
+    expect(isRequestedProvider("groq")).toBe(false);
+  });
+
+  test("explicit SERI_MODEL+SERI_PROVIDER env pair: true", () => {
+    process.env.SERI_MODEL = "env-model";
+    process.env.SERI_PROVIDER = "openrouter";
+    expect(isRequestedProvider("openrouter")).toBe(true);
+  });
+
+  test("explicit persisted SERI_PROVIDER: true", () => {
+    persistDefaultModel({ model: "picked-model", provider: "openrouter" });
+    expect(isRequestedProvider("openrouter")).toBe(true);
+  });
+
+  test("bogus/unrecognized SERI_PROVIDER value: false", () => {
+    process.env.SERI_MODEL = "env-model";
+    process.env.SERI_PROVIDER = "bogus";
+    expect(isRequestedProvider("bogus" as unknown as ModelProvider)).toBe(false);
   });
 });
 
