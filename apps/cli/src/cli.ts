@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
 import {
@@ -2602,10 +2602,16 @@ async function runTui(
     if (name === "/profile") {
       try {
         const dir = decideProfileCreate(args);
+        // mkdirSync's own recursive:true silently no-ops on an existing dir, so a repeat
+        // /profile new for the same name must not claim it just created one — checked BEFORE
+        // the call, not derived from its (nonexistent) return value.
+        const alreadyExisted = existsSync(dir);
         mkdirSync(dir, { recursive: true });
         dispatch({
           type: "transcript-append",
-          line: `Created profile directory ${dir}. This does not switch the running session's profile — restart with --profile ${args[1]} or SERI_PROFILE to use it.`,
+          // basename(dir), not the raw typed arg: dir is what decideProfileCreate actually
+          // validated and returned, and this hint should name that, not re-echo unvalidated input.
+          line: `Profile directory ${dir}${alreadyExisted ? " already exists" : " created"}. This does not switch the running session's profile — restart with --profile ${basename(dir)} or SERI_PROFILE to use it.`,
         });
       } catch (err) {
         dispatch({
