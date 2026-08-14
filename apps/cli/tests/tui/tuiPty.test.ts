@@ -3647,7 +3647,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-profile-new.mjs");
       writeFileSync(scriptPath, childScriptBare(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
       try {
         await sawLine("[approve-each]");
 
@@ -3668,6 +3668,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         while (!existsSync(profileDir) && Date.now() < deadline)
           await new Promise((r) => setTimeout(r, 20));
         expect(existsSync(profileDir)).toBe(true);
+
+        // Round 3's own fix: `ensureOwnerOnlyDir`'s "did I create it" answer comes from mkdirSync's
+        // own return value, not a separate existsSync probe beforehand — this is the "already
+        // exists" branch of that answer, exercised by asking for the SAME name a second time.
+        // sawLineTimes, not sawLine, for the typed-echo: "/profile new work" already appeared once
+        // above, so a plain sawLine would resolve immediately against that first occurrence.
+        child.stdin?.write("/profile new work");
+        await sawLineTimes("/profile new work", 2);
+        child.stdin?.write("\r");
+        await sawLine("already exists");
       } finally {
         child.kill("SIGKILL");
       }

@@ -728,14 +728,14 @@ describe("decideProfileCreate", () => {
     expect(() => decideProfileCreate(["new", "sessions"])).toThrow();
   });
 
-  // Regression test (thermo-nuclear + code-review, round 2): "default" isn't rejected by
-  // profileNameError (it's absent from getReservedProfileNames), but getConfigDir() folds it
-  // onto the base root with no `default/` segment — so the OLD `join(getBaseConfigDir(), name)`
-  // resolution created a directory `--profile default` could never select. `dir` must equal
-  // getBaseConfigDir() itself here, not a `default` subdirectory of it.
-  test("'default' resolves to the base config dir, not a default/ subdirectory", () => {
-    const { dir, name } = decideProfileCreate(["new", "default"]);
-    expect(dir).toBe(getBaseConfigDir());
-    expect(name).toBe("default");
+  // Regression test (thermo-nuclear + code-review, rounds 2-3): "default" isn't rejected by
+  // profileNameError (it's absent from getReservedProfileNames), but getConfigDir() folds it onto
+  // the base root with no `default/` segment — so the ORIGINAL `join(getBaseConfigDir(), name)`
+  // resolution created a directory `--profile default` could never select. Folding "default" the
+  // same way (round 2's first fix) stopped the orphaned directory but left `/profile new default`
+  // a confusing no-op; rejecting it outright (round 3) is what makes the one profile name that can
+  // never be "created" say so.
+  test("throws on 'default' — it is already the default profile", () => {
+    expect(() => decideProfileCreate(["new", "default"])).toThrow();
   });
 });

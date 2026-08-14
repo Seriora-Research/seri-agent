@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
@@ -2603,20 +2603,20 @@ async function runTui(
     if (name === "/profile") {
       try {
         const { dir, name: profileName } = decideProfileCreate(args);
-        // mkdirSync's own recursive:true silently no-ops on an existing dir, so a repeat
-        // /profile new for the same name must not claim it just created one — checked BEFORE
-        // the call, not derived from its (nonexistent) return value.
-        const alreadyExisted = existsSync(dir);
         // This directory will hold auth.json/config.json/permissions.yaml once the profile is
         // used, so it is owner-only like every other secrets-holding directory this codebase
-        // creates (ensureOwnerOnlyDir, atomicWriteFile.ts).
-        ensureOwnerOnlyDir(dir);
+        // creates (ensureOwnerOnlyDir, atomicWriteFile.ts). `created` comes from the mkdir call
+        // itself (code-review round 3) rather than a separate `existsSync(dir)` probe beforehand
+        // — a probe-then-create pair races two concurrent `/profile new work` invocations into
+        // both observing "doesn't exist yet" and both claiming "created" for a directory only one
+        // of them actually made.
+        const created = ensureOwnerOnlyDir(dir);
         dispatch({
           type: "transcript-append",
           // `profileName`, not basename(dir): decideProfileCreate already validated it, and for
-          // the "default" profile `dir` has no trailing segment equal to the name at all (see
-          // decideProfileCreate's own comment) — basename(dir) would be wrong there specifically.
-          line: `Profile directory ${dir}${alreadyExisted ? " already exists" : " created"}. This does not switch the running session's profile — restart with --profile ${profileName} or SERI_PROFILE to use it.`,
+          // a name whose resolved `dir` has no trailing segment equal to it, basename(dir) would
+          // be wrong (decideProfileCreate's own comment explains when that happens).
+          line: `Profile directory ${dir} ${created ? "created" : "already exists"}. This does not switch the running session's profile — restart with --profile ${profileName} or SERI_PROFILE to use it.`,
         });
       } catch (err) {
         dispatch({

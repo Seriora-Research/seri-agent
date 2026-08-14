@@ -1,14 +1,7 @@
 import { createHash } from "node:crypto";
-import {
-  appendFileSync,
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { foldsCase } from "../caseFold";
 import {
   applyRestore,
@@ -125,11 +118,8 @@ function sessionRef(sessionId: string): string {
 }
 
 function initStore(storeDir: string, worktree: string): void {
-  // 0o700 plus an explicit chmod, following authStore.ts: mkdirSync's mode is a no-op when the
-  // directory already exists, which is the common case from the second session on. This store
-  // holds copies of the user's source, so it is owner-only.
-  mkdirSync(storeDir, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") chmodSync(storeDir, 0o700);
+  // This store holds copies of the user's source, so it is owner-only.
+  ensureOwnerOnlyDir(storeDir);
   // The directory name is a hash, so without this nobody — including the user — can tell which
   // project a store belongs to.
   writeFileSync(join(storeDir, "worktree"), `${resolve(worktree)}\n`);

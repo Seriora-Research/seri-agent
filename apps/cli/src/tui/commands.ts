@@ -29,7 +29,7 @@ import {
 import { projectRoot } from "../checkpoint/shadowGit";
 import { maskValue } from "../config/commands";
 import { loadConfig } from "../config/config";
-import { profileDir, profileNameError } from "../config/paths";
+import { isDefaultProfile, profileDir, profileNameError } from "../config/paths";
 import { cycleMode } from "../gate/gate";
 import { loadGrants, PERSISTABLE_TOOL_NAMES } from "../permissions/store";
 import { allProviderKeyStates, PROVIDER_API_KEY_NAMES } from "../provider/keys";
@@ -290,14 +290,18 @@ export function decideMaxTurns(args: string[]): number {
 }
 
 // /profile new's own decision: validates the name and returns where its directory WOULD live —
-// this function does not create it, that is the caller's job. `profileDir`, not a raw
-// `join(getBaseConfigDir(), name)` (bug fixed here, code-review round 2): getConfigDir() folds
-// the profile name "default" (or its case-insensitive spellings on win32/darwin) onto the base
-// root with no `default/` segment — reusing that same fold here is what stops
-// `/profile new default` from creating an orphaned directory `--profile default` can never
-// select. Returns `name` alongside `dir` rather than making the caller reverse-engineer it via
-// `basename(dir)`, which would itself be wrong for exactly this "default" case, where `dir` has
-// no trailing segment equal to the validated name at all.
+// this function does not create it, that is the caller's job. Returns `name` alongside `dir`
+// rather than making the caller reverse-engineer it via `basename(dir)`, which would be wrong
+// for a non-default name that happens to collide with something odd in `dir`'s own path.
+//
+// "default" is rejected outright (bug fixed here, code-review round 2), not silently mapped
+// onto the base config dir: `isDefaultProfile`/`profileDir` (config/paths.ts) fold "default" (or
+// its case-insensitive spellings on win32/darwin) onto the base root with no `default/` segment
+// — so `join(getBaseConfigDir(), name)`, the ORIGINAL implementation here, used to create an
+// orphaned directory `--profile default` could never select. Folding it the same way `profileDir`
+// does instead of rejecting it would fix the orphaned-directory bug but leave `/profile new
+// default` as a confusing no-op ("already exists" for a directory the user never asked to check)
+// — rejecting it is what makes the one profile name that can never be "created" say so plainly.
 export function decideProfileCreate(args: string[]): { dir: string; name: string } {
   const [subcommand, name] = args;
   if (subcommand !== "new" || name === undefined || args.length !== 2) {
@@ -305,6 +309,9 @@ export function decideProfileCreate(args: string[]): { dir: string; name: string
   }
   const error = profileNameError(name);
   if (error !== undefined) throw new Error(error);
+  if (isDefaultProfile(name)) {
+    throw new Error(`"${name}" is already the default profile — there is nothing to create`);
+  }
   return { dir: profileDir(name), name };
 }
 
