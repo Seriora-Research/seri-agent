@@ -1170,6 +1170,22 @@ describe("App", () => {
 
       expect(instance.lastFrame() ?? "").toBe(before);
     });
+
+    // Stage C: the banner sits ABOVE the render ternary (App.tsx's own comment) rather than as one
+    // of its branches — the zeroKeys x noAuth "both at once" cell, component level: a first run
+    // with no provider key opens /setup's own panel, and the banner must still render alongside it
+    // rather than being replaced the way ApprovalBox/ModelPicker/SetupPanel replace each other.
+    test("renders alongside a pendingSetup panel, not replaced by it", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "auth-offer", show: true });
+      dispatch({ type: "setup-requested", rows: [] });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("/login");
+      expect(frame).toContain("/setup — provider API keys");
+    });
   });
 
   describe("auth panel", () => {
@@ -1226,6 +1242,49 @@ describe("App", () => {
       });
       await flush();
       expect(instance.lastFrame() ?? "").toContain("Login failed: expired code");
+    });
+
+    // auth-resolved is the reducer action createAuthHandlers' own onLogin/onLogout (cli.ts) fire
+    // once a device-flow result lands — proves the panel's own text (including the result step's
+    // message, the closest thing this panel has to hint text) is fully gone afterward, not just
+    // that SOME frame changed, and that InputBox is genuinely back (accepts input), not merely
+    // that nothing matched the render ternary's earlier branches.
+    test("clears the panel entirely, restoring InputBox", async () => {
+      const submitted: string[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSubmit={(v) => submitted.push(v)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "auth-requested", mode: "login" });
+      await flush();
+      dispatch({
+        type: "auth-step",
+        state: { step: "result", message: "Signed in as a@example.com", error: false },
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("Signed in as a@example.com");
+
+      dispatch({ type: "auth-resolved" });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).not.toContain("Signed in as a@example.com");
+      // A second flush: InputBox is a fresh mount here (swapped in for AuthPanel), and its own
+      // useInput needs an extra tick to register — the same mount-timing gap PermissionsPanel's
+      // own confirm-remove test above already needed for an identical component swap.
+      await flush();
+      instance.stdin.write("back to typing\r");
+      await flush();
+      expect(submitted).toEqual(["back to typing"]);
     });
   });
 
