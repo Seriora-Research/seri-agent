@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -1124,7 +1125,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "seri-pty-tui-"));
+    // realpathSync, not the raw mkdtempSync path (macOS CI, discovered by the /permissions
+    // tests below): os.tmpdir() on macOS resolves under /var/folders/…, itself a symlink to
+    // /private/var/folders/… — the CHILD's own process.cwd() (spawned with cwd: dir) comes back
+    // through the OS's getcwd(), which follows that symlink, so a projectKey computed here from
+    // the unresolved `dir` never matches the one the child computes from its own resolved cwd.
+    // Harmless for real usage (both grant and lookup share one process's already-resolved cwd);
+    // only bites a test that computes a worktree-keyed path in one process and reads it back via
+    // a different, spawned one — which is every test in this file that seeds permissions.yaml or
+    // checkpoints before starting the child.
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "seri-pty-tui-")));
   });
 
   afterEach(() => {
