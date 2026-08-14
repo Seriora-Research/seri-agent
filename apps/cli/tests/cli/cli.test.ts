@@ -1991,7 +1991,30 @@ describe("bare seri", () => {
     expect(errors.some((line) => line.includes("No task given."))).toBe(true);
   });
 
-  test("`hasNewTask` narrowing: `--continue \"new task\"` appends it, `--continue` alone appends nothing", async () => {
+  // Thermo-nuclear review finding: `ctx.taskText` used to be built as `positionals.join(" ")` with
+  // no trim, so a whitespace-only task read as non-empty (the length check) while the push site's
+  // OWN separate `.trim()` then persisted `content: ""` anyway — the exact empty-content message
+  // this whole stage exists to prevent. Trimming once at construction (cli.ts) means `runStart`
+  // treats a whitespace-only or empty-string positional the same as no task at all, so it never
+  // reaches prepareSession — this asserts that on the strongest possible level: no session is ever
+  // created, so there is nothing on disk for an empty-content message to appear in.
+  test("`run([\"   \"], {})` with no isTTY is a usage error, not a persisted empty-content message", async () => {
+    const { code, errors } = await captureLogs(() => run(["   "], { sessionsDir }));
+
+    expect(code).toBe(2);
+    expect(errors.some((line) => line.includes("No task given."))).toBe(true);
+    expect(readdirSync(sessionsDir)).toHaveLength(0);
+  });
+
+  test("`run([\"\"], {})` with no isTTY is a usage error, not a persisted empty-content message", async () => {
+    const { code, errors } = await captureLogs(() => run([""], { sessionsDir }));
+
+    expect(code).toBe(2);
+    expect(errors.some((line) => line.includes("No task given."))).toBe(true);
+    expect(readdirSync(sessionsDir)).toHaveLength(0);
+  });
+
+  test("runStart narrowing: `--continue \"new task\"` appends it, `--continue` alone appends nothing", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const existing: SessionState = {
       id: "abc",
@@ -2033,7 +2056,7 @@ describe("bare seri", () => {
   // (unlike bare `seri`, which now mounts the TUI on a TTY) still reaches this same non-interactive
   // driveLoop path when isTTY is falsy, and this is the case the old, un-narrowed `hasNewTask`
   // (`!ctx.resuming || ...`) already handled correctly for --resume/--continue — this pins it as a
-  // regression lock now that the predicate is a single, narrower expression.
+  // regression lock now that runStart replaces that predicate.
   test("`--resume <id>` with no task appends no empty-content user message", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const existing: SessionState = {

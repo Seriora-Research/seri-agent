@@ -857,23 +857,23 @@ function dirs(ctx: RunContext): CommandDirs {
   };
 }
 
-// Shared by prepareSession (decides whether to push the initial user message) and runTui's own
-// connectDispatch (decides whether to echo it) — true only when there is actual task text,
-// regardless of whether this is a resumed or brand-new session. A brand-new, task-less session no
-// longer gets an empty `{role:"user",content:""}` pushed (bare `seri` mounts the TUI idle instead
-// of hard-exiting — see startsIdle below, and the "Bare-seri" plan section). Kept as one function,
-// not the same expression repeated at both call sites, so the two can't silently drift out of sync
-// with each other.
-function hasNewTask(ctx: RunContext): boolean {
-  return ctx.taskText.length > 0;
-}
+// The three ways a run can begin, all derived from the same two RunContext fields (`resuming`,
+// `taskText`) — one function rather than two independent booleans over the same inputs, which used
+// to require its own comment on the second one just to defend it against the first ("deliberately
+// NOT !hasNewTask(ctx)"). Shared by prepareSession (decides whether to push the initial user
+// message), run()'s own usage-error gate, and runTui's own connectDispatch (decides whether to echo
+// the task and whether to auto-start a turn) — one function, not the same distinction repeated at
+// every call site, so they can't silently drift out of sync with each other.
+//   "task"   — real task text was given (new session or --continue/--resume with new text): push,
+//              echo, and start a turn on it.
+//   "resume" — --continue/--resume with no new text: nothing to push or echo, but still
+//              auto-starts a turn on the resumed session, same as it always has.
+//   "idle"   — no resume target and no task text (bare `seri` in a TTY): mount with nothing to do.
+type RunStart = "idle" | "task" | "resume";
 
-// Whether a TUI session should mount with nothing to do yet — no resume target and no task text.
-// Deliberately NOT `!hasNewTask(ctx)`: `seri --continue` with no new task (resuming, no task text)
-// must keep auto-starting a turn on the resumed session, same as it always has — only the genuinely
-// fresh, task-less case is new behavior.
-function startsIdle(ctx: RunContext): boolean {
-  return !ctx.resuming && ctx.taskText.length === 0;
+function runStart(ctx: RunContext): RunStart {
+  if (ctx.taskText.length > 0) return "task";
+  return ctx.resuming ? "resume" : "idle";
 }
 
 // A slash command always operates on the resume target — an explicit --resume id, or the most
@@ -1020,8 +1020,8 @@ async function prepareSession(
 
   if (!ctx.resuming) console.log(`Session ${session.id} created.`);
 
-  if (hasNewTask(ctx)) {
-    session.messages.push({ role: "user", content: ctx.taskText.trim() });
+  if (runStart(ctx) === "task") {
+    session.messages.push({ role: "user", content: ctx.taskText });
   }
 
   // Loaded once, here, alongside the model resolution it feeds — /model (runTui's own runTurn)
@@ -1221,11 +1221,13 @@ type DriveLoopResult = {
   // distinguishable from the main turn's, and summing it in would silently change what this file's
   // own printUsage/printCost assertions mean.
   archivist: ArchivistReport | undefined;
-  // Optional: only runTui sets this (driveLoop's own non-interactive callers never populate it).
-  // True the moment a turn actually starts (runTui's runTurn), so run() can tell "an idle TUI
-  // session the user quit without ever giving it a task" (false) apart from "a turn ran and this
-  // is its outcome" (true) — the two need different exit-code treatment.
-  ranAnyTurn?: boolean;
+  // Always true from driveLoop's own return, below — reaching it means a turn ran, unconditionally.
+  // runTui's own resolveRunTui (quit(), further down) is the one caller that can genuinely produce
+  // `false` here: an idle TUI session the user quit without ever submitting a task never calls
+  // driveLoop at all, so its own closure copy of this flag stays at its initial `false`. Not
+  // optional — driveLoop setting it unconditionally is what makes `false` mean exactly one thing
+  // (nothing ever ran) instead of also being read as "the non-interactive caller didn't bother."
+  ranAnyTurn: boolean;
 };
 
 // `maxTurns` is an argument rather than a field of ctx: it is neither the resume target nor where
@@ -1498,6 +1500,7 @@ async function driveLoop(
     cost,
     refusedWithoutRunning: hadDenial && !ranTool,
     archivist,
+    ranAnyTurn: true,
   };
 }
 
@@ -1895,9 +1898,9 @@ async function runTui(
   // copy is what lets the FINAL resolveRunTui result carry one too, printed once more after Ink
   // unmounts, the same way `usage`/`cost` already print again there.
   let archivist: ArchivistReport | undefined;
-  // Set true the moment runTurn actually starts a turn (not on the early-return guard below it) —
-  // an idle session the user quit without ever submitting a task never flips this, which is what
-  // lets run() tell that apart from a turn that ran and finished/errored/was cancelled.
+  // This closure's own copy of DriveLoopResult.ranAnyTurn (see that field's own comment) — flipped
+  // true the moment runTurn actually starts a turn (not on the early-return guard below it), so an
+  // idle session the user quit without ever submitting a task never flips it.
   let ranAnyTurn = false;
   // Created ONCE per run, outside the per-turn loop, so the tool-call counter accumulates across
   // every turn of this TUI session rather than resetting each time runTurn calls driveLoop.
@@ -2529,14 +2532,13 @@ async function runTui(
       onSetupClose,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
-        // hasNewTask — the same predicate prepareSession (above) uses to decide whether it pushed
-        // the initial user message at all — a bare `--resume` with no new task has nothing to
-        // echo, and neither does a bare `seri` with no task, but any other case does.
-        if (hasNewTask(ctx)) echoUserInput(ctx.taskText);
-        // startsIdle, NOT hasNewTask: a bare `seri` (no resume, no task) mounts idle instead of
-        // auto-starting a turn, but `seri --continue` with no new task must keep auto-starting a
-        // turn on the resumed session, exactly as it always has.
-        if (!startsIdle(ctx)) currentTurn = runTurn(prepared.session);
+        // runStart — the same three-state predicate prepareSession (above) uses to decide whether
+        // it pushed the initial user message at all: "task" echoes and starts a turn on it,
+        // "resume" (a bare `--continue`/`--resume`) starts a turn on the resumed session with
+        // nothing to echo, and "idle" (bare `seri`, no resume, no task) starts nothing.
+        const start = runStart(ctx);
+        if (start === "task") echoUserInput(ctx.taskText);
+        if (start !== "idle") currentTurn = runTurn(prepared.session);
       },
     }),
     // `interactive: true` — without it, Ink's own auto-detection (`ink.js`'s `resolveInteractiveOption`,
@@ -2593,18 +2595,38 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // fall through to the TUI on a TTY instead of hard-exiting.
   const isTTY = deps.isTTY ?? false;
 
+  // Built here, before the positionals.length===0 gate right below, rather than after it as
+  // before: the gate needs runStart(ctx)'s own answer, and RunContext's fields (deps.sessionsDir
+  // etc.) are all already available — nothing between here and the old construction site fed into
+  // it. `resumeId`/`resuming` and `taskText` are what the gate's OLD four-clause condition (removed
+  // below) was hand-checking directly; runStart is now the one place that logic lives.
+  const ctx: RunContext = {
+    resuming: values.continue === true || values.resume !== undefined,
+    resumeId: values.resume,
+    // Trimmed once, here, not at each push/echo site: an untrimmed value (`seri "   "`) used to
+    // read as non-empty (a bare `.length > 0` check) while the push site's OWN separate `.trim()`
+    // then persisted an empty-content message anyway — the exact bug this whole stage exists to
+    // prevent, reintroduced by a whitespace-only task. One trim, at construction, means every later
+    // reader of `ctx.taskText` (runStart, the push, the echo) agrees on what "empty" means.
+    taskText: positionals.join(" ").trim(),
+    sessionsDir: deps.sessionsDir ?? join(getConfigDir(), "sessions"),
+    checkpointsDir: deps.checkpointsDir ?? join(getConfigDir(), "checkpoints"),
+    permissionsDir: deps.permissionsDir ?? getConfigDir(),
+    // Matches prepareSession's own resolution (D7) so /memory and the archivist read the same
+    // config.json / memories/ directory a /setup-written key or a config set just landed in.
+    configDir: deps.authConfigDir ?? getConfigDir(),
+  };
+
   // Bare `seri` in a TTY mounts the TUI directly (idle, empty input box) instead of printing
-  // usage — this gate's non-interactive behavior (USAGE / "No task given.") is otherwise
-  // byte-for-byte unchanged: every existing caller that never passes isTTY still hits it exactly
-  // as before. Any other flags-but-no-task invocation (`seri --max-turns 5`) on a non-TTY caller
-  // is still a usage error: unlike bare `seri`, it named an intention and cannot be silently taken
-  // as "show usage".
-  if (
-    positionals.length === 0 &&
-    values.continue !== true &&
-    values.resume === undefined &&
-    !isTTY
-  ) {
+  // usage. On a non-TTY caller, this gate's own behavior (USAGE / "No task given.") is unchanged
+  // for the case every existing test already covers — no positionals at all. It now ALSO catches a
+  // whitespace-only or empty-string positional (`seri "   "`, `seri ""`): `ctx.taskText` is trimmed
+  // at construction (above), so `runStart` sees those the same as no task given, rather than
+  // reaching prepareSession and persisting an empty-content user message — a real bug this closes,
+  // not a byte-for-byte-unchanged case. Any other flags-but-no-task invocation (`seri --max-turns
+  // 5`) on a non-TTY caller is still a usage error: unlike bare `seri`, it named an intention and
+  // cannot be silently taken as "show usage".
+  if (runStart(ctx) === "idle" && !isTTY) {
     if (argv.length === 0) {
       console.log(USAGE);
       return 0;
@@ -2620,18 +2642,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   const permissions = handlePermissionsCommand(positionals, deps);
   if (permissions !== undefined) return permissions;
-
-  const ctx: RunContext = {
-    resuming: values.continue === true || values.resume !== undefined,
-    resumeId: values.resume,
-    taskText: positionals.join(" "),
-    sessionsDir: deps.sessionsDir ?? join(getConfigDir(), "sessions"),
-    checkpointsDir: deps.checkpointsDir ?? join(getConfigDir(), "checkpoints"),
-    permissionsDir: deps.permissionsDir ?? getConfigDir(),
-    // Matches prepareSession's own resolution (D7) so /memory and the archivist read the same
-    // config.json / memories/ directory a /setup-written key or a config set just landed in.
-    configDir: deps.authConfigDir ?? getConfigDir(),
-  };
 
   // Before prepareSession, never after: a bare `/undo` must act on the resume target rather than
   // mint a session to act on.
@@ -2763,12 +2773,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // tests/cli/cli.test.ts already records. signals.ts still names Stage 6's subagents as a
   // second aborter this same fallback would also cover, unchanged.
   //
-  // `ranAnyTurn === false` (bare `seri`, quit before ever submitting a task) is checked before all
-  // of the above: `doneReason` stays `undefined` for that session, and the mapping below would
-  // otherwise fall through to the final `return 1` and call an idle session the user simply closed
-  // a failure. `ranAnyTurn` is `undefined` (not `false`) on the non-interactive path, where this
-  // never applies.
-  if (ranAnyTurn === false) return 0;
+  // `!ranAnyTurn` (bare `seri`, quit before ever submitting a task) is placed after the usage/cost/
+  // signal handling above, but before the doneReason-based exit mapping below: `doneReason` stays
+  // `undefined` for that session, and that mapping would otherwise fall through to the final
+  // `return 1` and call an idle session the user simply closed a failure. `ranAnyTurn` is always
+  // `true` on the non-interactive path (DriveLoopResult's own comment), where this never fires.
+  if (!ranAnyTurn) return 0;
   if (doneReason === "no-tool-call") return refusedWithoutRunning ? 1 : 0;
   return 1;
 }
