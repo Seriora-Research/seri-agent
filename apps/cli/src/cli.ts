@@ -72,7 +72,12 @@ import {
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
-import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
+import {
+  DEFAULT_PROVIDER,
+  isRequestedProvider,
+  persistDefaultModel,
+  resolveDefaultModel,
+} from "./provider/defaults";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
 import {
@@ -998,7 +1003,14 @@ type PreparedRun = {
 // still what routing.test.ts asserts directly): this notice is purely informational, no embedded
 // command, so it reads better with a display name (PROVIDER_DISPLAY_NAMES) than the raw env var
 // constant — unlike missingKeyError's message, which needs the exact name because it IS one.
-function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider): string {
+// `configDir` lets this tell "the user actually named requestedProvider" (isRequestedProvider)
+// apart from resolveDefaultModel's own DEFAULT_PROVIDER fallback masquerading as one — a genuinely
+// blank first run reroutes off that fallback with no configured/requested provider at all, and
+// blaming a provider the user never named is worse than naming none.
+function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider, configDir?: string): string {
+  if (!isRequestedProvider(requestedProvider, configDir)) {
+    return `routing ${route.model} via ${route.provider} (your key)`;
+  }
   return `routing ${route.model} via ${route.provider} (your key) — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
 }
 
@@ -1082,7 +1094,7 @@ async function prepareSession(
   // know isTTY), so without the gate a session-start reroute printed twice for the same turn: once
   // here (before Ink even mounts) and again from runTurn.
   if (route.rerouted && !isTTY) {
-    printWarning(rerouteNotice(route, session.provider));
+    printWarning(rerouteNotice(route, session.provider, configDir));
   }
   // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
   // cost and context-window come from the wrong provider's entry.
@@ -2624,7 +2636,7 @@ async function runTui(
     if (route.rerouted) {
       dispatch({
         type: "transcript-append",
-        line: `↻ ${rerouteNotice(route, requestedProvider)}`,
+        line: `↻ ${rerouteNotice(route, requestedProvider, configDir)}`,
       });
     }
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one.
