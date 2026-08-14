@@ -1944,7 +1944,26 @@ function createConfigHandlers(opts: {
       type: "transcript-append",
       line: `Saved ${key}.${verifyConfigTakesEffectNote(key)}`,
     });
-    dispatchConfigList(key);
+    // NOT dispatchConfigList (bug fixed here, code-review round 2 — the exact class
+    // onSetupKeyEntered's own comment already fixed for /setup): that helper's own catch only
+    // dispatches command-error, which never touches `pendingConfig` — leaving THIS function's own
+    // `busy: true` (set above, before the write) stuck forever if the refresh read
+    // (configListState -> decideConfigOpen -> config.json) throws. ConfigEnterValue's own
+    // `if (busy) return;` gate is what turns that into a full lockout with no way out short of
+    // killing the process. Resetting `busy: false` here, inline, is what actually clears it.
+    try {
+      dispatch({ type: "config-step", state: configListState(key) });
+    } catch (err) {
+      dispatch({
+        type: "config-step",
+        state: {
+          step: "enter-value",
+          key,
+          busy: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
+    }
   }
 
   // Dual-purpose (mirrors onSetupRemove's own comment): the SAME prop the list step's 'r'/Delete
@@ -1976,7 +1995,22 @@ function createConfigHandlers(opts: {
           ? `Removed ${confirmedKey}.${verifyConfigTakesEffectNote(confirmedKey)}`
           : `${confirmedKey} was not set.`,
       });
-      dispatchConfigList(confirmedKey);
+      // NOT dispatchConfigList (bug fixed here, code-review round 2 — same shape as
+      // onConfigValueEntered's own fix above, without a `busy` gate to unstick since confirm-unset
+      // has none): that helper's own catch only dispatches command-error, never touching
+      // `pendingConfig` — leaving it stuck at "confirm-unset" naming a key that (whichever branch
+      // above just ran) no longer needs confirming. Pressing 'y' again would be a harmless no-op,
+      // but any other key looped back into the same broken refresh. Closing the panel instead is
+      // what actually gets the user unstuck — the transcript line above already said what happened.
+      try {
+        dispatch({ type: "config-step", state: configListState(confirmedKey) });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+        dispatch({ type: "config-resolved" });
+      }
       return;
     }
     // Same reasoning as onSetupRemove's own re-check: ConfigList's own useInput already gated this
@@ -2087,7 +2121,21 @@ function createPermissionsHandlers(opts: {
             ? `Removed ${confirmedTool}.`
             : `${confirmedTool} was not permanently approved.`,
       });
-      dispatchPermissionsList();
+      // NOT dispatchPermissionsList (bug fixed here, code-review round 2 — same shape as
+      // onConfigUnset's own fix above): that helper's own catch only dispatches command-error,
+      // never touching `pendingPermissions` — leaving it stuck at "confirm-remove" naming a tool
+      // that (whichever branch above just ran) no longer needs confirming. Closing the panel
+      // instead is what actually gets the user unstuck — the transcript line above already said
+      // what happened.
+      try {
+        dispatch({ type: "permissions-step", state: permissionsListState() });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+        dispatch({ type: "permissions-resolved" });
+      }
       return;
     }
     // Same reasoning as onConfigUnset's own re-check just above: PermissionsList's own useInput
