@@ -60,7 +60,7 @@ import {
   resetArchivistForRewind,
 } from "./memory/archivist";
 import { decideMemoryCommand, memoryCommandAccepts } from "./memory/commands";
-import { loadMemory, type LoadedMemory } from "./memory/store";
+import { type LoadedMemory, loadMemory } from "./memory/store";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
 import {
   effectiveTools,
@@ -69,9 +69,9 @@ import {
   PERSISTABLE_TOOLS,
   rememberGrant,
 } from "./permissions/store";
+import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
-import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";

@@ -27,8 +27,8 @@ import type { CostReport } from "../../src/provider/cost";
 import { getGroqModel } from "../../src/provider/groq";
 import { configuredProviders, PROVIDER_API_KEY_NAMES } from "../../src/provider/keys";
 import { toolDefinitions } from "../../src/provider/tools";
+import { loadSession, type SessionState, saveSession } from "../../src/session/session";
 import { onSignalCancel } from "../../src/signals";
-import { loadSession, saveSession, type SessionState } from "../../src/session/session";
 import type { CheckOutcome } from "../../src/verify/run";
 import { fakeRunLoop } from "./fakeRunLoop";
 
@@ -155,9 +155,9 @@ describe("run (task invocation)", () => {
     // D2's own transparency rule: never silent. But since no provider was ever actually
     // requested (DEFAULT_PROVIDER is a synthetic fallback, not a user choice), the notice must
     // not blame a provider the user never named.
-    expect(
-      errors.some((line) => line.includes("routing openai/gpt-oss-120b via openrouter")),
-    ).toBe(true);
+    expect(errors.some((line) => line.includes("routing openai/gpt-oss-120b via openrouter"))).toBe(
+      true,
+    );
     expect(errors.some((line) => /groq/i.test(line))).toBe(false);
   });
 

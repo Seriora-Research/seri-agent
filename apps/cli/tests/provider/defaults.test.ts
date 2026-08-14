@@ -4,8 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CATALOG_PROVIDERS } from "@seri/model-catalog";
 import { CONFIG_FILENAME } from "../../src/config/config";
+import {
+  isModelProvider,
+  persistDefaultModel,
+  resolveDefaultModel,
+} from "../../src/provider/defaults";
 import { DEFAULT_MODEL } from "../../src/provider/groq";
-import { isModelProvider, persistDefaultModel, resolveDefaultModel } from "../../src/provider/defaults";
 
 const originalModel = process.env.SERI_MODEL;
 const originalProvider = process.env.SERI_PROVIDER;
