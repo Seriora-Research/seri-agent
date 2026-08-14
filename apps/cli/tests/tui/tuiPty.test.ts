@@ -1655,7 +1655,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // native sibling — does, so resolveRoute reroutes turn 2 there (D2).
       await sawLine("RUNLOOP_CALL 2 model=claude-sonnet-5 provider=anthropic");
       // The transcript notice must name the PICKED provider (openrouter, the one actually
-      // missing a key), not stay silent about it — proof that `requestedProvider`, set by the
+      // missing a key), not stay silent about it — proof that `session.provider`, set by the
       // live picker pick (reducer.ts's own "model-picker-resolved" case), actually reached this
       // turn's reroute notice rather than a re-derived undefined. Split across two checks, not
       // one long toContain: Ink wraps this line across the terminal's own column width (measured
