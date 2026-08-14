@@ -3608,6 +3608,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const { rememberGrant, loadGrants, permissionsPath } = await import(
         "../../src/permissions/store"
       );
+      mkdirSync(permissionsDir, { recursive: true });
       writeFileSync(permissionsPath(permissionsDir), "global: [write_file]\nprojects: {}\n");
       rememberGrant(permissionsDir, dir, "write_file");
 
