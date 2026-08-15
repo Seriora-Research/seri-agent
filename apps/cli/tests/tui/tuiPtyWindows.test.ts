@@ -171,6 +171,26 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
       const pty = await import("node-pty");
       const { term, chunks, waitFor, decodedSoFar } = startChildNodePty(pty, scriptPath, dir);
       try {
+        // The welcome splash now mounts ahead of the normal flow on every interactive launch —
+        // dismissed here the same way tuiPty.test.ts's own startChild does: wait for its wordmark
+        // (the earliest text its first frame prints, proof raw mode is already set), write Escape,
+        // then a settle margin before this test's own first real assertion.
+        //
+        // KNOWN OPEN ISSUE, unresolved as of this comment: in the sandboxed environment this was
+        // written in, ANY `term.write()` call here — with or without this settle margin, on Escape
+        // or any other byte — throws an async "Socket is closed" from node-pty's own Windows backend
+        // (`_agent.inSocket.write`, windowsTerminal.js), even though `_agent.outSocket` keeps
+        // streaming the child's own output fine and the child itself never exits on its own (traced
+        // with a minimal, unmodified `pty.spawn` + `term.write` repro with no seri code involved at
+        // all — reproduces identically). Whether this is specific to that sandbox or a real
+        // limitation of this node-pty version's Windows write path is unconfirmed; needs verifying
+        // on an unsandboxed Windows machine before this test can be trusted again.
+        const sawSplash = await waitFor("SERI", 10_000);
+        if (sawSplash) {
+          term.write("\x1b");
+          await new Promise((r) => setTimeout(r, 100));
+        }
+
         // A single wait covers the whole turn: "(done: ...)" only appears after RUNLOOP_READY, the
         // tool-call line, and the tool-result confirmation line have all already been flushed.
         // Checked directly, not discarded: a regression here used to fall through to the
