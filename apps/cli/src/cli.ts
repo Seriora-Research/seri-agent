@@ -124,6 +124,7 @@ import {
   type TuiState,
   tuiReducer,
 } from "./tui/reducer";
+import { runWelcomeSplash } from "./tui/welcomeSplash";
 import { withVerification } from "./verify/wrapTools";
 
 export type CliDeps = {
@@ -3299,6 +3300,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // picker), so the same unconditional fall-through instead lands `prepareSession`'s
   // `resolveDefaultModel` read on that freshly-written pair rather than the groq-only fallback —
   // which is the actual fix this loop exists to ship.
+  // Ahead of both the zero-key gate below and the normal prompt, on every interactive launch —
+  // not gated behind any first-run/"seen it" flag or file. A separate, earlier isTTY gate rather
+  // than a branch inside the block below, so a corrected zeroKeysConfigured/runGuidedSetup diff
+  // never also has to account for this mount.
+  if (isTTY) {
+    await runWelcomeSplash(ctx.configDir, deps);
+  }
+
   if (isTTY) {
     const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
     if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
