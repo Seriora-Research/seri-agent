@@ -25,14 +25,24 @@ branch to `origin` and open a PR against `main` rather than merging locally. Nam
 descriptive branch name derived from the loop's slug (e.g. `hesper-stage-4-checkpoints`)
 is reasonable; ask if unsure.
 
-## PR review: `/code-review`, run by Claude, not a GitHub bot
+## PR review: `/code-review` stays the default; `@claude` in PRs is now also set up
 Considered and explicitly rejected (user directive, 2026-08-02): the official Claude
-GitHub App ("Code Review," auto-triggers on PR open, ~$15-25/review flat via usage
-credits, needs a Team/Enterprise plan) and `claude-code-action` in GitHub Actions
-(auto-triggers via workflow YAML, per-token billing, needs `ANTHROPIC_API_KEY` as a repo
-secret). Neither is set up. Instead: after opening a PR, run the local `/code-review`
-slash command against it yourself (the orchestrator, in-session) as part of the normal
-verification flow — no bot, no new billing surface, no repo secret to manage. This is
+GitHub App's managed "Code Review" product (auto-triggers on PR open, ~$15-25/review
+flat via usage credits, needs a Team/Enterprise plan) — **this part of the rejection
+still stands**, that product is not installed.
+
+**Revised 2026-08-15:** `claude-code-action` in GitHub Actions was rejected at the same
+time for "per-token billing, needs `ANTHROPIC_API_KEY` as a repo secret" — that specific
+objection no longer applies. The action supports `claude_code_oauth_token` (generated via
+`claude setup-token`) as an alternative to `anthropic_api_key`; runs then bill against the
+user's Claude Pro/Max subscription instead of separate API usage. Set up in this repo:
+`.github/workflows/claude.yml`, triggered by `@claude` in a PR/issue comment, secret
+`CLAUDE_CODE_OAUTH_TOKEN`, GitHub App installed. This is a manually-triggered mention
+workflow, not an auto-review-every-PR one.
+
+`/code-review` (run by the orchestrator, in-session) remains the default for loop
+verification — no bot, no repo secret to manage there. The `@claude` mention workflow is
+an ad hoc supplementary path (e.g. tagging `@claude` on a PR from GitHub's UI, off-session)
 in addition to, not instead of, the existing reviewer-verifier/thermo-nuclear passes
 already run during a loop's VERIFY phase.
 
