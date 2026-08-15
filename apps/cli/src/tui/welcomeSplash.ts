@@ -41,14 +41,26 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
     resolveClosed = resolve;
   });
 
-  function onSplashLogin(): void {
+  // createAuthHandlers' own onLogin never rejects (a failure dispatches an "auth-step"/"result"
+  // instead) — awaited here, then `liveState.pendingAuth` (this mount's own synchronous mirror,
+  // read fresh right after) is what tells a genuine success apart from a failure still on screen: a
+  // SUCCESSFUL login dispatches "auth-resolved" itself (createAuthHandlers' own catch-free path)
+  // with no further keypress ever coming, which — unlike runTui's mount, where that same dispatch
+  // just reveals the InputBox already wired to a live session — would otherwise leave this mount's
+  // own `closed` promise permanently unresolved, since only onSplashContinue/onAuthResolved
+  // (dismissing a still-open panel) call `resolveClosed` here. A failure leaves `pendingAuth` set
+  // (the "result" step), so it stays on screen for the user to read and dismiss via onAuthResolved,
+  // same as today.
+  async function onSplashLogin(): Promise<void> {
     dispatch({ type: "splash-resolved" });
-    onLogin("login");
+    await onLogin("login");
+    if (liveState.pendingAuth === undefined) resolveClosed();
   }
 
-  function onSplashSignup(): void {
+  async function onSplashSignup(): Promise<void> {
     dispatch({ type: "splash-resolved" });
-    onLogin("signup");
+    await onLogin("signup");
+    if (liveState.pendingAuth === undefined) resolveClosed();
   }
 
   function onSplashContinue(): void {
