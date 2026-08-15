@@ -106,7 +106,6 @@ import {
   configKeyInfo,
   decideAuthOffer,
   decideConfigOpen,
-  decideConfigToggle,
   decideMaxTurns,
   decideModeCycle,
   decideModelPickerOpen,
@@ -1953,20 +1952,15 @@ function createConfigHandlers(opts: {
   // screen of its own, unlike enter-value); everything else opens the free-text entry step. Reads
   // the row straight off the panel's own current list state rather than re-reading disk to decide
   // what to toggle to — that list is exactly what decideConfigOpen already resolved this row's
-  // `kind`/`on`/`source` from. decideConfigToggle (tui/commands.ts) is the pure part of this
-  // decision, unit-testable without a pty.
+  // `kind`/`on`/`source` from.
   function onConfigSelect(key: string): void {
     const pending = getPendingConfig();
     const row = pending?.step === "list" ? pending.rows.find((r) => r.key === key) : undefined;
-    const decision = decideConfigToggle(row);
-    // The `row === undefined` half is redundant with decision.kind in practice (decideConfigToggle
-    // only returns "toggle" for a defined boolean row) — it's here so TS narrows `row` itself for
-    // the `row.source` read below, since narrowing doesn't propagate through the function call.
-    if (decision.kind === "enter-value" || row === undefined) {
+    if (row?.kind !== "boolean") {
       dispatch({ type: "config-step", state: { step: "enter-value", key, busy: false } });
       return;
     }
-    const next = decision.next;
+    const next = row.on ? "false" : "true";
     try {
       setConfigValue(key, next, configDir);
     } catch (err) {

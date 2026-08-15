@@ -221,7 +221,8 @@ export function decideAuthOffer(configDir: string): boolean {
 // `secret` is false (neither of the two known keys is a secret — SERI_VERIFY_COMMAND might be
 // "bun check", which a user should be able to read back, not see as asterisks) — only actually
 // masked (maskValue's own output) when `secret` is true.
-export type ConfigRow = {
+export type ConfigRowKind = { kind: "string" } | { kind: "boolean"; on: boolean };
+export type ConfigRowBase = {
   key: string;
   label: string;
   description: string;
@@ -229,7 +230,8 @@ export type ConfigRow = {
   source: "config" | "env" | "unset";
   removable: boolean;
   secret: boolean;
-} & ({ kind: "string" } | { kind: "boolean"; on: boolean });
+};
+export type ConfigRow = ConfigRowBase & ConfigRowKind;
 
 type ConfigKeyInfo = {
   label: string;
@@ -242,19 +244,13 @@ type ConfigKeyInfo = {
   takesEffectNextRun: boolean;
 };
 
-// The two keys /config always shows, in this order, regardless of whether config.json has them —
-// none of these are secrets, unlike an unrecognized key, which defaults to secret (conservative:
-// an unknown key could be provider-shaped in spirit even though provider keys themselves are
-// filtered out above). Also the one place a key's label/description/kind/takesEffectNextRun is
-// defined: `CONFIG_KEY_INFO`'s type ties its keys to this array, so omitting a known key from
-// `CONFIG_KEY_INFO` is a compile error, not a silent gap the two used to be able to drift into
-// independently.
-const KNOWN_CONFIG_KEYS = ["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"] as const;
-
-// Human-readable label/description/kind for each KNOWN_CONFIG_KEYS member — a hand-added key has
-// no entry here and falls back to its raw key/empty description/"string" kind (configKeyInfo,
-// decideConfigOpen below), since there is no human name to show for it.
-const CONFIG_KEY_INFO: Record<(typeof KNOWN_CONFIG_KEYS)[number], ConfigKeyInfo> = {
+// Human-readable label/description/kind for each key /config always shows, in this order,
+// regardless of whether config.json has them — none of these are secrets, unlike an unrecognized
+// key, which defaults to secret (conservative: an unknown key could be provider-shaped in spirit
+// even though provider keys themselves are filtered out below). `KNOWN_CONFIG_KEYS` is derived
+// from this object's own keys, not maintained as a second list, so a key can't exist in one and
+// not the other.
+const CONFIG_KEY_INFO: Record<string, ConfigKeyInfo | undefined> = {
   SERI_VERIFY_ENABLED: {
     label: "Automatic verification",
     description: "Run the verify command after each file edit and show failures to the model.",
@@ -269,20 +265,21 @@ const CONFIG_KEY_INFO: Record<(typeof KNOWN_CONFIG_KEYS)[number], ConfigKeyInfo>
     takesEffectNextRun: true,
   },
 };
+const KNOWN_CONFIG_KEYS = Object.keys(CONFIG_KEY_INFO);
 
 // Pure lookup (no disk read) so ConfigEnterValue/ConfigConfirmUnset can show a key's label without
-// widening ConfigPanelState with a field decideConfigOpen already computes for the list step.
-export function configKeyInfo(key: string): {
-  label: string;
-  description: string;
-  takesEffectNextRun: boolean;
-} {
-  const info = (CONFIG_KEY_INFO as Record<string, ConfigKeyInfo | undefined>)[key];
-  return {
-    label: info?.label ?? key,
-    description: info?.description ?? "",
-    takesEffectNextRun: info?.takesEffectNextRun ?? false,
-  };
+// widening ConfigPanelState with a field decideConfigOpen already computes for the list step. Also
+// decideConfigOpen's own reader — one fallback (raw key/empty description/"string" kind for a
+// hand-added key with no entry here), not two copies of it.
+export function configKeyInfo(key: string): ConfigKeyInfo {
+  return (
+    CONFIG_KEY_INFO[key] ?? {
+      label: key,
+      description: "",
+      kind: "string",
+      takesEffectNextRun: false,
+    }
+  );
 }
 
 // Never listed by /config, even if present in config.json: the OAuth client id /login's device
@@ -317,17 +314,17 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
     const hasEnvEntry = envValue !== undefined;
     const source: ConfigRow["source"] = hasEnvEntry ? "env" : hasConfigEntry ? "config" : "unset";
     const value = envValue ?? config[key];
-    const info = (CONFIG_KEY_INFO as Record<string, ConfigKeyInfo | undefined>)[key];
-    const secret = info === undefined;
+    const { label, description, kind } = configKeyInfo(key);
+    const secret = CONFIG_KEY_INFO[key] === undefined;
     // configBoolean mirrors loadVerifyConfig (config/config.ts) exactly: on unless explicitly
     // turned off, so a mistyped value cannot silently disable the feature. Pinned by the
     // agreement test in tests/tui/commands.test.ts.
-    const kindFields: { kind: "string" } | { kind: "boolean"; on: boolean } =
-      info?.kind === "boolean" ? { kind: "boolean", on: configBoolean(value) } : { kind: "string" };
+    const kindFields: ConfigRowKind =
+      kind === "boolean" ? { kind: "boolean", on: configBoolean(value) } : { kind: "string" };
     return {
       key,
-      label: info?.label ?? key,
-      description: info?.description ?? "",
+      label,
+      description,
       masked: value === undefined ? "" : secret ? maskValue(value) : value,
       source,
       removable: hasConfigEntry,
@@ -335,19 +332,6 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
       ...kindFields,
     };
   });
-}
-
-export type ConfigToggleDecision =
-  | { kind: "toggle"; next: "true" | "false" }
-  | { kind: "enter-value" };
-
-// Pure over a row decideConfigOpen already resolved — no disk read, so a toggle can never
-// disagree with what the panel is showing (a fresh re-read could race a concurrent config.json
-// write and toggle away from a value the user never saw). A missing/string-kind row falls back to
-// enter-value, the same default onConfigSelect used before this existed.
-export function decideConfigToggle(row: ConfigRow | undefined): ConfigToggleDecision {
-  if (row === undefined || row.kind === "string") return { kind: "enter-value" };
-  return { kind: "toggle", next: row.on ? "false" : "true" };
 }
 
 // One /permissions list row per PERSISTABLE_TOOL_NAMES member currently in effect for this

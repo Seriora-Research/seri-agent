@@ -23,10 +23,8 @@ import { rememberGrant } from "../../src/permissions/store";
 import bundledManifest from "../../src/provider/catalog-manifest.json";
 import type { SessionState } from "../../src/session/session";
 import {
-  type ConfigRow,
   decideAuthOffer,
   decideConfigOpen,
-  decideConfigToggle,
   decideGuidedModelPickerOpen,
   decideMaxTurns,
   decideModeCycle,
@@ -780,54 +778,6 @@ describe("decideConfigOpen", () => {
       setConfigValue("SERI_VERIFY_ENABLED", value, configConfigDir);
       expect(on()).toBe(loadVerifyConfig(configConfigDir).enabled);
     }
-  });
-});
-
-describe("decideConfigToggle", () => {
-  const stringRow: ConfigRow = {
-    key: "SERI_VERIFY_COMMAND",
-    label: "Verify command",
-    description: "",
-    masked: "",
-    source: "unset",
-    removable: false,
-    secret: false,
-    kind: "string",
-  };
-
-  const boolRow = (on: boolean, source: ConfigRow["source"] = "config"): ConfigRow => ({
-    key: "SERI_VERIFY_ENABLED",
-    label: "Automatic verification",
-    description: "",
-    masked: "",
-    source,
-    removable: source === "config",
-    secret: false,
-    kind: "boolean",
-    on,
-  });
-
-  test("no row (key not found) falls back to enter-value", () => {
-    expect(decideConfigToggle(undefined)).toEqual({ kind: "enter-value" });
-  });
-
-  test("a string-kind row falls back to enter-value, never toggles", () => {
-    expect(decideConfigToggle(stringRow)).toEqual({ kind: "enter-value" });
-  });
-
-  test("a boolean row currently on toggles to next: false", () => {
-    expect(decideConfigToggle(boolRow(true))).toEqual({ kind: "toggle", next: "false" });
-  });
-
-  test("a boolean row currently off toggles to next: true", () => {
-    expect(decideConfigToggle(boolRow(false))).toEqual({ kind: "toggle", next: "true" });
-  });
-
-  // decideConfigToggle only reads `row.on` — an env-sourced row still toggles based on what's
-  // displayed, same as a config-sourced one. Whether that write takes effect is onConfigSelect's
-  // (cli.ts) concern, not this pure decision's.
-  test("an env-sourced boolean row toggles the same way as a config-sourced one", () => {
-    expect(decideConfigToggle(boolRow(false, "env"))).toEqual({ kind: "toggle", next: "true" });
   });
 });
 
