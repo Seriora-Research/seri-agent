@@ -777,11 +777,9 @@ describe("decideConfigOpen", () => {
     }
   });
 
-  // Formerly a known, documented divergence (an automated review on PR #111 flagged it as
-  // user-visible now that this row renders an on/off claim): SERI_VERIFY_ENABLED="" in env with a
-  // config.json fallback present. loadVerifyConfig's `read` treats "" as falsy and falls through
-  // to config.json; decideConfigOpen's `value` (envValue ?? config[key]) keeps "" for display/
-  // source purposes, so the fix is scoped to the boolean interpretation only.
+  // `source` stays "env" for an empty-string entry — existence, not precedence (the test just
+  // above this one) — but `on` must agree with the live session, which resolveConfigValue's
+  // falls-through-on-falsy precedence gets right where a naive `??` wouldn't.
   test("SERI_VERIFY_ENABLED='' in env with a config.json fallback agrees with loadVerifyConfig", () => {
     setConfigValue("SERI_VERIFY_ENABLED", "false", configConfigDir);
     process.env.SERI_VERIFY_ENABLED = "";
@@ -790,6 +788,23 @@ describe("decideConfigOpen", () => {
     expect(row?.kind === "boolean" && row.on).toBe(loadVerifyConfig(configConfigDir).enabled);
     expect(row?.kind === "boolean" && row.on).toBe(false);
   });
+
+  // Regression test for a masking bypass: CONFIG_KEY_INFO is an object literal, so a plain index
+  // lookup / `=== undefined` check resolves inherited Object.prototype members for a config.json
+  // key that happens to share their name — Object.hasOwn (configKeyInfo, and this row's own
+  // `secret`) is what closes it. Without that guard, every assertion below fails: `secret` reads
+  // false (the inherited member isn't undefined), so the raw value renders unmasked.
+  test.each(["toString", "constructor", "valueOf", "hasOwnProperty", "isPrototypeOf"])(
+    "a config key named %s is not treated as a known key and stays masked",
+    (key) => {
+      setConfigValue(key, "sk-should-not-leak", configConfigDir);
+      const row = decideConfigOpen(configConfigDir).find((r) => r.key === key);
+      expect(row?.secret).toBe(true);
+      expect(row?.masked).not.toBe("sk-should-not-leak");
+      expect(row?.kind).toBe("string");
+      expect(row?.label).toBe(key);
+    },
+  );
 });
 
 describe("decidePermissionsOpen", () => {

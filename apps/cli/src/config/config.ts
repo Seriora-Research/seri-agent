@@ -58,9 +58,12 @@ export function setConfigValues(
 }
 
 // Returns false when the key wasn't set, so callers can tell "removed" from "nothing to remove".
+// Object.hasOwn, not `key in`: `config` is a plain object, so `key in config` is also true for an
+// inherited Object.prototype member — `seri config unset toString` would otherwise report
+// "Removed" and rewrite the file having deleted nothing.
 export function unsetConfigValue(key: string, configDir: string = getConfigDir()): boolean {
   const config = loadConfig(configDir);
-  if (!(key in config)) return false;
+  if (!Object.hasOwn(config, key)) return false;
   delete config[key];
   writeConfig(config, configDir);
   return true;
@@ -84,11 +87,21 @@ export function configBoolean(value: string | undefined): boolean {
 }
 
 // env-then-file precedence, falsy-skip: an env var set to "" is treated the same as unset, so it
-// falls through to config.json rather than winning as a valid-looking empty value. Shared by every
-// reader below (and by decideConfigOpen, tui/commands.ts) so the precedence rule has one definition
-// instead of being hand-rolled per call site and risking disagreement between them.
+// falls through to config.json rather than winning as a valid-looking empty value. Mirrors
+// provider/keys.ts's stateFromConfig — value and source come from ONE truthiness test, so a
+// caller that needs both (decideConfigOpen, tui/commands.ts) can't have them disagree the way an
+// independently-computed source (`!== undefined`) and value (`||`) once did.
+export function resolveConfigValue(
+  name: string,
+  config: Record<string, string>,
+): { value: string | undefined; source: "env" | "config" | "unset" } {
+  if (process.env[name]) return { value: process.env[name], source: "env" };
+  if (config[name]) return { value: config[name], source: "config" };
+  return { value: undefined, source: "unset" };
+}
+
 export function configValue(name: string, config: Record<string, string>): string | undefined {
-  return process.env[name] || config[name] || undefined;
+  return resolveConfigValue(name, config).value;
 }
 
 export type VerifyConfig = { enabled: boolean; command: string | undefined };

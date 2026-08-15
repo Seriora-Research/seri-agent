@@ -662,10 +662,10 @@ function childScriptRewindDuringStream(dir: string, flagPath: string): string {
 // own escape hatch — no /setup test ever touches the network). GROQ_API_KEY is set as a real env
 // var, same as every other script in this file — the groq ROW reads `source: "env"` because of it,
 // which some of the tests below rely on precisely because it is NOT the row under test.
-// `extraEnv` covers the env-shadow scenarios (item 7, feature-plan.md): a caller passing e.g.
-// `{ OPENAI_API_KEY: "sk-openai-env-value" }` or `{ SERI_VERIFY_ENABLED: "false" }` gets a real env
-// var exported before the dynamic import, so the row/key under test reads `source: "env"` — the
-// point being that env wins the SOURCE regardless of whether a config.json entry also exists
+// `extraEnv` covers env-shadow scenarios: a caller passing e.g. `{ OPENAI_API_KEY:
+// "sk-openai-env-value" }` or `{ SERI_VERIFY_ENABLED: "false" }` gets a real env var exported
+// before the dynamic import, so the row/key under test reads `source: "env"` — the point being
+// that a truthy env value wins the SOURCE regardless of whether a config.json entry also exists
 // underneath (seeded separately, host-side, before spawn).
 function childScriptSetup(dir: string, extraEnv: Record<string, string> = {}): string {
   return [

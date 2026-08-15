@@ -129,14 +129,17 @@ function ConfigList({
   );
 }
 
+// Total over ConfigRow["source"], so both branches below share one definition instead of one
+// calling this and the other re-inlining a near-twin ternary that has to be kept in sync by hand.
 function sourceTag(row: ConfigRow): string {
-  return row.source === "env" ? " (env)" : "";
+  if (row.source === "unset") return "";
+  return row.source === "env" ? " (env)" : " (config)";
 }
 
 function formatConfigRow(row: ConfigRow): string {
   if (row.kind === "boolean") return `${row.label}: ${row.on ? "on" : "off"}${sourceTag(row)}`;
   if (row.source === "unset") return `${row.label}: not set`;
-  return `${row.label}: ${row.masked}${row.source === "env" ? " (env)" : " (config)"}`;
+  return `${row.label}: ${row.masked}${sourceTag(row)}`;
 }
 
 function ConfigEnterValue({

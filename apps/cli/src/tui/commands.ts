@@ -308,19 +308,20 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
     // Read once, not twice (code review, round 2): `source` used to check
     // `process.env[key] !== undefined` while the value read used `process.env[key] || config[key]`
     // — an env var deliberately set to "" (falsy, but not undefined) reported `source: "env"` while
-    // actually reading the config.json value underneath it, disagreeing with its own `source`.
+    // actually reading the config.json value underneath it, disagreeing with its own `source`. An
+    // env entry is "env"-sourced here even when empty — existence, not precedence, is what this
+    // row's own display is answering (pinned by this file's own tests).
     const envValue = process.env[key];
     const hasEnvEntry = envValue !== undefined;
     const source: ConfigRow["source"] = hasEnvEntry ? "env" : hasConfigEntry ? "config" : "unset";
     const value = envValue ?? config[key];
     const { label, description, kind } = configKeyInfo(key);
     const secret = !Object.hasOwn(CONFIG_KEY_INFO, key);
-    // `value` (above) only falls through to config[key] on undefined (`??`), kept that way because
-    // `source`/`masked` need to show an env-sourced "" honestly — but the boolean interpretation
-    // needs loadVerifyConfig's actual precedence (configValue, config/config.ts: falls through on
-    // ANY falsy env value, "" included), or SERI_VERIFY_ENABLED="" in env with a config.json
-    // fallback would show "on" for a value the live session treats as absent. Pinned by the
-    // agreement test in tests/tui/commands.test.ts.
+    // The boolean interpretation still needs the OTHER question — precedence, not existence:
+    // resolveConfigValue falls through on any falsy env value ("" included), same as
+    // loadVerifyConfig's live default resolution, so SERI_VERIFY_ENABLED="" in env with a
+    // config.json fallback computes `on` from config, matching the running session, even though
+    // `source`/`masked` above still (accurately) call this row env-sourced.
     const kindFields: ConfigRowKind =
       kind === "boolean"
         ? { kind: "boolean", on: configBoolean(configValue(key, config)) }

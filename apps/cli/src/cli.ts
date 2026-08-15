@@ -44,9 +44,9 @@ import {
 import { configCommand as configCommandReal } from "./config/commands";
 import {
   configBoolean,
-  configValue,
   loadConfig,
   loadVerifyConfig,
+  resolveConfigValue,
   setConfigValue,
   unsetConfigValue,
 } from "./config/config";
@@ -1970,8 +1970,11 @@ function createConfigHandlers(opts: {
       return;
     }
     let nextOn: boolean;
+    let envWins: boolean;
     try {
-      nextOn = !configBoolean(configValue(key, loadConfig(configDir)));
+      const { value, source } = resolveConfigValue(key, loadConfig(configDir));
+      nextOn = !configBoolean(value);
+      envWins = source === "env";
       setConfigValue(key, String(nextOn), configDir);
     } catch (err) {
       dispatch({
@@ -1981,13 +1984,14 @@ function createConfigHandlers(opts: {
       return;
     }
     // The write above always lands in config.json, but an env var wins the precedence race — say
-    // so instead of claiming the active value changed, when this row is env-sourced.
+    // so instead of claiming the active value changed, when it does. `envWins` is this same fresh
+    // resolve's `source`, not `row.source` (the panel's possibly-stale snapshot) — same staleness
+    // reasoning as `nextOn` above.
     dispatch({
       type: "transcript-append",
-      line:
-        row.source === "env"
-          ? `${configKeyInfo(key).label}: ${nextOn ? "on" : "off"} in config, ${key} env still wins.`
-          : `${configKeyInfo(key).label} is now ${nextOn ? "on" : "off"}.${verifyConfigTakesEffectNote(key)}`,
+      line: envWins
+        ? `${configKeyInfo(key).label}: ${nextOn ? "on" : "off"} in config, ${key} env still wins.`
+        : `${configKeyInfo(key).label} is now ${nextOn ? "on" : "off"}.${verifyConfigTakesEffectNote(key)}`,
     });
     dispatchConfigList(key);
   }
