@@ -161,29 +161,15 @@ What to expect before you turn it on:
   were already there before seri touched anything. Diagnostics in the file just written are listed
   first, and at most 20 are sent to the model, with the true total alongside.
 
-## Documentation
-
-| Doc | Covers |
-| --- | --- |
-| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | The design spec — a mechanism-by-mechanism verdict against every major agent harness surveyed |
-| [`docs/RESEARCH.md`](./docs/RESEARCH.md) | The convergence survey `ARCHITECTURE.md` is built from |
-| [`docs/BUILD-PLAN.md`](./docs/BUILD-PLAN.md) | The reasoning and verify criteria behind each roadmap stage |
-| [`docs/ROADMAP.md`](./docs/ROADMAP.md) | What's shipped, what's next, in execution order |
-| [`docs/EVOLUTION.md`](./docs/EVOLUTION.md) | Design for the trajectory-learning/policy pipeline — not built yet |
-| [`docs/PROMPT-ROUTING.md`](./docs/PROMPT-ROUTING.md) | The per-model-family prompt-routing design — not built yet |
-
 ## Where this is going
 
-`docs/ARCHITECTURE.md` surveys the strongest mechanisms across the major agent harnesses —
-Claude Code, Codex, opencode, Aider, Hermes, and others — and records an explicit verdict on
-each rather than picking one to follow. Two directions from that survey aren't built yet: an
-OS-level sandbox layered on top of the permission gate (bubblewrap/Seatbelt, upgrading the
-gate rather than replacing it), and an offline pipeline (`docs/EVOLUTION.md`) that turns
-recorded trajectories into a reviewable, per-project behavioral policy. That document is
-deliberately careful about what to call the second one: the claim is "policy learned from a
-corpus of trajectories, validated against a human-written baseline," not an autonomous or
-self-modifying harness — every promotion still requires a human to approve it, the same way
-memory writes do today.
+seri's design deliberately extracts the strongest mechanism from each major agent harness
+rather than cloning one wholesale, and commits to an explicit verdict on every mechanism it
+considers rather than leaving the choice implicit. Two directions aren't built yet: an
+OS-level sandbox layered on top of the permission gate, upgrading it rather than replacing
+it, and an offline pipeline that turns recorded trajectories into a reviewable, per-project
+behavioral policy. That second one is deliberately not "self-evolving" or autonomous — every
+promotion requires a human to approve it, the same way memory writes do today.
 
 ## Contributing
 
