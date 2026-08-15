@@ -1,5 +1,8 @@
 # seri
 
+[![CI](https://github.com/lzvxck/seri-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/lzvxck/seri-agent/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/lzvxck/seri-agent)](./LICENSE)
+
 seri is a cross-platform coding-agent CLI, built toward being a genuinely definitive agent
 harness rather than a clone of any one of them. It ships as a single `seri` binary — no
 runtime to install — written in TypeScript on [Bun](https://bun.com), and runs natively on
@@ -158,6 +161,17 @@ What to expect before you turn it on:
   were already there before seri touched anything. Diagnostics in the file just written are listed
   first, and at most 20 are sent to the model, with the true total alongside.
 
+## Documentation
+
+| Doc | Covers |
+| --- | --- |
+| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | The design spec — a mechanism-by-mechanism verdict against every major agent harness surveyed |
+| [`docs/RESEARCH.md`](./docs/RESEARCH.md) | The convergence survey `ARCHITECTURE.md` is built from |
+| [`docs/BUILD-PLAN.md`](./docs/BUILD-PLAN.md) | The reasoning and verify criteria behind each roadmap stage |
+| [`docs/ROADMAP.md`](./docs/ROADMAP.md) | What's shipped, what's next, in execution order |
+| [`docs/EVOLUTION.md`](./docs/EVOLUTION.md) | Design for the trajectory-learning/policy pipeline — not built yet |
+| [`docs/PROMPT-ROUTING.md`](./docs/PROMPT-ROUTING.md) | The per-model-family prompt-routing design — not built yet |
+
 ## Where this is going
 
 `docs/ARCHITECTURE.md` surveys the strongest mechanisms across the major agent harnesses —
@@ -169,7 +183,12 @@ recorded trajectories into a reviewable, per-project behavioral policy. That doc
 deliberately careful about what to call the second one: the claim is "policy learned from a
 corpus of trajectories, validated against a human-written baseline," not an autonomous or
 self-modifying harness — every promotion still requires a human to approve it, the same way
-memory writes do today. `docs/ROADMAP.md` tracks what's actually shipped against what's next.
+memory writes do today.
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for how to get the repo running and what a change
+needs to clear before it lands.
 
 ## License
 
