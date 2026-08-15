@@ -122,13 +122,21 @@ export type TuiState = {
   // /permissions' own blocking panel (Stage D). Mirrors `pendingSetup`'s role; unreachable until
   // wired.
   pendingPermissions: PermissionsPanelState | undefined;
+  // The welcome-splash mount's own blocking panel. Only ever `true` for the throwaway App instance
+  // runWelcomeSplash renders (its own `initialTuiState` call opts in via `showSplash` below) —
+  // `runTui` and `runGuidedSetup` never set it, so their own separate App instances never render
+  // WelcomeSplash a second time for the same launch.
+  pendingSplash: boolean;
 };
 
 function modeIndicator(mode: PermissionMode): string {
   return `[${mode}]`;
 }
 
-export function initialTuiState(session: SessionState<ModelMessage>): TuiState {
+export function initialTuiState(
+  session: SessionState<ModelMessage>,
+  opts?: { showSplash?: boolean },
+): TuiState {
   return {
     session,
     transcript: [],
@@ -145,6 +153,7 @@ export function initialTuiState(session: SessionState<ModelMessage>): TuiState {
     pendingAuth: undefined,
     pendingConfig: undefined,
     pendingPermissions: undefined,
+    pendingSplash: opts?.showSplash ?? false,
   };
 }
 
@@ -208,7 +217,8 @@ export type TuiAction =
   | { type: "config-resolved"; leftoverInput?: string }
   | { type: "permissions-requested"; rows: PermissionRow[] }
   | { type: "permissions-step"; state: PermissionsPanelState }
-  | { type: "permissions-resolved"; leftoverInput?: string };
+  | { type: "permissions-resolved"; leftoverInput?: string }
+  | { type: "splash-resolved" };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -301,6 +311,8 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         pendingPermissions: undefined,
         pendingInputPrefill: action.leftoverInput,
       };
+    case "splash-resolved":
+      return { ...state, pendingSplash: false };
   }
 }
 

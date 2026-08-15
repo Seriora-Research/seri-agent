@@ -603,3 +603,21 @@ describe("tuiReducer: permissions-requested / permissions-step / permissions-res
     expect(state).toEqual(initialTuiState(session()));
   });
 });
+
+describe("tuiReducer: splash-resolved", () => {
+  test("initialTuiState without opts defaults pendingSplash to false", () => {
+    expect(initialTuiState(session()).pendingSplash).toBe(false);
+  });
+
+  test("initialTuiState with showSplash: true sets pendingSplash to true", () => {
+    expect(initialTuiState(session(), { showSplash: true }).pendingSplash).toBe(true);
+  });
+
+  test("splash-resolved clears pendingSplash and leaves every other field untouched", () => {
+    const state = tuiReducer(initialTuiState(session(), { showSplash: true }), {
+      type: "splash-resolved",
+    });
+
+    expect(state).toEqual(initialTuiState(session()));
+  });
+});
