@@ -28,7 +28,7 @@ import {
 } from "../checkpoint/checkpoint";
 import { projectRoot } from "../checkpoint/shadowGit";
 import { maskValue } from "../config/commands";
-import { loadConfig } from "../config/config";
+import { configBoolean, loadConfig } from "../config/config";
 import { isDefaultProfile, profileDir, profileNameError } from "../config/paths";
 import { cycleMode } from "../gate/gate";
 import { loadGrants, PERSISTABLE_TOOL_NAMES } from "../permissions/store";
@@ -317,11 +317,11 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
     const value = envValue ?? config[key];
     const info = (CONFIG_KEY_INFO as Record<string, ConfigKeyInfo | undefined>)[key];
     const secret = info === undefined;
-    // `!== "false"` mirrors loadVerifyConfig (config/config.ts) exactly: on unless explicitly
+    // configBoolean mirrors loadVerifyConfig (config/config.ts) exactly: on unless explicitly
     // turned off, so a mistyped value cannot silently disable the feature. Pinned by the
     // agreement test in tests/tui/commands.test.ts.
     const kindFields: { kind: "string" } | { kind: "boolean"; on: boolean } =
-      info?.kind === "boolean" ? { kind: "boolean", on: value !== "false" } : { kind: "string" };
+      info?.kind === "boolean" ? { kind: "boolean", on: configBoolean(value) } : { kind: "string" };
     return {
       key,
       label: info?.label ?? key,

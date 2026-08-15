@@ -77,32 +77,37 @@ export function unsetConfigValue(key: string, configDir: string = getConfigDir()
 // Record<string, string> here, `config list` masks every value it holds, and nesting one object
 // inside it would change both. The env-var-shaped names are deliberate — they get the same
 // env-then-file precedence getApiKey has, for free.
+// On unless explicitly turned off: a mistyped value must not silently disable a feature guarded
+// by one of these flags.
+export function configBoolean(value: string | undefined): boolean {
+  return value !== "false";
+}
+
 export type VerifyConfig = { enabled: boolean; command: string | undefined };
 
 export function loadVerifyConfig(configDir?: string): VerifyConfig {
   const config = loadConfig(configDir);
   const read = (name: string): string | undefined => process.env[name] || config[name] || undefined;
   return {
-    // On unless explicitly turned off: a mistyped value must not silently disable the feature.
     // Separate from `command` being unset, because this is the named mitigation for the per-write
     // cost — a user who configured a command needs a way to suspend it without losing it.
-    enabled: read("SERI_VERIFY_ENABLED") !== "false",
+    enabled: configBoolean(read("SERI_VERIFY_ENABLED")),
     command: read("SERI_VERIFY_COMMAND"),
   };
 }
 
-// Stage 6b: the two /memory-controlled toggles, copying loadVerifyConfig's exact
-// read(...) !== "false" shape (above) so a typo can't silently disable either safe default. Both
-// are read live rather than cached, since either can flip mid-session via /memory approval on|off
-// or /memory archivist on|off and driveLoop re-reads this every turn.
+// Stage 6b: the two /memory-controlled toggles, sharing configBoolean's `!== "false"` shape
+// (above) so a typo can't silently disable either safe default. Both are read live rather than
+// cached, since either can flip mid-session via /memory approval on|off or /memory archivist
+// on|off and driveLoop re-reads this every turn.
 export type MemoryConfig = { approvalRequired: boolean; archivistEnabled: boolean };
 
 export function loadMemoryConfig(configDir?: string): MemoryConfig {
   const config = loadConfig(configDir);
   const read = (name: string): string | undefined => process.env[name] || config[name] || undefined;
   return {
-    approvalRequired: read("SERI_MEMORY_APPROVAL") !== "false",
-    archivistEnabled: read("SERI_ARCHIVIST_ENABLED") !== "false",
+    approvalRequired: configBoolean(read("SERI_MEMORY_APPROVAL")),
+    archivistEnabled: configBoolean(read("SERI_ARCHIVIST_ENABLED")),
   };
 }
 
