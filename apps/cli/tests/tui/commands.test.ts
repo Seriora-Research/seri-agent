@@ -694,6 +694,14 @@ describe("decideConfigOpen", () => {
     expect(rows.some((row) => row.key === "GROQ_API_KEY")).toBe(false);
   });
 
+  test("SERI_WORKOS_CLIENT_ID is absent from the returned rows even when set via config.json or env", () => {
+    setConfigValue("SERI_WORKOS_CLIENT_ID", "client_from_config", configConfigDir);
+    expect(decideConfigOpen(configConfigDir).some((row) => row.key === "SERI_WORKOS_CLIENT_ID")).toBe(false);
+
+    process.env.SERI_WORKOS_CLIENT_ID = "client_from_env";
+    expect(decideConfigOpen(configConfigDir).some((row) => row.key === "SERI_WORKOS_CLIENT_ID")).toBe(false);
+  });
+
   test("a non-provider hand-added key in config.json is present", () => {
     setConfigValue("SERI_SOME_OTHER_KEY", "value", configConfigDir);
     const rows = decideConfigOpen(configConfigDir);
