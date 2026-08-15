@@ -21,6 +21,7 @@ import { InputBox } from "./panels/InputBox";
 import { ModelPicker } from "./panels/ModelPicker";
 import { PermissionsPanel } from "./panels/PermissionsPanel";
 import { SetupPanel } from "./panels/SetupPanel";
+import { WelcomeSplash } from "./panels/WelcomeSplash";
 import { type Dispatch, initialTuiState, tuiReducer } from "./reducer";
 import { theme } from "./theme";
 
@@ -133,6 +134,11 @@ export type AppProps = {
   onPermissionsRemove?: (tool: string) => void;
   onPermissionsBack?: () => void;
   onPermissionsClose?: (leftoverInput?: string) => void;
+  // The welcome-splash mount's own three resolutions — unreachable in runTui/runGuidedSetup, whose
+  // own initialTuiState calls never set pendingSplash (reducer.ts's own comment).
+  onSplashLogin?: () => void;
+  onSplashSignup?: () => void;
+  onSplashContinue?: () => void;
 };
 
 // D5 (byok-open3-route-indicator feature-plan.md): no such hook existed in this file before — the
@@ -180,6 +186,9 @@ export function App({
   onPermissionsRemove,
   onPermissionsBack,
   onPermissionsClose,
+  onSplashLogin,
+  onSplashSignup,
+  onSplashContinue,
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
   const { exit } = useApp();
@@ -214,8 +223,11 @@ export function App({
       `auth-offer: false` dispatch at every point the auth panel opened, and round 2's whole bug
       class was a call site that forgot one. The reducer already owns `pendingAuth` — "is the
       panel currently open" is exactly what should gate "hide the redundant banner," derived here
-      instead of commanded from cli.ts. */}
-      <AuthBanner show={state.authOffer && state.pendingAuth === undefined} />
+      instead of commanded from cli.ts. `!state.pendingSplash`: the splash mount's own login/signup
+      menu already offers the same thing, so the banner would otherwise render underneath it. */}
+      <AuthBanner
+        show={state.authOffer && state.pendingAuth === undefined && !state.pendingSplash}
+      />
       <Static items={state.transcript}>{(line, index) => <Text key={index}>{line}</Text>}</Static>
       {state.streaming.length > 0 && <Text>{state.streaming}</Text>}
       {state.pendingTool !== undefined && (
@@ -279,6 +291,13 @@ export function App({
           onPermissionsRemove={onPermissionsRemove}
           onPermissionsBack={onPermissionsBack}
           onPermissionsClose={onPermissionsClose}
+        />
+      ) : state.pendingSplash ? (
+        <WelcomeSplash
+          authenticated={!state.authOffer}
+          onLogin={onSplashLogin}
+          onSignup={onSplashSignup}
+          onContinue={onSplashContinue}
         />
       ) : (
         <InputBox

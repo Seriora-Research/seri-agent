@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { type ModelCatalog, type ModelCatalogEntry, resetCatalogCache } from "@seri/model-catalog";
-import { catalogWithFallback, getModelCatalog, resetFallbackWarning } from "../../src/provider/catalog";
+import {
+  catalogWithFallback,
+  getModelCatalog,
+  resetFallbackWarning,
+} from "../../src/provider/catalog";
 
 function catalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
   return {
@@ -54,9 +58,7 @@ describe("catalogWithFallback", () => {
 
     const result = catalogWithFallback(live, new Set(["groq"]));
 
-    expect(result.entries.filter((entry) => entry.provider === "groq")).toEqual([
-      live.entries[0],
-    ]);
+    expect(result.entries.filter((entry) => entry.provider === "groq")).toEqual([live.entries[0]]);
   });
 });
 

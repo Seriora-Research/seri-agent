@@ -122,13 +122,24 @@ export type TuiState = {
   // /permissions' own blocking panel (Stage D). Mirrors `pendingSetup`'s role; unreachable until
   // wired.
   pendingPermissions: PermissionsPanelState | undefined;
+  // The welcome-splash mount's own blocking panel. `initialTuiState`'s own `showSplash` opt (below)
+  // only seeds the value App.tsx's OWN internal `useReducer(tuiReducer, initialTuiState(session))`
+  // call starts from — that call never passes `showSplash`, so every App instance still mounts with
+  // this `false` until `runWelcomeSplash`'s own `connectDispatch` fires `splash-requested` on mount,
+  // the same "seed false, flip true via a requested action fired at mount" shape `pendingSetup`/
+  // `pendingAuth` already use. `runTui` and `runGuidedSetup` never dispatch it, so their own
+  // separate App instances never render WelcomeSplash for the same launch.
+  pendingSplash: boolean;
 };
 
 function modeIndicator(mode: PermissionMode): string {
   return `[${mode}]`;
 }
 
-export function initialTuiState(session: SessionState<ModelMessage>): TuiState {
+export function initialTuiState(
+  session: SessionState<ModelMessage>,
+  opts?: { showSplash?: boolean },
+): TuiState {
   return {
     session,
     transcript: [],
@@ -145,6 +156,7 @@ export function initialTuiState(session: SessionState<ModelMessage>): TuiState {
     pendingAuth: undefined,
     pendingConfig: undefined,
     pendingPermissions: undefined,
+    pendingSplash: opts?.showSplash ?? false,
   };
 }
 
@@ -208,7 +220,9 @@ export type TuiAction =
   | { type: "config-resolved"; leftoverInput?: string }
   | { type: "permissions-requested"; rows: PermissionRow[] }
   | { type: "permissions-step"; state: PermissionsPanelState }
-  | { type: "permissions-resolved"; leftoverInput?: string };
+  | { type: "permissions-resolved"; leftoverInput?: string }
+  | { type: "splash-requested" }
+  | { type: "splash-resolved" };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -301,6 +315,10 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         pendingPermissions: undefined,
         pendingInputPrefill: action.leftoverInput,
       };
+    case "splash-requested":
+      return { ...state, pendingSplash: true };
+    case "splash-resolved":
+      return { ...state, pendingSplash: false };
   }
 }
 
