@@ -15,10 +15,8 @@ a coding agent.**
 
 ## How it works
 
-seri has one entry point. Run `seri` and it opens a full-screen terminal session — there is no
-separate headless task-runner mode, no `seri <task>` one-shot invocation, and no scriptable
-subcommands to call from CI. Every capability below is a slash command inside that session, not
-something you reach for from a shell script.
+seri has one entry point: run `seri` and it opens a full-screen terminal session. Every
+capability below is a slash command inside that session.
 
 - **A permission gate as the base safety layer**, on every OS: `read-only` / `approve-each` /
   `auto`, one keystroke to cycle (`/mode`). A tool you approve with "always" is remembered —
@@ -115,8 +113,6 @@ directory is safe — the next search writes it again — and a run that cannot 
 to a temporary copy.
 
 ## Commands
-
-Everything you'd expect from a CLI flag lives here instead — there is no other interface.
 
 | Command | Does |
 | --- | --- |
