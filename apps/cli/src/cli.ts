@@ -2337,9 +2337,13 @@ async function runTui(
   // own turn keeps streaming unaffected — flushing here would fragment that in-progress answer
   // into two transcript entries for a submission that did nothing. The rejected/accepted text
   // still gets echoed either way (this whole fix's own point); only the flush side-effect is
-  // skipped.
-  const echoUserInput = (text: string): void =>
+  // skipped. Also clears a stale commandError from a PREVIOUS submission: this fires before every
+  // submission's own branch runs (onSubmit's own comment), so a fresh command-error this
+  // submission goes on to produce still lands afterward and is unaffected.
+  const echoUserInput = (text: string): void => {
     dispatch({ type: "transcript-append", line: `> ${text.trim()}`, flush: false });
+    dispatch({ type: "command-error-cleared" });
+  };
   let turnInFlight = false;
   // HIGH-B: the currently in-flight turn's own promise (a fresh one assigned at each of the two
   // call sites that start one, both guarded so a new turn is never started while one is already

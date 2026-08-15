@@ -74,8 +74,9 @@ export type TuiState = {
   pendingTool: { name: string; args: unknown } | undefined;
   // A slash command that threw (previously uncaught, straight through Ink's own input handler),
   // or input shaped like a slash command that matched nothing / failed its own accepts() guard —
-  // rendered with theme.ts's `error` role rather than left to vanish silently. Not auto-cleared:
-  // it stays visible until the next command error replaces it or the session ends.
+  // rendered with theme.ts's `error` role rather than left to vanish silently. Cleared by
+  // `command-error-cleared`, dispatched alongside every submission's own echo (echoUserInput,
+  // cli.ts) — so it clears on the very next submission, success or failure of that submission.
   commandError: string | undefined;
   // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native ApprovalPrompt's own
   // live state — set when runTui's tuiApprovalPrompt is called (a write-tool call reached the
@@ -168,6 +169,7 @@ export type TuiAction =
   | { type: "transcript-append"; line: string; flush?: boolean }
   | { type: "loop-event"; event: LoopEvent }
   | { type: "command-error"; message: string }
+  | { type: "command-error-cleared" }
   | { type: "approval-requested"; toolName: string; args: unknown; offersAlways: boolean }
   | { type: "approval-resolved" }
   | { type: "model-picker-requested"; entries: ModelPickerEntry[] }
@@ -251,6 +253,8 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return applyLoopEvent(state, action.event);
     case "command-error":
       return { ...state, commandError: action.message };
+    case "command-error-cleared":
+      return { ...state, commandError: undefined };
     case "approval-requested":
       return {
         ...state,

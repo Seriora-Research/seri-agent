@@ -226,6 +226,24 @@ describe("tuiReducer: approval-requested / approval-resolved", () => {
   });
 });
 
+describe("tuiReducer: command-error / command-error-cleared", () => {
+  test("command-error sets commandError, command-error-cleared clears it, other fields untouched", () => {
+    const initial = initialTuiState(session());
+    expect(initial.commandError).toBeUndefined();
+
+    const withError = tuiReducer(initial, {
+      type: "command-error",
+      message: "Usage: /profile new <name>",
+    });
+    expect(withError.commandError).toBe("Usage: /profile new <name>");
+
+    const cleared = tuiReducer(withError, { type: "command-error-cleared" });
+    expect(cleared.commandError).toBeUndefined();
+    expect(cleared.session).toBe(withError.session);
+    expect(cleared.transcript).toBe(withError.transcript);
+  });
+});
+
 describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
   const entry: ModelCatalogEntry = {
     id: "llama-3.3-70b-versatile",
