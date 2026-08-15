@@ -218,9 +218,9 @@ export function decideAuthOffer(configDir: string): boolean {
 
 // One /config list row per known key, plus any other config.json key that isn't a provider API
 // key — provider keys are entirely /setup's, not /config's. `masked` is the raw value when
-// `secret` is false (code review, round 2: none of the three known keys are secrets —
-// SERI_VERIFY_COMMAND might be "bun check", which a user should be able to read back, not see as
-// asterisks) — only actually masked (maskValue's own output) when `secret` is true.
+// `secret` is false (neither of the two known keys is a secret — SERI_VERIFY_COMMAND might be
+// "bun check", which a user should be able to read back, not see as asterisks) — only actually
+// masked (maskValue's own output) when `secret` is true.
 export type ConfigRow = {
   key: string;
   masked: string;
@@ -229,11 +229,16 @@ export type ConfigRow = {
   secret: boolean;
 };
 
-// The three keys /config always shows, in this order, regardless of whether config.json has them
-// — none of these are secrets, unlike an unrecognized key, which defaults to secret (conservative:
+// The two keys /config always shows, in this order, regardless of whether config.json has them —
+// none of these are secrets, unlike an unrecognized key, which defaults to secret (conservative:
 // an unknown key could be provider-shaped in spirit even though provider keys themselves are
 // filtered out above).
-const KNOWN_CONFIG_KEYS = ["SERI_WORKOS_CLIENT_ID", "SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
+const KNOWN_CONFIG_KEYS = ["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
+
+// Never shown or editable via /config, even if present in config.json or process.env: the OAuth
+// client id /login's device flow resolves live (auth/deviceFlow.ts) — an internal/advanced
+// setting, not one a common /config user should see or change.
+const HIDDEN_CONFIG_KEYS = new Set(["SERI_WORKOS_CLIENT_ID"]);
 
 // The decision half of /config, mirroring decideSetupOpen's own shape. Provider API keys
 // (PROVIDER_API_KEY_NAMES) are excluded from the "other keys" tail even when present in
@@ -243,7 +248,10 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
   const config = loadConfig(configDir);
   const providerKeyNames = new Set<string>(Object.values(PROVIDER_API_KEY_NAMES));
   const otherKeys = Object.keys(config)
-    .filter((key) => !KNOWN_CONFIG_KEYS.includes(key) && !providerKeyNames.has(key))
+    .filter(
+      (key) =>
+        !KNOWN_CONFIG_KEYS.includes(key) && !providerKeyNames.has(key) && !HIDDEN_CONFIG_KEYS.has(key),
+    )
     .sort();
   return [...KNOWN_CONFIG_KEYS, ...otherKeys].map((key) => {
     const hasConfigEntry = key in config;
