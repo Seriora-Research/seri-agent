@@ -247,10 +247,17 @@ describe("decideGuidedModelPickerOpen", () => {
   const catalog = bundledManifest as ModelCatalog;
   const configured = new Set<ModelProvider>(["anthropic"]);
 
-  test("every returned row has its own key or a working reroute target", () => {
+  // The important regression test for the keyless-row-removal fix: a keyless row's model/provider
+  // pair is only reachable in the guided picker's own live+fallback merge, never guaranteed
+  // reachable in the LIVE catalog `resolveRoute` re-checks against at actual routing time — so
+  // every row must carry its own key, and no row may carry a `rerouteTo` at all. RED against the
+  // pre-fix code (the `keyed`/`rerouted` partition): that code allowed a keyless row through
+  // whenever `rerouteTo` was set, which this assertion would have caught immediately.
+  test("every returned row has keyConfigured true, and no row has a rerouteTo", () => {
     const rows = decideGuidedModelPickerOpen(catalog, configured);
     expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every((row) => row.keyConfigured || row.rerouteTo !== undefined)).toBe(true);
+    expect(rows.every((row) => row.keyConfigured === true)).toBe(true);
+    expect(rows.every((row) => row.rerouteTo === undefined)).toBe(true);
   });
 
   test("contains native anthropic rows — the key that was actually configured", () => {
@@ -279,6 +286,44 @@ describe("decideGuidedModelPickerOpen", () => {
       entries: [catalogEntry({ id: "a", provider: "groq" })],
     };
     expect(decideGuidedModelPickerOpen(catalog, new Set(["anthropic"]))).toEqual([]);
+  });
+
+  // byRoutePriority (routing.ts) orders a route group's members native-then-aggregator, ties
+  // broken by CATALOG_PROVIDERS order — groq before openrouter, regardless of which one the user
+  // actually has a key for. Under the old keyed/rerouted partition, the keyless groq row would
+  // have sorted first within the group and then been pushed after the keyed openrouter row; now
+  // it must not appear at all. RED against the pre-fix code: the old partition returned the groq
+  // row (with `rerouteTo: "openrouter"`) as `rows[1]`, so `rows.length` was 2, not 1.
+  test("never includes a keyless row, even when one would sort first", () => {
+    const routeCatalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "openai/gpt-oss-120b", provider: "groq" }),
+        catalogEntry({ id: "openai/gpt-oss-120b", provider: "openrouter" }),
+      ],
+    };
+    const rows = decideGuidedModelPickerOpen(routeCatalog, new Set(["openrouter"]));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.entry.provider).toBe("openrouter");
+  });
+
+  // code-review finding: `alternatives` (decideModelPickerOpen's own group.length - 1) is computed
+  // over the FULL route group before the keyless-row filter above drops every unshown sibling — a
+  // surviving row must not keep claiming an "alternative" that this list no longer contains. RED
+  // against the pre-fix code: `alternatives` stayed 1 (the full group's count) even after the
+  // groq sibling was filtered out, so formatModelRow would render "+1 route" for a route this list
+  // never shows.
+  test("recomputes alternatives from the filtered rows, not the stale full-group count", () => {
+    const routeCatalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "openai/gpt-oss-120b", provider: "groq" }),
+        catalogEntry({ id: "openai/gpt-oss-120b", provider: "openrouter" }),
+      ],
+    };
+    const rows = decideGuidedModelPickerOpen(routeCatalog, new Set(["openrouter"]));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.alternatives).toBe(0);
   });
 });
 

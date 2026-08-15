@@ -1019,6 +1019,45 @@ function childScriptGuidedSetupDelayedFetch(dir: string): string {
   ].join("\n");
 }
 
+// Unlike childScriptGuidedSetupDelayedFetch's own 500 status (which makes loadCatalog fall back to
+// the bundled manifest), this answers models.dev with a 200-OK payload that curates to zero rows
+// for every provider except groq, and groq's own "models" object is empty too — the live-fetch
+// path a real, mostly-empty upstream payload takes, not a network failure. Also deliberately does
+// NOT set SERI_DISABLE_MODELS_FETCH (same reasoning as childScriptGuidedSetupSlowFetch's own
+// comment), and deletes it since this suite's own npm script sets it process-wide.
+function childScriptGuidedSetupCatalogMissingProvider(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `delete process.env.GROQ_API_KEY;`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `delete process.env.ANTHROPIC_API_KEY;`,
+    `delete process.env.OPENAI_API_KEY;`,
+    `delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;`,
+    `delete process.env.SERI_DISABLE_MODELS_FETCH;`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) =>`,
+    `  typeof url === "string" && url.includes("models.dev")`,
+    `    ? Promise.resolve(new Response(JSON.stringify({ groq: { models: {} } }), { status: 200 }))`,
+    `    : realFetch(url, opts);`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
 // cli-tui-stage-b-bare-seri, feature-plan.md Stage B: a real TTY, no positionals, no --continue/
 // --resume — the exact case that used to hard-exit with USAGE before this stage and now mounts the
 // TUI idle instead. GROQ_API_KEY is set (unlike childScriptGuidedSetup) so the zero-keys gate never
@@ -3632,6 +3671,40 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.kill("SIGKILL");
       }
     }, 60_000);
+
+    // A 200-OK models.dev payload that curates to zero rows for the provider the user just
+    // configured used to resolve the panel with no picker at all, landing on prepareSession's
+    // groq-flavoured missing-key exit even though the key just saved was openrouter's. The
+    // mandatory-picker guarantee must hold here too, not just when the live catalog happens to
+    // carry rows for whichever provider the user picks.
+    test("Esc after adding a key still opens the mandatory picker when the live catalog carries no rows for that provider", async () => {
+      const scriptPath = join(dir, "child-guided-setup-catalog-missing-provider.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetupCatalogMissingProvider(dir));
+
+      const { child, sawLine } = startChild(scriptPath, dir);
+      try {
+        await sawLine("/setup — provider API keys");
+
+        // CATALOG_PROVIDERS order is groq, openrouter, ... — one Down reaches openrouter.
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("a");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        const secret = "sk-guided-setup-catalog-missing-provider-secret";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved OPENROUTER_API_KEY.");
+
+        child.stdin?.write("\x1b");
+        await wait100ms();
+        await sawLine("Route");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 20_000);
   });
 
   // Stage D (cli-commands-to-tui feature-plan.md): /config end to end on a real pty. Reuses

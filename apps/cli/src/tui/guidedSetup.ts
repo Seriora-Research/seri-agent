@@ -6,6 +6,7 @@
 // file has no dependency back on cli.ts at all.
 import { randomUUID } from "node:crypto";
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
+import { catalogWithFallback } from "../provider/catalog";
 import { persistDefaultModel } from "../provider/defaults";
 import { configuredProviders } from "../provider/keys";
 import { deliverSignal, onSignalCleanup } from "../signals";
@@ -208,17 +209,25 @@ export async function runGuidedSetup(
           // (and persist) a default model for a provider whose key was removed in the meantime,
           // reproducing the exact missing-key bug this feature exists to prevent.
           const freshConfigured = configuredProviders(configDir);
-          // Reviewer-verifier finding M1: `catalog` here is the LIVE models.dev payload, not the
-          // bundled manifest decideGuidedModelPickerOpen's own comment was measured against —
-          // loadCatalog silently drops a provider whose upstream `models` entry is missing/malformed,
-          // so this CAN come back empty for the provider the user just configured. An empty picker
-          // would render zero rows with no way to proceed except a fatal Ctrl-C (Enter is a no-op
-          // with nothing selected, Escape correctly re-prompts into the same empty list) — the same
-          // decline degrade used above is what actually gets the user back to a message they can act
-          // on. The same empty-picker guard also covers a provider removed during the wait: with no
-          // keys left, every row filters out and `entries.length === 0` degrades the same way.
-          const entries = decideGuidedModelPickerOpen(catalog, freshConfigured);
+          if (freshConfigured.size === 0) {
+            // Every key was removed during the wait — the same decline path as this function's
+            // own initial `configured.size === 0` check, above.
+            closeWithoutPicker();
+            return;
+          }
+          // `catalog` here is the LIVE models.dev payload: a provider whose upstream `models` entry
+          // is missing/malformed comes back with zero rows for it, even though the key the user just
+          // saved is for that exact provider. `catalogWithFallback` backfills only that provider's
+          // rows from the bundled manifest, scoped to what `freshConfigured` actually is.
+          const entries = decideGuidedModelPickerOpen(
+            catalogWithFallback(catalog, freshConfigured),
+            freshConfigured,
+          );
           if (entries.length === 0) {
+            // Unreachable in practice — the bundled manifest carries real rows for every provider,
+            // and decideGuidedModelPickerOpen only ever excludes rows, never invents one for a
+            // provider it has none for — but a blank picker has no way to proceed except a fatal
+            // Ctrl-C, so this degrades to the decline path instead of rendering zero rows.
             closeWithoutPicker();
             return;
           }

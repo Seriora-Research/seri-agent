@@ -1,6 +1,64 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { resetCatalogCache } from "@seri/model-catalog";
-import { getModelCatalog, resetFallbackWarning } from "../../src/provider/catalog";
+import { type ModelCatalog, type ModelCatalogEntry, resetCatalogCache } from "@seri/model-catalog";
+import { catalogWithFallback, getModelCatalog, resetFallbackWarning } from "../../src/provider/catalog";
+
+function catalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+  return {
+    id: "llama-3.3-70b-versatile",
+    provider: "groq",
+    displayName: "Llama 3.3 70B",
+    family: "llama",
+    contextWindow: 131_072,
+    maxOutputTokens: 32_768,
+    toolCall: true,
+    reasoning: false,
+    pricing: undefined,
+    ...overrides,
+  };
+}
+
+// Scoped to `configured`, not whole-catalog: an unconfigured provider's backfilled rows would
+// never be shown (the guided picker filters to the same `configured` set) but would still
+// inflate other providers' route-group alternatives counts for no reason.
+describe("catalogWithFallback", () => {
+  test("backfills a configured provider missing from live", () => {
+    const live: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [catalogEntry({ id: "live-groq", provider: "groq" })],
+    };
+
+    const result = catalogWithFallback(live, new Set(["groq", "openrouter"]));
+
+    expect(result.entries.some((entry) => entry.id === "live-groq")).toBe(true);
+    expect(result.entries.some((entry) => entry.provider === "openrouter")).toBe(true);
+  });
+
+  // The scoping regression test: a provider missing from live but not in `configured` must NOT be
+  // backfilled — its rows would offer a route the guided picker can't actually honor later.
+  test("does not backfill a provider missing from live but not in configured", () => {
+    const live: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [catalogEntry({ id: "live-groq", provider: "groq" })],
+    };
+
+    const result = catalogWithFallback(live, new Set(["groq"]));
+
+    expect(result.entries.some((entry) => entry.provider === "openrouter")).toBe(false);
+  });
+
+  test("live entries win over fallback entries for a provider live already has", () => {
+    const live: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [catalogEntry({ id: "live-groq", provider: "groq" })],
+    };
+
+    const result = catalogWithFallback(live, new Set(["groq"]));
+
+    expect(result.entries.filter((entry) => entry.provider === "groq")).toEqual([
+      live.entries[0],
+    ]);
+  });
+});
 
 // In-process, not a spawned child (M-2/M-3 fix): a spawned child inherits this package's own test
 // script env (apps/cli/package.json's `"test": "SERI_DISABLE_MODELS_FETCH=1 bun test"`), which made

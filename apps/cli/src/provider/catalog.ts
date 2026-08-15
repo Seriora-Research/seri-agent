@@ -1,4 +1,4 @@
-import { loadCatalog, type ModelCatalog } from "@seri/model-catalog";
+import { loadCatalog, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import { printWarning } from "../cli/output";
 import bundledManifest from "./catalog-manifest.json";
 
@@ -8,6 +8,24 @@ import bundledManifest from "./catalog-manifest.json";
 // bundler already treats a JSON import as a module and inlines it at build time, so it needs no
 // `with { type: "file" }` to survive inside the compiled binary.
 const FALLBACK_MANIFEST = bundledManifest as ModelCatalog;
+
+// Per-provider, not whole-catalog: a live models.dev payload can carry zero rows for one
+// configured provider while another configured provider's live rows are fine. Scoped to
+// `configured` (not every provider FALLBACK_MANIFEST has rows for): the guided picker
+// (tui/commands.ts's decideGuidedModelPickerOpen) filters to the same `configured` set, so an
+// unconfigured provider's backfilled rows would never be shown — but they'd still join that
+// provider's route groups and inflate the `alternatives`/ordering the SHOWN rows report, for
+// providers the picker has no reason to know about at all.
+export function catalogWithFallback(
+  live: ModelCatalog,
+  configured: ReadonlySet<ModelProvider>,
+): ModelCatalog {
+  const liveProviders = new Set(live.entries.map((entry) => entry.provider));
+  const backfill = FALLBACK_MANIFEST.entries.filter(
+    (entry) => configured.has(entry.provider) && !liveProviders.has(entry.provider),
+  );
+  return backfill.length === 0 ? live : { ...live, entries: [...live.entries, ...backfill] };
+}
 
 // Warns at most once per process (code-review finding, PR #91 round 3): `run()` and
 // `prepareSession` both call `getModelCatalog()` independently on the same guided-setup run, and

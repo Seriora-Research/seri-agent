@@ -138,20 +138,32 @@ export function decideModelPickerOpen(
   return rows;
 }
 
-// Guided setup's own picker (byok-guided-setup-default-model bugfix report, Decision 3):
-// `decideModelPickerOpen` filtered to rows `resolveRoute` will actually reach — its own key
-// configured, or a reroute target it computed for this exact `configured` set. Offering a
-// dead-end row here would let the ONE mandatory model pick of a blank first run still end in
-// `missingKeyError`, one step later than the bug this loop fixes but the same exit. `/model`'s own
-// picker (runTui) is deliberately NOT filtered this way — picking a keyless model there is a
-// power-user act with a working session already underneath it.
+// Guided setup's own picker (byok-guided-setup-default-model bugfix report, Decision 3): every
+// row here is one the user's own configured key serves. A keyless row that only reroutes is never
+// shown, for two reasons: its target is already present as its own keyed row in this same list
+// (`rerouteTo` is only ever set to a sibling that `decideModelPickerOpen` found configured, and
+// that sibling is itself emitted as a `keyConfigured: true` row), so a keyless row adds no
+// reachable outcome beyond bug surface; and a keyless row's model/provider pair can only be
+// persisted and resolved correctly later if it is independently reachable in the LIVE catalog at
+// actual routing time — a guarantee the picker's own catalog (a live+fallback merge) cannot make.
+// A KEYED row has no such gap: `resolveRoute` (provider/routing.ts) returns a configured pick
+// unchanged, before it ever looks the model up in any catalog — so a keyed row sourced from
+// `catalogWithFallback`'s backfill is exactly as safe to persist as a live one.
 export function decideGuidedModelPickerOpen(
   catalog: ModelCatalog,
   configured: ReadonlySet<ModelProvider>,
 ): ModelPickerEntry[] {
-  return decideModelPickerOpen(catalog, configured).filter(
-    (row) => row.keyConfigured || row.rerouteTo !== undefined,
-  );
+  const keyed = decideModelPickerOpen(catalog, configured).filter((row) => row.keyConfigured);
+  // `alternatives` above is `decideModelPickerOpen`'s own group.length - 1, counted over the FULL
+  // route group before this filter drops every keyless sibling — recomputed here over just the
+  // rows this list actually shows, or a row could claim "+1 route" for a route this list never
+  // renders (a keyless sibling elsewhere in the same group that got filtered out above).
+  const shownGroups = groupRoutes(keyed.map((row) => row.entry));
+  const shownAlternatives = new Map<ModelCatalogEntry, number>();
+  for (const group of shownGroups.values()) {
+    for (const entry of group) shownAlternatives.set(entry, group.length - 1);
+  }
+  return keyed.map((row) => ({ ...row, alternatives: shownAlternatives.get(row.entry) ?? 0 }));
 }
 
 // One row per provider — /setup's own table (D5-D8, feature-plan.md). `removable` is D8: it is
