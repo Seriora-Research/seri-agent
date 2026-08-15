@@ -885,16 +885,33 @@ function dirs(ctx: RunContext): CommandDirs {
 // every call site, so they can't silently drift out of sync with each other.
 //   "task"   — real task text was given (new session or --continue/--resume with new text): push,
 //              echo, and start a turn on it.
-//   "resume" — --continue/--resume with no new text: nothing to push or echo. A turn is started
-//              only if the resumed session's last message is a user message with no reply yet —
-//              a session that already ended on an assistant reply has nothing left to answer, and
-//              starting one anyway made a redundant model call and appended a duplicate reply.
+//   "resume" — --continue/--resume with no new text: nothing to push or echo. Whether a turn
+//              actually starts is a separate question the session's own messages answer, not
+//              this classification alone — see awaitsReply, below, and connectDispatch's use of it.
 //   "idle"   — no resume target and no task text (bare `seri` in a TTY): mount with nothing to do.
 type RunStart = "idle" | "task" | "resume";
 
 function runStart(ctx: RunContext): RunStart {
   if (ctx.taskText.length > 0) return "task";
   return ctx.resuming ? "resume" : "idle";
+}
+
+// Whether a resumed session still owes the user a reply — the gate connectDispatch (below) applies
+// before auto-starting a turn on a bare `--continue`/`--resume`. Not a plain `role === "user"`
+// check: loop.ts's own non-`"no-tool-call"` done reasons ("aborted" — including a mid-tool-batch
+// cancel, "max-iterations", "repeated-denials") all persist ending in a `role: "tool"` message
+// (loop.ts always pushes the tool-result row, even a synthetic "execution-denied" one for a
+// cancelled call, before yielding any of those), which is exactly as unanswered as a bare user
+// message — the model was cut off before giving its last word. The one state that's genuinely
+// finished is an assistant message with no tool-call parts left in it; an assistant message that
+// still carries an unresolved tool-call (only reachable if the process died between loop.ts
+// pushing that message and running the calls it named) is treated the same as "owes a reply",
+// since a resumed turn there is no worse than what the old unconditional runTurn call already did.
+function awaitsReply(messages: ModelMessage[]): boolean {
+  const last = messages.at(-1);
+  if (last === undefined) return false;
+  if (last.role !== "assistant") return true;
+  return Array.isArray(last.content) && last.content.some((part) => part.type === "tool-call");
 }
 
 // A slash command always operates on the resume target — an explicit --resume id, or the most
@@ -3170,14 +3187,12 @@ async function runTui(
         dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
         // runStart — the same three-state predicate prepareSession (above) uses to decide whether
         // it pushed the initial user message at all: "task" echoes and starts a turn on it,
-        // "resume" (a bare `--continue`/`--resume`) starts a turn only if the resumed session's
-        // last message is still an unanswered user message, and "idle" (bare `seri`, no resume, no
-        // task) starts nothing.
+        // "resume" (a bare `--continue`/`--resume`) starts a turn only if the resumed session
+        // still awaitsReply (above), and "idle" (bare `seri`, no resume, no task) starts nothing.
         const start = runStart(ctx);
         if (start === "task") echoUserInput(ctx.taskText);
         const shouldRunTurn =
-          start === "task" ||
-          (start === "resume" && prepared.session.messages.at(-1)?.role === "user");
+          start === "task" || (start === "resume" && awaitsReply(prepared.session.messages));
         if (shouldRunTurn) currentTurn = runTurn(prepared.session);
       },
     }),

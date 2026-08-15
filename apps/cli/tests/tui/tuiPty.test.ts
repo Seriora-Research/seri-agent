@@ -4297,5 +4297,65 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.kill("SIGKILL");
       }
     }, 60_000);
+
+    // loop.ts's own non-"no-tool-call" done reasons ("aborted" — including a mid-tool-batch
+    // cancel, "max-iterations", "repeated-denials") all persist ending in a `role: "tool"` message,
+    // never a bare unanswered user message — the model was cut off before giving its last word, so
+    // this is just as unanswered as the "pending user message" case above and must still resume.
+    test("still auto-starts a turn when the resumed session was interrupted mid tool-call (ends in a tool-result message)", async () => {
+      seedSession(join(dir, "sessions"), [
+        { role: "user", content: "do a task" },
+        {
+          role: "assistant",
+          content: [{ type: "tool-call", toolCallId: "1", toolName: "bash", input: {} }],
+        },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: "1",
+              toolName: "bash",
+              output: { type: "execution-denied", reason: "cancelled" },
+            },
+          ],
+        },
+      ]);
+
+      const scriptPath = join(dir, "child-continue-tool-ended.mjs");
+      writeFileSync(scriptPath, childScriptContinue(dir));
+
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        expect(occurrences("RUNLOOP_READY")).toBe(1);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The rare state where the process died between loop.ts pushing an assistant message carrying
+    // tool calls and executing them (no matching tool-result row got persisted) — still owes a
+    // reply, so this must resume too rather than silently mounting idle.
+    test("still auto-starts a turn when the resumed session's last message is an assistant message with unresolved tool calls", async () => {
+      seedSession(join(dir, "sessions"), [
+        { role: "user", content: "do a task" },
+        {
+          role: "assistant",
+          content: [{ type: "tool-call", toolCallId: "1", toolName: "bash", input: {} }],
+        },
+      ]);
+
+      const scriptPath = join(dir, "child-continue-unresolved-toolcall.mjs");
+      writeFileSync(scriptPath, childScriptContinue(dir));
+
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        expect(occurrences("RUNLOOP_READY")).toBe(1);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
   });
 });
