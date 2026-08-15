@@ -96,7 +96,7 @@ export function loadVerifyConfig(configDir?: string): VerifyConfig {
   };
 }
 
-// Stage 6b: the two /memory-controlled toggles, sharing configBoolean's `!== "false"` shape
+// The two /memory-controlled toggles, sharing configBoolean's `!== "false"` shape
 // (above) so a typo can't silently disable either safe default. Both are read live rather than
 // cached, since either can flip mid-session via /memory approval on|off or /memory archivist
 // on|off and driveLoop re-reads this every turn.
