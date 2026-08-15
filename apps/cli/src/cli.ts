@@ -89,6 +89,7 @@ import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/op
 import { type ResolvedRoute, resolveRoute } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
 import { validateProviderKey } from "./provider/validate";
+import { awaitsReply } from "./session/awaitsReply";
 import {
   findMostRecentSession,
   loadSession,
@@ -887,31 +888,14 @@ function dirs(ctx: RunContext): CommandDirs {
 //              echo, and start a turn on it.
 //   "resume" — --continue/--resume with no new text: nothing to push or echo. Whether a turn
 //              actually starts is a separate question the session's own messages answer, not
-//              this classification alone — see awaitsReply, below, and connectDispatch's use of it.
+//              this classification alone — see session/awaitsReply.ts, and connectDispatch's use
+//              of it, below.
 //   "idle"   — no resume target and no task text (bare `seri` in a TTY): mount with nothing to do.
 type RunStart = "idle" | "task" | "resume";
 
 function runStart(ctx: RunContext): RunStart {
   if (ctx.taskText.length > 0) return "task";
   return ctx.resuming ? "resume" : "idle";
-}
-
-// Whether a resumed session still owes the user a reply — the gate connectDispatch (below) applies
-// before auto-starting a turn on a bare `--continue`/`--resume`. Not a plain `role === "user"`
-// check: loop.ts's own non-`"no-tool-call"` done reasons ("aborted" — including a mid-tool-batch
-// cancel, "max-iterations", "repeated-denials") all persist ending in a `role: "tool"` message
-// (loop.ts always pushes the tool-result row, even a synthetic "execution-denied" one for a
-// cancelled call, before yielding any of those), which is exactly as unanswered as a bare user
-// message — the model was cut off before giving its last word. The one state that's genuinely
-// finished is an assistant message with no tool-call parts left in it; an assistant message that
-// still carries an unresolved tool-call (only reachable if the process died between loop.ts
-// pushing that message and running the calls it named) is treated the same as "owes a reply",
-// since a resumed turn there is no worse than what the old unconditional runTurn call already did.
-function awaitsReply(messages: ModelMessage[]): boolean {
-  const last = messages.at(-1);
-  if (last === undefined) return false;
-  if (last.role !== "assistant") return true;
-  return Array.isArray(last.content) && last.content.some((part) => part.type === "tool-call");
 }
 
 // A slash command always operates on the resume target — an explicit --resume id, or the most
@@ -3188,7 +3172,10 @@ async function runTui(
         // runStart — the same three-state predicate prepareSession (above) uses to decide whether
         // it pushed the initial user message at all: "task" echoes and starts a turn on it,
         // "resume" (a bare `--continue`/`--resume`) starts a turn only if the resumed session
-        // still awaitsReply (above), and "idle" (bare `seri`, no resume, no task) starts nothing.
+        // still awaitsReply (session/awaitsReply.ts), and "idle" (bare `seri`, no resume, no task)
+        // starts nothing. TUI-mount-only: the non-interactive branch below (`isTTY` false) still
+        // starts a turn unconditionally on "resume" — a known, narrower scope for this gate, not
+        // an oversight; see that branch's own comment.
         const start = runStart(ctx);
         if (start === "task") echoUserInput(ctx.taskText);
         const shouldRunTurn =
@@ -3355,6 +3342,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
   if (typeof prepared === "number") return prepared;
 
+  // The non-interactive branch below still calls driveLoop unconditionally on a bare
+  // `--continue`/`--resume` (no new task text) — the same redundant-turn defect
+  // session/awaitsReply.ts's own comment describes for the TUI mount path above, left open here
+  // deliberately: piped/scripted invocations are a separate, unaudited surface (their own usage
+  // gate above only rejects `runStart(ctx) === "idle"`, not "resume"), and closing it needs its
+  // own reproduction and test coverage rather than reusing the TUI-mount fix's evidence for a
+  // different call site. Tracked as a known gap, not an oversight.
   const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning, archivist, ranAnyTurn } =
     isTTY
       ? await runTui(prepared, ctx, deps, maxTurns, skipPermissions)

@@ -14,7 +14,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { type SessionState, saveSession } from "../../src/session/session";
+import type { ModelMessage } from "ai";
+import { saveSession } from "../../src/session/session";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
@@ -4250,7 +4251,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   // "resume" branch), even when the resumed session's last message already had a final assistant
   // reply — a redundant, unprompted model call that appended a duplicate reply to the session.
   describe("--continue mount", () => {
-    function seedSession(sessionsDir: string, messages: SessionState["messages"]): void {
+    // awaitsReply's own full truth table (all four `loop.ts` end states) is unit-tested directly in
+    // tests/session/awaitsReply.test.ts, with no pty and no win32 skip — these two tests exist only
+    // to prove connectDispatch actually wires that predicate into the mount, not to re-cover the
+    // predicate's own cases.
+    function seedSession(sessionsDir: string, messages: ModelMessage[]): void {
       saveSession(
         {
           id: "resumed",
@@ -4272,10 +4277,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-continue-answered.mjs");
       writeFileSync(scriptPath, childScriptContinue(dir));
 
-      const { child, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
       try {
-        // Negative control, same convention as "bare seri"'s own negative control above:
-        // wait100ms first so occurrences() has time to be wrong before proving it stayed at 0.
+        // Liveness proof before the negative control, same convention as "bare seri"'s own
+        // negative control above: the mode indicator (this seed's `permissionMode: "read-only"`)
+        // proves the child mounted AND resumed the seeded session, not merely that it never got
+        // that far — occurrences() staying at 0 for a process that never mounted would pass for
+        // the wrong reason.
+        await sawLine("[read-only]");
         await wait100ms();
         expect(occurrences("RUNLOOP_READY")).toBe(0);
       } finally {
@@ -4287,66 +4296,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       seedSession(join(dir, "sessions"), [{ role: "user", content: "do a task" }]);
 
       const scriptPath = join(dir, "child-continue-pending.mjs");
-      writeFileSync(scriptPath, childScriptContinue(dir));
-
-      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
-      try {
-        await sawLine("RUNLOOP_READY");
-        expect(occurrences("RUNLOOP_READY")).toBe(1);
-      } finally {
-        child.kill("SIGKILL");
-      }
-    }, 60_000);
-
-    // loop.ts's own non-"no-tool-call" done reasons ("aborted" — including a mid-tool-batch
-    // cancel, "max-iterations", "repeated-denials") all persist ending in a `role: "tool"` message,
-    // never a bare unanswered user message — the model was cut off before giving its last word, so
-    // this is just as unanswered as the "pending user message" case above and must still resume.
-    test("still auto-starts a turn when the resumed session was interrupted mid tool-call (ends in a tool-result message)", async () => {
-      seedSession(join(dir, "sessions"), [
-        { role: "user", content: "do a task" },
-        {
-          role: "assistant",
-          content: [{ type: "tool-call", toolCallId: "1", toolName: "bash", input: {} }],
-        },
-        {
-          role: "tool",
-          content: [
-            {
-              type: "tool-result",
-              toolCallId: "1",
-              toolName: "bash",
-              output: { type: "execution-denied", reason: "cancelled" },
-            },
-          ],
-        },
-      ]);
-
-      const scriptPath = join(dir, "child-continue-tool-ended.mjs");
-      writeFileSync(scriptPath, childScriptContinue(dir));
-
-      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
-      try {
-        await sawLine("RUNLOOP_READY");
-        expect(occurrences("RUNLOOP_READY")).toBe(1);
-      } finally {
-        child.kill("SIGKILL");
-      }
-    }, 60_000);
-
-    // The rare state where the process died between loop.ts pushing an assistant message carrying
-    // tool calls and executing them (no matching tool-result row got persisted) — still owes a
-    // reply, so this must resume too rather than silently mounting idle.
-    test("still auto-starts a turn when the resumed session's last message is an assistant message with unresolved tool calls", async () => {
-      seedSession(join(dir, "sessions"), [
-        { role: "user", content: "do a task" },
-        {
-          role: "assistant",
-          content: [{ type: "tool-call", toolCallId: "1", toolName: "bash", input: {} }],
-        },
-      ]);
-
-      const scriptPath = join(dir, "child-continue-unresolved-toolcall.mjs");
       writeFileSync(scriptPath, childScriptContinue(dir));
 
       const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
