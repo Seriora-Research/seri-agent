@@ -7,7 +7,7 @@ import bundledManifest from "./catalog-manifest.json";
 // plain .json import, unlike rg-vendored.bin's raw binary asset (vendorRipgrep.ts): bun's
 // bundler already treats a JSON import as a module and inlines it at build time, so it needs no
 // `with { type: "file" }` to survive inside the compiled binary.
-const FALLBACK_MANIFEST = bundledManifest as ModelCatalog;
+export const FALLBACK_MANIFEST = bundledManifest as ModelCatalog;
 
 // Warns at most once per process (code-review finding, PR #91 round 3): `run()` and
 // `prepareSession` both call `getModelCatalog()` independently on the same guided-setup run, and

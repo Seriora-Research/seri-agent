@@ -67,6 +67,7 @@ export async function runGuidedSetup(
     getPendingSetup: () => SetupState | undefined;
     configDir: string;
   }) => SetupHandlers,
+  fallbackCatalog: ModelCatalog,
 ): Promise<void> {
   const { render } = await import("ink");
   const { createElement } = await import("react");
@@ -208,17 +209,26 @@ export async function runGuidedSetup(
           // (and persist) a default model for a provider whose key was removed in the meantime,
           // reproducing the exact missing-key bug this feature exists to prevent.
           const freshConfigured = configuredProviders(configDir);
-          // Reviewer-verifier finding M1: `catalog` here is the LIVE models.dev payload, not the
-          // bundled manifest decideGuidedModelPickerOpen's own comment was measured against —
-          // loadCatalog silently drops a provider whose upstream `models` entry is missing/malformed,
-          // so this CAN come back empty for the provider the user just configured. An empty picker
-          // would render zero rows with no way to proceed except a fatal Ctrl-C (Enter is a no-op
-          // with nothing selected, Escape correctly re-prompts into the same empty list) — the same
-          // decline degrade used above is what actually gets the user back to a message they can act
-          // on. The same empty-picker guard also covers a provider removed during the wait: with no
-          // keys left, every row filters out and `entries.length === 0` degrades the same way.
-          const entries = decideGuidedModelPickerOpen(catalog, freshConfigured);
+          // `catalog` here is the LIVE models.dev payload: a provider whose upstream `models` entry
+          // is missing/malformed comes back with zero rows for it, even though the key the user just
+          // saved is for that exact provider. Falling back to `fallbackCatalog` (the bundled
+          // manifest, which carries every provider unconditionally) before giving up is what keeps
+          // the mandatory picker from disappearing just because the live payload was thin for one
+          // provider. Only when BOTH come back empty for `freshConfigured` — the case a provider
+          // removed during the wait also hits, since no keys left means every row filters out either
+          // way — is there truly nothing to offer: an empty picker would render zero rows with no way
+          // to proceed except a fatal Ctrl-C, so this degrades the same way the decline path above
+          // does, but says why first instead of resolving silently.
+          const liveEntries = decideGuidedModelPickerOpen(catalog, freshConfigured);
+          const entries =
+            liveEntries.length > 0
+              ? liveEntries
+              : decideGuidedModelPickerOpen(fallbackCatalog, freshConfigured);
           if (entries.length === 0) {
+            dispatch({
+              type: "transcript-append",
+              line: "No models available for the provider(s) you configured; continuing without a saved default.",
+            });
             closeWithoutPicker();
             return;
           }

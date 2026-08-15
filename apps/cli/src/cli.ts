@@ -70,7 +70,7 @@ import {
   rememberGrant,
 } from "./permissions/store";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
-import { getModelCatalog } from "./provider/catalog";
+import { FALLBACK_MANIFEST, getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
@@ -3314,7 +3314,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // explicit `patchConsole: false` on this `render()` call (there is none today — `runGuidedSetup`
     // only passes `exitOnCtrlC`/`interactive`) would silently reintroduce that hazard.
     if (zeroKeysConfigured) {
-      await runGuidedSetup(ctx.configDir, getModelCatalog(), createSetupHandlers);
+      await runGuidedSetup(ctx.configDir, getModelCatalog(), createSetupHandlers, FALLBACK_MANIFEST);
     }
   }
 
