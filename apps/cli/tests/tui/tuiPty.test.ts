@@ -3785,10 +3785,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("/config — settings");
 
-        // KNOWN_CONFIG_KEYS order (tui/commands.ts): SERI_WORKOS_CLIENT_ID, SERI_VERIFY_ENABLED,
-        // SERI_VERIFY_COMMAND — two Down presses reach the third.
-        child.stdin?.write("\x1b[B");
-        await wait100ms();
+        // KNOWN_CONFIG_KEYS order (tui/commands.ts): SERI_VERIFY_ENABLED, SERI_VERIFY_COMMAND —
+        // one Down press reaches the second.
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");

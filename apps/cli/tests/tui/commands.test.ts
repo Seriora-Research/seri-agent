@@ -17,7 +17,7 @@ import {
   readLog,
 } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable } from "../../src/checkpoint/shadowGit";
-import { setConfigValue } from "../../src/config/config";
+import { setConfigValue, unsetConfigValue } from "../../src/config/config";
 import { getBaseConfigDir } from "../../src/config/paths";
 import { rememberGrant } from "../../src/permissions/store";
 import bundledManifest from "../../src/provider/catalog-manifest.json";
@@ -618,9 +618,10 @@ describe("decideAuthOffer", () => {
 
 describe("decideConfigOpen", () => {
   let configConfigDir: string;
-  // All three known keys, not just SERI_WORKOS_CLIENT_ID (code review, round 2): any dev box or
-  // CI runner with SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND genuinely exported would otherwise
-  // silently fail the "all three are unset" assertion below.
+  // Env hygiene for every key this describe block touches, not just the two displayed ones: any
+  // dev box or CI runner with SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND genuinely exported would
+  // otherwise silently fail the "both are unset" assertion below, and SERI_WORKOS_CLIENT_ID is
+  // set directly by this file's own exclusion test further down.
   const KNOWN_KEYS = ["SERI_WORKOS_CLIENT_ID", "SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
   const originalEnv = Object.fromEntries(KNOWN_KEYS.map((name) => [name, process.env[name]]));
 
@@ -641,18 +642,14 @@ describe("decideConfigOpen", () => {
     }
   });
 
-  test("all three known keys are source: unset on an empty config dir", () => {
+  test("both known keys are source: unset on an empty config dir", () => {
     const rows = decideConfigOpen(configConfigDir);
-    expect(rows.map((row) => row.key)).toEqual([
-      "SERI_WORKOS_CLIENT_ID",
-      "SERI_VERIFY_ENABLED",
-      "SERI_VERIFY_COMMAND",
-    ]);
+    expect(rows.map((row) => row.key)).toEqual(["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"]);
     expect(rows.every((row) => row.source === "unset" && row.removable === false)).toBe(true);
   });
 
-  // None of the three known keys are secrets (code review, round 2) — SERI_VERIFY_COMMAND might
-  // be "bun check", which a user should be able to read back verbatim, not see as asterisks.
+  // Neither of the two known keys is a secret — SERI_VERIFY_COMMAND might be "bun check", which
+  // a user should be able to read back verbatim, not see as asterisks.
   test("a known key written via config.json is source: config, removable, and NOT masked", () => {
     setConfigValue("SERI_VERIFY_COMMAND", "bun run typecheck", configConfigDir);
     const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_COMMAND");
@@ -672,8 +669,8 @@ describe("decideConfigOpen", () => {
   });
 
   test("a key set via env var is source: env", () => {
-    process.env.SERI_WORKOS_CLIENT_ID = "client-from-env";
-    const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_WORKOS_CLIENT_ID");
+    process.env.SERI_VERIFY_ENABLED = "1";
+    const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_ENABLED");
     expect(row?.source).toBe("env");
   });
 
@@ -692,6 +689,21 @@ describe("decideConfigOpen", () => {
     setConfigValue("GROQ_API_KEY", "sk-fake-groq-key", configConfigDir);
     const rows = decideConfigOpen(configConfigDir);
     expect(rows.some((row) => row.key === "GROQ_API_KEY")).toBe(false);
+  });
+
+  test("SERI_WORKOS_CLIENT_ID is absent from the returned rows even when set via config.json or env", () => {
+    setConfigValue("SERI_WORKOS_CLIENT_ID", "client_from_config", configConfigDir);
+    expect(
+      decideConfigOpen(configConfigDir).some((row) => row.key === "SERI_WORKOS_CLIENT_ID"),
+    ).toBe(false);
+
+    // Unset the config.json entry first — otherwise this second assertion would pass even if the
+    // env-only path were broken, since the config.json exclusion above already covers the key.
+    unsetConfigValue("SERI_WORKOS_CLIENT_ID", configConfigDir);
+    process.env.SERI_WORKOS_CLIENT_ID = "client_from_env";
+    expect(
+      decideConfigOpen(configConfigDir).some((row) => row.key === "SERI_WORKOS_CLIENT_ID"),
+    ).toBe(false);
   });
 
   test("a non-provider hand-added key in config.json is present", () => {

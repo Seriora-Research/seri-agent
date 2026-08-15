@@ -218,9 +218,9 @@ export function decideAuthOffer(configDir: string): boolean {
 
 // One /config list row per known key, plus any other config.json key that isn't a provider API
 // key — provider keys are entirely /setup's, not /config's. `masked` is the raw value when
-// `secret` is false (code review, round 2: none of the three known keys are secrets —
-// SERI_VERIFY_COMMAND might be "bun check", which a user should be able to read back, not see as
-// asterisks) — only actually masked (maskValue's own output) when `secret` is true.
+// `secret` is false (neither of the two known keys is a secret — SERI_VERIFY_COMMAND might be
+// "bun check", which a user should be able to read back, not see as asterisks) — only actually
+// masked (maskValue's own output) when `secret` is true.
 export type ConfigRow = {
   key: string;
   masked: string;
@@ -229,21 +229,33 @@ export type ConfigRow = {
   secret: boolean;
 };
 
-// The three keys /config always shows, in this order, regardless of whether config.json has them
-// — none of these are secrets, unlike an unrecognized key, which defaults to secret (conservative:
+// The two keys /config always shows, in this order, regardless of whether config.json has them —
+// none of these are secrets, unlike an unrecognized key, which defaults to secret (conservative:
 // an unknown key could be provider-shaped in spirit even though provider keys themselves are
 // filtered out above).
-const KNOWN_CONFIG_KEYS = ["SERI_WORKOS_CLIENT_ID", "SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
+const KNOWN_CONFIG_KEYS = ["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
 
-// The decision half of /config, mirroring decideSetupOpen's own shape. Provider API keys
-// (PROVIDER_API_KEY_NAMES) are excluded from the "other keys" tail even when present in
-// config.json — /setup already owns those, and showing them here too would let /config unset a
-// provider key /setup itself never offers to.
+// Never listed by /config, even if present in config.json: the OAuth client id /login's device
+// flow resolves live (auth/deviceFlow.ts) — an internal/advanced setting, not one a common
+// /config user should see or change. (process.env never adds a row on its own — it only affects
+// the source/value of a key already in the list below — so no separate env guard is needed
+// here.) This is a display policy, not a lock: `seri config set SERI_WORKOS_CLIENT_ID <value>`
+// (config/commands.ts) still writes it deliberately, for whoever needs the escape hatch.
+const HIDDEN_CONFIG_KEYS = ["SERI_WORKOS_CLIENT_ID"];
+
+// The decision half of /config, mirroring decideSetupOpen's own shape. Every key the "other
+// keys" tail below must not emit: the two known keys (already shown, in their own fixed order),
+// the hidden ones, and provider API keys (PROVIDER_API_KEY_NAMES) — /setup already owns those,
+// and showing them here too would let /config unset a provider key /setup itself never offers to.
 export function decideConfigOpen(configDir: string): ConfigRow[] {
   const config = loadConfig(configDir);
-  const providerKeyNames = new Set<string>(Object.values(PROVIDER_API_KEY_NAMES));
+  const excludedKeys = new Set([
+    ...KNOWN_CONFIG_KEYS,
+    ...HIDDEN_CONFIG_KEYS,
+    ...Object.values(PROVIDER_API_KEY_NAMES),
+  ]);
   const otherKeys = Object.keys(config)
-    .filter((key) => !KNOWN_CONFIG_KEYS.includes(key) && !providerKeyNames.has(key))
+    .filter((key) => !excludedKeys.has(key))
     .sort();
   return [...KNOWN_CONFIG_KEYS, ...otherKeys].map((key) => {
     const hasConfigEntry = key in config;

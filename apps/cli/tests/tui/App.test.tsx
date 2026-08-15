@@ -1468,7 +1468,7 @@ describe("App", () => {
     function configRows(): ConfigRow[] {
       return [
         {
-          key: "SERI_WORKOS_CLIENT_ID",
+          key: "SERI_VERIFY_ENABLED",
           masked: "",
           source: "unset",
           removable: false,
@@ -1491,7 +1491,7 @@ describe("App", () => {
       await flush();
 
       const frame = instance.lastFrame() ?? "";
-      expect(frame).toContain("SERI_WORKOS_CLIENT_ID");
+      expect(frame).toContain("SERI_VERIFY_ENABLED");
       expect(frame).toContain("SERI_SOME_OTHER_KEY");
       expect(frame).toContain("sk-d...2345");
     });
