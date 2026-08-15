@@ -25,7 +25,6 @@ import type { SessionState } from "../../src/session/session";
 import {
   decideAuthOffer,
   decideConfigOpen,
-  decideConfigSelect,
   decideGuidedModelPickerOpen,
   decideMaxTurns,
   decideModeCycle,
@@ -779,66 +778,6 @@ describe("decideConfigOpen", () => {
       setConfigValue("SERI_VERIFY_ENABLED", value, configConfigDir);
       expect(on()).toBe(loadVerifyConfig(configConfigDir).enabled);
     }
-  });
-});
-
-describe("decideConfigSelect", () => {
-  let selectConfigDir: string;
-  const KNOWN_KEYS = ["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
-  const originalEnv = Object.fromEntries(KNOWN_KEYS.map((name) => [name, process.env[name]]));
-
-  beforeEach(() => {
-    for (const name of KNOWN_KEYS) delete process.env[name];
-    selectConfigDir = mkdtempSync(join(tmpdir(), "seri-config-select-test-"));
-  });
-
-  afterEach(() => {
-    rmSync(selectConfigDir, { recursive: true, force: true });
-    for (const name of KNOWN_KEYS) {
-      const original = originalEnv[name];
-      if (original === undefined) delete process.env[name];
-      else process.env[name] = original;
-    }
-  });
-
-  test("a string key returns { kind: 'enter-value' }", () => {
-    expect(decideConfigSelect("SERI_VERIFY_COMMAND", selectConfigDir)).toEqual({
-      kind: "enter-value",
-      key: "SERI_VERIFY_COMMAND",
-    });
-  });
-
-  test("an unknown key returns { kind: 'enter-value' }", () => {
-    expect(decideConfigSelect("SERI_SOME_OTHER_KEY", selectConfigDir)).toEqual({
-      kind: "enter-value",
-      key: "SERI_SOME_OTHER_KEY",
-    });
-  });
-
-  test("SERI_VERIFY_ENABLED unset toggles to next: 'false' (the first press turns the default off)", () => {
-    expect(decideConfigSelect("SERI_VERIFY_ENABLED", selectConfigDir)).toEqual({
-      kind: "toggle",
-      key: "SERI_VERIFY_ENABLED",
-      next: "false",
-    });
-  });
-
-  test("config 'false' toggles to next: 'true'; config 'true' toggles to next: 'false'", () => {
-    setConfigValue("SERI_VERIFY_ENABLED", "false", selectConfigDir);
-    let decision = decideConfigSelect("SERI_VERIFY_ENABLED", selectConfigDir);
-    expect(decision.kind === "toggle" && decision.next).toBe("true");
-
-    setConfigValue("SERI_VERIFY_ENABLED", "true", selectConfigDir);
-    decision = decideConfigSelect("SERI_VERIFY_ENABLED", selectConfigDir);
-    expect(decision.kind === "toggle" && decision.next).toBe("false");
-  });
-
-  // The write still lands in config.json while an env var keeps winning at read time — decided
-  // here, not blocked; the (env) tag on the row is the caller's own warning that it won't apply.
-  test("env 'false' toggles to next: 'true', even though env still wins over the write", () => {
-    process.env.SERI_VERIFY_ENABLED = "false";
-    const decision = decideConfigSelect("SERI_VERIFY_ENABLED", selectConfigDir);
-    expect(decision.kind === "toggle" && decision.next).toBe("true");
   });
 });
 

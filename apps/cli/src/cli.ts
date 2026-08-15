@@ -102,12 +102,10 @@ import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import {
   type CommandDirs,
-  type ConfigSelectDecision,
   checkpointTarget,
   configKeyInfo,
   decideAuthOffer,
   decideConfigOpen,
-  decideConfigSelect,
   decideMaxTurns,
   decideModeCycle,
   decideModelPickerOpen,
@@ -1953,27 +1951,22 @@ function createConfigHandlers(opts: {
     }
   }
 
-  // Branches on decideConfigSelect (tui/commands.ts): a boolean key toggles in place (write +
-  // transcript line + list refresh — a toggle has no screen of its own, unlike enter-value),
-  // everything else opens the free-text entry step.
+  // A boolean row toggles in place (write + transcript line + list refresh — a toggle has no
+  // screen of its own, unlike enter-value); everything else opens the free-text entry step. Reads
+  // the row straight off the panel's own current list state rather than re-reading disk to decide
+  // what to toggle to — that list is exactly what decideConfigOpen already resolved this row's
+  // `kind`/`on`/`source` from. No row for `key` (shouldn't normally happen) falls back to
+  // enter-value, the safest default.
   function onConfigSelect(key: string): void {
-    let decision: ConfigSelectDecision;
-    try {
-      decision = decideConfigSelect(key, configDir);
-    } catch (err) {
-      dispatch({
-        type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-      dispatch({ type: "config-resolved" });
-      return;
-    }
-    if (decision.kind === "enter-value") {
+    const pending = getPendingConfig();
+    const row = pending?.step === "list" ? pending.rows.find((r) => r.key === key) : undefined;
+    if (row === undefined || row.kind === "string") {
       dispatch({ type: "config-step", state: { step: "enter-value", key, busy: false } });
       return;
     }
+    const next = row.on ? "false" : "true";
     try {
-      setConfigValue(key, decision.next, configDir);
+      setConfigValue(key, next, configDir);
     } catch (err) {
       dispatch({
         type: "command-error",
@@ -1981,9 +1974,14 @@ function createConfigHandlers(opts: {
       });
       return;
     }
+    // The write above always lands in config.json, but an env var wins the precedence race — say
+    // so instead of claiming the active value changed, when this row is env-sourced.
     dispatch({
       type: "transcript-append",
-      line: `${configKeyInfo(key).label} is now ${decision.next === "false" ? "off" : "on"}.${verifyConfigTakesEffectNote(key)}`,
+      line:
+        row.source === "env"
+          ? `${configKeyInfo(key).label} set to ${next === "false" ? "off" : "on"} in config, but the ${key} environment variable still controls the active value.`
+          : `${configKeyInfo(key).label} is now ${next === "false" ? "off" : "on"}.${verifyConfigTakesEffectNote(key)}`,
     });
     dispatchConfigList(key);
   }

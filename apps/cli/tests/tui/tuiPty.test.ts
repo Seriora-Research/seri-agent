@@ -713,6 +713,33 @@ function childScriptSetupEnvShadow(dir: string): string {
   ].join("\n");
 }
 
+// /config's own env-shadow scenario: unlike childScriptSetup, this one exports
+// SERI_VERIFY_ENABLED as a real env var, so the row under test reads `source: "env"` and toggling
+// it must not claim the active value changed.
+function childScriptConfigEnvShadow(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.SERI_VERIFY_ENABLED = "false";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Stage C (cli-commands-to-tui feature-plan.md): /login, /signup and /logout's own script.
 // `login`/`logout` are faked via the SAME injection seam `handleAuthCommand` already uses for the
 // non-interactive `seri login`/`seri logout` (argv.test.ts's own "run (login/signup/logout)"
@@ -3875,10 +3902,47 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(on.SERI_VERIFY_ENABLED).toBe("true");
 
         // Negative control: this is what actually proves no free-text step ever opened — it goes
-        // red on any implementation that routes the boolean through enter-value (decideConfigSelect
-        // always returning { kind: "enter-value" }, ConfigEnterValue's own header text).
+        // red on any implementation that routes the boolean through enter-value
+        // (ConfigEnterValue's own header text).
         expect(occurrences("Set Automatic verification")).toBe(0);
         expect(occurrences("value for")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("toggling an env-shadowed boolean row reports the override instead of claiming the value changed", async () => {
+      const scriptPath = join(dir, "child-config-toggle-env.mjs");
+      writeFileSync(scriptPath, childScriptConfigEnvShadow(dir));
+
+      const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/config");
+        await sawLine("/config");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/config — settings");
+        // SERI_VERIFY_ENABLED=false is exported in the child's own env, so the row reads "off"
+        // from that, not from config.json (which has nothing yet).
+        await sawLine("Automatic verification: off");
+
+        child.stdin?.write("\r");
+        await sawLine(
+          "Automatic verification set to on in config, but the SERI_VERIFY_ENABLED environment variable still controls the active value.",
+        );
+
+        // The write still lands in config.json even though the env var wins at read time.
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.SERI_VERIFY_ENABLED === "true",
+        );
+        expect(config.SERI_VERIFY_ENABLED).toBe("true");
+
+        // The row itself still shows the env-sourced value after the list refreshes, not the
+        // write's value — a second render of "off", not one flipping to "on".
+        await sawLineTimes("Automatic verification: off", 2);
       } finally {
         child.kill("SIGKILL");
       }

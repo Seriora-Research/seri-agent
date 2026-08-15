@@ -316,23 +316,6 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
   });
 }
 
-// The decision half of /config's Enter/'a' action on a list row: a boolean key flips in place
-// (no screen — this is followed by an instant write and a list refresh, never rendered on its own,
-// see the architecture note this type's caller carries in cli.ts), everything else opens the
-// free-text entry step. Reads fresh from disk with the same env-then-config precedence
-// decideConfigOpen uses, rather than trusting a possibly-stale row the caller already has.
-export type ConfigSelectDecision =
-  | { kind: "toggle"; key: string; next: "true" | "false" }
-  | { kind: "enter-value"; key: string };
-
-export function decideConfigSelect(key: string, configDir: string): ConfigSelectDecision {
-  const info = CONFIG_KEY_INFO[key];
-  if (info?.kind !== "boolean") return { kind: "enter-value", key };
-  const config = loadConfig(configDir);
-  const value = process.env[key] ?? config[key];
-  return { kind: "toggle", key, next: value !== "false" ? "false" : "true" };
-}
-
 // One /permissions list row per PERSISTABLE_TOOL_NAMES member currently in effect for this
 // worktree: a project-tier grant (rememberGrant's only write target) is "persisted" and
 // removable; a global-tier grant (approved for every project, hand-edited or moved up by the
