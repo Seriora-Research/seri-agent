@@ -604,13 +604,19 @@ describe("tuiReducer: permissions-requested / permissions-step / permissions-res
   });
 });
 
-describe("tuiReducer: splash-resolved", () => {
+describe("tuiReducer: splash-requested / splash-resolved", () => {
   test("initialTuiState without opts defaults pendingSplash to false", () => {
     expect(initialTuiState(session()).pendingSplash).toBe(false);
   });
 
   test("initialTuiState with showSplash: true sets pendingSplash to true", () => {
     expect(initialTuiState(session(), { showSplash: true }).pendingSplash).toBe(true);
+  });
+
+  test("splash-requested sets pendingSplash to true from a default-false state", () => {
+    const state = tuiReducer(initialTuiState(session()), { type: "splash-requested" });
+
+    expect(state).toEqual({ ...initialTuiState(session()), pendingSplash: true });
   });
 
   test("splash-resolved clears pendingSplash and leaves every other field untouched", () => {

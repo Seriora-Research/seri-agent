@@ -76,6 +76,11 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
       onAuthResolved,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
+        // App's own internal `useReducer(tuiReducer, initialTuiState(session))` call never sees
+        // this mount's `showSplash` opt (that only seeds `liveState`, above) — `splash-requested`
+        // is what actually flips App's OWN rendered `pendingSplash` to true, the same "requested"
+        // dispatch every other pending panel already fires from its own connectDispatch.
+        dispatch({ type: "splash-requested" });
         dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
       },
     }),
