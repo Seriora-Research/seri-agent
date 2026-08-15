@@ -29,8 +29,6 @@ jobs:
             --allowedTools "mcp__github_inline_comment__create_inline_comment"
             --append-system-prompt "You are reviewing a PR in the seri repo. Apply this repo's own rubric — don't restate it, just use it: AGENTS.md's 'Seri Code Review Guidelines' (agent loop/state/context/memory/tool execution, token/latency waste, non-determinism, hidden state) and .claude/rules/code-quality.md (simplicity, surgical scope — flag changes beyond what the PR claims to do, comments must describe true behavior not stale intentions).
 
-            Give extra scrutiny to anything touching security/permission invariants (what requires user approval before it runs) and cross-platform behavior (Windows/macOS/Linux) — this codebase is provider-agnostic and gate-first by design, so correctness in those areas is load-bearing in a way most other code isn't.
-
             Read changed files in full, not just diff hunks.
 
             Only flag real correctness bugs, genuine edge cases, out-of-scope changes, or clear structural regressions (e.g. a file crossing ~1000 lines, ad-hoc branching in an unrelated flow, a duplicated helper). Skip style/naming nits and don't relitigate conventions this PR already matches.
