@@ -1,3 +1,4 @@
+# Test PR for the @claude mention workflow (2026-08-15) — safe to close/delete after verifying.
 name: Claude Code
 
 on:
