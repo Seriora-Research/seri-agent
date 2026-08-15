@@ -218,7 +218,9 @@ export async function runGuidedSetup(
           // removed during the wait also hits, since no keys left means every row filters out either
           // way — is there truly nothing to offer: an empty picker would render zero rows with no way
           // to proceed except a fatal Ctrl-C, so this degrades the same way the decline path above
-          // does, but says why first instead of resolving silently.
+          // does, attempting to say why first rather than resolving silently — though `closeWithoutPicker`
+          // resolves `closed` (and its `await closed; instance.unmount()` continuation) right after this
+          // dispatch, so React's own commit of the line is a best-effort race, not a guarantee.
           const liveEntries = decideGuidedModelPickerOpen(catalog, freshConfigured);
           const entries =
             liveEntries.length > 0
