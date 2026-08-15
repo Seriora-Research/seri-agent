@@ -6,10 +6,16 @@
 // file has no dependency back on cli.ts at all.
 import { randomUUID } from "node:crypto";
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
+import { FALLBACK_MANIFEST } from "../provider/catalog";
 import { persistDefaultModel } from "../provider/defaults";
 import { configuredProviders } from "../provider/keys";
 import { deliverSignal, onSignalCleanup } from "../signals";
-import { decideAuthOffer, decideGuidedModelPickerOpen, decideSetupOpen } from "./commands";
+import {
+  decideAuthOffer,
+  decideGuidedModelPickerOpen,
+  decideSetupOpen,
+  fillMissingProviders,
+} from "./commands";
 import {
   type Dispatch,
   initialTuiState,
@@ -67,7 +73,6 @@ export async function runGuidedSetup(
     getPendingSetup: () => SetupState | undefined;
     configDir: string;
   }) => SetupHandlers,
-  fallbackCatalog: ModelCatalog,
 ): Promise<void> {
   const { render } = await import("ink");
   const { createElement } = await import("react");
@@ -209,28 +214,25 @@ export async function runGuidedSetup(
           // (and persist) a default model for a provider whose key was removed in the meantime,
           // reproducing the exact missing-key bug this feature exists to prevent.
           const freshConfigured = configuredProviders(configDir);
+          if (freshConfigured.size === 0) {
+            // Every key was removed during the wait — the same decline path as this function's
+            // own initial `configured.size === 0` check, above.
+            closeWithoutPicker();
+            return;
+          }
           // `catalog` here is the LIVE models.dev payload: a provider whose upstream `models` entry
           // is missing/malformed comes back with zero rows for it, even though the key the user just
-          // saved is for that exact provider. Falling back to `fallbackCatalog` (the bundled
-          // manifest, which carries every provider unconditionally) before giving up is what keeps
-          // the mandatory picker from disappearing just because the live payload was thin for one
-          // provider. Only when BOTH come back empty for `freshConfigured` — the case a provider
-          // removed during the wait also hits, since no keys left means every row filters out either
-          // way — is there truly nothing to offer: an empty picker would render zero rows with no way
-          // to proceed except a fatal Ctrl-C, so this degrades the same way the decline path above
-          // does, attempting to say why first rather than resolving silently — though `closeWithoutPicker`
-          // resolves `closed` (and its `await closed; instance.unmount()` continuation) right after this
-          // dispatch, so React's own commit of the line is a best-effort race, not a guarantee.
-          const liveEntries = decideGuidedModelPickerOpen(catalog, freshConfigured);
-          const entries =
-            liveEntries.length > 0
-              ? liveEntries
-              : decideGuidedModelPickerOpen(fallbackCatalog, freshConfigured);
+          // saved is for that exact provider. Backfilling from the bundled manifest per-provider
+          // (rather than only when the whole live catalog is empty) keeps that one provider's rows
+          // from going missing without also hiding another configured provider's real live rows.
+          const merged = fillMissingProviders(catalog.entries, FALLBACK_MANIFEST.entries);
+          const entries = decideGuidedModelPickerOpen(
+            { ...catalog, entries: merged },
+            freshConfigured,
+          );
           if (entries.length === 0) {
-            dispatch({
-              type: "transcript-append",
-              line: "No models available for the provider(s) you configured; continuing without a saved default.",
-            });
+            // Unreachable in practice — the bundled manifest carries real rows for every provider —
+            // but degrades silently rather than crash if that ever stops holding.
             closeWithoutPicker();
             return;
           }
