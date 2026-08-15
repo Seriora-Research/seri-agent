@@ -3915,7 +3915,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-config-toggle-env.mjs");
       writeFileSync(scriptPath, childScriptConfigEnvShadow(dir));
 
-      const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
+      const { child, sawLine, sawLineTimes, occurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -3929,9 +3929,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Automatic verification: off");
 
         child.stdin?.write("\r");
-        await sawLine(
-          "Automatic verification set to on in config, but the SERI_VERIFY_ENABLED environment variable still controls the active value.",
-        );
+        await sawLine("Automatic verification: on in config, SERI_VERIFY_ENABLED env still wins.");
 
         // The write still lands in config.json even though the env var wins at read time.
         const config = await waitForConfig(
@@ -3941,8 +3939,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(config.SERI_VERIFY_ENABLED).toBe("true");
 
         // The row itself still shows the env-sourced value after the list refreshes, not the
-        // write's value — a second render of "off", not one flipping to "on".
+        // write's value — a second render of "off", not one flipping to "on". The transcript
+        // sentence above already contains "Automatic verification: on" as a substring (it's the
+        // prefix of "on in config, ..."), so a bare occurrences() !== 0 check would always fail —
+        // instead, pin that every occurrence of the row-shaped substring is accounted for by that
+        // one sentence, i.e. the row itself never independently rendered "on".
         await sawLineTimes("Automatic verification: off", 2);
+        expect(occurrences("Automatic verification: on")).toBe(
+          occurrences("Automatic verification: on in config, SERI_VERIFY_ENABLED env still wins."),
+        );
       } finally {
         child.kill("SIGKILL");
       }

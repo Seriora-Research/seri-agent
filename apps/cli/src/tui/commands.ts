@@ -272,9 +272,11 @@ const CONFIG_KEY_INFO: Record<(typeof KNOWN_CONFIG_KEYS)[number], ConfigKeyInfo>
 
 // Pure lookup (no disk read) so ConfigEnterValue/ConfigConfirmUnset can show a key's label without
 // widening ConfigPanelState with a field decideConfigOpen already computes for the list step.
-export function configKeyInfo(
-  key: string,
-): { label: string; description: string; takesEffectNextRun: boolean } {
+export function configKeyInfo(key: string): {
+  label: string;
+  description: string;
+  takesEffectNextRun: boolean;
+} {
   const info = (CONFIG_KEY_INFO as Record<string, ConfigKeyInfo | undefined>)[key];
   return {
     label: info?.label ?? key,
@@ -333,6 +335,19 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
       ...kindFields,
     };
   });
+}
+
+export type ConfigToggleDecision =
+  | { kind: "toggle"; next: "true" | "false" }
+  | { kind: "enter-value" };
+
+// Pure over a row decideConfigOpen already resolved — no disk read, so a toggle can never
+// disagree with what the panel is showing (a fresh re-read could race a concurrent config.json
+// write and toggle away from a value the user never saw). A missing/string-kind row falls back to
+// enter-value, the same default onConfigSelect used before this existed.
+export function decideConfigToggle(row: ConfigRow | undefined): ConfigToggleDecision {
+  if (row === undefined || row.kind === "string") return { kind: "enter-value" };
+  return { kind: "toggle", next: row.on ? "false" : "true" };
 }
 
 // One /permissions list row per PERSISTABLE_TOOL_NAMES member currently in effect for this
