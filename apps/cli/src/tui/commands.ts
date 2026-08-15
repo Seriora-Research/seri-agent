@@ -316,11 +316,18 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
     const value = envValue ?? config[key];
     const { label, description, kind } = configKeyInfo(key);
     const secret = CONFIG_KEY_INFO[key] === undefined;
-    // configBoolean mirrors loadVerifyConfig (config/config.ts) exactly: on unless explicitly
-    // turned off, so a mistyped value cannot silently disable the feature. Pinned by the
+    // configBoolean itself mirrors loadVerifyConfig's (config/config.ts) `!== "false"` check, but
+    // what feeds it must too: loadVerifyConfig's `read` falls through to config[key] on ANY falsy
+    // env value, including "", while `value` above only falls through on undefined (`??`) — kept
+    // that way because `source`/`masked` need to show an env-sourced "" honestly. `value ||
+    // config[key]` re-applies the falsy-skip *only* for the boolean interpretation, so
+    // SERI_VERIFY_ENABLED="" in env with a config.json fallback agrees with the live session
+    // instead of showing "on" for a value loadVerifyConfig treats as absent. Pinned by the
     // agreement test in tests/tui/commands.test.ts.
     const kindFields: ConfigRowKind =
-      kind === "boolean" ? { kind: "boolean", on: configBoolean(value) } : { kind: "string" };
+      kind === "boolean"
+        ? { kind: "boolean", on: configBoolean(value || config[key]) }
+        : { kind: "string" };
     return {
       key,
       label,

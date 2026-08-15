@@ -769,15 +769,26 @@ describe("decideConfigOpen", () => {
       const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_ENABLED");
       return row?.kind === "boolean" ? row.on : undefined;
     };
-    // Known divergence, documented not fixed: loadVerifyConfig reads with `||` (falsy-skip) while
-    // decideConfigOpen reads with `??` (nullish). They disagree only for SERI_VERIFY_ENABLED=""
-    // in env with a config.json fallback present — that case is deliberately not exercised here.
     expect(on()).toBe(loadVerifyConfig(configConfigDir).enabled);
 
     for (const value of ["false", "true", "yes"]) {
       setConfigValue("SERI_VERIFY_ENABLED", value, configConfigDir);
       expect(on()).toBe(loadVerifyConfig(configConfigDir).enabled);
     }
+  });
+
+  // Formerly a known, documented divergence (an automated review on PR #111 flagged it as
+  // user-visible now that this row renders an on/off claim): SERI_VERIFY_ENABLED="" in env with a
+  // config.json fallback present. loadVerifyConfig's `read` treats "" as falsy and falls through
+  // to config.json; decideConfigOpen's `value` (envValue ?? config[key]) keeps "" for display/
+  // source purposes, so the fix is scoped to the boolean interpretation only.
+  test("SERI_VERIFY_ENABLED='' in env with a config.json fallback agrees with loadVerifyConfig", () => {
+    setConfigValue("SERI_VERIFY_ENABLED", "false", configConfigDir);
+    process.env.SERI_VERIFY_ENABLED = "";
+    const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_ENABLED");
+    expect(row?.source).toBe("env");
+    expect(row?.kind === "boolean" && row.on).toBe(loadVerifyConfig(configConfigDir).enabled);
+    expect(row?.kind === "boolean" && row.on).toBe(false);
   });
 });
 
