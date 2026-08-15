@@ -618,9 +618,8 @@ describe("decideAuthOffer", () => {
 
 describe("decideConfigOpen", () => {
   let configConfigDir: string;
-  // Both known keys (code review, round 2): any dev box or CI runner with
-  // SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND genuinely exported would otherwise silently fail
-  // the "both are unset" assertion below.
+  // Both known keys: any dev box or CI runner with SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND
+  // genuinely exported would otherwise silently fail the "both are unset" assertion below.
   const KNOWN_KEYS = ["SERI_WORKOS_CLIENT_ID", "SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
   const originalEnv = Object.fromEntries(KNOWN_KEYS.map((name) => [name, process.env[name]]));
 
@@ -647,8 +646,8 @@ describe("decideConfigOpen", () => {
     expect(rows.every((row) => row.source === "unset" && row.removable === false)).toBe(true);
   });
 
-  // Neither of the two known keys is a secret (code review, round 2) — SERI_VERIFY_COMMAND might
-  // be "bun check", which a user should be able to read back verbatim, not see as asterisks.
+  // Neither of the two known keys is a secret — SERI_VERIFY_COMMAND might be "bun check", which
+  // a user should be able to read back verbatim, not see as asterisks.
   test("a known key written via config.json is source: config, removable, and NOT masked", () => {
     setConfigValue("SERI_VERIFY_COMMAND", "bun run typecheck", configConfigDir);
     const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_COMMAND");
