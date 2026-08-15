@@ -70,8 +70,6 @@ executable, and put it somewhere on your `PATH`. Both install scripts are short 
 read first, and both verify the download against the `SHA256SUMS` file published with each
 release — that catches a truncated or corrupted download, not a compromised release.
 
-Set `SERI_VERSION=<tag>` to install a specific release instead of the latest one.
-
 ## Getting started
 
 ```sh
