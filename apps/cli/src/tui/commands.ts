@@ -149,7 +149,9 @@ export function decideModelPickerOpen(
 // Rows served by the configured key come before reroute-only rows (stable within each group):
 // this picker preselects row 0 and Enter commits it immediately, so row 0 must be a model the
 // user's own key actually serves rather than a keyless row that merely sorts first under
-// `decideModelPickerOpen`'s native-then-aggregator ordering.
+// `decideModelPickerOpen`'s native-then-aggregator ordering. This trades away
+// `decideModelPickerOpen`'s own group-adjacency guarantee (its own comment, above): a group split
+// across the keyed/rerouted partition no longer keeps its members adjacent in the returned list.
 export function decideGuidedModelPickerOpen(
   catalog: ModelCatalog,
   configured: ReadonlySet<ModelProvider>,
@@ -160,6 +162,19 @@ export function decideGuidedModelPickerOpen(
   const keyed = reachable.filter((row) => row.keyConfigured);
   const rerouted = reachable.filter((row) => !row.keyConfigured);
   return [...keyed, ...rerouted];
+}
+
+// Per-provider, not whole-catalog: a live models.dev payload can carry zero rows for ONE
+// configured provider (an upstream `models` entry missing/malformed for just that provider)
+// while another configured provider's live rows are fine — using the fallback only when the
+// ENTIRE live catalog was empty would leave that one provider's rows blank with no indication.
+// Backfills a provider's entries from `fallback` only when `live` has none for it.
+export function fillMissingProviders(
+  live: ModelCatalogEntry[],
+  fallback: ModelCatalogEntry[],
+): ModelCatalogEntry[] {
+  const liveProviders = new Set(live.map((entry) => entry.provider));
+  return [...live, ...fallback.filter((entry) => !liveProviders.has(entry.provider))];
 }
 
 // One row per provider — /setup's own table (D5-D8, feature-plan.md). `removable` is D8: it is

@@ -35,6 +35,7 @@ import {
   decideRewind,
   decideSetupOpen,
   decideUndo,
+  fillMissingProviders,
 } from "../../src/tui/commands";
 
 let root: string;
@@ -297,6 +298,41 @@ describe("decideGuidedModelPickerOpen", () => {
     };
     const rows = decideGuidedModelPickerOpen(routeCatalog, new Set(["openrouter"]));
     expect(rows[0]?.keyConfigured).toBe(true);
+  });
+});
+
+describe("fillMissingProviders", () => {
+  test("backfills only the provider(s) missing from live entries, not ones live already has", () => {
+    const live = [catalogEntry({ id: "live-groq", provider: "groq" })];
+    const fallback = [
+      catalogEntry({ id: "fallback-groq", provider: "groq" }),
+      catalogEntry({ id: "fallback-openrouter", provider: "openrouter" }),
+    ];
+
+    const result = fillMissingProviders(live, fallback);
+
+    expect(result.map((entry) => entry.id)).toEqual(["live-groq", "fallback-openrouter"]);
+  });
+
+  test("combined with decideGuidedModelPickerOpen, offers a backfilled provider's rows", () => {
+    const live: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [catalogEntry({ id: "live-groq", provider: "groq" })],
+    };
+    const fallback = [
+      catalogEntry({ id: "fallback-groq", provider: "groq" }),
+      catalogEntry({ id: "fallback-openrouter", provider: "openrouter" }),
+    ];
+
+    const merged = fillMissingProviders(live.entries, fallback);
+    const rows = decideGuidedModelPickerOpen(
+      { ...live, entries: merged },
+      new Set(["groq", "openrouter"]),
+    );
+
+    expect(rows.some((row) => row.entry.id === "live-groq")).toBe(true);
+    expect(rows.some((row) => row.entry.id === "fallback-openrouter")).toBe(true);
+    expect(rows.some((row) => row.entry.id === "fallback-groq")).toBe(false);
   });
 });
 
