@@ -524,7 +524,17 @@ describe("tuiReducer: auth-offer / auth-requested / auth-step / auth-resolved", 
 
 describe("tuiReducer: config-requested / config-step / config-resolved", () => {
   const rows: ConfigRow[] = [
-    { key: "SERI_VERIFY_ENABLED", masked: "", source: "unset", removable: false, secret: false },
+    {
+      key: "SERI_VERIFY_ENABLED",
+      label: "Automatic verification",
+      description: "Run the verify command after each file edit and show failures to the model.",
+      masked: "",
+      source: "unset",
+      removable: false,
+      secret: false,
+      kind: "boolean",
+      on: true,
+    },
   ];
 
   test("config-requested opens at step list with the given rows", () => {
