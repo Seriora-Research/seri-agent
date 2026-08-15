@@ -3,28 +3,14 @@ import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import type { LoopEvent } from "../../src/loop/loop";
 import type { SessionState } from "../../src/session/session";
-import {
-  type ConfigRow,
-  configKeyInfo,
-  type ModelPickerEntry,
-  type PermissionRow,
-  type SetupProviderRow,
+import type {
+  ConfigRow,
+  ModelPickerEntry,
+  PermissionRow,
+  SetupProviderRow,
 } from "../../src/tui/commands";
 import { initialTuiState, tuiReducer } from "../../src/tui/reducer";
-
-// A naked `T` in a conditional type distributes over T's union members before Omit strips
-// "key"/"label"/"description" from each — plain `Omit<ConfigRow, ...>` would collapse the two
-// branches first, via keyof's usual "keys common to every member" rule, and silently drop the
-// boolean branch's own `on` field.
-type ConfigRowFields<T> = T extends ConfigRow ? Omit<T, "key" | "label" | "description"> : never;
-
-// Derives label/description from configKeyInfo (tui/commands.ts) instead of hand-copying its
-// production strings, so a copy change there doesn't leave a stale ConfigRow fixture asserting
-// text CONFIG_KEY_INFO no longer says.
-function configRowFixture(key: string, fields: ConfigRowFields<ConfigRow>): ConfigRow {
-  const { label, description } = configKeyInfo(key);
-  return { key, label, description, ...fields };
-}
+import { configRowFixture } from "./configRowFixture";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {

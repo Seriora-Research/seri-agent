@@ -6,7 +6,7 @@ import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
 import { App } from "../../src/tui/App";
-import { type ConfigRow, configKeyInfo, type ModelPickerEntry, type SetupProviderRow } from "../../src/tui/commands";
+import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import {
   formatContextWindow,
   formatCost,
@@ -16,6 +16,7 @@ import {
   formatSetupRow,
 } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
+import { configRowFixture } from "./configRowFixture";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
@@ -40,20 +41,6 @@ function route(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
 // write is throttled independently of React's own update scheduling).
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-// A naked `T` in a conditional type distributes over T's union members before Omit strips
-// "key"/"label"/"description" from each — plain `Omit<ConfigRow, ...>` would collapse the two
-// branches first, via keyof's usual "keys common to every member" rule, and silently drop the
-// boolean branch's own `on` field.
-type ConfigRowFields<T> = T extends ConfigRow ? Omit<T, "key" | "label" | "description"> : never;
-
-// Derives label/description from configKeyInfo (tui/commands.ts) instead of hand-copying its
-// production strings, so a copy change there doesn't leave a stale ConfigRow fixture asserting
-// text CONFIG_KEY_INFO no longer says.
-function configRowFixture(key: string, fields: ConfigRowFields<ConfigRow>): ConfigRow {
-  const { label, description } = configKeyInfo(key);
-  return { key, label, description, ...fields };
 }
 
 async function connect() {
