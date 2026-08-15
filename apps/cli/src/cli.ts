@@ -1891,16 +1891,13 @@ export function createAuthHandlers(opts: {
   return { onLogin, onLogout, onAbandon };
 }
 
-// Reviewer finding (Stage D round 1, MEDIUM-1): SERI_VERIFY_ENABLED and SERI_VERIFY_COMMAND are
-// only ever read once, at prepareSession's own `loadVerifyConfig()` call (above), baked into
-// `withVerification(...)` for the lifetime of the running process — unlike SERI_WORKOS_CLIENT_ID,
-// which /login re-resolves live via getWorkosClientId on every attempt. A /config write to either
-// of these two keys lands in config.json correctly but has no effect on the CURRENT session, only
-// the next one — this note is what keeps the confirmation honest about that.
+// SERI_VERIFY_ENABLED and SERI_VERIFY_COMMAND are only ever read once, at prepareSession's own
+// `loadVerifyConfig()` call (above), baked into `withVerification(...)` for the lifetime of the
+// running process — unlike SERI_WORKOS_CLIENT_ID, which /login re-resolves live via
+// getWorkosClientId on every attempt. `configKeyInfo`'s own `takesEffectNextRun` field (tui/commands.ts)
+// is what marks a key as one of these; this note is what keeps the confirmation honest about it.
 function verifyConfigTakesEffectNote(key: string): string {
-  return key === "SERI_VERIFY_ENABLED" || key === "SERI_VERIFY_COMMAND"
-    ? " (takes effect on the next run)"
-    : "";
+  return configKeyInfo(key).takesEffectNextRun ? " (takes effect on the next run)" : "";
 }
 
 // Stage D (cli-commands-to-tui feature-plan.md): /config's own two handlers, mirroring

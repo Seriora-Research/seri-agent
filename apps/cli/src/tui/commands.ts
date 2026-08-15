@@ -231,37 +231,56 @@ export type ConfigRow = {
   secret: boolean;
 } & ({ kind: "string" } | { kind: "boolean"; on: boolean });
 
+type ConfigKeyInfo = {
+  label: string;
+  description: string;
+  kind: "boolean" | "string";
+  // SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND are read once, at prepareSession's own
+  // loadVerifyConfig() call (cli.ts), and baked into withVerification(...) for the lifetime of the
+  // running process — a /config write to either lands in config.json correctly but has no effect
+  // on the CURRENT session, only the next one.
+  takesEffectNextRun: boolean;
+};
+
 // The two keys /config always shows, in this order, regardless of whether config.json has them —
 // none of these are secrets, unlike an unrecognized key, which defaults to secret (conservative:
 // an unknown key could be provider-shaped in spirit even though provider keys themselves are
-// filtered out above).
-const KNOWN_CONFIG_KEYS = ["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
+// filtered out above). Also the one place a key's label/description/kind/takesEffectNextRun is
+// defined: `CONFIG_KEY_INFO`'s type ties its keys to this array, so omitting a known key from
+// `CONFIG_KEY_INFO` is a compile error, not a silent gap the two used to be able to drift into
+// independently.
+const KNOWN_CONFIG_KEYS = ["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"] as const;
 
 // Human-readable label/description/kind for each KNOWN_CONFIG_KEYS member — a hand-added key has
 // no entry here and falls back to its raw key/empty description/"string" kind (configKeyInfo,
 // decideConfigOpen below), since there is no human name to show for it.
-const CONFIG_KEY_INFO: Record<
-  string,
-  { label: string; description: string; kind: "boolean" | "string" }
-> = {
+const CONFIG_KEY_INFO: Record<(typeof KNOWN_CONFIG_KEYS)[number], ConfigKeyInfo> = {
   SERI_VERIFY_ENABLED: {
     label: "Automatic verification",
     description: "Run the verify command after each file edit and show failures to the model.",
     kind: "boolean",
+    takesEffectNextRun: true,
   },
   SERI_VERIFY_COMMAND: {
     label: "Verify command",
     description:
       'Shell command run to verify edits, e.g. "bun run check". Nothing runs when unset.',
     kind: "string",
+    takesEffectNextRun: true,
   },
 };
 
 // Pure lookup (no disk read) so ConfigEnterValue/ConfigConfirmUnset can show a key's label without
 // widening ConfigPanelState with a field decideConfigOpen already computes for the list step.
-export function configKeyInfo(key: string): { label: string; description: string } {
-  const info = CONFIG_KEY_INFO[key];
-  return { label: info?.label ?? key, description: info?.description ?? "" };
+export function configKeyInfo(
+  key: string,
+): { label: string; description: string; takesEffectNextRun: boolean } {
+  const info = (CONFIG_KEY_INFO as Record<string, ConfigKeyInfo | undefined>)[key];
+  return {
+    label: info?.label ?? key,
+    description: info?.description ?? "",
+    takesEffectNextRun: info?.takesEffectNextRun ?? false,
+  };
 }
 
 // Never listed by /config, even if present in config.json: the OAuth client id /login's device
@@ -296,8 +315,8 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
     const hasEnvEntry = envValue !== undefined;
     const source: ConfigRow["source"] = hasEnvEntry ? "env" : hasConfigEntry ? "config" : "unset";
     const value = envValue ?? config[key];
-    const secret = !KNOWN_CONFIG_KEYS.includes(key);
-    const info = CONFIG_KEY_INFO[key];
+    const info = (CONFIG_KEY_INFO as Record<string, ConfigKeyInfo | undefined>)[key];
+    const secret = info === undefined;
     // `!== "false"` mirrors loadVerifyConfig (config/config.ts) exactly: on unless explicitly
     // turned off, so a mistyped value cannot silently disable the feature. Pinned by the
     // agreement test in tests/tui/commands.test.ts.
