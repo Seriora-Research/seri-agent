@@ -187,8 +187,13 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
         // on an unsandboxed Windows machine before this test can be trusted again.
         const sawSplash = await waitFor("SERI", 10_000);
         if (sawSplash) {
-          term.write("\x1b");
-          await new Promise((r) => setTimeout(r, 100));
+          // Swallowed on failure, matching tuiPty.test.ts's own startChild: if this exact write
+          // throws (see this block's own comment above), the splash is left undismissed and this
+          // test's own assertions below fail on a real timeout instead of an unhandled rejection.
+          try {
+            term.write("\x1b");
+            await new Promise((r) => setTimeout(r, 100));
+          } catch {}
         }
 
         // A single wait covers the whole turn: "(done: ...)" only appears after RUNLOOP_READY, the

@@ -1244,9 +1244,11 @@ async function startChild(
       // wait100ms's own 100ms (this file's own convention for "the pause every keypress that swaps
       // InputBox for a different mounted component already requires," defined below): without it, a
       // caller that writes its own first input immediately after this function returns can combine
-      // with Escape in the same still-canonical-mode line buffer (MEDIUM-E's own class) — measured
-      // live, this misdelivered "\x1b/max-turns 1" as one swallowed chunk instead of Escape-then-
-      // text, leaving the splash undismissed for the rest of the test.
+      // with Escape in the same still-canonical-mode line buffer — the terminal only flushes a line
+      // on a newline/mode-switch boundary, so two writes issued back to back can arrive as ONE read
+      // chunk on the child's side. Measured live, this misdelivered "\x1b/max-turns 1" as one
+      // swallowed chunk instead of Escape-then-text, leaving the splash undismissed for the rest of
+      // the test.
       await new Promise((resolve) => setTimeout(resolve, 100));
     } catch {}
   }
