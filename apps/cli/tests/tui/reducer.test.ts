@@ -3,13 +3,28 @@ import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import type { LoopEvent } from "../../src/loop/loop";
 import type { SessionState } from "../../src/session/session";
-import type {
-  ConfigRow,
-  ModelPickerEntry,
-  PermissionRow,
-  SetupProviderRow,
+import {
+  type ConfigRow,
+  configKeyInfo,
+  type ModelPickerEntry,
+  type PermissionRow,
+  type SetupProviderRow,
 } from "../../src/tui/commands";
 import { initialTuiState, tuiReducer } from "../../src/tui/reducer";
+
+// A naked `T` in a conditional type distributes over T's union members before Omit strips
+// "key"/"label"/"description" from each — plain `Omit<ConfigRow, ...>` would collapse the two
+// branches first, via keyof's usual "keys common to every member" rule, and silently drop the
+// boolean branch's own `on` field.
+type ConfigRowFields<T> = T extends ConfigRow ? Omit<T, "key" | "label" | "description"> : never;
+
+// Derives label/description from configKeyInfo (tui/commands.ts) instead of hand-copying its
+// production strings, so a copy change there doesn't leave a stale ConfigRow fixture asserting
+// text CONFIG_KEY_INFO no longer says.
+function configRowFixture(key: string, fields: ConfigRowFields<ConfigRow>): ConfigRow {
+  const { label, description } = configKeyInfo(key);
+  return { key, label, description, ...fields };
+}
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
@@ -524,17 +539,14 @@ describe("tuiReducer: auth-offer / auth-requested / auth-step / auth-resolved", 
 
 describe("tuiReducer: config-requested / config-step / config-resolved", () => {
   const rows: ConfigRow[] = [
-    {
-      key: "SERI_VERIFY_ENABLED",
-      label: "Automatic verification",
-      description: "Run the verify command after each file edit and show failures to the model.",
+    configRowFixture("SERI_VERIFY_ENABLED", {
       masked: "",
       source: "unset",
       removable: false,
       secret: false,
       kind: "boolean",
       on: true,
-    },
+    }),
   ];
 
   test("config-requested opens at step list with the given rows", () => {
