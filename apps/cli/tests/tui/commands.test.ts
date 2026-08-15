@@ -641,13 +641,9 @@ describe("decideConfigOpen", () => {
     }
   });
 
-  test("all three known keys are source: unset on an empty config dir", () => {
+  test("both known keys are source: unset on an empty config dir", () => {
     const rows = decideConfigOpen(configConfigDir);
-    expect(rows.map((row) => row.key)).toEqual([
-      "SERI_WORKOS_CLIENT_ID",
-      "SERI_VERIFY_ENABLED",
-      "SERI_VERIFY_COMMAND",
-    ]);
+    expect(rows.map((row) => row.key)).toEqual(["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"]);
     expect(rows.every((row) => row.source === "unset" && row.removable === false)).toBe(true);
   });
 
@@ -672,8 +668,8 @@ describe("decideConfigOpen", () => {
   });
 
   test("a key set via env var is source: env", () => {
-    process.env.SERI_WORKOS_CLIENT_ID = "client-from-env";
-    const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_WORKOS_CLIENT_ID");
+    process.env.SERI_VERIFY_ENABLED = "1";
+    const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_ENABLED");
     expect(row?.source).toBe("env");
   });
 
