@@ -13,14 +13,16 @@ session store, and the permission model are deliberately not bounded to a reposi
 general assistant work is a planned direction, not a shipped feature: **evaluate seri today as
 a coding agent.**
 
-## What's here today
+## How it works
 
-- **A TUI and a non-interactive mode on the same loop.** Run `seri "task"` for a single
-  scripted turn, or run `seri` with no arguments in a terminal to open the interactive TUI —
-  same engine either way.
+seri has one entry point. Run `seri` and it opens a full-screen terminal session — there is no
+separate headless task-runner mode, no `seri <task>` one-shot invocation, and no scriptable
+subcommands to call from CI. Every capability below is a slash command inside that session, not
+something you reach for from a shell script.
+
 - **A permission gate as the base safety layer**, on every OS: `read-only` / `approve-each` /
   `auto`, one keystroke to cycle (`/mode`). A tool you approve with "always" is remembered —
-  for `write_file`/`edit` that persists across runs (`seri permissions list|remove`).
+  for `write_file`/`edit` that persists across sessions.
 - **Checkpoints, undo, and rewind.** Every filesystem-mutating tool call commits to a shadow
   git ref, independent of your own branch. `/undo [n]`, `/rewind [n]`, `/restore <sha>` walk it
   back without touching your commit history.
@@ -75,57 +77,46 @@ Set `SERI_VERSION=<tag>` to install a specific release instead of the latest one
 ## Getting started
 
 ```sh
-seri config set GROQ_API_KEY <your-key>
-seri "explain what this repo does"
+seri
 ```
 
-Run `seri` with no task in a terminal instead, and it opens the TUI with an empty input box —
-the same loop, driven interactively, with slash commands (below) in place of flags.
+That's the whole invocation — seri opens the TUI. On a first run with no provider key
+configured anywhere, it routes you straight into guided setup instead of a blank prompt; from
+then on it's `/setup` (below) whenever you want to add, replace, or remove a key. Setting the
+matching environment variable before you launch (`GROQ_API_KEY`, say) works too — seri picks it
+up without you touching `/setup` at all.
 
 The default model is `openai/gpt-oss-120b` on Groq, chosen by measurement: on the same task, the
 same prompt and a fresh session each run, it made a real tool call in 20 of 20 runs where
-`llama-3.3-70b-versatile` managed 5 of 11. Set the `SERI_MODEL` env var for any other Groq model
-id. `seri config set SERI_MODEL <id>` works too, with the env var winning, but `seri config list`
-masks what it prints like an API key — `openai/gpt-oss-120b` reads back as `open...120b`, and an id
-of 12 characters or fewer as nothing but asterisks. The model is recorded on the session the first
-time the provider answers on it, so `--continue` keeps using the one that session has been running
-— and a mistyped id, which never gets that far, is never recorded: fix `SERI_MODEL` and
-`--continue` picks up the correction.
+`llama-3.3-70b-versatile` managed 5 of 11. `/model` switches it, mid-session, without losing
+context; a pick whose next turn actually succeeds becomes the default for every future brand-new
+session, not just the one you picked it in.
 
-Anthropic, OpenAI and Google work the same BYOK way as Groq and OpenRouter — set the matching key
-and pick a model:
+Anthropic, OpenAI and Google work the same BYOK way as Groq and OpenRouter:
 
-```sh
-seri config set ANTHROPIC_API_KEY <your-key>
-seri config set OPENAI_API_KEY <your-key>
-seri config set GOOGLE_GENERATIVE_AI_API_KEY <your-key>
-```
+| provider | key |
+| --- | --- |
+| Groq | `GROQ_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` |
+| OpenAI | `OPENAI_API_KEY` |
+| Google | `GOOGLE_GENERATIVE_AI_API_KEY` |
 
-`SERI_PROVIDER` names which of the five (`groq`, `openrouter`, `anthropic`, `openai`, `google`)
-`SERI_MODEL` should be read against; it defaults to `groq` and follows the same
-env-beats-config precedence as every other key here. **A `/model` pick whose next turn actually
-succeeds becomes the default for every future brand-new session**, not just the one you picked
-it in — it writes `SERI_MODEL`/`SERI_PROVIDER` to `config.json` the same way `seri config set`
-would. A session that never touches `/model` never writes either key.
-
-If a model is reachable through more than one provider (a model available both directly from
-Anthropic and through OpenRouter, say) and the pair you're on has no key, `seri` reroutes to
+`SERI_PROVIDER` names which of the five `SERI_MODEL` should be read against; both are
+environment variables, and both are also what a successful `/model` pick persists for you. If a
+model is reachable through more than one provider (a model available both directly from
+Anthropic and through OpenRouter, say) and the pair you're on has no key, seri reroutes to
 whichever configured provider reaches the same model — native providers preferred over an
 aggregator like OpenRouter — and says so once in the transcript. An explicit `/model` pick always
 wins over this if its own provider has a key.
-
-`seri --help` prints the usage text, and `seri --version` the installed version.
-`seri --continue` resumes the most recent session, and `seri --resume <id>` a named one; a task
-containing a flag goes after `--` (`seri -- fix the --help output`).
 
 The first search of each release unpacks its bundled ripgrep to `~/.seri/rg/<key>/`. Deleting that
 directory is safe — the next search writes it again — and a run that cannot write there falls back
 to a temporary copy.
 
-## Inside the TUI
+## Commands
 
-Everything below has a non-interactive `seri <subcommand>` equivalent for scripting; run
-`seri --help` for the full list.
+Everything you'd expect from a CLI flag lives here instead — there is no other interface.
 
 | Command | Does |
 | --- | --- |
@@ -142,8 +133,8 @@ Everything below has a non-interactive `seri <subcommand>` equivalent for script
 | `/max-turns <n>` | override the per-task turn budget (default 500) for the rest of the session |
 | `/exit` | end the session (or Ctrl-D) |
 
-`--dangerously-skip-permissions` runs every tool with no approval prompt, for that run only —
-attended use only, and never written back to a session.
+Approve-with-always still means once per tool, not a blanket grant for the session; and skipping
+approval prompts entirely for attended, high-trust work is a mode you opt into, not a default.
 
 ## Checking your code after a write
 
@@ -151,13 +142,9 @@ seri can run your project's own check command after every successful `write_file
 diagnostics back to the model in the same turn, so a type error it just introduced is visible
 while it is still working on that file.
 
-This is **off until you set a command**. seri does not look inside your repository for one.
-
-```sh
-seri config set SERI_VERIFY_COMMAND "bun run typecheck"
-```
-
-Both keys can also be set as environment variables, which take precedence over `config set`:
+This is **off until you set a command**, via `/config` — seri does not look inside your
+repository for one. `SERI_VERIFY_COMMAND` and `SERI_VERIFY_ENABLED` work as environment variables
+too, taking precedence over whatever `/config` has stored:
 
 | key | meaning |
 | --- | --- |
@@ -171,7 +158,7 @@ What to expect before you turn it on:
   file the model writes. A slower project check costs proportionally more.
 - **It runs in the directory you started seri in**, and the command is split on whitespace, so
   quoted arguments and paths containing spaces are not supported.
-- **Diagnostics are advisory.** The write is not rolled back. Use `seri /undo` for that.
+- **Diagnostics are advisory.** The write is not rolled back. Use `/undo` for that.
 - **It reports whatever your command reports**, usually the whole project — including errors that
   were already there before seri touched anything. Diagnostics in the file just written are listed
   first, and at most 20 are sent to the model, with the true total alongside.
