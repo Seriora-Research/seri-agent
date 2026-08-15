@@ -1162,10 +1162,15 @@ type Exit = { code: number | null; signal: NodeJS.Signals | null; stdout: string
 // comment for why a pty (not a pipe) is load-bearing here: raw mode's interpretation of input —
 // both 0x03 as a keypress rather than a signal, and each typed character reflecting live — is the
 // entire mechanism under test, and a pipe cannot exercise either.
-function startChild(
+async function startChild(
   scriptPath: string,
   cwd: string,
-): {
+  // `dismissSplash` defaults to true: the welcome splash now blocks every one of this file's
+  // scripts ahead of RUNLOOP_READY/the zero-key /setup gate, so every existing call site needs it
+  // dismissed before its own assertions can ever be reached. Only the "welcome splash" describe
+  // block below (whose whole job is exercising the splash itself) passes `false`.
+  opts: { dismissSplash?: boolean } = {},
+): Promise<{
   child: ReturnType<typeof spawn>;
   exited: Promise<Exit>;
   sawLine: (line: string) => Promise<void>;
@@ -1176,7 +1181,7 @@ function startChild(
   // against an assertion that turn 1 alone already satisfies.
   sawLineTimes: (line: string, count: number) => Promise<void>;
   occurrences: (line: string) => number;
-} {
+}> {
   const args = ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, scriptPath];
   const child = spawn("python3", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
 
@@ -1222,6 +1227,29 @@ function startChild(
         `child printed ${JSON.stringify(line)} ${occurrences(line)} time(s), wanted ${count}; got ${JSON.stringify(stdout)}`,
       );
   };
+
+  // "SERI" (WelcomeSplash's own wordmark) is the earliest text the splash's first frame prints —
+  // waiting for it before writing Escape is the same "raw mode is set by the time the readiness
+  // marker prints" reasoning childScriptCancel's own comment (below) already relies on for
+  // RUNLOOP_READY. Awaited here, before this function returns, rather than fired in the background:
+  // several callers below wait on the mode indicator line (present on the splash's own first frame
+  // too, unlike RUNLOOP_READY) as their own first sync point, and writing their own input before
+  // Escape has actually been queued would deliver it to the splash instead of the panel they meant
+  // to reach. Swallowed on failure: a script that genuinely never reaches a TTY (none in this file)
+  // degrades to leaving the splash undismissed for that one test's own assertions to fail on.
+  if (opts.dismissSplash ?? true) {
+    try {
+      await sawLine("SERI");
+      child.stdin?.write("\x1b");
+      // wait100ms's own 100ms (this file's own convention for "the pause every keypress that swaps
+      // InputBox for a different mounted component already requires," defined below): without it, a
+      // caller that writes its own first input immediately after this function returns can combine
+      // with Escape in the same still-canonical-mode line buffer (MEDIUM-E's own class) — measured
+      // live, this misdelivered "\x1b/max-turns 1" as one swallowed chunk instead of Escape-then-
+      // text, leaving the splash undismissed for the rest of the test.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } catch {}
+  }
 
   return { child, exited, sawLine, sawLineTimes, occurrences };
 }
@@ -1294,7 +1322,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-cancel.mjs");
     writeFileSync(scriptPath, childScriptCancel(dir));
 
-    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+    const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
     try {
       // Waiting for the fake runLoop's own readiness line is also what keeps the byte out of the
       // window before Ink sets raw mode (useInput's mount effect calls setRawMode(true)) — driveLoop
@@ -1333,7 +1361,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-input.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
 
-    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+    const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
 
@@ -1368,7 +1396,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-command-error.mjs");
     writeFileSync(scriptPath, childScriptCommandError(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
       // Turn resolves right away (this script's own comment explains why) — waited for here so
@@ -1408,7 +1436,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-exit-hijack.mjs");
     writeFileSync(scriptPath, childScriptCommandError(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
       await sawLine("(done: no-tool-call)");
@@ -1439,7 +1467,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-rejects.mjs");
     writeFileSync(scriptPath, childScriptRejects(dir));
 
-    const { exited, sawLine } = startChild(scriptPath, dir);
+    const { exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
 
@@ -1465,7 +1493,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-multi-turn.mjs");
     writeFileSync(scriptPath, childScriptMultiTurn(dir));
 
-    const { child, sawLine, sawLineTimes, occurrences } = startChild(scriptPath, dir);
+    const { child, sawLine, sawLineTimes, occurrences } = await startChild(scriptPath, dir);
     try {
       // prepareSession appended the initial task as the session's only message.
       await sawLine("RUNLOOP_CALL 1 messages=1");
@@ -1526,7 +1554,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-switch.mjs");
     writeFileSync(scriptPath, childScriptModelSwitch(dir));
 
-    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
     try {
       // The default model (groq.ts's own DEFAULT_MODEL) — proves the FIRST turn used it, before
       // any switch.
@@ -1599,7 +1627,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-multiroute.mjs");
     writeFileSync(scriptPath, childScriptModelMultiRoute(dir));
 
-    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
       await sawLine("(done: no-tool-call)");
@@ -1660,7 +1688,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-pick-rerouted.mjs");
     writeFileSync(scriptPath, childScriptModelPickRerouted(dir));
 
-    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
       await sawLine("(done: no-tool-call)");
@@ -1731,7 +1759,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-switch-persist-retry.mjs");
     writeFileSync(scriptPath, childScriptModelSwitch(dir));
 
-    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
       await sawLine("(done: no-tool-call)");
@@ -1807,7 +1835,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-switch-multi-tool-call.mjs");
     writeFileSync(scriptPath, childScriptModelSwitchMultiToolCall(dir));
 
-    const { child, sawLine, sawLineTimes, occurrences } = startChild(scriptPath, dir);
+    const { child, sawLine, sawLineTimes, occurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
       await sawLine("(done: no-tool-call)");
@@ -1865,7 +1893,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-switch-failure.mjs");
     writeFileSync(scriptPath, childScriptModelSwitchFailure(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
       await sawLine("(done: no-tool-call)");
@@ -1913,7 +1941,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     writeFileSync(scriptPath, childScriptModelPickKeyless(dir));
     const sessionsDir = join(dir, "sessions");
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
       await sawLine("(done: no-tool-call)");
@@ -1979,7 +2007,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-cancel.mjs");
     writeFileSync(scriptPath, childScriptCancel(dir));
 
-    const { child, exited, sawLine } = startChild(scriptPath, dir);
+    const { child, exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
       child.stdin?.write("\x03");
@@ -2012,7 +2040,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-quit.mjs");
     writeFileSync(scriptPath, childScriptQuit(dir));
 
-    const { child, exited, sawLine } = startChild(scriptPath, dir);
+    const { child, exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
       await sawLine("(done: no-tool-call)");
@@ -2049,7 +2077,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-quit-ctrld.mjs");
     writeFileSync(scriptPath, childScriptQuit(dir));
 
-    const { child, exited, sawLine } = startChild(scriptPath, dir);
+    const { child, exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
       await sawLine("(done: no-tool-call)");
@@ -2085,7 +2113,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-quit-mid-turn.mjs");
     writeFileSync(scriptPath, childScriptQuitMidTurn(dir));
 
-    const { child, exited, sawLine } = startChild(scriptPath, dir);
+    const { child, exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
 
@@ -2145,7 +2173,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-multi-turn-usage.mjs");
     writeFileSync(scriptPath, childScriptMultiTurnUsage(dir));
 
-    const { child, exited, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    const { child, exited, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1");
       await sawLine("(done: no-tool-call)");
@@ -2191,7 +2219,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-turn-in-flight-gate.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
 
@@ -2223,7 +2251,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-rewind-during-stream.mjs");
     writeFileSync(scriptPath, childScriptRewindDuringStream(dir, flagPath));
 
-    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+    const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
       await sawLine("STREAM_PART_1");
@@ -2256,7 +2284,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     writeFileSync(scriptPath, childScriptModePersistence(dir, flagPath));
     const sessionsDir = join(dir, "sessions");
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
       await sawLine("RUNLOOP_MSG1");
@@ -2309,7 +2337,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     writeFileSync(scriptPath, childScriptInput(dir));
     const sessionsDir = join(dir, "sessions");
 
-    const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+    const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
 
@@ -2344,7 +2372,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-ci-env.mjs");
     writeFileSync(scriptPath, childScriptCiEnv(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
 
@@ -2369,7 +2397,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-approval.mjs");
     writeFileSync(scriptPath, childScriptApproval(dir));
 
-    const { child, sawLine } = startChild(scriptPath, dir);
+    const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
       // The TUI's own ApprovalBox rendering the SAME prompt text makeApprovalPrompt uses — split
@@ -2411,7 +2439,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-reroute.mjs");
     writeFileSync(scriptPath, childScriptReroute(dir));
 
-    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+    const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 via=anthropic provider=anthropic");
       // Split across two checks, not one long toContain/sawLine: measured on a real pty (WSL),
@@ -2469,7 +2497,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-no-reroute.mjs");
     writeFileSync(scriptPath, childScriptNoReroute(dir));
 
-    const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+    const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 via=or provider=openrouter");
       await sawLine("(done: no-tool-call)");
@@ -2501,7 +2529,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-list.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2522,7 +2550,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-add.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      const { child, sawLine, exited } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2575,7 +2603,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-enter-delete.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+      const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2629,7 +2657,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-replace.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2672,7 +2700,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-remove.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2712,7 +2740,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-cancel.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2736,7 +2764,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-bad-args.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2757,7 +2785,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-env-shadow.mjs");
       writeFileSync(scriptPath, childScriptSetupEnvShadow(dir));
 
-      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2801,7 +2829,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-env-shadow-removable.mjs");
       writeFileSync(scriptPath, childScriptSetupEnvShadow(dir));
 
-      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2868,7 +2896,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-malformed-config.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine, sawLineTimes, occurrences } = startChild(scriptPath, dir);
+      const { child, sawLine, sawLineTimes, occurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2950,7 +2978,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-auth-banner.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
         await sawLine("Sign in with /login, or create an account with /signup");
@@ -2975,7 +3003,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-auth-login.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
 
-      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      const { child, sawLine, exited } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
         await sawLine("Sign in with /login, or create an account with /signup");
@@ -3017,7 +3045,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-auth-login-fails.mjs");
       writeFileSync(scriptPath, childScriptAuthLoginFails(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -3050,7 +3078,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-auth-login-hangs.mjs");
       writeFileSync(scriptPath, childScriptAuthLoginHangs(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -3087,7 +3115,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-auth-login-race.mjs");
       writeFileSync(scriptPath, childScriptAuthLoginRace(dir));
 
-      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -3129,7 +3157,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-auth-logout.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
         // seedAuth already wrote auth.json before spawn — decideAuthOffer is false at mount, so no
@@ -3156,7 +3184,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-auth-gate-matrix.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
         await sawLine("Sign in with /login, or create an account with /signup");
@@ -3206,7 +3234,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         // No "/setup" keystroke sent — this must appear on its own, unlike every other /setup test
         // in this file, which types the command first.
@@ -3272,7 +3300,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-slow-fetch.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupSlowFetch(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         const start = Date.now();
         await sawLine("/setup — provider API keys");
@@ -3294,7 +3322,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-slow-fetch-escape.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupSlowFetch(dir));
 
-      const { child, sawLine, occurrences, exited } = startChild(scriptPath, dir);
+      const { child, sawLine, occurrences, exited } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
 
@@ -3345,7 +3373,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-delayed-fetch.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupDelayedFetch(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
 
@@ -3409,7 +3437,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-remove-during-wait.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupDelayedFetch(dir));
 
-      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      const { child, sawLine, exited } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
 
@@ -3457,7 +3485,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-ctrld-during-wait.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupDelayedFetch(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
 
@@ -3501,7 +3529,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-non-groq.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
 
@@ -3558,7 +3586,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-picker-escape.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
 
@@ -3608,7 +3636,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-picker-ctrlc.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      const { child, sawLine, exited } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
 
@@ -3647,7 +3675,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-decline.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      const { child, sawLine, exited } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
 
@@ -3681,7 +3709,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-catalog-missing-provider.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupCatalogMissingProvider(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
 
@@ -3716,7 +3744,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-config.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine, occurrences } = startChild(scriptPath, dir);
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -3804,7 +3832,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-permissions.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -3863,7 +3891,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-permissions-global.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -3902,7 +3930,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-bare.mjs");
       writeFileSync(scriptPath, childScriptBare(dir));
 
-      const { child, sawLine, exited, occurrences } = startChild(scriptPath, dir);
+      const { child, sawLine, exited, occurrences } = await startChild(scriptPath, dir);
       try {
         // The mode-indicator/input box's own default-session label (modeIndicator, reducer.ts) —
         // proof the TUI actually mounted rather than the process just sitting there.
@@ -3947,7 +3975,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-bare-quit.mjs");
       writeFileSync(scriptPath, childScriptBare(dir));
 
-      const { child, sawLine, exited } = startChild(scriptPath, dir);
+      const { child, sawLine, exited } = await startChild(scriptPath, dir);
       try {
         await sawLine("[approve-each]");
         await wait100ms();
@@ -3980,7 +4008,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-max-turns.mjs");
       writeFileSync(scriptPath, childScriptMaxTurns(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("[approve-each]");
 
@@ -4008,7 +4036,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-max-turns-default.mjs");
       writeFileSync(scriptPath, childScriptMaxTurns(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("[approve-each]");
 
@@ -4028,7 +4056,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-profile-new.mjs");
       writeFileSync(scriptPath, childScriptBare(dir));
 
-      const { child, sawLine, sawLineTimes } = startChild(scriptPath, dir);
+      const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
       try {
         await sawLine("[approve-each]");
 
@@ -4068,7 +4096,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-profile-new-traversal.mjs");
       writeFileSync(scriptPath, childScriptBare(dir));
 
-      const { child, sawLine } = startChild(scriptPath, dir);
+      const { child, sawLine } = await startChild(scriptPath, dir);
       try {
         await sawLine("[approve-each]");
 
