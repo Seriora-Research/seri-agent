@@ -662,67 +662,20 @@ function childScriptRewindDuringStream(dir: string, flagPath: string): string {
 // own escape hatch — no /setup test ever touches the network). GROQ_API_KEY is set as a real env
 // var, same as every other script in this file — the groq ROW reads `source: "env"` because of it,
 // which some of the tests below rely on precisely because it is NOT the row under test.
-function childScriptSetup(dir: string): string {
+// `extraEnv` covers the env-shadow scenarios (item 7, feature-plan.md): a caller passing e.g.
+// `{ OPENAI_API_KEY: "sk-openai-env-value" }` or `{ SERI_VERIFY_ENABLED: "false" }` gets a real env
+// var exported before the dynamic import, so the row/key under test reads `source: "env"` — the
+// point being that env wins the SOURCE regardless of whether a config.json entry also exists
+// underneath (seeded separately, host-side, before spawn).
+function childScriptSetup(dir: string, extraEnv: Record<string, string> = {}): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
     `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
     `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
-    `const cli = await import(${JSON.stringify(CLI)});`,
-    `async function* runLoopFake(opts) {`,
-    `  console.log("\\nRUNLOOP_READY");`,
-    `  await new Promise(() => {});`,
-    `}`,
-    `await cli.run(["do", "a", "task"], {`,
-    `  runLoop: runLoopFake,`,
-    `  getGroqModel: () => ({}),`,
-    `  loadAgentsFile: () => "",`,
-    `  isTTY: process.stdout.isTTY,`,
-    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
-    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
-    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
-    `});`,
-  ].join("\n");
-}
-
-// The env-shadow scenario's own script (item 7, feature-plan.md): unlike childScriptSetup, this
-// one exports OPENAI_API_KEY as a real env var AND pre-seeds a DIFFERENT value into config.json
-// (below, host-side, before spawn) — D8's own point is that env wins the SOURCE regardless of
-// whether a config entry also exists underneath.
-function childScriptSetupEnvShadow(dir: string): string {
-  return [
-    `process.env.HOME = ${JSON.stringify(dir)};`,
-    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
-    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
-    `process.env.GROQ_API_KEY = "fake-test-key";`,
-    `process.env.OPENAI_API_KEY = "sk-openai-env-value";`,
-    `const cli = await import(${JSON.stringify(CLI)});`,
-    `async function* runLoopFake(opts) {`,
-    `  console.log("\\nRUNLOOP_READY");`,
-    `  await new Promise(() => {});`,
-    `}`,
-    `await cli.run(["do", "a", "task"], {`,
-    `  runLoop: runLoopFake,`,
-    `  getGroqModel: () => ({}),`,
-    `  loadAgentsFile: () => "",`,
-    `  isTTY: process.stdout.isTTY,`,
-    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
-    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
-    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
-    `});`,
-  ].join("\n");
-}
-
-// /config's own env-shadow scenario: unlike childScriptSetup, this one exports
-// SERI_VERIFY_ENABLED as a real env var, so the row under test reads `source: "env"` and toggling
-// it must not claim the active value changed.
-function childScriptConfigEnvShadow(dir: string): string {
-  return [
-    `process.env.HOME = ${JSON.stringify(dir)};`,
-    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
-    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
-    `process.env.GROQ_API_KEY = "fake-test-key";`,
-    `process.env.SERI_VERIFY_ENABLED = "false";`,
+    ...Object.entries(extraEnv).map(
+      ([name, value]) => `process.env.${name} = ${JSON.stringify(value)};`,
+    ),
     `const cli = await import(${JSON.stringify(CLI)});`,
     `async function* runLoopFake(opts) {`,
     `  console.log("\\nRUNLOOP_READY");`,
@@ -2841,7 +2794,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // environment as its source and refuses removal — there is genuinely nothing to unset.
     test("an env-shadowed row with no config entry reports the environment as the source and refuses removal", async () => {
       const scriptPath = join(dir, "child-setup-env-shadow.mjs");
-      writeFileSync(scriptPath, childScriptSetupEnvShadow(dir));
+      writeFileSync(scriptPath, childScriptSetup(dir, { OPENAI_API_KEY: "sk-openai-env-value" }));
 
       const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
       try {
@@ -2885,7 +2838,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     test("an env-shadowed row WITH a config entry underneath is removable", async () => {
       seedConfig(dir, { OPENAI_API_KEY: "sk-openai-config-value" });
       const scriptPath = join(dir, "child-setup-env-shadow-removable.mjs");
-      writeFileSync(scriptPath, childScriptSetupEnvShadow(dir));
+      writeFileSync(scriptPath, childScriptSetup(dir, { OPENAI_API_KEY: "sk-openai-env-value" }));
 
       const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
       try {
@@ -3913,7 +3866,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
     test("toggling an env-shadowed boolean row reports the override instead of claiming the value changed", async () => {
       const scriptPath = join(dir, "child-config-toggle-env.mjs");
-      writeFileSync(scriptPath, childScriptConfigEnvShadow(dir));
+      writeFileSync(scriptPath, childScriptSetup(dir, { SERI_VERIFY_ENABLED: "false" }));
 
       const { child, sawLine, sawLineTimes, occurrences } = await startChild(scriptPath, dir);
       try {
