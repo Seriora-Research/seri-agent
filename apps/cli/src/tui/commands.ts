@@ -28,7 +28,7 @@ import {
 } from "../checkpoint/checkpoint";
 import { projectRoot } from "../checkpoint/shadowGit";
 import { maskValue } from "../config/commands";
-import { configBoolean, loadConfig } from "../config/config";
+import { configBoolean, configValue, loadConfig } from "../config/config";
 import { isDefaultProfile, profileDir, profileNameError } from "../config/paths";
 import { cycleMode } from "../gate/gate";
 import { loadGrants, PERSISTABLE_TOOL_NAMES } from "../permissions/store";
@@ -272,14 +272,13 @@ const KNOWN_CONFIG_KEYS = Object.keys(CONFIG_KEY_INFO);
 // decideConfigOpen's own reader — one fallback (raw key/empty description/"string" kind for a
 // hand-added key with no entry here), not two copies of it.
 export function configKeyInfo(key: string): ConfigKeyInfo {
-  return (
-    CONFIG_KEY_INFO[key] ?? {
-      label: key,
-      description: "",
-      kind: "string",
-      takesEffectNextRun: false,
-    }
-  );
+  // Object.hasOwn, not `key in` / a bare index lookup: CONFIG_KEY_INFO is an object literal, so it
+  // inherits Object.prototype — a hand-added key literally named "toString" or "constructor" would
+  // otherwise resolve to the inherited function instead of falling through to the unknown-key
+  // default, and (decideConfigOpen, below) would report it as a known, unmasked key.
+  return Object.hasOwn(CONFIG_KEY_INFO, key)
+    ? (CONFIG_KEY_INFO[key] as ConfigKeyInfo)
+    : { label: key, description: "", kind: "string", takesEffectNextRun: false };
 }
 
 // Never listed by /config, even if present in config.json: the OAuth client id /login's device
@@ -315,18 +314,16 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
     const source: ConfigRow["source"] = hasEnvEntry ? "env" : hasConfigEntry ? "config" : "unset";
     const value = envValue ?? config[key];
     const { label, description, kind } = configKeyInfo(key);
-    const secret = CONFIG_KEY_INFO[key] === undefined;
-    // configBoolean itself mirrors loadVerifyConfig's (config/config.ts) `!== "false"` check, but
-    // what feeds it must too: loadVerifyConfig's `read` falls through to config[key] on ANY falsy
-    // env value, including "", while `value` above only falls through on undefined (`??`) — kept
-    // that way because `source`/`masked` need to show an env-sourced "" honestly. `value ||
-    // config[key]` re-applies the falsy-skip *only* for the boolean interpretation, so
-    // SERI_VERIFY_ENABLED="" in env with a config.json fallback agrees with the live session
-    // instead of showing "on" for a value loadVerifyConfig treats as absent. Pinned by the
+    const secret = !Object.hasOwn(CONFIG_KEY_INFO, key);
+    // `value` (above) only falls through to config[key] on undefined (`??`), kept that way because
+    // `source`/`masked` need to show an env-sourced "" honestly — but the boolean interpretation
+    // needs loadVerifyConfig's actual precedence (configValue, config/config.ts: falls through on
+    // ANY falsy env value, "" included), or SERI_VERIFY_ENABLED="" in env with a config.json
+    // fallback would show "on" for a value the live session treats as absent. Pinned by the
     // agreement test in tests/tui/commands.test.ts.
     const kindFields: ConfigRowKind =
       kind === "boolean"
-        ? { kind: "boolean", on: configBoolean(value || config[key]) }
+        ? { kind: "boolean", on: configBoolean(configValue(key, config)) }
         : { kind: "string" };
     return {
       key,

@@ -83,16 +83,23 @@ export function configBoolean(value: string | undefined): boolean {
   return value !== "false";
 }
 
+// env-then-file precedence, falsy-skip: an env var set to "" is treated the same as unset, so it
+// falls through to config.json rather than winning as a valid-looking empty value. Shared by every
+// reader below (and by decideConfigOpen, tui/commands.ts) so the precedence rule has one definition
+// instead of being hand-rolled per call site and risking disagreement between them.
+export function configValue(name: string, config: Record<string, string>): string | undefined {
+  return process.env[name] || config[name] || undefined;
+}
+
 export type VerifyConfig = { enabled: boolean; command: string | undefined };
 
 export function loadVerifyConfig(configDir?: string): VerifyConfig {
   const config = loadConfig(configDir);
-  const read = (name: string): string | undefined => process.env[name] || config[name] || undefined;
   return {
     // Separate from `command` being unset, because this is the named mitigation for the per-write
     // cost — a user who configured a command needs a way to suspend it without losing it.
-    enabled: configBoolean(read("SERI_VERIFY_ENABLED")),
-    command: read("SERI_VERIFY_COMMAND"),
+    enabled: configBoolean(configValue("SERI_VERIFY_ENABLED", config)),
+    command: configValue("SERI_VERIFY_COMMAND", config),
   };
 }
 
@@ -104,10 +111,9 @@ export type MemoryConfig = { approvalRequired: boolean; archivistEnabled: boolea
 
 export function loadMemoryConfig(configDir?: string): MemoryConfig {
   const config = loadConfig(configDir);
-  const read = (name: string): string | undefined => process.env[name] || config[name] || undefined;
   return {
-    approvalRequired: configBoolean(read("SERI_MEMORY_APPROVAL")),
-    archivistEnabled: configBoolean(read("SERI_ARCHIVIST_ENABLED")),
+    approvalRequired: configBoolean(configValue("SERI_MEMORY_APPROVAL", config)),
+    archivistEnabled: configBoolean(configValue("SERI_ARCHIVIST_ENABLED", config)),
   };
 }
 

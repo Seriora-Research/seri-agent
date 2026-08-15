@@ -42,7 +42,14 @@ import {
   usageError,
 } from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
-import { loadConfig, loadVerifyConfig, setConfigValue, unsetConfigValue } from "./config/config";
+import {
+  configBoolean,
+  configValue,
+  loadConfig,
+  loadVerifyConfig,
+  setConfigValue,
+  unsetConfigValue,
+} from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
 import type { PermissionMode } from "./gate/gate";
 import {
@@ -1949,10 +1956,12 @@ function createConfigHandlers(opts: {
   }
 
   // A boolean row toggles in place (write + transcript line + list refresh — a toggle has no
-  // screen of its own, unlike enter-value); everything else opens the free-text entry step. Reads
-  // the row straight off the panel's own current list state rather than re-reading disk to decide
-  // what to toggle to — that list is exactly what decideConfigOpen already resolved this row's
-  // `kind`/`on`/`source` from.
+  // screen of its own, unlike enter-value); everything else opens the free-text entry step. `row`
+  // (the panel's current list state) only decides `kind`/`source` here — the toggle target itself
+  // is a fresh disk read, not `row.on`, so a concurrent write (another `seri` process, a hand edit)
+  // between the list rendering and this call can't make the write silently no-op while the
+  // transcript still claims a change. Same "re-check before acting" reasoning as onConfigUnset's
+  // own confirm branch, just below.
   function onConfigSelect(key: string): void {
     const pending = getPendingConfig();
     const row = pending?.step === "list" ? pending.rows.find((r) => r.key === key) : undefined;
@@ -1960,9 +1969,10 @@ function createConfigHandlers(opts: {
       dispatch({ type: "config-step", state: { step: "enter-value", key, busy: false } });
       return;
     }
-    const next = row.on ? "false" : "true";
+    let nextOn: boolean;
     try {
-      setConfigValue(key, next, configDir);
+      nextOn = !configBoolean(configValue(key, loadConfig(configDir)));
+      setConfigValue(key, String(nextOn), configDir);
     } catch (err) {
       dispatch({
         type: "command-error",
@@ -1976,8 +1986,8 @@ function createConfigHandlers(opts: {
       type: "transcript-append",
       line:
         row.source === "env"
-          ? `${configKeyInfo(key).label}: ${next === "false" ? "off" : "on"} in config, ${key} env still wins.`
-          : `${configKeyInfo(key).label} is now ${next === "false" ? "off" : "on"}.${verifyConfigTakesEffectNote(key)}`,
+          ? `${configKeyInfo(key).label}: ${nextOn ? "on" : "off"} in config, ${key} env still wins.`
+          : `${configKeyInfo(key).label} is now ${nextOn ? "on" : "off"}.${verifyConfigTakesEffectNote(key)}`,
     });
     dispatchConfigList(key);
   }
