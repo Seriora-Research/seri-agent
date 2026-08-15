@@ -223,17 +223,46 @@ export function decideAuthOffer(configDir: string): boolean {
 // masked (maskValue's own output) when `secret` is true.
 export type ConfigRow = {
   key: string;
+  label: string;
+  description: string;
   masked: string;
   source: "config" | "env" | "unset";
   removable: boolean;
   secret: boolean;
-};
+} & ({ kind: "string" } | { kind: "boolean"; on: boolean });
 
 // The two keys /config always shows, in this order, regardless of whether config.json has them —
 // none of these are secrets, unlike an unrecognized key, which defaults to secret (conservative:
 // an unknown key could be provider-shaped in spirit even though provider keys themselves are
 // filtered out above).
 const KNOWN_CONFIG_KEYS = ["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
+
+// Human-readable label/description/kind for each KNOWN_CONFIG_KEYS member — a hand-added key has
+// no entry here and falls back to its raw key/empty description/"string" kind (configKeyInfo,
+// decideConfigOpen below), since there is no human name to show for it.
+const CONFIG_KEY_INFO: Record<
+  string,
+  { label: string; description: string; kind: "boolean" | "string" }
+> = {
+  SERI_VERIFY_ENABLED: {
+    label: "Automatic verification",
+    description: "Run the verify command after each file edit and show failures to the model.",
+    kind: "boolean",
+  },
+  SERI_VERIFY_COMMAND: {
+    label: "Verify command",
+    description:
+      'Shell command run to verify edits, e.g. "bun run check". Nothing runs when unset.',
+    kind: "string",
+  },
+};
+
+// Pure lookup (no disk read) so ConfigEnterValue/ConfigConfirmUnset can show a key's label without
+// widening ConfigPanelState with a field decideConfigOpen already computes for the list step.
+export function configKeyInfo(key: string): { label: string; description: string } {
+  const info = CONFIG_KEY_INFO[key];
+  return { label: info?.label ?? key, description: info?.description ?? "" };
+}
 
 // Never listed by /config, even if present in config.json: the OAuth client id /login's device
 // flow resolves live (auth/deviceFlow.ts) — an internal/advanced setting, not one a common
@@ -268,14 +297,40 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
     const source: ConfigRow["source"] = hasEnvEntry ? "env" : hasConfigEntry ? "config" : "unset";
     const value = envValue ?? config[key];
     const secret = !KNOWN_CONFIG_KEYS.includes(key);
+    const info = CONFIG_KEY_INFO[key];
+    // `!== "false"` mirrors loadVerifyConfig (config/config.ts) exactly: on unless explicitly
+    // turned off, so a mistyped value cannot silently disable the feature. Pinned by the
+    // agreement test in tests/tui/commands.test.ts.
+    const kindFields: { kind: "string" } | { kind: "boolean"; on: boolean } =
+      info?.kind === "boolean" ? { kind: "boolean", on: value !== "false" } : { kind: "string" };
     return {
       key,
+      label: info?.label ?? key,
+      description: info?.description ?? "",
       masked: value === undefined ? "" : secret ? maskValue(value) : value,
       source,
       removable: hasConfigEntry,
       secret,
+      ...kindFields,
     };
   });
+}
+
+// The decision half of /config's Enter/'a' action on a list row: a boolean key flips in place
+// (no screen — this is followed by an instant write and a list refresh, never rendered on its own,
+// see the architecture note this type's caller carries in cli.ts), everything else opens the
+// free-text entry step. Reads fresh from disk with the same env-then-config precedence
+// decideConfigOpen uses, rather than trusting a possibly-stale row the caller already has.
+export type ConfigSelectDecision =
+  | { kind: "toggle"; key: string; next: "true" | "false" }
+  | { kind: "enter-value"; key: string };
+
+export function decideConfigSelect(key: string, configDir: string): ConfigSelectDecision {
+  const info = CONFIG_KEY_INFO[key];
+  if (info?.kind !== "boolean") return { kind: "enter-value", key };
+  const config = loadConfig(configDir);
+  const value = process.env[key] ?? config[key];
+  return { kind: "toggle", key, next: value !== "false" ? "false" : "true" };
 }
 
 // One /permissions list row per PERSISTABLE_TOOL_NAMES member currently in effect for this

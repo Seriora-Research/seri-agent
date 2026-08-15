@@ -5,7 +5,7 @@
 
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
-import type { ConfigRow } from "../commands";
+import { type ConfigRow, configKeyInfo } from "../commands";
 import type { ConfigPanelState } from "../reducer";
 import { theme } from "../theme";
 
@@ -109,6 +109,9 @@ function ConfigList({
     }
   });
 
+  const selectedRow = rows[selected];
+  const actionHint = selectedRow?.kind === "boolean" ? "toggle" : "set";
+
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
       <Text color={theme.muted}>/config — settings</Text>
@@ -118,15 +121,22 @@ function ConfigList({
           {formatConfigRow(row)}
         </Text>
       ))}
-      <Text color={theme.muted}>↑/↓ move · Enter/a set · r/Delete unset · Esc/Ctrl-D close</Text>
+      {selectedRow !== undefined && <Text color={theme.muted}>{selectedRow.description}</Text>}
+      <Text
+        color={theme.muted}
+      >{`↑/↓ move · Enter/a ${actionHint} · r/Delete unset · Esc/Ctrl-D close`}</Text>
     </Box>
   );
 }
 
+function sourceTag(row: ConfigRow): string {
+  return row.source === "env" ? " (env)" : "";
+}
+
 function formatConfigRow(row: ConfigRow): string {
-  if (row.source === "unset") return `${row.key} not set`;
-  if (row.source === "env") return `${row.key} ${row.masked} (env)`;
-  return `${row.key} ${row.masked} (config)`;
+  if (row.kind === "boolean") return `${row.label}: ${row.on ? "on" : "off"}${sourceTag(row)}`;
+  if (row.source === "unset") return `${row.label}: not set`;
+  return `${row.label}: ${row.masked}${row.source === "env" ? " (env)" : " (config)"}`;
 }
 
 function ConfigEnterValue({
@@ -144,6 +154,7 @@ function ConfigEnterValue({
   // Never rendered raw — the same credential-disclosure reasoning SetupEnterKey's own `value`
   // has: any config value could be secret-shaped, so this always renders `"*".repeat(...)`.
   const [value, setValue] = useState("");
+  const { label, description } = configKeyInfo(key);
 
   useInput((input, inputKey) => {
     if (busy) return;
@@ -170,7 +181,8 @@ function ConfigEnterValue({
 
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
-      <Text color={theme.muted}>{`value for ${key}`}</Text>
+      <Text color={theme.muted}>{`Set ${label} (${key})`}</Text>
+      <Text color={theme.muted}>{description}</Text>
       <Text>{"*".repeat(value.length)}</Text>
       {error !== undefined && <Text color={theme.error}>{error}</Text>}
       {busy ? (
@@ -192,6 +204,7 @@ function ConfigConfirmUnset({
   onConfigBack?: () => void;
 }) {
   const { key } = pendingConfig;
+  const { label } = configKeyInfo(key);
 
   useInput((input, inputKey) => {
     // ApprovalBox's own convention: Enter and anything unrecognised both cancel — only an
@@ -211,7 +224,7 @@ function ConfigConfirmUnset({
 
   return (
     <Box borderStyle="round" borderColor={theme.warning}>
-      <Text color={theme.warning}>{`Unset ${key}? [y]es / [N]o`}</Text>
+      <Text color={theme.warning}>{`Unset ${label} (${key})? [y]es / [N]o`}</Text>
     </Box>
   );
 }

@@ -102,9 +102,12 @@ import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import {
   type CommandDirs,
+  type ConfigSelectDecision,
   checkpointTarget,
+  configKeyInfo,
   decideAuthOffer,
   decideConfigOpen,
+  decideConfigSelect,
   decideMaxTurns,
   decideModeCycle,
   decideModelPickerOpen,
@@ -1950,9 +1953,39 @@ function createConfigHandlers(opts: {
     }
   }
 
-  // No config.json read here — mirrors onSetupSelect: `key` alone is enough to open the entry step.
+  // Branches on decideConfigSelect (tui/commands.ts): a boolean key toggles in place (write +
+  // transcript line + list refresh — a toggle has no screen of its own, unlike enter-value),
+  // everything else opens the free-text entry step.
   function onConfigSelect(key: string): void {
-    dispatch({ type: "config-step", state: { step: "enter-value", key, busy: false } });
+    let decision: ConfigSelectDecision;
+    try {
+      decision = decideConfigSelect(key, configDir);
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      dispatch({ type: "config-resolved" });
+      return;
+    }
+    if (decision.kind === "enter-value") {
+      dispatch({ type: "config-step", state: { step: "enter-value", key, busy: false } });
+      return;
+    }
+    try {
+      setConfigValue(key, decision.next, configDir);
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    dispatch({
+      type: "transcript-append",
+      line: `${configKeyInfo(key).label} is now ${decision.next === "false" ? "off" : "on"}.${verifyConfigTakesEffectNote(key)}`,
+    });
+    dispatchConfigList(key);
   }
 
   function onConfigValueEntered(key: string, value: string): void {
