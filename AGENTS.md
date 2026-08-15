@@ -174,47 +174,26 @@ owner-only and via write-then-rename, since it holds API keys and a partial writ
 would break every later command's `loadConfig`. `list` masks values and flags any
 shadowed by an env var, because `getApiKey` prefers `process.env`.
 
-**Sessions** (`apps/cli/src/session/session.ts`) persist as one JSON file per session under
-`<configDir>/sessions/`; `--resume <id>` reloads that session, `--continue` reloads the most
-recent one. SQLite was considered and deferred in favor of this for v0/v1.
+# Seri Code Review Guidelines
 
-**Compaction** (`apps/cli/src/loop/compaction.ts`) triggers once input tokens cross a threshold
-of the model's context window. It summarizes evicted messages into a structured
-goal/progress/blockers/nextSteps recap via `generateText` (not `generateObject` — see
-recent commit history for why) and never cuts the eviction boundary in the middle of an
-{assistant tool-call, tool result} pair, since that reproduces
-`AI_MissingToolResultsError`.
+Seri is a research-oriented agentic coding harness designed to build, run,
+evaluate, and improve autonomous software engineering agents.
 
-**Checkpoints** (`apps/cli/src/checkpoint/`): every call to a filesystem-mutating tool —
-`write_file`, `bash`, `powershell` (`FS_MUTATING_TOOL_NAMES`, deliberately not
-`WRITE_TOOL_NAMES`, since `edit` is a pure string transform that writes nothing) — snapshots
-the whole **project** into a bare shadow git repo under
-`<configDir>/checkpoints/<sha256(projectRoot)[0..16]>/git`, keyed off `git rev-parse
---show-toplevel` from the session's cwd (falling back to that cwd outside a repo) so nothing
-is ever written into the user's own `.git`. `seri [--resume <id>] /undo [n]` restores
-byte-identical prior state with a reviewable diff; `/rewind [n]` truncates conversation
-history to the same anchor and touches no file. Two things a snapshot cannot cover, each
-warned about once per session: a **nested git repository** (staged as a gitlink, not
-reverted by `/undo`) and a project with **no `.gitignore`** (snapshotted whole, uncapped).
-`runLoop` stays stateless — `withCheckpoints` wraps the `ToolSet` in `cli.ts`, `loop.ts` has
-zero changes. Staging mechanics, the log/ref pruning invariant, and `/restore` are documented
-in the module's own comments.
+## Review priorities
 
-**Auth** (`apps/cli/src/auth/`): `seri login`/`signup`/`logout`, backed by WorkOS AuthKit's
-OAuth device-authorization flow (RFC 8628) — purely additive, zero changes to
-`apps/cli/src/provider/groq.ts` or the BYOK path in `apps/cli/src/config/config.ts`. `deviceFlow.ts`
-requests + polls (honoring `authorization_pending`/`slow_down`/`expired_token`/
-`access_denied`); `authStore.ts` persists the session as a single `auth.json` under
-`getConfigDir()` (owner-only file permissions, not the per-id `sessions/` pattern —
-there's exactly one auth session per machine); `browser.ts` best-effort opens the
-verification URL via the existing `spawnCollect`, no new dependency; `commands.ts`
-orchestrates (`login`/`signup` are the same underlying call — WorkOS's hosted UI
-handles sign-in vs. sign-up). `cli.ts` dispatches these subcommands before the
-existing task/`--resume`/`/mode` handling, mirroring the `/mode` carve-out.
-
-**AGENTS.md loading**: on a fresh (non-resumed) session, `apps/cli/src/agents/loadAgentsFile.ts`
-walks up from `cwd` looking for the nearest `AGENTS.md` and prepends its contents to
-the system prompt. This file is that file, for this repo.
+- Prioritize behavioral correctness and robustness over stylistic preferences.
+- Treat agent loops, state, context, memory, and tool execution as high-risk areas.
+- Flag unnecessary LLM calls, excessive token usage, avoidable latency, and inefficient tool usage.
+- Flag hidden state, brittle control flow, race conditions, and problematic non-determinism.
+- Check error handling, retries, recovery, cancellation, and failure modes.
+- Prefer simple, testable, composable implementations.
+- Avoid abstractions that do not solve a concrete problem.
+- Consider extensibility across different models, agent strategies, memory systems,
+  evaluators, and execution policies.
+- For LLM-related changes, consider context quality, context-window limitations,
+  model reliability, token usage, latency, and graceful degradation.
+- Consider the impact of changes on autonomous task completion, reproducibility,
+  observability, and debugging.
 
 ## Notes for agents
 
