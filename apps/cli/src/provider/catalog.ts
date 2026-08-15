@@ -11,10 +11,11 @@ const FALLBACK_MANIFEST = bundledManifest as ModelCatalog;
 
 // Per-provider, not whole-catalog: a live models.dev payload can carry zero rows for one
 // configured provider while another configured provider's live rows are fine. Scoped to
-// `configured` (not every provider FALLBACK_MANIFEST has rows for): an unconfigured provider's
-// backfilled rows would offer a route the guided picker can't actually honor later — the picker
-// only shows this catalog transiently, and `resolveRoute` re-checks against the real live
-// catalog at actual routing time, not this merged one.
+// `configured` (not every provider FALLBACK_MANIFEST has rows for): the guided picker
+// (tui/commands.ts's decideGuidedModelPickerOpen) filters to the same `configured` set, so an
+// unconfigured provider's backfilled rows would never be shown — but they'd still join that
+// provider's route groups and inflate the `alternatives`/ordering the SHOWN rows report, for
+// providers the picker has no reason to know about at all.
 export function catalogWithFallback(
   live: ModelCatalog,
   configured: ReadonlySet<ModelProvider>,

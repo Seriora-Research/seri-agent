@@ -306,6 +306,25 @@ describe("decideGuidedModelPickerOpen", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.entry.provider).toBe("openrouter");
   });
+
+  // code-review finding: `alternatives` (decideModelPickerOpen's own group.length - 1) is computed
+  // over the FULL route group before the keyless-row filter above drops every unshown sibling — a
+  // surviving row must not keep claiming an "alternative" that this list no longer contains. RED
+  // against the pre-fix code: `alternatives` stayed 1 (the full group's count) even after the
+  // groq sibling was filtered out, so formatModelRow would render "+1 route" for a route this list
+  // never shows.
+  test("recomputes alternatives from the filtered rows, not the stale full-group count", () => {
+    const routeCatalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "openai/gpt-oss-120b", provider: "groq" }),
+        catalogEntry({ id: "openai/gpt-oss-120b", provider: "openrouter" }),
+      ],
+    };
+    const rows = decideGuidedModelPickerOpen(routeCatalog, new Set(["openrouter"]));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.alternatives).toBe(0);
+  });
 });
 
 const ALL_KEY_NAMES = [

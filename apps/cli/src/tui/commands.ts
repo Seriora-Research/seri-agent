@@ -146,11 +146,24 @@ export function decideModelPickerOpen(
 // reachable outcome beyond bug surface; and a keyless row's model/provider pair can only be
 // persisted and resolved correctly later if it is independently reachable in the LIVE catalog at
 // actual routing time — a guarantee the picker's own catalog (a live+fallback merge) cannot make.
+// A KEYED row has no such gap: `resolveRoute` (provider/routing.ts) returns a configured pick
+// unchanged, before it ever looks the model up in any catalog — so a keyed row sourced from
+// `catalogWithFallback`'s backfill is exactly as safe to persist as a live one.
 export function decideGuidedModelPickerOpen(
   catalog: ModelCatalog,
   configured: ReadonlySet<ModelProvider>,
 ): ModelPickerEntry[] {
-  return decideModelPickerOpen(catalog, configured).filter((row) => row.keyConfigured);
+  const keyed = decideModelPickerOpen(catalog, configured).filter((row) => row.keyConfigured);
+  // `alternatives` above is `decideModelPickerOpen`'s own group.length - 1, counted over the FULL
+  // route group before this filter drops every keyless sibling — recomputed here over just the
+  // rows this list actually shows, or a row could claim "+1 route" for a route this list never
+  // renders (a keyless sibling elsewhere in the same group that got filtered out above).
+  const shownGroups = groupRoutes(keyed.map((row) => row.entry));
+  const shownAlternatives = new Map<ModelCatalogEntry, number>();
+  for (const group of shownGroups.values()) {
+    for (const entry of group) shownAlternatives.set(entry, group.length - 1);
+  }
+  return keyed.map((row) => ({ ...row, alternatives: shownAlternatives.get(row.entry) ?? 0 }));
 }
 
 // One row per provider — /setup's own table (D5-D8, feature-plan.md). `removable` is D8: it is

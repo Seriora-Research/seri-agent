@@ -17,8 +17,9 @@ function catalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogE
   };
 }
 
-// Scoped to `configured`, not whole-catalog (round-3 fix): backfilling an unconfigured provider's
-// rows would offer the guided picker a route `resolveRoute` can't actually reach later.
+// Scoped to `configured`, not whole-catalog: an unconfigured provider's backfilled rows would
+// never be shown (the guided picker filters to the same `configured` set) but would still
+// inflate other providers' route-group alternatives counts for no reason.
 describe("catalogWithFallback", () => {
   test("backfills a configured provider missing from live", () => {
     const live: ModelCatalog = {
