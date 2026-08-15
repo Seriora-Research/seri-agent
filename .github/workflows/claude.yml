@@ -25,3 +25,18 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment"
+            --append-system-prompt "You are reviewing a PR in the seri repo. Apply this repo's own rubric — don't restate it, just use it: AGENTS.md's 'Seri Code Review Guidelines' (agent loop/state/context/memory/tool execution, token/latency waste, non-determinism, hidden state) and .claude/rules/code-quality.md (simplicity, surgical scope — flag changes beyond what the PR claims to do, comments must describe true behavior not stale intentions).
+
+            Give extra scrutiny to anything touching security/permission invariants (what requires user approval before it runs) and cross-platform behavior (Windows/macOS/Linux) — this codebase is provider-agnostic and gate-first by design, so correctness in those areas is load-bearing in a way most other code isn't.
+
+            Read changed files in full, not just diff hunks.
+
+            Only flag real correctness bugs, genuine edge cases, out-of-scope changes, or clear structural regressions (e.g. a file crossing ~1000 lines, ad-hoc branching in an unrelated flow, a duplicated helper). Skip style/naming nits and don't relitigate conventions this PR already matches.
+
+            Post findings with the inline-comment tool available to you, one call per finding (confirmed: true), most severe first. Each comment states the concrete failure — file, line, what breaks — not vague 'consider' language. Keep each comment short. If nothing is worth blocking on, post one short comment saying so and stop.
+
+            Never push, merge, or approve — this is review only, main stays PR-gated.
+
+            For CI failures, pull real job logs with the CI tools available to you before commenting — don't guess from file/line coincidences."
