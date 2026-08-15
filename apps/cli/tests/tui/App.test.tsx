@@ -1690,6 +1690,22 @@ describe("App", () => {
 
       expect(unset).toEqual(["SERI_VERIFY_COMMAND"]);
     });
+
+    // configKeyInfo's fallback (tui/commands.ts): a key with no CONFIG_KEY_INFO entry shows its
+    // raw name as the label, since there is no human name for it — the confirm-unset prompt above
+    // only ever exercises a known key, which alone doesn't cover this path.
+    test("confirm-unset on an unrecognised key shows the raw key as its own label", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "config-step",
+        state: { step: "confirm-unset", key: "SERI_SOME_OTHER_KEY" },
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Unset SERI_SOME_OTHER_KEY (SERI_SOME_OTHER_KEY)");
+    });
   });
 
   describe("permissions panel", () => {
