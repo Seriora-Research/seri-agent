@@ -4118,4 +4118,101 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
   });
+
+  describe("welcome splash", () => {
+    // The crux test for this feature: GROQ_API_KEY is an *existing* key (same as every other
+    // script in this file), so checkZeroKeysConfigured is false and runGuidedSetup never mounts —
+    // yet the splash still shows, proving it isn't gated behind a first-run/zero-key check.
+    // `dismissSplash: false` (every test in this describe block passes it) opts out of startChild's
+    // own default auto-dismiss, since exercising the splash itself is the whole point here.
+    test("the splash renders on a launch with an already-configured provider key, not just a first run", async () => {
+      const scriptPath = join(dir, "child-splash-existing-key.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
+      try {
+        await sawLine("SERI");
+        await sawLine("Continue without logging in");
+
+        // Down twice from the default-selected "Log in" to "Continue without logging in", then
+        // Enter — real menu navigation, not Escape (already exercised by every other test in this
+        // file via startChild's own default dismiss path).
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\r");
+
+        // Falls through into the ordinary flow rather than replacing it.
+        await sawLine("RUNLOOP_READY");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("an already-authenticated user sees only Continue, not Log in / Sign up", async () => {
+      seedAuth(dir);
+      const scriptPath = join(dir, "child-splash-authenticated.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir, {
+        dismissSplash: false,
+      });
+      try {
+        await sawLine("SERI");
+        await sawLine("> Continue");
+        await wait100ms();
+
+        expect(occurrences("Log in")).toBe(0);
+        expect(occurrences("Sign up")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("selecting Log in from the splash opens the same device-flow panel /login uses, and a successful login still falls through to the normal flow", async () => {
+      const scriptPath = join(dir, "child-splash-login.mjs");
+      writeFileSync(scriptPath, childScriptAuth(dir));
+
+      const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
+      try {
+        await sawLine("SERI");
+        // "Log in" is the default-selected (first) item — a bare Enter, no navigation, selects it.
+        await sawLine("> Log in");
+        child.stdin?.write("\r");
+        await wait100ms();
+
+        await sawLine("https://example.com/device");
+        await sawLine("ABCD-1234");
+
+        // childScriptAuth's own loginFake resolves on its own ~50ms later — no further keypress.
+        await sawLine("RUNLOOP_READY");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("the splash appears ahead of the mandatory /setup panel for a zero-key user, and Continue does not skip /setup", async () => {
+      const scriptPath = join(dir, "child-splash-zero-key.mjs");
+      writeFileSync(scriptPath, childScriptGuidedSetup(dir));
+
+      const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
+      try {
+        await sawLine("SERI");
+        await sawLine("Continue without logging in");
+
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\r");
+
+        // The regression guard: Continue falls through into the existing mandatory-/setup gate
+        // rather than bypassing it.
+        await sawLine("/setup — provider API keys");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
 });
