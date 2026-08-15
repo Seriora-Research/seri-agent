@@ -35,7 +35,6 @@ import {
   decideRewind,
   decideSetupOpen,
   decideUndo,
-  fillMissingProviders,
 } from "../../src/tui/commands";
 
 let root: string;
@@ -248,10 +247,17 @@ describe("decideGuidedModelPickerOpen", () => {
   const catalog = bundledManifest as ModelCatalog;
   const configured = new Set<ModelProvider>(["anthropic"]);
 
-  test("every returned row has its own key or a working reroute target", () => {
+  // The important regression test for the keyless-row-removal fix: a keyless row's model/provider
+  // pair is only reachable in the guided picker's own live+fallback merge, never guaranteed
+  // reachable in the LIVE catalog `resolveRoute` re-checks against at actual routing time — so
+  // every row must carry its own key, and no row may carry a `rerouteTo` at all. RED against the
+  // pre-fix code (the `keyed`/`rerouted` partition): that code allowed a keyless row through
+  // whenever `rerouteTo` was set, which this assertion would have caught immediately.
+  test("every returned row has keyConfigured true, and no row has a rerouteTo", () => {
     const rows = decideGuidedModelPickerOpen(catalog, configured);
     expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every((row) => row.keyConfigured || row.rerouteTo !== undefined)).toBe(true);
+    expect(rows.every((row) => row.keyConfigured === true)).toBe(true);
+    expect(rows.every((row) => row.rerouteTo === undefined)).toBe(true);
   });
 
   test("contains native anthropic rows — the key that was actually configured", () => {
@@ -284,11 +290,11 @@ describe("decideGuidedModelPickerOpen", () => {
 
   // byRoutePriority (routing.ts) orders a route group's members native-then-aggregator, ties
   // broken by CATALOG_PROVIDERS order — groq before openrouter, regardless of which one the user
-  // actually has a key for. decideModelPickerOpen preserves that order deliberately (it mirrors
-  // resolveRoute's own tie-break), but the guided picker preselects row 0 and Enter commits it
-  // immediately: row 0 must be a row the user's own key serves, not a keyless reroute that merely
-  // happens to sort first.
-  test("puts rows the configured key serves first, so the preselected row is never a keyless reroute", () => {
+  // actually has a key for. Under the old keyed/rerouted partition, the keyless groq row would
+  // have sorted first within the group and then been pushed after the keyed openrouter row; now
+  // it must not appear at all. RED against the pre-fix code: the old partition returned the groq
+  // row (with `rerouteTo: "openrouter"`) as `rows[1]`, so `rows.length` was 2, not 1.
+  test("never includes a keyless row, even when one would sort first", () => {
     const routeCatalog: ModelCatalog = {
       fetchedAt: "2026-08-09T00:00:00.000Z",
       entries: [
@@ -297,42 +303,8 @@ describe("decideGuidedModelPickerOpen", () => {
       ],
     };
     const rows = decideGuidedModelPickerOpen(routeCatalog, new Set(["openrouter"]));
-    expect(rows[0]?.keyConfigured).toBe(true);
-  });
-});
-
-describe("fillMissingProviders", () => {
-  test("backfills only the provider(s) missing from live entries, not ones live already has", () => {
-    const live = [catalogEntry({ id: "live-groq", provider: "groq" })];
-    const fallback = [
-      catalogEntry({ id: "fallback-groq", provider: "groq" }),
-      catalogEntry({ id: "fallback-openrouter", provider: "openrouter" }),
-    ];
-
-    const result = fillMissingProviders(live, fallback);
-
-    expect(result.map((entry) => entry.id)).toEqual(["live-groq", "fallback-openrouter"]);
-  });
-
-  test("combined with decideGuidedModelPickerOpen, offers a backfilled provider's rows", () => {
-    const live: ModelCatalog = {
-      fetchedAt: "2026-08-09T00:00:00.000Z",
-      entries: [catalogEntry({ id: "live-groq", provider: "groq" })],
-    };
-    const fallback = [
-      catalogEntry({ id: "fallback-groq", provider: "groq" }),
-      catalogEntry({ id: "fallback-openrouter", provider: "openrouter" }),
-    ];
-
-    const merged = fillMissingProviders(live.entries, fallback);
-    const rows = decideGuidedModelPickerOpen(
-      { ...live, entries: merged },
-      new Set(["groq", "openrouter"]),
-    );
-
-    expect(rows.some((row) => row.entry.id === "live-groq")).toBe(true);
-    expect(rows.some((row) => row.entry.id === "fallback-openrouter")).toBe(true);
-    expect(rows.some((row) => row.entry.id === "fallback-groq")).toBe(false);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.entry.provider).toBe("openrouter");
   });
 });
 

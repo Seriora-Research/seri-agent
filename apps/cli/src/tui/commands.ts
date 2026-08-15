@@ -138,43 +138,19 @@ export function decideModelPickerOpen(
   return rows;
 }
 
-// Guided setup's own picker (byok-guided-setup-default-model bugfix report, Decision 3):
-// `decideModelPickerOpen` filtered to rows `resolveRoute` will actually reach — its own key
-// configured, or a reroute target it computed for this exact `configured` set. Offering a
-// dead-end row here would let the ONE mandatory model pick of a blank first run still end in
-// `missingKeyError`, one step later than the bug this loop fixes but the same exit. `/model`'s own
-// picker (runTui) is deliberately NOT filtered this way — picking a keyless model there is a
-// power-user act with a working session already underneath it.
-//
-// Rows served by the configured key come before reroute-only rows (stable within each group):
-// this picker preselects row 0 and Enter commits it immediately, so row 0 must be a model the
-// user's own key actually serves rather than a keyless row that merely sorts first under
-// `decideModelPickerOpen`'s native-then-aggregator ordering. This trades away
-// `decideModelPickerOpen`'s own group-adjacency guarantee (its own comment, above): a group split
-// across the keyed/rerouted partition no longer keeps its members adjacent in the returned list.
+// Guided setup's own picker (byok-guided-setup-default-model bugfix report, Decision 3): every
+// row here is one the user's own configured key serves. A keyless row that only reroutes is never
+// shown, for two reasons: its target is already present as its own keyed row in this same list
+// (`rerouteTo` is only ever set to a sibling that `decideModelPickerOpen` found configured, and
+// that sibling is itself emitted as a `keyConfigured: true` row), so a keyless row adds no
+// reachable outcome beyond bug surface; and a keyless row's model/provider pair can only be
+// persisted and resolved correctly later if it is independently reachable in the LIVE catalog at
+// actual routing time — a guarantee the picker's own catalog (a live+fallback merge) cannot make.
 export function decideGuidedModelPickerOpen(
   catalog: ModelCatalog,
   configured: ReadonlySet<ModelProvider>,
 ): ModelPickerEntry[] {
-  const reachable = decideModelPickerOpen(catalog, configured).filter(
-    (row) => row.keyConfigured || row.rerouteTo !== undefined,
-  );
-  const keyed = reachable.filter((row) => row.keyConfigured);
-  const rerouted = reachable.filter((row) => !row.keyConfigured);
-  return [...keyed, ...rerouted];
-}
-
-// Per-provider, not whole-catalog: a live models.dev payload can carry zero rows for ONE
-// configured provider (an upstream `models` entry missing/malformed for just that provider)
-// while another configured provider's live rows are fine — using the fallback only when the
-// ENTIRE live catalog was empty would leave that one provider's rows blank with no indication.
-// Backfills a provider's entries from `fallback` only when `live` has none for it.
-export function fillMissingProviders(
-  live: ModelCatalogEntry[],
-  fallback: ModelCatalogEntry[],
-): ModelCatalogEntry[] {
-  const liveProviders = new Set(live.map((entry) => entry.provider));
-  return [...live, ...fallback.filter((entry) => !liveProviders.has(entry.provider))];
+  return decideModelPickerOpen(catalog, configured).filter((row) => row.keyConfigured);
 }
 
 // One row per provider — /setup's own table (D5-D8, feature-plan.md). `removable` is D8: it is

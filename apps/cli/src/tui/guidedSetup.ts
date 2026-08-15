@@ -6,16 +6,11 @@
 // file has no dependency back on cli.ts at all.
 import { randomUUID } from "node:crypto";
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
-import { FALLBACK_MANIFEST } from "../provider/catalog";
+import { catalogWithFallback } from "../provider/catalog";
 import { persistDefaultModel } from "../provider/defaults";
 import { configuredProviders } from "../provider/keys";
 import { deliverSignal, onSignalCleanup } from "../signals";
-import {
-  decideAuthOffer,
-  decideGuidedModelPickerOpen,
-  decideSetupOpen,
-  fillMissingProviders,
-} from "./commands";
+import { decideAuthOffer, decideGuidedModelPickerOpen, decideSetupOpen } from "./commands";
 import {
   type Dispatch,
   initialTuiState,
@@ -222,17 +217,17 @@ export async function runGuidedSetup(
           }
           // `catalog` here is the LIVE models.dev payload: a provider whose upstream `models` entry
           // is missing/malformed comes back with zero rows for it, even though the key the user just
-          // saved is for that exact provider. Backfilling from the bundled manifest per-provider
-          // (rather than only when the whole live catalog is empty) keeps that one provider's rows
-          // from going missing without also hiding another configured provider's real live rows.
-          const merged = fillMissingProviders(catalog.entries, FALLBACK_MANIFEST.entries);
+          // saved is for that exact provider. `catalogWithFallback` backfills only that provider's
+          // rows from the bundled manifest, scoped to what `freshConfigured` actually is.
           const entries = decideGuidedModelPickerOpen(
-            { ...catalog, entries: merged },
+            catalogWithFallback(catalog, freshConfigured),
             freshConfigured,
           );
           if (entries.length === 0) {
-            // Unreachable in practice — the bundled manifest carries real rows for every provider —
-            // but degrades silently rather than crash if that ever stops holding.
+            // Unreachable in practice — the bundled manifest carries real rows for every provider,
+            // and decideGuidedModelPickerOpen only ever excludes rows, never invents one for a
+            // provider it has none for — but a blank picker has no way to proceed except a fatal
+            // Ctrl-C, so this degrades to the decline path instead of rendering zero rows.
             closeWithoutPicker();
             return;
           }
