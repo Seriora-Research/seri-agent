@@ -4148,6 +4148,44 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.kill("SIGKILL");
       }
     }, 60_000);
+
+    // Regression guard: commandError (reducer.ts) used to have no clearing action at all, so
+    // App.tsx's unconditional render of it kept the banner on screen through every later render —
+    // including a later, successful command's own. `occurrences(errorText) === 0` cannot prove a
+    // clear here: startChild's stdout is an ever-accumulating raw buffer, so text already printed
+    // can never be "un-printed" from it. Instead: Ink re-renders the whole tree on every state
+    // change, so a still-set commandError gets RE-PRINTED as part of every later render too — this
+    // asserts the error's occurrence count stays flat from immediately BEFORE the second command's
+    // own Enter to immediately after its own confirmation renders. The baseline is taken there, not
+    // right after the error first appears: typing the second command's own text also re-renders the
+    // still-visible banner one or more times before Enter is pressed (Ink re-rendering the whole
+    // live region on each keystroke, not just the input box), which is unrelated to whether Enter's
+    // submission clears it and would otherwise pollute the baseline.
+    test("a command-error clears once the next submission renders", async () => {
+      const scriptPath = join(dir, "child-profile-new-cleared.mjs");
+      writeFileSync(scriptPath, childScriptBare(dir));
+
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("[approve-each]");
+
+        child.stdin?.write("/profile new");
+        await sawLine("/profile new");
+        child.stdin?.write("\r");
+        await sawLine("Usage: /profile new <name>");
+
+        child.stdin?.write("/mode");
+        await sawLine("/mode");
+        const baseline = occurrences("Usage: /profile new <name>");
+
+        child.stdin?.write("\r");
+        await sawLine("permission mode is now auto");
+
+        expect(occurrences("Usage: /profile new <name>")).toBe(baseline);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
   });
 
   describe("welcome splash", () => {
