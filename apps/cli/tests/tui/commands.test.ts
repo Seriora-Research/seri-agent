@@ -618,8 +618,10 @@ describe("decideAuthOffer", () => {
 
 describe("decideConfigOpen", () => {
   let configConfigDir: string;
-  // Both known keys: any dev box or CI runner with SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND
-  // genuinely exported would otherwise silently fail the "both are unset" assertion below.
+  // Env hygiene for every key this describe block touches, not just the two displayed ones: any
+  // dev box or CI runner with SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND genuinely exported would
+  // otherwise silently fail the "both are unset" assertion below, and SERI_WORKOS_CLIENT_ID is
+  // set directly by this file's own exclusion test further down.
   const KNOWN_KEYS = ["SERI_WORKOS_CLIENT_ID", "SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
   const originalEnv = Object.fromEntries(KNOWN_KEYS.map((name) => [name, process.env[name]]));
 
@@ -691,10 +693,14 @@ describe("decideConfigOpen", () => {
 
   test("SERI_WORKOS_CLIENT_ID is absent from the returned rows even when set via config.json or env", () => {
     setConfigValue("SERI_WORKOS_CLIENT_ID", "client_from_config", configConfigDir);
-    expect(decideConfigOpen(configConfigDir).some((row) => row.key === "SERI_WORKOS_CLIENT_ID")).toBe(false);
+    expect(
+      decideConfigOpen(configConfigDir).some((row) => row.key === "SERI_WORKOS_CLIENT_ID"),
+    ).toBe(false);
 
     process.env.SERI_WORKOS_CLIENT_ID = "client_from_env";
-    expect(decideConfigOpen(configConfigDir).some((row) => row.key === "SERI_WORKOS_CLIENT_ID")).toBe(false);
+    expect(
+      decideConfigOpen(configConfigDir).some((row) => row.key === "SERI_WORKOS_CLIENT_ID"),
+    ).toBe(false);
   });
 
   test("a non-provider hand-added key in config.json is present", () => {

@@ -235,23 +235,26 @@ export type ConfigRow = {
 // filtered out above).
 const KNOWN_CONFIG_KEYS = ["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
 
-// Never shown or editable via /config, even if present in config.json or process.env: the OAuth
-// client id /login's device flow resolves live (auth/deviceFlow.ts) — an internal/advanced
-// setting, not one a common /config user should see or change.
-const HIDDEN_CONFIG_KEYS = new Set(["SERI_WORKOS_CLIENT_ID"]);
+// Never listed by /config, even if present in config.json or process.env: the OAuth client id
+// /login's device flow resolves live (auth/deviceFlow.ts) — an internal/advanced setting, not
+// one a common /config user should see or change. This is a display policy, not a lock:
+// `seri config set SERI_WORKOS_CLIENT_ID <value>` (config/commands.ts) still writes it
+// deliberately, for whoever needs the escape hatch.
+const HIDDEN_CONFIG_KEYS = ["SERI_WORKOS_CLIENT_ID"];
 
-// The decision half of /config, mirroring decideSetupOpen's own shape. Provider API keys
-// (PROVIDER_API_KEY_NAMES) are excluded from the "other keys" tail even when present in
-// config.json — /setup already owns those, and showing them here too would let /config unset a
-// provider key /setup itself never offers to.
+// The decision half of /config, mirroring decideSetupOpen's own shape. Every key the "other
+// keys" tail below must not emit: the two known keys (already shown, in their own fixed order),
+// the hidden ones, and provider API keys (PROVIDER_API_KEY_NAMES) — /setup already owns those,
+// and showing them here too would let /config unset a provider key /setup itself never offers to.
 export function decideConfigOpen(configDir: string): ConfigRow[] {
   const config = loadConfig(configDir);
-  const providerKeyNames = new Set<string>(Object.values(PROVIDER_API_KEY_NAMES));
+  const excludedKeys = new Set([
+    ...KNOWN_CONFIG_KEYS,
+    ...HIDDEN_CONFIG_KEYS,
+    ...Object.values(PROVIDER_API_KEY_NAMES),
+  ]);
   const otherKeys = Object.keys(config)
-    .filter(
-      (key) =>
-        !KNOWN_CONFIG_KEYS.includes(key) && !providerKeyNames.has(key) && !HIDDEN_CONFIG_KEYS.has(key),
-    )
+    .filter((key) => !excludedKeys.has(key))
     .sort();
   return [...KNOWN_CONFIG_KEYS, ...otherKeys].map((key) => {
     const hasConfigEntry = key in config;
