@@ -3784,6 +3784,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await wait100ms();
         await sawLine("/config — settings");
+        await sawLine("Automatic verification:");
+        await sawLine("Verify command:");
 
         // KNOWN_CONFIG_KEYS order (tui/commands.ts): SERI_VERIFY_ENABLED, SERI_VERIFY_COMMAND —
         // one Down press reaches the second.
@@ -3791,9 +3793,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("value for SERI_VERIFY_COMMAND");
+        await sawLine("Set Verify command (SERI_VERIFY_COMMAND)");
 
-        const value = "bun run check";
+        // Not "bun run check": CONFIG_KEY_INFO's own description for this key uses that exact
+        // string as its example ('e.g. "bun run check"'), which the entry step's own description
+        // line (below the header) renders unconditionally — a value equal to it would make the
+        // negative control below fail on the description text itself, before anything is typed.
+        const value = "bun run typecheck";
         child.stdin?.write(value);
         await wait100ms();
         // Negative control: while the value is still only ConfigEnterValue's own local state, the
@@ -3817,7 +3823,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         child.stdin?.write("r");
         await wait100ms();
-        await sawLine("Unset SERI_VERIFY_COMMAND");
+        await sawLine("Unset Verify command (SERI_VERIFY_COMMAND)");
 
         child.stdin?.write("y");
         await sawLine("Removed SERI_VERIFY_COMMAND.");
@@ -3827,6 +3833,52 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
           (c) => c.SERI_VERIFY_COMMAND === undefined,
         );
         expect(afterRemoval.SERI_VERIFY_COMMAND).toBeUndefined();
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("SERI_VERIFY_ENABLED toggles on Enter without opening a text prompt", async () => {
+      const scriptPath = join(dir, "child-config-toggle.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/config");
+        await sawLine("/config");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/config — settings");
+        // Nothing in config.json yet — the row must read "on" (loadVerifyConfig's own default),
+        // not "not set".
+        await sawLine("Automatic verification: on");
+
+        child.stdin?.write("\r");
+        await sawLine("Automatic verification is now off. (takes effect on the next run)");
+
+        const off = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.SERI_VERIFY_ENABLED === "false",
+        );
+        expect(off.SERI_VERIFY_ENABLED).toBe("false");
+        await sawLine("Automatic verification: off");
+
+        child.stdin?.write("\r");
+        await sawLine("Automatic verification is now on. (takes effect on the next run)");
+
+        const on = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.SERI_VERIFY_ENABLED === "true",
+        );
+        expect(on.SERI_VERIFY_ENABLED).toBe("true");
+
+        // Negative control: this is what actually proves no free-text step ever opened — it goes
+        // red on any implementation that routes the boolean through enter-value (decideConfigSelect
+        // always returning { kind: "enter-value" }, ConfigEnterValue's own header text).
+        expect(occurrences("Set Automatic verification")).toBe(0);
+        expect(occurrences("value for")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
