@@ -280,6 +280,24 @@ describe("decideGuidedModelPickerOpen", () => {
     };
     expect(decideGuidedModelPickerOpen(catalog, new Set(["anthropic"]))).toEqual([]);
   });
+
+  // byRoutePriority (routing.ts) orders a route group's members native-then-aggregator, ties
+  // broken by CATALOG_PROVIDERS order — groq before openrouter, regardless of which one the user
+  // actually has a key for. decideModelPickerOpen preserves that order deliberately (it mirrors
+  // resolveRoute's own tie-break), but the guided picker preselects row 0 and Enter commits it
+  // immediately: row 0 must be a row the user's own key serves, not a keyless reroute that merely
+  // happens to sort first.
+  test("puts rows the configured key serves first, so the preselected row is never a keyless reroute", () => {
+    const routeCatalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "openai/gpt-oss-120b", provider: "groq" }),
+        catalogEntry({ id: "openai/gpt-oss-120b", provider: "openrouter" }),
+      ],
+    };
+    const rows = decideGuidedModelPickerOpen(routeCatalog, new Set(["openrouter"]));
+    expect(rows[0]?.keyConfigured).toBe(true);
+  });
 });
 
 const ALL_KEY_NAMES = [
