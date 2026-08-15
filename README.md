@@ -76,17 +76,18 @@ release — that catches a truncated or corrupted download, not a compromised re
 seri
 ```
 
-That's the whole invocation — seri opens the TUI. On a first run with no provider key
-configured anywhere, it routes you straight into guided setup instead of a blank prompt; from
-then on it's `/setup` (below) whenever you want to add, replace, or remove a key. Setting the
-matching environment variable before you launch (`GROQ_API_KEY`, say) works too — seri picks it
-up without you touching `/setup` at all.
+That's the whole invocation — seri opens the TUI. On a first run, guided setup asks how you want
+to pay for models: bring your own provider key and pick a model explicitly (`/setup` gets you
+back here later to add, replace, or remove one — setting the matching environment variable
+before you launch, `GROQ_API_KEY` say, works too), or sign into a hosted seri account
+(`/login`) and skip key management.
 
-The default model is `openai/gpt-oss-120b` on Groq, chosen by measurement: on the same task, the
-same prompt and a fresh session each run, it made a real tool call in 20 of 20 runs where
-`llama-3.3-70b-versatile` managed 5 of 11. `/model` switches it, mid-session, without losing
-context; a pick whose next turn actually succeeds becomes the default for every future brand-new
-session, not just the one you picked it in.
+A signed-in account defaults to `openai/gpt-oss-120b` via OpenRouter, chosen by measurement: on
+the same task, the same prompt and a fresh session each run, it made a real tool call in 20 of 20
+runs where `llama-3.3-70b-versatile` managed 5 of 11. BYOK has no such default — you choose a
+model as part of setup. Either way, `/model` switches it, mid-session, without losing context; a
+pick whose next turn actually succeeds becomes the default for every future brand-new session,
+not just the one you picked it in.
 
 Anthropic, OpenAI and Google work the same BYOK way as Groq and OpenRouter:
 
