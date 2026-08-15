@@ -885,8 +885,10 @@ function dirs(ctx: RunContext): CommandDirs {
 // every call site, so they can't silently drift out of sync with each other.
 //   "task"   — real task text was given (new session or --continue/--resume with new text): push,
 //              echo, and start a turn on it.
-//   "resume" — --continue/--resume with no new text: nothing to push or echo, but still
-//              auto-starts a turn on the resumed session, same as it always has.
+//   "resume" — --continue/--resume with no new text: nothing to push or echo. A turn is started
+//              only if the resumed session's last message is a user message with no reply yet —
+//              a session that already ended on an assistant reply has nothing left to answer, and
+//              starting one anyway made a redundant model call and appended a duplicate reply.
 //   "idle"   — no resume target and no task text (bare `seri` in a TTY): mount with nothing to do.
 type RunStart = "idle" | "task" | "resume";
 
@@ -3168,11 +3170,15 @@ async function runTui(
         dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
         // runStart — the same three-state predicate prepareSession (above) uses to decide whether
         // it pushed the initial user message at all: "task" echoes and starts a turn on it,
-        // "resume" (a bare `--continue`/`--resume`) starts a turn on the resumed session with
-        // nothing to echo, and "idle" (bare `seri`, no resume, no task) starts nothing.
+        // "resume" (a bare `--continue`/`--resume`) starts a turn only if the resumed session's
+        // last message is still an unanswered user message, and "idle" (bare `seri`, no resume, no
+        // task) starts nothing.
         const start = runStart(ctx);
         if (start === "task") echoUserInput(ctx.taskText);
-        if (start !== "idle") currentTurn = runTurn(prepared.session);
+        const shouldRunTurn =
+          start === "task" ||
+          (start === "resume" && prepared.session.messages.at(-1)?.role === "user");
+        if (shouldRunTurn) currentTurn = runTurn(prepared.session);
       },
     }),
     // `interactive: true` — without it, Ink's own auto-detection (`ink.js`'s `resolveInteractiveOption`,
