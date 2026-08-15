@@ -17,7 +17,7 @@ import {
   readLog,
 } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable } from "../../src/checkpoint/shadowGit";
-import { setConfigValue } from "../../src/config/config";
+import { setConfigValue, unsetConfigValue } from "../../src/config/config";
 import { getBaseConfigDir } from "../../src/config/paths";
 import { rememberGrant } from "../../src/permissions/store";
 import bundledManifest from "../../src/provider/catalog-manifest.json";
@@ -697,6 +697,9 @@ describe("decideConfigOpen", () => {
       decideConfigOpen(configConfigDir).some((row) => row.key === "SERI_WORKOS_CLIENT_ID"),
     ).toBe(false);
 
+    // Unset the config.json entry first — otherwise this second assertion would pass even if the
+    // env-only path were broken, since the config.json exclusion above already covers the key.
+    unsetConfigValue("SERI_WORKOS_CLIENT_ID", configConfigDir);
     process.env.SERI_WORKOS_CLIENT_ID = "client_from_env";
     expect(
       decideConfigOpen(configConfigDir).some((row) => row.key === "SERI_WORKOS_CLIENT_ID"),

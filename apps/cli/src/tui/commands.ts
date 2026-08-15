@@ -235,11 +235,12 @@ export type ConfigRow = {
 // filtered out above).
 const KNOWN_CONFIG_KEYS = ["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
 
-// Never listed by /config, even if present in config.json or process.env: the OAuth client id
-// /login's device flow resolves live (auth/deviceFlow.ts) — an internal/advanced setting, not
-// one a common /config user should see or change. This is a display policy, not a lock:
-// `seri config set SERI_WORKOS_CLIENT_ID <value>` (config/commands.ts) still writes it
-// deliberately, for whoever needs the escape hatch.
+// Never listed by /config, even if present in config.json: the OAuth client id /login's device
+// flow resolves live (auth/deviceFlow.ts) — an internal/advanced setting, not one a common
+// /config user should see or change. (process.env never adds a row on its own — it only affects
+// the source/value of a key already in the list below — so no separate env guard is needed
+// here.) This is a display policy, not a lock: `seri config set SERI_WORKOS_CLIENT_ID <value>`
+// (config/commands.ts) still writes it deliberately, for whoever needs the escape hatch.
 const HIDDEN_CONFIG_KEYS = ["SERI_WORKOS_CLIENT_ID"];
 
 // The decision half of /config, mirroring decideSetupOpen's own shape. Every key the "other
