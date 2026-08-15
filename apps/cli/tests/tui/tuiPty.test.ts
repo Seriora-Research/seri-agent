@@ -14,6 +14,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { ModelMessage } from "ai";
+import { saveSession } from "../../src/session/session";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
@@ -1123,6 +1125,33 @@ function childScriptMaxTurns(dir: string): string {
 // 2: the two were byte-for-byte identical function bodies under a different name — a bare-mount
 // idle TUI is exactly what /profile new's own test needs too, since HOME redirection is already
 // childScriptBare's job, and decideProfileCreate's getBaseConfigDir() reads that same HOME).
+
+// Same shape as childScriptBare, minus the bare-mount case: `--continue` resumes whatever session
+// the test pre-seeds into sessionsDir via saveSession, rather than mounting idle with none.
+function childScriptContinue(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run(["--continue"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
 
 // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
 // research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
@@ -4212,6 +4241,67 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // The regression guard: Continue falls through into the existing mandatory-/setup gate
         // rather than bypassing it.
         await sawLine("/setup — provider API keys");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
+
+  // `--continue`/`--resume` used to call runTurn unconditionally on mount (cli.ts's own runStart
+  // "resume" branch), even when the resumed session's last message already had a final assistant
+  // reply — a redundant, unprompted model call that appended a duplicate reply to the session.
+  describe("--continue mount", () => {
+    // awaitsReply's own full truth table (all four `loop.ts` end states) is unit-tested directly in
+    // tests/session/awaitsReply.test.ts, with no pty and no win32 skip — these two tests exist only
+    // to prove connectDispatch actually wires that predicate into the mount, not to re-cover the
+    // predicate's own cases.
+    function seedSession(sessionsDir: string, messages: ModelMessage[]): void {
+      saveSession(
+        {
+          id: "resumed",
+          cwd: ".",
+          systemPrompt: "",
+          permissionMode: "read-only",
+          messages,
+        },
+        sessionsDir,
+      );
+    }
+
+    test("does not auto-start a turn when the resumed session's last message already has an assistant reply", async () => {
+      seedSession(join(dir, "sessions"), [
+        { role: "user", content: "do a task" },
+        { role: "assistant", content: [{ type: "text", text: "done" }] },
+      ]);
+
+      const scriptPath = join(dir, "child-continue-answered.mjs");
+      writeFileSync(scriptPath, childScriptContinue(dir));
+
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      try {
+        // Liveness proof before the negative control, same convention as "bare seri"'s own
+        // negative control above: the mode indicator (this seed's `permissionMode: "read-only"`)
+        // proves the child mounted AND resumed the seeded session, not merely that it never got
+        // that far — occurrences() staying at 0 for a process that never mounted would pass for
+        // the wrong reason.
+        await sawLine("[read-only]");
+        await wait100ms();
+        expect(occurrences("RUNLOOP_READY")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("still auto-starts a turn when the resumed session's last message is an unanswered user message", async () => {
+      seedSession(join(dir, "sessions"), [{ role: "user", content: "do a task" }]);
+
+      const scriptPath = join(dir, "child-continue-pending.mjs");
+      writeFileSync(scriptPath, childScriptContinue(dir));
+
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        expect(occurrences("RUNLOOP_READY")).toBe(1);
       } finally {
         child.kill("SIGKILL");
       }

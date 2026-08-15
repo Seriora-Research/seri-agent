@@ -89,6 +89,7 @@ import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/op
 import { type ResolvedRoute, resolveRoute } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
 import { validateProviderKey } from "./provider/validate";
+import { awaitsReply } from "./session/awaitsReply";
 import {
   findMostRecentSession,
   loadSession,
@@ -885,8 +886,10 @@ function dirs(ctx: RunContext): CommandDirs {
 // every call site, so they can't silently drift out of sync with each other.
 //   "task"   — real task text was given (new session or --continue/--resume with new text): push,
 //              echo, and start a turn on it.
-//   "resume" — --continue/--resume with no new text: nothing to push or echo, but still
-//              auto-starts a turn on the resumed session, same as it always has.
+//   "resume" — --continue/--resume with no new text: nothing to push or echo. Whether a turn
+//              actually starts is a separate question the session's own messages answer, not
+//              this classification alone — see session/awaitsReply.ts, and connectDispatch's use
+//              of it, below.
 //   "idle"   — no resume target and no task text (bare `seri` in a TTY): mount with nothing to do.
 type RunStart = "idle" | "task" | "resume";
 
@@ -3168,11 +3171,16 @@ async function runTui(
         dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
         // runStart — the same three-state predicate prepareSession (above) uses to decide whether
         // it pushed the initial user message at all: "task" echoes and starts a turn on it,
-        // "resume" (a bare `--continue`/`--resume`) starts a turn on the resumed session with
-        // nothing to echo, and "idle" (bare `seri`, no resume, no task) starts nothing.
+        // "resume" (a bare `--continue`/`--resume`) starts a turn only if the resumed session
+        // still awaitsReply (session/awaitsReply.ts), and "idle" (bare `seri`, no resume, no task)
+        // starts nothing. TUI-mount-only: the non-interactive branch below (`isTTY` false) still
+        // starts a turn unconditionally on "resume" — a known, narrower scope for this gate, not
+        // an oversight; see that branch's own comment.
         const start = runStart(ctx);
         if (start === "task") echoUserInput(ctx.taskText);
-        if (start !== "idle") currentTurn = runTurn(prepared.session);
+        const shouldRunTurn =
+          start === "task" || (start === "resume" && awaitsReply(prepared.session.messages));
+        if (shouldRunTurn) currentTurn = runTurn(prepared.session);
       },
     }),
     // `interactive: true` — without it, Ink's own auto-detection (`ink.js`'s `resolveInteractiveOption`,
@@ -3334,6 +3342,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
   if (typeof prepared === "number") return prepared;
 
+  // The non-interactive branch below still calls driveLoop unconditionally on a bare
+  // `--continue`/`--resume` (no new task text) — the same redundant-turn defect
+  // session/awaitsReply.ts's own comment describes for the TUI mount path above, left open here
+  // deliberately: piped/scripted invocations are a separate, unaudited surface (their own usage
+  // gate above only rejects `runStart(ctx) === "idle"`, not "resume"), and closing it needs its
+  // own reproduction and test coverage rather than reusing the TUI-mount fix's evidence for a
+  // different call site. Tracked as a known gap, not an oversight.
   const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning, archivist, ranAnyTurn } =
     isTTY
       ? await runTui(prepared, ctx, deps, maxTurns, skipPermissions)
