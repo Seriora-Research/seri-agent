@@ -145,13 +145,21 @@ export function decideModelPickerOpen(
 // `missingKeyError`, one step later than the bug this loop fixes but the same exit. `/model`'s own
 // picker (runTui) is deliberately NOT filtered this way — picking a keyless model there is a
 // power-user act with a working session already underneath it.
+//
+// Rows served by the configured key come before reroute-only rows (stable within each group):
+// this picker preselects row 0 and Enter commits it immediately, so row 0 must be a model the
+// user's own key actually serves rather than a keyless row that merely sorts first under
+// `decideModelPickerOpen`'s native-then-aggregator ordering.
 export function decideGuidedModelPickerOpen(
   catalog: ModelCatalog,
   configured: ReadonlySet<ModelProvider>,
 ): ModelPickerEntry[] {
-  return decideModelPickerOpen(catalog, configured).filter(
+  const reachable = decideModelPickerOpen(catalog, configured).filter(
     (row) => row.keyConfigured || row.rerouteTo !== undefined,
   );
+  const keyed = reachable.filter((row) => row.keyConfigured);
+  const rerouted = reachable.filter((row) => !row.keyConfigured);
+  return [...keyed, ...rerouted];
 }
 
 // One row per provider — /setup's own table (D5-D8, feature-plan.md). `removable` is D8: it is
