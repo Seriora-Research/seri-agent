@@ -56,7 +56,11 @@ describe("dispatchSetupList (via onSetupBack)", () => {
     };
     const { onSetupBack } = createSetupHandlers({
       dispatch,
-      getPendingSetup: () => ({ step: "confirm-remove", provider: "groq", keyName: "GROQ_API_KEY" }),
+      getPendingSetup: () => ({
+        step: "confirm-remove",
+        provider: "groq",
+        keyName: "GROQ_API_KEY",
+      }),
       configDir,
     });
 
@@ -74,7 +78,11 @@ describe("dispatchSetupList (via onSetupBack)", () => {
     let panelClosedCount = 0;
     const { onSetupBack } = createSetupHandlers({
       dispatch,
-      getPendingSetup: () => ({ step: "confirm-remove", provider: "groq", keyName: "GROQ_API_KEY" }),
+      getPendingSetup: () => ({
+        step: "confirm-remove",
+        provider: "groq",
+        keyName: "GROQ_API_KEY",
+      }),
       configDir,
       onPanelClosed: () => {
         panelClosedCount += 1;

@@ -1057,8 +1057,12 @@ async function prepareSession(
   // into one queue with no stream tag used to make `fatalDuringTui` print every one of them to
   // stderr regardless of origin, reclassifying a routine notice as an error.
   const preMountMessages: PreMountMessage[] = [];
-  const emit = isTTY ? (text: string) => preMountMessages.push({ text, stream: "stdout" }) : console.log;
-  const warn = isTTY ? (text: string) => preMountMessages.push({ text, stream: "stderr" }) : console.error;
+  const emit = isTTY
+    ? (text: string) => preMountMessages.push({ text, stream: "stdout" })
+    : console.log;
+  const warn = isTTY
+    ? (text: string) => preMountMessages.push({ text, stream: "stderr" })
+    : console.error;
   // Passed as printWarning's own `sink` param — `undefined` on the non-TTY path keeps its existing
   // default (console.error) exactly as before.
   const warnSink = isTTY ? warn : undefined;
