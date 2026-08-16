@@ -28,7 +28,7 @@ import {
 } from "../checkpoint/checkpoint";
 import { projectRoot } from "../checkpoint/shadowGit";
 import { maskValue } from "../config/commands";
-import { loadConfig } from "../config/config";
+import { configBoolean, loadConfig, resolveConfigValue } from "../config/config";
 import { isDefaultProfile, profileDir, profileNameError } from "../config/paths";
 import { cycleMode } from "../gate/gate";
 import { loadGrants, PERSISTABLE_TOOL_NAMES } from "../permissions/store";
@@ -221,19 +221,72 @@ export function decideAuthOffer(configDir: string): boolean {
 // `secret` is false (neither of the two known keys is a secret — SERI_VERIFY_COMMAND might be
 // "bun check", which a user should be able to read back, not see as asterisks) — only actually
 // masked (maskValue's own output) when `secret` is true.
-export type ConfigRow = {
+export type ConfigRowKind = { kind: "string" } | { kind: "boolean"; on: boolean };
+export type ConfigRowBase = {
   key: string;
+  label: string;
+  description: string;
   masked: string;
   source: "config" | "env" | "unset";
   removable: boolean;
   secret: boolean;
 };
+export type ConfigRow = ConfigRowBase & ConfigRowKind;
 
-// The two keys /config always shows, in this order, regardless of whether config.json has them —
-// none of these are secrets, unlike an unrecognized key, which defaults to secret (conservative:
-// an unknown key could be provider-shaped in spirit even though provider keys themselves are
-// filtered out above).
-const KNOWN_CONFIG_KEYS = ["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
+type ConfigKeyInfo = {
+  label: string;
+  description: string;
+  kind: "boolean" | "string";
+  // SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND are read once, at prepareSession's own
+  // loadVerifyConfig() call (cli.ts), and baked into withVerification(...) for the lifetime of the
+  // running process — a /config write to either lands in config.json correctly but has no effect
+  // on the CURRENT session, only the next one.
+  takesEffectNextRun: boolean;
+};
+
+// Human-readable label/description/kind for each key /config always shows, in this order,
+// regardless of whether config.json has them — none of these are secrets, unlike an unrecognized
+// key, which defaults to secret (conservative: an unknown key could be provider-shaped in spirit
+// even though provider keys themselves are filtered out below). `KNOWN_CONFIG_KEYS` is derived
+// from this object's own keys, not maintained as a second list, so a key can't exist in one and
+// not the other.
+// A Map, not an object literal keyed on user-supplied strings: SLASH_COMMANDS (cli.ts) already
+// hit this exact hazard and its own fix was the container, not a guard on the lookup — a plain
+// object inherits Object.prototype, so a hand-added key literally named "toString" or
+// "constructor" would resolve to the inherited function instead of falling through to the
+// unknown-key default, and decideConfigOpen (below) would report it as a known, unmasked key.
+const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
+  [
+    "SERI_VERIFY_ENABLED",
+    {
+      label: "Automatic verification",
+      description: "Run the verify command after each file edit and show failures to the model.",
+      kind: "boolean",
+      takesEffectNextRun: true,
+    },
+  ],
+  [
+    "SERI_VERIFY_COMMAND",
+    {
+      label: "Verify command",
+      description:
+        'Shell command run to verify edits, e.g. "bun run check". Nothing runs when unset.',
+      kind: "string",
+      takesEffectNextRun: true,
+    },
+  ],
+]);
+const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
+
+// Pure lookup (no disk read) so ConfigEnterValue/ConfigConfirmUnset can show a key's label without
+// widening ConfigPanelState with a field decideConfigOpen already computes for the list step. Also
+// decideConfigOpen's own reader — one fallback (raw key/empty description/"string" kind for a
+// hand-added key with no entry here), not two copies of it.
+export function configKeyInfo(key: string): ConfigKeyInfo {
+  return (
+    CONFIG_KEY_INFO.get(key) ?? { label: key, description: "", kind: "string", takesEffectNextRun: false }
+  );
+}
 
 // Never listed by /config, even if present in config.json: the OAuth client id /login's device
 // flow resolves live (auth/deviceFlow.ts) — an internal/advanced setting, not one a common
@@ -258,22 +311,28 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
     .filter((key) => !excludedKeys.has(key))
     .sort();
   return [...KNOWN_CONFIG_KEYS, ...otherKeys].map((key) => {
-    const hasConfigEntry = key in config;
-    // Read once, not twice (code review, round 2): `source` used to check
-    // `process.env[key] !== undefined` while the value read used `process.env[key] || config[key]`
-    // — an env var deliberately set to "" (falsy, but not undefined) reported `source: "env"` while
-    // actually reading the config.json value underneath it, disagreeing with its own `source`.
-    const envValue = process.env[key];
-    const hasEnvEntry = envValue !== undefined;
-    const source: ConfigRow["source"] = hasEnvEntry ? "env" : hasConfigEntry ? "config" : "unset";
-    const value = envValue ?? config[key];
-    const secret = !KNOWN_CONFIG_KEYS.includes(key);
+    const hasConfigEntry = Object.hasOwn(config, key);
+    // source and value come from ONE precedence read, same as provider/keys.ts's stateFromConfig
+    // (which /setup itself is built on) — code review, round 2 fixed a version of this where
+    // `source` checked `!== undefined` while the value read used `||`, so an env var deliberately
+    // set to "" reported `source: "env"` while the value shown was already config.json's; that fix
+    // only ever covered the boolean row (SERI_VERIFY_ENABLED), so the same disagreement remained
+    // live for the string row (SERI_VERIFY_COMMAND) — resolveConfigValue closes it for both, and
+    // for any hand-added key, at once: a value nothing reads is never displayed as authoritative.
+    const { value, source } = resolveConfigValue(key, config);
+    const { label, description, kind } = configKeyInfo(key);
+    const secret = !CONFIG_KEY_INFO.has(key);
+    const kindFields: ConfigRowKind =
+      kind === "boolean" ? { kind: "boolean", on: configBoolean(value) } : { kind: "string" };
     return {
       key,
+      label,
+      description,
       masked: value === undefined ? "" : secret ? maskValue(value) : value,
       source,
       removable: hasConfigEntry,
       secret,
+      ...kindFields,
     };
   });
 }

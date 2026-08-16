@@ -42,7 +42,13 @@ import {
   usageError,
 } from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
-import { loadConfig, loadVerifyConfig, setConfigValue, unsetConfigValue } from "./config/config";
+import {
+  configBoolean,
+  loadConfig,
+  loadVerifyConfig,
+  setConfigValue,
+  unsetConfigValue,
+} from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
 import type { PermissionMode } from "./gate/gate";
 import {
@@ -103,6 +109,7 @@ import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import {
   type CommandDirs,
   checkpointTarget,
+  configKeyInfo,
   decideAuthOffer,
   decideConfigOpen,
   decideMaxTurns,
@@ -1890,16 +1897,13 @@ export function createAuthHandlers(opts: {
   return { onLogin, onLogout, onAbandon };
 }
 
-// Reviewer finding (Stage D round 1, MEDIUM-1): SERI_VERIFY_ENABLED and SERI_VERIFY_COMMAND are
-// only ever read once, at prepareSession's own `loadVerifyConfig()` call (above), baked into
-// `withVerification(...)` for the lifetime of the running process — unlike SERI_WORKOS_CLIENT_ID,
-// which /login re-resolves live via getWorkosClientId on every attempt. A /config write to either
-// of these two keys lands in config.json correctly but has no effect on the CURRENT session, only
-// the next one — this note is what keeps the confirmation honest about that.
+// SERI_VERIFY_ENABLED and SERI_VERIFY_COMMAND are only ever read once, at prepareSession's own
+// `loadVerifyConfig()` call (above), baked into `withVerification(...)` for the lifetime of the
+// running process — unlike SERI_WORKOS_CLIENT_ID, which /login re-resolves live via
+// getWorkosClientId on every attempt. `configKeyInfo`'s own `takesEffectNextRun` field (tui/commands.ts)
+// is what marks a key as one of these; this note is what keeps the confirmation honest about it.
 function verifyConfigTakesEffectNote(key: string): string {
-  return key === "SERI_VERIFY_ENABLED" || key === "SERI_VERIFY_COMMAND"
-    ? " (takes effect on the next run)"
-    : "";
+  return configKeyInfo(key).takesEffectNextRun ? " (takes effect on the next run)" : "";
 }
 
 // Stage D (cli-commands-to-tui feature-plan.md): /config's own two handlers, mirroring
@@ -1950,9 +1954,44 @@ function createConfigHandlers(opts: {
     }
   }
 
-  // No config.json read here — mirrors onSetupSelect: `key` alone is enough to open the entry step.
+  // A boolean row toggles in place (write + transcript line + list refresh — a toggle has no
+  // screen of its own, unlike enter-value); everything else opens the free-text entry step. `kind`
+  // is static (configKeyInfo(key), a pure function of `key`) — no need to read it off the panel's
+  // possibly-stale row, and doing so risked a silent wrong-branch fallback: if `pending` wasn't on
+  // "list" or the row wasn't found, `row?.kind !== "boolean"` was vacuously true for a boolean key.
   function onConfigSelect(key: string): void {
-    dispatch({ type: "config-step", state: { step: "enter-value", key, busy: false } });
+    if (configKeyInfo(key).kind !== "boolean") {
+      dispatch({ type: "config-step", state: { step: "enter-value", key, busy: false } });
+      return;
+    }
+    let nextOn: boolean;
+    try {
+      // Toggles config.json's OWN stored value, not the effective (env-precedence-resolved) one —
+      // a fresh disk read, not a possibly-stale `row.on`, so a concurrent write (another `seri`
+      // process, a hand edit) between the list rendering and this call can't make the write
+      // silently no-op while the transcript still claims a change. Same "re-check before acting"
+      // reasoning as onConfigUnset's own confirm branch, just below. Toggling the EFFECTIVE value
+      // instead would make every press a no-op under a truthy env var: config.json would keep
+      // getting overwritten with the same value the env var was already forcing.
+      nextOn = !configBoolean(loadConfig(configDir)[key]);
+      setConfigValue(key, String(nextOn), configDir);
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    // The write above always lands in config.json, but a truthy env var wins the precedence race —
+    // say so instead of claiming the active value changed.
+    const envWins = Boolean(process.env[key]);
+    dispatch({
+      type: "transcript-append",
+      line: envWins
+        ? `${configKeyInfo(key).label}: ${nextOn ? "on" : "off"} in config, ${key} env still wins.`
+        : `${configKeyInfo(key).label} is now ${nextOn ? "on" : "off"}.${verifyConfigTakesEffectNote(key)}`,
+    });
+    dispatchConfigList(key);
   }
 
   function onConfigValueEntered(key: string, value: string): void {
@@ -2034,7 +2073,7 @@ function createConfigHandlers(opts: {
     // process) — a fresh, guarded read is what actually decides whether to offer the confirm step.
     let hasConfigEntry: boolean;
     try {
-      hasConfigEntry = key in loadConfig(configDir);
+      hasConfigEntry = Object.hasOwn(loadConfig(configDir), key);
     } catch (err) {
       dispatch({
         type: "command-error",

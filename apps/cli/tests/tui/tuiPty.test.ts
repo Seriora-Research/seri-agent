@@ -662,40 +662,20 @@ function childScriptRewindDuringStream(dir: string, flagPath: string): string {
 // own escape hatch — no /setup test ever touches the network). GROQ_API_KEY is set as a real env
 // var, same as every other script in this file — the groq ROW reads `source: "env"` because of it,
 // which some of the tests below rely on precisely because it is NOT the row under test.
-function childScriptSetup(dir: string): string {
+// `extraEnv` covers env-shadow scenarios: a caller passing e.g. `{ OPENAI_API_KEY:
+// "sk-openai-env-value" }` or `{ SERI_VERIFY_ENABLED: "false" }` gets a real env var exported
+// before the dynamic import, so the row/key under test reads `source: "env"` — the point being
+// that a truthy env value wins the SOURCE regardless of whether a config.json entry also exists
+// underneath (seeded separately, host-side, before spawn).
+function childScriptSetup(dir: string, extraEnv: Record<string, string> = {}): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
     `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
     `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
-    `const cli = await import(${JSON.stringify(CLI)});`,
-    `async function* runLoopFake(opts) {`,
-    `  console.log("\\nRUNLOOP_READY");`,
-    `  await new Promise(() => {});`,
-    `}`,
-    `await cli.run(["do", "a", "task"], {`,
-    `  runLoop: runLoopFake,`,
-    `  getGroqModel: () => ({}),`,
-    `  loadAgentsFile: () => "",`,
-    `  isTTY: process.stdout.isTTY,`,
-    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
-    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
-    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
-    `});`,
-  ].join("\n");
-}
-
-// The env-shadow scenario's own script (item 7, feature-plan.md): unlike childScriptSetup, this
-// one exports OPENAI_API_KEY as a real env var AND pre-seeds a DIFFERENT value into config.json
-// (below, host-side, before spawn) — D8's own point is that env wins the SOURCE regardless of
-// whether a config entry also exists underneath.
-function childScriptSetupEnvShadow(dir: string): string {
-  return [
-    `process.env.HOME = ${JSON.stringify(dir)};`,
-    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
-    `process.env.SERI_SKIP_KEY_VALIDATION = "1";`,
-    `process.env.GROQ_API_KEY = "fake-test-key";`,
-    `process.env.OPENAI_API_KEY = "sk-openai-env-value";`,
+    ...Object.entries(extraEnv).map(
+      ([name, value]) => `process.env.${name} = ${JSON.stringify(value)};`,
+    ),
     `const cli = await import(${JSON.stringify(CLI)});`,
     `async function* runLoopFake(opts) {`,
     `  console.log("\\nRUNLOOP_READY");`,
@@ -2814,7 +2794,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // environment as its source and refuses removal — there is genuinely nothing to unset.
     test("an env-shadowed row with no config entry reports the environment as the source and refuses removal", async () => {
       const scriptPath = join(dir, "child-setup-env-shadow.mjs");
-      writeFileSync(scriptPath, childScriptSetupEnvShadow(dir));
+      writeFileSync(scriptPath, childScriptSetup(dir, { OPENAI_API_KEY: "sk-openai-env-value" }));
 
       const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
       try {
@@ -2858,7 +2838,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     test("an env-shadowed row WITH a config entry underneath is removable", async () => {
       seedConfig(dir, { OPENAI_API_KEY: "sk-openai-config-value" });
       const scriptPath = join(dir, "child-setup-env-shadow-removable.mjs");
-      writeFileSync(scriptPath, childScriptSetupEnvShadow(dir));
+      writeFileSync(scriptPath, childScriptSetup(dir, { OPENAI_API_KEY: "sk-openai-env-value" }));
 
       const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
       try {
@@ -3784,6 +3764,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await wait100ms();
         await sawLine("/config — settings");
+        await sawLine("Automatic verification:");
+        await sawLine("Verify command:");
 
         // KNOWN_CONFIG_KEYS order (tui/commands.ts): SERI_VERIFY_ENABLED, SERI_VERIFY_COMMAND —
         // one Down press reaches the second.
@@ -3791,9 +3773,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("value for SERI_VERIFY_COMMAND");
+        await sawLine("Set Verify command (SERI_VERIFY_COMMAND)");
 
-        const value = "bun run check";
+        // Not "bun run check": CONFIG_KEY_INFO's own description for this key uses that exact
+        // string as its example ('e.g. "bun run check"'), which the entry step's own description
+        // line (below the header) renders unconditionally — a value equal to it would make the
+        // negative control below fail on the description text itself, before anything is typed.
+        const value = "bun run typecheck";
         child.stdin?.write(value);
         await wait100ms();
         // Negative control: while the value is still only ConfigEnterValue's own local state, the
@@ -3817,7 +3803,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         child.stdin?.write("r");
         await wait100ms();
-        await sawLine("Unset SERI_VERIFY_COMMAND");
+        await sawLine("Unset Verify command (SERI_VERIFY_COMMAND)");
 
         child.stdin?.write("y");
         await sawLine("Removed SERI_VERIFY_COMMAND.");
@@ -3827,6 +3813,94 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
           (c) => c.SERI_VERIFY_COMMAND === undefined,
         );
         expect(afterRemoval.SERI_VERIFY_COMMAND).toBeUndefined();
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("SERI_VERIFY_ENABLED toggles on Enter without opening a text prompt", async () => {
+      const scriptPath = join(dir, "child-config-toggle.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/config");
+        await sawLine("/config");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/config — settings");
+        // Nothing in config.json yet — the row must read "on" (loadVerifyConfig's own default),
+        // not "not set".
+        await sawLine("Automatic verification: on");
+
+        child.stdin?.write("\r");
+        await sawLine("Automatic verification is now off. (takes effect on the next run)");
+
+        const off = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.SERI_VERIFY_ENABLED === "false",
+        );
+        expect(off.SERI_VERIFY_ENABLED).toBe("false");
+        await sawLine("Automatic verification: off");
+
+        child.stdin?.write("\r");
+        await sawLine("Automatic verification is now on. (takes effect on the next run)");
+
+        const on = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.SERI_VERIFY_ENABLED === "true",
+        );
+        expect(on.SERI_VERIFY_ENABLED).toBe("true");
+
+        // Negative control: this is what actually proves no free-text step ever opened — it goes
+        // red on any implementation that routes the boolean through enter-value
+        // (ConfigEnterValue's own header text).
+        expect(occurrences("Set Automatic verification")).toBe(0);
+        expect(occurrences("value for")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("toggling an env-shadowed boolean row reports the override instead of claiming the value changed", async () => {
+      const scriptPath = join(dir, "child-config-toggle-env.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir, { SERI_VERIFY_ENABLED: "false" }));
+
+      const { child, sawLine, sawLineTimes, occurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/config");
+        await sawLine("/config");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/config — settings");
+        // SERI_VERIFY_ENABLED=false is exported in the child's own env, so the row reads "off"
+        // from that, not from config.json (which has nothing yet).
+        await sawLine("Automatic verification: off");
+
+        child.stdin?.write("\r");
+        await sawLine("Automatic verification: on in config, SERI_VERIFY_ENABLED env still wins.");
+
+        // The write still lands in config.json even though the env var wins at read time.
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.SERI_VERIFY_ENABLED === "true",
+        );
+        expect(config.SERI_VERIFY_ENABLED).toBe("true");
+
+        // The row itself still shows the env-sourced value after the list refreshes, not the
+        // write's value — a second render of "off", not one flipping to "on". The transcript
+        // sentence above already contains "Automatic verification: on" as a substring (it's the
+        // prefix of "on in config, ..."), so a bare occurrences() !== 0 check would always fail —
+        // instead, pin that every occurrence of the row-shaped substring is accounted for by that
+        // one sentence, i.e. the row itself never independently rendered "on".
+        await sawLineTimes("Automatic verification: off", 2);
+        expect(occurrences("Automatic verification: on")).toBe(
+          occurrences("Automatic verification: on in config, SERI_VERIFY_ENABLED env still wins."),
+        );
       } finally {
         child.kill("SIGKILL");
       }

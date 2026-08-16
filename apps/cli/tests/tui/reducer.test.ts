@@ -10,6 +10,7 @@ import type {
   SetupProviderRow,
 } from "../../src/tui/commands";
 import { initialTuiState, tuiReducer } from "../../src/tui/reducer";
+import { configRowFixture } from "./configRowFixture";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
@@ -524,7 +525,14 @@ describe("tuiReducer: auth-offer / auth-requested / auth-step / auth-resolved", 
 
 describe("tuiReducer: config-requested / config-step / config-resolved", () => {
   const rows: ConfigRow[] = [
-    { key: "SERI_VERIFY_ENABLED", masked: "", source: "unset", removable: false, secret: false },
+    configRowFixture("SERI_VERIFY_ENABLED", {
+      masked: "",
+      source: "unset",
+      removable: false,
+      secret: false,
+      kind: "boolean",
+      on: true,
+    }),
   ];
 
   test("config-requested opens at step list with the given rows", () => {

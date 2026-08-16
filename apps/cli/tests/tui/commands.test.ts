@@ -17,7 +17,7 @@ import {
   readLog,
 } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable } from "../../src/checkpoint/shadowGit";
-import { setConfigValue, unsetConfigValue } from "../../src/config/config";
+import { loadVerifyConfig, setConfigValue, unsetConfigValue } from "../../src/config/config";
 import { getBaseConfigDir } from "../../src/config/paths";
 import { rememberGrant } from "../../src/permissions/store";
 import bundledManifest from "../../src/provider/catalog-manifest.json";
@@ -674,15 +674,15 @@ describe("decideConfigOpen", () => {
     expect(row?.source).toBe("env");
   });
 
-  // Code review, round 2: `source`/value used to disagree on an env var set to "" — `source`
-  // read `!== undefined` (true for ""), the value read `||` (falls through to config.json for the
-  // falsy ""). Both must now agree: env wins for `source` AND for the value read.
-  test("an env var set to the empty string is source: env, not source: config", () => {
+  // An empty-string env var must not outrank config.json: it loses the precedence race (same
+  // falsy-skip rule as loadVerifyConfig's own live default resolution), so both `source` and
+  // `masked` must say "config", not silently display a value the running session doesn't read.
+  test("an env var set to the empty string falls through to config.json for source and value", () => {
     setConfigValue("SERI_VERIFY_COMMAND", "bun run typecheck", configConfigDir);
     process.env.SERI_VERIFY_COMMAND = "";
     const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_COMMAND");
-    expect(row?.source).toBe("env");
-    expect(row?.masked).toBe("");
+    expect(row?.source).toBe("config");
+    expect(row?.masked).toBe("bun run typecheck");
   });
 
   test("a provider API key written to config.json is absent from the returned rows", () => {
@@ -711,6 +711,99 @@ describe("decideConfigOpen", () => {
     const rows = decideConfigOpen(configConfigDir);
     expect(rows.some((row) => row.key === "SERI_SOME_OTHER_KEY")).toBe(true);
   });
+
+  // Both known keys have a real label (CONFIG_KEY_INFO), unlike a hand-added key, whose label
+  // falls back to its own raw key (the "unknown key" test just below).
+  test("both known keys get a label that is not their raw key, and a non-empty description", () => {
+    const rows = decideConfigOpen(configConfigDir);
+    for (const row of rows) {
+      expect(row.label).not.toBe(row.key);
+      expect(row.description).not.toBe("");
+    }
+  });
+
+  test("an unknown key falls back to label === key, description === '', kind === 'string'", () => {
+    setConfigValue("SERI_SOME_OTHER_KEY", "value", configConfigDir);
+    const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_SOME_OTHER_KEY");
+    expect(row?.label).toBe("SERI_SOME_OTHER_KEY");
+    expect(row?.description).toBe("");
+    expect(row?.kind).toBe("string");
+  });
+
+  test("SERI_VERIFY_ENABLED is kind: boolean; SERI_VERIFY_COMMAND is kind: string", () => {
+    const rows = decideConfigOpen(configConfigDir);
+    expect(rows.find((r) => r.key === "SERI_VERIFY_ENABLED")?.kind).toBe("boolean");
+    expect(rows.find((r) => r.key === "SERI_VERIFY_COMMAND")?.kind).toBe("string");
+  });
+
+  test("SERI_VERIFY_ENABLED's on matrix: unset/'true'/'yes' → true; 'false' → false", () => {
+    const on = (): boolean | undefined => {
+      const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_ENABLED");
+      return row?.kind === "boolean" ? row.on : undefined;
+    };
+    expect(on()).toBe(true);
+
+    setConfigValue("SERI_VERIFY_ENABLED", "false", configConfigDir);
+    expect(on()).toBe(false);
+
+    setConfigValue("SERI_VERIFY_ENABLED", "true", configConfigDir);
+    expect(on()).toBe(true);
+
+    // A mistyped value must not silently disable the feature.
+    setConfigValue("SERI_VERIFY_ENABLED", "yes", configConfigDir);
+    expect(on()).toBe(true);
+  });
+
+  test("SERI_VERIFY_ENABLED='false' via env is on: false, source: env", () => {
+    process.env.SERI_VERIFY_ENABLED = "false";
+    const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_ENABLED");
+    expect(row?.source).toBe("env");
+    expect(row?.kind === "boolean" && row.on).toBe(false);
+  });
+
+  // Anti-drift: decideConfigOpen's own `!== "false"` (this file's own comment on the source, not
+  // copied here) must keep agreeing with loadVerifyConfig's (config/config.ts) live default
+  // resolution across the same value matrix, without touching config.ts to prove it.
+  test("agrees with loadVerifyConfig(dir).enabled across [absent, 'false', 'true', 'yes']", () => {
+    const on = (): boolean | undefined => {
+      const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_ENABLED");
+      return row?.kind === "boolean" ? row.on : undefined;
+    };
+    expect(on()).toBe(loadVerifyConfig(configConfigDir).enabled);
+
+    for (const value of ["false", "true", "yes"]) {
+      setConfigValue("SERI_VERIFY_ENABLED", value, configConfigDir);
+      expect(on()).toBe(loadVerifyConfig(configConfigDir).enabled);
+    }
+  });
+
+  // Same falls-through rule as the string-key test above, exercised on the boolean key: `source`
+  // AND `on` both agree with loadVerifyConfig's own live default resolution for env="".
+  test("SERI_VERIFY_ENABLED='' in env with a config.json fallback agrees with loadVerifyConfig", () => {
+    setConfigValue("SERI_VERIFY_ENABLED", "false", configConfigDir);
+    process.env.SERI_VERIFY_ENABLED = "";
+    const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_ENABLED");
+    expect(row?.source).toBe("config");
+    expect(row?.kind === "boolean" && row.on).toBe(loadVerifyConfig(configConfigDir).enabled);
+    expect(row?.kind === "boolean" && row.on).toBe(false);
+  });
+
+  // Regression test for a masking bypass: CONFIG_KEY_INFO is an object literal, so a plain index
+  // lookup / `=== undefined` check resolves inherited Object.prototype members for a config.json
+  // key that happens to share their name — Object.hasOwn (configKeyInfo, and this row's own
+  // `secret`) is what closes it. Without that guard, every assertion below fails: `secret` reads
+  // false (the inherited member isn't undefined), so the raw value renders unmasked.
+  test.each(["toString", "constructor", "valueOf", "hasOwnProperty", "isPrototypeOf"])(
+    "a config key named %s is not treated as a known key and stays masked",
+    (key) => {
+      setConfigValue(key, "sk-should-not-leak", configConfigDir);
+      const row = decideConfigOpen(configConfigDir).find((r) => r.key === key);
+      expect(row?.secret).toBe(true);
+      expect(row?.masked).not.toBe("sk-should-not-leak");
+      expect(row?.kind).toBe("string");
+      expect(row?.label).toBe(key);
+    },
+  );
 });
 
 describe("decidePermissionsOpen", () => {

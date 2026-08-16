@@ -58,9 +58,12 @@ export function setConfigValues(
 }
 
 // Returns false when the key wasn't set, so callers can tell "removed" from "nothing to remove".
+// Object.hasOwn, not `key in`: `config` is a plain object, so `key in config` is also true for an
+// inherited Object.prototype member — `seri config unset toString` would otherwise report
+// "Removed" and rewrite the file having deleted nothing.
 export function unsetConfigValue(key: string, configDir: string = getConfigDir()): boolean {
   const config = loadConfig(configDir);
-  if (!(key in config)) return false;
+  if (!Object.hasOwn(config, key)) return false;
   delete config[key];
   writeConfig(config, configDir);
   return true;
@@ -77,32 +80,53 @@ export function unsetConfigValue(key: string, configDir: string = getConfigDir()
 // Record<string, string> here, `config list` masks every value it holds, and nesting one object
 // inside it would change both. The env-var-shaped names are deliberate — they get the same
 // env-then-file precedence getApiKey has, for free.
+// On unless explicitly turned off: a mistyped value must not silently disable a feature guarded
+// by one of these flags.
+export function configBoolean(value: string | undefined): boolean {
+  return value !== "false";
+}
+
+// env-then-file precedence, falsy-skip: an env var set to "" is treated the same as unset, so it
+// falls through to config.json rather than winning as a valid-looking empty value. Mirrors
+// provider/keys.ts's stateFromConfig — value and source come from ONE truthiness test, so a
+// caller that needs both (decideConfigOpen, tui/commands.ts) can't have them disagree the way an
+// independently-computed source (`!== undefined`) and value (`||`) once did.
+export function resolveConfigValue(
+  name: string,
+  config: Record<string, string>,
+): { value: string | undefined; source: "env" | "config" | "unset" } {
+  if (process.env[name]) return { value: process.env[name], source: "env" };
+  if (config[name]) return { value: config[name], source: "config" };
+  return { value: undefined, source: "unset" };
+}
+
+export function configValue(name: string, config: Record<string, string>): string | undefined {
+  return resolveConfigValue(name, config).value;
+}
+
 export type VerifyConfig = { enabled: boolean; command: string | undefined };
 
 export function loadVerifyConfig(configDir?: string): VerifyConfig {
   const config = loadConfig(configDir);
-  const read = (name: string): string | undefined => process.env[name] || config[name] || undefined;
   return {
-    // On unless explicitly turned off: a mistyped value must not silently disable the feature.
     // Separate from `command` being unset, because this is the named mitigation for the per-write
     // cost — a user who configured a command needs a way to suspend it without losing it.
-    enabled: read("SERI_VERIFY_ENABLED") !== "false",
-    command: read("SERI_VERIFY_COMMAND"),
+    enabled: configBoolean(configValue("SERI_VERIFY_ENABLED", config)),
+    command: configValue("SERI_VERIFY_COMMAND", config),
   };
 }
 
-// Stage 6b: the two /memory-controlled toggles, copying loadVerifyConfig's exact
-// read(...) !== "false" shape (above) so a typo can't silently disable either safe default. Both
-// are read live rather than cached, since either can flip mid-session via /memory approval on|off
-// or /memory archivist on|off and driveLoop re-reads this every turn.
+// The two /memory-controlled toggles, sharing configBoolean's `!== "false"` shape
+// (above) so a typo can't silently disable either safe default. Both are read live rather than
+// cached, since either can flip mid-session via /memory approval on|off or /memory archivist
+// on|off and driveLoop re-reads this every turn.
 export type MemoryConfig = { approvalRequired: boolean; archivistEnabled: boolean };
 
 export function loadMemoryConfig(configDir?: string): MemoryConfig {
   const config = loadConfig(configDir);
-  const read = (name: string): string | undefined => process.env[name] || config[name] || undefined;
   return {
-    approvalRequired: read("SERI_MEMORY_APPROVAL") !== "false",
-    archivistEnabled: read("SERI_ARCHIVIST_ENABLED") !== "false",
+    approvalRequired: configBoolean(configValue("SERI_MEMORY_APPROVAL", config)),
+    archivistEnabled: configBoolean(configValue("SERI_ARCHIVIST_ENABLED", config)),
   };
 }
 

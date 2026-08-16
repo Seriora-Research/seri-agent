@@ -16,6 +16,7 @@ import {
   formatSetupRow,
 } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
+import { configRowFixture } from "./configRowFixture";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
@@ -1467,33 +1468,92 @@ describe("App", () => {
   describe("config panel", () => {
     function configRows(): ConfigRow[] {
       return [
-        {
-          key: "SERI_VERIFY_ENABLED",
+        configRowFixture("SERI_VERIFY_ENABLED", {
           masked: "",
           source: "unset",
           removable: false,
           secret: false,
-        },
-        {
-          key: "SERI_SOME_OTHER_KEY",
+          kind: "boolean",
+          on: true,
+        }),
+        configRowFixture("SERI_SOME_OTHER_KEY", {
           masked: "sk-d...2345",
           source: "config",
           removable: true,
           secret: true,
-        },
+          kind: "string",
+        }),
       ];
     }
 
-    test("the list step shows each row's key and masked value", async () => {
+    test("the list step shows each row's label and masked value", async () => {
       const { instance, dispatch } = await connect();
 
       dispatch({ type: "config-requested", rows: configRows() });
       await flush();
 
       const frame = instance.lastFrame() ?? "";
-      expect(frame).toContain("SERI_VERIFY_ENABLED");
+      expect(frame).toContain("Automatic verification: on");
+      expect(frame).not.toContain("SERI_VERIFY_ENABLED");
       expect(frame).toContain("SERI_SOME_OTHER_KEY");
       expect(frame).toContain("sk-d...2345");
+    });
+
+    test("the selected row's description renders, and moving Down swaps it for the next row's", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "config-requested", rows: configRows() });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain(
+        "Run the verify command after each file edit and show failures to the model.",
+      );
+
+      instance.stdin.write("\x1b[B"); // Down
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).not.toContain(
+        "Run the verify command after each file edit and show failures to the model.",
+      );
+    });
+
+    test("the hint reads 'Enter/a toggle' on the boolean row and 'Enter/a set' after moving to a string row", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "config-requested", rows: configRows() });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain("Enter/a toggle");
+
+      instance.stdin.write("\x1b[B"); // Down
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain("Enter/a set");
+    });
+
+    test("Enter on the boolean row calls onConfigSelect with its key", async () => {
+      const selected: string[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onConfigSelect={(key) => selected.push(key)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({ type: "config-requested", rows: configRows() });
+      await flush();
+
+      instance.stdin.write("\r"); // Enter
+      await flush();
+
+      expect(selected).toEqual(["SERI_VERIFY_ENABLED"]);
     });
 
     // The key-leak guard, mirroring SetupEnterKey's own test above: a raw secret-shaped value must
@@ -1505,13 +1565,13 @@ describe("App", () => {
       dispatch({
         type: "config-requested",
         rows: [
-          {
-            key: "SERI_SOME_OTHER_KEY",
+          configRowFixture("SERI_SOME_OTHER_KEY", {
             masked: "sk-d...2345",
             source: "config",
             removable: true,
             secret: true,
-          },
+            kind: "string",
+          }),
         ],
       });
       await flush();
@@ -1587,13 +1647,14 @@ describe("App", () => {
 
       dispatch({
         type: "config-step",
-        state: { step: "confirm-unset", key: "SERI_SOME_OTHER_KEY" },
+        state: { step: "confirm-unset", key: "SERI_VERIFY_COMMAND" },
       });
       await flush();
 
       const frame = instance.lastFrame() ?? "";
       expect(frame).toContain("[y]es");
       expect(frame).toContain("[N]o");
+      expect(frame).toContain("Verify command (SERI_VERIFY_COMMAND)");
 
       instance.stdin.write("z"); // unrecognised key
       await flush();
@@ -1602,7 +1663,7 @@ describe("App", () => {
 
       dispatch({
         type: "config-step",
-        state: { step: "confirm-unset", key: "SERI_SOME_OTHER_KEY" },
+        state: { step: "confirm-unset", key: "SERI_VERIFY_COMMAND" },
       });
       await flush();
       instance.stdin.write("\r"); // Enter
@@ -1612,13 +1673,29 @@ describe("App", () => {
 
       dispatch({
         type: "config-step",
-        state: { step: "confirm-unset", key: "SERI_SOME_OTHER_KEY" },
+        state: { step: "confirm-unset", key: "SERI_VERIFY_COMMAND" },
       });
       await flush();
       instance.stdin.write("y");
       await flush();
 
-      expect(unset).toEqual(["SERI_SOME_OTHER_KEY"]);
+      expect(unset).toEqual(["SERI_VERIFY_COMMAND"]);
+    });
+
+    // configKeyInfo's fallback (tui/commands.ts): a key with no CONFIG_KEY_INFO entry shows its
+    // raw name as the label, since there is no human name for it — the confirm-unset prompt above
+    // only ever exercises a known key, which alone doesn't cover this path.
+    test("confirm-unset on an unrecognised key shows the raw key as its own label", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "config-step",
+        state: { step: "confirm-unset", key: "SERI_SOME_OTHER_KEY" },
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Unset SERI_SOME_OTHER_KEY (SERI_SOME_OTHER_KEY)");
     });
   });
 
@@ -1733,13 +1810,13 @@ describe("App", () => {
       dispatch({
         type: "config-requested",
         rows: [
-          {
-            key: "SERI_VERIFY_COMMAND",
+          configRowFixture("SERI_VERIFY_COMMAND", {
             masked: "bun check",
             source: "config",
             removable: true,
             secret: false,
-          },
+            kind: "string",
+          }),
         ],
       });
       await flush();
@@ -1766,13 +1843,13 @@ describe("App", () => {
       dispatch({
         type: "config-requested",
         rows: [
-          {
-            key: "SERI_VERIFY_COMMAND",
+          configRowFixture("SERI_VERIFY_COMMAND", {
             masked: "bun check",
             source: "config",
             removable: true,
             secret: false,
-          },
+            kind: "string",
+          }),
         ],
       });
       await flush();
