@@ -107,12 +107,12 @@ export type AppProps = {
   onSetupBack?: () => void;
   onSetupClose?: (leftoverInput?: string) => void;
   // Bug fix (coordinator follow-up on Stage C; extended round 4): AuthPanel's own "result" step
-  // (a device-flow failure — a denied/expired code, a network error, degraded by cli.ts's
-  // createAuthHandlers' own catch block) had no way back to InputBox at all before this — not
-  // even Ctrl-C, which is wired to onCancel, not to clearing pendingAuth. Called from AuthPanel's
-  // own Escape handler on every step, plus Enter on "result" — a successful login never reaches
-  // here: createAuthHandlers.onLogin (cli.ts) dispatches auth-resolved itself, right after its own
-  // `await loginFn(...)` returns, with no user keypress involved.
+  // (a device-flow failure — a denied/expired code, a network error, degraded by
+  // createAuthHandlers' (tui/handlers.ts) own catch block) had no way back to InputBox at all
+  // before this — not even Ctrl-C, which is wired to onCancel, not to clearing pendingAuth. Called
+  // from AuthPanel's own Escape handler on every step, plus Enter on "result" — a successful login
+  // never reaches here: createAuthHandlers.onLogin (tui/handlers.ts) dispatches auth-resolved
+  // itself, right after its own `await loginFn(...)` returns, with no user keypress involved.
   onAuthResolved?: () => void;
   // Stage A scaffolding (cli-commands-to-tui feature-plan.md): /config's own resolutions, mirroring
   // onSetupSelect's own five-prop shape — ConfigPanel.tsx's own step-dispatcher needs a real prop to

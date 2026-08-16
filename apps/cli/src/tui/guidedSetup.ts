@@ -1,9 +1,9 @@
 // Extracted from cli.ts (code-review finding, PR #91 round 2: cli.ts is 2900+ lines and this
 // function alone — the liveState/dispatch mirror, every guided-setup-only handler closure, and the
 // two-then-three module-level UI string constants — was ~200 of them). Self-contained: the only
-// thing it needs from cli.ts's own module scope is `createSetupHandlers` (which stays there,
-// shared byte-identical with `runTui`), threaded in as a parameter rather than imported, so this
-// file has no dependency back on cli.ts at all.
+// thing it needs is `createSetupHandlers`, imported directly from its own module (./handlers) —
+// a sibling of this file, shared byte-identical with `runTui` (cli.ts), with no dependency back on
+// cli.ts itself.
 import { randomUUID } from "node:crypto";
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
 import { catalogWithFallback } from "../provider/catalog";
@@ -11,13 +11,8 @@ import { persistDefaultModel } from "../provider/defaults";
 import { configuredProviders } from "../provider/keys";
 import { deliverSignal, onSignalCleanup } from "../signals";
 import { decideAuthOffer, decideGuidedModelPickerOpen, decideSetupOpen } from "./commands";
-import {
-  type Dispatch,
-  initialTuiState,
-  type SetupState,
-  type TuiState,
-  tuiReducer,
-} from "./reducer";
+import { createSetupHandlers } from "./handlers";
+import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./reducer";
 
 // `runGuidedSetup`'s own mandatory-picker copy (Decision 1/2, byok-guided-setup-default-model
 // bugfix report) — named constants rather than inlined literals, so tuiPty.test.ts's own pty
@@ -31,15 +26,6 @@ const GUIDED_MODEL_LOADING = "Loading available models…";
 // be a bare, silent no-op — indistinguishable from a dead key, especially from the "enter-key"
 // step (SetupEnterKey's own Ctrl-D goes straight to onSetupClose, not through onSetupBack).
 const GUIDED_MODEL_STILL_LOADING = "Still loading available models — one moment.";
-
-// The shape `cli.ts`'s own `createSetupHandlers` factory returns — described here structurally
-// rather than imported, so this file stays free of any import from cli.ts.
-type SetupHandlers = {
-  onSetupSelect: (provider: ModelProvider) => void;
-  onSetupKeyEntered: (provider: ModelProvider, value: string) => Promise<void>;
-  onSetupRemove: (provider: ModelProvider) => void;
-  onSetupBack: () => void;
-};
 
 // Mounted only when the pre-`prepareSession` gate in `run()` finds a real TTY and zero API keys
 // configured anywhere (env or config.json) — the "genuinely blank first run" case that would
@@ -63,11 +49,6 @@ type SetupHandlers = {
 export async function runGuidedSetup(
   configDir: string,
   catalogPromise: Promise<ModelCatalog>,
-  createSetupHandlers: (opts: {
-    dispatch: Dispatch;
-    getPendingSetup: () => SetupState | undefined;
-    configDir: string;
-  }) => SetupHandlers,
 ): Promise<void> {
   const { render } = await import("ink");
   const { createElement } = await import("react");

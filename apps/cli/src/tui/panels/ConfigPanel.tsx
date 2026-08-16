@@ -109,6 +109,8 @@ function ConfigList({
 
   const selectedRow = rows[selected];
   const actionHint = selectedRow?.kind === "boolean" ? "toggle" : "set";
+  const selectedDescription =
+    selectedRow === undefined ? undefined : configKeyInfo(selectedRow.key).description;
 
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
@@ -119,9 +121,7 @@ function ConfigList({
           {formatConfigRow(row)}
         </Text>
       ))}
-      {selectedRow !== undefined && configKeyInfo(selectedRow.key).description && (
-        <Text color={theme.muted}>{configKeyInfo(selectedRow.key).description}</Text>
-      )}
+      {selectedDescription && <Text color={theme.muted}>{selectedDescription}</Text>}
       <Text
         color={theme.muted}
       >{`↑/↓ move · Enter/a ${actionHint} · r/Delete unset · Esc/Ctrl-D close`}</Text>

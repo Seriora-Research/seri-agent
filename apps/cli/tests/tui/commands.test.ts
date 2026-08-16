@@ -714,13 +714,14 @@ describe("decideConfigOpen", () => {
   });
 
   // Both known keys have a real label (CONFIG_KEY_INFO), unlike a hand-added key, whose label
-  // falls back to its own raw key (the "unknown key" test just below). ConfigRow itself doesn't
-  // carry label/description — configKeyInfo(row.key) is the single source of truth for both.
+  // falls back to its own raw key (the "unknown key" test just below). This asserts configKeyInfo
+  // directly, not through decideConfigOpen — that decideConfigOpen actually emits both known keys,
+  // in this order, is what "both known keys are source: unset on an empty config dir" (above)
+  // already pins; asserting it again here would just duplicate that coverage.
   test("both known keys get a label that is not their raw key, and a non-empty description", () => {
-    const rows = decideConfigOpen(configConfigDir);
-    for (const row of rows) {
-      expect(configKeyInfo(row.key).label).not.toBe(row.key);
-      expect(configKeyInfo(row.key).description).not.toBe("");
+    for (const key of ["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"]) {
+      expect(configKeyInfo(key).label).not.toBe(key);
+      expect(configKeyInfo(key).description).not.toBe("");
     }
   });
 

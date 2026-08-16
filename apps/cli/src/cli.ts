@@ -2289,7 +2289,7 @@ async function runTui(
     }
     // /login, /signup and /logout, like /model and /setup just above: intercepted here rather than
     // added to SLASH_COMMANDS, since they drive the blocking pendingAuth panel (createAuthHandlers,
-    // above) rather than anything the non-interactive path has a screen for.
+    // tui/handlers.ts) rather than anything the non-interactive path has a screen for.
     if (name === "/login" || name === "/signup") {
       if (args.length > 0) {
         dispatch({ type: "command-error", message: `${name}: invalid arguments.` });
@@ -2335,7 +2335,7 @@ async function runTui(
       // degrades to an empty list and reports through onWarning instead (/code-review, round 3:
       // this call previously dropped that callback, so a corrupted permissions.yaml opened as a
       // silently-empty panel with no indication anything was wrong). `ctx.permissionsDir`, not
-      // `configDir` — see createPermissionsHandlers' own comment.
+      // `configDir` — see createPermissionsHandlers' own comment (tui/handlers.ts).
       try {
         dispatch({
           type: "permissions-requested",
@@ -2504,9 +2504,9 @@ async function runTui(
       // a logout-failure result) never changed the auth-session file between when it was last
       // read and this firing — a login failure means saveAuthSession never ran, and a logout
       // failure's own result panel already got a truthful recompute from onLogout's own single
-      // post-try/catch dispatch (createAuthHandlers' own comment). `onAbandon` still runs first:
-      // a still-in-flight login dismissed from "starting"/"device" must actually cancel (real
-      // AbortController, not just a dispatch guard) before anything else here runs.
+      // post-try/catch dispatch (createAuthHandlers' own comment, tui/handlers.ts). `onAbandon`
+      // still runs first: a still-in-flight login dismissed from "starting"/"device" must actually
+      // cancel (real AbortController, not just a dispatch guard) before anything else here runs.
       onAuthResolved: () => {
         onAbandon();
         dispatch({ type: "auth-resolved" });
@@ -2683,7 +2683,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // explicit `patchConsole: false` on this `render()` call (there is none today — `runGuidedSetup`
     // only passes `exitOnCtrlC`/`interactive`) would silently reintroduce that hazard.
     if (zeroKeysConfigured) {
-      await runGuidedSetup(ctx.configDir, getModelCatalog(), createSetupHandlers);
+      await runGuidedSetup(ctx.configDir, getModelCatalog());
     }
   }
 

@@ -1,7 +1,7 @@
 import type { ModelProvider } from "@seri/model-catalog";
-import type { CliDeps } from "../cli";
 import { login as loginReal, logout as logoutReal } from "../auth/commands";
 import { getWorkosClientId } from "../auth/deviceFlow";
+import type { CliDeps } from "../cli";
 import { configBoolean, loadConfig, setConfigValue, unsetConfigValue } from "../config/config";
 import { forgetGrant, loadGrants } from "../permissions/store";
 import { PROVIDER_API_KEY_NAMES, type ProviderKeyState, providerKeyState } from "../provider/keys";
@@ -13,15 +13,10 @@ import {
   decidePermissionsOpen,
   decideSetupOpen,
 } from "./commands";
-import type {
-  ConfigPanelState,
-  Dispatch,
-  PermissionsPanelState,
-  SetupState,
-} from "./reducer";
+import type { ConfigPanelState, Dispatch, PermissionsPanelState, SetupState } from "./reducer";
 
-// D5-D8 (feature-plan.md): /setup's own five handlers, mirroring the /model pair above — each
-// does nothing but recompute the current truth (decideSetupOpen re-reads config.json/env every
+// /setup's own five handlers, mirroring cli.ts's /model pair (onModelSelected/onModelPickerCancel) —
+// each does nothing but recompute the current truth (decideSetupOpen re-reads config.json/env every
 // time, never trusting a stale copy) and dispatch it. `setupListState` is the one piece shared
 // by every path that returns to the list step: fresh rows, plus — when a specific provider is
 // named — that row's own index, so returning from enter-key/confirm-remove re-highlights the row
@@ -60,7 +55,7 @@ export function createSetupHandlers(opts: {
   // A shared "refresh the list, degrade to command-error if that throws" primitive (code-review
   // finding, PR #73, round 2): decideSetupOpen reads config.json, and a malformed file is exactly
   // as reachable once the panel is already open (a racing second `seri` process, a hand edit) as it
-  // is at the /setup-OPEN interceptor above — which the round 1 fix already guarded. Used by
+  // is at the /setup-OPEN interceptor (cli.ts) — which the round 1 fix already guarded. Used by
   // onSetupRemove's success path and onSetupBack — round 1 missed both, reached only from INSIDE an
   // already-open panel, with nothing above them to catch a throw out of their own `useInput`
   // callback. NOT used by onSetupKeyEntered's own success path (round 3, item #3): that one needs
@@ -234,7 +229,10 @@ export function createSetupHandlers(opts: {
 // are a blocking panel (pendingAuth), not a list this file can just re-show.
 export function createAuthHandlers(opts: {
   dispatch: Dispatch;
-  deps: CliDeps;
+  // Pick, not the full CliDeps: this factory only ever reads these two injection seams, and naming
+  // them here documents the actual contract instead of overstating it with cli.ts's ~20-field deps
+  // bag (any CliDeps value still satisfies this — every caller keeps passing its own `deps` as-is).
+  deps: Pick<CliDeps, "login" | "logout">;
   configDir: string;
 }): {
   onLogin: (mode: "login" | "signup") => Promise<void>;
@@ -252,7 +250,7 @@ export function createAuthHandlers(opts: {
   // it, `pollForToken` (deviceFlow.ts) actually stops polling and returns `{status:"aborted"}`
   // instead of eventually succeeding unseen. `attemptCounter` stays too — it still correctly
   // guards the (much narrower, now purely UI-timing) dispatch race even with real cancellation
-  // backing it up, mirroring this file's own `turnInFlight`-style "ignore a stale async result"
+  // backing it up, mirroring cli.ts's own `turnInFlight`-style "ignore a stale async result"
   // pattern elsewhere.
   let attemptCounter = 0;
   let currentController: AbortController | undefined;

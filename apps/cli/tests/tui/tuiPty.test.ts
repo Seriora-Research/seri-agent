@@ -754,8 +754,8 @@ function childScriptAuth(dir: string): string {
 
 // Bug fix (coordinator follow-up on Stage C): the failure round-trip childScriptAuth's own
 // describe block never exercised — `loginFake` here rejects the way the real device flow does on
-// a denied/expired code, driving createAuthHandlers' own catch branch (cli.ts) in a real process,
-// not just at the reducer level (App.test.tsx already covers that half).
+// a denied/expired code, driving createAuthHandlers' own catch branch (tui/handlers.ts) in a real
+// process, not just at the reducer level (App.test.tsx already covers that half).
 function childScriptAuthLoginFails(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -827,7 +827,7 @@ function childScriptAuthLoginHangs(dir: string): string {
 // at all, so it can only prove Escape returns the UI — it can't distinguish "the poll was really
 // cancelled" from "cancellation doesn't exist and we just stopped listening"), this fake's own
 // poll resolves ~1s AFTER Escape, checking `handlerDeps.signal?.aborted` itself — the exact same
-// AbortSignal `createAuthHandlers.onLogin` (cli.ts) threads through the real `loginFn`'s 4th
+// AbortSignal `createAuthHandlers.onLogin` (tui/handlers.ts) threads through the real `loginFn`'s 4th
 // argument. This is what proves the real plumbing: onAbandon's own `.abort()` call actually
 // reaches this fake in time, not just that createAuthHandlers stopped honoring its dispatches.
 function childScriptAuthLoginRace(dir: string): string {
@@ -3051,7 +3051,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // useInput existed, a denied/expired device code left this exact screen up with no keyboard
     // path back at all — no press, Enter included, ever returned the input box. `childScriptAuth`'s
     // own /login test above only exercises the SUCCESS round-trip; this one drives
-    // createAuthHandlers' own catch branch (cli.ts) in a real process.
+    // createAuthHandlers' own catch branch (tui/handlers.ts) in a real process.
     test("a failed /login shows the error, and a keypress returns to the ordinary input box", async () => {
       const scriptPath = join(dir, "child-auth-login-fails.mjs");
       writeFileSync(scriptPath, childScriptAuthLoginFails(dir));
