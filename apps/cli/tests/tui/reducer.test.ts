@@ -158,7 +158,12 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
     const state = { ...transcriptOf(lines), viewportRows: 5 };
     const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
 
-    const visible = visibleTranscript(next.transcript, 5, next.transcriptScrollOffset, next.columns);
+    const visible = visibleTranscript(
+      next.transcript,
+      5,
+      next.transcriptScrollOffset,
+      next.columns,
+    );
     expect(visible).toEqual(["line 0", "line 1", "line 2", "line 3", "line 4"]);
   });
 
