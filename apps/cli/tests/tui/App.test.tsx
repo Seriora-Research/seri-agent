@@ -162,6 +162,36 @@ describe("App", () => {
     expect(frame).toContain("line 299");
   });
 
+  // Regression guard (found independently by two automated PR reviewers): `transcriptScrollOffset`
+  // used to be re-clamped only inside the `transcript-scroll`/`transcript-scroll-to` actions
+  // themselves, both fired only by a keypress — a terminal resize that GROWS the viewport fires
+  // neither, so a scrolled-up offset stayed pinned to the height the viewport had when it was set,
+  // and `visibleTranscript` kept showing exactly that many lines instead of growing to fill the
+  // taller box. Scrolling to the very top makes this observable without depending on the exact
+  // chrome-row math: the highest line number shown must increase once the terminal grows, since
+  // more of the already-loaded transcript becomes visible below the fixed top edge.
+  test("a resize while scrolled to the top reveals more of the transcript, not a static slice", async () => {
+    const { instance, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    instance.stdin.write("\x1b[H"); // Home
+    await flush();
+
+    const highestLineShown = (frame: string) =>
+      Math.max(...[...frame.matchAll(/line (\d+)/g)].map((m) => Number(m[1])));
+    const highestBefore = highestLineShown(instance.lastFrame() ?? "");
+
+    // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a plain
+    // assignment, not overriding one (same cast the windowSize-shrink test above already uses).
+    instance.stdout.rows = 40;
+    instance.stdout.emit("resize");
+    await flush();
+
+    expect(highestLineShown(instance.lastFrame() ?? "")).toBeGreaterThan(highestBefore);
+  });
+
   test("a tool-call loop-event sets the running status, and tool-result clears it", async () => {
     const { instance, dispatch } = await connect();
 

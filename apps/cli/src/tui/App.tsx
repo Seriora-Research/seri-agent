@@ -22,7 +22,12 @@ import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
-import { DEFAULT_COLUMNS, FALLBACK_CHROME_ROWS, formatModeLabel, visibleTranscript } from "./format";
+import {
+  DEFAULT_COLUMNS,
+  FALLBACK_CHROME_ROWS,
+  formatModeLabel,
+  visibleTranscript,
+} from "./format";
 import { ApprovalBox } from "./panels/ApprovalBox";
 import { AuthBanner, AuthPanel } from "./panels/AuthPanel";
 import { ConfigPanel } from "./panels/ConfigPanel";
@@ -215,6 +220,17 @@ export function App({
   const viewportRows = hasMeasured ? measuredRows : Math.max(1, rows - FALLBACK_CHROME_ROWS);
   // One line of overlap between pages, same convention a terminal pager's own PageUp/PageDown use.
   const pageSize = Math.max(1, viewportRows - 1);
+
+  // A resize can grow `viewportRows` with no keypress at all — useListWindow's own effect handles
+  // the identical case for panel lists (its own comment), but the transcript's scroll offset lives
+  // in the reducer, not component state, so it needs the equivalent here: without this, a taller
+  // terminal leaves `transcriptScrollOffset` past its new max (reducer.ts's own `transcript-scroll`
+  // clamp), and `visibleTranscript` renders fewer than `viewportRows` lines — blank space above the
+  // shown text — until the next PageUp/PageDown/Home/End recomputes it. A zero-delta scroll re-runs
+  // that same clamp and is a no-op whenever the offset is already valid.
+  useEffect(() => {
+    dispatch({ type: "transcript-scroll", delta: 0, viewportRows });
+  }, [viewportRows]);
 
   useEffect(() => {
     connectDispatch?.(dispatch);
