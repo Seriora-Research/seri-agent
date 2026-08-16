@@ -1067,19 +1067,17 @@ async function prepareSession(
   // default (console.error) exactly as before.
   const warnSink = isTTY ? warn : undefined;
 
-  // One try wrapping everything from here through the final `return` (found by review — this used
-  // to be two separate try/catches, around loadOrCreateSession and resolveRoute/getModel only,
-  // identical on catch): every OTHER fallible call in this function — saveSession, checkpointTarget,
-  // loadGrants, createCheckpointer/loadVerifyConfig, loadMemory — was reachable with no catch at
-  // all, discarding `preMountMessages` right along with whatever it threw. One catch means nothing
-  // fallible in this function can do that again by omission. `configDir` is resolved in here too,
-  // not above the try (code-review finding: that function's own model/provider backfill,
-  // resolveDefaultModel, needs the SAME configDir routing/getModel below already use, not the
-  // ambient default — a sandboxed `authConfigDir` caller used to get session.model/session.provider
-  // read from the wrong config.json entirely; `configDir` matches `seri config`'s own resolution, so
-  // a key `/setup` or `seri config set` just wrote is picked up on the very next run) — being inside
-  // the try is what makes `run()`'s own isTTY try/catch around this function's call site provably
-  // unreachable, see that call site's own comment.
+  // One try wrapping everything from here through the final `return`: every fallible call in this
+  // function — loadOrCreateSession, resolveRoute/getModel, saveSession, checkpointTarget,
+  // loadGrants, createCheckpointer/loadVerifyConfig, loadMemory — shares this one catch, so nothing
+  // in here can discard `preMountMessages` by falling outside it. `configDir` is resolved in here
+  // too, not above the try: that function's own model/provider backfill, resolveDefaultModel,
+  // needs the SAME configDir routing/getModel below already use, not the ambient default — a
+  // sandboxed `authConfigDir` caller used to get session.model/session.provider read from the wrong
+  // config.json entirely; `configDir` matches `seri config`'s own resolution, so a key `/setup` or
+  // `seri config set` just wrote is picked up on the very next run. Being inside the try is what
+  // makes `run()`'s own isTTY try/catch around this function's call site provably unreachable, see
+  // that call site's own comment.
   try {
     const configDir = deps.authConfigDir ?? getConfigDir();
     const { session, modelRecorded } = loadOrCreateSession(

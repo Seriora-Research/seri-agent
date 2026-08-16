@@ -34,10 +34,10 @@ export function exitAltScreen(): void {
     // rest of the shell session. Left `true` on a thrown write, the next exit path's own call is a
     // real retry instead of the no-op `if (!entered) return` above would otherwise make it.
     //
-    // `process.off` lives HERE, not ahead of the try (found by review, round 2 of this same fix):
-    // deregistering the "exit" listener before the writes even run would defeat the retry this
-    // comment just described — a listener removed unconditionally can't fire again to retry a write
-    // that hasn't happened yet. Only removed once the writes are confirmed to have actually
+    // `process.off` lives HERE, not ahead of the try: deregistering the "exit" listener before the
+    // writes even run would defeat the retry the comment above describes — a listener removed
+    // unconditionally can't fire again to retry a write that hasn't happened yet. Only removed
+    // once the writes are confirmed to have actually
     // succeeded, alongside `entered`, for the same reason `enterAltScreen` re-registers a fresh one
     // every time it transitions false → true: at most one live registration either way, just never
     // torn down before it might still be needed.

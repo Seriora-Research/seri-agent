@@ -157,12 +157,11 @@ export type AppProps = {
   onSplashContinue?: () => void;
 };
 
-// `?? DEFAULT_COLUMNS` (both call sites below) only ever substituted on `undefined` — not on a real
-// but unusable `0`, which a pty can genuinely report for the first render or two before its window
-// size ioctl has actually landed (reproduced live over a real pty in WSL, found by review's own
-// `columns=0` finding: `state.columns` reaching `wrapForTranscript` as 0 clamps to 1 there — not a
-// crash, but a transcript wrapped to ONE CHARACTER PER ROW, which is worse than the silent
-// corruption that clamp was written to prevent). `|| DEFAULT_COLUMNS`, not `??`: `||` treats `0`
+// A pty can genuinely report `stdout.columns` as a real but unusable `0` for the first render or
+// two, before its window-size ioctl has actually landed (reproduced live over a real pty in WSL):
+// `state.columns` reaching `wrapForTranscript` as 0 clamps to 1 there — not a crash, but a
+// transcript wrapped to ONE CHARACTER PER ROW, which is worse than the silent corruption that
+// clamp was written to prevent. `|| DEFAULT_COLUMNS`, not `??`: `||` treats `0`
 // the same as `undefined`/`null`, which is exactly the substitution a column count of zero needs —
 // there is no real terminal width `0` is ever the correct value for.
 function resolveWidth(columns: number | undefined): number {
