@@ -309,33 +309,26 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "transcript-append":
       return pushLine(state, action.line, action.flush ?? true);
     case "transcript-scroll": {
-      const max = maxScrollOffset(
-        state.totalVisualRows,
-        state.streaming,
-        state.columns,
-        state.viewportRows,
-      );
+      const streamingRows = streamingVisualRows(state.streaming, state.columns);
+      const max = maxScrollOffset(state.totalVisualRows, streamingRows, state.viewportRows);
       const next = Math.min(max, Math.max(0, state.transcriptScrollOffset + action.delta));
       return {
         ...state,
         transcriptScrollOffset: next,
-        transcriptScrollStreamingRows: streamingVisualRows(state.streaming, state.columns),
+        transcriptScrollStreamingRows: streamingRows,
       };
     }
-    case "transcript-scroll-to":
+    case "transcript-scroll-to": {
+      const streamingRows = streamingVisualRows(state.streaming, state.columns);
       return {
         ...state,
         transcriptScrollOffset:
           action.to === "top"
-            ? maxScrollOffset(
-                state.totalVisualRows,
-                state.streaming,
-                state.columns,
-                state.viewportRows,
-              )
+            ? maxScrollOffset(state.totalVisualRows, streamingRows, state.viewportRows)
             : 0,
-        transcriptScrollStreamingRows: streamingVisualRows(state.streaming, state.columns),
+        transcriptScrollStreamingRows: streamingRows,
       };
+    }
     case "viewport-resized": {
       // Only a genuine `columns` change invalidates the cache: every existing entry re-wraps to a
       // different row count then, and that's the one time re-deriving it from scratch is correct
@@ -355,8 +348,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           : streamingVisualRows(state.streaming, action.columns);
       const max = maxScrollOffset(
         totalVisualRows,
-        state.streaming,
-        action.columns,
+        transcriptScrollStreamingRows,
         action.viewportRows,
       );
       return {
@@ -458,16 +450,17 @@ function streamingVisualRows(streaming: string, columns: number): number {
 }
 
 // The furthest `transcriptScrollOffset` can go: every visual row that exists, committed plus
-// in-progress, minus the ones already on screen. `viewport-resized` passes the action's own
-// `columns`/`viewportRows` rather than `state`'s, since it is re-clamping against the NEW geometry,
-// not the one currently in state.
+// in-progress, minus the ones already on screen. Takes the streaming answer's own row count
+// pre-computed rather than re-deriving it from `streaming`/`columns` itself: every call site also
+// needs that same row count for `transcriptScrollStreamingRows` (the offset's own snapshot of it),
+// so computing it once and passing it to both avoids wrapping the streaming answer twice per
+// dispatch.
 function maxScrollOffset(
   totalVisualRows: number,
-  streaming: string,
-  columns: number,
+  streamingRows: number,
   viewportRows: number,
 ): number {
-  return Math.max(0, totalVisualRows + streamingVisualRows(streaming, columns) - viewportRows);
+  return Math.max(0, totalVisualRows + streamingRows - viewportRows);
 }
 
 // Commits any pending streamed text as its own transcript line before appending `line`, so a
