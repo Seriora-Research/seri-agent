@@ -31,10 +31,7 @@ describe("dispatchSetupList (via onSetupBack)", () => {
   });
 
   test("a valid config.json refreshes the list", () => {
-    const actions: TuiAction[] = [];
-    const dispatch: (action: TuiAction) => void = (action) => {
-      actions.push(action);
-    };
+    const { actions, dispatch } = actionsCollector();
     const { onSetupBack } = createSetupHandlers({
       dispatch,
       getPendingSetup: () => undefined,
@@ -50,10 +47,7 @@ describe("dispatchSetupList (via onSetupBack)", () => {
 
   test("onSetupBack on a corrupted config.json closes the panel instead of leaving confirm-remove stuck", () => {
     writeFileSync(join(configDir, "config.json"), "{ not json");
-    const actions: TuiAction[] = [];
-    const dispatch: (action: TuiAction) => void = (action) => {
-      actions.push(action);
-    };
+    const { actions, dispatch } = actionsCollector();
     const { onSetupBack } = createSetupHandlers({
       dispatch,
       getPendingSetup: () => ({
@@ -71,10 +65,7 @@ describe("dispatchSetupList (via onSetupBack)", () => {
 
   test("onPanelClosed fires exactly once when the refresh fails", () => {
     writeFileSync(join(configDir, "config.json"), "{ not json");
-    const actions: TuiAction[] = [];
-    const dispatch: (action: TuiAction) => void = (action) => {
-      actions.push(action);
-    };
+    const { dispatch } = actionsCollector();
     let panelClosedCount = 0;
     const { onSetupBack } = createSetupHandlers({
       dispatch,
