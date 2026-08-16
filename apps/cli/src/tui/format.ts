@@ -34,6 +34,19 @@ export const MIN_LIST_WINDOW = 3;
 export const LIST_WINDOW_MAX = MODEL_PICKER_WINDOW;
 export const PANEL_CHROME_ROWS = 9;
 
+// Every row a panel's own budget has to share with the rest of App.tsx's render, reserved
+// unconditionally rather than threaded through as props: the root Box's own spare row (App.tsx,
+// `height={rows - 1}`), the unconditional mode-indicator row, a `commandError` line (one row,
+// shown above the panel), and AuthBanner's three-row bordered Box (shown above everything when
+// signed out) — 1 + 1 + 1 + 3 = 6. Unconditional because `commandError`/`authOffer` live on
+// reducer state inside App, out of scope for the four panel components that call
+// `useListWindow(selected)` with nothing else in scope — threading both flags into every one of
+// them (plus App itself) costs far more than the alternative: over-reserving these six rows when
+// neither is actually showing costs at most one list row on a 24-row terminal and nothing at all
+// on a 25+ row one, while under-reserving pushes a panel row off the alt screen with no scrollback
+// to recover it.
+export const APP_CHROME_ROWS = 6;
+
 // The transcript viewport's placeholder height for the one frame before useBoxMetrics has ever
 // measured the live region below it (App.tsx) — not the real budget, just enough that the first
 // frame renders a plausible slice of the transcript instead of an empty one.

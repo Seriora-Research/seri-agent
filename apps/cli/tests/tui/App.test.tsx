@@ -651,6 +651,13 @@ describe("App", () => {
 
     test("shows a +N more hint once the filtered list exceeds the visible window", async () => {
       const { instance, dispatch } = await connect();
+      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so this doesn't
+      // depend on the host terminal's real height (App.test.tsx's own listWindowSize describe).
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
       const entries = Array.from({ length: 12 }, (_, i) =>
         row({ id: `model-${i}`, displayName: `Model ${i}` }),
       );
@@ -667,6 +674,13 @@ describe("App", () => {
     // and never disappeared even once every remaining entry was on screen.
     test("the +N more hint count decreases while scrolling down, disappearing at the bottom", async () => {
       const { instance, dispatch } = await connect();
+      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so this doesn't
+      // depend on the host terminal's real height (App.test.tsx's own listWindowSize describe).
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
       const entries = Array.from({ length: 12 }, (_, i) =>
         row({ id: `model-${i}`, displayName: `Model ${i}` }),
       );
@@ -820,6 +834,15 @@ describe("App", () => {
 
     test("the list step shows all five provider rows, masked values included", async () => {
       const { instance, dispatch } = await connect();
+      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so all 5 rows
+      // fit regardless of the host terminal's real height (App.test.tsx's own listWindowSize
+      // describe) — a shrunk window truncates SetupPanel's own fixed 5-row list just like any
+      // other panel's.
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
 
       dispatch({ type: "setup-requested", rows: setupRows() });
       await flush();
@@ -1351,11 +1374,11 @@ describe("App", () => {
   });
 
   describe("listWindowSize", () => {
-    // ink-testing-library's own `getWindowSize` fallback (App.test.tsx's own convention elsewhere
-    // in this file) floors rows at 24 — 24 - PANEL_CHROME_ROWS(9) = 15, clamped down to
-    // LIST_WINDOW_MAX(10). This is the "+2 more — keep typing to narrow" regression guard's own
-    // underlying fact: ModelPicker's window stays 10 under the test harness regardless of the host
-    // terminal's real size.
+    // listWindowSize is a pure function of `rows`, tested here at hand-picked inputs — it does NOT
+    // describe what `rows` ink-testing-library's own Stdout stub resolves to. That stub exposes no
+    // `rows` getter at all, so `useWindowSize().rows` falls through to the HOST terminal's real
+    // height rather than any fixed value; tests that depend on an exact window size pin
+    // `instance.stdout.rows` explicitly instead of relying on a stub default.
     test("a tall terminal clamps to LIST_WINDOW_MAX (10)", () => {
       expect(listWindowSize(24)).toBe(10);
     });
@@ -2015,6 +2038,13 @@ describe("App", () => {
     // reached 0 even once every remaining row was on screen.
     test("the +N more footer count decreases while scrolling down, reaching 0 at the bottom", async () => {
       const { instance, dispatch } = await connect();
+      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so this doesn't
+      // depend on the host terminal's real height (App.test.tsx's own listWindowSize describe).
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
 
       const rows = Array.from({ length: 15 }, (_, i) => ({
         key: `FAKE_KEY_${i}`,
@@ -2074,6 +2104,48 @@ describe("App", () => {
       await flush();
 
       expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_9");
+    });
+
+    // Regression guard: useListWindow's row budget used to reserve only the root Box's own spare
+    // row and the unconditional mode-indicator row (APP_CHROME_ROWS, format.ts) — not commandError
+    // or AuthBanner, both of which can be showing at the same time as a panel. On a 20-row
+    // terminal that overflowed the alt-screen viewport, unrecoverable until the panel closed or the
+    // terminal resized (no scrollback on the alt screen).
+    test("a panel opened under an auth banner and a command error still fits the viewport", async () => {
+      const { instance, dispatch } = await connect();
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 20;
+      instance.stdout.emit("resize");
+      await flush();
+
+      dispatch({ type: "auth-offer", show: true });
+      dispatch({ type: "command-error", message: "boom" });
+      // Row 0 is a known key (configKeyInfo has a description for it) so the selected row's
+      // description line renders too, matching ConfigPanel's own tallest real case — a bare
+      // FAKE_KEY row has no description and would silently under-count the panel's real height.
+      const rows: ConfigRow[] = [
+        configRows()[0] as ConfigRow,
+        ...Array.from({ length: 14 }, (_, i) => ({
+          key: `FAKE_KEY_${i}`,
+          masked: "",
+          source: "unset" as const,
+          removable: false,
+          kind: "string" as const,
+        })),
+      ];
+      dispatch({ type: "config-requested", rows });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      // Content that doesn't fit the fixed-height root Box (App.tsx's `height={rows - 1}`) doesn't
+      // grow the frame taller — Ink overlaps two rows' worth of text onto one instead. Pre-fix, that
+      // overlap lands on the mode-indicator row (overwritten by the command-error line) and the
+      // panel's own header line vanishes entirely; both must render intact once the reservation
+      // accounts for AuthBanner and commandError.
+      expect(frame).toContain("[approve-each]");
+      expect(frame).toContain("/config — settings");
+      expect(frame).toContain("Esc/Ctrl-D close");
     });
   });
 
@@ -2169,6 +2241,13 @@ describe("App", () => {
     // reached 0 even once every remaining row was on screen.
     test("the +N more footer count decreases while scrolling down, reaching 0 at the bottom", async () => {
       const { instance, dispatch } = await connect();
+      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so this doesn't
+      // depend on the host terminal's real height (App.test.tsx's own listWindowSize describe).
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
 
       dispatch({
         type: "permissions-requested",

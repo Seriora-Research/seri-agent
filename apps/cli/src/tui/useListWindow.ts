@@ -7,7 +7,7 @@
 
 import { useWindowSize } from "ink";
 import { useEffect, useState } from "react";
-import { listWindowSize, slideWindow } from "./format";
+import { APP_CHROME_ROWS, listWindowSize, slideWindow } from "./format";
 
 export function useListWindow(selected: number): {
   offset: number;
@@ -24,16 +24,12 @@ export function useListWindow(selected: number): {
   reset: () => void;
 } {
   const { rows } = useWindowSize();
-  // `rows - 2`, not raw `rows` (found by review, twice): App.tsx's own root Box is sized to
-  // `rows - 1` (one row reserved for a mid-run console write to land in without scrolling the
-  // alt-screen viewport), which accounts for the first `-1`. A panel replaces InputBox in App.tsx's
-  // own render ternary, but NOT the mode-indicator row above that ternary (App.tsx's own
-  // `modeLabel`/`↑ scrolled`/status row) — that row renders unconditionally alongside every panel,
-  // so a panel budgeted off the FULL `rows - 1` still overflows by exactly the one row the
-  // mode-indicator itself occupies, at every terminal height PANEL_CHROME_ROWS' own clamp hasn't
-  // already floored to MIN_LIST_WINDOW. `commandError`/`AuthBanner` can each cost one more
-  // conditionally; not reserved for here, since neither is unconditional the way the mode row is.
-  const windowSize = listWindowSize(rows - 2);
+  // `rows - APP_CHROME_ROWS`, not raw `rows`: a panel replaces InputBox in App.tsx's own render
+  // ternary, but everything else App.tsx can render alongside a panel — the root Box's own spare
+  // row, the unconditional mode-indicator row, a `commandError` line, AuthBanner's three-row
+  // bordered Box — still needs its own share of `rows`. See APP_CHROME_ROWS' own comment
+  // (format.ts) for why that reservation is unconditional rather than threaded through as props.
+  const windowSize = listWindowSize(rows - APP_CHROME_ROWS);
   // Seeded from `selected` via the same slideWindow rule onSelectionMove uses, not a bare 0: a
   // panel can mount with a non-zero seeded selection (ConfigPanel/PermissionsPanel/SetupPanel all
   // re-dispatch their own `selected` after a save/unset/remove), and a hardcoded-0 offset would
