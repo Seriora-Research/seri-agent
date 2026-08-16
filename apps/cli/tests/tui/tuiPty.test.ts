@@ -71,6 +71,36 @@ function childScriptInput(dir: string): string {
   ].join("\n");
 }
 
+// D4/D6 (App.tsx's own viewport): a transcript longer than any real terminal's row count, built
+// fast (no real I/O per iteration) rather than 300 separate turns — one turn yielding 300
+// tool-call events, each a distinct, greppable transcript line (`read_file`'s own args embed the
+// iteration number). `read_file` specifically: applyLoopEvent (reducer.ts) only sets `pendingTool`
+// for write_file/edit, so this never renders the pending-write box the viewport tests don't care
+// about.
+function childScriptManyLines(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  for (let i = 0; i < 300; i++) {`,
+    `    yield { type: "tool-call", name: "read_file", args: { path: "line-" + i + ".txt" } };`,
+    `  }`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Pins the `interactive: true` fix (cli.ts's own comment on its render() call): without it, Ink's
 // own CI auto-detection (`is-in-ci`, keyed on the `CI`/`CONTINUOUS_INTEGRATION` env vars) treats a
 // real pty as non-interactive whenever `CI` is set — exactly GitHub Actions' own default for every
@@ -1221,6 +1251,13 @@ async function startChild(
   // out of the pty capture WHILE the process is still running, not just assert against it once
   // `exited` resolves.
   stdoutSoFar: () => string;
+  // The plain text of the most recently completed frame, stripped of ANSI. Unlike `sawLine`/
+  // `occurrences` (which see EVERY byte the child ever wrote, cumulative), the viewport tests below
+  // need to know what's on screen RIGHT NOW — a line that scrolled out of the viewport is still in
+  // the cumulative capture forever. Reconstructed from Ink's own synchronized-output bracket
+  // (write-synchronized.js's bsu/esu, `\x1b[?2026h`/`\x1b[?2026l`), which every interactive frame
+  // write is wrapped in (shouldSynchronize is true for a real pty with `interactive: true`).
+  lastFrame: () => string;
 }> {
   const args = ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, scriptPath];
   const child = spawn("python3", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
@@ -1245,6 +1282,16 @@ async function startChild(
   });
 
   const occurrences = (line: string): number => stdout.split(line).length - 1;
+
+  const lastFrame = (): string => {
+    const bsu = "\x1b[?2026h";
+    const esu = "\x1b[?2026l";
+    const start = stdout.lastIndexOf(bsu);
+    if (start === -1) return "";
+    const end = stdout.indexOf(esu, start + bsu.length);
+    if (end === -1) return "";
+    return stdout.slice(start + bsu.length, end).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
+  };
 
   const sawLine = async (line: string): Promise<void> => {
     const deadline = Date.now() + 20_000;
@@ -1293,7 +1340,15 @@ async function startChild(
     } catch {}
   }
 
-  return { child, exited, sawLine, sawLineTimes, occurrences, stdoutSoFar: () => stdout };
+  return {
+    child,
+    exited,
+    sawLine,
+    sawLineTimes,
+    occurrences,
+    stdoutSoFar: () => stdout,
+    lastFrame,
+  };
 }
 
 // Windows has no pty to allocate — same constraint as approvalPromptPty.test.ts. Real execution is
@@ -4573,6 +4628,81 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(occurrences("\x1b[?1049l")).toBe(1);
       } finally {
         // Already exited in the success case; harmless if the process is already gone.
+      }
+    }, 60_000);
+  });
+
+  // D4/D6 (App.tsx's own viewport): the transcript is now a measured, tail-anchored, scrollable
+  // region rather than an append-only `<Static>` — these are the real-terminal counterpart of
+  // App.test.tsx's own viewport tests, on a real pty rather than ink-testing-library's stub.
+  describe("transcript viewport scrolling", () => {
+    test("a transcript longer than the terminal shows the newest line and hides the oldest, with the InputBox still visible", async () => {
+      const scriptPath = join(dir, "child-viewport-overflow.mjs");
+      writeFileSync(scriptPath, childScriptManyLines(dir));
+
+      const { child, sawLine, lastFrame } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        await sawLine("line-299.txt");
+
+        const frame = lastFrame();
+        expect(frame).toContain("line-299.txt");
+        expect(frame).not.toContain("line-0.txt");
+        expect(frame).toContain("╭"); // InputBox's own border
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("PageUp shows the scrolled indicator and scrolls the newest line out of view", async () => {
+      const scriptPath = join(dir, "child-viewport-pageup.mjs");
+      writeFileSync(scriptPath, childScriptManyLines(dir));
+
+      const { child, sawLine, lastFrame } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        await sawLine("line-299.txt");
+        await sawLine("(done: no-tool-call)");
+
+        child.stdin?.write("\x1b[5~"); // Page Up
+        await sawLine("↑ scrolled — End to follow");
+
+        const frame = lastFrame();
+        expect(frame).toContain("↑ scrolled — End to follow");
+        expect(frame).not.toContain("line-299.txt");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("End clears the scrolled indicator and returns the newest line to view", async () => {
+      const scriptPath = join(dir, "child-viewport-end.mjs");
+      writeFileSync(scriptPath, childScriptManyLines(dir));
+
+      const { child, sawLine, lastFrame } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        await sawLine("line-299.txt");
+        await sawLine("(done: no-tool-call)");
+
+        child.stdin?.write("\x1b[5~"); // Page Up
+        await sawLine("↑ scrolled — End to follow");
+
+        child.stdin?.write("\x1b[F"); // End
+        // No new distinctive text to `sawLine` on here — the indicator's own DISAPPEARANCE is what
+        // this asserts, so it has to be polled on `lastFrame()` directly rather than waited for via
+        // `sawLine`'s cumulative-capture semantics (the same reasoning `stdoutSoFar`'s own comment
+        // gives for why a live snapshot, not the cumulative one, is what's needed here).
+        const deadline = Date.now() + 5_000;
+        while (lastFrame().includes("↑ scrolled") && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 20));
+        }
+
+        const frame = lastFrame();
+        expect(frame).not.toContain("↑ scrolled");
+        expect(frame).toContain("line-299.txt");
+      } finally {
+        child.kill("SIGKILL");
       }
     }, 60_000);
   });

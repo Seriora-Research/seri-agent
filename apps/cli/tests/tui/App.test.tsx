@@ -77,13 +77,53 @@ describe("App", () => {
     expect(instance.lastFrame()).toContain("[read-only]");
   });
 
-  test("a transcript-append dispatch grows the static transcript", async () => {
+  test("a transcript-append dispatch grows the transcript viewport", async () => {
     const { instance, dispatch } = await connect();
 
     dispatch({ type: "transcript-append", line: "Session s1: permission mode is now auto" });
     await flush();
 
     expect(instance.lastFrame()).toContain("Session s1: permission mode is now auto");
+  });
+
+  // D4: tail-anchored, not head-anchored — 300 lines is comfortably more than any real terminal's
+  // row count, so the viewport MUST be showing a slice, and that slice must be the newest end.
+  test("a transcript longer than the viewport shows the newest line and hides the oldest, with InputBox still visible", async () => {
+    const { instance, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush();
+
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("line 299");
+    expect(frame).not.toContain("line 0");
+    // The InputBox's own border (panels/InputBox.tsx) — proves the viewport left room for the
+    // live region below it rather than consuming the whole frame.
+    expect(frame).toContain("╭");
+  });
+
+  test("PageUp shows the scrolled indicator and reveals an older line; End clears it and returns to the newest", async () => {
+    const { instance, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush();
+    expect(instance.lastFrame()).not.toContain("↑ scrolled");
+
+    instance.stdin.write("\x1b[5~"); // Page Up
+    await flush();
+    let frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("↑ scrolled — End to follow");
+    expect(frame).not.toContain("line 299");
+
+    instance.stdin.write("\x1b[F"); // End
+    await flush();
+    frame = instance.lastFrame() ?? "";
+    expect(frame).not.toContain("↑ scrolled");
+    expect(frame).toContain("line 299");
   });
 
   test("a tool-call loop-event sets the running status, and tool-result clears it", async () => {

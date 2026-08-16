@@ -1,19 +1,28 @@
-// Root TUI component (Phase 4, feature-plan.md). Structurally correct and wired to Phase 2's
-// reducer, not feature-complete: Phase 5 wires this to driveLoop and cli.ts's slash-command
-// dispatch. <Static> is the direct replacement for output.ts's console.log/process.stdout.write
-// calls — the same append-only, never-repainted transcript, rendered by Ink instead of printed
-// directly. Everything below it is a live region: status/spinner, a pending-write placeholder, the
-// mode indicator, and a basic input box, all re-rendered in place rather than scrolled.
+// Root TUI component, rendered full-screen in the alternate screen buffer (altScreen.ts's own
+// enter/exit calls, cli.ts). The transcript is a measured, tail-anchored, scrollable viewport
+// (visibleTranscript, format.ts) rather than an append-only <Static> region — a terminal-height
+// slice of `state.transcript`, following the newest line by default and scrollable with
+// PageUp/PageDown/Home/End. Everything below it is a live region: status/spinner, a pending-write
+// placeholder, the mode indicator, and a basic input box, all re-rendered in place.
 
 import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import { Box, Static, Text, useApp, useInput, useStdout } from "ink";
-import { useEffect, useReducer, useState } from "react";
+import {
+  Box,
+  type DOMElement,
+  Text,
+  useApp,
+  useBoxMetrics,
+  useInput,
+  useStdout,
+  useWindowSize,
+} from "ink";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
-import { DEFAULT_COLUMNS, formatModeLabel } from "./format";
+import { DEFAULT_COLUMNS, FALLBACK_CHROME_ROWS, formatModeLabel, visibleTranscript } from "./format";
 import { ApprovalBox } from "./panels/ApprovalBox";
 import { AuthBanner, AuthPanel } from "./panels/AuthPanel";
 import { ConfigPanel } from "./panels/ConfigPanel";
@@ -193,7 +202,19 @@ export function App({
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
   const { exit } = useApp();
   const width = useTerminalWidth();
+  const { rows } = useWindowSize();
   const modeLabel = formatModeLabel(state.modeIndicator, route, width);
+
+  // The transcript viewport's own height comes from flexbox's leftover space (flexGrow, below),
+  // not from how many lines it renders — so measuring it back with useBoxMetrics cannot create a
+  // feedback loop where changing the slice changes the measurement. `hasMeasured` is false only for
+  // the one frame before Ink's first layout pass; FALLBACK_CHROME_ROWS is a placeholder for that
+  // frame alone, not a real chrome-height estimate.
+  const viewportRef = useRef<DOMElement | null>(null);
+  const { height: measuredRows, hasMeasured } = useBoxMetrics(viewportRef);
+  const viewportRows = hasMeasured ? measuredRows : Math.max(1, rows - FALLBACK_CHROME_ROWS);
+  // One line of overlap between pages, same convention a terminal pager's own PageUp/PageDown use.
+  const pageSize = Math.max(1, viewportRows - 1);
 
   useEffect(() => {
     connectDispatch?.(dispatch);
@@ -212,10 +233,17 @@ export function App({
   // nothing: InputBox's own handler skips any key.ctrl input).
   useInput((input, key) => {
     if (key.ctrl && input === "c") onCancel?.();
+    if (key.pageUp) dispatch({ type: "transcript-scroll", delta: pageSize });
+    if (key.pageDown) dispatch({ type: "transcript-scroll", delta: -pageSize });
+    if (key.home) dispatch({ type: "transcript-scroll-to", to: "top" });
+    if (key.end) dispatch({ type: "transcript-scroll-to", to: "bottom" });
   });
 
   return (
-    <Box flexDirection="column">
+    // `rows - 1`, not `rows`: Ink forces a full clear-and-redraw on every frame on Windows once
+    // the rendered output fills the whole terminal height (isWindowsConsole && (wasFullscreen ||
+    // isFullscreen), Ink's own resolveOutput) — one row short keeps the normal diffing path.
+    <Box flexDirection="column" height={rows - 1}>
       {/* Rendered ABOVE the render ternary below, not as one of its branches — unlike
       ApprovalBox/ModelPicker/SetupPanel this never replaces InputBox, it sits alongside it.
       `state.pendingAuth === undefined` (not just `state.authOffer`) is the derived half of the
@@ -228,7 +256,28 @@ export function App({
       <AuthBanner
         show={state.authOffer && state.pendingAuth === undefined && !state.pendingSplash}
       />
-      <Static items={state.transcript}>{(line, index) => <Text key={index}>{line}</Text>}</Static>
+      {/* flexGrow/flexShrink/minHeight={0} give this box whatever height is left over after
+      every sibling below has laid out — `viewportRows` (above) reads that back via useBoxMetrics,
+      not the other way around, so there is no feedback loop from the slice into the measurement.
+      `visibleTranscript` already caps the line COUNT at `viewportRows`; `overflowY`/
+      `justifyContent="flex-end"` only handle the residual case where a slice line wraps and pushes
+      the total over — anchoring to the end means the overflow falls off the top (oldest), not the
+      bottom (newest). */}
+      <Box
+        ref={viewportRef}
+        flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        minHeight={0}
+        overflowY="hidden"
+        justifyContent="flex-end"
+      >
+        {visibleTranscript(state.transcript, viewportRows, state.transcriptScrollOffset).map(
+          (line, index) => (
+            <Text key={index}>{line}</Text>
+          ),
+        )}
+      </Box>
       {state.streaming.length > 0 && <Text>{state.streaming}</Text>}
       {state.pendingTool !== undefined && (
         <Box borderStyle="round" borderColor={theme.warning}>
@@ -242,7 +291,12 @@ export function App({
       )}
       <Box flexDirection="row" justifyContent="space-between">
         <Text color={theme.accent}>{modeLabel}</Text>
-        {state.status.length > 0 && <Text color={theme.muted}>{state.status}</Text>}
+        <Box flexDirection="row" gap={1}>
+          {state.transcriptScrollOffset > 0 && (
+            <Text color={theme.muted}>↑ scrolled — End to follow</Text>
+          )}
+          {state.status.length > 0 && <Text color={theme.muted}>{state.status}</Text>}
+        </Box>
       </Box>
       {state.commandError !== undefined && <Text color={theme.error}>{state.commandError}</Text>}
       {/* Findings 1+5: mutually exclusive with InputBox — a pending approval question is the only

@@ -90,8 +90,8 @@ export async function runGuidedSetup(
   // `model-picker-resolved`, `state.pendingModelPicker` stays set and `ModelPicker` stays mounted
   // with its own local filter/selection intact — the user gets a visible reason instead of the
   // panel silently doing nothing. `command-error`, not `transcript-append`: it is a single-slot
-  // field rendered above the picker, so holding Escape replaces one line instead of flooding
-  // `<Static>`. Ctrl-C is still the way out and needs no code here — see `onCancel`, below.
+  // field rendered above the picker, so holding Escape replaces one line instead of flooding the
+  // transcript. Ctrl-C is still the way out and needs no code here — see `onCancel`, below.
   function onGuidedModelPickerCancel(): void {
     dispatch({ type: "command-error", message: GUIDED_MODEL_REQUIRED });
   }
