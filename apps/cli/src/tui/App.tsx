@@ -157,16 +157,29 @@ export type AppProps = {
   onSplashContinue?: () => void;
 };
 
+// `?? DEFAULT_COLUMNS` (both call sites below) only ever substituted on `undefined` — not on a real
+// but unusable `0`, which a pty can genuinely report for the first render or two before its window
+// size ioctl has actually landed (reproduced live over a real pty in WSL, found by review's own
+// `columns=0` finding: `state.columns` reaching `wrapForTranscript` as 0 clamps to 1 there — not a
+// crash, but a transcript wrapped to ONE CHARACTER PER ROW, which is worse than the silent
+// corruption that clamp was written to prevent). `|| DEFAULT_COLUMNS`, not `??`: `||` treats `0`
+// the same as `undefined`/`null`, which is exactly the substitution a column count of zero needs —
+// there is no real terminal width `0` is ever the correct value for.
+function resolveWidth(columns: number | undefined): number {
+  return columns || DEFAULT_COLUMNS;
+}
+
 // D5 (byok-open3-route-indicator feature-plan.md): no such hook existed in this file before — the
 // persistent mode-indicator (App, below) needs to know the terminal's current column width, live,
-// to pick its 3-tier layout. See DEFAULT_COLUMNS's own comment for what the `?? DEFAULT_COLUMNS`
-// fallback actually guards (a genuine non-TTY production stdout), and what it does not.
+// to pick its 3-tier layout. See DEFAULT_COLUMNS's own comment for what the fallback actually
+// guards (a genuine non-TTY production stdout, or the real pty startup race above), and what it
+// does not.
 function useTerminalWidth(): number {
   const { stdout } = useStdout();
-  const [width, setWidth] = useState(stdout.columns ?? DEFAULT_COLUMNS);
+  const [width, setWidth] = useState(resolveWidth(stdout.columns));
 
   useEffect(() => {
-    const onResize = () => setWidth(stdout.columns ?? DEFAULT_COLUMNS);
+    const onResize = () => setWidth(resolveWidth(stdout.columns));
     stdout.on("resize", onResize);
     return () => {
       stdout.off("resize", onResize);
