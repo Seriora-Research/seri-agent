@@ -219,7 +219,14 @@ export function App({
   // frame alone, not a real chrome-height estimate.
   const viewportRef = useRef<DOMElement | null>(null);
   const { height: measuredRows, hasMeasured } = useBoxMetrics(viewportRef);
-  const viewportRows = hasMeasured ? measuredRows : Math.max(1, rows - FALLBACK_CHROME_ROWS);
+  // `Math.max(1, ...)` on BOTH branches (found by review): the measured one had no floor. The
+  // transcript Box has `minHeight={0}`, so on a short enough terminal — or one where the sibling
+  // rows above/below it (mode indicator, an open commandError line) already consume the whole
+  // `rows - 1` budget — Yoga can genuinely measure it down to 0. `visibleTranscript(transcript, 0,
+  // ...)` then computes `start === end`, an empty slice: an in-progress streamed answer renders as
+  // nothing, not as "not enough room," with no visible sign anything is wrong until the layout
+  // recovers.
+  const viewportRows = Math.max(1, hasMeasured ? measuredRows : rows - FALLBACK_CHROME_ROWS);
   // One line of overlap between pages, same convention a terminal pager's own PageUp/PageDown use.
   const pageSize = Math.max(1, viewportRows - 1);
 
