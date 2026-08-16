@@ -71,7 +71,7 @@ function childScriptInput(dir: string): string {
   ].join("\n");
 }
 
-// D4/D6 (App.tsx's own viewport): a transcript longer than any real terminal's row count, built
+// App.tsx's own viewport: a transcript longer than any real terminal's row count, built
 // fast (no real I/O per iteration) rather than 300 separate turns — one turn yielding 300
 // tool-call events, each a distinct, greppable transcript line (`read_file`'s own args embed the
 // iteration number). `read_file` specifically: applyLoopEvent (reducer.ts) only sets `pendingTool`
@@ -1915,7 +1915,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         (c) => c.SERI_MODEL === "claude-sonnet-5",
       );
       expect(config.SERI_MODEL).toBe("claude-sonnet-5");
-      // D4: the RESOLVED pair persists, not the one literally selected in the picker.
+      // The RESOLVED pair persists, not the one literally selected in the picker.
       expect(config.SERI_PROVIDER).toBe("anthropic");
       expect(config.SERI_PROVIDER).not.toBe("openrouter");
     } finally {
@@ -4745,7 +4745,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }, 60_000);
   });
 
-  // D4/D6 (App.tsx's own viewport): the transcript is now a measured, tail-anchored, scrollable
+  // App.tsx's own viewport: the transcript is now a measured, tail-anchored, scrollable
   // region rather than an append-only `<Static>` — these are the real-terminal counterpart of
   // App.test.tsx's own viewport tests, on a real pty rather than ink-testing-library's stub.
   describe("transcript viewport scrolling", () => {

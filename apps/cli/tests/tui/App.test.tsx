@@ -86,7 +86,7 @@ describe("App", () => {
     expect(instance.lastFrame()).toContain("Session s1: permission mode is now auto");
   });
 
-  // D4: tail-anchored, not head-anchored — 300 lines is comfortably more than any real terminal's
+  // Tail-anchored, not head-anchored — 300 lines is comfortably more than any real terminal's
   // row count, so the viewport MUST be showing a slice, and that slice must be the newest end.
   test("a transcript longer than the viewport shows the newest line and hides the oldest, with InputBox still visible", async () => {
     const { instance, dispatch } = await connect();
@@ -1261,7 +1261,7 @@ describe("App", () => {
       );
     });
 
-    // D5's own negative control: below 52 cols the row reverts to EXACTLY today's pre-change
+    // Negative control: below 52 cols the row reverts to EXACTLY today's pre-change
     // output — mode indicator only, regardless of what `route` carries — proving the model+route
     // label can never crowd the spinner/status text off screen at any width.
     test("minimal width (<52 cols): mode indicator only, byte-identical to the pre-change row", () => {
