@@ -122,7 +122,10 @@ function ConfigList({
   const selectedDescription =
     selectedRow === undefined ? undefined : configKeyInfo(selectedRow.key).description;
   const visible = rows.slice(offset, offset + windowSize);
-  const remaining = rows.length - visible.length;
+  // Rows strictly BELOW the window, not `rows.length - visible.length` (which counts rows hidden
+  // above the window too, and stays flat at `rows.length - windowSize` the whole time the window
+  // is full — the footer would never count down while scrolling toward the bottom).
+  const remaining = Math.max(0, rows.length - offset - windowSize);
 
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">

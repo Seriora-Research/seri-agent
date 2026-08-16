@@ -573,6 +573,30 @@ describe("App", () => {
       expect(instance.lastFrame()).toContain("+2 more — keep typing to narrow");
     });
 
+    // Regression guard: `remaining` used to be `filtered.length - visible.length`, which counts
+    // entries hidden ABOVE the window too and stays flat at `filtered.length - windowSize` for as
+    // long as the window is full — the hint never counted down while scrolling toward the bottom,
+    // and never disappeared even once every remaining entry was on screen.
+    test("the +N more hint count decreases while scrolling down, disappearing at the bottom", async () => {
+      const { instance, dispatch } = await connect();
+      const entries = Array.from({ length: 12 }, (_, i) =>
+        row({ id: `model-${i}`, displayName: `Model ${i}` }),
+      );
+
+      dispatch({ type: "model-picker-requested", entries });
+      await flush();
+      expect(instance.lastFrame()).toContain("+2 more — keep typing to narrow");
+
+      for (let i = 0; i < 11; i++) {
+        instance.stdin.write("\x1b[B"); // Down arrow
+        await flush();
+      }
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Model 11");
+      expect(frame).not.toContain("more — keep typing to narrow");
+    });
+
     // C1: the real bug — the visible window used to always be the first MODEL_PICKER_WINDOW
     // entries regardless of `selectedIndex`, so Down past the 10th entry moved the highlight
     // somewhere nothing on screen showed. Down 15 times over 20 entries lands well past the
@@ -1873,6 +1897,35 @@ describe("App", () => {
       const frame = instance.lastFrame() ?? "";
       expect(frame).toContain("> FAKE_KEY_12");
     });
+
+    // Regression guard: `remaining` used to be `rows.length - visible.length`, which counts rows
+    // hidden ABOVE the window too and stays flat at `rows.length - windowSize` for as long as the
+    // window is full — the footer never counted down while scrolling toward the bottom, and never
+    // reached 0 even once every remaining row was on screen.
+    test("the +N more footer count decreases while scrolling down, reaching 0 at the bottom", async () => {
+      const { instance, dispatch } = await connect();
+
+      const rows = Array.from({ length: 15 }, (_, i) => ({
+        key: `FAKE_KEY_${i}`,
+        masked: "",
+        source: "unset" as const,
+        removable: false,
+        kind: "string" as const,
+      }));
+      dispatch({ type: "config-requested", rows });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("+5 more");
+
+      for (let i = 0; i < 14; i++) {
+        instance.stdin.write("\x1b[B"); // Down
+        await flush();
+      }
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("> FAKE_KEY_14");
+      expect(frame).not.toContain("+0 more");
+      expect(frame).not.toMatch(/\+\d+ more/);
+    });
   });
 
   describe("permissions panel", () => {
@@ -1939,9 +1992,9 @@ describe("App", () => {
       expect(removed).toEqual(["write_file"]);
     });
 
-    // D7: useListWindow's own window budget (listWindowSize) — 15 rows, more than any real
-    // terminal's clamped window under ink-testing-library (LIST_WINDOW_MAX, format.ts's own
-    // comment), so this must truncate and show the footer.
+    // useListWindow's own window budget (listWindowSize) — 15 rows, more than any real terminal's
+    // clamped window under ink-testing-library (LIST_WINDOW_MAX, format.ts's own comment), so this
+    // must truncate and show the footer.
     test("a row count past the window budget truncates and shows a +N more footer", async () => {
       const { instance, dispatch } = await connect();
 
@@ -1959,6 +2012,34 @@ describe("App", () => {
       expect(frame).toContain("tool_0");
       expect(frame).not.toContain("tool_14");
       expect(frame).toMatch(/\+\d+ more/);
+    });
+
+    // Regression guard: `remaining` used to be `rows.length - visible.length`, which counts rows
+    // hidden ABOVE the window too and stays flat at `rows.length - windowSize` for as long as the
+    // window is full — the footer never counted down while scrolling toward the bottom, and never
+    // reached 0 even once every remaining row was on screen.
+    test("the +N more footer count decreases while scrolling down, reaching 0 at the bottom", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "permissions-requested",
+        rows: Array.from({ length: 15 }, (_, i) => ({
+          tool: `tool_${i}`,
+          source: "persisted" as const,
+          removable: true,
+        })),
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("+5 more");
+
+      for (let i = 0; i < 14; i++) {
+        instance.stdin.write("\x1b[B"); // Down
+        await flush();
+      }
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("> tool_14");
+      expect(frame).not.toMatch(/\+\d+ more/);
     });
   });
 
