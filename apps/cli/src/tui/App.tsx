@@ -221,16 +221,22 @@ export function App({
   // One line of overlap between pages, same convention a terminal pager's own PageUp/PageDown use.
   const pageSize = Math.max(1, viewportRows - 1);
 
-  // A resize can grow `viewportRows` with no keypress at all — useListWindow's own effect handles
-  // the identical case for panel lists (its own comment), but the transcript's scroll offset lives
-  // in the reducer, not component state, so it needs the equivalent here: without this, a taller
-  // terminal leaves `transcriptScrollOffset` past its new max (reducer.ts's own `transcript-scroll`
-  // clamp), and `visibleTranscript` renders fewer than `viewportRows` lines — blank space above the
-  // shown text — until the next PageUp/PageDown/Home/End recomputes it. A zero-delta scroll re-runs
-  // that same clamp and is a no-op whenever the offset is already valid.
+  // `columns`/`viewportRows` live on TuiState itself (reducer.ts's own comment on those fields) —
+  // this is the one place that ever measures them, so it's the one place that ever dispatches them
+  // in. Two things ride on this same action: `appendLines` (reducer.ts) needs the current width to
+  // wrap new transcript content to real visual rows, and a resize that GROWS `viewportRows` with no
+  // keypress at all needs `transcriptScrollOffset` re-clamped against the new max (the reducer's own
+  // `viewport-resized` case does both) — useListWindow's own effect handles the identical resize
+  // case for panel lists, just against component state instead of the reducer's.
+  //
+  // Declared before `connectDispatch`'s own effect, not after: on mount, React runs effects in
+  // declaration order within the same commit, and cli.ts's `runTui` dispatches the initial task
+  // echo and any queued startup notices from INSIDE that later effect (connectDispatch's own
+  // callback) — this one has to land first so `state.columns` is already the real measured width
+  // by the time anything gets wrapped, not the placeholder `initialTuiState` seeds it with.
   useEffect(() => {
-    dispatch({ type: "transcript-scroll", delta: 0, viewportRows });
-  }, [viewportRows]);
+    dispatch({ type: "viewport-resized", columns: width, viewportRows });
+  }, [width, viewportRows]);
 
   useEffect(() => {
     connectDispatch?.(dispatch);
@@ -264,10 +270,10 @@ export function App({
   useInput((input, key) => {
     if (key.ctrl && input === "c") onCancel?.();
     if (!noPanelOpen) return;
-    if (key.pageUp) dispatch({ type: "transcript-scroll", delta: pageSize, viewportRows });
-    if (key.pageDown) dispatch({ type: "transcript-scroll", delta: -pageSize, viewportRows });
-    if (key.home) dispatch({ type: "transcript-scroll-to", to: "top", viewportRows });
-    if (key.end) dispatch({ type: "transcript-scroll-to", to: "bottom", viewportRows });
+    if (key.pageUp) dispatch({ type: "transcript-scroll", delta: pageSize });
+    if (key.pageDown) dispatch({ type: "transcript-scroll", delta: -pageSize });
+    if (key.home) dispatch({ type: "transcript-scroll-to", to: "top" });
+    if (key.end) dispatch({ type: "transcript-scroll-to", to: "bottom" });
   });
 
   return (

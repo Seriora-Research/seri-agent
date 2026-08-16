@@ -192,6 +192,28 @@ describe("App", () => {
     expect(highestLineShown(instance.lastFrame() ?? "")).toBeGreaterThan(highestBefore);
   });
 
+  // Regression guard (found by review): before `appendLines` (reducer.ts) hard-wrapped at write
+  // time, a single streamed answer with embedded newlines committed as ONE transcript array entry
+  // — `transcript.length` was 1 regardless of how many terminal rows that entry actually needed to
+  // render. `visibleTranscript`'s slice and the scroll clamp both count ARRAY entries, so with
+  // length 1, `max = transcript.length - viewportRows` was always <= 0: PageUp/Home could never
+  // move the offset at all, and whatever the box couldn't fit was silently clipped by
+  // `overflowY="hidden"` with no way to reach it — not just on this test's 25-line answer, but on
+  // any answer longer than the viewport happened to be tall that day.
+  test("a single answer with more lines than the viewport is fully reachable by scrolling, not silently dropped", async () => {
+    const { instance, dispatch } = await connect();
+
+    const answer = Array.from({ length: 25 }, (_, i) => `answer line ${i}`).join("\n");
+    dispatch({ type: "transcript-append", line: answer });
+    await flush();
+
+    instance.stdin.write("\x1b[H"); // Home
+    await flush();
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("answer line 0");
+    expect(frame).toContain("↑ scrolled");
+  });
+
   test("a tool-call loop-event sets the running status, and tool-result clears it", async () => {
     const { instance, dispatch } = await connect();
 
