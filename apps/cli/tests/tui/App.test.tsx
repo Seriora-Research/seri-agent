@@ -16,7 +16,6 @@ import {
   formatSetupRow,
 } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
-import { configRowFixture } from "./configRowFixture";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
@@ -1468,21 +1467,23 @@ describe("App", () => {
   describe("config panel", () => {
     function configRows(): ConfigRow[] {
       return [
-        configRowFixture("SERI_VERIFY_ENABLED", {
+        {
+          key: "SERI_VERIFY_ENABLED",
           masked: "",
           source: "unset",
           removable: false,
           secret: false,
           kind: "boolean",
           on: true,
-        }),
-        configRowFixture("SERI_SOME_OTHER_KEY", {
+        },
+        {
+          key: "SERI_SOME_OTHER_KEY",
           masked: "sk-d...2345",
           source: "config",
           removable: true,
           secret: true,
           kind: "string",
-        }),
+        },
       ];
     }
 
@@ -1565,13 +1566,14 @@ describe("App", () => {
       dispatch({
         type: "config-requested",
         rows: [
-          configRowFixture("SERI_SOME_OTHER_KEY", {
+          {
+            key: "SERI_SOME_OTHER_KEY",
             masked: "sk-d...2345",
             source: "config",
             removable: true,
             secret: true,
             kind: "string",
-          }),
+          },
         ],
       });
       await flush();
@@ -1810,13 +1812,14 @@ describe("App", () => {
       dispatch({
         type: "config-requested",
         rows: [
-          configRowFixture("SERI_VERIFY_COMMAND", {
+          {
+            key: "SERI_VERIFY_COMMAND",
             masked: "bun check",
             source: "config",
             removable: true,
             secret: false,
             kind: "string",
-          }),
+          },
         ],
       });
       await flush();
@@ -1843,13 +1846,14 @@ describe("App", () => {
       dispatch({
         type: "config-requested",
         rows: [
-          configRowFixture("SERI_VERIFY_COMMAND", {
+          {
+            key: "SERI_VERIFY_COMMAND",
             masked: "bun check",
             source: "config",
             removable: true,
             secret: false,
             kind: "string",
-          }),
+          },
         ],
       });
       await flush();

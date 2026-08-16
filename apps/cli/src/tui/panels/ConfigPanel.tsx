@@ -1,7 +1,5 @@
-// Stage A scaffolding (cli-commands-to-tui feature-plan.md): no dispatcher wired to this yet —
-// Stage D wires /config to fire `config-requested`/`config-step`/`config-resolved`. New code, not
-// a move, but structurally identical to panels/SetupPanel.tsx's own family (same step shape, same
-// key bindings), adapted from arbitrary config.json keys/values rather than provider API keys.
+// Structurally identical to panels/SetupPanel.tsx's own family (same step shape, same key
+// bindings), adapted from arbitrary config.json keys/values rather than provider API keys.
 
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
@@ -121,7 +119,9 @@ function ConfigList({
           {formatConfigRow(row)}
         </Text>
       ))}
-      {selectedRow?.description && <Text color={theme.muted}>{selectedRow.description}</Text>}
+      {selectedRow !== undefined && configKeyInfo(selectedRow.key).description && (
+        <Text color={theme.muted}>{configKeyInfo(selectedRow.key).description}</Text>
+      )}
       <Text
         color={theme.muted}
       >{`↑/↓ move · Enter/a ${actionHint} · r/Delete unset · Esc/Ctrl-D close`}</Text>
@@ -137,9 +137,10 @@ function sourceTag(row: ConfigRow): string {
 }
 
 function formatConfigRow(row: ConfigRow): string {
-  if (row.kind === "boolean") return `${row.label}: ${row.on ? "on" : "off"}${sourceTag(row)}`;
-  if (row.source === "unset") return `${row.label}: not set`;
-  return `${row.label}: ${row.masked}${sourceTag(row)}`;
+  const label = configKeyInfo(row.key).label;
+  if (row.kind === "boolean") return `${label}: ${row.on ? "on" : "off"}${sourceTag(row)}`;
+  if (row.source === "unset") return `${label}: not set`;
+  return `${label}: ${row.masked}${sourceTag(row)}`;
 }
 
 function ConfigEnterValue({
