@@ -70,7 +70,7 @@ function ConfigList({
   // Seeded from the reducer's own `selected`, then moved locally — SetupList's own split between
   // "reducer supplies the starting point, the component owns live navigation".
   const [selected, setSelected] = useState(pendingConfig.selected);
-  const { offset, windowSize, onSelectionMove } = useListWindow();
+  const { offset, windowSize, onSelectionMove } = useListWindow(pendingConfig.selected);
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {

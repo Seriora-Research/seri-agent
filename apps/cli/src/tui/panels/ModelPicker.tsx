@@ -35,7 +35,12 @@ export function ModelPicker({
   // it only moves when `selectedIndex` would otherwise land outside it (`onSelectionMove`), not
   // recomputed fresh from `selectedIndex` on every render, which would re-center the window on
   // every keypress instead of sliding it only when actually needed.
-  const { offset: scrollOffset, windowSize, onSelectionMove, reset: resetScroll } = useListWindow();
+  const {
+    offset: scrollOffset,
+    windowSize,
+    onSelectionMove,
+    reset: resetScroll,
+  } = useListWindow(0);
 
   const filtered =
     filterQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, filterQuery));

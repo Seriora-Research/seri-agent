@@ -1794,21 +1794,19 @@ describe("App", () => {
       expect(frame).toContain("Unset SERI_SOME_OTHER_KEY (SERI_SOME_OTHER_KEY)");
     });
 
-    // D7: same regression guard as the permissions panel's own truncation test below.
+    // Same regression guard as the permissions panel's own truncation test below.
     test("a row count past the window budget truncates and shows a +N more footer", async () => {
       const { instance, dispatch } = await connect();
 
       dispatch({
         type: "config-requested",
-        rows: Array.from({ length: 15 }, (_, i) =>
-          configRowFixture(`FAKE_KEY_${i}`, {
-            masked: "",
-            source: "unset",
-            removable: false,
-            secret: false,
-            kind: "string",
-          }),
-        ),
+        rows: Array.from({ length: 15 }, (_, i) => ({
+          key: `FAKE_KEY_${i}`,
+          masked: "",
+          source: "unset" as const,
+          removable: false,
+          kind: "string" as const,
+        })),
       });
       await flush();
 
@@ -1816,6 +1814,28 @@ describe("App", () => {
       expect(frame).toContain("FAKE_KEY_0");
       expect(frame).not.toContain("FAKE_KEY_14");
       expect(frame).toMatch(/\+\d+ more/);
+    });
+
+    // Regression guard: a panel re-mounted with a non-zero seeded `selected` (cli.ts's own
+    // findIndex-computed seed after a save/unset/remove) used to always start its own window at
+    // offset 0, scrolling the acted-on row's own `>` marker off-screen on a list longer than the
+    // window, until the next arrow key. useListWindow now seeds its offset from the initial
+    // selection via the same slideWindow rule an arrow press already uses.
+    test("re-mounting with a non-zero seeded selection keeps that row's own marker in view", async () => {
+      const { instance, dispatch } = await connect();
+
+      const rows = Array.from({ length: 15 }, (_, i) => ({
+        key: `FAKE_KEY_${i}`,
+        masked: "",
+        source: "unset" as const,
+        removable: false,
+        kind: "string" as const,
+      }));
+      dispatch({ type: "config-step", state: { step: "list", rows, selected: 12 } });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("> FAKE_KEY_12");
     });
   });
 

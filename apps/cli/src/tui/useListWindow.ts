@@ -9,7 +9,7 @@ import { useWindowSize } from "ink";
 import { useState } from "react";
 import { listWindowSize, slideWindow } from "./format";
 
-export function useListWindow(): {
+export function useListWindow(initialSelected: number): {
   offset: number;
   windowSize: number;
   // Called by the caller's own up/down-arrow handler with the NEXT selected index, so the window
@@ -22,7 +22,11 @@ export function useListWindow(): {
 } {
   const { rows } = useWindowSize();
   const windowSize = listWindowSize(rows);
-  const [offset, setOffset] = useState(0);
+  // Seeded from `initialSelected` via the same slideWindow rule onSelectionMove uses, not a bare
+  // 0: a panel can mount with a non-zero seeded selection (ConfigPanel/PermissionsPanel/SetupPanel
+  // all re-dispatch their own `selected` after a save/unset/remove), and a hardcoded-0 offset would
+  // scroll that row off-screen until the next arrow key on a list longer than the window.
+  const [offset, setOffset] = useState(() => slideWindow(0, initialSelected, windowSize));
 
   return {
     offset,

@@ -52,7 +52,7 @@ function PermissionsList({
 }) {
   const { rows } = pendingPermissions;
   const [selected, setSelected] = useState(pendingPermissions.selected);
-  const { offset, windowSize, onSelectionMove } = useListWindow();
+  const { offset, windowSize, onSelectionMove } = useListWindow(pendingPermissions.selected);
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {

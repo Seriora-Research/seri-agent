@@ -76,7 +76,7 @@ function SetupList({
   // `selectedIndex` already has, for the identical reason (transient UI data with no reason to
   // round-trip through cli.ts on every arrow key).
   const [selected, setSelected] = useState(pendingSetup.selected);
-  const { offset, windowSize, onSelectionMove } = useListWindow();
+  const { offset, windowSize, onSelectionMove } = useListWindow(pendingSetup.selected);
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {
