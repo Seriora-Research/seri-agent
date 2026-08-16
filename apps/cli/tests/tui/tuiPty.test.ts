@@ -4654,6 +4654,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // above) — this second press finds it empty and falls through to signals.ts's fatal path.
         child.stdin?.write("\x03");
 
+        // Asserted on "settled", not on `signal`/`code` — same reason the "second Ctrl-C" test
+        // above only checks this much: `child` here is the python3 pty allocator, and its own `-c`
+        // script (`pty.spawn(sys.argv[1:])`, startChild's own comment) never forwards the return
+        // value to `sys.exit`, so python3 always exits normally once that call returns, regardless
+        // of how the grandchild actually died. Not independently checkable from outside the dying
+        // process on this pty harness.
         const result = await Promise.race([
           exited,
           new Promise<"the run never settled">((r) =>
@@ -4661,9 +4667,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
           ),
         ]);
         expect(result).not.toBe("the run never settled");
-
-        const { signal } = result as Exit;
-        expect(signal).toBe("SIGINT");
         expect(rawOccurrences("\x1b[?1049l")).toBe(1);
       } finally {
         child.kill("SIGKILL");
