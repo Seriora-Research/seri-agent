@@ -301,11 +301,11 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "transcript-append":
       return pushLine(state, action.line, action.flush ?? true);
     case "transcript-scroll": {
-      const max = Math.max(
-        0,
-        state.totalVisualRows +
-          streamingVisualRows(state.streaming, state.columns) -
-          state.viewportRows,
+      const max = maxScrollOffset(
+        state.totalVisualRows,
+        state.streaming,
+        state.columns,
+        state.viewportRows,
       );
       const next = Math.min(max, Math.max(0, state.transcriptScrollOffset + action.delta));
       return { ...state, transcriptScrollOffset: next };
@@ -315,11 +315,11 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         ...state,
         transcriptScrollOffset:
           action.to === "top"
-            ? Math.max(
-                0,
-                state.totalVisualRows +
-                  streamingVisualRows(state.streaming, state.columns) -
-                  state.viewportRows,
+            ? maxScrollOffset(
+                state.totalVisualRows,
+                state.streaming,
+                state.columns,
+                state.viewportRows,
               )
             : 0,
       };
@@ -333,11 +333,11 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         action.columns === state.columns
           ? state.totalVisualRows
           : transcriptVisualRows(state.transcript, action.columns);
-      const max = Math.max(
-        0,
-        totalVisualRows +
-          streamingVisualRows(state.streaming, action.columns) -
-          action.viewportRows,
+      const max = maxScrollOffset(
+        totalVisualRows,
+        state.streaming,
+        action.columns,
+        action.viewportRows,
       );
       return {
         ...state,
@@ -434,6 +434,19 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
 // below), which fires once per streamed token and cannot afford to re-wrap `streaming` on every one.
 function streamingVisualRows(streaming: string, columns: number): number {
   return streaming.length > 0 ? transcriptVisualRows([streaming], columns) : 0;
+}
+
+// The furthest `transcriptScrollOffset` can go: every visual row that exists, committed plus
+// in-progress, minus the ones already on screen. `viewport-resized` passes the action's own
+// `columns`/`viewportRows` rather than `state`'s, since it is re-clamping against the NEW geometry,
+// not the one currently in state.
+function maxScrollOffset(
+  totalVisualRows: number,
+  streaming: string,
+  columns: number,
+  viewportRows: number,
+): number {
+  return Math.max(0, totalVisualRows + streamingVisualRows(streaming, columns) - viewportRows);
 }
 
 // Commits any pending streamed text as its own transcript line before appending `line`, so a
