@@ -86,6 +86,7 @@ import { deliverSignal, onSignalCancel, onSignalCleanup, raiseSignal } from "./s
 import { withSubagents } from "./subagents/dispatch";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
+import { enterAltScreen, exitAltScreen } from "./tui/altScreen";
 import {
   type CommandDirs,
   checkpointTarget,
@@ -1031,6 +1032,10 @@ async function prepareSession(
       configDir,
     ));
   } catch (err) {
+    // Same reasoning as checkZeroKeysConfigured's own catch: this is terminal for the run, and the
+    // alt screen (entered before this function is ever reached on the TUI path) would otherwise
+    // discard the message on exit rather than leave it readable on the primary screen.
+    exitAltScreen();
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   }
@@ -1076,6 +1081,8 @@ async function prepareSession(
       configDir,
     );
   } catch (err) {
+    // Same reasoning as the loadOrCreateSession catch above.
+    exitAltScreen();
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   }
@@ -1567,6 +1574,10 @@ function checkZeroKeysConfigured(configDir: string): boolean | number {
   try {
     return configuredProviders(configDir).size === 0;
   } catch (err) {
+    // The alt screen is still active here (entered by run()'s own isTTY block, above), and this
+    // message is terminal for the run — nothing re-enters it after this catch returns. Without
+    // this, the message would be written into a buffer about to be discarded on process exit.
+    exitAltScreen();
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   }
@@ -2661,6 +2672,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // than a branch inside the block below, so a corrected zeroKeysConfigured/runGuidedSetup diff
   // never also has to account for this mount.
   if (isTTY) {
+    enterAltScreen();
     await runWelcomeSplash(ctx.configDir, deps);
   }
 
@@ -2711,6 +2723,8 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
           makeApprovalPrompt(deps.createInterface),
           createArchivistState(prepared.session),
         );
+
+  exitAltScreen();
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are

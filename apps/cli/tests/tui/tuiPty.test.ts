@@ -151,6 +151,32 @@ function childScriptRejects(dir: string): string {
   ].join("\n");
 }
 
+// Publishes its own pid: the harness's `child` is the python3 pty allocator, not this bun
+// grandchild, so a test that needs to send SIGTERM to the process actually running the TUI has to
+// read the pid from here rather than signalling `child` itself. Otherwise identical to
+// childScriptInput — a runLoop that never settles, so the TUI is still mounted (and the alt screen
+// still entered) when the signal arrives.
+function childScriptSigterm(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `console.log("\\nPID=" + process.pid);`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // H-3: a runLoop that resolves per call, reporting how many times it has been invoked and how
 // many messages it was handed — the two facts that prove a second, free-form task submission
 // actually re-invoked driveLoop against the LIVE (accumulated) session, rather than the TUI
@@ -1190,6 +1216,11 @@ async function startChild(
   // against an assertion that turn 1 alone already satisfies.
   sawLineTimes: (line: string, count: number) => Promise<void>;
   occurrences: (line: string) => number;
+  // The accumulated capture so far, live — mirrors tuiPtyWindows.test.ts's own `decodedSoFar()`.
+  // Needed by the SIGTERM lifecycle test below, which has to read a value (the child's own pid)
+  // out of the pty capture WHILE the process is still running, not just assert against it once
+  // `exited` resolves.
+  stdoutSoFar: () => string;
 }> {
   const args = ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, scriptPath];
   const child = spawn("python3", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
@@ -1262,7 +1293,7 @@ async function startChild(
     } catch {}
   }
 
-  return { child, exited, sawLine, sawLineTimes, occurrences };
+  return { child, exited, sawLine, sawLineTimes, occurrences, stdoutSoFar: () => stdout };
 }
 
 // Windows has no pty to allocate — same constraint as approvalPromptPty.test.ts. Real execution is
@@ -4415,6 +4446,133 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(occurrences("RUNLOOP_READY")).toBe(1);
       } finally {
         child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
+
+  // D1-D3 (altScreen.ts, signals.ts, cli.ts's own enterAltScreen/exitAltScreen call sites): one
+  // continuous alt-screen session per launch, entered once before the first Ink mount and exited
+  // exactly once on every exit path — never left active, and never torn down twice.
+  describe("alt-screen enter/exit lifecycle", () => {
+    test("/exit: enters the alt screen once and exits it once, after Ink's own teardown", async () => {
+      const scriptPath = join(dir, "child-altscreen-exit.mjs");
+      writeFileSync(scriptPath, childScriptQuit(dir));
+
+      const { child, exited, sawLine, occurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        await sawLine("(done: no-tool-call)");
+
+        child.stdin?.write("/exit");
+        await sawLine("/exit");
+        child.stdin?.write("\r");
+
+        const result = await Promise.race([
+          exited,
+          new Promise<"the run never settled">((r) =>
+            setTimeout(() => r("the run never settled"), 15_000),
+          ),
+        ]);
+        expect(result).not.toBe("the run never settled");
+
+        const { stdout } = result as Exit;
+        expect(occurrences("\x1b[?1049h")).toBe(1);
+        expect(occurrences("\x1b[?1049l")).toBe(1);
+        expect(stdout.lastIndexOf("\x1b[?1049l")).toBeGreaterThan(stdout.indexOf("\x1b[?1049h"));
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // H-4's own scenario (the "second Ctrl-C" test above), re-asserted for the alt screen: the
+    // fatal path runs signals.ts's own `cleanups` (Ink's `instance.unmount()` among them) before
+    // `onSignalCleanupLast`'s `exitAltScreen` — proven here by the exit sequence still landing
+    // exactly once despite the process dying by signal rather than returning from run().
+    test("fatal Ctrl-C: exits the alt screen exactly once when the process dies by signal", async () => {
+      const scriptPath = join(dir, "child-altscreen-fatal-ctrlc.mjs");
+      writeFileSync(scriptPath, childScriptCancel(dir));
+
+      const { child, exited, sawLine, occurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        child.stdin?.write("\x03");
+        await sawLine("RUNLOOP_ABORTED aborted=true");
+        // The first press's cancel slot is now spent (same reasoning as the "second Ctrl-C" test
+        // above) — this second press finds it empty and falls through to signals.ts's fatal path.
+        child.stdin?.write("\x03");
+
+        const result = await Promise.race([
+          exited,
+          new Promise<"the run never settled">((r) =>
+            setTimeout(() => r("the run never settled"), 15_000),
+          ),
+        ]);
+        expect(result).not.toBe("the run never settled");
+
+        const { signal } = result as Exit;
+        expect(signal).toBe("SIGINT");
+        expect(occurrences("\x1b[?1049l")).toBe(1);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("SIGTERM: exits the alt screen exactly once", async () => {
+      const scriptPath = join(dir, "child-altscreen-sigterm.mjs");
+      writeFileSync(scriptPath, childScriptSigterm(dir));
+
+      const { child, exited, sawLine, occurrences, stdoutSoFar } = await startChild(
+        scriptPath,
+        dir,
+      );
+      try {
+        await sawLine("PID=");
+        await sawLine("RUNLOOP_READY");
+        const pidMatch = /PID=(\d+)/.exec(stdoutSoFar());
+        if (pidMatch === null) throw new Error(`no PID= line in ${JSON.stringify(stdoutSoFar())}`);
+        // The pid of the bun process actually running the TUI — not `child.pid`, the python3 pty
+        // allocator's own pid (this function's own header comment). Killed directly, bypassing the
+        // pty entirely, the same way a real `Stop-Process`/systemd stop reaches the process rather
+        // than the terminal it happens to be attached to.
+        process.kill(Number(pidMatch[1]), "SIGTERM");
+
+        const result = await Promise.race([
+          exited,
+          new Promise<"the run never settled">((r) =>
+            setTimeout(() => r("the run never settled"), 15_000),
+          ),
+        ]);
+        expect(result).not.toBe("the run never settled");
+
+        expect(occurrences("\x1b[?1049l")).toBe(1);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // H-2's own scenario ("driveLoop rejecting settles run() instead of hanging forever", above),
+    // re-asserted for the alt screen: run() has no try/catch around `await runTui(...)`, so this
+    // exit relies on the `process.on("exit", exitAltScreen)` backstop (altScreen.ts), not the
+    // explicit call before printUsage — that line is never reached on this path.
+    test("uncaught throw: exits the alt screen exactly once", async () => {
+      const scriptPath = join(dir, "child-altscreen-rejects.mjs");
+      writeFileSync(scriptPath, childScriptRejects(dir));
+
+      const { exited, sawLine, occurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        const result = await Promise.race([
+          exited,
+          new Promise<"the run never settled">((r) =>
+            setTimeout(() => r("the run never settled"), 15_000),
+          ),
+        ]);
+        expect(result).not.toBe("the run never settled");
+
+        expect(occurrences("\x1b[?1049l")).toBe(1);
+      } finally {
+        // Already exited in the success case; harmless if the process is already gone.
       }
     }, 60_000);
   });

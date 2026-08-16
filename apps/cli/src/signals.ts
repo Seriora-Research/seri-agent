@@ -15,6 +15,8 @@
 // surface as an uncaught exception with exit 1 — inverting the very 128 + n semantics this file
 // exists to protect. A cleanup must still not depend on running before or after another, and that
 // half is not enforced: the array is ordered by nothing more meaningful than module import order.
+// One exception: `lastCleanup` (below) always runs after every entry here, because it restores the
+// terminal's primary screen and has to run after Ink's own unmount, not before it.
 const cleanups: Array<() => void> = [];
 
 export function onSignalCleanup(fn: () => void): void {
@@ -32,6 +34,19 @@ export function onSignalCancel(fn: (signal: NodeJS.Signals) => void): () => void
   return () => {
     if (cancel === fn) cancel = undefined;
   };
+}
+
+// Also one slot, same reasoning as `cancel` above, plus a second constraint that reasoning alone
+// doesn't cover: this one has to run AFTER every `cleanups` entry, not merely once. `cleanups` runs
+// in push order with no ordering guarantee (this file's own header comment), which is fine for
+// independent cleanups but not for this one — it restores the terminal's primary screen, so if it
+// ran before Ink's own `instance.unmount()` (a `cleanups` entry), Ink's final frame would land on
+// the just-restored primary screen instead of the alt buffer being torn down, which is the exact
+// scrollback pollution alt-screen mode exists to avoid.
+let lastCleanup: (() => void) | undefined;
+
+export function onSignalCleanupLast(fn: () => void): void {
+  lastCleanup = fn;
 }
 
 // Re-raise instead of exiting with 128 + n. A normal exit reports a status, not a death by
@@ -86,6 +101,12 @@ export function deliverSignal(signal: NodeJS.Signals): void {
     } catch {
       // One cleanup's bug must not cost the others their turn, or the process its re-raise.
     }
+  }
+
+  try {
+    lastCleanup?.();
+  } catch {
+    // Same containment as the loop above — a broken terminal restore must not skip the re-raise.
   }
 
   raiseSignal(signal);
