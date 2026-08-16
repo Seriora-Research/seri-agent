@@ -260,6 +260,65 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
     expect(next.transcriptScrollStreamingRows).toBe(20);
   });
 
+  // Regression: appendLines used to add a flush's FULL added-row count to `transcriptScrollOffset`
+  // even though `transcriptScrollStreamingRows` rows of that streaming text were already folded
+  // into the offset once, by the earlier `transcript-scroll-to`. Streaming another 5 rows after
+  // that snapshot (still un-flushed, so the offset doesn't move again) and then flushing counted
+  // those original 20 rows a second time, overshooting the correct anchor by exactly 20 rows and
+  // landing past the end of the transcript — `visibleTranscript` at that offset returns nothing.
+  test("a flush after more streaming happened since a scroll snapshot advances the offset only by the newly-flushed growth, not the full streamed length again", () => {
+    const streamingLines = Array.from({ length: 20 }, (_, i) => `streamed line ${i}`);
+    let state: TuiState = { ...initialTuiState(session()), viewportRows: 5 };
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: streamingLines.join("\n") },
+    });
+    state = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(state.transcriptScrollOffset).toBe(15);
+    expect(state.transcriptScrollStreamingRows).toBe(20);
+
+    const moreLines = Array.from({ length: 5 }, (_, i) => `streamed line ${20 + i}`);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: `\n${moreLines.join("\n")}` },
+    });
+
+    const next = tuiReducer(state, { type: "transcript-append", line: "(done: no-tool-call)" });
+
+    expect(next.transcriptScrollOffset).toBe(21);
+    const visible = visibleTranscript(
+      next.transcript,
+      5,
+      next.transcriptScrollOffset,
+      next.columns,
+    );
+    expect(visible).toEqual(streamingLines.slice(0, 5));
+  });
+
+  // `flush: false` (echoUserInput echoing a submission a mid-turn gate rejected — see
+  // transcript-append's own case comment) never resolves `state.streaming`: nothing moves out of
+  // it into `rawLines`, so the still-active streaming answer's own snapshot must stay exactly as
+  // the last real scroll action left it, not get reset as if this append had flushed it.
+  test("flush: false leaves transcriptScrollStreamingRows untouched — the streaming answer it snapshot is still in progress", () => {
+    const streamingLines = Array.from({ length: 20 }, (_, i) => `streamed line ${i}`);
+    let state: TuiState = { ...initialTuiState(session()), viewportRows: 5 };
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: streamingLines.join("\n") },
+    });
+    state = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(state.transcriptScrollStreamingRows).toBe(20);
+
+    const next = tuiReducer(state, {
+      type: "transcript-append",
+      line: "> /rewind 1",
+      flush: false,
+    });
+
+    expect(next.transcriptScrollStreamingRows).toBe(20);
+    expect(next.streaming).toBe(streamingLines.join("\n"));
+  });
+
   // Regression guard: `transcript` stores LOGICAL lines, never pre-wrapped output — a multi-line
   // string committed by one `transcript-append` must stay exactly one array entry, not several.
   // Storing the wrapped form instead was tried and reverted: once written, a hard-wrap break is

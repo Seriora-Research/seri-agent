@@ -346,6 +346,13 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         action.columns === state.columns
           ? state.totalVisualRows
           : transcriptVisualRows(state.transcript, action.columns);
+      // Same reasoning as `totalVisualRows` above: streaming's own visual row count can only change
+      // when `columns` itself changes, so a `viewportRows`-only resize reuses the existing snapshot
+      // instead of paying a full re-wrap of the streaming answer.
+      const transcriptScrollStreamingRows =
+        action.columns === state.columns
+          ? state.transcriptScrollStreamingRows
+          : streamingVisualRows(state.streaming, action.columns);
       const max = maxScrollOffset(
         totalVisualRows,
         state.streaming,
@@ -358,7 +365,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         viewportRows: action.viewportRows,
         totalVisualRows,
         transcriptScrollOffset: Math.min(max, state.transcriptScrollOffset),
-        transcriptScrollStreamingRows: streamingVisualRows(state.streaming, action.columns),
+        transcriptScrollStreamingRows,
       };
     }
     case "loop-event":
@@ -472,7 +479,7 @@ function maxScrollOffset(
 function pushLine(state: TuiState, line: string, flush = true): TuiState {
   if (!flush) return appendLines(state, [line]);
   const appended = state.streaming.length > 0 ? [state.streaming, line] : [line];
-  return { ...appendLines(state, appended), streaming: "" };
+  return { ...appendLines(state, appended, state.transcriptScrollStreamingRows), streaming: "" };
 }
 
 // Appends one or more LOGICAL lines, untouched — no wrapping here; see TuiState.transcript's own
@@ -483,17 +490,29 @@ function pushLine(state: TuiState, line: string, flush = true): TuiState {
 // while the viewport is scrolled up (`transcriptScrollOffset > 0`), advances the offset by the same
 // amount so a scrolled-up view stays anchored on the same content as new rows arrive, rather than
 // sliding out from under the reader mid-read by fewer rows than what actually landed underneath it.
-function appendLines(state: TuiState, rawLines: string[]): TuiState {
+//
+// `resolvedStreamingRows` is how many of those `addedRows` were already streaming text that a prior
+// scroll action (transcript-scroll/-to/viewport-resized) had already folded into
+// `transcriptScrollOffset` via `transcriptScrollStreamingRows` (see that field's own comment and
+// App.tsx's matching delta-not-total logic). `pushLine`'s flush path moves `state.streaming` verbatim
+// into `rawLines`, so without subtracting that back out, `addedRows` would double-count rows the
+// offset already accounts for and overshoot past the content the reader was anchored on. The
+// no-flush path never touches `streaming`, so it passes the default 0 — nothing to subtract, and
+// `transcriptScrollStreamingRows` must stay as-is since that still-active streaming hasn't resolved.
+function appendLines(state: TuiState, rawLines: string[], resolvedStreamingRows = 0): TuiState {
   const addedRows = transcriptVisualRows(rawLines, state.columns);
   return {
     ...state,
     transcript: [...state.transcript, ...rawLines],
     totalVisualRows: state.totalVisualRows + addedRows,
     transcriptScrollOffset:
-      state.transcriptScrollOffset > 0 ? state.transcriptScrollOffset + addedRows : 0,
-    // A flush moves `streaming` back to `""` (pushLine, below), so there is no streaming content
-    // left baked into the offset above — the next render's delta compensation starts from 0 again.
-    transcriptScrollStreamingRows: 0,
+      state.transcriptScrollOffset > 0
+        ? state.transcriptScrollOffset + Math.max(0, addedRows - resolvedStreamingRows)
+        : 0,
+    // Only reset once the snapshot has actually been resolved into `rawLines` above (flush path) —
+    // a no-flush append leaves streaming's own still-growing content, and its snapshot, untouched.
+    transcriptScrollStreamingRows:
+      resolvedStreamingRows > 0 ? 0 : state.transcriptScrollStreamingRows,
   };
 }
 
