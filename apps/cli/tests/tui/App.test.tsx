@@ -126,6 +126,42 @@ describe("App", () => {
     expect(frame).toContain("line 299");
   });
 
+  // Regression guard: PageUp/PageDown/Home/End used to fire regardless of which render-ternary
+  // branch was active, mutating transcriptScrollOffset in the background while a modal panel
+  // (here /config) fully occluded the transcript. Closing the panel would then reveal a
+  // transcript scrolled up with no visible keypress of the user's own against it to explain why.
+  test("PageUp while a modal panel is open does not scroll the transcript in the background", async () => {
+    const { instance, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    dispatch({
+      type: "config-requested",
+      rows: [
+        {
+          key: "SERI_VERIFY_ENABLED",
+          masked: "",
+          source: "unset",
+          removable: false,
+          kind: "boolean",
+          on: true,
+        },
+      ],
+    });
+    await flush();
+
+    instance.stdin.write("\x1b[5~"); // Page Up
+    await flush();
+    expect(instance.lastFrame()).not.toContain("↑ scrolled");
+
+    dispatch({ type: "config-resolved" });
+    await flush();
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).not.toContain("↑ scrolled");
+    expect(frame).toContain("line 299");
+  });
+
   test("a tool-call loop-event sets the running status, and tool-result clears it", async () => {
     const { instance, dispatch } = await connect();
 

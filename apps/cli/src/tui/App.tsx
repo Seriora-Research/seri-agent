@@ -228,11 +228,26 @@ export function App({
     onSessionChange?.(state.session);
   }, [state.session, onSessionChange]);
 
+  // True exactly when InputBox is the render ternary's own active branch, below — every other
+  // branch is a modal panel that owns the keyboard and fully occludes the transcript, so
+  // PageUp/PageDown/Home/End must not scroll it in the background while one is open: the user would
+  // close the panel to find the transcript scrolled and the "↑ scrolled" banner showing, with no
+  // visible keypress of theirs against the transcript to explain why.
+  const noPanelOpen =
+    state.pendingApproval === undefined &&
+    state.pendingModelPicker === undefined &&
+    state.pendingSetup === undefined &&
+    state.pendingAuth === undefined &&
+    state.pendingConfig === undefined &&
+    state.pendingPermissions === undefined &&
+    !state.pendingSplash;
+
   // A second, independent useInput from InputBox's own — Ink delivers the same keypress to every
   // registered handler, so this fires regardless of what InputBox does with the same press (today,
   // nothing: InputBox's own handler skips any key.ctrl input).
   useInput((input, key) => {
     if (key.ctrl && input === "c") onCancel?.();
+    if (!noPanelOpen) return;
     if (key.pageUp) dispatch({ type: "transcript-scroll", delta: pageSize, viewportRows });
     if (key.pageDown) dispatch({ type: "transcript-scroll", delta: -pageSize, viewportRows });
     if (key.home) dispatch({ type: "transcript-scroll-to", to: "top", viewportRows });
