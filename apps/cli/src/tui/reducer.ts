@@ -75,13 +75,22 @@ export type TuiState = {
   transcriptScrollOffset: number;
   // The terminal's own current width and the transcript viewport's own current height, in rows —
   // kept on state (not threaded through every `transcript-scroll` action the way `viewportRows`
-  // used to be) so the scroll clamp (`transcriptVisualRows`, format.ts) and a resize both read the
-  // same two numbers from one place instead of re-deriving them at every call site. Seeded from
-  // `DEFAULT_COLUMNS`/a small placeholder here — App.tsx's own resize effect corrects both to the
-  // real measured values before the first real transcript content is ever appended (see that
-  // effect's own comment for why the ordering is guaranteed, not assumed).
+  // used to be) so the scroll clamp and a resize both read the same two numbers from one place
+  // instead of re-deriving them at every call site. Seeded from `DEFAULT_COLUMNS`/a small
+  // placeholder here — App.tsx's own resize effect corrects both to the real measured values
+  // before the first real transcript content is ever appended (see that effect's own comment for
+  // why the ordering is guaranteed, not assumed).
   columns: number;
   viewportRows: number;
+  // `transcriptVisualRows(transcript, columns)` (format.ts), cached rather than recomputed by every
+  // scroll/resize case below (found by review): that function re-wraps the ENTIRE transcript, and
+  // PageUp/PageDown auto-repeat at the OS key-repeat rate, so recomputing it per dispatch meant
+  // holding either key re-wrapped the whole session's history on every repeat tick. Kept correct by
+  // construction, not by re-deriving: `appendLines` advances it by the NEW lines' own row count
+  // (cheap, proportional to what was just added) and `viewport-resized` is the only case that ever
+  // recomputes it from scratch, and only when `columns` actually changed — the one time the cached
+  // value can no longer be trusted, since every existing entry re-wraps to a different row count.
+  totalVisualRows: number;
   // The model's in-progress answer, not yet committed to the transcript — the live region's
   // content in Phase 4, flushed into `transcript` the moment a non-text event needs to report.
   streaming: string;
@@ -170,6 +179,7 @@ export function initialTuiState(
     // Not a real chrome-height estimate, same spirit as App.tsx's own FALLBACK_CHROME_ROWS
     // placeholder — corrected by the first `viewport-resized` dispatch before it can matter.
     viewportRows: 1,
+    totalVisualRows: 0,
     streaming: "",
     status: "",
     modeIndicator: modeIndicator(session.permissionMode),
@@ -291,10 +301,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "transcript-append":
       return pushLine(state, action.line, action.flush ?? true);
     case "transcript-scroll": {
-      const max = Math.max(
-        0,
-        transcriptVisualRows(state.transcript, state.columns) - state.viewportRows,
-      );
+      const max = Math.max(0, state.totalVisualRows - state.viewportRows);
       const next = Math.min(max, Math.max(0, state.transcriptScrollOffset + action.delta));
       return { ...state, transcriptScrollOffset: next };
     }
@@ -302,19 +309,24 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return {
         ...state,
         transcriptScrollOffset:
-          action.to === "top"
-            ? Math.max(0, transcriptVisualRows(state.transcript, state.columns) - state.viewportRows)
-            : 0,
+          action.to === "top" ? Math.max(0, state.totalVisualRows - state.viewportRows) : 0,
       };
     case "viewport-resized": {
-      const max = Math.max(
-        0,
-        transcriptVisualRows(state.transcript, action.columns) - action.viewportRows,
-      );
+      // Only a genuine `columns` change invalidates the cache: every existing entry re-wraps to a
+      // different row count then, and that's the one time re-deriving it from scratch is correct
+      // AND unavoidable — `viewportRows` alone changing (the far more common case, since it tracks
+      // measured box height and can jitter by a row across renders) never changes how many VISUAL
+      // rows the transcript occupies, only how many of them fit on screen at once.
+      const totalVisualRows =
+        action.columns === state.columns
+          ? state.totalVisualRows
+          : transcriptVisualRows(state.transcript, action.columns);
+      const max = Math.max(0, totalVisualRows - action.viewportRows);
       return {
         ...state,
         columns: action.columns,
         viewportRows: action.viewportRows,
+        totalVisualRows,
         transcriptScrollOffset: Math.min(max, state.transcriptScrollOffset),
       };
     }
@@ -408,17 +420,19 @@ function pushLine(state: TuiState, line: string, flush = true): TuiState {
 }
 
 // Appends one or more LOGICAL lines, untouched — no wrapping here; see TuiState.transcript's own
-// comment for why the entries themselves must stay whatever was passed in. If the viewport is
-// scrolled up (`transcriptScrollOffset > 0`), advances the offset by the VISUAL row count the new
-// lines add at the current `columns` — not by `rawLines.length` — so a scrolled-up view stays
-// anchored on the same content as new rows arrive, rather than sliding out from under the reader
-// mid-read by fewer rows than what actually landed underneath it.
+// comment for why the entries themselves must stay whatever was passed in. `addedRows` (the VISUAL
+// row count the new lines add at the current `columns`, not `rawLines.length`) does two things:
+// advances `totalVisualRows` (the cache `transcript-scroll`'s own clamp trusts — see that field's
+// own comment) unconditionally, since it must stay correct regardless of scroll position; and, only
+// while the viewport is scrolled up (`transcriptScrollOffset > 0`), advances the offset by the same
+// amount so a scrolled-up view stays anchored on the same content as new rows arrive, rather than
+// sliding out from under the reader mid-read by fewer rows than what actually landed underneath it.
 function appendLines(state: TuiState, rawLines: string[]): TuiState {
-  const addedRows =
-    state.transcriptScrollOffset > 0 ? transcriptVisualRows(rawLines, state.columns) : 0;
+  const addedRows = transcriptVisualRows(rawLines, state.columns);
   return {
     ...state,
     transcript: [...state.transcript, ...rawLines],
+    totalVisualRows: state.totalVisualRows + addedRows,
     transcriptScrollOffset:
       state.transcriptScrollOffset > 0 ? state.transcriptScrollOffset + addedRows : 0,
   };

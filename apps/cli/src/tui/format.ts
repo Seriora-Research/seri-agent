@@ -75,20 +75,32 @@ export function transcriptVisualRows(lines: string[], columns: number): number {
 // longer than the viewport keeps showing its NEWEST rows by default, the same thing the terminal
 // itself would show if these lines had just scrolled by normally.
 //
-// Walks `lines` from the newest entry backward, wrapping each one and prepending its rows, stopping
-// as soon as `offset + rows` visual rows have accumulated (or the transcript runs out) — bounded by
-// how deep the reader has scrolled, not by total session length, so this stays cheap on every render
-// of a long-running session instead of re-wrapping the whole history every frame.
+// Walks `lines` from the newest entry backward, wrapping each one, stopping as soon as
+// `offset + rows` visual rows have accumulated (or the transcript runs out) — bounded by how deep
+// the reader has scrolled, not by total session length, so this stays cheap on every render of a
+// long-running session (called once per streamed token while a turn is in progress) instead of
+// re-wrapping the whole history every frame.
+//
+// Collected newest-line-first via `push` (O(1) amortized), each line's OWN rows kept in their
+// normal top-to-bottom order — `.reverse()` at the end restores overall chronological order in one
+// O(collected lines) pass. `unshift(...wrapped)` in this same loop (found by review) was O(current
+// tail length) per call, making the accumulation up to O(scroll-depth²): cheap while scrolled near
+// the bottom, but the exact case a reader scrolled deep into a long session (or a fast streamed
+// answer on a tall terminal) would actually hit every render.
 export function visibleTranscript(
   lines: string[],
   rows: number,
   offset: number,
   columns: number,
 ): string[] {
-  const tail: string[] = [];
-  for (let i = lines.length - 1; i >= 0 && tail.length < offset + rows; i--) {
-    tail.unshift(...wrapForTranscript(lines[i], columns));
+  const collected: string[][] = [];
+  let collectedRows = 0;
+  for (let i = lines.length - 1; i >= 0 && collectedRows < offset + rows; i--) {
+    const wrapped = wrapForTranscript(lines[i], columns);
+    collected.push(wrapped);
+    collectedRows += wrapped.length;
   }
+  const tail = collected.reverse().flat();
   const end = Math.max(0, tail.length - offset);
   const start = Math.max(0, end - rows);
   return tail.slice(start, end);

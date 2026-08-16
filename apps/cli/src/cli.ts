@@ -1013,6 +1013,24 @@ function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider | 
   return `routing ${route.model} via ${route.provider} (your key) — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
 }
 
+// The one place a TTY-path failure becomes an exit code, used by every catch between
+// `enterAltScreen()` and `runTui`'s own mount (this function's own catches, and `run()`'s two
+// try/catches around the steps on either side of `prepareSession`): exits the alt screen before
+// printing anything (undiscarded messages need the primary screen restored first — the same
+// reasoning `checkZeroKeysConfigured`'s own catch used to state on its own), then flushes any
+// `preMountMessages` queued so far ahead of the fatal message itself, rather than dropping them —
+// a queued "Session X created." or fallback-catalog warning would otherwise vanish with no trace
+// once the run is already ending here instead of ever reaching runTui's own flush site
+// (connectDispatch). Safe to call with `err` from ANY throw in this window, caught or uncaught:
+// this is also what closes the "stack trace printed into the discarded alt-screen buffer" failure
+// mode for a genuinely uncaught exception, since `run()`'s own top-level catches route here too.
+function fatalDuringTui(err: unknown, preMountMessages: readonly string[] = []): number {
+  exitAltScreen();
+  for (const queued of preMountMessages) console.error(queued);
+  console.error(err instanceof Error ? err.message : String(err));
+  return 1;
+}
+
 async function prepareSession(
   ctx: RunContext,
   deps: CliDeps,
@@ -1034,18 +1052,6 @@ async function prepareSession(
   // Passed as printWarning/printPreApproved's own `sink` param — `undefined` on the non-TTY path
   // keeps their existing default (console.error/console.log) exactly as before.
   const warnSink = isTTY ? emit : undefined;
-  // Terminal-for-the-run bailout, shared by both catches below: exits the alt screen (same
-  // reasoning as checkZeroKeysConfigured's own catch — undiscarded messages need the primary
-  // screen restored first) and flushes `preMountMessages` to the now-visible console before the
-  // fatal message itself, rather than dropping them — a queued "Session X created." or fallback-
-  // catalog warning would otherwise vanish with no trace: this function's only OTHER flush site,
-  // runTui's connectDispatch, is never reached on this path.
-  const bailOut = (message: string): number => {
-    exitAltScreen();
-    for (const queued of preMountMessages) console.error(queued);
-    console.error(message);
-    return 1;
-  };
 
   let session: RunSession;
   let modelRecorded: boolean;
@@ -1058,7 +1064,7 @@ async function prepareSession(
       configDir,
     ));
   } catch (err) {
-    return bailOut(err instanceof Error ? err.message : String(err));
+    return fatalDuringTui(err, preMountMessages);
   }
 
   if (!ctx.resuming) emit(`Session ${session.id} created.`);
@@ -1102,7 +1108,7 @@ async function prepareSession(
       configDir,
     );
   } catch (err) {
-    return bailOut(err instanceof Error ? err.message : String(err));
+    return fatalDuringTui(err, preMountMessages);
   }
   // D2: a rerouted pair is never silent — the piped/non-interactive path gets the notice here,
   // gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent into the transcript
@@ -1597,11 +1603,10 @@ function checkZeroKeysConfigured(configDir: string): boolean | number {
     return configuredProviders(configDir).size === 0;
   } catch (err) {
     // The alt screen is still active here (entered by run()'s own isTTY block, above), and this
-    // message is terminal for the run — nothing re-enters it after this catch returns. Without
-    // this, the message would be written into a buffer about to be discarded on process exit.
-    exitAltScreen();
-    console.error(err instanceof Error ? err.message : String(err));
-    return 1;
+    // message is terminal for the run — nothing re-enters it after this catch returns. No
+    // `preMountMessages` to flush: this runs before `prepareSession` (the only thing that queues
+    // any) is ever called.
+    return fatalDuringTui(err);
   }
 }
 
@@ -2698,29 +2703,38 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // never also has to account for this mount.
   if (isTTY) {
     enterAltScreen();
-    await runWelcomeSplash(ctx.configDir, deps);
-  }
-
-  if (isTTY) {
-    const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
-    if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
-    // getModelCatalog() deliberately NOT awaited here (code-review finding, PR #91): awaiting it
-    // before runGuidedSetup blocked /setup from ever painting until the models.dev fetch settled
-    // (up to FETCH_TIMEOUT_MS) — a blank terminal on exactly the flow this feature exists to make
-    // instant. The fetch still starts immediately; runGuidedSetup's own onSetupClose only consumes
-    // the resolved catalog once it actually needs it, by which point a real user has almost always
-    // already typed a key and closed the panel.
-    //
-    // This IS a fetch running in parallel with a live Ink render — the exact hazard Decision 5
-    // (byok-guided-setup-default-model bugfix report) originally avoided by construction, loading
-    // the catalog fully BEFORE `runGuidedSetup` ever mounted. It is safe here only because Ink
-    // 7.1.1's `render()` defaults `patchConsole: true` (ink/build/render.js) — `getModelCatalog`'s
-    // own `printWarning` (a `console.error` call, provider/catalog.ts) gets routed above the live
-    // frame instead of corrupting it, on every offline first run. A future Ink upgrade or an
-    // explicit `patchConsole: false` on this `render()` call (there is none today — `runGuidedSetup`
-    // only passes `exitOnCtrlC`/`interactive`) would silently reintroduce that hazard.
-    if (zeroKeysConfigured) {
-      await runGuidedSetup(ctx.configDir, getModelCatalog());
+    // Wrapped, unlike the rest of this function's own `return N` early exits: `run()` has never
+    // had a top-level `.catch` (its only caller, `import.meta.main`, does
+    // `run(...).then((code) => process.exit(code))`), and neither Bun nor this file installs an
+    // `uncaughtException`/`unhandledRejection` handler — a real throw here (found by review) would
+    // print its own stack trace INTO the still-active alt-screen buffer, which `process.on("exit",
+    // exitAltScreen)` then silently discards on the way out, leaving the user with a dead process
+    // and zero visible diagnostics. `fatalDuringTui` (prepareSession's own bailout, shared here) is
+    // what every other terminal-for-the-run failure in this window already routes through.
+    try {
+      await runWelcomeSplash(ctx.configDir, deps);
+      const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
+      if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
+      // getModelCatalog() deliberately NOT awaited here (code-review finding, PR #91): awaiting it
+      // before runGuidedSetup blocked /setup from ever painting until the models.dev fetch settled
+      // (up to FETCH_TIMEOUT_MS) — a blank terminal on exactly the flow this feature exists to make
+      // instant. The fetch still starts immediately; runGuidedSetup's own onSetupClose only consumes
+      // the resolved catalog once it actually needs it, by which point a real user has almost always
+      // already typed a key and closed the panel.
+      //
+      // This IS a fetch running in parallel with a live Ink render — the exact hazard Decision 5
+      // (byok-guided-setup-default-model bugfix report) originally avoided by construction, loading
+      // the catalog fully BEFORE `runGuidedSetup` ever mounted. It is safe here only because Ink
+      // 7.1.1's `render()` defaults `patchConsole: true` (ink/build/render.js) — `getModelCatalog`'s
+      // own `printWarning` (a `console.error` call, provider/catalog.ts) gets routed above the live
+      // frame instead of corrupting it, on every offline first run. A future Ink upgrade or an
+      // explicit `patchConsole: false` on this `render()` call (there is none today — `runGuidedSetup`
+      // only passes `exitOnCtrlC`/`interactive`) would silently reintroduce that hazard.
+      if (zeroKeysConfigured) {
+        await runGuidedSetup(ctx.configDir, getModelCatalog());
+      }
+    } catch (err) {
+      return fatalDuringTui(err);
     }
   }
 
@@ -2734,20 +2748,35 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // gate above only rejects `runStart(ctx) === "idle"`, not "resume"), and closing it needs its
   // own reproduction and test coverage rather than reusing the TUI-mount fix's evidence for a
   // different call site. Tracked as a known gap, not an oversight.
+  let runResult: DriveLoopResult;
+  if (isTTY) {
+    // Same reasoning as the try/catch above this function's own welcome-splash/guided-setup block:
+    // a throw out of runTui (a reducer bug, a rendering error, anything Ink itself doesn't already
+    // catch) would otherwise reach `import.meta.main`'s bare `.then`, print its stack into the
+    // still-active alt screen, and lose it the instant `process.on("exit")` restores the primary
+    // one. `prepared.preMountMessages` is flushed here too, for the same reason `prepareSession`'s
+    // own catches flush it: this IS the only other path that can end the run before runTui's own
+    // `connectDispatch` ever gets a chance to.
+    try {
+      runResult = await runTui(prepared, ctx, deps, maxTurns, skipPermissions);
+    } catch (err) {
+      return fatalDuringTui(err, prepared.preMountMessages);
+    }
+  } else {
+    runResult = await driveLoop(
+      prepared,
+      ctx,
+      deps,
+      maxTurns,
+      printEvent,
+      () => prepared.permissionMode,
+      (session) => saveSession(session, ctx.sessionsDir),
+      makeApprovalPrompt(deps.createInterface),
+      createArchivistState(prepared.session),
+    );
+  }
   const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning, archivist, ranAnyTurn } =
-    isTTY
-      ? await runTui(prepared, ctx, deps, maxTurns, skipPermissions)
-      : await driveLoop(
-          prepared,
-          ctx,
-          deps,
-          maxTurns,
-          printEvent,
-          () => prepared.permissionMode,
-          (session) => saveSession(session, ctx.sessionsDir),
-          makeApprovalPrompt(deps.createInterface),
-          createArchivistState(prepared.session),
-        );
+    runResult;
 
   exitAltScreen();
 

@@ -23,9 +23,16 @@ export function enterAltScreen(): void {
 
 export function exitAltScreen(): void {
   if (!entered) return;
-  entered = false;
   try {
     process.stdout.write("\x1b[?1049l");
     process.stdout.write("\x1b[?25h");
+    // Only after BOTH writes succeed (found by review): flipping this first meant that if the
+    // buffer-restore write succeeded but the cursor-show write then threw (stdout closing between
+    // the two, a killed/detached terminal), the error was swallowed by the bare `catch` below with
+    // `entered` already false — no later call from any of the exit paths listed above could ever
+    // retry, leaving the terminal on the primary buffer with the cursor permanently hidden for the
+    // rest of the shell session. Left `true` on a thrown write, the next exit path's own call is a
+    // real retry instead of the no-op `if (!entered) return` above would otherwise make it.
+    entered = false;
   } catch {}
 }
