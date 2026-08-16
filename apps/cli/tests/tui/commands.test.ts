@@ -726,6 +726,18 @@ describe("decideConfigOpen", () => {
     }
   });
 
+  // Regression guard (found by review): ConfigPanel's `selectedDescription` (panels/
+  // ConfigPanel.tsx) renders this in a SINGLE row — PANEL_CHROME_ROWS (format.ts) budgets the
+  // panel's whole layout on that assumption, with no wrap allowance. At an 80-column terminal (the
+  // repo's own DEFAULT_COLUMNS fallback), the bordered panel's interior is ~78 columns, so a
+  // description at or past that wraps to 2 rows and pushes the panel 1 row past its budget — this
+  // is exactly what SERI_VERIFY_COMMAND's own description did (81 chars) before being shortened.
+  test("no known config key's description is long enough to wrap ConfigPanel's single-row budget", () => {
+    for (const key of KNOWN_CONFIG_KEYS) {
+      expect(configKeyInfo(key).description.length).toBeLessThanOrEqual(78);
+    }
+  });
+
   test("an unknown key falls back to label === key, description === '', kind === 'string'", () => {
     setConfigValue("SERI_SOME_OTHER_KEY", "value", configConfigDir);
     const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_SOME_OTHER_KEY");
