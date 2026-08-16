@@ -1,13 +1,14 @@
 // Mirrors guidedSetup.ts's own mount structure (throwaway session, liveState/dispatch synchronous
 // mirror, render()/instance.unmount(), onSignalCleanup) for a single, separate, earlier Ink mount:
 // the welcome splash that shows ahead of both the zero-key guided-setup gate and the normal TUI on
-// every interactive launch (run()'s own call site). Unlike guidedSetup.ts, this file does import
-// from cli.ts (createAuthHandlers, CliDeps) — the same device-flow auth wiring runTui reuses,
-// rather than a second implementation of it.
+// every interactive launch (run()'s own call site). Unlike guidedSetup.ts, this file does reuse
+// createAuthHandlers (./handlers) — the same device-flow auth wiring runTui reuses, rather than a
+// second implementation of it.
 import { randomUUID } from "node:crypto";
-import { type CliDeps, createAuthHandlers } from "../cli";
+import type { CliDeps } from "../cli";
 import { deliverSignal, onSignalCleanup } from "../signals";
 import { decideAuthOffer } from "./commands";
+import { createAuthHandlers } from "./handlers";
 import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./reducer";
 
 export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promise<void> {
