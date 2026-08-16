@@ -12,7 +12,55 @@ import type { ModelPickerEntry, SetupProviderRow } from "./commands";
 // truncateArgsDisplay already applies to a single long line. `selectedIndex` can move past this
 // many rows (arrow-key navigation over the full filtered list, not just what's on screen) — see
 // `scrollOffset` (panels/ModelPicker.tsx) for how the visible window slides to keep it in view.
+// Also `LIST_WINDOW_MAX` (below) — the hard cap every OTHER list panel's own `listWindowSize`
+// clamps to, so none of them can render a taller window than the picker itself ever has.
 export const MODEL_PICKER_WINDOW = 10;
+
+// Shared by every list panel (ModelPicker, ConfigPanel, PermissionsPanel, SetupPanel) via
+// useListWindow.ts. `LIST_WINDOW_MAX` is `MODEL_PICKER_WINDOW` itself, not a separately chosen
+// number — under ink-testing-library, `Stdout` exposes `columns` but no `rows`, so a rows-derived
+// window would fall through to the host terminal's own real size and make App.test.tsx's own
+// row-count assertions machine-dependent; capping at the picker's own existing constant keeps
+// every panel's window deterministic under that stub the same way the picker's already is.
+// `MIN_LIST_WINDOW` is a floor for a short terminal, not a value any of today's real panels reach
+// (SetupPanel's own 5 providers already fits under it) — enough rows that a floor-clamped panel
+// still shows more than one entry at a time. `PANEL_CHROME_ROWS` is how much of a panel's own
+// height is spent on its border, header/filter line, and "+N more" footer rather than list rows —
+// measured against ConfigPanel/PermissionsPanel/SetupPanel's own JSX, the tallest of which
+// (SetupPanel, list step) renders a border, a title line, and the footer around its rows.
+export const MIN_LIST_WINDOW = 3;
+export const LIST_WINDOW_MAX = MODEL_PICKER_WINDOW;
+export const PANEL_CHROME_ROWS = 8;
+
+// The transcript viewport's placeholder height for the one frame before useBoxMetrics has ever
+// measured the live region below it (App.tsx) — not the real budget, just enough that the first
+// frame renders a plausible slice of the transcript instead of an empty one.
+export const FALLBACK_CHROME_ROWS = 6;
+
+// The visible slice of a committed transcript for a viewport `rows` tall, `offset` lines up from
+// the newest (0 = following the latest line). Tail-anchored, not head-anchored: a transcript
+// longer than the viewport keeps showing its NEWEST lines by default, the same thing the terminal
+// itself would show if these lines had just scrolled by normally.
+export function visibleTranscript(lines: string[], rows: number, offset: number): string[] {
+  const end = Math.max(0, lines.length - offset);
+  const start = Math.max(0, end - rows);
+  return lines.slice(start, end);
+}
+
+// The "clamp, don't re-center" rule lifted verbatim out of ModelPicker's own `moveSelection`
+// (panels/ModelPicker.tsx) — factored out so useListWindow.ts can share it across every list panel
+// instead of each reimplementing the picker's own sliding-window arithmetic.
+export function slideWindow(offset: number, selected: number, windowSize: number): number {
+  if (selected < offset) return selected;
+  if (selected >= offset + windowSize) return selected - windowSize + 1;
+  return offset;
+}
+
+// How many rows a list panel's own window can show for a terminal `rows` tall — clamped between
+// `MIN_LIST_WINDOW` and `LIST_WINDOW_MAX`, never derived past either even on a very tall terminal.
+export function listWindowSize(rows: number): number {
+  return Math.min(LIST_WINDOW_MAX, Math.max(MIN_LIST_WINDOW, rows - PANEL_CHROME_ROWS));
+}
 
 // Column widths for formatModelRow/MODEL_PICKER_HEADER below — plain padded strings, not a table
 // component: this repo hand-rolls its TUI deliberately (App.tsx's own file-level comment) and Ink

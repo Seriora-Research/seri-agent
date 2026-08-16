@@ -14,6 +14,9 @@ import {
   formatModelRow,
   formatRouteLabel,
   formatSetupRow,
+  listWindowSize,
+  slideWindow,
+  visibleTranscript,
 } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
 
@@ -1099,6 +1102,60 @@ describe("App", () => {
       expect(formatModeLabel("[approve-each]", undefined, 100)).toBe("[approve-each]");
       expect(formatModeLabel("[approve-each]", undefined, 60)).toBe("[approve-each]");
       expect(formatModeLabel("[approve-each]", undefined, 10)).toBe("[approve-each]");
+    });
+  });
+
+  describe("visibleTranscript", () => {
+    test("a transcript shorter than the viewport is shown in full", () => {
+      expect(visibleTranscript(["a", "b", "c"], 5, 0)).toEqual(["a", "b", "c"]);
+    });
+
+    // D4: tail-anchored, not head-anchored — a transcript longer than the viewport shows its
+    // NEWEST lines by default, matching what scrolled-by terminal output would already show.
+    test("a transcript longer than the viewport shows the newest lines, not the oldest", () => {
+      expect(visibleTranscript(["a", "b", "c", "d", "e"], 3, 0)).toEqual(["c", "d", "e"]);
+    });
+
+    test("a positive offset slides the window toward older lines", () => {
+      expect(visibleTranscript(["a", "b", "c", "d", "e"], 3, 1)).toEqual(["b", "c", "d"]);
+    });
+
+    test("an offset large enough to reach the start still returns at most `rows` lines", () => {
+      expect(visibleTranscript(["a", "b", "c"], 5, 10)).toEqual([]);
+    });
+  });
+
+  describe("slideWindow", () => {
+    // The exact "clamp, don't re-center" cases ModelPicker's own moveSelection relies on.
+    test("selection still inside the window: offset does not move", () => {
+      expect(slideWindow(0, 5, 10)).toBe(0);
+    });
+
+    test("selection above the window: offset jumps up to the selection", () => {
+      expect(slideWindow(5, 2, 10)).toBe(2);
+    });
+
+    test("selection past the bottom of the window: offset slides just far enough to include it", () => {
+      expect(slideWindow(0, 10, 10)).toBe(1);
+    });
+  });
+
+  describe("listWindowSize", () => {
+    // ink-testing-library's own `getWindowSize` fallback (App.test.tsx's own convention elsewhere
+    // in this file) floors rows at 24 — 24 - PANEL_CHROME_ROWS(8) = 16, clamped down to
+    // LIST_WINDOW_MAX(10). This is the D7 regression guard's own underlying fact: ModelPicker's
+    // window stays 10 under the test harness regardless of the host terminal's real size.
+    test("a tall terminal clamps to LIST_WINDOW_MAX (10)", () => {
+      expect(listWindowSize(24)).toBe(10);
+    });
+
+    test("a short terminal clamps to MIN_LIST_WINDOW (3), never fewer", () => {
+      expect(listWindowSize(5)).toBe(3);
+    });
+
+    test("a terminal in between returns rows minus the panel chrome budget", () => {
+      expect(listWindowSize(18)).toBe(10);
+      expect(listWindowSize(15)).toBe(7);
     });
   });
 

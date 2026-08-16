@@ -59,8 +59,14 @@ export type PermissionsPanelState =
 
 export type TuiState = {
   session: SessionState<ModelMessage>;
-  // Append-only committed lines — the <Static> transcript's source in Phase 4.
+  // Append-only committed lines, rendered by App.tsx as a scrollable viewport (visibleTranscript,
+  // format.ts) rather than printed once and never revisited.
   transcript: string[];
+  // Lines from the BOTTOM of the transcript the viewport is scrolled up by. 0 = following the
+  // latest line (the default, and the state End returns to). Incremented by pushLine while > 0 so
+  // a scrolled-up view stays anchored on the same content as new lines arrive, rather than sliding
+  // out from under the reader mid-read.
+  transcriptScrollOffset: number;
   // The model's in-progress answer, not yet committed to the transcript — the live region's
   // content in Phase 4, flushed into `transcript` the moment a non-text event needs to report.
   streaming: string;
@@ -144,6 +150,7 @@ export function initialTuiState(
   return {
     session,
     transcript: [],
+    transcriptScrollOffset: 0,
     streaming: "",
     status: "",
     modeIndicator: modeIndicator(session.permissionMode),
@@ -167,6 +174,11 @@ export type TuiAction =
   // echo that must not fragment an in-progress streamed answer into two transcript entries (see
   // pushLine's own comment).
   | { type: "transcript-append"; line: string; flush?: boolean }
+  // Scrolls the transcript viewport. Positive `delta` moves toward older lines. The reducer clamps
+  // to `[0, transcript.length - 1]` and does not know the viewport height — App.tsx computes
+  // `delta` from the measured viewport before dispatching (pageSize's own comment there).
+  | { type: "transcript-scroll"; delta: number }
+  | { type: "transcript-scroll-to"; to: "top" | "bottom" }
   | { type: "loop-event"; event: LoopEvent }
   | { type: "command-error"; message: string }
   | { type: "command-error-cleared" }
@@ -249,6 +261,17 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     // typed mid-stream reordered the transcript against the model's own still-in-progress answer.
     case "transcript-append":
       return pushLine(state, action.line, action.flush ?? true);
+    case "transcript-scroll": {
+      const max = Math.max(0, state.transcript.length - 1);
+      const next = Math.min(max, Math.max(0, state.transcriptScrollOffset + action.delta));
+      return { ...state, transcriptScrollOffset: next };
+    }
+    case "transcript-scroll-to":
+      return {
+        ...state,
+        transcriptScrollOffset:
+          action.to === "top" ? Math.max(0, state.transcript.length - 1) : 0,
+      };
     case "loop-event":
       return applyLoopEvent(state, action.event);
     case "command-error":
@@ -333,10 +356,22 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
 // later, whole, by whatever event finishes the turn) and not cleared either (clearing it would
 // silently drop the model's in-progress text instead of just deferring its commit).
 function pushLine(state: TuiState, line: string, flush = true): TuiState {
-  if (!flush) return { ...state, transcript: [...state.transcript, line] };
-  const transcript =
-    state.streaming.length > 0 ? [...state.transcript, state.streaming] : state.transcript;
-  return { ...state, transcript: [...transcript, line], streaming: "" };
+  if (!flush) return appendLines(state, [line]);
+  const appended = state.streaming.length > 0 ? [state.streaming, line] : [line];
+  return { ...appendLines(state, appended), streaming: "" };
+}
+
+// Appends one or more lines and, if the viewport is scrolled up (`transcriptScrollOffset > 0`),
+// advances the offset by the same count so the view stays anchored on the same content rather than
+// sliding out from under the reader as new lines land underneath it. A flushed stream (pushLine,
+// above) can append two lines in one call, so this increments by `lines.length`, not by 1.
+function appendLines(state: TuiState, lines: string[]): TuiState {
+  return {
+    ...state,
+    transcript: [...state.transcript, ...lines],
+    transcriptScrollOffset:
+      state.transcriptScrollOffset > 0 ? state.transcriptScrollOffset + lines.length : 0,
+  };
 }
 
 function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {

@@ -115,6 +115,80 @@ describe("tuiReducer: transcript-append", () => {
   });
 });
 
+describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
+  function transcriptOf(lines: string[]) {
+    let state = initialTuiState(session());
+    for (const line of lines) state = tuiReducer(state, { type: "transcript-append", line });
+    return state;
+  }
+
+  test("a positive delta (toward older lines) increases the offset", () => {
+    const state = transcriptOf(["a", "b", "c", "d", "e"]);
+    const next = tuiReducer(state, { type: "transcript-scroll", delta: 2 });
+    expect(next.transcriptScrollOffset).toBe(2);
+  });
+
+  test("clamps at 0 — a negative delta cannot scroll past the newest line", () => {
+    const state = transcriptOf(["a", "b", "c"]);
+    const next = tuiReducer(state, { type: "transcript-scroll", delta: -5 });
+    expect(next.transcriptScrollOffset).toBe(0);
+  });
+
+  test("clamps at transcript.length - 1 — a large delta cannot scroll past the oldest line", () => {
+    const state = transcriptOf(["a", "b", "c"]);
+    const next = tuiReducer(state, { type: "transcript-scroll", delta: 100 });
+    expect(next.transcriptScrollOffset).toBe(2);
+  });
+
+  test("transcript-scroll-to top jumps to the oldest line", () => {
+    const state = transcriptOf(["a", "b", "c", "d"]);
+    const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(next.transcriptScrollOffset).toBe(3);
+  });
+
+  test("transcript-scroll-to bottom resumes following the newest line", () => {
+    const scrolled = tuiReducer(transcriptOf(["a", "b", "c"]), {
+      type: "transcript-scroll",
+      delta: 2,
+    });
+    const next = tuiReducer(scrolled, { type: "transcript-scroll-to", to: "bottom" });
+    expect(next.transcriptScrollOffset).toBe(0);
+  });
+
+  // D5's own anchoring rule (reducer.ts's own comment on `appendLines`): a scrolled-up view must
+  // not slide out from under the reader as new lines land underneath it. `pushLine` can append TWO
+  // lines in one call (a flushed streaming answer plus the new line, as here) — the offset has to
+  // advance by however many lines actually landed, not by a hardcoded 1, or a flush-heavy sequence
+  // of turns would silently drift the anchored view.
+  test("a scrolled-up view (offset > 0) advances by the number of lines a flush actually appends", () => {
+    let state = transcriptOf(["a", "b", "c", "d", "e"]);
+    state = tuiReducer(state, { type: "transcript-scroll", delta: 3 });
+    expect(state.transcriptScrollOffset).toBe(3);
+
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "the model's in-progress answer" },
+    });
+    // flush: true (the default) — pushLine commits `streaming` AND `line`, two lines in one call.
+    const next = tuiReducer(state, { type: "transcript-append", line: "f" });
+
+    expect(next.transcript).toEqual(["a", "b", "c", "d", "e", "the model's in-progress answer", "f"]);
+    expect(next.transcriptScrollOffset).toBe(5);
+  });
+
+  test("a view already following the newest line (offset === 0) stays at 0 regardless of how many lines a flush appends", () => {
+    let state = transcriptOf(["a", "b", "c"]);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "streaming…" },
+    });
+    const next = tuiReducer(state, { type: "transcript-append", line: "d" });
+
+    expect(next.transcript).toEqual(["a", "b", "c", "streaming…", "d"]);
+    expect(next.transcriptScrollOffset).toBe(0);
+  });
+});
+
 describe("tuiReducer: loop-event", () => {
   function apply(state = initialTuiState(session()), event: LoopEvent) {
     return tuiReducer(state, { type: "loop-event", event });
