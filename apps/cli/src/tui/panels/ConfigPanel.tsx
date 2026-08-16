@@ -6,6 +6,7 @@ import { useState } from "react";
 import { type ConfigRow, configKeyInfo } from "../commands";
 import type { ConfigPanelState } from "../reducer";
 import { theme } from "../theme";
+import { useListWindow } from "../useListWindow";
 
 // /config's own live state (tui/reducer.ts's pendingConfig) — mirrors SetupPanel's
 // step-dispatcher exactly: one branch per step, since each has genuinely different input
@@ -69,6 +70,7 @@ function ConfigList({
   // Seeded from the reducer's own `selected`, then moved locally — SetupList's own split between
   // "reducer supplies the starting point, the component owns live navigation".
   const [selected, setSelected] = useState(pendingConfig.selected);
+  const { offset, windowSize, onSelectionMove } = useListWindow();
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {
@@ -76,11 +78,19 @@ function ConfigList({
       return;
     }
     if (key.upArrow) {
-      setSelected((current) => Math.max(0, current - 1));
+      setSelected((current) => {
+        const next = Math.max(0, current - 1);
+        onSelectionMove(next);
+        return next;
+      });
       return;
     }
     if (key.downArrow) {
-      setSelected((current) => Math.min(rows.length - 1, current + 1));
+      setSelected((current) => {
+        const next = Math.min(rows.length - 1, current + 1);
+        onSelectionMove(next);
+        return next;
+      });
       return;
     }
     const row = rows[selected];
@@ -111,16 +121,22 @@ function ConfigList({
   const actionHint = selectedRow?.kind === "boolean" ? "toggle" : "set";
   const selectedDescription =
     selectedRow === undefined ? undefined : configKeyInfo(selectedRow.key).description;
+  const visible = rows.slice(offset, offset + windowSize);
+  const remaining = rows.length - visible.length;
 
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
       <Text color={theme.muted}>/config — settings</Text>
-      {rows.map((row, index) => (
-        <Text key={row.key} color={index === selected ? theme.accent : undefined}>
-          {index === selected ? "> " : "  "}
-          {formatConfigRow(row)}
-        </Text>
-      ))}
+      {visible.map((row, localIndex) => {
+        const index = offset + localIndex;
+        return (
+          <Text key={row.key} color={index === selected ? theme.accent : undefined}>
+            {index === selected ? "> " : "  "}
+            {formatConfigRow(row)}
+          </Text>
+        );
+      })}
+      {remaining > 0 && <Text color={theme.muted}>+{remaining} more</Text>}
       {selectedDescription && <Text color={theme.muted}>{selectedDescription}</Text>}
       <Text
         color={theme.muted}

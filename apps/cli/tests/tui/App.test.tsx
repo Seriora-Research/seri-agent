@@ -1793,6 +1793,30 @@ describe("App", () => {
       const frame = instance.lastFrame() ?? "";
       expect(frame).toContain("Unset SERI_SOME_OTHER_KEY (SERI_SOME_OTHER_KEY)");
     });
+
+    // D7: same regression guard as the permissions panel's own truncation test below.
+    test("a row count past the window budget truncates and shows a +N more footer", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "config-requested",
+        rows: Array.from({ length: 15 }, (_, i) =>
+          configRowFixture(`FAKE_KEY_${i}`, {
+            masked: "",
+            source: "unset",
+            removable: false,
+            secret: false,
+            kind: "string",
+          }),
+        ),
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("FAKE_KEY_0");
+      expect(frame).not.toContain("FAKE_KEY_14");
+      expect(frame).toMatch(/\+\d+ more/);
+    });
   });
 
   describe("permissions panel", () => {
@@ -1857,6 +1881,28 @@ describe("App", () => {
       await flush();
 
       expect(removed).toEqual(["write_file"]);
+    });
+
+    // D7: useListWindow's own window budget (listWindowSize) — 15 rows, more than any real
+    // terminal's clamped window under ink-testing-library (LIST_WINDOW_MAX, format.ts's own
+    // comment), so this must truncate and show the footer.
+    test("a row count past the window budget truncates and shows a +N more footer", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "permissions-requested",
+        rows: Array.from({ length: 15 }, (_, i) => ({
+          tool: `tool_${i}`,
+          source: "persisted" as const,
+          removable: true,
+        })),
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("tool_0");
+      expect(frame).not.toContain("tool_14");
+      expect(frame).toMatch(/\+\d+ more/);
     });
   });
 

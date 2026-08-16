@@ -5,8 +5,9 @@ import type { ModelProvider } from "@seri/model-catalog";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import type { ModelPickerEntry } from "../commands";
-import { formatModelRow, MODEL_PICKER_HEADER, MODEL_PICKER_WINDOW, matchesFilter } from "../format";
+import { formatModelRow, MODEL_PICKER_HEADER, matchesFilter } from "../format";
 import { theme } from "../theme";
+import { useListWindow } from "../useListWindow";
 
 // /model's own live state (tui/reducer.ts's pendingModelPicker) — mirrors ApprovalBox's shape
 // exactly: its own useInput, a round-bordered box, mutually exclusive with InputBox. `filterQuery`
@@ -27,31 +28,22 @@ export function ModelPicker({
 }) {
   const [filterQuery, setFilterQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  // C1 fix: the window rendered used to always be `filtered.slice(0, MODEL_PICKER_WINDOW)` —
-  // the first N entries, regardless of `selectedIndex` — so Down past the visible window moved
-  // the highlight somewhere nothing on screen showed, and with 279 catalog entries most of the
-  // list was unreachable. `scrollOffset` is the top of the currently-rendered window; it only
-  // moves when `selectedIndex` would otherwise land outside `[scrollOffset, scrollOffset +
-  // MODEL_PICKER_WINDOW)` (moveSelection, below) — not recomputed fresh from `selectedIndex` on
-  // every render, which would re-center the window on every keypress instead of sliding it only
-  // when actually needed.
-  const [scrollOffset, setScrollOffset] = useState(0);
+  // C1 fix: the window rendered used to always be `filtered.slice(0, windowSize)` — the first N
+  // entries, regardless of `selectedIndex` — so Down past the visible window moved the highlight
+  // somewhere nothing on screen showed, and with 279 catalog entries most of the list was
+  // unreachable. `scrollOffset` is the top of the currently-rendered window, from useListWindow —
+  // it only moves when `selectedIndex` would otherwise land outside it (`onSelectionMove`), not
+  // recomputed fresh from `selectedIndex` on every render, which would re-center the window on
+  // every keypress instead of sliding it only when actually needed.
+  const { offset: scrollOffset, windowSize, onSelectionMove, reset: resetScroll } = useListWindow();
 
   const filtered =
     filterQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, filterQuery));
 
-  // Moves the selection to `next` (already clamped to `[0, filtered.length - 1]` by the caller)
-  // and slides `scrollOffset` only far enough to keep it inside the visible window — the classic
-  // "clamp, don't re-center" rule a sliding window needs so scrolling up from the bottom of a long
-  // list doesn't snap back to the top the instant the highlight re-enters the window it was
-  // already inside.
+  // Moves the selection to `next` (already clamped to `[0, filtered.length - 1]` by the caller).
   function moveSelection(next: number): void {
     setSelectedIndex(next);
-    setScrollOffset((offset) => {
-      if (next < offset) return next;
-      if (next >= offset + MODEL_PICKER_WINDOW) return next - MODEL_PICKER_WINDOW + 1;
-      return offset;
-    });
+    onSelectionMove(next);
   }
 
   useInput((input, key) => {
@@ -80,7 +72,7 @@ export function ModelPicker({
     if (key.backspace || key.delete) {
       setFilterQuery((query) => query.slice(0, -1));
       setSelectedIndex(0);
-      setScrollOffset(0);
+      resetScroll();
       return;
     }
     if (input.length === 0) return;
@@ -98,7 +90,7 @@ export function ModelPicker({
     if (terminatorIndex === -1) {
       setFilterQuery(nextQuery);
       setSelectedIndex(0);
-      setScrollOffset(0);
+      resetScroll();
       return;
     }
     // Code-review finding: this used to stop at `typed` and silently discard everything after the
@@ -116,7 +108,7 @@ export function ModelPicker({
     }
   });
 
-  const visible = filtered.slice(scrollOffset, scrollOffset + MODEL_PICKER_WINDOW);
+  const visible = filtered.slice(scrollOffset, scrollOffset + windowSize);
   const remaining = filtered.length - visible.length;
 
   return (

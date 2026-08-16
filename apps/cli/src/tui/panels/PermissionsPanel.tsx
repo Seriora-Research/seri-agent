@@ -8,6 +8,7 @@ import { useState } from "react";
 import type { PermissionRow } from "../commands";
 import type { PermissionsPanelState } from "../reducer";
 import { theme } from "../theme";
+import { useListWindow } from "../useListWindow";
 
 // /permissions' own live state (tui/reducer.ts's pendingPermissions) — mirrors SetupPanel's
 // step-dispatcher shape with one fewer step.
@@ -51,6 +52,7 @@ function PermissionsList({
 }) {
   const { rows } = pendingPermissions;
   const [selected, setSelected] = useState(pendingPermissions.selected);
+  const { offset, windowSize, onSelectionMove } = useListWindow();
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {
@@ -58,11 +60,19 @@ function PermissionsList({
       return;
     }
     if (key.upArrow) {
-      setSelected((current) => Math.max(0, current - 1));
+      setSelected((current) => {
+        const next = Math.max(0, current - 1);
+        onSelectionMove(next);
+        return next;
+      });
       return;
     }
     if (key.downArrow) {
-      setSelected((current) => Math.min(rows.length - 1, current + 1));
+      setSelected((current) => {
+        const next = Math.min(rows.length - 1, current + 1);
+        onSelectionMove(next);
+        return next;
+      });
       return;
     }
     const row = rows[selected];
@@ -78,15 +88,22 @@ function PermissionsList({
     }
   });
 
+  const visible = rows.slice(offset, offset + windowSize);
+  const remaining = rows.length - visible.length;
+
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
       <Text color={theme.muted}>/permissions — tools approved permanently</Text>
-      {rows.map((row, index) => (
-        <Text key={row.tool} color={index === selected ? theme.accent : undefined}>
-          {index === selected ? "> " : "  "}
-          {formatPermissionRow(row)}
-        </Text>
-      ))}
+      {visible.map((row, localIndex) => {
+        const index = offset + localIndex;
+        return (
+          <Text key={row.tool} color={index === selected ? theme.accent : undefined}>
+            {index === selected ? "> " : "  "}
+            {formatPermissionRow(row)}
+          </Text>
+        );
+      })}
+      {remaining > 0 && <Text color={theme.muted}>+{remaining} more</Text>}
       <Text color={theme.muted}>↑/↓ move · r/Delete remove · Esc/Ctrl-D close</Text>
     </Box>
   );

@@ -7,6 +7,7 @@ import { useState } from "react";
 import { formatSetupRow } from "../format";
 import type { SetupState } from "../reducer";
 import { theme } from "../theme";
+import { useListWindow } from "../useListWindow";
 
 // /setup's own live state (tui/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-exclusion
 // role, dispatching to one of three step-specific sub-components below rather than one component
@@ -75,6 +76,7 @@ function SetupList({
   // `selectedIndex` already has, for the identical reason (transient UI data with no reason to
   // round-trip through cli.ts on every arrow key).
   const [selected, setSelected] = useState(pendingSetup.selected);
+  const { offset, windowSize, onSelectionMove } = useListWindow();
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {
@@ -82,11 +84,19 @@ function SetupList({
       return;
     }
     if (key.upArrow) {
-      setSelected((current) => Math.max(0, current - 1));
+      setSelected((current) => {
+        const next = Math.max(0, current - 1);
+        onSelectionMove(next);
+        return next;
+      });
       return;
     }
     if (key.downArrow) {
-      setSelected((current) => Math.min(rows.length - 1, current + 1));
+      setSelected((current) => {
+        const next = Math.min(rows.length - 1, current + 1);
+        onSelectionMove(next);
+        return next;
+      });
       return;
     }
     const row = rows[selected];
@@ -119,15 +129,22 @@ function SetupList({
     }
   });
 
+  const visible = rows.slice(offset, offset + windowSize);
+  const remaining = rows.length - visible.length;
+
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
       <Text color={theme.muted}>/setup — provider API keys</Text>
-      {rows.map((row, index) => (
-        <Text key={row.provider} color={index === selected ? theme.accent : undefined}>
-          {index === selected ? "> " : "  "}
-          {formatSetupRow(row)}
-        </Text>
-      ))}
+      {visible.map((row, localIndex) => {
+        const index = offset + localIndex;
+        return (
+          <Text key={row.provider} color={index === selected ? theme.accent : undefined}>
+            {index === selected ? "> " : "  "}
+            {formatSetupRow(row)}
+          </Text>
+        );
+      })}
+      {remaining > 0 && <Text color={theme.muted}>+{remaining} more</Text>}
       <Text color={theme.muted}>
         ↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close
       </Text>
