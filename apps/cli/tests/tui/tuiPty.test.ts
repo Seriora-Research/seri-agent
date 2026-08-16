@@ -1476,7 +1476,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-cancel.mjs");
     writeFileSync(scriptPath, childScriptCancel(dir));
 
-    const { child, sawLine, frameOccurrences } = await startChild(scriptPath, dir);
+    const { child, sawLine, frameOccurrences, sawInFrameTimes } = await startChild(scriptPath, dir);
     try {
       // Waiting for the fake runLoop's own readiness line is also what keeps the byte out of the
       // window before Ink sets raw mode (useInput's mount effect calls setRawMode(true)) — driveLoop
@@ -1488,14 +1488,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // connectDispatch's own echo of the initial argv task ("do a task", this file's own
       // cli.run(["do", "a", "task"], ...) argv) — covered here, not a dedicated test, since every
       // child script in this file already launches with the same argv and this is the first test
-      // to reach RUNLOOP_READY. Dispatched before RUNLOOP_READY's own console.log (connectDispatch
-      // echoes, then calls runTurn, which is what reaches the fake runLoop), but the echo only
-      // reaches the pty once Ink actually renders it — waited on explicitly rather than read
-      // immediately. `frameOccurrences`, not the raw cumulative count: once rendered, this line
-      // recurs in the raw pty capture on every LATER, unrelated repaint (Ink's own log-update.js
-      // erases and rewrites the whole frame on any change) — `lastFrame()` is what's actually on
-      // screen right now, immune to that.
-      await sawLine("> do a task");
+      // to reach RUNLOOP_READY. `sawInFrameTimes`, not `sawLine`: the raw pty stream can deliver the
+      // bytes for this line before the synchronized-output CLOSE marker for the frame that contains
+      // them, so `sawLine` (a raw substring check) can resolve one chunk ahead of `lastFrame()`
+      // actually seeing a closed frame with this line in it — `frameOccurrences` would then read an
+      // empty/stale `lastFrame()` and report 0 (macOS CI, this exact race, `> /mode` below).
+      // `frameOccurrences`, not the raw cumulative count, for the assertion itself: once rendered,
+      // this line recurs in the raw pty capture on every LATER, unrelated repaint (Ink's own
+      // log-update.js erases and rewrites the whole frame on any change) — `lastFrame()` is what's
+      // actually on screen right now, immune to that.
+      await sawInFrameTimes("> do a task", 1);
       expect(frameOccurrences("> do a task")).toBe(1);
       child.stdin?.write("\x03");
       // stdin is deliberately left open, same reason as the sibling file: an EOF would end the run
@@ -1518,7 +1520,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-input.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
 
-    const { child, sawLine, frameOccurrences } = await startChild(scriptPath, dir);
+    const { child, sawLine, frameOccurrences, sawInFrameTimes } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
 
@@ -1534,12 +1536,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("permission mode is now auto");
       // The submitted command itself, echoed into the persistent transcript exactly once — not
       // just its result. onSubmit's own transcript-append dispatch, before the command dispatch.
-      // Waited on explicitly before reading frameOccurrences(), same as the argv-task and
-      // second-task echo checks elsewhere in this file: the echo lands via an async render commit,
-      // not synchronously with the dispatch that triggered it — and `frameOccurrences`, not the
-      // raw cumulative count, since this line recurs in the raw pty capture on every LATER,
+      // `sawInFrameTimes`, not `sawLine`: the raw pty stream can deliver these bytes before the
+      // synchronized-output CLOSE marker for the frame that contains them, so a raw substring check
+      // can resolve one chunk ahead of `lastFrame()` actually seeing a closed frame with this line
+      // in it — `frameOccurrences` would then read an empty/stale `lastFrame()` and report 0 (the
+      // CI failure this line's own history traces to). `frameOccurrences`, not the raw cumulative
+      // count, for the assertion itself: this line recurs in the raw pty capture on every LATER,
       // unrelated repaint once it has rendered once.
-      await sawLine("> /mode");
+      await sawInFrameTimes("> /mode", 1);
       expect(frameOccurrences("> /mode")).toBe(1);
     } finally {
       child.kill("SIGKILL");
@@ -1652,7 +1656,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-multi-turn.mjs");
     writeFileSync(scriptPath, childScriptMultiTurn(dir));
 
-    const { child, sawLine, frameOccurrences } = await startChild(scriptPath, dir);
+    const { child, sawLine, frameOccurrences, sawInFrameTimes } = await startChild(scriptPath, dir);
     try {
       // prepareSession appended the initial task as the session's only message.
       await sawLine("RUNLOOP_CALL 1 messages=1");
@@ -1683,13 +1687,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_CALL 2 messages=3");
       // The second task's own text, echoed into the persistent transcript exactly once — the
       // input box's live reflection (waited on above) is not the same thing as the submitted
-      // line actually landing in the transcript. Waited on explicitly before counting: the echo
-      // reaches the pty only once Ink actually commits the render, a scheduler macrotask after
-      // RUNLOOP_CALL 2's own console.log. `frameOccurrences`, not the raw cumulative count: once
-      // rendered, this line recurs in the raw pty capture on every LATER, unrelated repaint (Ink's
-      // own log-update.js erases and rewrites the whole frame on any change) — `lastFrame()` is
-      // what's actually on screen right now, immune to that.
-      await sawLine("> a second task");
+      // line actually landing in the transcript. `sawInFrameTimes`, not `sawLine`: the raw pty
+      // stream can deliver these bytes before the synchronized-output CLOSE marker for the frame
+      // that contains them, so a raw substring check can resolve one chunk ahead of `lastFrame()`
+      // actually seeing a closed frame with this line in it — `frameOccurrences` would then read an
+      // empty/stale `lastFrame()` and report 0. `frameOccurrences`, not the raw cumulative count,
+      // for the assertion itself: once rendered, this line recurs in the raw pty capture on every
+      // LATER, unrelated repaint (Ink's own log-update.js erases and rewrites the whole frame on
+      // any change) — `lastFrame()` is what's actually on screen right now, immune to that.
+      await sawInFrameTimes("> a second task", 1);
       expect(frameOccurrences("> a second task")).toBe(1);
 
       // Scenario c at the TUI level (feature-plan.md): a session that never invokes /model must
@@ -2433,7 +2439,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-rewind-during-stream.mjs");
     writeFileSync(scriptPath, childScriptRewindDuringStream(dir, flagPath));
 
-    const { child, sawLine, frameOccurrences } = await startChild(scriptPath, dir);
+    const { child, sawLine, frameOccurrences, sawInFrameTimes } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
       await sawLine("STREAM_PART_1");
@@ -2445,11 +2451,17 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       writeFileSync(flagPath, "");
       await sawLine("(done: no-tool-call)");
-      // Bug fixed here (macOS CI, round 3): waited on "(done: …)" but never on "Hello world"
-      // itself before counting it. Explicit wait first, matching every other frameOccurrences()
-      // check in this file — and `frameOccurrences`, not the raw cumulative count, since this
-      // line recurs in the raw pty capture on every later, unrelated repaint once rendered once.
-      await sawLine("Hello world");
+      // Bug fixed here (macOS CI): waited on "(done: …)" but never on "Hello world" itself before
+      // counting it. That first fix used `sawLine` (a raw substring check), which is not enough on
+      // its own: the raw pty stream can deliver "Hello world"'s bytes before the synchronized-output
+      // CLOSE marker for the frame that contains them, so `sawLine` can resolve one chunk ahead of
+      // `lastFrame()` actually seeing a closed frame with this line in it — `frameOccurrences` would
+      // then read an empty/stale `lastFrame()` and report 0, the same failure shape this line was
+      // originally fixed for. `sawInFrameTimes` waits on the frame-aware read `frameOccurrences`
+      // itself uses, closing that gap. `frameOccurrences`, not the raw cumulative count, for the
+      // assertion itself: this line recurs in the raw pty capture on every later, unrelated repaint
+      // once rendered once.
+      await sawInFrameTimes("Hello world", 1);
 
       expect(frameOccurrences("Hello world")).toBe(1);
     } finally {

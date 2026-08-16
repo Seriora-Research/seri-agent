@@ -169,7 +169,11 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
       writeFileSync(scriptPath, childScriptAltScreen(dir));
 
       const pty = await import("node-pty");
-      const { term, chunks, waitFor, decodedSoFar, exited } = startChildNodePty(pty, scriptPath, dir);
+      const { term, chunks, waitFor, decodedSoFar, exited } = startChildNodePty(
+        pty,
+        scriptPath,
+        dir,
+      );
       try {
         // The welcome splash now mounts ahead of the normal flow on every interactive launch —
         // dismissed here the same way tuiPty.test.ts's own startChild does: wait for its wordmark

@@ -193,7 +193,15 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
     // flush: true (the default) — pushLine commits `streaming` AND `line`, two lines in one call.
     const next = tuiReducer(state, { type: "transcript-append", line: "f" });
 
-    expect(next.transcript).toEqual(["a", "b", "c", "d", "e", "the model's in-progress answer", "f"]);
+    expect(next.transcript).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "the model's in-progress answer",
+      "f",
+    ]);
     expect(next.transcriptScrollOffset).toBe(5);
   });
 
