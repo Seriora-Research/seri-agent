@@ -250,6 +250,50 @@ describe("App", () => {
     expect(instance.lastFrame() ?? "").toBe(anchored);
   });
 
+  // Regression guard: Home/PageUp dispatched WHILE an answer is already streaming sets
+  // `transcriptScrollOffset` to a value that already includes the current streaming row count
+  // (`maxScrollOffset`, reducer.ts). `transcriptOffset`'s own `pendingRows` compensation (App.tsx)
+  // used to add the CURRENT streaming row count on top of that every render regardless, double-
+  // counting the rows already folded into the offset — the combined total overshot the transcript's
+  // own visual-row length, `visibleTranscript` (format.ts) sliced down to nothing, and the viewport
+  // rendered blank instead of a full page of the streamed answer.
+  test("Home pressed mid-stream (no further streaming) reveals a full page of the streamed answer, not a blank gap", async () => {
+    const { instance, dispatch } = await connect();
+
+    const answer = Array.from({ length: 300 }, (_, i) => `answer line ${i}`).join("\n");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    await flush();
+
+    instance.stdin.write("\x1b[H"); // Home
+    await flush();
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("answer line 0");
+    expect(frame).toContain("↑ scrolled");
+  });
+
+  // Same bug as above, but with genuine post-scroll growth: confirms the delta compensation
+  // (`pendingRows - transcriptScrollStreamingRows`) neither double-counts the rows already baked
+  // into the offset at scroll time nor drops the rows that stream in afterward — the view stays
+  // anchored on the same content exactly like the already-committed-transcript case above.
+  test("more text streaming in after Home is pressed mid-stream keeps the view anchored, not double- or under-counted", async () => {
+    const { instance, dispatch } = await connect();
+
+    const answer = Array.from({ length: 300 }, (_, i) => `answer line ${i}`).join("\n");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    await flush();
+
+    instance.stdin.write("\x1b[H"); // Home
+    await flush();
+    const anchored = instance.lastFrame() ?? "";
+    expect(anchored).toContain("answer line 0");
+
+    for (let i = 0; i < 10; i++) {
+      dispatch({ type: "loop-event", event: { type: "text-delta", text: `\nmore ${i}` } });
+      await flush();
+      expect(instance.lastFrame() ?? "").toBe(anchored);
+    }
+  });
+
   test("a tool-call loop-event sets the running status, and tool-result clears it", async () => {
     const { instance, dispatch } = await connect();
 

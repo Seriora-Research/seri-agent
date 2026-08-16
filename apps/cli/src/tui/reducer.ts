@@ -73,6 +73,13 @@ export type TuiState = {
   // comment — so a scrolled-up view stays anchored on the same content as new rows arrive, rather
   // than sliding out from under the reader mid-read.
   transcriptScrollOffset: number;
+  // The visual row count `state.streaming` had the last time `transcriptScrollOffset` was set
+  // (`transcript-scroll`/`transcript-scroll-to`/`viewport-resized`) — that streaming row count is
+  // already baked into `transcriptScrollOffset` itself (`maxScrollOffset` folds it in), so App.tsx
+  // must add only the GROWTH since then when it compensates for streaming rows not yet flushed into
+  // `transcript`, not the current total: adding the total on top double-counts the rows already
+  // present at dispatch time.
+  transcriptScrollStreamingRows: number;
   // The terminal's own current width and the transcript viewport's own current height, in rows —
   // kept on state (not threaded through every `transcript-scroll` action the way `viewportRows`
   // used to be) so the scroll clamp and a resize both read the same two numbers from one place
@@ -175,6 +182,7 @@ export function initialTuiState(
     session,
     transcript: [],
     transcriptScrollOffset: 0,
+    transcriptScrollStreamingRows: 0,
     columns: DEFAULT_COLUMNS,
     // Not a real chrome-height estimate, same spirit as App.tsx's own FALLBACK_CHROME_ROWS
     // placeholder — corrected by the first `viewport-resized` dispatch before it can matter.
@@ -308,7 +316,11 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         state.viewportRows,
       );
       const next = Math.min(max, Math.max(0, state.transcriptScrollOffset + action.delta));
-      return { ...state, transcriptScrollOffset: next };
+      return {
+        ...state,
+        transcriptScrollOffset: next,
+        transcriptScrollStreamingRows: streamingVisualRows(state.streaming, state.columns),
+      };
     }
     case "transcript-scroll-to":
       return {
@@ -322,6 +334,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
                 state.viewportRows,
               )
             : 0,
+        transcriptScrollStreamingRows: streamingVisualRows(state.streaming, state.columns),
       };
     case "viewport-resized": {
       // Only a genuine `columns` change invalidates the cache: every existing entry re-wraps to a
@@ -345,6 +358,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         viewportRows: action.viewportRows,
         totalVisualRows,
         transcriptScrollOffset: Math.min(max, state.transcriptScrollOffset),
+        transcriptScrollStreamingRows: streamingVisualRows(state.streaming, action.columns),
       };
     }
     case "loop-event":
@@ -477,6 +491,9 @@ function appendLines(state: TuiState, rawLines: string[]): TuiState {
     totalVisualRows: state.totalVisualRows + addedRows,
     transcriptScrollOffset:
       state.transcriptScrollOffset > 0 ? state.transcriptScrollOffset + addedRows : 0,
+    // A flush moves `streaming` back to `""` (pushLine, below), so there is no streaming content
+    // left baked into the offset above — the next render's delta compensation starts from 0 again.
+    transcriptScrollStreamingRows: 0,
   };
 }
 

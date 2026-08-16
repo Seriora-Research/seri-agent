@@ -250,10 +250,22 @@ export function App({
   // `state.streaming` is empty: `transcriptVisualRows` always returns >= 1 even for `""` (a blank
   // committed line is meaningful; an ABSENT streaming answer is not), so this guards that case
   // explicitly rather than let a spurious extra row of offset apply while nothing is streaming.
+  //
+  // Only the GROWTH since `transcriptScrollOffset` was last set is added, not the full current
+  // `pendingRows`: `transcriptScrollOffset` itself already includes whatever streaming row count
+  // existed at the moment a scroll action last set it (`maxScrollOffset`, reducer.ts, folds
+  // `state.streaming`'s own row count into the ceiling it clamps against). Adding the CURRENT total
+  // on top of that every render double-counts those already-baked-in rows — `transcriptOffset` then
+  // overshoots the combined committed+streaming stack `visibleTranscript` slices, and the viewport
+  // renders a gap instead of a full page. `transcriptScrollStreamingRows` is the reducer's own
+  // snapshot of what was already baked in, so only the delta needs compensating for here.
   const pendingRows =
     state.streaming.length > 0 ? transcriptVisualRows([state.streaming], state.columns) : 0;
   const transcriptOffset =
-    state.transcriptScrollOffset > 0 ? state.transcriptScrollOffset + pendingRows : 0;
+    state.transcriptScrollOffset > 0
+      ? state.transcriptScrollOffset +
+        Math.max(0, pendingRows - state.transcriptScrollStreamingRows)
+      : 0;
 
   // `columns`/`viewportRows` live on TuiState itself (reducer.ts's own comment on those fields) —
   // this is the one place that ever measures them, so it's the one place that ever dispatches them

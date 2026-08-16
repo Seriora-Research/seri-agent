@@ -242,6 +242,24 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
     expect(visible).toEqual(streamingLines.slice(0, 5));
   });
 
+  // `transcriptScrollStreamingRows` snapshots the streaming row count already folded into
+  // `transcriptScrollOffset` by `maxScrollOffset` above — App.tsx (its own `pendingRows`
+  // compensation) reads this back to add only newly-streamed growth on top of the offset, not the
+  // full current streaming row count again. `state.streaming` hasn't grown since the dispatch
+  // above, so the snapshot must equal the same 20 rows already baked into `transcriptScrollOffset`.
+  test("transcript-scroll-to top snapshots the streaming row count already baked into the offset", () => {
+    const streamingLines = Array.from({ length: 20 }, (_, i) => `streamed line ${i}`);
+    let state: TuiState = { ...initialTuiState(session()), viewportRows: 5 };
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: streamingLines.join("\n") },
+    });
+
+    const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(next.transcriptScrollOffset).toBe(15);
+    expect(next.transcriptScrollStreamingRows).toBe(20);
+  });
+
   // Regression guard: `transcript` stores LOGICAL lines, never pre-wrapped output — a multi-line
   // string committed by one `transcript-append` must stay exactly one array entry, not several.
   // Storing the wrapped form instead was tried and reverted: once written, a hard-wrap break is
