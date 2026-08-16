@@ -1926,6 +1926,44 @@ describe("App", () => {
       expect(frame).not.toContain("+0 more");
       expect(frame).not.toMatch(/\+\d+ more/);
     });
+
+    // Regression guard: `windowSize` is recomputed live from useWindowSize().rows on every render,
+    // but `offset` previously only changed via an explicit arrow press (onSelectionMove) — a
+    // terminal resize that shrinks windowSize could leave the currently selected row outside
+    // [offset, offset + windowSize) with no keypress to trigger a recompute. ink-testing-library's
+    // own Stdout stub has no real `rows` getter (only `columns` is fixed), so it can be assigned
+    // directly and a "resize" event emitted to make useWindowSize (both App.tsx's own call and
+    // useListWindow's) pick up the new value, the same mechanism a real terminal resize uses.
+    test("a windowSize shrink after a selection move keeps the selected row in view without a keypress", async () => {
+      const { instance, dispatch } = await connect();
+
+      const rows = Array.from({ length: 15 }, (_, i) => ({
+        key: `FAKE_KEY_${i}`,
+        masked: "",
+        source: "unset" as const,
+        removable: false,
+        kind: "string" as const,
+      }));
+      dispatch({ type: "config-requested", rows });
+      await flush();
+
+      // Select row 9 — still inside the default (10-row) window, so offset stays 0.
+      for (let i = 0; i < 9; i++) {
+        instance.stdin.write("\x1b[B"); // Down
+        await flush();
+      }
+      expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_9");
+
+      // Shrink to a 3-row window (listWindowSize(11) = clamp(11 - 8, 3, 10) = 3) — with offset
+      // still 0, row 9 would fall outside [0, 3) unless something re-clamps it.
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one; that's what makes the fake resize below observable.
+      instance.stdout.rows = 11;
+      instance.stdout.emit("resize");
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_9");
+    });
   });
 
   describe("permissions panel", () => {

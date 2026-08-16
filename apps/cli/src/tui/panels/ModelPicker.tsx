@@ -40,7 +40,7 @@ export function ModelPicker({
     windowSize,
     onSelectionMove,
     reset: resetScroll,
-  } = useListWindow(0);
+  } = useListWindow(selectedIndex);
 
   const filtered =
     filterQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, filterQuery));
