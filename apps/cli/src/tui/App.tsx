@@ -363,7 +363,11 @@ export function App({
       <Box flexDirection="row" justifyContent="space-between">
         <Text color={theme.accent}>{modeLabel}</Text>
         <Box flexDirection="row" gap={1}>
-          {state.transcriptScrollOffset > 0 && (
+          {/* `noPanelOpen` too, not just the offset (found by review): while a panel is open, End
+          is swallowed by the exact same gate `noPanelOpen` already puts on the transcript-scroll
+          keys above — the banner would otherwise keep telling the user to press a key that does
+          nothing until they close the panel first. */}
+          {state.transcriptScrollOffset > 0 && noPanelOpen && (
             <Text color={theme.muted}>↑ scrolled — End to follow</Text>
           )}
           {state.status.length > 0 && <Text color={theme.muted}>{state.status}</Text>}

@@ -23,16 +23,6 @@ export function enterAltScreen(): void {
 
 export function exitAltScreen(): void {
   if (!entered) return;
-  // Found by review: `enterAltScreen` registers a fresh `process.on("exit", ...)` listener every
-  // time it transitions `entered` false → true, and nothing removed the PREVIOUS one — dormant in
-  // production (one `run()` call per process, so at most one registration ever happens), but a live
-  // leak for anything that calls `run()` repeatedly in one process (a test, an embedder), eventually
-  // tripping Node's MaxListenersExceededWarning. `process.off`, not a one-shot `{ once: true }` on
-  // the `.on` call: the "exit" event only ever fires once per process regardless, so the listener
-  // was already effectively single-use — this just makes the bookkeeping accurate rather than
-  // leaving a reference to `exitAltScreen` (and everything its closure keeps alive) registered on
-  // `process` forever after the alt screen has already been torn down.
-  process.off("exit", exitAltScreen);
   try {
     process.stdout.write("\x1b[?1049l");
     process.stdout.write("\x1b[?25h");
@@ -43,6 +33,15 @@ export function exitAltScreen(): void {
     // retry, leaving the terminal on the primary buffer with the cursor permanently hidden for the
     // rest of the shell session. Left `true` on a thrown write, the next exit path's own call is a
     // real retry instead of the no-op `if (!entered) return` above would otherwise make it.
+    //
+    // `process.off` lives HERE, not ahead of the try (found by review, round 2 of this same fix):
+    // deregistering the "exit" listener before the writes even run would defeat the retry this
+    // comment just described — a listener removed unconditionally can't fire again to retry a write
+    // that hasn't happened yet. Only removed once the writes are confirmed to have actually
+    // succeeded, alongside `entered`, for the same reason `enterAltScreen` re-registers a fresh one
+    // every time it transitions false → true: at most one live registration either way, just never
+    // torn down before it might still be needed.
     entered = false;
+    process.off("exit", exitAltScreen);
   } catch {}
 }
