@@ -16,7 +16,6 @@ import {
   formatSetupRow,
 } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
-import { configRowFixture } from "./configRowFixture";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
@@ -1214,9 +1213,9 @@ describe("App", () => {
     // Bug fix (this same round): the derivation above only covers "hide while the panel is open"
     // — the instant a successful login's own `auth-resolved` clears `pendingAuth` again, the
     // derivation reduces to bare `authOffer`, which was never updated to reflect the session that
-    // just got saved. createAuthHandlers.onLogin's own success path (cli.ts) recomputes it fresh
-    // right after, exactly like onLogout's `show: true` and the mount/onAuthResolved recomputes
-    // already do for their own real state changes — this reproduces that exact three-dispatch
+    // just got saved. createAuthHandlers.onLogin's own success path (tui/handlers.ts) recomputes
+    // it fresh right after, exactly like onLogout's `show: true` and the mount/onAuthResolved
+    // recomputes already do for their own real state changes — this reproduces that exact three-dispatch
     // sequence and checks the banner does NOT flash back on.
     test("stays hidden after a successful login, not just while the panel is open", async () => {
       const { instance, dispatch } = await connect();
@@ -1292,8 +1291,8 @@ describe("App", () => {
       expect(instance.lastFrame() ?? "").toContain("Login failed: expired code");
     });
 
-    // auth-resolved is the reducer action createAuthHandlers' own onLogin/onLogout (cli.ts) fire
-    // once a device-flow result lands — proves the panel's own text (including the result step's
+    // auth-resolved is the reducer action createAuthHandlers' own onLogin/onLogout (tui/handlers.ts)
+    // fire once a device-flow result lands — proves the panel's own text (including the result step's
     // message, the closest thing this panel has to hint text) is fully gone afterward, not just
     // that SOME frame changed, and that InputBox is genuinely back (accepts input), not merely
     // that nothing matched the render ternary's earlier branches.
@@ -1336,7 +1335,7 @@ describe("App", () => {
     });
 
     // Bug fix (coordinator follow-up on Stage C): before AuthPanel's own useInput existed, a
-    // failed login/signup (createAuthHandlers' own catch, cli.ts — a denied/expired code, a
+    // failed login/signup (createAuthHandlers' own catch, tui/handlers.ts — a denied/expired code, a
     // network error) left the "result" step up with no keyboard path back at all, not even
     // Ctrl-C. Presses a REAL key (not a direct auth-resolved dispatch, which "clears the panel
     // entirely" above already covers) to prove AuthPanel's own Enter/Esc handling is actually
@@ -1468,21 +1467,21 @@ describe("App", () => {
   describe("config panel", () => {
     function configRows(): ConfigRow[] {
       return [
-        configRowFixture("SERI_VERIFY_ENABLED", {
+        {
+          key: "SERI_VERIFY_ENABLED",
           masked: "",
           source: "unset",
           removable: false,
-          secret: false,
           kind: "boolean",
           on: true,
-        }),
-        configRowFixture("SERI_SOME_OTHER_KEY", {
+        },
+        {
+          key: "SERI_SOME_OTHER_KEY",
           masked: "sk-d...2345",
           source: "config",
           removable: true,
-          secret: true,
           kind: "string",
-        }),
+        },
       ];
     }
 
@@ -1565,13 +1564,13 @@ describe("App", () => {
       dispatch({
         type: "config-requested",
         rows: [
-          configRowFixture("SERI_SOME_OTHER_KEY", {
+          {
+            key: "SERI_SOME_OTHER_KEY",
             masked: "sk-d...2345",
             source: "config",
             removable: true,
-            secret: true,
             kind: "string",
-          }),
+          },
         ],
       });
       await flush();
@@ -1810,13 +1809,13 @@ describe("App", () => {
       dispatch({
         type: "config-requested",
         rows: [
-          configRowFixture("SERI_VERIFY_COMMAND", {
+          {
+            key: "SERI_VERIFY_COMMAND",
             masked: "bun check",
             source: "config",
             removable: true,
-            secret: false,
             kind: "string",
-          }),
+          },
         ],
       });
       await flush();
@@ -1843,13 +1842,13 @@ describe("App", () => {
       dispatch({
         type: "config-requested",
         rows: [
-          configRowFixture("SERI_VERIFY_COMMAND", {
+          {
+            key: "SERI_VERIFY_COMMAND",
             masked: "bun check",
             source: "config",
             removable: true,
-            secret: false,
             kind: "string",
-          }),
+          },
         ],
       });
       await flush();

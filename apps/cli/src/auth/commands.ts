@@ -19,9 +19,9 @@ export async function login(
     onDeviceCode?: (device: { verificationUri: string; userCode: string }) => void;
     onMessage?: (message: string) => void;
     // Bug fix (thermo-nuclear, round 5): threaded straight through to pollForTokenFn — the TUI's
-    // own createAuthHandlers (cli.ts) passes one per attempt so abandoning "starting"/"device"
-    // (Escape) actually stops the poll, instead of merely muting its eventual dispatches while it
-    // keeps running in the background and could still call saveAuthSession later.
+    // own createAuthHandlers (tui/handlers.ts) passes one per attempt so abandoning
+    // "starting"/"device" (Escape) actually stops the poll, instead of merely muting its eventual
+    // dispatches while it keeps running in the background and could still call saveAuthSession later.
     signal?: AbortSignal;
   } = {},
 ): Promise<void> {

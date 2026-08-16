@@ -754,8 +754,8 @@ function childScriptAuth(dir: string): string {
 
 // Bug fix (coordinator follow-up on Stage C): the failure round-trip childScriptAuth's own
 // describe block never exercised — `loginFake` here rejects the way the real device flow does on
-// a denied/expired code, driving createAuthHandlers' own catch branch (cli.ts) in a real process,
-// not just at the reducer level (App.test.tsx already covers that half).
+// a denied/expired code, driving createAuthHandlers' own catch branch (tui/handlers.ts) in a real
+// process, not just at the reducer level (App.test.tsx already covers that half).
 function childScriptAuthLoginFails(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -827,7 +827,7 @@ function childScriptAuthLoginHangs(dir: string): string {
 // at all, so it can only prove Escape returns the UI — it can't distinguish "the poll was really
 // cancelled" from "cancellation doesn't exist and we just stopped listening"), this fake's own
 // poll resolves ~1s AFTER Escape, checking `handlerDeps.signal?.aborted` itself — the exact same
-// AbortSignal `createAuthHandlers.onLogin` (cli.ts) threads through the real `loginFn`'s 4th
+// AbortSignal `createAuthHandlers.onLogin` (tui/handlers.ts) threads through the real `loginFn`'s 4th
 // argument. This is what proves the real plumbing: onAbandon's own `.abort()` call actually
 // reaches this fake in time, not just that createAuthHandlers stopped honoring its dispatches.
 function childScriptAuthLoginRace(dir: string): string {
@@ -3051,7 +3051,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // useInput existed, a denied/expired device code left this exact screen up with no keyboard
     // path back at all — no press, Enter included, ever returned the input box. `childScriptAuth`'s
     // own /login test above only exercises the SUCCESS round-trip; this one drives
-    // createAuthHandlers' own catch branch (cli.ts) in a real process.
+    // createAuthHandlers' own catch branch (tui/handlers.ts) in a real process.
     test("a failed /login shows the error, and a keypress returns to the ordinary input box", async () => {
       const scriptPath = join(dir, "child-auth-login-fails.mjs");
       writeFileSync(scriptPath, childScriptAuthLoginFails(dir));
@@ -3882,25 +3882,26 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Automatic verification: off");
 
         child.stdin?.write("\r");
-        await sawLine("Automatic verification: on in config, SERI_VERIFY_ENABLED env still wins.");
+        await sawLine("Automatic verification: off in config, SERI_VERIFY_ENABLED env still wins.");
 
-        // The write still lands in config.json even though the env var wins at read time.
+        // The toggle flips config.json's OWN stored value (onConfigSelect's own comment,
+        // tui/handlers.ts), not the env-shadowed display value — with no key stored yet,
+        // configBoolean(undefined) reads as "on" (config.ts's own default), so the write lands
+        // as "false", the same direction an unshadowed row would take from that same default
+        // (the "SERI_VERIFY_ENABLED toggles on Enter" test just above, no env involved).
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
-          (c) => c.SERI_VERIFY_ENABLED === "true",
+          (c) => c.SERI_VERIFY_ENABLED === "false",
         );
-        expect(config.SERI_VERIFY_ENABLED).toBe("true");
+        expect(config.SERI_VERIFY_ENABLED).toBe("false");
 
-        // The row itself still shows the env-sourced value after the list refreshes, not the
-        // write's value — a second render of "off", not one flipping to "on". The transcript
-        // sentence above already contains "Automatic verification: on" as a substring (it's the
-        // prefix of "on in config, ..."), so a bare occurrences() !== 0 check would always fail —
-        // instead, pin that every occurrence of the row-shaped substring is accounted for by that
-        // one sentence, i.e. the row itself never independently rendered "on".
-        await sawLineTimes("Automatic verification: off", 2);
-        expect(occurrences("Automatic verification: on")).toBe(
-          occurrences("Automatic verification: on in config, SERI_VERIFY_ENABLED env still wins."),
-        );
+        // The row itself still shows the env-sourced value after the list refreshes — the
+        // transcript sentence above already contains "Automatic verification: off" as a
+        // substring (it's the prefix of "off in config, ..."), so three total occurrences (the
+        // first render, the message, the refreshed render) is what proves the row never
+        // independently rendered "on".
+        await sawLineTimes("Automatic verification: off", 3);
+        expect(occurrences("Automatic verification: on")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }

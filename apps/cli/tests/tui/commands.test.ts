@@ -23,6 +23,7 @@ import { rememberGrant } from "../../src/permissions/store";
 import bundledManifest from "../../src/provider/catalog-manifest.json";
 import type { SessionState } from "../../src/session/session";
 import {
+  configKeyInfo,
   decideAuthOffer,
   decideConfigOpen,
   decideGuidedModelPickerOpen,
@@ -35,6 +36,7 @@ import {
   decideRewind,
   decideSetupOpen,
   decideUndo,
+  KNOWN_CONFIG_KEYS,
 } from "../../src/tui/commands";
 
 let root: string;
@@ -655,15 +657,15 @@ describe("decideConfigOpen", () => {
     const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_COMMAND");
     expect(row?.source).toBe("config");
     expect(row?.removable).toBe(true);
-    expect(row?.secret).toBe(false);
     expect(row?.masked).toBe("bun run typecheck");
   });
 
-  // An unrecognized key defaults to secret: true (conservative) and is genuinely masked.
-  test("an unknown key written via config.json is secret: true and masked, not the raw value", () => {
+  // An unrecognized key defaults to secret (conservative) and is genuinely masked — `secret`
+  // itself isn't on ConfigRow (it's a pure function of `key`, local to decideConfigOpen), so this
+  // asserts the one thing it's observable through: `masked` never being the raw value.
+  test("an unknown key written via config.json is masked, not the raw value", () => {
     setConfigValue("SERI_SOME_OTHER_KEY", "sk-fake-secret-value", configConfigDir);
     const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_SOME_OTHER_KEY");
-    expect(row?.secret).toBe(true);
     expect(row?.masked).not.toBe("");
     expect(row?.masked).not.toBe("sk-fake-secret-value");
   });
@@ -713,20 +715,22 @@ describe("decideConfigOpen", () => {
   });
 
   // Both known keys have a real label (CONFIG_KEY_INFO), unlike a hand-added key, whose label
-  // falls back to its own raw key (the "unknown key" test just below).
+  // falls back to its own raw key (the "unknown key" test just below). This asserts configKeyInfo
+  // directly, not through decideConfigOpen — that decideConfigOpen actually emits both known keys,
+  // in this order, is what "both known keys are source: unset on an empty config dir" (above)
+  // already pins; asserting it again here would just duplicate that coverage.
   test("both known keys get a label that is not their raw key, and a non-empty description", () => {
-    const rows = decideConfigOpen(configConfigDir);
-    for (const row of rows) {
-      expect(row.label).not.toBe(row.key);
-      expect(row.description).not.toBe("");
+    for (const key of KNOWN_CONFIG_KEYS) {
+      expect(configKeyInfo(key).label).not.toBe(key);
+      expect(configKeyInfo(key).description).not.toBe("");
     }
   });
 
   test("an unknown key falls back to label === key, description === '', kind === 'string'", () => {
     setConfigValue("SERI_SOME_OTHER_KEY", "value", configConfigDir);
     const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_SOME_OTHER_KEY");
-    expect(row?.label).toBe("SERI_SOME_OTHER_KEY");
-    expect(row?.description).toBe("");
+    expect(row && configKeyInfo(row.key).label).toBe("SERI_SOME_OTHER_KEY");
+    expect(row && configKeyInfo(row.key).description).toBe("");
     expect(row?.kind).toBe("string");
   });
 
@@ -788,20 +792,20 @@ describe("decideConfigOpen", () => {
     expect(row?.kind === "boolean" && row.on).toBe(false);
   });
 
-  // Regression test for a masking bypass: CONFIG_KEY_INFO is an object literal, so a plain index
-  // lookup / `=== undefined` check resolves inherited Object.prototype members for a config.json
-  // key that happens to share their name — Object.hasOwn (configKeyInfo, and this row's own
-  // `secret`) is what closes it. Without that guard, every assertion below fails: `secret` reads
-  // false (the inherited member isn't undefined), so the raw value renders unmasked.
+  // Regression test for a masking bypass: a plain object literal used as a lookup table inherits
+  // Object.prototype, so a config.json key that happens to share a name with an inherited member
+  // (e.g. "toString") would resolve to it instead of falling through to the unknown-key default —
+  // the local `secret` inside decideConfigOpen would read false (the inherited member isn't
+  // undefined) and render the raw value. CONFIG_KEY_INFO is a Map specifically so this can't
+  // happen by construction, not by a guard.
   test.each(["toString", "constructor", "valueOf", "hasOwnProperty", "isPrototypeOf"])(
     "a config key named %s is not treated as a known key and stays masked",
     (key) => {
       setConfigValue(key, "sk-should-not-leak", configConfigDir);
       const row = decideConfigOpen(configConfigDir).find((r) => r.key === key);
-      expect(row?.secret).toBe(true);
       expect(row?.masked).not.toBe("sk-should-not-leak");
       expect(row?.kind).toBe("string");
-      expect(row?.label).toBe(key);
+      expect(row && configKeyInfo(row.key).label).toBe(key);
     },
   );
 });

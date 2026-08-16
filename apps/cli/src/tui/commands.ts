@@ -8,7 +8,6 @@
 // and cli.ts both call through to, rather than cli.ts keeping its own duplicate (it did, briefly,
 // between Phase 2 and the fix that consolidated it here).
 import {
-  CATALOG_PROVIDERS,
   filterCatalogEntries,
   groupRoutes,
   type ModelCatalog,
@@ -204,11 +203,9 @@ export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
   }));
 }
 
-// Stage A scaffolding (cli-commands-to-tui feature-plan.md): the five decide* functions below have
-// no caller yet — Stages B-E wire /login, /signup, /config, /permissions, /max-turns and /profile
-// new into the reducer these decide. Same contract as every decide* function above: recompute
+// The decide* functions below share the same contract as every decide* function above: recompute
 // fresh from disk on every call, plain functions, no Ink import, no saveSession/console.log/print*,
-// let a bad input throw for the (not-yet-written) caller's try/catch to turn into a command-error.
+// let a bad input throw for the caller's try/catch to turn into a command-error.
 
 // /login and /signup's own non-blocking offer (AuthBanner, App.tsx): true iff no auth session is
 // saved yet, so a first-run user sees the offer without it blocking anything they're already doing.
@@ -224,12 +221,9 @@ export function decideAuthOffer(configDir: string): boolean {
 export type ConfigRowKind = { kind: "string" } | { kind: "boolean"; on: boolean };
 export type ConfigRowBase = {
   key: string;
-  label: string;
-  description: string;
   masked: string;
   source: "config" | "env" | "unset";
   removable: boolean;
-  secret: boolean;
 };
 export type ConfigRow = ConfigRowBase & ConfigRowKind;
 
@@ -276,7 +270,7 @@ const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
     },
   ],
 ]);
-const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
+export const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
 
 // Pure lookup (no disk read) so ConfigEnterValue/ConfigConfirmUnset can show a key's label without
 // widening ConfigPanelState with a field decideConfigOpen already computes for the list step. Also
@@ -284,7 +278,12 @@ const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
 // hand-added key with no entry here), not two copies of it.
 export function configKeyInfo(key: string): ConfigKeyInfo {
   return (
-    CONFIG_KEY_INFO.get(key) ?? { label: key, description: "", kind: "string", takesEffectNextRun: false }
+    CONFIG_KEY_INFO.get(key) ?? {
+      label: key,
+      description: "",
+      kind: "string",
+      takesEffectNextRun: false,
+    }
   );
 }
 
@@ -320,18 +319,22 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
     // live for the string row (SERI_VERIFY_COMMAND) — resolveConfigValue closes it for both, and
     // for any hand-added key, at once: a value nothing reads is never displayed as authoritative.
     const { value, source } = resolveConfigValue(key, config);
-    const { label, description, kind } = configKeyInfo(key);
+    // label/description are NOT carried on the row: configKeyInfo(key) is the single source of
+    // truth for both, and every consumer (ConfigPanel.tsx's three steps) already has the key —
+    // carrying a copy here just for the list step meant a fixture module (configRowFixture.ts)
+    // existed solely to keep that copy from drifting out of sync with CONFIG_KEY_INFO.
+    const kind = configKeyInfo(key).kind;
+    // Not carried on the row either, same reasoning as label/description just above: `secret` is
+    // just as pure a function of `key` (CONFIG_KEY_INFO.has(key)) and has no production reader —
+    // it only ever picks which value `masked` computes to, right here.
     const secret = !CONFIG_KEY_INFO.has(key);
     const kindFields: ConfigRowKind =
       kind === "boolean" ? { kind: "boolean", on: configBoolean(value) } : { kind: "string" };
     return {
       key,
-      label,
-      description,
       masked: value === undefined ? "" : secret ? maskValue(value) : value,
       source,
       removable: hasConfigEntry,
-      secret,
       ...kindFields,
     };
   });
