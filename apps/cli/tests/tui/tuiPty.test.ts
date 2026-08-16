@@ -3882,25 +3882,26 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Automatic verification: off");
 
         child.stdin?.write("\r");
-        await sawLine("Automatic verification: on in config, SERI_VERIFY_ENABLED env still wins.");
+        await sawLine("Automatic verification: off in config, SERI_VERIFY_ENABLED env still wins.");
 
-        // The write still lands in config.json even though the env var wins at read time.
+        // The toggle flips config.json's OWN stored value (onConfigSelect's own comment,
+        // tui/handlers.ts), not the env-shadowed display value — with no key stored yet,
+        // configBoolean(undefined) reads as "on" (config.ts's own default), so the write lands
+        // as "false", the same direction an unshadowed row would take from that same default
+        // (the "SERI_VERIFY_ENABLED toggles on Enter" test just above, no env involved).
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
-          (c) => c.SERI_VERIFY_ENABLED === "true",
+          (c) => c.SERI_VERIFY_ENABLED === "false",
         );
-        expect(config.SERI_VERIFY_ENABLED).toBe("true");
+        expect(config.SERI_VERIFY_ENABLED).toBe("false");
 
-        // The row itself still shows the env-sourced value after the list refreshes, not the
-        // write's value — a second render of "off", not one flipping to "on". The transcript
-        // sentence above already contains "Automatic verification: on" as a substring (it's the
-        // prefix of "on in config, ..."), so a bare occurrences() !== 0 check would always fail —
-        // instead, pin that every occurrence of the row-shaped substring is accounted for by that
-        // one sentence, i.e. the row itself never independently rendered "on".
-        await sawLineTimes("Automatic verification: off", 2);
-        expect(occurrences("Automatic verification: on")).toBe(
-          occurrences("Automatic verification: on in config, SERI_VERIFY_ENABLED env still wins."),
-        );
+        // The row itself still shows the env-sourced value after the list refreshes — the
+        // transcript sentence above already contains "Automatic verification: off" as a
+        // substring (it's the prefix of "off in config, ..."), so three total occurrences (the
+        // first render, the message, the refreshed render) is what proves the row never
+        // independently rendered "on".
+        await sawLineTimes("Automatic verification: off", 3);
+        expect(occurrences("Automatic verification: on")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }

@@ -8,7 +8,6 @@
 // and cli.ts both call through to, rather than cli.ts keeping its own duplicate (it did, briefly,
 // between Phase 2 and the fix that consolidated it here).
 import {
-  CATALOG_PROVIDERS,
   filterCatalogEntries,
   groupRoutes,
   type ModelCatalog,
@@ -279,7 +278,12 @@ export const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
 // hand-added key with no entry here), not two copies of it.
 export function configKeyInfo(key: string): ConfigKeyInfo {
   return (
-    CONFIG_KEY_INFO.get(key) ?? { label: key, description: "", kind: "string", takesEffectNextRun: false }
+    CONFIG_KEY_INFO.get(key) ?? {
+      label: key,
+      description: "",
+      kind: "string",
+      takesEffectNextRun: false,
+    }
   );
 }
 
