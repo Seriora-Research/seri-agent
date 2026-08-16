@@ -1242,9 +1242,10 @@ describe("App", () => {
 
   describe("listWindowSize", () => {
     // ink-testing-library's own `getWindowSize` fallback (App.test.tsx's own convention elsewhere
-    // in this file) floors rows at 24 — 24 - PANEL_CHROME_ROWS(8) = 16, clamped down to
-    // LIST_WINDOW_MAX(10). This is the D7 regression guard's own underlying fact: ModelPicker's
-    // window stays 10 under the test harness regardless of the host terminal's real size.
+    // in this file) floors rows at 24 — 24 - PANEL_CHROME_ROWS(9) = 15, clamped down to
+    // LIST_WINDOW_MAX(10). This is the "+2 more — keep typing to narrow" regression guard's own
+    // underlying fact: ModelPicker's window stays 10 under the test harness regardless of the host
+    // terminal's real size.
     test("a tall terminal clamps to LIST_WINDOW_MAX (10)", () => {
       expect(listWindowSize(24)).toBe(10);
     });
@@ -1254,8 +1255,8 @@ describe("App", () => {
     });
 
     test("a terminal in between returns rows minus the panel chrome budget", () => {
-      expect(listWindowSize(18)).toBe(10);
-      expect(listWindowSize(15)).toBe(7);
+      expect(listWindowSize(18)).toBe(9);
+      expect(listWindowSize(15)).toBe(6);
     });
   });
 

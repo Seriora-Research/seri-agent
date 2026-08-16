@@ -26,11 +26,12 @@ export const MODEL_PICKER_WINDOW = 10;
 // (SetupPanel's own 5 providers already fits under it) — enough rows that a floor-clamped panel
 // still shows more than one entry at a time. `PANEL_CHROME_ROWS` is how much of a panel's own
 // height is spent on its border, header/filter line, and "+N more" footer rather than list rows —
-// measured against ConfigPanel/PermissionsPanel/SetupPanel's own JSX, the tallest of which
-// (SetupPanel, list step) renders a border, a title line, and the footer around its rows.
+// sized against ConfigPanel's own list step, the tallest of the four: unlike PermissionsPanel/
+// SetupPanel, it can render a "+N more" footer AND a selectedDescription line at once (one row
+// each), on top of the border/header/hint every panel already has.
 export const MIN_LIST_WINDOW = 3;
 export const LIST_WINDOW_MAX = MODEL_PICKER_WINDOW;
-export const PANEL_CHROME_ROWS = 8;
+export const PANEL_CHROME_ROWS = 9;
 
 // The transcript viewport's placeholder height for the one frame before useBoxMetrics has ever
 // measured the live region below it (App.tsx) — not the real budget, just enough that the first
