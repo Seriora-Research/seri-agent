@@ -75,13 +75,18 @@ export async function runGuidedSetup(
     reactDispatch?.(action);
   };
 
+  let resolveClosed!: () => void;
+
+  // An arrow, not a bare `resolveClosed` reference: this call happens before `resolveClosed` is
+  // assigned (below), so passing the binding directly would capture `undefined` — the arrow defers
+  // the read of `resolveClosed` until `onPanelClosed` is actually invoked, by which point it is set.
   const { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack } = createSetupHandlers({
     dispatch,
     getPendingSetup: () => liveState.pendingSetup,
     configDir,
+    onPanelClosed: () => resolveClosed(),
   });
 
-  let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
     resolveClosed = resolve;
   });
