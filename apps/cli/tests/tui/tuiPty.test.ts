@@ -4719,9 +4719,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }, 60_000);
 
     // H-2's own scenario ("driveLoop rejecting settles run() instead of hanging forever", above),
-    // re-asserted for the alt screen: run() has no try/catch around `await runTui(...)`, so this
-    // exit relies on the `process.on("exit", exitAltScreen)` backstop (altScreen.ts), not the
-    // explicit call before printUsage — that line is never reached on this path.
+    // re-asserted for the alt screen: run()'s `try { runResult = await runTui(...) } catch (err) {
+    // return fatalDuringTui(err, ...) }` (cli.ts) is what exits it here, via `fatalDuringTui`'s own
+    // `exitAltScreen()` call — not the unconditional `exitAltScreen()` right before `printUsage`,
+    // which sits after that try/catch and is never reached once `runTui` has thrown.
     test("uncaught throw: exits the alt screen exactly once", async () => {
       const scriptPath = join(dir, "child-altscreen-rejects.mjs");
       writeFileSync(scriptPath, childScriptRejects(dir));
