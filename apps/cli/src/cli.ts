@@ -924,6 +924,14 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
   }
 }
 
+// A queued startup notice, tagged with the stream it was headed for — `fatalDuringTui` routes each
+// one to `console.log`/`console.error` accordingly so a stdout-origin line (a routine "Session …
+// created.") never gets reclassified as stderr-origin (a warning) just because both funnelled
+// through the same queue. The TUI flush site (runTui's own `connectDispatch`) ignores `stream`
+// deliberately: every queued line lands in the transcript either way, regardless of which stream
+// it would have gone to on a non-TTY run.
+type PreMountMessage = { text: string; stream: "stdout" | "stderr" };
+
 // Everything the loop is driven with, resolved before the first model call so a failure to build
 // any of it is an exit code rather than a half-started turn.
 //
@@ -984,8 +992,9 @@ type PreparedRun = {
   // are queued here instead: prepareSession runs after enterAltScreen() but before runTui's own
   // Ink render(), so a direct console write in that gap lands on the alt-screen buffer and is gone
   // the instant the TUI's first frame paints over it. runTui flushes this into the transcript at
-  // mount. Empty on the non-TTY path, which still writes these directly (no alt screen there).
-  preMountMessages: string[];
+  // mount. Empty on the non-TTY path, which still writes these directly (no alt screen there). Each
+  // entry keeps the stream it was headed for — see PreMountMessage's own comment.
+  preMountMessages: PreMountMessage[];
 };
 
 // Shared by prepareSession's own non-TTY notice and runTui's runTurn (below) — the two used to
@@ -1024,9 +1033,11 @@ function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider | 
 // (connectDispatch). Safe to call with `err` from ANY throw in this window, caught or uncaught:
 // this is also what closes the "stack trace printed into the discarded alt-screen buffer" failure
 // mode for a genuinely uncaught exception, since `run()`'s own top-level catches route here too.
-function fatalDuringTui(err: unknown, preMountMessages: readonly string[] = []): number {
+function fatalDuringTui(err: unknown, preMountMessages: readonly PreMountMessage[] = []): number {
   exitAltScreen();
-  for (const queued of preMountMessages) console.error(queued);
+  for (const queued of preMountMessages) {
+    (queued.stream === "stdout" ? console.log : console.error)(queued.text);
+  }
   console.error(err instanceof Error ? err.message : String(err));
   return 1;
 }
@@ -1046,12 +1057,17 @@ async function prepareSession(
   // `/setup` or `seri config set` just wrote is picked up on the very next run.
   const configDir = deps.authConfigDir ?? getConfigDir();
   // See PreparedRun.preMountMessages' own comment: queued instead of printed on the TUI path,
-  // printed immediately (unchanged) everywhere else.
-  const preMountMessages: string[] = [];
-  const emit = isTTY ? (line: string) => preMountMessages.push(line) : console.log;
-  // Passed as printWarning/printPreApproved's own `sink` param — `undefined` on the non-TTY path
-  // keeps their existing default (console.error/console.log) exactly as before.
-  const warnSink = isTTY ? emit : undefined;
+  // printed immediately (unchanged) everywhere else. Two queueing sinks, not one: `emit` is for
+  // stdout-origin lines (session-created, printPreApproved's own default), `warn` for stderr-origin
+  // ones (printWarning's three call sites, getModelCatalog's fallback warning) — collapsing both
+  // into one queue with no stream tag used to make `fatalDuringTui` print every one of them to
+  // stderr regardless of origin, reclassifying a routine notice as an error.
+  const preMountMessages: PreMountMessage[] = [];
+  const emit = isTTY ? (text: string) => preMountMessages.push({ text, stream: "stdout" }) : console.log;
+  const warn = isTTY ? (text: string) => preMountMessages.push({ text, stream: "stderr" }) : console.error;
+  // Passed as printWarning's own `sink` param — `undefined` on the non-TTY path keeps its existing
+  // default (console.error) exactly as before.
+  const warnSink = isTTY ? warn : undefined;
 
   // One try wrapping everything from here through the final `return` (found by review — this used
   // to be two separate try/catches, around loadOrCreateSession and resolveRoute/getModel only,
@@ -1149,9 +1165,12 @@ async function prepareSession(
     const permissionMode = skipPermissions ? "auto" : session.permissionMode;
     // approve-each only: in read-only the gate blocks these tools before it ever consults the
     // allowlist (gate.ts:14), and in auto everything is allowed anyway — printing "pre-approved" in
-    // either would be a sentence the run does not honour.
+    // either would be a sentence the run does not honour. `isTTY ? emit : undefined`, not
+    // `warnSink`: printPreApproved's own default sink is console.log, so queueing it under the
+    // stderr-tagged `warn` would misclassify a routine notice as an error once fatalDuringTui
+    // routes by stream.
     if (permissionMode === "approve-each" && allowedTools.length > 0) {
-      printPreApproved(allowedTools, warnSink);
+      printPreApproved(allowedTools, isTTY ? emit : undefined);
     }
 
     // `write_file`, `bash` and `powershell` write relative to process.cwd(), while the snapshot
@@ -2564,7 +2583,12 @@ async function runTui(
         reactDispatch = reducerDispatch;
         // See PreparedRun.preMountMessages' own comment: prepareSession queued these instead of
         // printing them directly, since it runs after enterAltScreen() but before this mount.
-        for (const line of prepared.preMountMessages) dispatch({ type: "transcript-append", line });
+        // `.stream` is ignored deliberately (PreMountMessage's own comment): every queued line
+        // lands in the transcript either way, regardless of which console stream it would have
+        // gone to on a non-TTY run.
+        for (const { text } of prepared.preMountMessages) {
+          dispatch({ type: "transcript-append", line: text });
+        }
         // Stage C: the non-blocking login/signup offer (AuthBanner) — true iff no auth session is
         // saved yet, computed fresh at mount the same way decideSetupOpen/decideModelPickerOpen are
         // computed fresh on their own open, not cached from prepareSession.
