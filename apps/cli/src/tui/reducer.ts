@@ -174,11 +174,14 @@ export type TuiAction =
   // echo that must not fragment an in-progress streamed answer into two transcript entries (see
   // pushLine's own comment).
   | { type: "transcript-append"; line: string; flush?: boolean }
-  // Scrolls the transcript viewport. Positive `delta` moves toward older lines. The reducer clamps
-  // to `[0, transcript.length - 1]` and does not know the viewport height — App.tsx computes
-  // `delta` from the measured viewport before dispatching (pageSize's own comment there).
-  | { type: "transcript-scroll"; delta: number }
-  | { type: "transcript-scroll-to"; to: "top" | "bottom" }
+  // Scrolls the transcript viewport. Positive `delta` moves toward older lines, clamped to
+  // `[0, transcript.length - viewportRows]` — the offset at which visibleTranscript shows the
+  // oldest `viewportRows` lines, not just the single oldest line (`length - 1` would slice down to
+  // one line pinned to the bottom by `justifyContent="flex-end"`, App.tsx). `viewportRows` is
+  // carried on the action, not read from state, because the reducer otherwise has no view height to
+  // clamp against — App.tsx passes the same measured value it uses for `pageSize`.
+  | { type: "transcript-scroll"; delta: number; viewportRows: number }
+  | { type: "transcript-scroll-to"; to: "top" | "bottom"; viewportRows: number }
   | { type: "loop-event"; event: LoopEvent }
   | { type: "command-error"; message: string }
   | { type: "command-error-cleared" }
@@ -262,7 +265,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "transcript-append":
       return pushLine(state, action.line, action.flush ?? true);
     case "transcript-scroll": {
-      const max = Math.max(0, state.transcript.length - 1);
+      const max = Math.max(0, state.transcript.length - action.viewportRows);
       const next = Math.min(max, Math.max(0, state.transcriptScrollOffset + action.delta));
       return { ...state, transcriptScrollOffset: next };
     }
@@ -270,7 +273,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return {
         ...state,
         transcriptScrollOffset:
-          action.to === "top" ? Math.max(0, state.transcript.length - 1) : 0,
+          action.to === "top" ? Math.max(0, state.transcript.length - action.viewportRows) : 0,
       };
     case "loop-event":
       return applyLoopEvent(state, action.event);

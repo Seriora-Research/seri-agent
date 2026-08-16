@@ -9,6 +9,7 @@ import type {
   PermissionRow,
   SetupProviderRow,
 } from "../../src/tui/commands";
+import { visibleTranscript } from "../../src/tui/format";
 import { initialTuiState, tuiReducer } from "../../src/tui/reducer";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -124,34 +125,54 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
 
   test("a positive delta (toward older lines) increases the offset", () => {
     const state = transcriptOf(["a", "b", "c", "d", "e"]);
-    const next = tuiReducer(state, { type: "transcript-scroll", delta: 2 });
+    const next = tuiReducer(state, { type: "transcript-scroll", delta: 2, viewportRows: 1 });
     expect(next.transcriptScrollOffset).toBe(2);
   });
 
   test("clamps at 0 — a negative delta cannot scroll past the newest line", () => {
     const state = transcriptOf(["a", "b", "c"]);
-    const next = tuiReducer(state, { type: "transcript-scroll", delta: -5 });
+    const next = tuiReducer(state, { type: "transcript-scroll", delta: -5, viewportRows: 1 });
     expect(next.transcriptScrollOffset).toBe(0);
   });
 
-  test("clamps at transcript.length - 1 — a large delta cannot scroll past the oldest line", () => {
-    const state = transcriptOf(["a", "b", "c"]);
-    const next = tuiReducer(state, { type: "transcript-scroll", delta: 100 });
-    expect(next.transcriptScrollOffset).toBe(2);
+  // A large delta must not scroll past the offset that shows a FULL viewport of the oldest
+  // lines — `transcript.length - viewportRows`, not `transcript.length - 1` (the latter would
+  // slice `visibleTranscript` down to a single oldest line pinned to the bottom by
+  // `justifyContent="flex-end"`, App.tsx, instead of a full page).
+  test("clamps at transcript.length - viewportRows — a large delta stops at a full page of the oldest lines", () => {
+    const state = transcriptOf(["a", "b", "c", "d", "e"]);
+    const next = tuiReducer(state, { type: "transcript-scroll", delta: 100, viewportRows: 2 });
+    expect(next.transcriptScrollOffset).toBe(3);
   });
 
-  test("transcript-scroll-to top jumps to the oldest line", () => {
-    const state = transcriptOf(["a", "b", "c", "d"]);
-    const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+  test("transcript-scroll-to top jumps to the offset that shows a full page of the oldest lines", () => {
+    const state = transcriptOf(["a", "b", "c", "d", "e"]);
+    const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top", viewportRows: 2 });
     expect(next.transcriptScrollOffset).toBe(3);
+  });
+
+  // The exact scenario MEDIUM-1 (code review) named: Home/repeated PageUp used to collapse the
+  // viewport to a single line instead of a full page.
+  test("transcript-scroll-to top: visibleTranscript then renders a full viewport of the oldest lines, not one line", () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i}`);
+    const state = transcriptOf(lines);
+    const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top", viewportRows: 5 });
+
+    const visible = visibleTranscript(next.transcript, 5, next.transcriptScrollOffset);
+    expect(visible).toEqual(["line 0", "line 1", "line 2", "line 3", "line 4"]);
   });
 
   test("transcript-scroll-to bottom resumes following the newest line", () => {
     const scrolled = tuiReducer(transcriptOf(["a", "b", "c"]), {
       type: "transcript-scroll",
       delta: 2,
+      viewportRows: 1,
     });
-    const next = tuiReducer(scrolled, { type: "transcript-scroll-to", to: "bottom" });
+    const next = tuiReducer(scrolled, {
+      type: "transcript-scroll-to",
+      to: "bottom",
+      viewportRows: 1,
+    });
     expect(next.transcriptScrollOffset).toBe(0);
   });
 
@@ -162,7 +183,7 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
   // of turns would silently drift the anchored view.
   test("a scrolled-up view (offset > 0) advances by the number of lines a flush actually appends", () => {
     let state = transcriptOf(["a", "b", "c", "d", "e"]);
-    state = tuiReducer(state, { type: "transcript-scroll", delta: 3 });
+    state = tuiReducer(state, { type: "transcript-scroll", delta: 3, viewportRows: 2 });
     expect(state.transcriptScrollOffset).toBe(3);
 
     state = tuiReducer(state, {

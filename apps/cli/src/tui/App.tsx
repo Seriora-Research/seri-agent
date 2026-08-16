@@ -233,10 +233,10 @@ export function App({
   // nothing: InputBox's own handler skips any key.ctrl input).
   useInput((input, key) => {
     if (key.ctrl && input === "c") onCancel?.();
-    if (key.pageUp) dispatch({ type: "transcript-scroll", delta: pageSize });
-    if (key.pageDown) dispatch({ type: "transcript-scroll", delta: -pageSize });
-    if (key.home) dispatch({ type: "transcript-scroll-to", to: "top" });
-    if (key.end) dispatch({ type: "transcript-scroll-to", to: "bottom" });
+    if (key.pageUp) dispatch({ type: "transcript-scroll", delta: pageSize, viewportRows });
+    if (key.pageDown) dispatch({ type: "transcript-scroll", delta: -pageSize, viewportRows });
+    if (key.home) dispatch({ type: "transcript-scroll-to", to: "top", viewportRows });
+    if (key.end) dispatch({ type: "transcript-scroll-to", to: "bottom", viewportRows });
   });
 
   return (
