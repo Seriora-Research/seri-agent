@@ -1049,13 +1049,6 @@ async function prepareSession(
   isTTY: boolean,
 ): Promise<PreparedRun | number> {
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
-  // Resolved before loadOrCreateSession, not after (code-review finding, PR #73, round 3, item
-  // #4): that function's own model/provider backfill (resolveDefaultModel) needs the SAME
-  // configDir routing/getModel below already use, not the ambient default — a sandboxed
-  // `authConfigDir` caller used to get session.model/session.provider read from the wrong
-  // config.json entirely. `configDir` matches `seri config`'s own resolution (D7), so a key
-  // `/setup` or `seri config set` just wrote is picked up on the very next run.
-  const configDir = deps.authConfigDir ?? getConfigDir();
   // See PreparedRun.preMountMessages' own comment: queued instead of printed on the TUI path,
   // printed immediately (unchanged) everywhere else. Two queueing sinks, not one: `emit` is for
   // stdout-origin lines (session-created, printPreApproved's own default), `warn` for stderr-origin
@@ -1074,8 +1067,16 @@ async function prepareSession(
   // identical on catch): every OTHER fallible call in this function — saveSession, checkpointTarget,
   // loadGrants, createCheckpointer/loadVerifyConfig, loadMemory — was reachable with no catch at
   // all, discarding `preMountMessages` right along with whatever it threw. One catch means nothing
-  // fallible in this function can do that again by omission.
+  // fallible in this function can do that again by omission. `configDir` is resolved in here too,
+  // not above the try (code-review finding: that function's own model/provider backfill,
+  // resolveDefaultModel, needs the SAME configDir routing/getModel below already use, not the
+  // ambient default — a sandboxed `authConfigDir` caller used to get session.model/session.provider
+  // read from the wrong config.json entirely; `configDir` matches `seri config`'s own resolution, so
+  // a key `/setup` or `seri config set` just wrote is picked up on the very next run) — being inside
+  // the try is what makes `run()`'s own isTTY try/catch around this function's call site provably
+  // unreachable, see that call site's own comment.
   try {
+    const configDir = deps.authConfigDir ?? getConfigDir();
     const { session, modelRecorded } = loadOrCreateSession(
       ctx.resuming,
       ctx.resumeId,
@@ -2778,25 +2779,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
   }
 
-  // isTTY-only try, kept even though prepareSession's own one catch (its own comment: "nothing
-  // fallible in this function can [throw uncaught] again by omission") means it never actually
-  // throws to this call site on EITHER path — a missing API key or a saveSession/loadGrants/
-  // createCheckpointer failure all come back as prepareSession's own `fatalDuringTui` return value,
-  // handled uniformly by the `typeof prepared === "number"` check below regardless of `isTTY`. This
-  // try/catch is a backstop against something prepareSession itself throws before reaching its own
-  // try (an argument-evaluation failure, not a fallible call inside it) reaching Ink's own render
-  // loop while the alt screen is still active on the TTY path; the non-TTY path has no alt screen to
-  // protect and needs no matching backstop.
-  let prepared: PreparedRun | number;
-  if (isTTY) {
-    try {
-      prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
-    } catch (err) {
-      return fatalDuringTui(err);
-    }
-  } else {
-    prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
-  }
+  // prepareSession reports failure as a return value (its own comment: "nothing fallible in this
+  // function can [throw uncaught] again by omission"), so the TTY and non-TTY paths need no
+  // different handling here — both are covered by the `typeof prepared === "number"` check below.
+  const prepared: PreparedRun | number = await prepareSession(ctx, deps, skipPermissions, isTTY);
   if (typeof prepared === "number") return prepared;
 
   // The non-interactive branch below still calls driveLoop unconditionally on a bare
