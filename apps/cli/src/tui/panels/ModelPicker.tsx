@@ -126,9 +126,14 @@ export function ModelPicker({
       {visible.map((row, localIndex) => {
         const index = scrollOffset + localIndex;
         return (
+          // `wrap="truncate-end"` (found by review, same reasoning as ConfigPanel's own row Text):
+          // formatModelRow's fixed column widths sum to ~87 chars — real on any terminal narrower
+          // than that, not a hypothetical edge case — and PANEL_CHROME_ROWS (format.ts) budgets
+          // exactly one row per list row regardless.
           <Text
             key={`${row.entry.provider}/${row.entry.id}`}
             color={index === selectedIndex ? theme.accent : undefined}
+            wrap="truncate-end"
           >
             {index === selectedIndex ? "> " : "  "}
             {formatModelRow(row)}

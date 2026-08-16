@@ -4,6 +4,7 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import { type ConfigRow, configKeyInfo } from "../commands";
+import { singleLine } from "../format";
 import type { ConfigPanelState } from "../reducer";
 import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
@@ -170,17 +171,6 @@ function ConfigList({
 function sourceTag(row: ConfigRow): string {
   if (row.source === "unset") return "";
   return row.source === "env" ? " (env)" : " (config)";
-}
-
-// `wrap="truncate-end"` (the Text this feeds, below) only guards a value wider than the panel —
-// it does nothing for a literal newline, which Ink still renders as a real line break regardless
-// of wrap mode. A non-secret value can carry one: the TUI's own `/config` entry step strips
-// `\r`/`\n` as they're typed (InputBox's own paste-terminator handling), but `seri config set` on
-// the CLI (config/config.ts's setConfigValue) does not, so a value written that way can still
-// reach here with one in it. Collapsed to a single space, not stripped to nothing, so an oddly
-// space-joined value at least stays legible about where the break was.
-function singleLine(value: string): string {
-  return value.replace(/\r\n|\r|\n/g, " ");
 }
 
 function formatConfigRow(row: ConfigRow): string {

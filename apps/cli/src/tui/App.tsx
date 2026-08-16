@@ -27,6 +27,7 @@ import {
   DEFAULT_COLUMNS,
   FALLBACK_CHROME_ROWS,
   formatModeLabel,
+  transcriptVisualRows,
   visibleTranscript,
 } from "./format";
 import { ApprovalBox } from "./panels/ApprovalBox";
@@ -222,6 +223,18 @@ export function App({
   // One line of overlap between pages, same convention a terminal pager's own PageUp/PageDown use.
   const pageSize = Math.max(1, viewportRows - 1);
 
+  // Read the render-time `visibleTranscript` call's own comment for why this exists: a scrolled-up
+  // `transcriptScrollOffset` (reducer.ts) only ever advances when a flush actually happens
+  // (`appendLines`), so without this, a streamed answer's OWN growth (not yet flushed) would drift
+  // the visible window toward newer content one row at a time and then snap back at flush. `0` when
+  // `state.streaming` is empty: `transcriptVisualRows` always returns >= 1 even for `""` (a blank
+  // committed line is meaningful; an ABSENT streaming answer is not), so this guards that case
+  // explicitly rather than let a spurious extra row of offset apply while nothing is streaming.
+  const pendingRows =
+    state.streaming.length > 0 ? transcriptVisualRows([state.streaming], state.columns) : 0;
+  const transcriptOffset =
+    state.transcriptScrollOffset > 0 ? state.transcriptScrollOffset + pendingRows : 0;
+
   // `columns`/`viewportRows` live on TuiState itself (reducer.ts's own comment on those fields) —
   // this is the one place that ever measures them, so it's the one place that ever dispatches them
   // in. Two things ride on this same action: `appendLines` (reducer.ts) needs the current width to
@@ -278,12 +291,17 @@ export function App({
   });
 
   return (
-    // `rows - 1`, not `rows`, on Windows only: Ink forces a full clear-and-redraw on every frame
-    // there once the rendered output fills the whole terminal height (isWindowsConsole &&
-    // (wasFullscreen || isFullscreen), Ink's own resolveOutput) — one row short keeps the normal
-    // diffing path. That check is Windows-specific (`isWindowsConsole`), so macOS/Linux keep the
-    // full `rows` instead of losing a row of usable height to a bug they don't have.
-    <Box flexDirection="column" height={process.platform === "win32" ? rows - 1 : rows}>
+    // `rows - 1`, not `rows`, on every platform (reverted from a Windows-only gate found by
+    // review): Windows' own `isWindowsConsole && (wasFullscreen || isFullscreen)` full-redraw path
+    // (Ink's own resolveOutput) is real and Windows-specific, but it is not the only reason this
+    // needs to stay one row short. At a FULL `rows`, `isFullscreen` becomes true on every platform
+    // (Ink's own `outputHeight >= viewportRows`), and mid-run `console.*` output (patchConsole,
+    // e.g. a checkpoint/archivist warning) then erases and rewrites `rows` lines for a write that
+    // adds its own lines on top — the terminal scrolls, but nothing off Windows re-triggers the
+    // full-clear path to notice, so log-update's own line-count bookkeeping goes stale and every
+    // later frame paints at the wrong offset for the REST OF THE SESSION. `rows - 1` leaves exactly
+    // the one spare row that absorbs a single console write without ever scrolling the viewport.
+    <Box flexDirection="column" height={rows - 1}>
       {/* Rendered ABOVE the render ternary below, not as one of its branches — unlike
       ApprovalBox/ModelPicker/SetupPanel this never replaces InputBox, it sits alongside it.
       `state.pendingAuth === undefined` (not just `state.authOffer`) is the derived half of the
@@ -303,16 +321,16 @@ export function App({
       VISUAL row count at `viewportRows`, so `overflowY`/`justifyContent="flex-end"` are a pure
       backstop now, not load-bearing truncation — anchoring to the end means a genuine one-frame
       overshoot falls off the top (oldest), not the bottom (newest).
-      The in-progress answer (`state.streaming`) is appended as the newest entry here rather than
-      rendered as its own unbounded `<Text>` below the box (the previous shape): unwrapped and
-      un-height-capped for its entire duration, it could grow taller than the box and push InputBox
-      off-screen — the same "one entry, many rows" defect this file exists to fix, just still live
-      for every answer's whole streaming duration. Folding it in means a scrolled-up reader no
-      longer force-follows a live answer either, which matches how a terminal pager already behaves
-      (scrolling up stops following); one honest gap: this box's own scroll clamp (reducer.ts) is
-      computed over `state.transcript` alone, one flush behind the streamed row count it renders
-      here, so the deepest reachable PageUp is momentarily short by however many rows are still
-      streaming — self-correcting the instant the turn flushes. */}
+      The in-progress answer (`state.streaming`) is passed as `visibleTranscript`'s own `pending`
+      parameter rather than rendered as its own unbounded `<Text>` below the box (the original
+      shape) or spread into a `[...state.transcript, state.streaming]` array (a version of this fix
+      tried and reverted, found by review: that allocated a full copy of the transcript on every
+      streamed token, exactly what `visibleTranscript`'s own tail-walk exists to avoid paying).
+      `effectiveOffset` below is what keeps a scrolled-up reader's view from drifting toward newer
+      content as the answer grows and then snapping back the instant it flushes: `appendLines`
+      (reducer.ts) already advances `transcriptScrollOffset` by a flush's own row count for exactly
+      this reason, and pending rows need the identical treatment applied live, since they are not
+      yet a dispatched action `appendLines` could react to. */}
       <Box
         ref={viewportRef}
         flexDirection="column"
@@ -323,10 +341,11 @@ export function App({
         justifyContent="flex-end"
       >
         {visibleTranscript(
-          state.streaming.length > 0 ? [...state.transcript, state.streaming] : state.transcript,
+          state.transcript,
           viewportRows,
-          state.transcriptScrollOffset,
+          transcriptOffset,
           state.columns,
+          state.streaming,
         ).map((line, index) => (
           <Text key={index}>{line}</Text>
         ))}

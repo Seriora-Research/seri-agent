@@ -2217,17 +2217,28 @@ async function runTui(
           connectDispatch: undefined,
         }),
       );
-      void instance.waitUntilExit().then(() => {
-        resolveRunTui({
-          doneReason,
-          cancelledBy: undefined,
-          usage,
-          cost,
-          refusedWithoutRunning,
-          archivist,
-          ranAnyTurn,
+      // `.catch(rejectRunTui)` (found by review): Ink's own `unmount(error)` rejects
+      // `waitUntilExit()`'s promise when the argument is an Error (a render crash, for instance) —
+      // without this, that rejection had nowhere to go (a `void`ed promise with no rejection
+      // handler), so `settled` above never settled at all: `await runTui(...)` at this function's
+      // own call site hung forever, with the alt screen still up, instead of hitting the catch that
+      // is supposed to cover exactly this case.
+      void instance
+        .waitUntilExit()
+        .then(() => {
+          resolveRunTui({
+            doneReason,
+            cancelledBy: undefined,
+            usage,
+            cost,
+            refusedWithoutRunning,
+            archivist,
+            ranAnyTurn,
+          });
+        })
+        .catch((err: unknown) => {
+          rejectRunTui(err instanceof Error ? err : new Error(String(err)));
         });
-      });
     };
     if (turnInFlight) {
       // MEDIUM-5: without this, cancelling a still-running turn on the way out (this whole
@@ -2738,7 +2749,24 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
   }
 
-  const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
+  // isTTY-only try (found by review — the alt screen is still active here on that path, and this
+  // was the single largest gap in the earlier fix for the SAME defect the two try/catches above and
+  // below this call already close): prepareSession's own two internal catches only cover
+  // loadOrCreateSession and resolveRoute/getModel, but everything else it calls — saveSession,
+  // checkpointTarget, loadGrants, createCheckpointer/loadVerifyConfig, loadMemory — can still throw
+  // straight through it uncaught. Non-TTY is intentionally left exactly as before: there is no alt
+  // screen to protect there, and Bun's own default uncaught-exception reporting (a full stack to
+  // stderr) is strictly more diagnostic than routing it through fatalDuringTui's message-only print.
+  let prepared: PreparedRun | number;
+  if (isTTY) {
+    try {
+      prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
+    } catch (err) {
+      return fatalDuringTui(err);
+    }
+  } else {
+    prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
+  }
   if (typeof prepared === "number") return prepared;
 
   // The non-interactive branch below still calls driveLoop unconditionally on a bare

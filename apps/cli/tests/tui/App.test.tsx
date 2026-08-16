@@ -220,6 +220,36 @@ describe("App", () => {
     expect(frame).toContain("↑ scrolled");
   });
 
+  // Regression guard (found by review): folding the in-progress answer into the same scrollable
+  // viewport as the committed transcript (so it stops being unbounded/unwrapped, the test above's
+  // own fix) came with a second bug the first fix's own tests never exercised — a scrolled-up
+  // reader's `transcriptScrollOffset` only advances at FLUSH (`appendLines`, reducer.ts), so nothing
+  // compensated for `state.streaming` growing WHILE still in progress: the visible window drifted
+  // toward newer content one row at a time as the answer streamed, then jumped back the instant it
+  // flushed. Asserts the strongest form directly: the rendered frame must not change AT ALL while
+  // scrolled away from the tail, streaming or not.
+  test("a scrolled-up reader's view neither drifts while an answer streams nor jumps when it flushes", async () => {
+    const { instance, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    instance.stdin.write("\x1b[5~"); // Page Up — scroll away from the tail
+    await flush();
+    const anchored = instance.lastFrame() ?? "";
+    expect(anchored).toContain("↑ scrolled");
+
+    for (let i = 0; i < 10; i++) {
+      dispatch({ type: "loop-event", event: { type: "text-delta", text: `chunk ${i}\n` } });
+      await flush();
+      expect(instance.lastFrame() ?? "").toBe(anchored);
+    }
+
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush();
+    expect(instance.lastFrame() ?? "").toBe(anchored);
+  });
+
   test("a tool-call loop-event sets the running status, and tool-result clears it", async () => {
     const { instance, dispatch } = await connect();
 

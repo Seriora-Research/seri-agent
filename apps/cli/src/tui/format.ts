@@ -79,7 +79,10 @@ export function transcriptVisualRows(lines: string[], columns: number): number {
 // `offset + rows` visual rows have accumulated (or the transcript runs out) — bounded by how deep
 // the reader has scrolled, not by total session length, so this stays cheap on every render of a
 // long-running session (called once per streamed token while a turn is in progress) instead of
-// re-wrapping the whole history every frame.
+// re-wrapping the whole history every frame. NOTE: at the deepest possible scroll (Home, offset ===
+// totalVisualRows - viewportRows) this bound degrades to the full transcript, same as the O(n)
+// clamp — unavoidable without caching wrapped output, which is the one thing this file's own
+// `wrapForTranscript` comment explains storing at write time can never safely do.
 //
 // Collected newest-line-first via `push` (O(1) amortized), each line's OWN rows kept in their
 // normal top-to-bottom order — `.reverse()` at the end restores overall chronological order in one
@@ -87,14 +90,28 @@ export function transcriptVisualRows(lines: string[], columns: number): number {
 // tail length) per call, making the accumulation up to O(scroll-depth²): cheap while scrolled near
 // the bottom, but the exact case a reader scrolled deep into a long session (or a fast streamed
 // answer on a tall terminal) would actually hit every render.
+//
+// `pending` (App.tsx's `state.streaming`, the in-progress answer not yet committed to `lines`) is
+// wrapped and seeded into the accumulation FIRST, ahead of the backward walk over `lines` — not
+// spread into a `[...lines, pending]` array at the call site (found by review, a prior version of
+// this function did exactly that): that allocated a full copy of the committed transcript on every
+// call, i.e. every streamed token, for a function whose entire point is staying proportional to
+// scroll depth instead of session length. Wrapping in the SAME accumulation `lines` itself feeds
+// keeps `pending`'s own row count part of one coherent walk rather than a second, disconnected one.
 export function visibleTranscript(
   lines: string[],
   rows: number,
   offset: number,
   columns: number,
+  pending = "",
 ): string[] {
   const collected: string[][] = [];
   let collectedRows = 0;
+  if (pending.length > 0) {
+    const wrapped = wrapForTranscript(pending, columns);
+    collected.push(wrapped);
+    collectedRows += wrapped.length;
+  }
   for (let i = lines.length - 1; i >= 0 && collectedRows < offset + rows; i--) {
     const wrapped = wrapForTranscript(lines[i], columns);
     collected.push(wrapped);
@@ -104,6 +121,20 @@ export function visibleTranscript(
   const end = Math.max(0, tail.length - offset);
   const start = Math.max(0, end - rows);
   return tail.slice(start, end);
+}
+
+// For a list-panel row rendered with `wrap="truncate-end"` (ConfigPanel, SetupPanel): that prop
+// only guards a value wider than the panel — it does nothing for a literal newline, which Ink still
+// renders as a real line break regardless of wrap mode. A non-secret config value can carry one:
+// the TUI's own interactive entry steps strip `\r`/`\n` as they're typed (InputBox's own
+// paste-terminator handling), but `seri config set` on the CLI (config/config.ts's setConfigValue)
+// does not, so a value written that way can still reach a row's own render with one in it — and
+// SetupPanel's own `maskValue` output (config/commands.ts) keeps a value's first/last 4 characters
+// verbatim, so a newline in either survives the masking too. Collapsed to a single space, not
+// stripped to nothing, so an oddly space-joined value at least stays legible about where the break
+// was.
+export function singleLine(value: string): string {
+  return value.replace(/\r\n|\r|\n/g, " ");
 }
 
 // The "clamp, don't re-center" rule lifted verbatim out of ModelPicker's own `moveSelection`
@@ -317,10 +348,16 @@ export function envShadowReason(keyName: string): string {
 export function formatSetupRow(row: SetupProviderRow): string {
   const name = truncatePad(row.provider, PROVIDER_WIDTH);
   if (row.source === "unset") return `${name} not set`;
+  // `singleLine`, not `row.masked` raw (found by review): `maskValue` keeps a value's first/last 4
+  // characters verbatim, so a literal newline in either survives masking — see `singleLine`'s own
+  // comment for how it reaches here. `?? ""`: `masked` is `undefined` only for the "unset" source
+  // already returned above, never for "env"/"config" — the fallback is unreachable in practice, not
+  // a real case being papered over.
+  const masked = singleLine(row.masked ?? "");
   if (row.source === "env") {
     return row.removable
-      ? `${name} ${row.masked} (env, config entry underneath — removable)`
+      ? `${name} ${masked} (env, config entry underneath — removable)`
       : `${name} ${envShadowReason(row.keyName)}`;
   }
-  return `${name} ${row.masked} (config)`;
+  return `${name} ${masked} (config)`;
 }

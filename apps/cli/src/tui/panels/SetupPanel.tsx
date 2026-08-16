@@ -141,7 +141,14 @@ function SetupList({
       {visible.map((row, localIndex) => {
         const index = offset + localIndex;
         return (
-          <Text key={row.provider} color={index === selected ? theme.accent : undefined}>
+          // `wrap="truncate-end"` (found by review, same reasoning as ConfigPanel's own row Text):
+          // a config-entry value here is arbitrary user input, and PANEL_CHROME_ROWS (format.ts)
+          // budgets exactly one row per list row regardless of how wide it is.
+          <Text
+            key={row.provider}
+            color={index === selected ? theme.accent : undefined}
+            wrap="truncate-end"
+          >
             {index === selected ? "> " : "  "}
             {formatSetupRow(row)}
           </Text>
