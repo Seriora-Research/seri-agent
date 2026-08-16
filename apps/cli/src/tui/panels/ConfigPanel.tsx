@@ -222,7 +222,14 @@ function ConfigEnterValue({
       <Text color={theme.muted}>{`Set ${label} (${key})`}</Text>
       <Text color={theme.muted}>{description}</Text>
       <Text>{"*".repeat(value.length)}</Text>
-      {error !== undefined && <Text color={theme.error}>{error}</Text>}
+      {/* singleLine + wrap="truncate-end": error comes from messageOf(err) — an Error#message is
+      unbounded and free to carry a literal newline, and this panel budgets exactly one row for it,
+      same reasoning as App.tsx's own commandError guard. */}
+      {error !== undefined && (
+        <Text color={theme.error} wrap="truncate-end">
+          {singleLine(error)}
+        </Text>
+      )}
       {busy ? (
         <Text color={theme.muted}>Saving…</Text>
       ) : (

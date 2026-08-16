@@ -3,6 +3,7 @@
 // `auth-requested`/`auth-step`/`auth-resolved`. New code, not a move.
 
 import { Box, Text, useInput } from "ink";
+import { singleLine } from "../format";
 import type { AuthPanelState } from "../reducer";
 import { theme } from "../theme";
 
@@ -73,7 +74,12 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
       borderColor={state.error ? theme.error : theme.accent}
       flexDirection="column"
     >
-      <Text color={state.error ? theme.error : theme.accent}>{state.message}</Text>
+      {/* singleLine + wrap="truncate-end": the error case comes from messageOf(err) — an
+      Error#message is unbounded and free to carry a literal newline, and this panel budgets
+      exactly one row for it, same reasoning as App.tsx's own commandError guard. */}
+      <Text color={state.error ? theme.error : theme.accent} wrap="truncate-end">
+        {singleLine(state.message)}
+      </Text>
       <Text color={theme.muted}>Enter/Esc continue</Text>
     </Box>
   );

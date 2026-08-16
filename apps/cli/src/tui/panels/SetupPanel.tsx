@@ -4,7 +4,7 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
-import { formatSetupRow, remaining } from "../format";
+import { formatSetupRow, remaining, singleLine } from "../format";
 import type { SetupState } from "../reducer";
 import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
@@ -209,7 +209,14 @@ function SetupEnterKey({
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
       <Text color={theme.muted}>{`${keyName} for ${provider}`}</Text>
       <Text>{"*".repeat(value.length)}</Text>
-      {error !== undefined && <Text color={theme.error}>{error}</Text>}
+      {/* singleLine + wrap="truncate-end": error comes from messageOf(err) — an Error#message is
+      unbounded and free to carry a literal newline, and this panel budgets exactly one row for it,
+      same reasoning as App.tsx's own commandError guard. */}
+      {error !== undefined && (
+        <Text color={theme.error} wrap="truncate-end">
+          {singleLine(error)}
+        </Text>
+      )}
       {busy ? (
         <Text color={theme.muted}>Validating…</Text>
       ) : (
