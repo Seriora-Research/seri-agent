@@ -2754,14 +2754,15 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
   }
 
-  // isTTY-only try (found by review — the alt screen is still active here on that path, and this
-  // was the single largest gap in the earlier fix for the SAME defect the two try/catches above and
-  // below this call already close): prepareSession's own two internal catches only cover
-  // loadOrCreateSession and resolveRoute/getModel, but everything else it calls — saveSession,
-  // checkpointTarget, loadGrants, createCheckpointer/loadVerifyConfig, loadMemory — can still throw
-  // straight through it uncaught. Non-TTY is intentionally left exactly as before: there is no alt
-  // screen to protect there, and Bun's own default uncaught-exception reporting (a full stack to
-  // stderr) is strictly more diagnostic than routing it through fatalDuringTui's message-only print.
+  // isTTY-only try, kept even though prepareSession's own one catch (its own comment: "nothing
+  // fallible in this function can [throw uncaught] again by omission") means it never actually
+  // throws to this call site on EITHER path — a missing API key or a saveSession/loadGrants/
+  // createCheckpointer failure all come back as prepareSession's own `fatalDuringTui` return value,
+  // handled uniformly by the `typeof prepared === "number"` check below regardless of `isTTY`. This
+  // try/catch is a backstop against something prepareSession itself throws before reaching its own
+  // try (an argument-evaluation failure, not a fallible call inside it) reaching Ink's own render
+  // loop while the alt screen is still active on the TTY path; the non-TTY path has no alt screen to
+  // protect and needs no matching backstop.
   let prepared: PreparedRun | number;
   if (isTTY) {
     try {
