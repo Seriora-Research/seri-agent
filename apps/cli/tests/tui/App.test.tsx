@@ -699,7 +699,7 @@ describe("App", () => {
       expect(frame).not.toContain("more — keep typing to narrow");
     });
 
-    // C1: the real bug — the visible window used to always be the first MODEL_PICKER_WINDOW
+    // C1: the real bug — the visible window used to always be the first LIST_WINDOW_MAX
     // entries regardless of `selectedIndex`, so Down past the 10th entry moved the highlight
     // somewhere nothing on screen showed. Down 15 times over 20 entries lands well past the
     // original window; this checks BOTH halves the task's own comment calls out: the list actually

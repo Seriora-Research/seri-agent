@@ -7,22 +7,15 @@ import wrapAnsi from "wrap-ansi";
 import type { ResolvedRoute } from "../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "./commands";
 
-// The most a picker window ever shows at once, regardless of how many entries match the current
-// filter — the catalog easily runs into the hundreds (models.dev's own OpenRouter listing), and
-// rendering all of them would scroll the picker itself out of view, the same reasoning
-// truncateArgsDisplay already applies to a single long line. `selectedIndex` can move past this
-// many rows (arrow-key navigation over the full filtered list, not just what's on screen) — see
-// `scrollOffset` (panels/ModelPicker.tsx) for how the visible window slides to keep it in view.
-// Also `LIST_WINDOW_MAX` (below) — the hard cap every OTHER list panel's own `listWindowSize`
-// clamps to, so none of them can render a taller window than the picker itself ever has.
-export const MODEL_PICKER_WINDOW = 10;
-
 // Shared by every list panel (ModelPicker, ConfigPanel, PermissionsPanel, SetupPanel) via
-// useListWindow.ts. `LIST_WINDOW_MAX` is `MODEL_PICKER_WINDOW` itself, not a separately chosen
-// number — under ink-testing-library, `Stdout` exposes `columns` but no `rows`, so a rows-derived
-// window would fall through to the host terminal's own real size and make App.test.tsx's own
-// row-count assertions machine-dependent; capping at the picker's own existing constant keeps
-// every panel's window deterministic under that stub the same way the picker's already is.
+// useListWindow.ts — the most any of their windows ever shows at once, regardless of how many
+// entries/rows match the current filter. The catalog easily runs into the hundreds (models.dev's
+// own OpenRouter listing), and rendering all of them would scroll the panel itself out of view, the
+// same reasoning truncateArgsDisplay already applies to a single long line; `LIST_WINDOW_MAX` is the
+// ceiling on a tall terminal, `MIN_LIST_WINDOW` (below) the floor on a short one. `selectedIndex` can
+// move past this many rows (arrow-key navigation over the full filtered list, not just what's on
+// screen) — see `slideWindow`/`useListWindow.ts` for how the visible window slides to keep it in
+// view.
 // `MIN_LIST_WINDOW` is a floor for a short terminal, not a value any of today's real panels reach
 // (SetupPanel's own 5 providers already fits under it) — enough rows that a floor-clamped panel
 // still shows more than one entry at a time. `PANEL_CHROME_ROWS` is how much of a panel's own
@@ -30,8 +23,8 @@ export const MODEL_PICKER_WINDOW = 10;
 // sized against ConfigPanel's own list step, the tallest of the four: unlike PermissionsPanel/
 // SetupPanel, it can render a "+N more" footer AND a selectedDescription line at once (one row
 // each), on top of the border/header/hint every panel already has.
+export const LIST_WINDOW_MAX = 10;
 export const MIN_LIST_WINDOW = 3;
-export const LIST_WINDOW_MAX = MODEL_PICKER_WINDOW;
 export const PANEL_CHROME_ROWS = 9;
 
 // Every row a panel's own budget has to share with the rest of App.tsx's render, reserved
