@@ -27,6 +27,7 @@ import {
   DEFAULT_COLUMNS,
   FALLBACK_CHROME_ROWS,
   formatModeLabel,
+  singleLine,
   transcriptVisualRows,
   visibleTranscript,
 } from "./format";
@@ -404,13 +405,17 @@ export function App({
           {state.status.length > 0 && <Text color={theme.muted}>{state.status}</Text>}
         </Box>
       </Box>
-      {/* `wrap="truncate-end"`: APP_CHROME_ROWS (format.ts) reserves exactly one row for this line,
-      but a slash-command catch's own messageOf(err) is unbounded-length (a file path, a JSON parse
-      error) — left to soft-wrap, a long one would consume a second row APP_CHROME_ROWS never
-      reserved, pushing an open panel's own bottom row past the alt-screen viewport. */}
+      {/* APP_CHROME_ROWS (format.ts) reserves exactly one row for this line, but a slash-command
+      catch's own messageOf(err) is an Error#message — unbounded length AND free to carry a literal
+      `\n` (a multi-line validation error, a JSON-parse error citing surrounding context). Ink
+      renders an embedded newline as a real line break regardless of `wrap`, which only governs a
+      single line's own overflow — `singleLine` collapses any embedded break first, matching
+      ConfigPanel's own row values (format.ts's own comment), then `wrap="truncate-end"` guards
+      what's left from overflowing on a narrow terminal. Either alone would leave the other case
+      free to push an open panel's own bottom row past the alt-screen viewport. */}
       {state.commandError !== undefined && (
         <Text color={theme.error} wrap="truncate-end">
-          {state.commandError}
+          {singleLine(state.commandError)}
         </Text>
       )}
       {/* Findings 1+5: mutually exclusive with InputBox — a pending approval question is the only
