@@ -232,7 +232,7 @@ export function App({
   // frame alone, not a real chrome-height estimate.
   const viewportRef = useRef<DOMElement | null>(null);
   const { height: measuredRows, hasMeasured } = useBoxMetrics(viewportRef);
-  // `Math.max(1, ...)` on BOTH branches (found by review): the measured one had no floor. The
+  // `Math.max(1, ...)` on BOTH branches: the measured one had no floor. The
   // transcript Box has `minHeight={0}`, so on a short enough terminal — or one where the sibling
   // rows above/below it (mode indicator, an open commandError line) already consume the whole
   // `rows - 1` budget — Yoga can genuinely measure it down to 0. `visibleTranscript(transcript, 0,
@@ -355,9 +355,9 @@ export function App({
       overshoot falls off the top (oldest), not the bottom (newest).
       The in-progress answer (`state.streaming`) is passed as `visibleTranscript`'s own `pending`
       parameter rather than rendered as its own unbounded `<Text>` below the box (the original
-      shape) or spread into a `[...state.transcript, state.streaming]` array (a version of this fix
-      tried and reverted, found by review: that allocated a full copy of the transcript on every
-      streamed token, exactly what `visibleTranscript`'s own tail-walk exists to avoid paying).
+      shape) or spread into a `[...state.transcript, state.streaming]` array (tried and reverted:
+      that allocated a full copy of the transcript on every streamed token, exactly what
+      `visibleTranscript`'s own tail-walk exists to avoid paying).
       `effectiveOffset` below is what keeps a scrolled-up reader's view from drifting toward newer
       content as the answer grows and then snapping back the instant it flushes: `appendLines`
       (reducer.ts) already advances `transcriptScrollOffset` by a flush's own row count for exactly
@@ -395,7 +395,7 @@ export function App({
       <Box flexDirection="row" justifyContent="space-between">
         <Text color={theme.accent}>{modeLabel}</Text>
         <Box flexDirection="row" gap={1}>
-          {/* `noPanelOpen` too, not just the offset (found by review): while a panel is open, End
+          {/* `noPanelOpen` too, not just the offset: while a panel is open, End
           is swallowed by the exact same gate `noPanelOpen` already puts on the transcript-scroll
           keys above — the banner would otherwise keep telling the user to press a key that does
           nothing until they close the panel first. */}

@@ -31,7 +31,7 @@ export function exitAltScreen(): void {
   try {
     process.stdout.write("\x1b[?1049l");
     process.stdout.write("\x1b[?25h");
-    // Only after BOTH writes succeed (found by review): flipping this first meant that if the
+    // Only after BOTH writes succeed: flipping this first meant that if the
     // buffer-restore write succeeded but the cursor-show write then threw (stdout closing between
     // the two, a killed/detached terminal), the error was swallowed by the bare `catch` below with
     // `entered` already false — no later call from any of the exit paths listed above could ever

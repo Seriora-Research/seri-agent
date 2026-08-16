@@ -51,9 +51,10 @@ export const FALLBACK_CHROME_ROWS = 6;
 // overflowing it. `trim: false` keeps leading whitespace exactly as written: tool output routinely
 // carries meaningful indentation (a diff, a code snippet), and wrap-ansi's own default trims it.
 // `Math.max(1, columns)`: a genuinely zero-width terminal (a resize race, an odd PTY state — real,
-// not hypothetical: `stdout.columns` can report 0, and `?? DEFAULT_COLUMNS` only substitutes on
-// `undefined`) would otherwise hand wrap-ansi a 0 budget, which it accepts silently and degrades to
-// one character per row rather than throwing. Always returns at least one entry, even for `""`, so
+// not hypothetical: `stdout.columns` can report 0 for a real pty's first render or two) would
+// otherwise hand wrap-ansi a 0 budget, which it accepts silently and degrades to one character per
+// row rather than throwing — a defensive floor here regardless of what upstream substitution
+// `resolveWidth` (App.tsx) already applies. Always returns at least one entry, even for `""`, so
 // an intentional blank separator line survives as one.
 //
 // This is called from `transcript`'s OWN read path (visibleTranscript/transcriptVisualRows, below)
@@ -92,15 +93,15 @@ export function transcriptVisualRows(lines: string[], columns: number): number {
 //
 // Collected newest-line-first via `push` (O(1) amortized), each line's OWN rows kept in their
 // normal top-to-bottom order — `.reverse()` at the end restores overall chronological order in one
-// O(collected lines) pass. `unshift(...wrapped)` in this same loop (found by review) was O(current
+// O(collected lines) pass. `unshift(...wrapped)` in this same loop was O(current
 // tail length) per call, making the accumulation up to O(scroll-depth²): cheap while scrolled near
 // the bottom, but the exact case a reader scrolled deep into a long session (or a fast streamed
 // answer on a tall terminal) would actually hit every render.
 //
 // `pending` (App.tsx's `state.streaming`, the in-progress answer not yet committed to `lines`) is
 // wrapped and seeded into the accumulation FIRST, ahead of the backward walk over `lines` — not
-// spread into a `[...lines, pending]` array at the call site (found by review, a prior version of
-// this function did exactly that): that allocated a full copy of the committed transcript on every
+// spread into a `[...lines, pending]` array at the call site (a prior version of this function did
+// exactly that, tried and reverted): that allocated a full copy of the committed transcript on every
 // call, i.e. every streamed token, for a function whose entire point is staying proportional to
 // scroll depth instead of session length. Wrapping in the SAME accumulation `lines` itself feeds
 // keeps `pending`'s own row count part of one coherent walk rather than a second, disconnected one.
@@ -189,9 +190,11 @@ export const COST_WIDTH = 18;
 export const MODE_LABEL_FULL_COLS = 76;
 export const MODE_LABEL_COMPACT_COLS = 52;
 
-// A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined` —
-// this is what `stdout.columns ?? DEFAULT_COLUMNS` (useTerminalWidth, App.tsx) guards against. It
-// is NOT what makes App.test.tsx's own Ink component tests land in the full tier:
+// A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined`,
+// and a real pty can separately report a genuine but unusable `columns === 0` for its first render
+// or two — both are what `resolveWidth`'s `stdout.columns || DEFAULT_COLUMNS` (App.tsx) guards
+// against; `||`, not `??`, is what makes the zero case fall back too. It is NOT what makes
+// App.test.tsx's own Ink component tests land in the full tier:
 // ink-testing-library's stub stdout returns a real `columns: 100`, so those tests are already in
 // the full tier on the actual value, not this fallback.
 export const DEFAULT_COLUMNS = 80;
@@ -362,7 +365,7 @@ export function envShadowReason(keyName: string): string {
 export function formatSetupRow(row: SetupProviderRow): string {
   const name = truncatePad(row.provider, PROVIDER_WIDTH);
   if (row.source === "unset") return `${name} not set`;
-  // `singleLine`, not `row.masked` raw (found by review): `maskValue` keeps a value's first/last 4
+  // `singleLine`, not `row.masked` raw: `maskValue` keeps a value's first/last 4
   // characters verbatim, so a literal newline in either survives masking — see `singleLine`'s own
   // comment for how it reaches here. `?? ""`: `masked` is `undefined` only for the "unset" source
   // already returned above, never for "env"/"config" — the fallback is unreachable in practice, not

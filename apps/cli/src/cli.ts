@@ -2240,7 +2240,7 @@ async function runTui(
           connectDispatch: undefined,
         }),
       );
-      // `.catch(rejectRunTui)` (found by review): Ink's own `unmount(error)` rejects
+      // `.catch(rejectRunTui)`: Ink's own `unmount(error)` rejects
       // `waitUntilExit()`'s promise when the argument is an Error (a render crash, for instance) —
       // without this, that rejection had nowhere to go (a `void`ed promise with no rejection
       // handler), so `settled` above never settled at all: `await runTui(...)` at this function's
@@ -2744,14 +2744,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // Wrapped, unlike the rest of this function's own `return N` early exits: `run()` has never
     // had a top-level `.catch` (its only caller, `import.meta.main`, does
     // `run(...).then((code) => process.exit(code))`), and neither Bun nor this file installs an
-    // `uncaughtException`/`unhandledRejection` handler — a real throw here (found by review) would
-    // print its own stack trace INTO the still-active alt-screen buffer, which `process.on("exit",
+    // `uncaughtException`/`unhandledRejection` handler — a real throw here would print its own
+    // stack trace INTO the still-active alt-screen buffer, which `process.on("exit",
     // exitAltScreen)` then silently discards on the way out, leaving the user with a dead process
     // and zero visible diagnostics. `fatalDuringTui` (prepareSession's own bailout, shared here) is
     // what every other terminal-for-the-run failure in this window already routes through.
     //
-    // `enterAltScreen()` itself is INSIDE this try (found by review, not just the calls after it):
-    // its own `entered = true` runs before its write, so a thrown write still leaves `exitAltScreen`
+    // `enterAltScreen()` itself is INSIDE this try, not just the calls after it: its own
+    // `entered = true` runs before its write, so a thrown write still leaves `exitAltScreen`
     // (called by `fatalDuringTui` below) able to attempt — and safely no-op-on-failure — a real
     // restore, rather than the throw escaping before any of this machinery is even reachable.
     try {
