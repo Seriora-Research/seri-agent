@@ -4,7 +4,7 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
-import { formatSetupRow } from "../format";
+import { formatSetupRow, remaining } from "../format";
 import type { SetupState } from "../reducer";
 import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
@@ -130,10 +130,7 @@ function SetupList({
   });
 
   const visible = rows.slice(offset, offset + windowSize);
-  // Rows strictly BELOW the window, not `rows.length - visible.length` (which counts rows hidden
-  // above the window too, and stays flat at `rows.length - windowSize` the whole time the window
-  // is full — the footer would never count down while scrolling toward the bottom).
-  const remaining = Math.max(0, rows.length - offset - windowSize);
+  const remainingCount = remaining(rows.length, offset, windowSize);
 
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
@@ -154,7 +151,7 @@ function SetupList({
           </Text>
         );
       })}
-      {remaining > 0 && <Text color={theme.muted}>+{remaining} more</Text>}
+      {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
       <Text color={theme.muted}>
         ↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close
       </Text>

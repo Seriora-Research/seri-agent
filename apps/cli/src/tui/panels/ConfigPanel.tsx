@@ -4,7 +4,7 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import { type ConfigRow, configKeyInfo } from "../commands";
-import { singleLine } from "../format";
+import { remaining, singleLine } from "../format";
 import type { ConfigPanelState } from "../reducer";
 import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
@@ -123,10 +123,7 @@ function ConfigList({
   const selectedDescription =
     selectedRow === undefined ? undefined : configKeyInfo(selectedRow.key).description;
   const visible = rows.slice(offset, offset + windowSize);
-  // Rows strictly BELOW the window, not `rows.length - visible.length` (which counts rows hidden
-  // above the window too, and stays flat at `rows.length - windowSize` the whole time the window
-  // is full — the footer would never count down while scrolling toward the bottom).
-  const remaining = Math.max(0, rows.length - offset - windowSize);
+  const remainingCount = remaining(rows.length, offset, windowSize);
 
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
@@ -149,7 +146,7 @@ function ConfigList({
           </Text>
         );
       })}
-      {remaining > 0 && <Text color={theme.muted}>+{remaining} more</Text>}
+      {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
       {selectedDescription && (
         // Same reasoning as the row Text above: a config key's own description is fixed copy today
         // (commands.ts trims it to fit an assumed 80-column terminal), but nothing here reads the

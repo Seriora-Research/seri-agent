@@ -158,6 +158,14 @@ export function listWindowSize(rows: number): number {
   return Math.min(LIST_WINDOW_MAX, Math.max(MIN_LIST_WINDOW, rows - PANEL_CHROME_ROWS));
 }
 
+// A list panel's own "+N more" footer count: rows strictly BELOW the window, not
+// `total - visible.length`, which counts rows hidden ABOVE the window too and stays flat at
+// `total - windowSize` for as long as the window is full — the footer would never count down while
+// scrolling toward the bottom, and never disappear even once every remaining row was on screen.
+export function remaining(total: number, offset: number, windowSize: number): number {
+  return Math.max(0, total - offset - windowSize);
+}
+
 // Column widths for formatModelRow/MODEL_PICKER_HEADER below — plain padded strings, not a table
 // component: this repo hand-rolls its TUI deliberately (App.tsx's own file-level comment) and Ink
 // has none built in.

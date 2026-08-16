@@ -5,7 +5,7 @@ import type { ModelProvider } from "@seri/model-catalog";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import type { ModelPickerEntry } from "../commands";
-import { formatModelRow, MODEL_PICKER_HEADER, matchesFilter } from "../format";
+import { formatModelRow, MODEL_PICKER_HEADER, matchesFilter, remaining } from "../format";
 import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
 
@@ -114,10 +114,7 @@ export function ModelPicker({
   });
 
   const visible = filtered.slice(scrollOffset, scrollOffset + windowSize);
-  // Rows strictly BELOW the window, not `filtered.length - visible.length` (which counts rows
-  // hidden above the window too, and stays flat at `filtered.length - windowSize` the whole time
-  // the window is full — the footer would never count down while scrolling toward the bottom).
-  const remaining = Math.max(0, filtered.length - scrollOffset - windowSize);
+  const remainingCount = remaining(filtered.length, scrollOffset, windowSize);
 
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
@@ -140,7 +137,9 @@ export function ModelPicker({
           </Text>
         );
       })}
-      {remaining > 0 && <Text color={theme.muted}>+{remaining} more — keep typing to narrow</Text>}
+      {remainingCount > 0 && (
+        <Text color={theme.muted}>+{remainingCount} more — keep typing to narrow</Text>
+      )}
     </Box>
   );
 }
