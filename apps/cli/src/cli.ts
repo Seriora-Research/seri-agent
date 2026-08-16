@@ -979,6 +979,13 @@ type PreparedRun = {
   // session" (renderMemoryTier's own doc comment) means loaded HERE and nowhere else; a write made
   // mid-session takes effect next session, not this one.
   memory: LoadedMemory;
+  // Startup notices (session-created, permission warnings, pre-approved tools, the cross-project
+  // checkpoint mismatch) that prepareSession would otherwise print directly. On the TUI path they
+  // are queued here instead: prepareSession runs after enterAltScreen() but before runTui's own
+  // Ink render(), so a direct console write in that gap lands on the alt-screen buffer and is gone
+  // the instant the TUI's first frame paints over it. runTui flushes this into the transcript at
+  // mount. Empty on the non-TTY path, which still writes these directly (no alt screen there).
+  preMountMessages: string[];
 };
 
 // Shared by prepareSession's own non-TTY notice and runTui's runTurn (below) — the two used to
@@ -1020,6 +1027,13 @@ async function prepareSession(
   // config.json entirely. `configDir` matches `seri config`'s own resolution (D7), so a key
   // `/setup` or `seri config set` just wrote is picked up on the very next run.
   const configDir = deps.authConfigDir ?? getConfigDir();
+  // See PreparedRun.preMountMessages' own comment: queued instead of printed on the TUI path,
+  // printed immediately (unchanged) everywhere else.
+  const preMountMessages: string[] = [];
+  const emit = isTTY ? (line: string) => preMountMessages.push(line) : console.log;
+  // Passed as printWarning/printPreApproved's own `sink` param — `undefined` on the non-TTY path
+  // keeps their existing default (console.error/console.log) exactly as before.
+  const warnSink = isTTY ? emit : undefined;
 
   let session: RunSession;
   let modelRecorded: boolean;
@@ -1040,7 +1054,7 @@ async function prepareSession(
     return 1;
   }
 
-  if (!ctx.resuming) console.log(`Session ${session.id} created.`);
+  if (!ctx.resuming) emit(`Session ${session.id} created.`);
 
   if (runStart(ctx) === "task") {
     session.messages.push({ role: "user", content: ctx.taskText });
@@ -1049,7 +1063,7 @@ async function prepareSession(
   // Loaded once, here, alongside the model resolution it feeds — /model (runTui's own runTurn)
   // reuses this SAME catalog on every later turn rather than reloading it, but @seri/model-catalog
   // caches for the rest of the process either way (catalog.ts's own loadCatalog).
-  const catalog = await getModelCatalog();
+  const catalog = await getModelCatalog(undefined, warnSink);
   // D3 (feature-plan.md): resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
   // stays a pure, environment-independent switch with its own test file.
   // Bug fixed here (code-review, PR #73): `configuredProviders` (called by `resolveRoute` below)
@@ -1123,13 +1137,15 @@ async function prepareSession(
   // is consent for that run, not standing consent for one on a timer. Seeding a scheduled run
   // from here is docs/ARCHITECTURE.md:202's "base safety layer disabled on a timer" arriving
   // through a file instead of a flag.
-  const grants = loadGrants(ctx.permissionsDir, worktree, printWarning);
+  const grants = loadGrants(ctx.permissionsDir, worktree, (msg) => printWarning(msg, warnSink));
   const allowedTools = effectiveTools(grants);
   const permissionMode = skipPermissions ? "auto" : session.permissionMode;
   // approve-each only: in read-only the gate blocks these tools before it ever consults the
   // allowlist (gate.ts:14), and in auto everything is allowed anyway — printing "pre-approved" in
   // either would be a sentence the run does not honour.
-  if (permissionMode === "approve-each" && allowedTools.length > 0) printPreApproved(allowedTools);
+  if (permissionMode === "approve-each" && allowedTools.length > 0) {
+    printPreApproved(allowedTools, warnSink);
+  }
 
   // `write_file`, `bash` and `powershell` write relative to process.cwd(), while the snapshot
   // covers the project root. Anywhere inside the project is fine — that is the whole point of
@@ -1141,6 +1157,7 @@ async function prepareSession(
   if (inProject === ".." || inProject.startsWith(`..${sep}`) || isAbsolute(inProject)) {
     printWarning(
       `this session's files are checkpointed under ${worktree}, but tools run in ${process.cwd()} — /undo will act on ${worktree}`,
+      warnSink,
     );
   }
 
@@ -1181,6 +1198,7 @@ async function prepareSession(
     route,
     checkpointer,
     memory,
+    preMountMessages,
   };
 }
 
@@ -2524,6 +2542,9 @@ async function runTui(
       },
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
+        // See PreparedRun.preMountMessages' own comment: prepareSession queued these instead of
+        // printing them directly, since it runs after enterAltScreen() but before this mount.
+        for (const line of prepared.preMountMessages) dispatch({ type: "transcript-append", line });
         // Stage C: the non-blocking login/signup offer (AuthBanner) — true iff no auth session is
         // saved yet, computed fresh at mount the same way decideSetupOpen/decideModelPickerOpen are
         // computed fresh on their own open, not cached from prepareSession.

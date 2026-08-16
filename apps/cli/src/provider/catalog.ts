@@ -47,11 +47,20 @@ export function resetFallbackWarning(): void {
 // The one dispatch point apps/cli calls to get the model catalog: @seri/model-catalog does the
 // fetch-with-fallback and the in-memory caching, this just supplies the CLI's own bundled
 // fallback and warns once when that fallback is what actually got used.
-export async function getModelCatalog(fetchFn: typeof fetch = fetch): Promise<ModelCatalog> {
+export async function getModelCatalog(
+  fetchFn: typeof fetch = fetch,
+  // Forwarded to printWarning's own `sink` param — prepareSession's TUI path (cli.ts) passes its
+  // preMountMessages queue here for the identical reason it passes one to loadGrants/
+  // printPreApproved: this call happens after enterAltScreen() but before the TUI's own Ink mount,
+  // so the default console.error would land on the alt-screen buffer and vanish. The OTHER call
+  // site (run()'s unawaited guided-setup gate) omits this and stays on the default — that one runs
+  // while an Ink instance IS mounted, so `patchConsole: true` already routes it safely.
+  sink?: (line: string) => void,
+): Promise<ModelCatalog> {
   const catalog = await loadCatalog(FALLBACK_MANIFEST, fetchFn);
   if (catalog === FALLBACK_MANIFEST && !warnedFallback) {
     warnedFallback = true;
-    printWarning("could not reach models.dev; using the bundled model catalog");
+    printWarning("could not reach models.dev; using the bundled model catalog", sink);
   }
   return catalog;
 }

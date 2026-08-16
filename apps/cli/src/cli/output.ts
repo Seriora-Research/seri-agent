@@ -125,8 +125,12 @@ export function approvalPromptText(toolName: string, args: unknown, offersAlways
 
 // stderr, not stdout: stdout carries the model's own output and is routinely piped, and a warning
 // that a file will not be recoverable must not end up inside whatever consumed that pipe.
-export function printWarning(message: string): void {
-  console.error(`⚠ ${message}`);
+// `sink` follows undoPlanLines/recoveryLines' own optional-sink shape (below) — prepareSession's
+// TUI path (cli.ts) passes one that queues the formatted line instead of writing it to the
+// terminal, since a raw console.error between enterAltScreen() and the TUI's own Ink mount lands
+// on the alt-screen buffer and is gone the instant that render() paints over it.
+export function printWarning(message: string, sink: (line: string) => void = console.error): void {
+  sink(`⚠ ${message}`);
 }
 
 // The second half of what an "always" answer now does. Printed only when a grant was actually
@@ -141,8 +145,11 @@ export function printGrantPersisted(name: string, worktree: string): void {
 // A grant the user cannot see is a grant they cannot revoke, and a grant made weeks ago in another
 // session is exactly the invisible kind. One line at the start of the run that would otherwise
 // silently skip a prompt.
-export function printPreApproved(tools: readonly string[]): void {
-  console.log(
+export function printPreApproved(
+  tools: readonly string[],
+  sink: (line: string) => void = console.log,
+): void {
+  sink(
     `Pre-approved without asking: ${tools.map(escapeControlChars).join(", ")} — seri permissions list`,
   );
 }
