@@ -529,7 +529,6 @@ describe("tuiReducer: config-requested / config-step / config-resolved", () => {
       masked: "",
       source: "unset",
       removable: false,
-      secret: false,
       kind: "boolean",
       on: true,
     },

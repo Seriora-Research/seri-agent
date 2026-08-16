@@ -225,7 +225,6 @@ export type ConfigRowBase = {
   masked: string;
   source: "config" | "env" | "unset";
   removable: boolean;
-  secret: boolean;
 };
 export type ConfigRow = ConfigRowBase & ConfigRowKind;
 
@@ -272,7 +271,7 @@ const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
     },
   ],
 ]);
-const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
+export const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
 
 // Pure lookup (no disk read) so ConfigEnterValue/ConfigConfirmUnset can show a key's label without
 // widening ConfigPanelState with a field decideConfigOpen already computes for the list step. Also
@@ -321,6 +320,9 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
     // carrying a copy here just for the list step meant a fixture module (configRowFixture.ts)
     // existed solely to keep that copy from drifting out of sync with CONFIG_KEY_INFO.
     const kind = configKeyInfo(key).kind;
+    // Not carried on the row either, same reasoning as label/description just above: `secret` is
+    // just as pure a function of `key` (CONFIG_KEY_INFO.has(key)) and has no production reader —
+    // it only ever picks which value `masked` computes to, right here.
     const secret = !CONFIG_KEY_INFO.has(key);
     const kindFields: ConfigRowKind =
       kind === "boolean" ? { kind: "boolean", on: configBoolean(value) } : { kind: "string" };
@@ -329,7 +331,6 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
       masked: value === undefined ? "" : secret ? maskValue(value) : value,
       source,
       removable: hasConfigEntry,
-      secret,
       ...kindFields,
     };
   });

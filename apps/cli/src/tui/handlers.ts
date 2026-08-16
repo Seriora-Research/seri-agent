@@ -1,3 +1,10 @@
+// The action half of the decision/presentation split tui/commands.ts's own header describes —
+// each factory here pairs 1:1 with a decide* function there (createSetupHandlers/decideSetupOpen,
+// createConfigHandlers/decideConfigOpen, createPermissionsHandlers/decidePermissionsOpen,
+// createAuthHandlers/decideAuthOffer): the decide* function recomputes fresh truth from disk and
+// returns it, the handler here dispatches it (or degrades to a command-error) and owns the actual
+// I/O and side effects. Extracted from cli.ts (originally ~670 of its lines) to live next to the
+// functions it mirrors rather than across the module boundary from them.
 import type { ModelProvider } from "@seri/model-catalog";
 import { login as loginReal, logout as logoutReal } from "../auth/commands";
 import { getWorkosClientId } from "../auth/deviceFlow";
@@ -22,12 +29,10 @@ import type { ConfigPanelState, Dispatch, PermissionsPanelState, SetupState } fr
 // named — that row's own index, so returning from enter-key/confirm-remove re-highlights the row
 // the user was just looking at instead of always snapping back to the top.
 //
-// Extracted (byok-guided-setup, feature-plan.md) so both `runTui` and the blank-first-run
-// bootstrap (`runGuidedSetup`, tui/guidedSetup.ts — threaded this factory in as a parameter rather
-// than importing it there, code-review finding PR #91 round 2) share one copy of this logic rather
-// than diverging over time. `getPendingSetup` is a live accessor (not a captured snapshot) — each
-// caller passes in a closure that reads its own current reducer state, matching the semantics
-// `liveState.pendingSetup` had before this extraction.
+// Shared, not reimplemented, by both callers: `runTui` (cli.ts) and the blank-first-run bootstrap
+// (`runGuidedSetup`, tui/guidedSetup.ts — a sibling of this file, importing it directly) both call
+// this same factory rather than diverging over time. `getPendingSetup` is a live accessor (not a
+// captured snapshot) — each caller passes in a closure that reads its own current reducer state.
 export function createSetupHandlers(opts: {
   dispatch: Dispatch;
   getPendingSetup: () => SetupState | undefined;
@@ -91,7 +96,7 @@ export function createSetupHandlers(opts: {
   // D5's own probe, then D6's own write — `validateProviderKey` never throws (its own contract:
   // every failure mode resolves to a result, not a rejection), so only the config write itself
   // needs a try/catch, matching the persist path's degrade-to-a-message posture (onSessionChange's
-  // own comment, above) rather than converting a validated key into a lost one over an unrelated
+  // own comment, cli.ts) rather than converting a validated key into a lost one over an unrelated
   // write failure.
   //
   // `keyName` is PROVIDER_API_KEY_NAMES[provider] directly, not a decideSetupOpen scan (code-review
@@ -275,9 +280,10 @@ export function createAuthHandlers(opts: {
             },
           });
         },
-        // Presentation only (this file's own header comment) — the state-machine dispatches
-        // (auth-resolved, the auth-offer recompute) moved out to right after the `await` below,
-        // run once rather than from inside a callback login() may or may not ever call.
+        // Presentation only (createAuthHandlers' own header comment, just above) — the
+        // state-machine dispatches (auth-resolved, the auth-offer recompute) moved out to right
+        // after the `await` below, run once rather than from inside a callback login() may or may
+        // not ever call.
         onMessage: (message) => {
           if (myAttempt !== attemptCounter) return;
           dispatch({ type: "transcript-append", line: message });

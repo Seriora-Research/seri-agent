@@ -39,7 +39,7 @@ export type TokenResult =
   | { status: "expired" }
   | { status: "error"; message: string }
   // Bug fix (thermo-nuclear, round 5): distinct from every other terminal status above — an
-  // abandoned login (Escape on "starting"/"device", cli.ts's own AuthPanel) is a deliberate
+  // abandoned login (Escape on "starting"/"device", tui/panels/AuthPanel.tsx) is a deliberate
   // cancellation, not a failure, so it must never reach saveAuthSession NOR produce an error
   // message the way "denied"/"expired"/"error" all do (createAuthHandlers' own catch,
   // tui/handlers.ts).
