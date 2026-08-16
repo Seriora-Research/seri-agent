@@ -28,7 +28,7 @@ import {
 } from "../checkpoint/checkpoint";
 import { projectRoot } from "../checkpoint/shadowGit";
 import { maskValue } from "../config/commands";
-import { configBoolean, configValue, loadConfig } from "../config/config";
+import { configBoolean, loadConfig } from "../config/config";
 import { isDefaultProfile, profileDir, profileNameError } from "../config/paths";
 import { cycleMode } from "../gate/gate";
 import { loadGrants, PERSISTABLE_TOOL_NAMES } from "../permissions/store";
@@ -318,13 +318,14 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
     const { label, description, kind } = configKeyInfo(key);
     const secret = !Object.hasOwn(CONFIG_KEY_INFO, key);
     // The boolean interpretation still needs the OTHER question — precedence, not existence:
-    // resolveConfigValue falls through on any falsy env value ("" included), same as
-    // loadVerifyConfig's live default resolution, so SERI_VERIFY_ENABLED="" in env with a
-    // config.json fallback computes `on` from config, matching the running session, even though
-    // `source`/`masked` above still (accurately) call this row env-sourced.
+    // falling through on ANY falsy `envValue` ("" included), same as loadVerifyConfig's live
+    // default resolution, so SERI_VERIFY_ENABLED="" in env with a config.json fallback computes
+    // `on` from config, matching the running session, even though `source`/`masked` above still
+    // (accurately) call this row env-sourced. Reuses `envValue` (above) rather than calling
+    // configValue, which would re-read process.env[key] from scratch for the same key.
     const kindFields: ConfigRowKind =
       kind === "boolean"
-        ? { kind: "boolean", on: configBoolean(configValue(key, config)) }
+        ? { kind: "boolean", on: configBoolean(envValue || config[key] || undefined) }
         : { kind: "string" };
     return {
       key,

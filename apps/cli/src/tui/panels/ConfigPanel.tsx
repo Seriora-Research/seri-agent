@@ -121,7 +121,7 @@ function ConfigList({
           {formatConfigRow(row)}
         </Text>
       ))}
-      {selectedRow !== undefined && <Text color={theme.muted}>{selectedRow.description}</Text>}
+      {selectedRow?.description && <Text color={theme.muted}>{selectedRow.description}</Text>}
       <Text
         color={theme.muted}
       >{`↑/↓ move · Enter/a ${actionHint} · r/Delete unset · Esc/Ctrl-D close`}</Text>
