@@ -6,6 +6,7 @@
 // cli.ts itself.
 import { randomUUID } from "node:crypto";
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
+import { messageOf } from "../errors";
 import { catalogWithFallback } from "../provider/catalog";
 import { persistDefaultModel } from "../provider/defaults";
 import { configuredProviders } from "../provider/keys";
@@ -114,7 +115,7 @@ export async function runGuidedSetup(
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       return; // picker stays up; Ctrl-C is the way out
     }
