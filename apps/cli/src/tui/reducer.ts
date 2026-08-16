@@ -301,7 +301,12 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "transcript-append":
       return pushLine(state, action.line, action.flush ?? true);
     case "transcript-scroll": {
-      const max = Math.max(0, state.totalVisualRows - state.viewportRows);
+      const max = Math.max(
+        0,
+        state.totalVisualRows +
+          streamingVisualRows(state.streaming, state.columns) -
+          state.viewportRows,
+      );
       const next = Math.min(max, Math.max(0, state.transcriptScrollOffset + action.delta));
       return { ...state, transcriptScrollOffset: next };
     }
@@ -309,7 +314,14 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return {
         ...state,
         transcriptScrollOffset:
-          action.to === "top" ? Math.max(0, state.totalVisualRows - state.viewportRows) : 0,
+          action.to === "top"
+            ? Math.max(
+                0,
+                state.totalVisualRows +
+                  streamingVisualRows(state.streaming, state.columns) -
+                  state.viewportRows,
+              )
+            : 0,
       };
     case "viewport-resized": {
       // Only a genuine `columns` change invalidates the cache: every existing entry re-wraps to a
@@ -321,7 +333,12 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         action.columns === state.columns
           ? state.totalVisualRows
           : transcriptVisualRows(state.transcript, action.columns);
-      const max = Math.max(0, totalVisualRows - action.viewportRows);
+      const max = Math.max(
+        0,
+        totalVisualRows +
+          streamingVisualRows(state.streaming, action.columns) -
+          action.viewportRows,
+      );
       return {
         ...state,
         columns: action.columns,
@@ -405,6 +422,18 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "splash-resolved":
       return { ...state, pendingSplash: false };
   }
+}
+
+// The in-progress streamed answer's own visual row count at `columns` wide — `state.totalVisualRows`
+// only ever tracks the COMMITTED transcript (see its own comment), so a scroll-bound clamp that
+// used that cache alone could never reach rows still sitting in `state.streaming`: with an empty or
+// short committed transcript and a streamed answer taller than one viewport, PageUp/Home computed
+// their ceiling from `totalVisualRows` and could never move `transcriptScrollOffset` past 0, even
+// though `visibleTranscript` (format.ts) renders `streaming` as real content above the viewport's
+// tail. Only called from the three keypress/resize cases below — never from "text" (applyLoopEvent,
+// below), which fires once per streamed token and cannot afford to re-wrap `streaming` on every one.
+function streamingVisualRows(streaming: string, columns: number): number {
+  return streaming.length > 0 ? transcriptVisualRows([streaming], columns) : 0;
 }
 
 // Commits any pending streamed text as its own transcript line before appending `line`, so a

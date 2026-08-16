@@ -151,8 +151,8 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
     expect(next.transcriptScrollOffset).toBe(3);
   });
 
-  // The exact scenario MEDIUM-1 (code review) named: Home/repeated PageUp used to collapse the
-  // viewport to a single line instead of a full page.
+  // Regression: Home/repeated PageUp used to collapse the viewport to a single line instead of
+  // a full page.
   test("transcript-scroll-to top: visibleTranscript then renders a full viewport of the oldest lines, not one line", () => {
     const lines = Array.from({ length: 20 }, (_, i) => `line ${i}`);
     const state = { ...transcriptOf(lines), viewportRows: 5 };
@@ -176,7 +176,7 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
     expect(next.transcriptScrollOffset).toBe(0);
   });
 
-  // D5's own anchoring rule (reducer.ts's own comment on `appendLines`): a scrolled-up view must
+  // reducer.ts's own anchoring rule (see its comment on `appendLines`): a scrolled-up view must
   // not slide out from under the reader as new lines land underneath it. `pushLine` can append TWO
   // lines in one call (a flushed streaming answer plus the new line, as here) — the offset has to
   // advance by however many lines actually landed, not by a hardcoded 1, or a flush-heavy sequence
@@ -215,6 +215,31 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
 
     expect(next.transcript).toEqual(["a", "b", "c", "streaming…", "d"]);
     expect(next.transcriptScrollOffset).toBe(0);
+  });
+
+  // Regression: `state.totalVisualRows` only ever tracks the COMMITTED transcript, so a scroll
+  // bound derived from it alone stayed clamped to 0 with an empty transcript, no matter how tall
+  // an in-progress streamed answer (`state.streaming`) grew — PageUp/Home could never reach rows
+  // that `visibleTranscript` (format.ts) was already rendering above the viewport's tail.
+  test("transcript-scroll-to top reaches rows still sitting in an in-progress streamed answer, not just the committed transcript", () => {
+    const streamingLines = Array.from({ length: 20 }, (_, i) => `streamed line ${i}`);
+    let state: TuiState = { ...initialTuiState(session()), viewportRows: 5 };
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: streamingLines.join("\n") },
+    });
+
+    const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(next.transcriptScrollOffset).toBe(15);
+
+    const visible = visibleTranscript(
+      next.transcript,
+      5,
+      next.transcriptScrollOffset,
+      next.columns,
+      next.streaming,
+    );
+    expect(visible).toEqual(streamingLines.slice(0, 5));
   });
 
   // Regression guard: `transcript` stores LOGICAL lines, never pre-wrapped output — a multi-line
