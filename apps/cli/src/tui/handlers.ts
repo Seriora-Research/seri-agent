@@ -10,6 +10,7 @@ import { login as loginReal, logout as logoutReal } from "../auth/commands";
 import { getWorkosClientId } from "../auth/deviceFlow";
 import type { CliDeps } from "../cli";
 import { configBoolean, loadConfig, setConfigValue, unsetConfigValue } from "../config/config";
+import { messageOf } from "../errors";
 import { forgetGrant, loadGrants } from "../permissions/store";
 import { PROVIDER_API_KEY_NAMES, type ProviderKeyState, providerKeyState } from "../provider/keys";
 import { validateProviderKey } from "../provider/validate";
@@ -79,7 +80,7 @@ export function createSetupHandlers(opts: {
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       dispatch({ type: "setup-resolved" });
       onPanelClosed?.();
@@ -142,7 +143,7 @@ export function createSetupHandlers(opts: {
           provider,
           keyName,
           busy: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: messageOf(err),
         },
       });
       return;
@@ -170,7 +171,7 @@ export function createSetupHandlers(opts: {
           provider,
           keyName,
           busy: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: messageOf(err),
         },
       });
     }
@@ -190,7 +191,7 @@ export function createSetupHandlers(opts: {
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
         return;
       }
@@ -208,7 +209,7 @@ export function createSetupHandlers(opts: {
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       return;
     }
@@ -310,7 +311,7 @@ export function createAuthHandlers(opts: {
         type: "auth-step",
         state: {
           step: "result",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
           error: true,
         },
       });
@@ -329,7 +330,7 @@ export function createAuthHandlers(opts: {
         type: "auth-step",
         state: {
           step: "result",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
           error: true,
         },
       });
@@ -401,7 +402,7 @@ export function createConfigHandlers(opts: {
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       dispatch({ type: "config-resolved" });
     }
@@ -431,7 +432,7 @@ export function createConfigHandlers(opts: {
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       return;
     }
@@ -458,7 +459,7 @@ export function createConfigHandlers(opts: {
           step: "enter-value",
           key,
           busy: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: messageOf(err),
         },
       });
       return;
@@ -483,7 +484,7 @@ export function createConfigHandlers(opts: {
           step: "enter-value",
           key,
           busy: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: messageOf(err),
         },
       });
     }
@@ -508,7 +509,7 @@ export function createConfigHandlers(opts: {
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
         return;
       }
@@ -530,7 +531,7 @@ export function createConfigHandlers(opts: {
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       return;
     }
@@ -596,7 +597,7 @@ export function createPermissionsHandlers(opts: {
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       dispatch({ type: "permissions-resolved" });
     }
@@ -636,7 +637,7 @@ export function createPermissionsHandlers(opts: {
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
         return;
       }
@@ -686,7 +687,7 @@ export function createPermissionsHandlers(opts: {
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       return;
     }

@@ -44,6 +44,7 @@ import {
 import { configCommand as configCommandReal } from "./config/commands";
 import { loadVerifyConfig } from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
+import { messageOf } from "./errors";
 import type { PermissionMode } from "./gate/gate";
 import {
   type ApprovalAnswer,
@@ -679,7 +680,7 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
       options: PARSE_OPTIONS,
     }));
   } catch (err) {
-    return usageError(err instanceof Error ? err.message : String(err));
+    return usageError(messageOf(err));
   }
 
   // Set here, before any validation below that can return a usage error early: every call to
@@ -763,7 +764,7 @@ async function runSelftest(deps: CliDeps): Promise<number> {
     console.log(`selftest ok: ripgrep ${rgVersion(resolveRg())}`);
     return 0;
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(messageOf(err));
     return 1;
   }
 }
@@ -778,7 +779,7 @@ async function handleAuthCommand(
       const configDir = deps.authConfigDir ?? getConfigDir();
       await loginFn(positionals[0], getWorkosClientId(configDir), configDir);
     } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
+      console.error(messageOf(err));
       return 1;
     }
     return 0;
@@ -788,7 +789,7 @@ async function handleAuthCommand(
     try {
       logoutFn(deps.authConfigDir ?? getConfigDir());
     } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
+      console.error(messageOf(err));
       return 1;
     }
     return 0;
@@ -815,7 +816,7 @@ function handleConfigCommand(positionals: string[], deps: CliDeps): number | und
     );
     return code;
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(messageOf(err));
     return 1;
   }
 }
@@ -835,7 +836,7 @@ function handlePermissionsCommand(positionals: string[], deps: CliDeps): number 
     );
     return code;
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(messageOf(err));
     return 1;
   }
 }
@@ -901,7 +902,7 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
       await command.run(commandArgs, dirs(ctx));
       return 0;
     } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
+      console.error(messageOf(err));
       return 1;
     }
   }
@@ -919,7 +920,7 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
     await command.run(loadSession<ModelMessage>(id, ctx.sessionsDir), commandArgs, dirs(ctx));
     return 0;
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(messageOf(err));
     return 1;
   }
 }
@@ -1038,7 +1039,7 @@ function fatalDuringTui(err: unknown, preMountMessages: readonly PreMountMessage
   for (const queued of preMountMessages) {
     (queued.stream === "stdout" ? console.log : console.error)(queued.text);
   }
-  console.error(err instanceof Error ? err.message : String(err));
+  console.error(messageOf(err));
   return 1;
 }
 
@@ -1505,7 +1506,7 @@ async function driveLoop(
           appendBarrier(storeDir, session.id, "compaction");
         } catch (err) {
           printWarning(
-            `could not record the compaction barrier, so /rewind may not be able to cross this point: ${err instanceof Error ? err.message : String(err)}`,
+            `could not record the compaction barrier, so /rewind may not be able to cross this point: ${messageOf(err)}`,
           );
         }
       }
@@ -1537,7 +1538,7 @@ async function driveLoop(
             printGrantPersisted(event.name, worktree);
         } catch (err) {
           printWarning(
-            `could not save the permanent approval for ${event.name}, so seri will ask again next time: ${err instanceof Error ? err.message : String(err)}`,
+            `could not save the permanent approval for ${event.name}, so seri will ask again next time: ${messageOf(err)}`,
           );
         }
       }
@@ -1833,7 +1834,7 @@ async function runTui(
     try {
       saveSession(toPersist, ctx.sessionsDir);
     } catch (err) {
-      const message = `could not save the session: ${err instanceof Error ? err.message : String(err)}`;
+      const message = `could not save the session: ${messageOf(err)}`;
       printWarning(message);
       for (const { reject } of resolvers) reject(new Error(message));
       return;
@@ -2130,7 +2131,7 @@ async function runTui(
                 persistDefaultModel({ model: modelId, provider }, configDir);
                 lastPersistedModel = { model: modelId, provider };
               } catch (err) {
-                const message = err instanceof Error ? err.message : String(err);
+                const message = messageOf(err);
                 printWarning(`could not save the default model: ${message}`);
               }
             }
@@ -2333,7 +2334,7 @@ async function runTui(
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
       }
       return;
@@ -2351,7 +2352,7 @@ async function runTui(
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
       }
       return;
@@ -2389,7 +2390,7 @@ async function runTui(
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
       }
       return;
@@ -2417,7 +2418,7 @@ async function runTui(
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
       }
       return;
@@ -2435,7 +2436,7 @@ async function runTui(
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
       }
       return;
@@ -2461,7 +2462,7 @@ async function runTui(
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
       }
       return;
@@ -2520,7 +2521,7 @@ async function runTui(
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
     }
   }
