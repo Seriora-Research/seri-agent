@@ -192,20 +192,26 @@ describe("App", () => {
     expect(highestLineShown(instance.lastFrame() ?? "")).toBeGreaterThan(highestBefore);
   });
 
-  // Regression guard (found by review): before `appendLines` (reducer.ts) hard-wrapped at write
-  // time, a single streamed answer with embedded newlines committed as ONE transcript array entry
-  // — `transcript.length` was 1 regardless of how many terminal rows that entry actually needed to
-  // render. `visibleTranscript`'s slice and the scroll clamp both count ARRAY entries, so with
-  // length 1, `max = transcript.length - viewportRows` was always <= 0: PageUp/Home could never
-  // move the offset at all, and whatever the box couldn't fit was silently clipped by
-  // `overflowY="hidden"` with no way to reach it — not just on this test's 25-line answer, but on
-  // any answer longer than the viewport happened to be tall that day.
+  // Regression guard (found by review): before `visibleTranscript`/the scroll clamp derived visual
+  // rows from `state.transcript` on read (format.ts's own `transcriptVisualRows`), a single streamed
+  // answer with embedded newlines committed as ONE transcript array entry — the clamp's `max` was
+  // always <= 0 regardless of how many rows that one entry actually needed, so PageUp/Home could
+  // never move the offset at all and whatever the box couldn't fit was silently clipped by
+  // `overflowY="hidden"` with no way to reach it. 300 lines, not a small number: on a real, tall
+  // terminal (this test's own stdout height comes from the REAL host process, not a fixture —
+  // ink-testing-library's stub stdout has no `rows` getter) a short answer can fit entirely without
+  // the bug ever being exercised, which is exactly why a short version of this test can pass on a
+  // broken build. `"answer line 0"` alone doesn't prove reachability either — `overflowY="hidden"`
+  // clips from the TOP, so line 0 is the one line a broken build already keeps; the tail
+  // (`"answer line 299"`) is the one only the fix can reach.
   test("a single answer with more lines than the viewport is fully reachable by scrolling, not silently dropped", async () => {
     const { instance, dispatch } = await connect();
 
-    const answer = Array.from({ length: 25 }, (_, i) => `answer line ${i}`).join("\n");
+    const answer = Array.from({ length: 300 }, (_, i) => `answer line ${i}`).join("\n");
     dispatch({ type: "transcript-append", line: answer });
     await flush();
+
+    expect(instance.lastFrame() ?? "").toContain("answer line 299");
 
     instance.stdin.write("\x1b[H"); // Home
     await flush();
@@ -1259,21 +1265,43 @@ describe("App", () => {
 
   describe("visibleTranscript", () => {
     test("a transcript shorter than the viewport is shown in full", () => {
-      expect(visibleTranscript(["a", "b", "c"], 5, 0)).toEqual(["a", "b", "c"]);
+      expect(visibleTranscript(["a", "b", "c"], 5, 0, 80)).toEqual(["a", "b", "c"]);
     });
 
-    // D4: tail-anchored, not head-anchored — a transcript longer than the viewport shows its
-    // NEWEST lines by default, matching what scrolled-by terminal output would already show.
+    // tail-anchored, not head-anchored — a transcript longer than the viewport shows its NEWEST
+    // lines by default, matching what scrolled-by terminal output would already show.
     test("a transcript longer than the viewport shows the newest lines, not the oldest", () => {
-      expect(visibleTranscript(["a", "b", "c", "d", "e"], 3, 0)).toEqual(["c", "d", "e"]);
+      expect(visibleTranscript(["a", "b", "c", "d", "e"], 3, 0, 80)).toEqual(["c", "d", "e"]);
     });
 
     test("a positive offset slides the window toward older lines", () => {
-      expect(visibleTranscript(["a", "b", "c", "d", "e"], 3, 1)).toEqual(["b", "c", "d"]);
+      expect(visibleTranscript(["a", "b", "c", "d", "e"], 3, 1, 80)).toEqual(["b", "c", "d"]);
     });
 
     test("an offset large enough to reach the start still returns at most `rows` lines", () => {
-      expect(visibleTranscript(["a", "b", "c"], 5, 10)).toEqual([]);
+      expect(visibleTranscript(["a", "b", "c"], 5, 10, 80)).toEqual([]);
+    });
+
+    // Regression guard: a logical entry longer than `columns` used to count as exactly one row no
+    // matter how many rows it actually rendered — the "one entry, many rows" bug this file exists
+    // to close. A single 25-word-boundary-free entry, wrapped at 10 columns, must occupy exactly
+    // as many array slots as it needs, and the tail-walk must still respect `rows`.
+    test("a single entry longer than `columns` counts as multiple visual rows, not one", () => {
+      const long = "a".repeat(25); // 25 chars, no spaces — forces `hard: true` breaking
+      expect(visibleTranscript([long], 3, 0, 10)).toEqual(["aaaaaaaaaa", "aaaaaaaaaa", "aaaaa"]);
+      // Scrolled up by exactly one visual row: the newest row drops off the bottom.
+      expect(visibleTranscript([long], 3, 1, 10)).toEqual(["aaaaaaaaaa", "aaaaaaaaaa"]);
+    });
+
+    // A resize changes `columns` with no change to the logical `lines` array at all — this is only
+    // meaningful because the transcript stores logical lines, not pre-wrapped rows (reducer.ts's own
+    // comment on `TuiState.transcript`): the same entries must re-wrap differently at a new width,
+    // proving nothing was destroyed by the earlier (narrower) width's own wrapping.
+    test("the same transcript re-wraps differently when `columns` changes, nothing is lost", () => {
+      const long = "a".repeat(25);
+      expect(visibleTranscript([long], 10, 0, 10)).toHaveLength(3);
+      expect(visibleTranscript([long], 10, 0, 25)).toHaveLength(1);
+      expect(visibleTranscript([long], 10, 0, 5)).toHaveLength(5);
     });
   });
 

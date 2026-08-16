@@ -3,6 +3,7 @@
 // cli-commands-to-tui feature-plan.md) verbatim: a pure move, no behavior change.
 
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
+import wrapAnsi from "wrap-ansi";
 import type { ResolvedRoute } from "../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "./commands";
 
@@ -38,14 +39,59 @@ export const PANEL_CHROME_ROWS = 9;
 // frame renders a plausible slice of the transcript instead of an empty one.
 export const FALLBACK_CHROME_ROWS = 6;
 
-// The visible slice of a committed transcript for a viewport `rows` tall, `offset` lines up from
-// the newest (0 = following the latest line). Tail-anchored, not head-anchored: a transcript
-// longer than the viewport keeps showing its NEWEST lines by default, the same thing the terminal
+// Hard-wraps `text` to `columns` VISUAL rows, ANSI-aware (a bash/git tool result can carry real
+// color codes, and wrap-ansi tracks them across the break rather than losing the reset). `hard:
+// true` force-breaks a single word/token longer than `columns` (an unbroken path or URL) instead of
+// overflowing it. `trim: false` keeps leading whitespace exactly as written: tool output routinely
+// carries meaningful indentation (a diff, a code snippet), and wrap-ansi's own default trims it.
+// `Math.max(1, columns)`: a genuinely zero-width terminal (a resize race, an odd PTY state — real,
+// not hypothetical: `stdout.columns` can report 0, and `?? DEFAULT_COLUMNS` only substitutes on
+// `undefined`) would otherwise hand wrap-ansi a 0 budget, which it accepts silently and degrades to
+// one character per row rather than throwing. Always returns at least one entry, even for `""`, so
+// an intentional blank separator line survives as one.
+//
+// This is called from `transcript`'s OWN read path (visibleTranscript/transcriptVisualRows, below)
+// and the transcript never stores its own wrapped output — deliberately: a hard-wrap break is
+// indistinguishable from a real `\n` once written, so a version that wrapped at write time could
+// never correctly re-wrap on a resize (there is no way to un-wrap what was already split). Deriving
+// from the untouched logical lines on every read is what makes a resize free instead of lossy.
+export function wrapForTranscript(text: string, columns: number): string[] {
+  return wrapAnsi(text, Math.max(1, columns), { hard: true, trim: false }).split("\n");
+}
+
+// The total number of VISUAL rows `lines` (logical, unwrapped) occupies at `columns` wide — what
+// the scroll clamp (reducer.ts's `transcript-scroll`/`transcript-scroll-to`/`viewport-resized`
+// cases) needs to know the real maximum offset. O(transcript length): fine on a keypress/resize
+// (the only callers), not fine per-render, which is exactly why `visibleTranscript` below does NOT
+// call this — it only ever wraps the tail slice it actually needs.
+export function transcriptVisualRows(lines: string[], columns: number): number {
+  let total = 0;
+  for (const line of lines) total += wrapForTranscript(line, columns).length;
+  return total;
+}
+
+// The visible slice of a committed transcript for a viewport `rows` tall, `offset` VISUAL rows up
+// from the newest (0 = following the latest line). Tail-anchored, not head-anchored: a transcript
+// longer than the viewport keeps showing its NEWEST rows by default, the same thing the terminal
 // itself would show if these lines had just scrolled by normally.
-export function visibleTranscript(lines: string[], rows: number, offset: number): string[] {
-  const end = Math.max(0, lines.length - offset);
+//
+// Walks `lines` from the newest entry backward, wrapping each one and prepending its rows, stopping
+// as soon as `offset + rows` visual rows have accumulated (or the transcript runs out) — bounded by
+// how deep the reader has scrolled, not by total session length, so this stays cheap on every render
+// of a long-running session instead of re-wrapping the whole history every frame.
+export function visibleTranscript(
+  lines: string[],
+  rows: number,
+  offset: number,
+  columns: number,
+): string[] {
+  const tail: string[] = [];
+  for (let i = lines.length - 1; i >= 0 && tail.length < offset + rows; i--) {
+    tail.unshift(...wrapForTranscript(lines[i], columns));
+  }
+  const end = Math.max(0, tail.length - offset);
   const start = Math.max(0, end - rows);
-  return lines.slice(start, end);
+  return tail.slice(start, end);
 }
 
 // The "clamp, don't re-center" rule lifted verbatim out of ModelPicker's own `moveSelection`

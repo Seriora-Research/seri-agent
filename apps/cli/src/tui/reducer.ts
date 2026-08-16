@@ -3,13 +3,12 @@
 // import — a plain, standalone reducer, testable without a terminal.
 import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import wrapAnsi from "wrap-ansi";
 import { toolAllowedLine, toolResultLine } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
 import type { SessionState } from "../session/session";
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
-import { DEFAULT_COLUMNS } from "./format";
+import { DEFAULT_COLUMNS, transcriptVisualRows } from "./format";
 
 // /setup's own live state (D5-D8, feature-plan.md) — a three-step flow, mirrored on the reducer
 // the same way /model's picker is: "list" shows all five providers, "enter-key" is the masked
@@ -61,23 +60,23 @@ export type PermissionsPanelState =
 
 export type TuiState = {
   session: SessionState<ModelMessage>;
-  // Append-only committed lines, rendered by App.tsx as a scrollable viewport (visibleTranscript,
-  // format.ts) rather than printed once and never revisited. Each entry is exactly one VISUAL
-  // terminal row, not one logical line: `appendLines` (below) hard-wraps at `columns` before
-  // pushing, specifically so `transcript.length` is what `visibleTranscript`'s row-count slice and
-  // this file's own scroll clamp can both trust. A multi-line streamed answer or a long tool-call
-  // argument becomes several entries here, never one entry that renders taller than one row.
+  // Append-only committed LOGICAL lines — one entry per `transcript-append`/pushLine call, never
+  // re-split or re-joined here. Rendered by App.tsx as a scrollable viewport (visibleTranscript,
+  // format.ts), which wraps each entry to `columns` VISUAL rows on read, not on write: a hard-wrap
+  // break is indistinguishable from a real `\n` once written, so storing the wrapped output would
+  // make a resize lossy (the old width's wrapping can never be un-done to re-wrap at the new one).
+  // Keeping this array untouched is what makes a resize a free re-derivation instead of a rewrite.
   transcript: string[];
-  // Lines from the BOTTOM of the transcript the viewport is scrolled up by. 0 = following the
-  // latest line (the default, and the state End returns to). Incremented by pushLine while > 0 so
-  // a scrolled-up view stays anchored on the same content as new lines arrive, rather than sliding
-  // out from under the reader mid-read.
+  // VISUAL rows from the BOTTOM of the (wrapped) transcript the viewport is scrolled up by. 0 =
+  // following the latest row (the default, and the state End returns to). Advanced by pushLine
+  // while > 0, by however many visual rows a flush actually added — see `appendLines`' own
+  // comment — so a scrolled-up view stays anchored on the same content as new rows arrive, rather
+  // than sliding out from under the reader mid-read.
   transcriptScrollOffset: number;
   // The terminal's own current width and the transcript viewport's own current height, in rows —
-  // kept on state (not threaded through every `transcript-append`/`transcript-scroll` action the
-  // way they used to be) so `appendLines` can wrap text to `columns` at the point it enters
-  // `transcript` (below), and so a resize needs exactly one action (`viewport-resized`) instead of
-  // re-deriving the same two numbers at every call site that needs either. Seeded from
+  // kept on state (not threaded through every `transcript-scroll` action the way `viewportRows`
+  // used to be) so the scroll clamp (`transcriptVisualRows`, format.ts) and a resize both read the
+  // same two numbers from one place instead of re-deriving them at every call site. Seeded from
   // `DEFAULT_COLUMNS`/a small placeholder here — App.tsx's own resize effect corrects both to the
   // real measured values before the first real transcript content is ever appended (see that
   // effect's own comment for why the ordering is guaranteed, not assumed).
@@ -194,10 +193,11 @@ export type TuiAction =
   // echo that must not fragment an in-progress streamed answer into two transcript entries (see
   // pushLine's own comment).
   | { type: "transcript-append"; line: string; flush?: boolean }
-  // Scrolls the transcript viewport. Positive `delta` moves toward older lines, clamped to
-  // `[0, transcript.length - state.viewportRows]` — the offset at which visibleTranscript shows the
-  // oldest `viewportRows` lines, not just the single oldest line (`length - 1` would slice down to
-  // one line pinned to the bottom by `justifyContent="flex-end"`, App.tsx).
+  // Scrolls the transcript viewport. Positive `delta` moves toward older rows, clamped to
+  // `[0, transcriptVisualRows(transcript, columns) - viewportRows]` — the offset at which
+  // visibleTranscript shows a full `viewportRows`-tall page of the oldest content, not just the
+  // single oldest row (`totalRows - 1` would slice down to one row pinned to the bottom by
+  // `justifyContent="flex-end"`, App.tsx).
   | { type: "transcript-scroll"; delta: number }
   | { type: "transcript-scroll-to"; to: "top" | "bottom" }
   // Dispatched by App.tsx's own resize effect whenever the measured terminal width or transcript
@@ -291,7 +291,10 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "transcript-append":
       return pushLine(state, action.line, action.flush ?? true);
     case "transcript-scroll": {
-      const max = Math.max(0, state.transcript.length - state.viewportRows);
+      const max = Math.max(
+        0,
+        transcriptVisualRows(state.transcript, state.columns) - state.viewportRows,
+      );
       const next = Math.min(max, Math.max(0, state.transcriptScrollOffset + action.delta));
       return { ...state, transcriptScrollOffset: next };
     }
@@ -299,10 +302,15 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return {
         ...state,
         transcriptScrollOffset:
-          action.to === "top" ? Math.max(0, state.transcript.length - state.viewportRows) : 0,
+          action.to === "top"
+            ? Math.max(0, transcriptVisualRows(state.transcript, state.columns) - state.viewportRows)
+            : 0,
       };
     case "viewport-resized": {
-      const max = Math.max(0, state.transcript.length - action.viewportRows);
+      const max = Math.max(
+        0,
+        transcriptVisualRows(state.transcript, action.columns) - action.viewportRows,
+      );
       return {
         ...state,
         columns: action.columns,
@@ -399,29 +407,20 @@ function pushLine(state: TuiState, line: string, flush = true): TuiState {
   return { ...appendLines(state, appended), streaming: "" };
 }
 
-// Hard-wraps `text` to `columns` visual rows, ANSI-aware (a bash/git tool result can carry real
-// color codes, and wrap-ansi tracks them across the break rather than losing the reset). `hard:
-// true` force-breaks a single word/token longer than `columns` (an unbroken path or URL) instead of
-// overflowing it — the one case a plain `.split("\n")` could never have caught regardless. `trim:
-// false` keeps leading whitespace exactly as written: tool output routinely carries meaningful
-// indentation (a diff, a code snippet), and wrap-ansi's own default trims it. Always returns at
-// least one entry, even for `""`, so an intentional blank separator line survives as one.
-function wrapForTranscript(text: string, columns: number): string[] {
-  return wrapAnsi(text, columns, { hard: true, trim: false }).split("\n");
-}
-
-// Appends one or more lines and, if the viewport is scrolled up (`transcriptScrollOffset > 0`),
-// advances the offset by the same count so the view stays anchored on the same content rather than
-// sliding out from under the reader as new lines land underneath it. A flushed stream (pushLine,
-// above) can append two lines in one call, so this increments by `lines.length` AFTER wrapping —
-// the reader is scrolled up by a count of TRANSCRIPT entries (visual rows), not raw arguments.
+// Appends one or more LOGICAL lines, untouched — no wrapping here; see TuiState.transcript's own
+// comment for why the entries themselves must stay whatever was passed in. If the viewport is
+// scrolled up (`transcriptScrollOffset > 0`), advances the offset by the VISUAL row count the new
+// lines add at the current `columns` — not by `rawLines.length` — so a scrolled-up view stays
+// anchored on the same content as new rows arrive, rather than sliding out from under the reader
+// mid-read by fewer rows than what actually landed underneath it.
 function appendLines(state: TuiState, rawLines: string[]): TuiState {
-  const lines = rawLines.flatMap((line) => wrapForTranscript(line, state.columns));
+  const addedRows =
+    state.transcriptScrollOffset > 0 ? transcriptVisualRows(rawLines, state.columns) : 0;
   return {
     ...state,
-    transcript: [...state.transcript, ...lines],
+    transcript: [...state.transcript, ...rawLines],
     transcriptScrollOffset:
-      state.transcriptScrollOffset > 0 ? state.transcriptScrollOffset + lines.length : 0,
+      state.transcriptScrollOffset > 0 ? state.transcriptScrollOffset + addedRows : 0,
   };
 }
 

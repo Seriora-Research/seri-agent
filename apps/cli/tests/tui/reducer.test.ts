@@ -158,7 +158,7 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
     const state = { ...transcriptOf(lines), viewportRows: 5 };
     const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
 
-    const visible = visibleTranscript(next.transcript, 5, next.transcriptScrollOffset);
+    const visible = visibleTranscript(next.transcript, 5, next.transcriptScrollOffset, next.columns);
     expect(visible).toEqual(["line 0", "line 1", "line 2", "line 3", "line 4"]);
   });
 
@@ -210,6 +210,68 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
 
     expect(next.transcript).toEqual(["a", "b", "c", "streaming…", "d"]);
     expect(next.transcriptScrollOffset).toBe(0);
+  });
+
+  // Regression guard: `transcript` stores LOGICAL lines, never pre-wrapped output — a multi-line
+  // string committed by one `transcript-append` must stay exactly one array entry, not several.
+  // Storing the wrapped form instead was tried and reverted: once written, a hard-wrap break is
+  // indistinguishable from a real `\n`, so a later resize could never correctly re-wrap it.
+  test("transcript-append stores one entry per call, even for a multi-line string", () => {
+    const state = initialTuiState(session());
+    const next = tuiReducer(state, {
+      type: "transcript-append",
+      line: "first line\nsecond line\nthird line",
+    });
+
+    expect(next.transcript).toEqual(["first line\nsecond line\nthird line"]);
+  });
+});
+
+describe("tuiReducer: viewport-resized", () => {
+  test("updates columns and viewportRows", () => {
+    const state = initialTuiState(session());
+    const next = tuiReducer(state, { type: "viewport-resized", columns: 60, viewportRows: 12 });
+
+    expect(next.columns).toBe(60);
+    expect(next.viewportRows).toBe(12);
+  });
+
+  // The bug this action's own re-clamp exists to close: a resize that GROWS viewportRows (a taller
+  // terminal) shrinks the max valid offset (`totalRows - viewportRows`), which can leave a
+  // previously-valid `transcriptScrollOffset` past the new maximum.
+  test("re-clamps transcriptScrollOffset when a growing viewportRows makes it invalid", () => {
+    let state = initialTuiState(session());
+    for (let i = 0; i < 10; i++) {
+      state = tuiReducer(state, { type: "transcript-append", line: `line ${i}` });
+    }
+    state = { ...state, viewportRows: 3 };
+    state = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(state.transcriptScrollOffset).toBe(7); // 10 rows - 3 viewportRows
+
+    const next = tuiReducer(state, { type: "viewport-resized", columns: 80, viewportRows: 8 });
+    expect(next.transcriptScrollOffset).toBe(2); // 10 rows - 8 viewportRows
+  });
+
+  // Regression guard (found by review): the transcript used to hard-wrap AT WRITE TIME, so a
+  // narrowing resize left already-committed entries wrapped at the OLD width forever — the exact
+  // "one entry doesn't equal one visual row" bug this file exists to close, just re-entered through
+  // the resize door instead of through a long append. Storing logical lines and deriving visual rows
+  // on read (transcriptVisualRows, format.ts) means a resize can only ever change how MANY rows the
+  // clamp reports, never lose the ability to reach any of them.
+  test("a narrowing resize re-derives the total row count instead of trusting stale wrapped output", () => {
+    const long = "a".repeat(200); // 200 chars, no spaces — always hard-wraps, at any width
+    let state = tuiReducer(initialTuiState(session()), { type: "transcript-append", line: long });
+    state = tuiReducer(state, { type: "viewport-resized", columns: 100, viewportRows: 5 });
+    state = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    const offsetAt100Cols = state.transcriptScrollOffset; // 2 rows at 100 cols, minus 5 viewportRows
+
+    // Narrow to 20 columns: the SAME logical entry now needs far more visual rows (10, not 2) — a
+    // write-time-wrapped design would still report the OLD row count here and under-clamp.
+    const narrowed = tuiReducer(state, { type: "viewport-resized", columns: 20, viewportRows: 5 });
+    const reClamped = tuiReducer(narrowed, { type: "transcript-scroll-to", to: "top" });
+
+    expect(reClamped.transcriptScrollOffset).toBeGreaterThan(offsetAt100Cols);
+    expect(reClamped.transcriptScrollOffset).toBe(5); // 10 rows at 20 cols, minus 5 viewportRows
   });
 });
 

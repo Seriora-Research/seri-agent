@@ -1034,6 +1034,18 @@ async function prepareSession(
   // Passed as printWarning/printPreApproved's own `sink` param — `undefined` on the non-TTY path
   // keeps their existing default (console.error/console.log) exactly as before.
   const warnSink = isTTY ? emit : undefined;
+  // Terminal-for-the-run bailout, shared by both catches below: exits the alt screen (same
+  // reasoning as checkZeroKeysConfigured's own catch — undiscarded messages need the primary
+  // screen restored first) and flushes `preMountMessages` to the now-visible console before the
+  // fatal message itself, rather than dropping them — a queued "Session X created." or fallback-
+  // catalog warning would otherwise vanish with no trace: this function's only OTHER flush site,
+  // runTui's connectDispatch, is never reached on this path.
+  const bailOut = (message: string): number => {
+    exitAltScreen();
+    for (const queued of preMountMessages) console.error(queued);
+    console.error(message);
+    return 1;
+  };
 
   let session: RunSession;
   let modelRecorded: boolean;
@@ -1046,12 +1058,7 @@ async function prepareSession(
       configDir,
     ));
   } catch (err) {
-    // Same reasoning as checkZeroKeysConfigured's own catch: this is terminal for the run, and the
-    // alt screen (entered before this function is ever reached on the TUI path) would otherwise
-    // discard the message on exit rather than leave it readable on the primary screen.
-    exitAltScreen();
-    console.error(err instanceof Error ? err.message : String(err));
-    return 1;
+    return bailOut(err instanceof Error ? err.message : String(err));
   }
 
   if (!ctx.resuming) emit(`Session ${session.id} created.`);
@@ -1095,10 +1102,7 @@ async function prepareSession(
       configDir,
     );
   } catch (err) {
-    // Same reasoning as the loadOrCreateSession catch above.
-    exitAltScreen();
-    console.error(err instanceof Error ? err.message : String(err));
-    return 1;
+    return bailOut(err instanceof Error ? err.message : String(err));
   }
   // D2: a rerouted pair is never silent — the piped/non-interactive path gets the notice here,
   // gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent into the transcript

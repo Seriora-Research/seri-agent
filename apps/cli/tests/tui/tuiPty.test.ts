@@ -4753,10 +4753,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-viewport-overflow.mjs");
       writeFileSync(scriptPath, childScriptManyLines(dir));
 
-      const { child, sawLine, lastFrame } = await startChild(scriptPath, dir);
+      const { child, sawLine, lastFrame, sawInFrameTimes } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        await sawLine("line-299.txt");
+        // `sawInFrameTimes`, not `sawLine`: the raw pty stream can deliver these bytes before the
+        // synchronized-output CLOSE marker for the frame that contains them, so a raw substring
+        // check can resolve one chunk ahead of `lastFrame()` actually seeing a closed frame with
+        // this line in it — reading `lastFrame()` right after would then race an empty/stale frame.
+        await sawInFrameTimes("line-299.txt", 1);
 
         const frame = lastFrame();
         expect(frame).toContain("line-299.txt");
@@ -4771,14 +4775,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-viewport-pageup.mjs");
       writeFileSync(scriptPath, childScriptManyLines(dir));
 
-      const { child, sawLine, lastFrame } = await startChild(scriptPath, dir);
+      const { child, sawLine, lastFrame, sawInFrameTimes } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
         await sawLine("line-299.txt");
         await sawLine("(done: no-tool-call)");
 
         child.stdin?.write("\x1b[5~"); // Page Up
-        await sawLine("↑ scrolled — End to follow");
+        // `sawInFrameTimes`, not `sawLine`, immediately before reading `lastFrame()` below — same
+        // raw-vs-frame race as above.
+        await sawInFrameTimes("↑ scrolled — End to follow", 1);
 
         const frame = lastFrame();
         expect(frame).toContain("↑ scrolled — End to follow");

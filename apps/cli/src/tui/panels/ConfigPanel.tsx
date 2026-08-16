@@ -133,14 +133,31 @@ function ConfigList({
       {visible.map((row, localIndex) => {
         const index = offset + localIndex;
         return (
-          <Text key={row.key} color={index === selected ? theme.accent : undefined}>
+          // `wrap="truncate-end"`: a config VALUE is arbitrary user input (`seri config set
+          // SERI_VERIFY_COMMAND "…"`, say), unlike every other panel's fixed-shape rows (a tool
+          // name, a provider). PANEL_CHROME_ROWS (format.ts) budgets exactly one row per list row —
+          // Ink's default wrap would soft-wrap a long value into a second row and overflow that
+          // budget the same way the SERI_VERIFY_COMMAND description string itself once did.
+          <Text
+            key={row.key}
+            color={index === selected ? theme.accent : undefined}
+            wrap="truncate-end"
+          >
             {index === selected ? "> " : "  "}
             {formatConfigRow(row)}
           </Text>
         );
       })}
       {remaining > 0 && <Text color={theme.muted}>+{remaining} more</Text>}
-      {selectedDescription && <Text color={theme.muted}>{selectedDescription}</Text>}
+      {selectedDescription && (
+        // Same reasoning as the row Text above: a config key's own description is fixed copy today
+        // (commands.ts trims it to fit an assumed 80-column terminal), but nothing here reads the
+        // REAL terminal width, so a narrower real TTY reproduces the exact overflow that fix closed
+        // for the default width only. Truncating is the one guarantee that holds at any width.
+        <Text color={theme.muted} wrap="truncate-end">
+          {selectedDescription}
+        </Text>
+      )}
       <Text
         color={theme.muted}
       >{`↑/↓ move · Enter/a ${actionHint} · r/Delete unset · Esc/Ctrl-D close`}</Text>

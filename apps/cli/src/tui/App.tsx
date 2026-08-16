@@ -1,9 +1,10 @@
 // Root TUI component, rendered full-screen in the alternate screen buffer (altScreen.ts's own
 // enter/exit calls, cli.ts). The transcript is a measured, tail-anchored, scrollable viewport
-// (visibleTranscript, format.ts) rather than an append-only <Static> region — a terminal-height
-// slice of `state.transcript`, following the newest line by default and scrollable with
-// PageUp/PageDown/Home/End. Everything below it is a live region: status/spinner, a pending-write
-// placeholder, the mode indicator, and a basic input box, all re-rendered in place.
+// (visibleTranscript, format.ts) rather than an append-only <Static> region — a terminal-width- and
+// -height-bounded slice of `state.transcript` PLUS the in-progress `state.streaming` answer as its
+// own newest entry, following the newest row by default and scrollable with PageUp/PageDown/Home/
+// End. Everything below it is a live region: status/spinner, a pending-write placeholder, the mode
+// indicator, and a basic input box, all re-rendered in place.
 
 import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
@@ -277,10 +278,12 @@ export function App({
   });
 
   return (
-    // `rows - 1`, not `rows`: Ink forces a full clear-and-redraw on every frame on Windows once
-    // the rendered output fills the whole terminal height (isWindowsConsole && (wasFullscreen ||
-    // isFullscreen), Ink's own resolveOutput) — one row short keeps the normal diffing path.
-    <Box flexDirection="column" height={rows - 1}>
+    // `rows - 1`, not `rows`, on Windows only: Ink forces a full clear-and-redraw on every frame
+    // there once the rendered output fills the whole terminal height (isWindowsConsole &&
+    // (wasFullscreen || isFullscreen), Ink's own resolveOutput) — one row short keeps the normal
+    // diffing path. That check is Windows-specific (`isWindowsConsole`), so macOS/Linux keep the
+    // full `rows` instead of losing a row of usable height to a bug they don't have.
+    <Box flexDirection="column" height={process.platform === "win32" ? rows - 1 : rows}>
       {/* Rendered ABOVE the render ternary below, not as one of its branches — unlike
       ApprovalBox/ModelPicker/SetupPanel this never replaces InputBox, it sits alongside it.
       `state.pendingAuth === undefined` (not just `state.authOffer`) is the derived half of the
@@ -296,10 +299,20 @@ export function App({
       {/* flexGrow/flexShrink/minHeight={0} give this box whatever height is left over after
       every sibling below has laid out — `viewportRows` (above) reads that back via useBoxMetrics,
       not the other way around, so there is no feedback loop from the slice into the measurement.
-      `visibleTranscript` already caps the line COUNT at `viewportRows`; `overflowY`/
-      `justifyContent="flex-end"` only handle the residual case where a slice line wraps and pushes
-      the total over — anchoring to the end means the overflow falls off the top (oldest), not the
-      bottom (newest). */}
+      `visibleTranscript` (format.ts) already wraps every entry to `state.columns` and caps the
+      VISUAL row count at `viewportRows`, so `overflowY`/`justifyContent="flex-end"` are a pure
+      backstop now, not load-bearing truncation — anchoring to the end means a genuine one-frame
+      overshoot falls off the top (oldest), not the bottom (newest).
+      The in-progress answer (`state.streaming`) is appended as the newest entry here rather than
+      rendered as its own unbounded `<Text>` below the box (the previous shape): unwrapped and
+      un-height-capped for its entire duration, it could grow taller than the box and push InputBox
+      off-screen — the same "one entry, many rows" defect this file exists to fix, just still live
+      for every answer's whole streaming duration. Folding it in means a scrolled-up reader no
+      longer force-follows a live answer either, which matches how a terminal pager already behaves
+      (scrolling up stops following); one honest gap: this box's own scroll clamp (reducer.ts) is
+      computed over `state.transcript` alone, one flush behind the streamed row count it renders
+      here, so the deepest reachable PageUp is momentarily short by however many rows are still
+      streaming — self-correcting the instant the turn flushes. */}
       <Box
         ref={viewportRef}
         flexDirection="column"
@@ -309,13 +322,15 @@ export function App({
         overflowY="hidden"
         justifyContent="flex-end"
       >
-        {visibleTranscript(state.transcript, viewportRows, state.transcriptScrollOffset).map(
-          (line, index) => (
-            <Text key={index}>{line}</Text>
-          ),
-        )}
+        {visibleTranscript(
+          state.streaming.length > 0 ? [...state.transcript, state.streaming] : state.transcript,
+          viewportRows,
+          state.transcriptScrollOffset,
+          state.columns,
+        ).map((line, index) => (
+          <Text key={index}>{line}</Text>
+        ))}
       </Box>
-      {state.streaming.length > 0 && <Text>{state.streaming}</Text>}
       {state.pendingTool !== undefined && (
         <Box borderStyle="round" borderColor={theme.warning}>
           {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: pendingTool is set
