@@ -24,7 +24,13 @@ export function useListWindow(selected: number): {
   reset: () => void;
 } {
   const { rows } = useWindowSize();
-  const windowSize = listWindowSize(rows);
+  // `rows - 1`, not raw `rows` (found by review): App.tsx's own root Box is sized to `rows - 1`
+  // (one row reserved for a mid-run console write to land in without scrolling the alt-screen
+  // viewport — that Box's own comment has the mechanism), so a panel budgeting its window off the
+  // full, un-adjusted `rows` sizes itself for one row more than the space it will actually render
+  // inside, at every terminal height PANEL_CHROME_ROWS' own clamp hasn't already floored to
+  // MIN_LIST_WINDOW.
+  const windowSize = listWindowSize(rows - 1);
   // Seeded from `selected` via the same slideWindow rule onSelectionMove uses, not a bare 0: a
   // panel can mount with a non-zero seeded selection (ConfigPanel/PermissionsPanel/SetupPanel all
   // re-dispatch their own `selected` after a save/unset/remove), and a hardcoded-0 offset would

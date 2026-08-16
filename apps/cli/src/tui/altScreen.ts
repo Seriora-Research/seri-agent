@@ -23,6 +23,16 @@ export function enterAltScreen(): void {
 
 export function exitAltScreen(): void {
   if (!entered) return;
+  // Found by review: `enterAltScreen` registers a fresh `process.on("exit", ...)` listener every
+  // time it transitions `entered` false → true, and nothing removed the PREVIOUS one — dormant in
+  // production (one `run()` call per process, so at most one registration ever happens), but a live
+  // leak for anything that calls `run()` repeatedly in one process (a test, an embedder), eventually
+  // tripping Node's MaxListenersExceededWarning. `process.off`, not a one-shot `{ once: true }` on
+  // the `.on` call: the "exit" event only ever fires once per process regardless, so the listener
+  // was already effectively single-use — this just makes the bookkeeping accurate rather than
+  // leaving a reference to `exitAltScreen` (and everything its closure keeps alive) registered on
+  // `process` forever after the alt screen has already been torn down.
+  process.off("exit", exitAltScreen);
   try {
     process.stdout.write("\x1b[?1049l");
     process.stdout.write("\x1b[?25h");

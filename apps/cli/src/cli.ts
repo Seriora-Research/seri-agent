@@ -1053,48 +1053,46 @@ async function prepareSession(
   // keeps their existing default (console.error/console.log) exactly as before.
   const warnSink = isTTY ? emit : undefined;
 
-  let session: RunSession;
-  let modelRecorded: boolean;
+  // One try wrapping everything from here through the final `return` (found by review — this used
+  // to be two separate try/catches, around loadOrCreateSession and resolveRoute/getModel only,
+  // identical on catch): every OTHER fallible call in this function — saveSession, checkpointTarget,
+  // loadGrants, createCheckpointer/loadVerifyConfig, loadMemory — was reachable with no catch at
+  // all, discarding `preMountMessages` right along with whatever it threw. One catch means nothing
+  // fallible in this function can do that again by omission.
   try {
-    ({ session, modelRecorded } = loadOrCreateSession(
+    const { session, modelRecorded } = loadOrCreateSession(
       ctx.resuming,
       ctx.resumeId,
       ctx.sessionsDir,
       loadAgentsFileFn,
       configDir,
-    ));
-  } catch (err) {
-    return fatalDuringTui(err, preMountMessages);
-  }
+    );
 
-  if (!ctx.resuming) emit(`Session ${session.id} created.`);
+    if (!ctx.resuming) emit(`Session ${session.id} created.`);
 
-  if (runStart(ctx) === "task") {
-    session.messages.push({ role: "user", content: ctx.taskText });
-  }
+    if (runStart(ctx) === "task") {
+      session.messages.push({ role: "user", content: ctx.taskText });
+    }
 
-  // Loaded once, here, alongside the model resolution it feeds — /model (runTui's own runTurn)
-  // reuses this SAME catalog on every later turn rather than reloading it, but @seri/model-catalog
-  // caches for the rest of the process either way (catalog.ts's own loadCatalog).
-  const catalog = await getModelCatalog(undefined, warnSink);
-  // D3 (feature-plan.md): resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
-  // stays a pure, environment-independent switch with its own test file.
-  // Bug fixed here (code-review, PR #73): `configuredProviders` (called by `resolveRoute` below)
-  // reads config.json — `getApiKey`'s own `loadConfig` call, which does a bare `JSON.parse` — so a
-  // corrupted config.json throws SYNCHRONOUSLY, the same failure mode `getModel` itself already
-  // guards against below. Before routing-priority resolution existed, that same read only ever
-  // happened INSIDE getAnthropicModel/etc., already inside this try. Moving it inside here too is
-  // what restores "a corrupted config.json prints a clean error and exits 1," not an uncaught
-  // crash on every session start.
-  let route: ReturnType<typeof resolveRoute>;
-  let model: LanguageModel;
-  try {
-    route = resolveRoute(
+    // Loaded once, here, alongside the model resolution it feeds — /model (runTui's own runTurn)
+    // reuses this SAME catalog on every later turn rather than reloading it, but @seri/model-catalog
+    // caches for the rest of the process either way (catalog.ts's own loadCatalog).
+    const catalog = await getModelCatalog(undefined, warnSink);
+    // D3 (feature-plan.md): resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
+    // stays a pure, environment-independent switch with its own test file.
+    // Bug fixed here (code-review, PR #73): `configuredProviders` (called by `resolveRoute` below)
+    // reads config.json — `getApiKey`'s own `loadConfig` call, which does a bare `JSON.parse` — so a
+    // corrupted config.json throws SYNCHRONOUSLY, the same failure mode `getModel` itself already
+    // guards against below. Before routing-priority resolution existed, that same read only ever
+    // happened INSIDE getAnthropicModel/etc. — no longer a distinct case now that one try covers the
+    // whole function, but the reasoning ("a corrupted config.json prints a clean error and exits 1,"
+    // not an uncaught crash) is still exactly why this needs to be inside the try at all.
+    const route = resolveRoute(
       catalog,
       { model: session.model, provider: session.provider ?? DEFAULT_PROVIDER },
       configuredProviders(configDir),
     );
-    model = getModel(
+    const model = getModel(
       route.model,
       route.provider,
       session.id,
@@ -1107,109 +1105,111 @@ async function prepareSession(
       },
       configDir,
     );
+    // D2: a rerouted pair is never silent — the piped/non-interactive path gets the notice here,
+    // gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent into the transcript
+    // once per turn, and this call ALSO runs on the TUI path (this function has no other reason to
+    // know isTTY), so without the gate a session-start reroute printed twice for the same turn: once
+    // here (before Ink even mounts) and again from runTurn.
+    if (route.rerouted && !isTTY) {
+      printWarning(rerouteNotice(route, session.provider));
+    }
+    // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
+    // cost and context-window come from the wrong provider's entry.
+    const catalogEntry = findCatalogEntry(catalog, route.model, route.provider);
+
+    // A model this run merely RESOLVED is deliberately left out of the file. getGroqModel accepts
+    // any string — an unknown id is not rejected here, it comes back as a provider 404 mid-run — so
+    // pinning at creation mints a session that can never succeed, and `--continue`, the obvious
+    // retry, re-reads the bad id and fails identically while a corrected SERI_MODEL is ignored.
+    // driveLoop's messages-updated save records it instead, which loop.ts only emits after a turn
+    // the provider actually answered (loop.ts:264 for text, :276 for tool calls; a failure yields
+    // `error` and no messages-updated at all), so what gets pinned is a model that demonstrably
+    // worked.
+    //
+    // opencode solves this upstream of the call, looking the id up in a provider catalog and
+    // failing with `ModelNotFoundError` plus did-you-mean suggestions before anything is stored.
+    // seri has no catalog until Stage 7a, so "pin only what answered" is the catalog-free half of
+    // that guarantee. A model the session already recorded is untouched: it earned its place the
+    // same way.
+    saveSession(modelRecorded ? session : { ...session, model: undefined }, ctx.sessionsDir);
+
+    // Checkpointing is enabled by exactly this call, which is also why rolling it back is a
+    // one-line revert: `runLoop`, the session store, the gate and every tool are unmodified, and
+    // the store lives entirely outside the user's repository.
+    const { storeDir, worktree } = checkpointTarget(session, dirs(ctx));
+
+    // Read here and nowhere else. NOTE FOR A FUTURE SCHEDULER (docs/BUILD-PLAN.md, "Unattended
+    // permission surface" open item): an unattended run must NOT copy this line. Every entry in
+    // that file was written by a human answering a live prompt in a run they were watching; that
+    // is consent for that run, not standing consent for one on a timer. Seeding a scheduled run
+    // from here is docs/ARCHITECTURE.md:202's "base safety layer disabled on a timer" arriving
+    // through a file instead of a flag.
+    const grants = loadGrants(ctx.permissionsDir, worktree, (msg) => printWarning(msg, warnSink));
+    const allowedTools = effectiveTools(grants);
+    const permissionMode = skipPermissions ? "auto" : session.permissionMode;
+    // approve-each only: in read-only the gate blocks these tools before it ever consults the
+    // allowlist (gate.ts:14), and in auto everything is allowed anyway — printing "pre-approved" in
+    // either would be a sentence the run does not honour.
+    if (permissionMode === "approve-each" && allowedTools.length > 0) {
+      printPreApproved(allowedTools, warnSink);
+    }
+
+    // `write_file`, `bash` and `powershell` write relative to process.cwd(), while the snapshot
+    // covers the project root. Anywhere inside the project is fine — that is the whole point of
+    // resolving the root, and it is why a subdirectory launch no longer trips this. What is left is
+    // a genuine cross-project resume: it would snapshot one project while the tools edit another,
+    // and a later /undo would run its removal pass in the ORIGINAL project, deleting untracked
+    // files a human made there. Said out loud rather than left to be discovered by the deletion.
+    const inProject = relative(worktree, process.cwd());
+    if (inProject === ".." || inProject.startsWith(`..${sep}`) || isAbsolute(inProject)) {
+      printWarning(
+        `this session's files are checkpointed under ${worktree}, but tools run in ${process.cwd()} — /undo will act on ${worktree}`,
+        warnSink,
+      );
+    }
+
+    // Verification is enabled by exactly this composition, and rolling it back is deleting the
+    // outer call: `runLoop`, the gate, the session store and every tool are unmodified, and
+    // `verify/` becomes dead code rather than something that has to be unpicked.
+    //
+    // Outside withCheckpoints, not inside: the checkpoint has to be taken BEFORE the write
+    // (checkpoint/wrapTools.ts:18-22) and the check has to run AFTER it, so this is the order that
+    // puts each on the correct side. The AbortSignal the check is run with is the one runLoop hands
+    // `execute` (loop.ts:331), which is driveLoop's controller — the same Ctrl-C that stops a bash
+    // command stops a check.
+    const checkpointer = createCheckpointer({
+      storeDir,
+      worktree,
+      sessionId: session.id,
+      onWarning: printWarning,
+    });
+    const tools = withVerification(
+      withCheckpoints(toolDefinitions, checkpointer),
+      loadVerifyConfig(),
+    );
+
+    // Loaded once, here, alongside everything else this function resolves once per run — this is
+    // what "frozen per session" means (memory/store.ts's own renderMemoryTier doc comment).
+    const memory = loadMemory({ configDir, worktree });
+
+    return {
+      session,
+      storeDir,
+      tools,
+      model,
+      permissionMode,
+      worktree,
+      allowedTools,
+      catalog,
+      catalogEntry,
+      route,
+      checkpointer,
+      memory,
+      preMountMessages,
+    };
   } catch (err) {
     return fatalDuringTui(err, preMountMessages);
   }
-  // D2: a rerouted pair is never silent — the piped/non-interactive path gets the notice here,
-  // gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent into the transcript
-  // once per turn, and this call ALSO runs on the TUI path (this function has no other reason to
-  // know isTTY), so without the gate a session-start reroute printed twice for the same turn: once
-  // here (before Ink even mounts) and again from runTurn.
-  if (route.rerouted && !isTTY) {
-    printWarning(rerouteNotice(route, session.provider));
-  }
-  // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
-  // cost and context-window come from the wrong provider's entry.
-  const catalogEntry = findCatalogEntry(catalog, route.model, route.provider);
-
-  // A model this run merely RESOLVED is deliberately left out of the file. getGroqModel accepts any
-  // string — an unknown id is not rejected here, it comes back as a provider 404 mid-run — so
-  // pinning at creation mints a session that can never succeed, and `--continue`, the obvious retry,
-  // re-reads the bad id and fails identically while a corrected SERI_MODEL is ignored. driveLoop's
-  // messages-updated save records it instead, which loop.ts only emits after a turn the provider
-  // actually answered (loop.ts:264 for text, :276 for tool calls; a failure yields `error` and no
-  // messages-updated at all), so what gets pinned is a model that demonstrably worked.
-  //
-  // opencode solves this upstream of the call, looking the id up in a provider catalog and failing
-  // with `ModelNotFoundError` plus did-you-mean suggestions before anything is stored. seri has no
-  // catalog until Stage 7a, so "pin only what answered" is the catalog-free half of that guarantee.
-  // A model the session already recorded is untouched: it earned its place the same way.
-  saveSession(modelRecorded ? session : { ...session, model: undefined }, ctx.sessionsDir);
-
-  // Checkpointing is enabled by exactly this call, which is also why rolling it back is a one-line
-  // revert: `runLoop`, the session store, the gate and every tool are unmodified, and the store
-  // lives entirely outside the user's repository.
-  const { storeDir, worktree } = checkpointTarget(session, dirs(ctx));
-
-  // Read here and nowhere else. NOTE FOR A FUTURE SCHEDULER (docs/BUILD-PLAN.md, "Unattended
-  // permission surface" open item): an unattended run must NOT copy this line. Every entry in
-  // that file was written by a human answering a live prompt in a run they were watching; that
-  // is consent for that run, not standing consent for one on a timer. Seeding a scheduled run
-  // from here is docs/ARCHITECTURE.md:202's "base safety layer disabled on a timer" arriving
-  // through a file instead of a flag.
-  const grants = loadGrants(ctx.permissionsDir, worktree, (msg) => printWarning(msg, warnSink));
-  const allowedTools = effectiveTools(grants);
-  const permissionMode = skipPermissions ? "auto" : session.permissionMode;
-  // approve-each only: in read-only the gate blocks these tools before it ever consults the
-  // allowlist (gate.ts:14), and in auto everything is allowed anyway — printing "pre-approved" in
-  // either would be a sentence the run does not honour.
-  if (permissionMode === "approve-each" && allowedTools.length > 0) {
-    printPreApproved(allowedTools, warnSink);
-  }
-
-  // `write_file`, `bash` and `powershell` write relative to process.cwd(), while the snapshot
-  // covers the project root. Anywhere inside the project is fine — that is the whole point of
-  // resolving the root, and it is why a subdirectory launch no longer trips this. What is left is
-  // a genuine cross-project resume: it would snapshot one project while the tools edit another,
-  // and a later /undo would run its removal pass in the ORIGINAL project, deleting untracked files
-  // a human made there. Said out loud rather than left to be discovered by the deletion.
-  const inProject = relative(worktree, process.cwd());
-  if (inProject === ".." || inProject.startsWith(`..${sep}`) || isAbsolute(inProject)) {
-    printWarning(
-      `this session's files are checkpointed under ${worktree}, but tools run in ${process.cwd()} — /undo will act on ${worktree}`,
-      warnSink,
-    );
-  }
-
-  // Verification is enabled by exactly this composition, and rolling it back is deleting the outer
-  // call: `runLoop`, the gate, the session store and every tool are unmodified, and `verify/`
-  // becomes dead code rather than something that has to be unpicked.
-  //
-  // Outside withCheckpoints, not inside: the checkpoint has to be taken BEFORE the write
-  // (checkpoint/wrapTools.ts:18-22) and the check has to run AFTER it, so this is the order that
-  // puts each on the correct side. The AbortSignal the check is run with is the one runLoop hands
-  // `execute` (loop.ts:331), which is driveLoop's controller — the same Ctrl-C that stops a bash
-  // command stops a check.
-  const checkpointer = createCheckpointer({
-    storeDir,
-    worktree,
-    sessionId: session.id,
-    onWarning: printWarning,
-  });
-  const tools = withVerification(
-    withCheckpoints(toolDefinitions, checkpointer),
-    loadVerifyConfig(),
-  );
-
-  // Loaded once, here, alongside everything else this function resolves once per run — this is
-  // what "frozen per session" means (memory/store.ts's own renderMemoryTier doc comment).
-  const memory = loadMemory({ configDir, worktree });
-
-  return {
-    session,
-    storeDir,
-    tools,
-    model,
-    permissionMode,
-    worktree,
-    allowedTools,
-    catalog,
-    catalogEntry,
-    route,
-    checkpointer,
-    memory,
-    preMountMessages,
-  };
 }
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
@@ -2713,7 +2713,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // than a branch inside the block below, so a corrected zeroKeysConfigured/runGuidedSetup diff
   // never also has to account for this mount.
   if (isTTY) {
-    enterAltScreen();
     // Wrapped, unlike the rest of this function's own `return N` early exits: `run()` has never
     // had a top-level `.catch` (its only caller, `import.meta.main`, does
     // `run(...).then((code) => process.exit(code))`), and neither Bun nor this file installs an
@@ -2722,7 +2721,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // exitAltScreen)` then silently discards on the way out, leaving the user with a dead process
     // and zero visible diagnostics. `fatalDuringTui` (prepareSession's own bailout, shared here) is
     // what every other terminal-for-the-run failure in this window already routes through.
+    //
+    // `enterAltScreen()` itself is INSIDE this try (found by review, not just the calls after it):
+    // its own `entered = true` runs before its write, so a thrown write still leaves `exitAltScreen`
+    // (called by `fatalDuringTui` below) able to attempt — and safely no-op-on-failure — a real
+    // restore, rather than the throw escaping before any of this machinery is even reachable.
     try {
+      enterAltScreen();
       await runWelcomeSplash(ctx.configDir, deps);
       const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
       if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;

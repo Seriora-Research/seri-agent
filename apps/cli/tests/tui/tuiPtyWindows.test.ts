@@ -12,7 +12,7 @@ import type * as PtyModule from "node-pty";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
-// altScreen.ts's own D1: one continuous `\x1b[?1049h`/`\x1b[?1049l` pair per launch. A quit-capable
+// altScreen.ts's own invariant: one continuous `\x1b[?1049h`/`\x1b[?1049l` pair per launch. A quit-capable
 // runLoop rather than a hanging one: this test needs the process to actually exit on its own (via
 // Ctrl-D) so `\x1b[?1049l`'s own "exactly once, after the child exits" claim has something real to
 // observe, not a `term.kill()` from the test harness racing whatever cleanup would have run.
@@ -38,7 +38,7 @@ function childScriptAltScreen(dir: string): string {
 }
 
 // altScreen.ts's own hand-rolled pair, byte-for-byte what Ink itself writes for `alternateScreen`
-// (D1, feature-plan.md) — `\x1b[?1049h`/`\x1b[?1049l`, not the DEC-2026 synchronized-output bracket
+// — `\x1b[?1049h`/`\x1b[?1049l`, not the DEC-2026 synchronized-output bracket
 // the old version of this test searched for (that subject — `<Static>`'s own bsu/esu-wrapped flush
 // — no longer exists; App.tsx renders the transcript as a measured viewport instead).
 const ALT_SCREEN_ENTER = Buffer.from([0x1b, 0x5b, 0x3f, 0x31, 0x30, 0x34, 0x39, 0x68]); // \x1b[?1049h
