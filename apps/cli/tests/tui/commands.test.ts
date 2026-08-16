@@ -674,15 +674,15 @@ describe("decideConfigOpen", () => {
     expect(row?.source).toBe("env");
   });
 
-  // Code review, round 2: `source`/value used to disagree on an env var set to "" — `source`
-  // read `!== undefined` (true for ""), the value read `||` (falls through to config.json for the
-  // falsy ""). Both must now agree: env wins for `source` AND for the value read.
-  test("an env var set to the empty string is source: env, not source: config", () => {
+  // An empty-string env var must not outrank config.json: it loses the precedence race (same
+  // falsy-skip rule as loadVerifyConfig's own live default resolution), so both `source` and
+  // `masked` must say "config", not silently display a value the running session doesn't read.
+  test("an env var set to the empty string falls through to config.json for source and value", () => {
     setConfigValue("SERI_VERIFY_COMMAND", "bun run typecheck", configConfigDir);
     process.env.SERI_VERIFY_COMMAND = "";
     const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_COMMAND");
-    expect(row?.source).toBe("env");
-    expect(row?.masked).toBe("");
+    expect(row?.source).toBe("config");
+    expect(row?.masked).toBe("bun run typecheck");
   });
 
   test("a provider API key written to config.json is absent from the returned rows", () => {
@@ -777,14 +777,13 @@ describe("decideConfigOpen", () => {
     }
   });
 
-  // `source` stays "env" for an empty-string entry — existence, not precedence (the test just
-  // above this one) — but `on` must agree with the live session, which resolveConfigValue's
-  // falls-through-on-falsy precedence gets right where a naive `??` wouldn't.
+  // Same falls-through rule as the string-key test above, exercised on the boolean key: `source`
+  // AND `on` both agree with loadVerifyConfig's own live default resolution for env="".
   test("SERI_VERIFY_ENABLED='' in env with a config.json fallback agrees with loadVerifyConfig", () => {
     setConfigValue("SERI_VERIFY_ENABLED", "false", configConfigDir);
     process.env.SERI_VERIFY_ENABLED = "";
     const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_ENABLED");
-    expect(row?.source).toBe("env");
+    expect(row?.source).toBe("config");
     expect(row?.kind === "boolean" && row.on).toBe(loadVerifyConfig(configConfigDir).enabled);
     expect(row?.kind === "boolean" && row.on).toBe(false);
   });

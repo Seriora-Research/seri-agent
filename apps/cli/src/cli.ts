@@ -46,7 +46,6 @@ import {
   configBoolean,
   loadConfig,
   loadVerifyConfig,
-  resolveConfigValue,
   setConfigValue,
   unsetConfigValue,
 } from "./config/config";
@@ -1956,25 +1955,25 @@ function createConfigHandlers(opts: {
   }
 
   // A boolean row toggles in place (write + transcript line + list refresh — a toggle has no
-  // screen of its own, unlike enter-value); everything else opens the free-text entry step. `row`
-  // (the panel's current list state) only decides `kind`/`source` here — the toggle target itself
-  // is a fresh disk read, not `row.on`, so a concurrent write (another `seri` process, a hand edit)
-  // between the list rendering and this call can't make the write silently no-op while the
-  // transcript still claims a change. Same "re-check before acting" reasoning as onConfigUnset's
-  // own confirm branch, just below.
+  // screen of its own, unlike enter-value); everything else opens the free-text entry step. `kind`
+  // is static (configKeyInfo(key), a pure function of `key`) — no need to read it off the panel's
+  // possibly-stale row, and doing so risked a silent wrong-branch fallback: if `pending` wasn't on
+  // "list" or the row wasn't found, `row?.kind !== "boolean"` was vacuously true for a boolean key.
   function onConfigSelect(key: string): void {
-    const pending = getPendingConfig();
-    const row = pending?.step === "list" ? pending.rows.find((r) => r.key === key) : undefined;
-    if (row?.kind !== "boolean") {
+    if (configKeyInfo(key).kind !== "boolean") {
       dispatch({ type: "config-step", state: { step: "enter-value", key, busy: false } });
       return;
     }
     let nextOn: boolean;
-    let envWins: boolean;
     try {
-      const { value, source } = resolveConfigValue(key, loadConfig(configDir));
-      nextOn = !configBoolean(value);
-      envWins = source === "env";
+      // Toggles config.json's OWN stored value, not the effective (env-precedence-resolved) one —
+      // a fresh disk read, not a possibly-stale `row.on`, so a concurrent write (another `seri`
+      // process, a hand edit) between the list rendering and this call can't make the write
+      // silently no-op while the transcript still claims a change. Same "re-check before acting"
+      // reasoning as onConfigUnset's own confirm branch, just below. Toggling the EFFECTIVE value
+      // instead would make every press a no-op under a truthy env var: config.json would keep
+      // getting overwritten with the same value the env var was already forcing.
+      nextOn = !configBoolean(loadConfig(configDir)[key]);
       setConfigValue(key, String(nextOn), configDir);
     } catch (err) {
       dispatch({
@@ -1983,10 +1982,9 @@ function createConfigHandlers(opts: {
       });
       return;
     }
-    // The write above always lands in config.json, but an env var wins the precedence race — say
-    // so instead of claiming the active value changed, when it does. `envWins` is this same fresh
-    // resolve's `source`, not `row.source` (the panel's possibly-stale snapshot) — same staleness
-    // reasoning as `nextOn` above.
+    // The write above always lands in config.json, but a truthy env var wins the precedence race —
+    // say so instead of claiming the active value changed.
+    const envWins = Boolean(process.env[key]);
     dispatch({
       type: "transcript-append",
       line: envWins
@@ -2075,7 +2073,7 @@ function createConfigHandlers(opts: {
     // process) — a fresh, guarded read is what actually decides whether to offer the confirm step.
     let hasConfigEntry: boolean;
     try {
-      hasConfigEntry = key in loadConfig(configDir);
+      hasConfigEntry = Object.hasOwn(loadConfig(configDir), key);
     } catch (err) {
       dispatch({
         type: "command-error",
