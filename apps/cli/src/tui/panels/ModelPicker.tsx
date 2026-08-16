@@ -119,7 +119,10 @@ export function ModelPicker({
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
       <Text>{filterQuery.length > 0 ? filterQuery : " "}</Text>
-      <Text color={theme.muted}>{`  ${MODEL_PICKER_HEADER}`}</Text>
+      {/* Same reasoning as the row Text below: MODEL_PICKER_HEADER's own fixed column widths sum to
+      the same ~87 chars, so it soft-wraps on the identical narrow terminals the row fix guards
+      against. */}
+      <Text color={theme.muted} wrap="truncate-end">{`  ${MODEL_PICKER_HEADER}`}</Text>
       {visible.map((row, localIndex) => {
         const index = scrollOffset + localIndex;
         return (

@@ -404,7 +404,15 @@ export function App({
           {state.status.length > 0 && <Text color={theme.muted}>{state.status}</Text>}
         </Box>
       </Box>
-      {state.commandError !== undefined && <Text color={theme.error}>{state.commandError}</Text>}
+      {/* `wrap="truncate-end"`: APP_CHROME_ROWS (format.ts) reserves exactly one row for this line,
+      but a slash-command catch's own messageOf(err) is unbounded-length (a file path, a JSON parse
+      error) — left to soft-wrap, a long one would consume a second row APP_CHROME_ROWS never
+      reserved, pushing an open panel's own bottom row past the alt-screen viewport. */}
+      {state.commandError !== undefined && (
+        <Text color={theme.error} wrap="truncate-end">
+          {state.commandError}
+        </Text>
+      )}
       {/* Findings 1+5: mutually exclusive with InputBox — a pending approval question is the only
       thing this run is waiting on, and answering it (not typing a task or slash command) is the
       only input that means anything until it clears. Extended to a third state for /model, a

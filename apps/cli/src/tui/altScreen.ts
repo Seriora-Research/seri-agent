@@ -16,9 +16,14 @@ let entered = false;
 export function enterAltScreen(): void {
   if (entered) return;
   entered = true;
-  process.stdout.write("\x1b[?1049h");
+  // Registered BEFORE the write, not after: exitAltScreen's own comment already treats a thrown
+  // write as real (a killed/detached terminal). If the buffer-switch write below throws, the
+  // caller's own catch (cli.ts) still reaches fatalDuringTui's single exitAltScreen() retry either
+  // way, but registering these first means an uncaught throw elsewhere in the same synchronous
+  // stack, before that catch runs, still has a listener in place rather than none at all.
   process.on("exit", exitAltScreen);
   onSignalCleanupLast(exitAltScreen);
+  process.stdout.write("\x1b[?1049h");
 }
 
 export function exitAltScreen(): void {

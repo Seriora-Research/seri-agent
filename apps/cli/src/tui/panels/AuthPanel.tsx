@@ -16,7 +16,13 @@ export function AuthBanner({ show }: { show: boolean }) {
   if (!show) return null;
   return (
     <Box borderStyle="round" borderColor={theme.accent}>
-      <Text color={theme.accent}>Sign in with /login, or create an account with /signup</Text>
+      {/* `wrap="truncate-end"`: APP_CHROME_ROWS (format.ts) counts this box as exactly 3 rows —
+      2 border + 1 text. Below ~58 columns this fixed string would otherwise soft-wrap to a
+      second text row, making the box 4 rows and pushing an open panel's own bottom row past the
+      alt-screen viewport. */}
+      <Text color={theme.accent} wrap="truncate-end">
+        Sign in with /login, or create an account with /signup
+      </Text>
     </Box>
   );
 }
