@@ -3,9 +3,10 @@
 // `auth-requested`/`auth-step`/`auth-resolved`. New code, not a move.
 
 import { Box, Text, useInput } from "ink";
+import { ErrorLine } from "../components";
 import { singleLine } from "../format";
 import type { AuthPanelState } from "../reducer";
-import { ERROR_MARK, theme } from "../theme";
+import { theme } from "../theme";
 
 // The non-blocking login/signup offer — a single bordered row, the same visual weight as
 // ApprovalBox's own bordered box, rendered ABOVE App.tsx's render ternary rather than as one of
@@ -28,9 +29,10 @@ export function AuthBanner({ show }: { show: boolean }) {
 
 // /login and /signup's own blocking device-flow panel — mirrors SetupPanel's step-dispatcher
 // shape, one branch per step. `onDismiss` is called from Escape on every step, plus Enter on
-// "result" (SetupConfirmRemove's own Esc-cancels convention, SetupPanel.tsx, is the closest
-// precedent for "either key just closes it" — used on "result" only, where an explicit
-// confirmation reads naturally; Escape alone covers "starting"/"device").
+// "result" only, where an explicit confirmation reads naturally (Escape alone covers
+// "starting"/"device"). This panel's own explicit `key.escape` check below is what makes Escape
+// work here — unlike `ConfirmPrompt` (components.tsx), which never inspects `key.escape` and
+// treats a bare Escape as an inert stray keypress, not a cancel.
 //
 // Bug fix (thermo-nuclear + code-review, round 4): before Escape worked here at all, neither it
 // nor Ctrl-C (wired to onCancel, not to clearing pendingAuth — a raw Ctrl-C during "starting"/
@@ -72,13 +74,18 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
       borderColor={state.error ? theme.error : theme.muted}
       flexDirection="column"
     >
-      {/* singleLine + wrap="truncate-end": the error case comes from messageOf(err) — an
-      Error#message is unbounded and free to carry a literal newline, and this panel budgets
-      exactly one row for it, same reasoning as App.tsx's own commandError guard. */}
-      <Text bold={state.error} color={state.error ? theme.error : undefined} wrap="truncate-end">
-        {state.error ? ERROR_MARK : ""}
-        {singleLine(state.message)}
-      </Text>
+      {/* `state.error` is a single boolean discriminant on this "result" variant, so the branch
+      happens once here rather than as several independently-conditional props — one of the two
+      resulting elements is ErrorLine's own constant-styled alert line, the other a plain unstyled
+      one, and neither needs the other's styling. `singleLine` runs on both branches (ErrorLine
+      calls it internally on the error one) because either message can carry an embedded newline
+      that `wrap="truncate-end"` alone does not guard. The outer Box's own `borderColor` ternary
+      stays local — it styles the box, not this line. */}
+      {state.error ? (
+        <ErrorLine message={state.message} />
+      ) : (
+        <Text wrap="truncate-end">{singleLine(state.message)}</Text>
+      )}
       <Text color={theme.muted}>Enter/Esc continue</Text>
     </Box>
   );

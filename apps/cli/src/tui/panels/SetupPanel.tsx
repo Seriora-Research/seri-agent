@@ -4,16 +4,17 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
-import { formatSetupRow, remaining, singleLine } from "../format";
+import { ConfirmPrompt, ErrorLine, ListRow } from "../components";
+import { formatSetupRow } from "../format";
 import type { SetupState } from "../reducer";
-import { ERROR_MARK, selectedRowStyle, theme, WARNING_MARK } from "../theme";
+import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /setup's own live state (tui/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-exclusion
-// role, dispatching to one of three step-specific sub-components below rather than one component
-// handling all three at once, since each step has genuinely different input handling and local
-// state (the same reasoning ApprovalBox/ModelPicker are separate components rather than one
-// component branching internally).
+// role, dispatching to one of two step-specific sub-components below for the steps that still own
+// input handling and local state (the same reasoning ApprovalBox/ModelPicker are separate
+// components rather than one component branching internally); the confirm-remove step delegates
+// to the shared ConfirmPrompt (components.tsx) instead.
 export function SetupPanel({
   pendingSetup,
   onSetupSelect,
@@ -40,11 +41,12 @@ export function SetupPanel({
     );
   }
   if (pendingSetup.step === "confirm-remove") {
+    const { provider, keyName } = pendingSetup;
     return (
-      <SetupConfirmRemove
-        pendingSetup={pendingSetup}
-        onSetupRemove={onSetupRemove}
-        onSetupBack={onSetupBack}
+      <ConfirmPrompt
+        subject={`Remove ${keyName} (${provider})`}
+        onConfirm={() => onSetupRemove?.(provider)}
+        onCancel={() => onSetupBack?.()}
       />
     );
   }
@@ -75,39 +77,23 @@ function SetupList({
   // supplies the starting point, the component owns live navigation" split ModelPicker's own
   // `selectedIndex` already has, for the identical reason (transient UI data with no reason to
   // round-trip through cli.ts on every arrow key).
-  const [selected, setSelected] = useState(pendingSetup.selected);
-  const { offset, windowSize, onSelectionMove } = useListWindow(selected);
+  const { selected, visible, remainingCount, handleArrowKey } = useListWindow(
+    rows,
+    pendingSetup.selected,
+  );
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {
       onSetupClose?.();
       return;
     }
-    if (key.upArrow) {
-      setSelected((current) => {
-        const next = Math.max(0, current - 1);
-        onSelectionMove(next);
-        return next;
-      });
-      return;
-    }
-    if (key.downArrow) {
-      setSelected((current) => {
-        const next = Math.min(rows.length - 1, current + 1);
-        onSelectionMove(next);
-        return next;
-      });
-      return;
-    }
+    if (handleArrowKey(key)) return;
     const row = rows[selected];
-    // Bug fixed here (code-review, PR #73, round 3): `key.return`/`key.delete` must be checked
-    // BEFORE the `input.length === 0` guard below, not after — Ink's own key parser sets `input`
-    // to `''` for every named key, Enter and Delete included (confirmed against
-    // node_modules/ink/build/parse-keypress.js and use-input.js), so the empty-input guard used to
-    // return before either of these two branches was ever reached. Every other useInput in this
-    // file (ModelPicker, SetupEnterKey, SetupConfirmRemove) already has the ordering this way —
-    // this was the one holdout, and it made Enter/Delete dead here despite the panel's own hint
-    // text advertising them.
+    // `key.return`/`key.delete` must be checked BEFORE the `input.length === 0` guard below, not
+    // after — Ink's own key parser sets `input` to `''` for every named key, Enter and Delete
+    // included (confirmed against node_modules/ink/build/parse-keypress.js and use-input.js), so
+    // an empty-input guard ahead of these two branches would make Enter/Delete dead here despite
+    // the panel's own hint text advertising them.
     if (key.return) {
       if (row !== undefined) onSetupSelect?.(row.provider);
       return;
@@ -129,24 +115,12 @@ function SetupList({
     }
   });
 
-  const visible = rows.slice(offset, offset + windowSize);
-  const remainingCount = remaining(rows.length, offset, windowSize);
-
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>/setup — provider API keys</Text>
-      {visible.map((row, localIndex) => {
-        const index = offset + localIndex;
-        return (
-          // `wrap="truncate-end"` (found by review, same reasoning as ConfigPanel's own row Text):
-          // a config-entry value here is arbitrary user input, and PANEL_CHROME_ROWS (format.ts)
-          // budgets exactly one row per list row regardless of how wide it is.
-          <Text key={row.provider} {...selectedRowStyle(index === selected)} wrap="truncate-end">
-            {index === selected ? "> " : "  "}
-            {formatSetupRow(row)}
-          </Text>
-        );
-      })}
+      {visible.map(({ row, isSelected }) => (
+        <ListRow key={row.provider} selected={isSelected} label={formatSetupRow(row)} />
+      ))}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
       <Text color={theme.muted}>
         ↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close
@@ -205,57 +179,12 @@ function SetupEnterKey({
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>{`${keyName} for ${provider}`}</Text>
       <Text>{"*".repeat(value.length)}</Text>
-      {/* singleLine + wrap="truncate-end": error comes from messageOf(err) — an Error#message is
-      unbounded and free to carry a literal newline, and this panel budgets exactly one row for it,
-      same reasoning as App.tsx's own commandError guard. */}
-      {error !== undefined && (
-        <Text color={theme.error} bold wrap="truncate-end">
-          {ERROR_MARK}
-          {singleLine(error)}
-        </Text>
-      )}
+      <ErrorLine message={error} />
       {busy ? (
         <Text color={theme.muted}>Validating…</Text>
       ) : (
         <Text color={theme.muted}>Enter submit · Esc back · Ctrl-D close</Text>
       )}
-    </Box>
-  );
-}
-
-function SetupConfirmRemove({
-  pendingSetup,
-  onSetupRemove,
-  onSetupBack,
-}: {
-  pendingSetup: Extract<SetupState, { step: "confirm-remove" }>;
-  onSetupRemove?: (provider: ModelProvider) => void;
-  onSetupBack?: () => void;
-}) {
-  const { provider, keyName } = pendingSetup;
-
-  useInput((input, key) => {
-    // ApprovalBox's own convention (above): Enter and anything unrecognised both cancel — only an
-    // explicit "y" confirms.
-    if (key.return) {
-      onSetupBack?.();
-      return;
-    }
-    if (key.ctrl || key.meta) return;
-    if (input.length === 0) return;
-    if (input.toLowerCase() === "y") {
-      onSetupRemove?.(provider);
-      return;
-    }
-    onSetupBack?.();
-  });
-
-  return (
-    <Box borderStyle="single" borderColor={theme.warning}>
-      <Text color={theme.warning} bold>
-        {WARNING_MARK}
-        {`Remove ${keyName} (${provider})? [y]es / [N]o`}
-      </Text>
     </Box>
   );
 }

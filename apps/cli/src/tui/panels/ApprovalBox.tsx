@@ -1,10 +1,10 @@
 // Extracted out of App.tsx (Stage A, cli-commands-to-tui feature-plan.md) verbatim: a pure move,
 // no behavior change.
 
-import { Box, Text, useInput } from "ink";
+import { useInput } from "ink";
 import { approvalPromptText } from "../../cli/output";
 import type { ApprovalAnswer } from "../../loop/loop";
-import { theme, WARNING_MARK } from "../theme";
+import { WarningBox } from "../components";
 
 // approvalPromptText (cli/output.ts), not a hand-copied template: round 7 code review found this
 // line written out twice (here and in makeApprovalPrompt's own rl.question call, cli.ts) — same
@@ -63,12 +63,5 @@ export function ApprovalBox({
     onAnswer?.("no");
   });
 
-  return (
-    <Box borderStyle="single" borderColor={theme.warning}>
-      <Text color={theme.warning} bold>
-        {WARNING_MARK}
-        {approvalPromptText(toolName, args, offersAlways)}
-      </Text>
-    </Box>
-  );
+  return <WarningBox message={approvalPromptText(toolName, args, offersAlways)} />;
 }

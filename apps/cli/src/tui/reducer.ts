@@ -16,10 +16,10 @@ import { DEFAULT_COLUMNS, transcriptVisualRows } from "./format";
 // own freshly-recomputed `rows` (SetupList, App.tsx, renders and navigates them) rather than
 // reaching back into a stale copy, so a step transition always renders what config.json/env
 // actually say at that moment. "enter-key" and "confirm-remove" do NOT carry `rows` — neither
-// SetupEnterKey nor SetupConfirmRemove (App.tsx) reads a row list at all, only `provider`/
-// `keyName` and their own step-specific fields; a `rows` field on either used to exist purely to
-// satisfy the type, forcing cli.ts's own handlers to compute-and-thread a row array (a config.json
-// read) nothing ever consumed (code-review, PR #73).
+// SetupEnterKey nor the confirm-remove step (SetupPanel.tsx) reads a row list at all, only
+// `provider`/`keyName` and their own step-specific fields; a `rows` field on either used to exist
+// purely to satisfy the type, forcing cli.ts's own handlers to compute-and-thread a row array (a
+// config.json read) nothing ever consumed.
 export type SetupState =
   | { step: "list"; rows: SetupProviderRow[]; selected: number }
   | {

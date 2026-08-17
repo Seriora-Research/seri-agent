@@ -4,14 +4,15 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import { type ConfigRow, configKeyInfo } from "../commands";
-import { remaining, singleLine } from "../format";
+import { ConfirmPrompt, ErrorLine, ListRow } from "../components";
+import { singleLine } from "../format";
 import type { ConfigPanelState } from "../reducer";
-import { ERROR_MARK, selectedRowStyle, theme, WARNING_MARK } from "../theme";
+import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /config's own live state (tui/reducer.ts's pendingConfig) — mirrors SetupPanel's
-// step-dispatcher exactly: one branch per step, since each has genuinely different input
-// handling and local state.
+// step-dispatcher shape: one branch per step that still owns input handling and local state;
+// the confirm-unset step delegates to the shared ConfirmPrompt (components.tsx) instead.
 export function ConfigPanel({
   pendingConfig,
   onConfigSelect,
@@ -38,11 +39,12 @@ export function ConfigPanel({
     );
   }
   if (pendingConfig.step === "confirm-unset") {
+    const { key } = pendingConfig;
     return (
-      <ConfigConfirmUnset
-        pendingConfig={pendingConfig}
-        onConfigUnset={onConfigUnset}
-        onConfigBack={onConfigBack}
+      <ConfirmPrompt
+        subject={`Unset ${configKeyInfo(key).label} (${key})`}
+        onConfirm={() => onConfigUnset?.(key)}
+        onCancel={() => onConfigBack?.()}
       />
     );
   }
@@ -70,30 +72,17 @@ function ConfigList({
   const { rows } = pendingConfig;
   // Seeded from the reducer's own `selected`, then moved locally — SetupList's own split between
   // "reducer supplies the starting point, the component owns live navigation".
-  const [selected, setSelected] = useState(pendingConfig.selected);
-  const { offset, windowSize, onSelectionMove } = useListWindow(selected);
+  const { selected, visible, remainingCount, handleArrowKey } = useListWindow(
+    rows,
+    pendingConfig.selected,
+  );
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {
       onConfigClose?.();
       return;
     }
-    if (key.upArrow) {
-      setSelected((current) => {
-        const next = Math.max(0, current - 1);
-        onSelectionMove(next);
-        return next;
-      });
-      return;
-    }
-    if (key.downArrow) {
-      setSelected((current) => {
-        const next = Math.min(rows.length - 1, current + 1);
-        onSelectionMove(next);
-        return next;
-      });
-      return;
-    }
+    if (handleArrowKey(key)) return;
     const row = rows[selected];
     // key.return/key.delete are checked before the input.length === 0 guard, matching
     // SetupList's own fix for this exact ordering (Ink reports input === '' for every named key).
@@ -122,32 +111,20 @@ function ConfigList({
   const actionHint = selectedRow?.kind === "boolean" ? "toggle" : "set";
   const selectedDescription =
     selectedRow === undefined ? undefined : configKeyInfo(selectedRow.key).description;
-  const visible = rows.slice(offset, offset + windowSize);
-  const remainingCount = remaining(rows.length, offset, windowSize);
 
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>/config — settings</Text>
-      {visible.map((row, localIndex) => {
-        const index = offset + localIndex;
-        return (
-          // `wrap="truncate-end"`: a config VALUE is arbitrary user input (`seri config set
-          // SERI_VERIFY_COMMAND "…"`, say), unlike every other panel's fixed-shape rows (a tool
-          // name, a provider). PANEL_CHROME_ROWS (format.ts) budgets exactly one row per list row —
-          // Ink's default wrap would soft-wrap a long value into a second row and overflow that
-          // budget the same way the SERI_VERIFY_COMMAND description string itself once did.
-          <Text key={row.key} {...selectedRowStyle(index === selected)} wrap="truncate-end">
-            {index === selected ? "> " : "  "}
-            {formatConfigRow(row)}
-          </Text>
-        );
-      })}
+      {visible.map(({ row, isSelected }) => (
+        <ListRow key={row.key} selected={isSelected} label={formatConfigRow(row)} />
+      ))}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
       {selectedDescription && (
-        // Same reasoning as the row Text above: a config key's own description is fixed copy today
-        // (commands.ts trims it to fit an assumed 80-column terminal), but nothing here reads the
-        // REAL terminal width, so a narrower real TTY reproduces the exact overflow that fix closed
-        // for the default width only. Truncating is the one guarantee that holds at any width.
+        // Same reasoning as ListRow's own comment (components.tsx): a config key's own description
+        // is fixed copy today (commands.ts trims it to fit an assumed 80-column terminal), but
+        // nothing here reads the REAL terminal width, so a narrower real TTY reproduces the exact
+        // overflow that fix closed for the default width only. Truncating is the one guarantee
+        // that holds at any width.
         <Text color={theme.muted} wrap="truncate-end">
           {selectedDescription}
         </Text>
@@ -218,58 +195,12 @@ function ConfigEnterValue({
       <Text color={theme.muted}>{`Set ${label} (${key})`}</Text>
       <Text color={theme.muted}>{description}</Text>
       <Text>{"*".repeat(value.length)}</Text>
-      {/* singleLine + wrap="truncate-end": error comes from messageOf(err) — an Error#message is
-      unbounded and free to carry a literal newline, and this panel budgets exactly one row for it,
-      same reasoning as App.tsx's own commandError guard. */}
-      {error !== undefined && (
-        <Text color={theme.error} bold wrap="truncate-end">
-          {ERROR_MARK}
-          {singleLine(error)}
-        </Text>
-      )}
+      <ErrorLine message={error} />
       {busy ? (
         <Text color={theme.muted}>Saving…</Text>
       ) : (
         <Text color={theme.muted}>Enter submit · Esc back · Ctrl-D close</Text>
       )}
-    </Box>
-  );
-}
-
-function ConfigConfirmUnset({
-  pendingConfig,
-  onConfigUnset,
-  onConfigBack,
-}: {
-  pendingConfig: Extract<ConfigPanelState, { step: "confirm-unset" }>;
-  onConfigUnset?: (key: string) => void;
-  onConfigBack?: () => void;
-}) {
-  const { key } = pendingConfig;
-  const { label } = configKeyInfo(key);
-
-  useInput((input, inputKey) => {
-    // ApprovalBox's own convention: Enter and anything unrecognised both cancel — only an
-    // explicit "y" confirms.
-    if (inputKey.return) {
-      onConfigBack?.();
-      return;
-    }
-    if (inputKey.ctrl || inputKey.meta) return;
-    if (input.length === 0) return;
-    if (input.toLowerCase() === "y") {
-      onConfigUnset?.(key);
-      return;
-    }
-    onConfigBack?.();
-  });
-
-  return (
-    <Box borderStyle="single" borderColor={theme.warning}>
-      <Text color={theme.warning} bold>
-        {WARNING_MARK}
-        {`Unset ${label} (${key})? [y]es / [N]o`}
-      </Text>
     </Box>
   );
 }

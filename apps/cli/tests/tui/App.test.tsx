@@ -7,6 +7,7 @@ import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
 import { App } from "../../src/tui/App";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
+import { ListRow } from "../../src/tui/components";
 import {
   formatContextWindow,
   formatCost,
@@ -20,7 +21,6 @@ import {
   visibleTranscript,
 } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
-import { selectedRowStyle } from "../../src/tui/theme";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
@@ -79,7 +79,7 @@ describe("App", () => {
     expect(instance.lastFrame()).toContain("[read-only]");
   });
 
-  // `not.toContain("╭")` is what makes this non-vacuous across all 17 borderStyle sites at once —
+  // `not.toContain("╭")` is what makes this non-vacuous across all 14 borderStyle sites at once —
   // a stray "round" reintroduced anywhere would still leave "┌" present elsewhere on screen.
   test("borders render with square corners, not rounded ones", async () => {
     const { instance } = await connect();
@@ -87,6 +87,17 @@ describe("App", () => {
     const frame = instance.lastFrame() ?? "";
     expect(frame).toContain("┌");
     expect(frame).not.toContain("╭");
+  });
+
+  test("a command-error dispatch renders the ErrorLine mark and message", async () => {
+    const { instance, dispatch } = await connect();
+
+    dispatch({ type: "command-error", message: "boom" });
+    await flush();
+
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("✕ ");
+    expect(frame).toContain("boom");
   });
 
   test("a transcript-append dispatch grows the transcript viewport", async () => {
@@ -612,6 +623,58 @@ describe("App", () => {
     });
   });
 
+  describe("ListRow", () => {
+    // ink-testing-library's lastFrame() carries no ANSI codes in this test environment (measured
+    // against a plain <Text color="red">, same finding as the "result step" comment below) — the
+    // reverse-video composition (backgroundColor+inverse) is invisible to every mounted-frame
+    // assertion elsewhere in this file, so this is the one place that pins the actual style props
+    // rather than just the "> "/"  " marker. Calling the component directly (not mounting it) is
+    // safe here: ListRow has no hooks, so its return value is a plain element whose props reflect
+    // exactly what it would render.
+    test("selected applies backgroundColor+inverse; unselected applies neither", () => {
+      expect(ListRow({ selected: true, label: "x" }).props).toMatchObject({
+        backgroundColor: "black",
+        inverse: true,
+      });
+      expect(ListRow({ selected: false, label: "x" }).props).toMatchObject({
+        backgroundColor: undefined,
+        inverse: false,
+      });
+    });
+  });
+
+  describe("welcome splash", () => {
+    // ListRow always applies wrap="truncate-end": before this, WelcomeSplash's own row Text
+    // carried no wrap prop at all, so a label wider than the terminal soft-wrapped onto a second
+    // row instead of truncating — this pins both halves, the marker at a normal width and the
+    // truncation at a narrow one.
+    test("rows carry the ListRow marker, and truncate rather than wrap at a narrow width", async () => {
+      const { instance, dispatch } = await connect();
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
+
+      dispatch({ type: "auth-offer", show: true });
+      dispatch({ type: "splash-requested" });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain("> Log in");
+
+      // `columns` IS a getter-only accessor on ink-testing-library's Stdout prototype (unlike
+      // `rows` above), so a plain assignment throws in strict mode — defineProperty shadows it
+      // with an own data property instead.
+      Object.defineProperty(instance.stdout, "columns", { value: 24, configurable: true });
+      instance.stdout.emit("resize");
+      await flush();
+
+      const narrowFrame = instance.lastFrame() ?? "";
+      expect(narrowFrame).toContain("Continue without");
+      expect(narrowFrame).not.toContain("logging in");
+    });
+  });
+
   describe("model picker", () => {
     function entry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
       return {
@@ -814,6 +877,9 @@ describe("App", () => {
       const frame = instance.lastFrame() ?? "";
       expect(frame).toContain("Model 15");
       expect(frame).not.toContain("Model 0 ");
+      // Pins the ListRow marker: formatModelRow leads with the display name, so it sits right
+      // after "> ".
+      expect(frame).toContain("> Model 15");
 
       instance.stdin.write("\r");
       await flush();
@@ -931,6 +997,8 @@ describe("App", () => {
       expect(frame).toContain("sk-o...abcd");
       // The env row shows D8's own disabled-remove reason, not a masked value.
       expect(frame).toContain("set by $ANTHROPIC_API_KEY in your environment");
+      // Pins the ListRow marker itself, in front of the first (selected) row's own label.
+      expect(frame).toContain(`> ${formatSetupRow(setupRows()[0] as SetupProviderRow)}`);
     });
 
     // Bug fixed here (code-review, PR #73, round 3, item #1): Enter is dead in the real TUI twice
@@ -1178,6 +1246,7 @@ describe("App", () => {
         },
       });
       await flush();
+      expect(instance.lastFrame() ?? "").toContain("! Remove OPENROUTER_API_KEY");
       instance.stdin.write("n");
       await flush();
 
@@ -1196,6 +1265,48 @@ describe("App", () => {
       instance.stdin.write("y");
       await flush();
 
+      expect(removed).toEqual(["openrouter"]);
+    });
+
+    // ConfirmPrompt's own guards (components.tsx): `key.ctrl || key.meta` and `input.length === 0`
+    // ahead of the "y" check are what makes a navigation key a no-op here rather than falling
+    // through to the unrecognised-cancels branch and silently backing out of a destructive prompt
+    // — the same class of bug ApprovalBox's own arrow/backspace test above exists for.
+    test("confirm-remove: an arrow key is a no-op, not an implicit cancel", async () => {
+      const removed: ModelProvider[] = [];
+      const backCalls: number[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupRemove={(provider) => removed.push(provider)}
+          onSetupBack={() => backCalls.push(backCalls.length)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "confirm-remove",
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+        },
+      });
+      await flush();
+
+      instance.stdin.write("\x1b[A"); // up arrow
+      await flush();
+      expect(removed).toEqual([]);
+      expect(backCalls).toEqual([]);
+
+      // Still live, not silently cancelled: an actual "y" still confirms.
+      instance.stdin.write("y");
+      await flush();
       expect(removed).toEqual(["openrouter"]);
     });
 
@@ -1503,15 +1614,6 @@ describe("App", () => {
     });
   });
 
-  describe("selectedRowStyle", () => {
-    // Asserting the literal "black"/true, not theme.selected/true re-imported under a different
-    // name: importing the constant under test would make this comparison vacuous.
-    test("returns backgroundColor+inverse when selected, nothing when not", () => {
-      expect(selectedRowStyle(true)).toEqual({ backgroundColor: "black", inverse: true });
-      expect(selectedRowStyle(false)).toEqual({});
-    });
-  });
-
   describe("persistent mode+route indicator (mounted)", () => {
     // useTerminalWidth's own live-resize wiring — formatModeLabel's tests above already cover the
     // tier DECISION logic as a pure function, so this is the one Ink-level smoke test needed to
@@ -1786,8 +1888,9 @@ describe("App", () => {
       expect(resolved).toEqual([0]);
     });
 
-    // Escape, mirroring SetupConfirmRemove's own Esc-cancels convention (SetupPanel.tsx) — the
-    // dismissal precedent this fix follows.
+    // Escape on the result step: AuthPanel's own explicit key.escape check, not something it gets
+    // from ConfirmPrompt — that component never inspects key.escape and treats a bare Escape as
+    // an inert stray keypress there, not a cancel.
     test("Escape on the result step also calls onAuthResolved", async () => {
       const resolved: number[] = [];
       let dispatch: ((action: TuiAction) => void) | undefined;
@@ -1932,6 +2035,39 @@ describe("App", () => {
       );
     });
 
+    // Up-arrow is never pressed by any panel test elsewhere in this file (every list-panel test
+    // presses Down only) — handleArrowKey's own top clamp (useListWindow.ts, `Math.max(0, next)`
+    // on the upArrow branch's `current.selected - 1`) is otherwise entirely uncovered by this
+    // suite.
+    test("Up moves the selection back, and clamps at the top without wrapping or going negative", async () => {
+      const { instance, dispatch } = await connect();
+
+      const rows = Array.from({ length: 3 }, (_, i) => ({
+        key: `FAKE_KEY_${i}`,
+        masked: "",
+        source: "unset" as const,
+        removable: false,
+        kind: "string" as const,
+      }));
+      dispatch({ type: "config-requested", rows });
+      await flush();
+
+      instance.stdin.write("\x1b[B"); // Down
+      await flush();
+      instance.stdin.write("\x1b[B"); // Down
+      await flush();
+
+      instance.stdin.write("\x1b[A"); // Up
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_1");
+
+      instance.stdin.write("\x1b[A"); // Up
+      await flush();
+      instance.stdin.write("\x1b[A"); // Up — already at the top, must not wrap or go negative
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_0");
+    });
+
     test("the hint reads 'Enter/a toggle' on the boolean row and 'Enter/a set' after moving to a string row", async () => {
       const { instance, dispatch } = await connect();
 
@@ -2058,8 +2194,8 @@ describe("App", () => {
       expect(closed).toEqual([0]);
     });
 
-    // ConfigConfirmUnset's own convention (mirroring SetupConfirmRemove's confirm-remove test
-    // above): the [y]es/[N]o prompt renders, and only an explicit "y" confirms via onConfigUnset —
+    // ConfirmPrompt's own convention (mirroring the setup panel's confirm-remove test above): the
+    // [y]es/[N]o prompt renders, and only an explicit "y" confirms via onConfigUnset —
     // Enter and any other unrecognised key both cancel back via onConfigBack.
     test("confirm-unset: '[y]es / [N]o' renders; Enter and an unrecognised key both cancel, 'y' confirms", async () => {
       const unset: string[] = [];
@@ -2213,7 +2349,7 @@ describe("App", () => {
     });
 
     // Regression guard: `windowSize` is recomputed live from useWindowSize().rows on every render,
-    // but `offset` previously only changed via an explicit arrow press (onSelectionMove) — a
+    // but `offset` previously only changed via an explicit arrow press (handleArrowKey) — a
     // terminal resize that shrinks windowSize could leave the currently selected row outside
     // [offset, offset + windowSize) with no keypress to trigger a recompute. ink-testing-library's
     // own Stdout stub has no real `rows` getter (only `columns` is fixed), so it can be assigned
@@ -2248,6 +2384,58 @@ describe("App", () => {
       await flush();
 
       expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_9");
+    });
+
+    // Regression guard: the resize effect re-slid `offset` via `slideWindow`, but that function
+    // only moves `offset` when `selected` falls outside the window — an `offset` left over from a
+    // smaller window survived a GROW unchanged even when `rows.length` now had room to show more.
+    // Shrinks first (to push `offset` up near the end of the list), then grows back past the
+    // shrunk offset, and checks the window actually widens instead of staying stuck at 5 visible
+    // rows out of a 10-row budget.
+    test("a windowSize grow after a shrink widens the window instead of leaving offset stale", async () => {
+      const { instance, dispatch } = await connect();
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30; // windowSize 10
+      instance.stdout.emit("resize");
+      await flush();
+
+      const rows = Array.from({ length: 15 }, (_, i) => ({
+        key: `FAKE_KEY_${i}`,
+        masked: "",
+        source: "unset" as const,
+        removable: false,
+        kind: "string" as const,
+      }));
+      dispatch({ type: "config-requested", rows });
+      await flush();
+
+      // Select row 12 — past the 10-row window, so offset slides to 3.
+      for (let i = 0; i < 12; i++) {
+        instance.stdin.write("\x1b[B"); // Down
+        await flush();
+      }
+
+      // Shrink to a 3-row window: offset slides to 10 (selected 12, windowSize 3).
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 11;
+      instance.stdout.emit("resize");
+      await flush();
+      // Negative control: at offset 10/windowSize 3, row 5 is well outside the window.
+      expect(instance.lastFrame() ?? "").not.toContain("FAKE_KEY_5");
+
+      // Grow back to a 10-row window with no keypress. offset 10 is stale — with 15 rows and a
+      // 10-row window, the widest valid offset is 5 (rows.slice(5, 15)).
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("> FAKE_KEY_12");
+      expect(frame).toContain("FAKE_KEY_5");
     });
 
     // Regression guard: useListWindow's row budget used to reserve only the root Box's own spare
@@ -2322,9 +2510,39 @@ describe("App", () => {
       expect(frame).not.toContain("not removable");
     });
 
+    // handleArrowKey's empty-list clamp (useListWindow.ts, Math.max(0, next)): pressing Down while
+    // rows is [] must not leave the hook's selection at -1 for the SAME component instance once
+    // rows arrive — useListWindow's useState only seeds from initialSelected on first mount, so a
+    // second permissions-requested dispatch reuses the same internal state rather than resetting
+    // it. Without the clamp, a negative offset makes `rows.slice(offset, ...)` read from the END
+    // of the array instead of the start (JS negative-slice semantics) — with two rows that means
+    // only the SECOND row renders at all, marked selected, and the first is missing from the frame
+    // entirely; this asserts the first row renders, unmarked-if-second, marked-if-first.
+    test("Down on an empty list does not leave the selection negative once rows arrive", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "permissions-requested", rows: [] });
+      await flush();
+      instance.stdin.write("\x1b[B");
+      await flush();
+
+      dispatch({
+        type: "permissions-requested",
+        rows: [
+          { tool: "read_file", source: "pre-approved", removable: true },
+          { tool: "write_file", source: "persisted", removable: true },
+        ],
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("> read_file");
+      expect(frame).toContain("  write_file");
+    });
+
     // Review round 3 finding (MEDIUM-1's own test coverage gap), mirroring SetupPanel's own
     // confirm-remove test above: proves App.tsx's render call actually threads onPermissionsRemove
-    // through to PermissionsPanel, not just that PermissionsConfirmRemove's own 'y' handling works.
+    // through to PermissionsPanel, not just that ConfirmPrompt's own 'y' handling works.
     test("confirm-remove: 'y' calls onPermissionsRemove", async () => {
       const removed: string[] = [];
       let dispatch: ((action: TuiAction) => void) | undefined;
@@ -2342,7 +2560,7 @@ describe("App", () => {
 
       // A single dispatch straight to confirm-remove (matching SetupPanel's own confirm-remove
       // test above), not permissions-requested then permissions-step: the latter swaps
-      // PermissionsList for PermissionsConfirmRemove mid-test, and that component swap's own
+      // PermissionsList for ConfirmPrompt mid-test, and that component swap's own
       // useInput needs an extra tick to register (the same mount-timing gap SetupEnterKey's own
       // key-leak test already needed two flush() calls for).
       dispatch({

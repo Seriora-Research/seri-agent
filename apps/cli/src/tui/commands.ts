@@ -277,10 +277,10 @@ const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
 ]);
 export const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
 
-// Pure lookup (no disk read) so ConfigEnterValue/ConfigConfirmUnset can show a key's label without
-// widening ConfigPanelState with a field decideConfigOpen already computes for the list step. Also
-// decideConfigOpen's own reader — one fallback (raw key/empty description/"string" kind for a
-// hand-added key with no entry here), not two copies of it.
+// Pure lookup (no disk read) so ConfigEnterValue/ConfigPanel's confirm-unset step can show a
+// key's label without widening ConfigPanelState with a field decideConfigOpen already computes
+// for the list step. Also decideConfigOpen's own reader — one fallback (raw key/empty
+// description/"string" kind for a hand-added key with no entry here), not two copies of it.
 export function configKeyInfo(key: string): ConfigKeyInfo {
   return (
     CONFIG_KEY_INFO.get(key) ?? {

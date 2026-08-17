@@ -177,11 +177,11 @@ export function createSetupHandlers(opts: {
     }
   }
 
-  // D8: this is the SAME prop SetupList's own 'r' keypress and SetupConfirmRemove's own 'y'
-  // keypress both call — App.tsx has only five /setup props total, no separate "request
-  // confirmation" one — so which one this call means is read off the CURRENT live reducer state,
-  // the same "trust liveState, not a caller-captured copy" pattern this closure already uses
-  // throughout (this function's own top comment).
+  // This is the SAME prop SetupList's own 'r' keypress and ConfirmPrompt's own 'y'
+  // keypress (rendered for the confirm-remove step) both call — App.tsx has only five /setup
+  // props total, no separate "request confirmation" one — so which one this call means is read
+  // off the CURRENT live reducer state, the same "trust liveState, not a caller-captured copy"
+  // pattern this closure already uses throughout (this function's own top comment).
   function onSetupRemove(provider: ModelProvider): void {
     const pending = getPendingSetup();
     if (pending?.step === "confirm-remove") {
