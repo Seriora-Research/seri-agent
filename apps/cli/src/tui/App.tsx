@@ -23,11 +23,11 @@ import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
+import { ErrorLine } from "./components";
 import {
   DEFAULT_COLUMNS,
   FALLBACK_CHROME_ROWS,
   formatModeLabel,
-  singleLine,
   transcriptVisualRows,
   visibleTranscript,
 } from "./format";
@@ -40,7 +40,7 @@ import { PermissionsPanel } from "./panels/PermissionsPanel";
 import { SetupPanel } from "./panels/SetupPanel";
 import { WelcomeSplash } from "./panels/WelcomeSplash";
 import { type Dispatch, initialTuiState, tuiReducer } from "./reducer";
-import { ERROR_MARK, theme } from "./theme";
+import { theme } from "./theme";
 
 export type AppProps = {
   session: SessionState<ModelMessage>;
@@ -407,20 +407,7 @@ export function App({
           {state.status.length > 0 && <Text color={theme.muted}>{state.status}</Text>}
         </Box>
       </Box>
-      {/* APP_CHROME_ROWS (format.ts) reserves exactly one row for this line, but a slash-command
-      catch's own messageOf(err) is an Error#message — unbounded length AND free to carry a literal
-      `\n` (a multi-line validation error, a JSON-parse error citing surrounding context). Ink
-      renders an embedded newline as a real line break regardless of `wrap`, which only governs a
-      single line's own overflow — `singleLine` collapses any embedded break first, matching
-      ConfigPanel's own row values (format.ts's own comment), then `wrap="truncate-end"` guards
-      what's left from overflowing on a narrow terminal. Either alone would leave the other case
-      free to push an open panel's own bottom row past the alt-screen viewport. */}
-      {state.commandError !== undefined && (
-        <Text color={theme.error} bold wrap="truncate-end">
-          {ERROR_MARK}
-          {singleLine(state.commandError)}
-        </Text>
-      )}
+      <ErrorLine message={state.commandError} />
       {/* Findings 1+5: mutually exclusive with InputBox — a pending approval question is the only
       thing this run is waiting on, and answering it (not typing a task or slash command) is the
       only input that means anything until it clears. Extended to a third state for /model, a

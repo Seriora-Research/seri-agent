@@ -89,6 +89,17 @@ describe("App", () => {
     expect(frame).not.toContain("╭");
   });
 
+  test("a command-error dispatch renders the ErrorLine mark and message", async () => {
+    const { instance, dispatch } = await connect();
+
+    dispatch({ type: "command-error", message: "boom" });
+    await flush();
+
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("✕ ");
+    expect(frame).toContain("boom");
+  });
+
   test("a transcript-append dispatch grows the transcript viewport", async () => {
     const { instance, dispatch } = await connect();
 

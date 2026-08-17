@@ -4,10 +4,10 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import { type ConfigRow, configKeyInfo } from "../commands";
-import { ListRow } from "../components";
+import { ErrorLine, ListRow } from "../components";
 import { remaining, singleLine } from "../format";
 import type { ConfigPanelState } from "../reducer";
-import { ERROR_MARK, theme, WARNING_MARK } from "../theme";
+import { theme, WARNING_MARK } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /config's own live state (tui/reducer.ts's pendingConfig) — mirrors SetupPanel's
@@ -211,15 +211,7 @@ function ConfigEnterValue({
       <Text color={theme.muted}>{`Set ${label} (${key})`}</Text>
       <Text color={theme.muted}>{description}</Text>
       <Text>{"*".repeat(value.length)}</Text>
-      {/* singleLine + wrap="truncate-end": error comes from messageOf(err) — an Error#message is
-      unbounded and free to carry a literal newline, and this panel budgets exactly one row for it,
-      same reasoning as App.tsx's own commandError guard. */}
-      {error !== undefined && (
-        <Text color={theme.error} bold wrap="truncate-end">
-          {ERROR_MARK}
-          {singleLine(error)}
-        </Text>
-      )}
+      <ErrorLine message={error} />
       {busy ? (
         <Text color={theme.muted}>Saving…</Text>
       ) : (

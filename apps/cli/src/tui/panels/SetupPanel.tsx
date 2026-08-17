@@ -4,10 +4,10 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
-import { ListRow } from "../components";
-import { formatSetupRow, remaining, singleLine } from "../format";
+import { ErrorLine, ListRow } from "../components";
+import { formatSetupRow, remaining } from "../format";
 import type { SetupState } from "../reducer";
-import { ERROR_MARK, theme, WARNING_MARK } from "../theme";
+import { theme, WARNING_MARK } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /setup's own live state (tui/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-exclusion
@@ -204,15 +204,7 @@ function SetupEnterKey({
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>{`${keyName} for ${provider}`}</Text>
       <Text>{"*".repeat(value.length)}</Text>
-      {/* singleLine + wrap="truncate-end": error comes from messageOf(err) — an Error#message is
-      unbounded and free to carry a literal newline, and this panel budgets exactly one row for it,
-      same reasoning as App.tsx's own commandError guard. */}
-      {error !== undefined && (
-        <Text color={theme.error} bold wrap="truncate-end">
-          {ERROR_MARK}
-          {singleLine(error)}
-        </Text>
-      )}
+      <ErrorLine message={error} />
       {busy ? (
         <Text color={theme.muted}>Validating…</Text>
       ) : (
