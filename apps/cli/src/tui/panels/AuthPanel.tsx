@@ -3,9 +3,10 @@
 // `auth-requested`/`auth-step`/`auth-resolved`. New code, not a move.
 
 import { Box, Text, useInput } from "ink";
+import { ErrorLine } from "../components";
 import { singleLine } from "../format";
 import type { AuthPanelState } from "../reducer";
-import { ERROR_MARK, theme } from "../theme";
+import { theme } from "../theme";
 
 // The non-blocking login/signup offer — a single bordered row, the same visual weight as
 // ApprovalBox's own bordered box, rendered ABOVE App.tsx's render ternary rather than as one of
@@ -72,16 +73,18 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
       borderColor={state.error ? theme.error : theme.muted}
       flexDirection="column"
     >
-      {/* Not ErrorLine (components.tsx): the mark, bold, and color here are all conditional on
-      state.error (blank/unbold/undefined on success), and the outer Box's own borderColor toggles
-      with it too — ErrorLine's contract is a constant-styled alert line, which this line isn't.
-      singleLine collapses an embedded newline from messageOf(err) first, then wrap="truncate-end"
-      guards what's left from overflowing the one row this panel budgets for it — either alone
-      would leave the other case free to push this box past the alt-screen viewport. */}
-      <Text bold={state.error} color={state.error ? theme.error : undefined} wrap="truncate-end">
-        {state.error ? ERROR_MARK : ""}
-        {singleLine(state.message)}
-      </Text>
+      {/* `state.error` is a single boolean discriminant on this "result" variant, so the branch
+      happens once here rather than as several independently-conditional props — one of the two
+      resulting elements is ErrorLine's own constant-styled alert line, the other a plain unstyled
+      one, and neither needs the other's styling. `singleLine` runs on both branches (ErrorLine
+      calls it internally on the error one) because either message can carry an embedded newline
+      that `wrap="truncate-end"` alone does not guard. The outer Box's own `borderColor` ternary
+      stays local — it styles the box, not this line. */}
+      {state.error ? (
+        <ErrorLine message={state.message} />
+      ) : (
+        <Text wrap="truncate-end">{singleLine(state.message)}</Text>
+      )}
       <Text color={theme.muted}>Enter/Esc continue</Text>
     </Box>
   );
