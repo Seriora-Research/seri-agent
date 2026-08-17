@@ -1,3 +1,5 @@
+import type { TextProps } from "ink";
+
 // The TUI's monochrome palette (docs/TUI-DESIGN.md): every component imports its color from here
 // rather than hardcoding a literal. `error`/`warning` carry no hue — ERROR_MARK/WARNING_MARK below
 // are what distinguishes an alert from ordinary text now that color no longer does, and `selected`
@@ -21,9 +23,8 @@ export const WARNING_MARK = "! ";
 // text on ANSI black, which in many dark themes is indistinguishable from the terminal background —
 // `inverse` is what actually swaps the glyphs to the terminal's own default foreground on top of
 // that band, verified against Ink's own Text.js applying chalk.inverse last.
-export function selectedRowStyle(isSelected: boolean): {
-  backgroundColor?: string;
-  inverse?: true;
-} {
+export function selectedRowStyle(
+  isSelected: boolean,
+): Pick<TextProps, "backgroundColor" | "inverse"> {
   return isSelected ? { backgroundColor: theme.selected, inverse: true } : {};
 }
