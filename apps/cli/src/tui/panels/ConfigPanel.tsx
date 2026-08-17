@@ -131,9 +131,7 @@ function ConfigList({
       <Text color={theme.muted}>/config — settings</Text>
       {visible.map((row, localIndex) => {
         const index = offset + localIndex;
-        return (
-          <ListRow key={row.key} selected={index === selected} label={formatConfigRow(row)} />
-        );
+        return <ListRow key={row.key} selected={index === selected} label={formatConfigRow(row)} />;
       })}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
       {selectedDescription && (

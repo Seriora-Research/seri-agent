@@ -139,11 +139,7 @@ function SetupList({
       {visible.map((row, localIndex) => {
         const index = offset + localIndex;
         return (
-          <ListRow
-            key={row.provider}
-            selected={index === selected}
-            label={formatSetupRow(row)}
-          />
+          <ListRow key={row.provider} selected={index === selected} label={formatSetupRow(row)} />
         );
       })}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
