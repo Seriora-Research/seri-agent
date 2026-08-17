@@ -136,9 +136,8 @@ describe("getGatewayModel — outgoing request", () => {
 
   // loop.ts reuses ONE model instance across every tool-call round-trip and compaction call in
   // a turn, so a key minted once at construction time (rather than per outgoing request) would
-  // be shared by every request that model ever makes — the ledger's ON CONFLICT DO NOTHING
-  // upsert then silently drops every request after the first, under-billing and under-counting
-  // the Free daily cap.
+  // be shared by every request that model ever makes, making the CLI's own tracing/correlation
+  // value useless for telling separate requests apart.
   test("two separate logical requests through the same constructed client carry different idempotency keys", async () => {
     process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";
     seedAuthJson(tmpRoot);

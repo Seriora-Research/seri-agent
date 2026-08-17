@@ -24,11 +24,12 @@ function gatewayBaseUrl(configDir: string): string {
 const UNUSED_PLACEHOLDER_KEY = "seri-gateway";
 
 // Mints a fresh X-Seri-Idempotency-Key on every invocation of the returned fetch — one logical
-// request, one key — and the retry-once-on-401 wrapper below reuses that SAME key for its own
-// replay, never a new one. `loop.ts` reuses one LanguageModel across every tool-call round-trip
-// and compaction call in a turn, so a key fixed once at construction time would be shared by
-// every request that model ever makes, and the ledger's own idempotency barrier would silently
-// drop every request after the first.
+// request, one key. This is the CLI's own tracing/correlation value only: the server mints its
+// own idempotency key for the usage ledger and does not trust this header for billing or dedup.
+// Still minted per-request rather than once at construction, because `loop.ts` reuses one
+// LanguageModel across every tool-call round-trip and compaction call in a turn — a value fixed
+// at construction time would tag every request in a turn with the same key, making it useless
+// for telling them apart.
 //
 // The Authorization header is likewise read fresh here, from disk, on every call — not baked
 // into createOpenAI's config at construction time — so a token refreshed by THIS wrapper's own
@@ -53,7 +54,7 @@ function authedFetch(
     if (!refreshed) return response;
 
     // Same idempotency key as the first attempt, on purpose: this is a retry of the SAME
-    // logical request, not a second one — minting a new key here would double-bill it.
+    // logical request for tracing purposes, not a second one.
     headers.set("Authorization", `Bearer ${refreshed.accessToken}`);
     return fetchFn(input, { ...requestInit, headers });
   };
