@@ -21,9 +21,7 @@ export function AuthBanner({ show }: { show: boolean }) {
       2 border + 1 text. Below ~58 columns this fixed string would otherwise soft-wrap to a
       second text row, making the box 4 rows and pushing an open panel's own bottom row past the
       alt-screen viewport. */}
-      <Text wrap="truncate-end">
-        Sign in with /login, or create an account with /signup
-      </Text>
+      <Text wrap="truncate-end">Sign in with /login, or create an account with /signup</Text>
     </Box>
   );
 }

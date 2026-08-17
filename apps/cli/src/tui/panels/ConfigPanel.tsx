@@ -136,11 +136,7 @@ function ConfigList({
           // name, a provider). PANEL_CHROME_ROWS (format.ts) budgets exactly one row per list row —
           // Ink's default wrap would soft-wrap a long value into a second row and overflow that
           // budget the same way the SERI_VERIFY_COMMAND description string itself once did.
-          <Text
-            key={row.key}
-            {...selectedRowStyle(index === selected)}
-            wrap="truncate-end"
-          >
+          <Text key={row.key} {...selectedRowStyle(index === selected)} wrap="truncate-end">
             {index === selected ? "> " : "  "}
             {formatConfigRow(row)}
           </Text>

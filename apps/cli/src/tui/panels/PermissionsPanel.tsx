@@ -102,11 +102,7 @@ function PermissionsList({
           // to "write_file"/"edit" today, so this row can't actually overflow yet — matching the
           // guard ConfigPanel/SetupPanel/ModelPicker's own row Text already carries for the same
           // one-row-per-list-row budget keeps this panel consistent with the others regardless.
-          <Text
-            key={row.tool}
-            {...selectedRowStyle(index === selected)}
-            wrap="truncate-end"
-          >
+          <Text key={row.tool} {...selectedRowStyle(index === selected)} wrap="truncate-end">
             {index === selected ? "> " : "  "}
             {formatPermissionRow(row)}
           </Text>

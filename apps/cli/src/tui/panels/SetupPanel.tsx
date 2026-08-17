@@ -141,11 +141,7 @@ function SetupList({
           // `wrap="truncate-end"` (found by review, same reasoning as ConfigPanel's own row Text):
           // a config-entry value here is arbitrary user input, and PANEL_CHROME_ROWS (format.ts)
           // budgets exactly one row per list row regardless of how wide it is.
-          <Text
-            key={row.provider}
-            {...selectedRowStyle(index === selected)}
-            wrap="truncate-end"
-          >
+          <Text key={row.provider} {...selectedRowStyle(index === selected)} wrap="truncate-end">
             {index === selected ? "> " : "  "}
             {formatSetupRow(row)}
           </Text>
