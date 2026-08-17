@@ -35,7 +35,10 @@ export type TokenResult =
       status: "success";
       accessToken: string;
       refreshToken: string;
-      expiresIn: number;
+      // Optional: WorkOS's real device-flow token response carries no expires_in field at all
+      // (confirmed live) — this is not a malformed response, it is the normal shape. Callers
+      // must treat a missing value as "no expiry hint available", never as an error.
+      expiresIn?: number;
       user: { id: string; email: string };
     }
   | { status: "denied" }

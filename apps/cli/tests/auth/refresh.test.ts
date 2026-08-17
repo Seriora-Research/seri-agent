@@ -89,9 +89,9 @@ describe("refreshAccessToken", () => {
     expect(result.status).toBe("error");
   });
 
-  // refreshSession feeds expiresIn straight into `Date.now() + expiresIn * 1000`; a missing
-  // value there produces `new Date(NaN)`, whose toISOString() throws.
-  test("a 200 response with tokens but missing expires_in returns {status: 'error'}", async () => {
+  // WorkOS's real refresh-grant response carries no expires_in field (confirmed live for the
+  // device-flow token response, same auth system) — this is the normal shape, not an error.
+  test("a 200 response with tokens but missing expires_in still succeeds, with expiresIn undefined", async () => {
     const fetchFn = async () =>
       fakeResponse(true, 200, { access_token: "at-new", refresh_token: "rt-new" });
 
@@ -101,7 +101,7 @@ describe("refreshAccessToken", () => {
       fetchFn as unknown as typeof fetch,
     );
 
-    expect(result.status).toBe("error");
+    expect(result).toEqual({ status: "success", accessToken: "at-new", refreshToken: "rt-new" });
   });
 });
 
@@ -143,6 +143,32 @@ describe("refreshSession", () => {
     const onDisk = loadAuthSession(configDir);
     expect(onDisk?.accessToken).toBe("at-new");
     expect(onDisk?.refreshToken).toBe("rt-new");
+  });
+
+  // The real-world WorkOS response shape: no expires_in at all. A stale expiresAt from the
+  // previous session must be cleared, not kept — it would describe the old token — but this is
+  // still a successful refresh, not an error.
+  test("a response with no expires_in still succeeds, clearing any previous expiresAt", async () => {
+    seedAuthJson({
+      accessToken: "at-old",
+      refreshToken: "rt-old",
+      userId: "user_1",
+      email: "a@example.com",
+      obtainedAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-01-01T00:05:00.000Z",
+    });
+    const fetchFn = async () =>
+      fakeResponse(true, 200, { access_token: "at-new", refresh_token: "rt-new" });
+
+    const updated = await refreshSession(configDir, fetchFn as unknown as typeof fetch);
+
+    expect(updated?.accessToken).toBe("at-new");
+    expect(updated?.refreshToken).toBe("rt-new");
+    expect(updated?.expiresAt).toBeUndefined();
+
+    const onDisk = loadAuthSession(configDir);
+    expect(onDisk?.accessToken).toBe("at-new");
+    expect(onDisk?.expiresAt).toBeUndefined();
   });
 
   test("non-200 returns undefined, no write, no throw", async () => {

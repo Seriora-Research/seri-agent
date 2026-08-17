@@ -2,7 +2,7 @@ import { type AuthSession, loadAuthSession, saveAuthSession } from "./authStore"
 import { AUTHENTICATE_URL, getWorkosClientId } from "./deviceFlow";
 
 export type RefreshResult =
-  | { status: "success"; accessToken: string; refreshToken: string; expiresIn: number }
+  | { status: "success"; accessToken: string; refreshToken: string; expiresIn?: number }
   | { status: "error"; message: string };
 
 // Matches deviceFlow.ts's own parseResponseBody: a non-JSON error body must not throw an
@@ -49,17 +49,14 @@ export async function refreshAccessToken(
     };
   }
   // A 200 with an unexpected body shape must not persist undefined tokens into auth.json — the
-  // same trust boundary as pollForToken's own response.ok check, applied to the fields inside it.
-  // expires_in is checked too: refreshSession below feeds it straight into
-  // `Date.now() + expiresIn * 1000`, and a missing/non-number value there produces
-  // `new Date(NaN)`, whose toISOString() throws — the same uncaught-exception class this
-  // function exists to prevent, just via a different field.
+  // same trust boundary as pollForToken's own response.ok check, applied to the fields inside
+  // it. expires_in is deliberately NOT required here: WorkOS's real response carries no such
+  // field (confirmed live), so its absence is the normal shape, not a malformed one.
   if (
     typeof body.access_token !== "string" ||
     !body.access_token ||
     typeof body.refresh_token !== "string" ||
-    !body.refresh_token ||
-    typeof body.expires_in !== "number"
+    !body.refresh_token
   ) {
     return { status: "error", message: "WorkOS refresh response is missing token fields" };
   }
@@ -67,7 +64,7 @@ export async function refreshAccessToken(
     status: "success",
     accessToken: body.access_token,
     refreshToken: body.refresh_token,
-    expiresIn: body.expires_in,
+    expiresIn: typeof body.expires_in === "number" ? body.expires_in : undefined,
   };
 }
 
@@ -87,11 +84,19 @@ export async function refreshSession(
   );
   if (result.status === "error") return undefined;
 
+  // A stale expiresAt carried over from the previous session would describe the OLD token, not
+  // this one — worse than no hint at all — so a missing expiresIn clears it rather than keeping
+  // the old value.
+  const expiresAt =
+    typeof result.expiresIn === "number" && Number.isFinite(result.expiresIn)
+      ? new Date(Date.now() + result.expiresIn * 1000).toISOString()
+      : undefined;
+
   const updated: AuthSession = {
     ...session,
     accessToken: result.accessToken,
     refreshToken: result.refreshToken,
-    expiresAt: new Date(Date.now() + result.expiresIn * 1000).toISOString(),
+    expiresAt,
   };
   saveAuthSession(updated, configDir);
   return updated;

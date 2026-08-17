@@ -68,6 +68,14 @@ export async function login(
     throw new Error(result.message);
   }
 
+  // WorkOS's real token response carries no expires_in field — expiresAt stays undefined
+  // (authStore.ts's AuthSession.expiresAt is optional for exactly this case) rather than
+  // computing `new Date(NaN)`, which throws on `.toISOString()`.
+  const expiresAt =
+    typeof result.expiresIn === "number" && Number.isFinite(result.expiresIn)
+      ? new Date(Date.now() + result.expiresIn * 1000).toISOString()
+      : undefined;
+
   saveAuthSession(
     {
       accessToken: result.accessToken,
@@ -75,7 +83,7 @@ export async function login(
       userId: result.user.id,
       email: result.user.email,
       obtainedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + result.expiresIn * 1000).toISOString(),
+      expiresAt,
     },
     configDir,
   );

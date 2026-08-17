@@ -156,6 +156,31 @@ describe("pollForToken", () => {
     expect(sleepCalls).toEqual([5000, 5000, 5000]);
   });
 
+  // WorkOS's real device-flow token response carries no expires_in field at all (confirmed
+  // live) — this is the normal shape, not a malformed one, and must succeed the same way.
+  test("succeeds with expiresIn undefined when the response has no expires_in field", async () => {
+    const fetchFn = (async () =>
+      fakeResponse(true, {
+        access_token: "at-1",
+        refresh_token: "rt-1",
+        user: { id: "user_1", email: "a@example.com" },
+      })) as unknown as typeof fetch;
+
+    const result = await pollForToken("client_123", device, {
+      fetchFn,
+      sleep: async () => {},
+      now: () => 0,
+    });
+
+    expect(result).toEqual({
+      status: "success",
+      accessToken: "at-1",
+      refreshToken: "rt-1",
+      user: { id: "user_1", email: "a@example.com" },
+    });
+    expect((result as { expiresIn?: number }).expiresIn).toBeUndefined();
+  });
+
   test("slow_down increases the wait by 5 seconds for subsequent polls", async () => {
     const responses = [
       fakeResponse(false, { error: "authorization_pending" }),
