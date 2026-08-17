@@ -7,6 +7,7 @@ import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
 import { App } from "../../src/tui/App";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
+import { ListRow } from "../../src/tui/components";
 import {
   formatContextWindow,
   formatCost,
@@ -619,6 +620,26 @@ describe("App", () => {
       instance.stdin.write("y");
       await flush();
       expect(answers).toEqual(["once"]);
+    });
+  });
+
+  describe("ListRow", () => {
+    // ink-testing-library's lastFrame() carries no ANSI codes in this test environment (measured
+    // against a plain <Text color="red">, same finding as the "result step" comment below) — the
+    // reverse-video composition (backgroundColor+inverse) is invisible to every mounted-frame
+    // assertion elsewhere in this file, so this is the one place that pins the actual style props
+    // rather than just the "> "/"  " marker. Calling the component directly (not mounting it) is
+    // safe here: ListRow has no hooks, so its return value is a plain element whose props reflect
+    // exactly what it would render.
+    test("selected applies backgroundColor+inverse; unselected applies neither", () => {
+      expect(ListRow({ selected: true, label: "x" }).props).toMatchObject({
+        backgroundColor: "black",
+        inverse: true,
+      });
+      expect(ListRow({ selected: false, label: "x" }).props).toMatchObject({
+        backgroundColor: undefined,
+        inverse: false,
+      });
     });
   });
 
@@ -2328,7 +2349,7 @@ describe("App", () => {
     });
 
     // Regression guard: `windowSize` is recomputed live from useWindowSize().rows on every render,
-    // but `offset` previously only changed via an explicit arrow press (onSelectionMove) — a
+    // but `offset` previously only changed via an explicit arrow press (handleArrowKey) — a
     // terminal resize that shrinks windowSize could leave the currently selected row outside
     // [offset, offset + windowSize) with no keypress to trigger a recompute. ink-testing-library's
     // own Stdout stub has no real `rows` getter (only `columns` is fixed), so it can be assigned
