@@ -624,10 +624,10 @@ describe("App", () => {
   });
 
   describe("welcome splash", () => {
-    // D2 (ListRow always applies wrap="truncate-end", including here): before this, WelcomeSplash's
-    // own row Text carried no wrap prop at all, so a label wider than the terminal soft-wrapped
-    // onto a second row instead of truncating — this pins both halves, the marker at a normal width
-    // and the truncation at a narrow one.
+    // ListRow always applies wrap="truncate-end": before this, WelcomeSplash's own row Text
+    // carried no wrap prop at all, so a label wider than the terminal soft-wrapped onto a second
+    // row instead of truncating — this pins both halves, the marker at a normal width and the
+    // truncation at a narrow one.
     test("rows carry the ListRow marker, and truncate rather than wrap at a narrow width", async () => {
       const { instance, dispatch } = await connect();
       // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
@@ -649,7 +649,9 @@ describe("App", () => {
       instance.stdout.emit("resize");
       await flush();
 
-      expect(instance.lastFrame() ?? "").not.toContain("logging in");
+      const narrowFrame = instance.lastFrame() ?? "";
+      expect(narrowFrame).toContain("Continue without");
+      expect(narrowFrame).not.toContain("logging in");
     });
   });
 
