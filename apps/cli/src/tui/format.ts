@@ -34,7 +34,7 @@ export const PANEL_CHROME_ROWS = 9;
 // shown above the panel), and AuthBanner's three-row bordered Box (shown above everything when
 // signed out) — 1 + 1 + 1 + 3 = 6. Unconditional because `commandError`/`authOffer` live on
 // reducer state inside App, out of scope for the four panel components that call
-// `useListWindow(selected)` with nothing else in scope — threading both flags into every one of
+// `useListWindow(rows, selected)` with nothing else in scope — threading both flags into every one of
 // them (plus App itself) costs far more than the alternative: over-reserving these six rows when
 // neither is actually showing costs at most one list row on a 24-row terminal and nothing at all
 // on a 25+ row one, while under-reserving pushes a panel row off the alt screen with no scrollback
@@ -162,9 +162,9 @@ export function singleLine(value: string): string {
   return escapeControlChars(value.replace(/\r\n|\r|\n/g, " "));
 }
 
-// The "clamp, don't re-center" rule lifted verbatim out of ModelPicker's own `moveSelection`
-// (panels/ModelPicker.tsx) — factored out so useListWindow.ts can share it across every list panel
-// instead of each reimplementing the picker's own sliding-window arithmetic.
+// The "clamp, don't re-center" rule shared by every list panel's window — factored out so
+// useListWindow.ts's own `handleArrowKey` can call it instead of each panel reimplementing the
+// sliding-window arithmetic.
 export function slideWindow(offset: number, selected: number, windowSize: number): number {
   if (selected < offset) return selected;
   if (selected >= offset + windowSize) return selected - windowSize + 1;

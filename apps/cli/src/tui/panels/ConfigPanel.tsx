@@ -5,7 +5,7 @@ import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import { type ConfigRow, configKeyInfo } from "../commands";
 import { ConfirmPrompt, ErrorLine, ListRow } from "../components";
-import { remaining, singleLine } from "../format";
+import { singleLine } from "../format";
 import type { ConfigPanelState } from "../reducer";
 import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
@@ -72,30 +72,17 @@ function ConfigList({
   const { rows } = pendingConfig;
   // Seeded from the reducer's own `selected`, then moved locally — SetupList's own split between
   // "reducer supplies the starting point, the component owns live navigation".
-  const [selected, setSelected] = useState(pendingConfig.selected);
-  const { offset, windowSize, onSelectionMove } = useListWindow(selected);
+  const { selected, offset, visible, remainingCount, handleArrowKey } = useListWindow(
+    rows,
+    pendingConfig.selected,
+  );
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {
       onConfigClose?.();
       return;
     }
-    if (key.upArrow) {
-      setSelected((current) => {
-        const next = Math.max(0, current - 1);
-        onSelectionMove(next);
-        return next;
-      });
-      return;
-    }
-    if (key.downArrow) {
-      setSelected((current) => {
-        const next = Math.min(rows.length - 1, current + 1);
-        onSelectionMove(next);
-        return next;
-      });
-      return;
-    }
+    if (handleArrowKey(key)) return;
     const row = rows[selected];
     // key.return/key.delete are checked before the input.length === 0 guard, matching
     // SetupList's own fix for this exact ordering (Ink reports input === '' for every named key).
@@ -124,8 +111,6 @@ function ConfigList({
   const actionHint = selectedRow?.kind === "boolean" ? "toggle" : "set";
   const selectedDescription =
     selectedRow === undefined ? undefined : configKeyInfo(selectedRow.key).description;
-  const visible = rows.slice(offset, offset + windowSize);
-  const remainingCount = remaining(rows.length, offset, windowSize);
 
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">

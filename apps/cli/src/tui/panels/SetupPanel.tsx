@@ -5,7 +5,7 @@ import type { ModelProvider } from "@seri/model-catalog";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import { ConfirmPrompt, ErrorLine, ListRow } from "../components";
-import { formatSetupRow, remaining } from "../format";
+import { formatSetupRow } from "../format";
 import type { SetupState } from "../reducer";
 import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
@@ -77,30 +77,17 @@ function SetupList({
   // supplies the starting point, the component owns live navigation" split ModelPicker's own
   // `selectedIndex` already has, for the identical reason (transient UI data with no reason to
   // round-trip through cli.ts on every arrow key).
-  const [selected, setSelected] = useState(pendingSetup.selected);
-  const { offset, windowSize, onSelectionMove } = useListWindow(selected);
+  const { selected, offset, visible, remainingCount, handleArrowKey } = useListWindow(
+    rows,
+    pendingSetup.selected,
+  );
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {
       onSetupClose?.();
       return;
     }
-    if (key.upArrow) {
-      setSelected((current) => {
-        const next = Math.max(0, current - 1);
-        onSelectionMove(next);
-        return next;
-      });
-      return;
-    }
-    if (key.downArrow) {
-      setSelected((current) => {
-        const next = Math.min(rows.length - 1, current + 1);
-        onSelectionMove(next);
-        return next;
-      });
-      return;
-    }
+    if (handleArrowKey(key)) return;
     const row = rows[selected];
     // `key.return`/`key.delete` must be checked BEFORE the `input.length === 0` guard below, not
     // after — Ink's own key parser sets `input` to `''` for every named key, Enter and Delete
@@ -127,9 +114,6 @@ function SetupList({
       onSetupRemove?.(row.provider);
     }
   });
-
-  const visible = rows.slice(offset, offset + windowSize);
-  const remainingCount = remaining(rows.length, offset, windowSize);
 
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">

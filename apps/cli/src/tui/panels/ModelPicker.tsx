@@ -6,15 +6,15 @@ import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import type { ModelPickerEntry } from "../commands";
 import { ListRow } from "../components";
-import { formatModelRow, MODEL_PICKER_HEADER, matchesFilter, remaining } from "../format";
+import { formatModelRow, MODEL_PICKER_HEADER, matchesFilter } from "../format";
 import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /model's own live state (tui/reducer.ts's pendingModelPicker) — mirrors ApprovalBox's shape
 // exactly: its own useInput, a single-bordered box, mutually exclusive with InputBox. `filterQuery`
-// and `selectedIndex` are local component state, not reducer state, for the same reason InputBox's
-// own `value` is: this is transient UI data with no reason to survive a resolve/cancel or be
-// visible to anything outside this component.
+// is local component state, not reducer state, for the same reason InputBox's own `value` is: this
+// is transient UI data with no reason to survive a resolve/cancel or be visible to anything outside
+// this component. The selection index is owned by useListWindow instead, for the same reason.
 export function ModelPicker({
   entries,
   onModelSelected,
@@ -28,29 +28,25 @@ export function ModelPicker({
   onModelPickerCancel?: () => void;
 }) {
   const [filterQuery, setFilterQuery] = useState("");
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  // C1 fix: the window rendered used to always be `filtered.slice(0, windowSize)` — the first N
-  // entries, regardless of `selectedIndex` — so Down past the visible window moved the highlight
-  // somewhere nothing on screen showed, and with 279 catalog entries most of the list was
-  // unreachable. `scrollOffset` is the top of the currently-rendered window, from useListWindow —
-  // it only moves when `selectedIndex` would otherwise land outside it (`onSelectionMove`), not
-  // recomputed fresh from `selectedIndex` on every render, which would re-center the window on
-  // every keypress instead of sliding it only when actually needed.
-  const {
-    offset: scrollOffset,
-    windowSize,
-    onSelectionMove,
-    reset: resetScroll,
-  } = useListWindow(selectedIndex);
 
   const filtered =
     filterQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, filterQuery));
 
-  // Moves the selection to `next` (already clamped to `[0, filtered.length - 1]` by the caller).
-  function moveSelection(next: number): void {
-    setSelectedIndex(next);
-    onSelectionMove(next);
-  }
+  // C1 fix: the window rendered used to always be `filtered.slice(0, windowSize)` — the first N
+  // entries, regardless of the selection — so Down past the visible window moved the highlight
+  // somewhere nothing on screen showed, and with 279 catalog entries most of the list was
+  // unreachable. `scrollOffset` is the top of the currently-rendered window, from useListWindow —
+  // it only moves when the selection would otherwise land outside it (`handleArrowKey`), not
+  // recomputed fresh from the selection on every render, which would re-center the window on every
+  // keypress instead of sliding it only when actually needed.
+  const {
+    selected: selectedIndex,
+    offset: scrollOffset,
+    visible,
+    remainingCount,
+    handleArrowKey,
+    reset: resetScroll,
+  } = useListWindow(filtered);
 
   useInput((input, key) => {
     // Escape OR Ctrl-D — deliberately NOT ApprovalBox's Ctrl-D (which triggers app quit): this is
@@ -59,14 +55,7 @@ export function ModelPicker({
       onModelPickerCancel?.();
       return;
     }
-    if (key.upArrow) {
-      moveSelection(Math.max(0, selectedIndex - 1));
-      return;
-    }
-    if (key.downArrow) {
-      moveSelection(Math.min(filtered.length - 1, selectedIndex + 1));
-      return;
-    }
+    if (handleArrowKey(key)) return;
     if (key.return) {
       const row = filtered[selectedIndex];
       if (row !== undefined) {
@@ -77,7 +66,6 @@ export function ModelPicker({
     if (key.ctrl || key.meta) return;
     if (key.backspace || key.delete) {
       setFilterQuery((query) => query.slice(0, -1));
-      setSelectedIndex(0);
       resetScroll();
       return;
     }
@@ -95,7 +83,6 @@ export function ModelPicker({
     const nextQuery = filterQuery + typed;
     if (terminatorIndex === -1) {
       setFilterQuery(nextQuery);
-      setSelectedIndex(0);
       resetScroll();
       return;
     }
@@ -113,9 +100,6 @@ export function ModelPicker({
       onModelSelected?.({ model: row.entry.id, provider: row.entry.provider }, after || undefined);
     }
   });
-
-  const visible = filtered.slice(scrollOffset, scrollOffset + windowSize);
-  const remainingCount = remaining(filtered.length, scrollOffset, windowSize);
 
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">

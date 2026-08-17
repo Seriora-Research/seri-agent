@@ -4,10 +4,8 @@
 // nothing to type here, only tools to revoke.
 
 import { Box, Text, useInput } from "ink";
-import { useState } from "react";
 import type { PermissionRow } from "../commands";
 import { ConfirmPrompt, ListRow } from "../components";
-import { remaining } from "../format";
 import type { PermissionsPanelState } from "../reducer";
 import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
@@ -55,30 +53,17 @@ function PermissionsList({
   onPermissionsClose?: (leftoverInput?: string) => void;
 }) {
   const { rows } = pendingPermissions;
-  const [selected, setSelected] = useState(pendingPermissions.selected);
-  const { offset, windowSize, onSelectionMove } = useListWindow(selected);
+  const { selected, offset, visible, remainingCount, handleArrowKey } = useListWindow(
+    rows,
+    pendingPermissions.selected,
+  );
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {
       onPermissionsClose?.();
       return;
     }
-    if (key.upArrow) {
-      setSelected((current) => {
-        const next = Math.max(0, current - 1);
-        onSelectionMove(next);
-        return next;
-      });
-      return;
-    }
-    if (key.downArrow) {
-      setSelected((current) => {
-        const next = Math.min(rows.length - 1, current + 1);
-        onSelectionMove(next);
-        return next;
-      });
-      return;
-    }
+    if (handleArrowKey(key)) return;
     const row = rows[selected];
     if (key.delete) {
       if (row?.removable) onPermissionsRemove?.(row.tool);
@@ -91,9 +76,6 @@ function PermissionsList({
       onPermissionsRemove?.(row.tool);
     }
   });
-
-  const visible = rows.slice(offset, offset + windowSize);
-  const remainingCount = remaining(rows.length, offset, windowSize);
 
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">

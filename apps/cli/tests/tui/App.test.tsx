@@ -2023,6 +2023,38 @@ describe("App", () => {
       );
     });
 
+    // Up-arrow is never pressed by any panel test elsewhere in this file (every list-panel test
+    // presses Down only) — handleArrowKey's own `Math.max(0, current - 1)` branch (useListWindow.ts)
+    // is otherwise entirely uncovered by this suite.
+    test("Up moves the selection back, and clamps at the top without wrapping or going negative", async () => {
+      const { instance, dispatch } = await connect();
+
+      const rows = Array.from({ length: 3 }, (_, i) => ({
+        key: `FAKE_KEY_${i}`,
+        masked: "",
+        source: "unset" as const,
+        removable: false,
+        kind: "string" as const,
+      }));
+      dispatch({ type: "config-requested", rows });
+      await flush();
+
+      instance.stdin.write("\x1b[B"); // Down
+      await flush();
+      instance.stdin.write("\x1b[B"); // Down
+      await flush();
+
+      instance.stdin.write("\x1b[A"); // Up
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_1");
+
+      instance.stdin.write("\x1b[A"); // Up
+      await flush();
+      instance.stdin.write("\x1b[A"); // Up — already at the top, must not wrap or go negative
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_0");
+    });
+
     test("the hint reads 'Enter/a toggle' on the boolean row and 'Enter/a set' after moving to a string row", async () => {
       const { instance, dispatch } = await connect();
 
