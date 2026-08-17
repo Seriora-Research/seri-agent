@@ -28,7 +28,7 @@ export function AuthBanner({ show }: { show: boolean }) {
 
 // /login and /signup's own blocking device-flow panel — mirrors SetupPanel's step-dispatcher
 // shape, one branch per step. `onDismiss` is called from Escape on every step, plus Enter on
-// "result" (SetupConfirmRemove's own Esc-cancels convention, SetupPanel.tsx, is the closest
+// "result" (ConfirmPrompt's own Esc-cancels convention, components.tsx, is the closest
 // precedent for "either key just closes it" — used on "result" only, where an explicit
 // confirmation reads naturally; Escape alone covers "starting"/"device").
 //

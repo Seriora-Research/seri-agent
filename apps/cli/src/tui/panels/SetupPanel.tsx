@@ -4,17 +4,17 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
-import { ErrorLine, ListRow, WarningBox } from "../components";
+import { ConfirmPrompt, ErrorLine, ListRow } from "../components";
 import { formatSetupRow, remaining } from "../format";
 import type { SetupState } from "../reducer";
 import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /setup's own live state (tui/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-exclusion
-// role, dispatching to one of three step-specific sub-components below rather than one component
-// handling all three at once, since each step has genuinely different input handling and local
-// state (the same reasoning ApprovalBox/ModelPicker are separate components rather than one
-// component branching internally).
+// role, dispatching to one of two step-specific sub-components below for the steps that still own
+// input handling and local state (the same reasoning ApprovalBox/ModelPicker are separate
+// components rather than one component branching internally); the confirm-remove step delegates
+// to the shared ConfirmPrompt (components.tsx) instead.
 export function SetupPanel({
   pendingSetup,
   onSetupSelect,
@@ -41,11 +41,12 @@ export function SetupPanel({
     );
   }
   if (pendingSetup.step === "confirm-remove") {
+    const { provider, keyName } = pendingSetup;
     return (
-      <SetupConfirmRemove
-        pendingSetup={pendingSetup}
-        onSetupRemove={onSetupRemove}
-        onSetupBack={onSetupBack}
+      <ConfirmPrompt
+        message={`Remove ${keyName} (${provider})? [y]es / [N]o`}
+        onConfirm={() => onSetupRemove?.(provider)}
+        onCancel={() => onSetupBack?.()}
       />
     );
   }
@@ -101,14 +102,11 @@ function SetupList({
       return;
     }
     const row = rows[selected];
-    // Bug fixed here (code-review, PR #73, round 3): `key.return`/`key.delete` must be checked
-    // BEFORE the `input.length === 0` guard below, not after — Ink's own key parser sets `input`
-    // to `''` for every named key, Enter and Delete included (confirmed against
-    // node_modules/ink/build/parse-keypress.js and use-input.js), so the empty-input guard used to
-    // return before either of these two branches was ever reached. Every other useInput in this
-    // file (ModelPicker, SetupEnterKey, SetupConfirmRemove) already has the ordering this way —
-    // this was the one holdout, and it made Enter/Delete dead here despite the panel's own hint
-    // text advertising them.
+    // `key.return`/`key.delete` must be checked BEFORE the `input.length === 0` guard below, not
+    // after — Ink's own key parser sets `input` to `''` for every named key, Enter and Delete
+    // included (confirmed against node_modules/ink/build/parse-keypress.js and use-input.js), so
+    // an empty-input guard ahead of these two branches would make Enter/Delete dead here despite
+    // the panel's own hint text advertising them.
     if (key.return) {
       if (row !== undefined) onSetupSelect?.(row.provider);
       return;
@@ -208,34 +206,4 @@ function SetupEnterKey({
       )}
     </Box>
   );
-}
-
-function SetupConfirmRemove({
-  pendingSetup,
-  onSetupRemove,
-  onSetupBack,
-}: {
-  pendingSetup: Extract<SetupState, { step: "confirm-remove" }>;
-  onSetupRemove?: (provider: ModelProvider) => void;
-  onSetupBack?: () => void;
-}) {
-  const { provider, keyName } = pendingSetup;
-
-  useInput((input, key) => {
-    // ApprovalBox's own convention (above): Enter and anything unrecognised both cancel — only an
-    // explicit "y" confirms.
-    if (key.return) {
-      onSetupBack?.();
-      return;
-    }
-    if (key.ctrl || key.meta) return;
-    if (input.length === 0) return;
-    if (input.toLowerCase() === "y") {
-      onSetupRemove?.(provider);
-      return;
-    }
-    onSetupBack?.();
-  });
-
-  return <WarningBox message={`Remove ${keyName} (${provider})? [y]es / [N]o`} />;
 }

@@ -1,4 +1,4 @@
-import { Box, Text } from "ink";
+import { Box, Text, useInput } from "ink";
 import { singleLine } from "./format";
 import { ERROR_MARK, selectedRowStyle, theme, WARNING_MARK } from "./theme";
 
@@ -33,6 +33,36 @@ export function WarningBox({ message }: { message: string }) {
       </Text>
     </Box>
   );
+}
+
+// The shared y/N confirm step every SetupPanel/ConfigPanel/PermissionsPanel dispatcher uses:
+// Enter and anything unrecognised both cancel, only an explicit "y" confirms. `key.ctrl ||
+// key.meta` and the `input.length === 0` guard ahead of the "y" check are what makes an arrow
+// key or another navigation keypress a no-op here rather than falling through to the
+// unrecognised-cancels branch and silently backing out of a destructive prompt.
+export function ConfirmPrompt({
+  message,
+  onConfirm,
+  onCancel,
+}: {
+  message: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useInput((input, key) => {
+    if (key.return) {
+      onCancel();
+      return;
+    }
+    if (key.ctrl || key.meta) return;
+    if (input.length === 0) return;
+    if (input.toLowerCase() === "y") {
+      onConfirm();
+      return;
+    }
+    onCancel();
+  });
+  return <WarningBox message={message} />;
 }
 
 // The selection marker + row highlight shared by every selectable-list panel. `wrap=

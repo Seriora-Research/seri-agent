@@ -1248,6 +1248,48 @@ describe("App", () => {
       expect(removed).toEqual(["openrouter"]);
     });
 
+    // ConfirmPrompt's own guards (components.tsx): `key.ctrl || key.meta` and `input.length === 0`
+    // ahead of the "y" check are what makes a navigation key a no-op here rather than falling
+    // through to the unrecognised-cancels branch and silently backing out of a destructive prompt
+    // — the same class of bug ApprovalBox's own arrow/backspace test above exists for.
+    test("confirm-remove: an arrow key is a no-op, not an implicit cancel", async () => {
+      const removed: ModelProvider[] = [];
+      const backCalls: number[] = [];
+      let dispatch: ((action: TuiAction) => void) | undefined;
+      const instance = render(
+        <App
+          session={session()}
+          route={route()}
+          connectDispatch={(d) => (dispatch = d)}
+          onSetupRemove={(provider) => removed.push(provider)}
+          onSetupBack={() => backCalls.push(backCalls.length)}
+          done={false}
+        />,
+      );
+      await flush();
+      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "confirm-remove",
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+        },
+      });
+      await flush();
+
+      instance.stdin.write("\x1b[A"); // up arrow
+      await flush();
+      expect(removed).toEqual([]);
+      expect(backCalls).toEqual([]);
+
+      // Still live, not silently cancelled: an actual "y" still confirms.
+      instance.stdin.write("y");
+      await flush();
+      expect(removed).toEqual(["openrouter"]);
+    });
+
     // Render precedence (App.tsx's own render ternary): pendingApproval beats pendingModelPicker
     // beats pendingSetup beats InputBox.
     test("pendingApproval takes precedence over pendingSetup, which takes precedence over InputBox", async () => {
@@ -1835,7 +1877,7 @@ describe("App", () => {
       expect(resolved).toEqual([0]);
     });
 
-    // Escape, mirroring SetupConfirmRemove's own Esc-cancels convention (SetupPanel.tsx) — the
+    // Escape, mirroring ConfirmPrompt's own Esc-cancels convention (components.tsx) — the
     // dismissal precedent this fix follows.
     test("Escape on the result step also calls onAuthResolved", async () => {
       const resolved: number[] = [];
@@ -2107,8 +2149,8 @@ describe("App", () => {
       expect(closed).toEqual([0]);
     });
 
-    // ConfigConfirmUnset's own convention (mirroring SetupConfirmRemove's confirm-remove test
-    // above): the [y]es/[N]o prompt renders, and only an explicit "y" confirms via onConfigUnset —
+    // ConfirmPrompt's own convention (mirroring the setup panel's confirm-remove test above): the
+    // [y]es/[N]o prompt renders, and only an explicit "y" confirms via onConfigUnset —
     // Enter and any other unrecognised key both cancel back via onConfigBack.
     test("confirm-unset: '[y]es / [N]o' renders; Enter and an unrecognised key both cancel, 'y' confirms", async () => {
       const unset: string[] = [];
@@ -2373,7 +2415,7 @@ describe("App", () => {
 
     // Review round 3 finding (MEDIUM-1's own test coverage gap), mirroring SetupPanel's own
     // confirm-remove test above: proves App.tsx's render call actually threads onPermissionsRemove
-    // through to PermissionsPanel, not just that PermissionsConfirmRemove's own 'y' handling works.
+    // through to PermissionsPanel, not just that ConfirmPrompt's own 'y' handling works.
     test("confirm-remove: 'y' calls onPermissionsRemove", async () => {
       const removed: string[] = [];
       let dispatch: ((action: TuiAction) => void) | undefined;
@@ -2391,7 +2433,7 @@ describe("App", () => {
 
       // A single dispatch straight to confirm-remove (matching SetupPanel's own confirm-remove
       // test above), not permissions-requested then permissions-step: the latter swaps
-      // PermissionsList for PermissionsConfirmRemove mid-test, and that component swap's own
+      // PermissionsList for ConfirmPrompt mid-test, and that component swap's own
       // useInput needs an extra tick to register (the same mount-timing gap SetupEnterKey's own
       // key-leak test already needed two flush() calls for).
       dispatch({

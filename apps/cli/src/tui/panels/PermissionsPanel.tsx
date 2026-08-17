@@ -6,14 +6,15 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import type { PermissionRow } from "../commands";
-import { ListRow, WarningBox } from "../components";
+import { ConfirmPrompt, ListRow } from "../components";
 import { remaining } from "../format";
 import type { PermissionsPanelState } from "../reducer";
 import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /permissions' own live state (tui/reducer.ts's pendingPermissions) — mirrors SetupPanel's
-// step-dispatcher shape with one fewer step.
+// step-dispatcher shape with one fewer step; the confirm-remove step delegates to the shared
+// ConfirmPrompt (components.tsx) instead of a step-specific sub-component.
 export function PermissionsPanel({
   pendingPermissions,
   onPermissionsRemove,
@@ -26,11 +27,12 @@ export function PermissionsPanel({
   onPermissionsClose?: (leftoverInput?: string) => void;
 }) {
   if (pendingPermissions.step === "confirm-remove") {
+    const { tool } = pendingPermissions;
     return (
-      <PermissionsConfirmRemove
-        pendingPermissions={pendingPermissions}
-        onPermissionsRemove={onPermissionsRemove}
-        onPermissionsBack={onPermissionsBack}
+      <ConfirmPrompt
+        message={`Remove ${tool}? [y]es / [N]o`}
+        onConfirm={() => onPermissionsRemove?.(tool)}
+        onCancel={() => onPermissionsBack?.()}
       />
     );
   }
@@ -112,34 +114,4 @@ function formatPermissionRow(row: PermissionRow): string {
   return row.removable
     ? `${row.tool} (${row.source})`
     : `${row.tool} (${row.source}, not removable)`;
-}
-
-function PermissionsConfirmRemove({
-  pendingPermissions,
-  onPermissionsRemove,
-  onPermissionsBack,
-}: {
-  pendingPermissions: Extract<PermissionsPanelState, { step: "confirm-remove" }>;
-  onPermissionsRemove?: (tool: string) => void;
-  onPermissionsBack?: () => void;
-}) {
-  const { tool } = pendingPermissions;
-
-  useInput((input, key) => {
-    // ApprovalBox's own convention: Enter and anything unrecognised both cancel — only an
-    // explicit "y" confirms.
-    if (key.return) {
-      onPermissionsBack?.();
-      return;
-    }
-    if (key.ctrl || key.meta) return;
-    if (input.length === 0) return;
-    if (input.toLowerCase() === "y") {
-      onPermissionsRemove?.(tool);
-      return;
-    }
-    onPermissionsBack?.();
-  });
-
-  return <WarningBox message={`Remove ${tool}? [y]es / [N]o`} />;
 }

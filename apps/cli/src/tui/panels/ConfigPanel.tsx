@@ -4,15 +4,15 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import { type ConfigRow, configKeyInfo } from "../commands";
-import { ErrorLine, ListRow, WarningBox } from "../components";
+import { ConfirmPrompt, ErrorLine, ListRow } from "../components";
 import { remaining, singleLine } from "../format";
 import type { ConfigPanelState } from "../reducer";
 import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /config's own live state (tui/reducer.ts's pendingConfig) — mirrors SetupPanel's
-// step-dispatcher exactly: one branch per step, since each has genuinely different input
-// handling and local state.
+// step-dispatcher shape: one branch per step that still owns input handling and local state;
+// the confirm-unset step delegates to the shared ConfirmPrompt (components.tsx) instead.
 export function ConfigPanel({
   pendingConfig,
   onConfigSelect,
@@ -39,11 +39,12 @@ export function ConfigPanel({
     );
   }
   if (pendingConfig.step === "confirm-unset") {
+    const { key } = pendingConfig;
     return (
-      <ConfigConfirmUnset
-        pendingConfig={pendingConfig}
-        onConfigUnset={onConfigUnset}
-        onConfigBack={onConfigBack}
+      <ConfirmPrompt
+        message={`Unset ${configKeyInfo(key).label} (${key})? [y]es / [N]o`}
+        onConfirm={() => onConfigUnset?.(key)}
+        onCancel={() => onConfigBack?.()}
       />
     );
   }
@@ -218,35 +219,4 @@ function ConfigEnterValue({
       )}
     </Box>
   );
-}
-
-function ConfigConfirmUnset({
-  pendingConfig,
-  onConfigUnset,
-  onConfigBack,
-}: {
-  pendingConfig: Extract<ConfigPanelState, { step: "confirm-unset" }>;
-  onConfigUnset?: (key: string) => void;
-  onConfigBack?: () => void;
-}) {
-  const { key } = pendingConfig;
-  const { label } = configKeyInfo(key);
-
-  useInput((input, inputKey) => {
-    // ApprovalBox's own convention: Enter and anything unrecognised both cancel — only an
-    // explicit "y" confirms.
-    if (inputKey.return) {
-      onConfigBack?.();
-      return;
-    }
-    if (inputKey.ctrl || inputKey.meta) return;
-    if (input.length === 0) return;
-    if (input.toLowerCase() === "y") {
-      onConfigUnset?.(key);
-      return;
-    }
-    onConfigBack?.();
-  });
-
-  return <WarningBox message={`Unset ${label} (${key})? [y]es / [N]o`} />;
 }
