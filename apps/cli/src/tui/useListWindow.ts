@@ -55,12 +55,18 @@ export function useListWindow<T>(
   // Returns `current` unchanged, not a new object, when the slide is a no-op: a plain object
   // literal here would defeat React's own `Object.is` bailout on every windowSize change (a
   // resize whose offset doesn't actually need to move would still force a re-render).
+  // `slideWindow` alone isn't enough on a GROW: it only re-centers when `selected` falls outside
+  // the current window, so an offset left over from a smaller window (e.g. 10 with `selected`
+  // still inside [10, 13)) survives a grow to windowSize 10 unchanged, even though `rows.length`
+  // now has room to show more above it. Clamping to `rows.length - windowSize` afterward is what
+  // actually uses the extra room a grow just made available.
   useEffect(() => {
     setWin((current) => {
-      const offset = slideWindow(current.offset, current.selected, windowSize);
+      const slid = slideWindow(current.offset, current.selected, windowSize);
+      const offset = Math.min(slid, Math.max(0, rows.length - windowSize));
       return offset === current.offset ? current : { ...current, offset };
     });
-  }, [windowSize]);
+  }, [windowSize, rows.length]);
 
   return {
     selected: win.selected,

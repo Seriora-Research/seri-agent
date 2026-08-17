@@ -2386,6 +2386,58 @@ describe("App", () => {
       expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_9");
     });
 
+    // Regression guard: the resize effect re-slid `offset` via `slideWindow`, but that function
+    // only moves `offset` when `selected` falls outside the window — an `offset` left over from a
+    // smaller window survived a GROW unchanged even when `rows.length` now had room to show more.
+    // Shrinks first (to push `offset` up near the end of the list), then grows back past the
+    // shrunk offset, and checks the window actually widens instead of staying stuck at 5 visible
+    // rows out of a 10-row budget.
+    test("a windowSize grow after a shrink widens the window instead of leaving offset stale", async () => {
+      const { instance, dispatch } = await connect();
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30; // windowSize 10
+      instance.stdout.emit("resize");
+      await flush();
+
+      const rows = Array.from({ length: 15 }, (_, i) => ({
+        key: `FAKE_KEY_${i}`,
+        masked: "",
+        source: "unset" as const,
+        removable: false,
+        kind: "string" as const,
+      }));
+      dispatch({ type: "config-requested", rows });
+      await flush();
+
+      // Select row 12 — past the 10-row window, so offset slides to 3.
+      for (let i = 0; i < 12; i++) {
+        instance.stdin.write("\x1b[B"); // Down
+        await flush();
+      }
+
+      // Shrink to a 3-row window: offset slides to 10 (selected 12, windowSize 3).
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 11;
+      instance.stdout.emit("resize");
+      await flush();
+      // Negative control: at offset 10/windowSize 3, row 5 is well outside the window.
+      expect(instance.lastFrame() ?? "").not.toContain("FAKE_KEY_5");
+
+      // Grow back to a 10-row window with no keypress. offset 10 is stale — with 15 rows and a
+      // 10-row window, the widest valid offset is 5 (rows.slice(5, 15)).
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("> FAKE_KEY_12");
+      expect(frame).toContain("FAKE_KEY_5");
+    });
+
     // Regression guard: useListWindow's row budget used to reserve only the root Box's own spare
     // row and the unconditional mode-indicator row (APP_CHROME_ROWS, format.ts) — not commandError
     // or AuthBanner, both of which can be showing at the same time as a panel. On a 20-row
