@@ -31,18 +31,25 @@ export const PANEL_CHROME_ROWS = 9;
 // Every row a panel's own budget has to share with the rest of App.tsx's render, reserved
 // unconditionally rather than threaded through as props: the root Box's own spare row (App.tsx,
 // `height={rows - 1}`), the unconditional mode-indicator row, a `commandError` line (one row,
-// shown above the panel), AuthBanner's three-row bordered Box (shown above everything when signed
-// out), and the pendingTool three-row bordered Box (shown while a write_file/edit call is
-// in-flight — a panel can genuinely be open at the same time, since /model, /setup, /config, and
-// /permissions are all handled before the turnInFlight guard that gates ordinary tasks) —
-// 1 + 1 + 1 + 3 + 3 = 9. Unconditional because `commandError`/`authOffer`/`pendingTool` all live on
+// shown above the panel), and AuthBanner's three-row bordered Box (shown above everything when
+// signed out) — 1 + 1 + 1 + 3 = 6. Unconditional because `commandError`/`authOffer` live on
 // reducer state inside App, out of scope for the four panel components that call
-// `useListWindow(selected)` with nothing else in scope — threading all three flags into every one
-// of them (plus App itself) costs far more than the alternative: over-reserving these nine rows
-// when none is actually showing costs list rows on a short terminal and nothing at all on a tall
-// one, while under-reserving pushes a panel row off the alt screen with no scrollback to recover
-// it.
-export const APP_CHROME_ROWS = 9;
+// `useListWindow(selected)` with nothing else in scope — threading both flags into every one of
+// them (plus App itself) costs far more than the alternative: over-reserving these six rows when
+// neither is actually showing costs at most one list row on a 24-row terminal and nothing at all
+// on a 25+ row one, while under-reserving pushes a panel row off the alt screen with no scrollback
+// to recover it.
+//
+// Does NOT also reserve for `pendingTool`'s own three-row bordered Box, even though a panel can
+// genuinely be open while a write_file/edit call is in flight (/model, /setup, /config, and
+// /permissions are all handled before the turnInFlight guard) — tried once (bumping this to 9) and
+// reverted: on a real 24-row terminal, that shrank the /model picker's default window from 9 rows
+// to 6, pushing the bundled fallback manifest's own default model (one of only 6 groq entries in a
+// 350-entry catalog) out of the picker's default unfiltered view — a real, more commonly hit
+// regression than the pendingTool overflow it was meant to close. Left as a known gap rather than
+// re-fixed here; a real fix needs either a shorter LIST_WINDOW_MAX floor or measuring pendingTool's
+// own height live instead of reserving for it unconditionally.
+export const APP_CHROME_ROWS = 6;
 
 // The transcript viewport's placeholder height for the one frame before useBoxMetrics has ever
 // measured the live region below it (App.tsx) — not the real budget, just enough that the first
