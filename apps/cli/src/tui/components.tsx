@@ -1,6 +1,6 @@
 import { Box, Text, useInput } from "ink";
 import { singleLine } from "./format";
-import { ERROR_MARK, selectedRowStyle, theme, WARNING_MARK } from "./theme";
+import { ERROR_MARK, theme, WARNING_MARK } from "./theme";
 
 // Each caller reserves exactly one row for an alert line like this (App.tsx's own
 // APP_CHROME_ROWS for `commandError`, each panel's own budget for SetupEnterKey/
@@ -78,9 +78,19 @@ export function ConfirmPrompt({
 // "truncate-end"` applies unconditionally, not per caller: every list panel budgets exactly one
 // row per list row (PANEL_CHROME_ROWS, format.ts), and Ink's default wrap would soft-wrap an
 // over-width label into a second row and overflow that budget.
+//
+// `backgroundColor` alone would paint default-foreground text on ANSI black, which in many dark
+// themes is indistinguishable from the terminal background — `inverse` is what actually swaps
+// the glyphs to the terminal's own default foreground on top of that band, verified against
+// Ink's own Text.js applying chalk.inverse last. `undefined`/`false` when not selected: Ink
+// treats a missing `backgroundColor` as "no background" and `inverse` defaults to `false`.
 export function ListRow({ selected, label }: { selected: boolean; label: string }) {
   return (
-    <Text {...selectedRowStyle(selected)} wrap="truncate-end">
+    <Text
+      backgroundColor={selected ? theme.selected : undefined}
+      inverse={selected}
+      wrap="truncate-end"
+    >
       {selected ? "> " : "  "}
       {label}
     </Text>
