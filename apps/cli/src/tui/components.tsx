@@ -2,13 +2,15 @@ import { Box, Text } from "ink";
 import { singleLine } from "./format";
 import { ERROR_MARK, selectedRowStyle, theme, WARNING_MARK } from "./theme";
 
-// APP_CHROME_ROWS (format.ts) reserves exactly one row for an alert line like this, but its
-// `message` can be an Error#message — unbounded length AND free to carry a literal `\n` (a
-// multi-line validation error, a JSON-parse error citing surrounding context). Ink renders an
-// embedded newline as a real line break regardless of `wrap`, which only governs a single line's
-// own overflow — `singleLine` collapses any embedded break first, then `wrap="truncate-end"`
-// guards what's left from overflowing on a narrow terminal. Either alone would leave the other
-// case free to push an open panel's own bottom row past the alt-screen viewport.
+// Each caller reserves exactly one row for an alert line like this (App.tsx's own
+// APP_CHROME_ROWS for `commandError`, each panel's own budget for SetupEnterKey/
+// ConfigEnterValue's error line), but `message` can be an Error#message — unbounded length AND
+// free to carry a literal `\n` (a multi-line validation error, a JSON-parse error citing
+// surrounding context). Ink renders an embedded newline as a real line break regardless of
+// `wrap`, which only governs a single line's own overflow — `singleLine` collapses any embedded
+// break first, then `wrap="truncate-end"` guards what's left from overflowing on a narrow
+// terminal. Either alone would leave the other case free to push an open panel's own bottom row
+// past the alt-screen viewport.
 export function ErrorLine({ message }: { message: string | undefined }) {
   if (message === undefined) return null;
   return (
