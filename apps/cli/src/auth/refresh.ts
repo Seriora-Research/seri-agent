@@ -50,11 +50,16 @@ export async function refreshAccessToken(
   }
   // A 200 with an unexpected body shape must not persist undefined tokens into auth.json — the
   // same trust boundary as pollForToken's own response.ok check, applied to the fields inside it.
+  // expires_in is checked too: refreshSession below feeds it straight into
+  // `Date.now() + expiresIn * 1000`, and a missing/non-number value there produces
+  // `new Date(NaN)`, whose toISOString() throws — the same uncaught-exception class this
+  // function exists to prevent, just via a different field.
   if (
     typeof body.access_token !== "string" ||
     !body.access_token ||
     typeof body.refresh_token !== "string" ||
-    !body.refresh_token
+    !body.refresh_token ||
+    typeof body.expires_in !== "number"
   ) {
     return { status: "error", message: "WorkOS refresh response is missing token fields" };
   }

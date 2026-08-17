@@ -88,6 +88,21 @@ describe("refreshAccessToken", () => {
 
     expect(result.status).toBe("error");
   });
+
+  // refreshSession feeds expiresIn straight into `Date.now() + expiresIn * 1000`; a missing
+  // value there produces `new Date(NaN)`, whose toISOString() throws.
+  test("a 200 response with tokens but missing expires_in returns {status: 'error'}", async () => {
+    const fetchFn = async () =>
+      fakeResponse(true, 200, { access_token: "at-new", refresh_token: "rt-new" });
+
+    const result = await refreshAccessToken(
+      "client_123",
+      "rt-old",
+      fetchFn as unknown as typeof fetch,
+    );
+
+    expect(result.status).toBe("error");
+  });
 });
 
 describe("refreshSession", () => {
