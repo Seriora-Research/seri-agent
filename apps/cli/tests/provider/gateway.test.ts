@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { streamText } from "ai";
-import { AUTH_FILENAME } from "../../src/auth/authStore";
+import { AUTH_FILENAME, loadAuthSession, saveAuthSession } from "../../src/auth/authStore";
 import type { refreshSession as refreshSessionReal } from "../../src/auth/refresh";
 import { getGatewayModel } from "../../src/provider/gateway";
 
@@ -69,6 +69,20 @@ function fakeRefresh(accessToken: string): typeof refreshSessionReal {
 const refreshNeverCalled: typeof refreshSessionReal = (async () => {
   throw new Error("refreshSession should not have been called");
 }) as unknown as typeof refreshSessionReal;
+
+// Unlike fakeRefresh above, this persists to disk — the property under test is that a LATER,
+// separate authedFetch invocation reads the refreshed token off disk rather than a value baked
+// into createOpenAI's config at construction time, and only a real (or disk-writing) refresh
+// exercises that.
+function fakeRefreshPersisting(configDir: string, accessToken: string): typeof refreshSessionReal {
+  return (async () => {
+    const session = loadAuthSession(configDir);
+    if (!session) return undefined;
+    const updated = { ...session, accessToken, refreshToken: "rt-2" };
+    saveAuthSession(updated, configDir);
+    return updated;
+  }) as unknown as typeof refreshSessionReal;
+}
 
 describe("getGatewayModel — BYOK guard", () => {
   // The verify-bar item: a provider with a locally-configured key must never reach the gateway
@@ -206,5 +220,28 @@ describe("getGatewayModel — 401 retry", () => {
 
     await expect(streamText({ model, prompt: "hi" }).text).rejects.toBeDefined();
     expect(calls).toHaveLength(1);
+  });
+
+  // A refresh triggered by one request's retry must not be forgotten the instant that request
+  // finishes: every LATER request through the same model should use the new token immediately,
+  // not repeat the same 401 -> refresh -> retry cycle every single time.
+  test("a token refreshed during one request's retry is used directly by the next request", async () => {
+    process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";
+    seedAuthJson(tmpRoot);
+    const { fetchFn, calls } = stubFetch([unauthorized, sseResponse, sseResponse]);
+
+    const model = getGatewayModel("some-model", "openrouter", "session-1", tmpRoot, {
+      fetchFn,
+      refreshSession: fakeRefreshPersisting(tmpRoot, "at-2"),
+    });
+    await streamText({ model, prompt: "first turn" }).text;
+    await streamText({ model, prompt: "second turn" }).text;
+
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.headers.get("Authorization")).toBe("Bearer at-1");
+    expect(calls[1]?.headers.get("Authorization")).toBe("Bearer at-2");
+    // The second turn's very first attempt already carries the refreshed token — no second
+    // 401 -> retry cycle.
+    expect(calls[2]?.headers.get("Authorization")).toBe("Bearer at-2");
   });
 });

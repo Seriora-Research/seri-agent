@@ -18,13 +18,22 @@ function gatewayBaseUrl(configDir: string): string {
   return getApiKey("SERI_GATEWAY_URL", configDir) ?? DEFAULT_GATEWAY_URL;
 }
 
+// Never used for real auth — authedFetch below overwrites the Authorization header on every
+// call, reading the current on-disk session fresh each time. createOpenAI still requires a
+// non-empty apiKey to construct, so this is only a placeholder to satisfy that.
+const UNUSED_PLACEHOLDER_KEY = "seri-gateway";
+
 // Mints a fresh X-Seri-Idempotency-Key on every invocation of the returned fetch — one logical
-// request, one key — and the retry-once-on-401 wrapper (D4) below reuses that SAME key for its
-// own replay, never a new one. `loop.ts` reuses one LanguageModel across every tool-call
-// round-trip and compaction call in a turn, so createOpenAI's own static `headers` option (fixed
-// once at construction) is the wrong place for this: every request built from this model would
-// otherwise share one key, and the ledger's `ON CONFLICT (idempotency_key) DO NOTHING` upsert
-// would silently drop every request after the first.
+// request, one key — and the retry-once-on-401 wrapper below reuses that SAME key for its own
+// replay, never a new one. `loop.ts` reuses one LanguageModel across every tool-call round-trip
+// and compaction call in a turn, so a key fixed once at construction time would be shared by
+// every request that model ever makes, and the ledger's own idempotency barrier would silently
+// drop every request after the first.
+//
+// The Authorization header is likewise read fresh here, from disk, on every call — not baked
+// into createOpenAI's config at construction time — so a token refreshed by THIS wrapper's own
+// retry (below) is picked up by every later request the same model makes, not just the one that
+// triggered the refresh.
 function authedFetch(
   configDir: string,
   fetchFn: typeof fetch,
@@ -33,6 +42,8 @@ function authedFetch(
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const headers = new Headers(init?.headers);
     headers.set("X-Seri-Idempotency-Key", crypto.randomUUID());
+    const session = loadAuthSession(configDir);
+    if (session) headers.set("Authorization", `Bearer ${session.accessToken}`);
     const requestInit = { ...init, headers };
 
     const response = await fetchFn(input, requestInit);
@@ -53,9 +64,10 @@ type GatewayDeps = {
   refreshSession?: typeof refreshSessionReal;
 };
 
-// D2's BYOK guard, D4's sticky-routing/idempotency headers. `sessionId` is the CLI session id
-// (sticky routing / prompt-cache behaviour, injected server-side as `session_id`); the
-// idempotency key itself is minted per-request inside authedFetch, not here — see its comment.
+// The BYOK guard, plus the sticky-routing/idempotency headers a gateway request needs.
+// `sessionId` is the CLI session id (sticky routing / prompt-cache behaviour, injected
+// server-side as `session_id`); the idempotency key and the Authorization header are both set
+// per-request inside authedFetch, not here — see its comment.
 export function getGatewayModel(
   modelId: string,
   provider: ModelProvider,
@@ -69,15 +81,16 @@ export function getGatewayModel(
     );
   }
 
-  const session = loadAuthSession(configDir);
-  if (!session) throw new Error("Not logged in. Run: seri login");
+  // Checked here only to fail fast with a clear message before constructing anything — the
+  // credential actually used per-request is re-read fresh inside authedFetch.
+  if (!loadAuthSession(configDir)) throw new Error("Not logged in. Run: seri login");
 
   const fetchFn = deps.fetchFn ?? fetch;
   const refreshSession = deps.refreshSession ?? refreshSessionReal;
 
   return createOpenAI({
     baseURL: gatewayBaseUrl(configDir),
-    apiKey: session.accessToken,
+    apiKey: UNUSED_PLACEHOLDER_KEY,
     headers: {
       "X-Seri-Session-Id": sessionId,
     },
