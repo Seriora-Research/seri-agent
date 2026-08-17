@@ -79,7 +79,7 @@ describe("App", () => {
     expect(instance.lastFrame()).toContain("[read-only]");
   });
 
-  // `not.toContain("╭")` is what makes this non-vacuous across all 17 borderStyle sites at once —
+  // `not.toContain("╭")` is what makes this non-vacuous across all 14 borderStyle sites at once —
   // a stray "round" reintroduced anywhere would still leave "┌" present elsewhere on screen.
   test("borders render with square corners, not rounded ones", async () => {
     const { instance } = await connect();
