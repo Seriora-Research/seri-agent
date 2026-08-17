@@ -75,9 +75,12 @@ export function ConfirmPrompt({
 }
 
 // The selection marker + row highlight shared by every selectable-list panel. `wrap=
-// "truncate-end"` applies unconditionally, not per caller: every list panel budgets exactly one
-// row per list row (PANEL_CHROME_ROWS, format.ts), and Ink's default wrap would soft-wrap an
-// over-width label into a second row and overflow that budget.
+// "truncate-end"` applies unconditionally, not per caller: every `useListWindow`-backed panel
+// budgets exactly one row per list row (PANEL_CHROME_ROWS, format.ts), and Ink's default wrap
+// would soft-wrap an over-width label into a second row and overflow that budget.
+// `WelcomeSplash` is the one caller not windowed by `useListWindow` at all (2-3 fixed items, no
+// scroll) — for it, this `wrap` is a deliberate, tested behavior change from its pre-ListRow
+// rows, which soft-wrapped instead of truncating (see the splash's own truncation test).
 //
 // `backgroundColor` alone would paint default-foreground text on ANSI black, which in many dark
 // themes is indistinguishable from the terminal background — `inverse` is what actually swaps

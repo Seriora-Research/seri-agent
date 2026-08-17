@@ -19,7 +19,7 @@ import { DEFAULT_COLUMNS, transcriptVisualRows } from "./format";
 // SetupEnterKey nor the confirm-remove step (SetupPanel.tsx) reads a row list at all, only
 // `provider`/`keyName` and their own step-specific fields; a `rows` field on either used to exist
 // purely to satisfy the type, forcing cli.ts's own handlers to compute-and-thread a row array (a
-// config.json read) nothing ever consumed (code-review, PR #73).
+// config.json read) nothing ever consumed.
 export type SetupState =
   | { step: "list"; rows: SetupProviderRow[]; selected: number }
   | {

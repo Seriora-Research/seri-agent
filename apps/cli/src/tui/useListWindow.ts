@@ -5,8 +5,7 @@
 // transcript's scroll offset) no external event stream mutates them — the same distinction
 // reducer.ts's own TuiState.transcriptScrollOffset comment draws.
 
-import { useWindowSize } from "ink";
-import type { Key } from "ink";
+import { type Key, useWindowSize } from "ink";
 import { useEffect, useState } from "react";
 import { APP_CHROME_ROWS, listWindowSize, remaining, slideWindow } from "./format";
 
@@ -53,11 +52,14 @@ export function useListWindow<T>(
   // no-op (handleArrowKey already applied the same result synchronously), so this only does real
   // work on a resize. `selected`/`offset` living in one state means this effect only needs
   // `windowSize` as a dependency — `win` itself already changed atomically wherever `selected` did.
+  // Returns `current` unchanged, not a new object, when the slide is a no-op: a plain object
+  // literal here would defeat React's own `Object.is` bailout on every windowSize change (a
+  // resize whose offset doesn't actually need to move would still force a re-render).
   useEffect(() => {
-    setWin((current) => ({
-      selected: current.selected,
-      offset: slideWindow(current.offset, current.selected, windowSize),
-    }));
+    setWin((current) => {
+      const offset = slideWindow(current.offset, current.selected, windowSize);
+      return offset === current.offset ? current : { ...current, offset };
+    });
   }, [windowSize]);
 
   return {
