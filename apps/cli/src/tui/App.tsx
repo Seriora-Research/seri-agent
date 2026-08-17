@@ -297,10 +297,12 @@ export function App({
   }, [state.session, onSessionChange]);
 
   // True exactly when InputBox is the render ternary's own active branch, below — every other
-  // branch is a modal panel that owns the keyboard and fully occludes the transcript, so
-  // PageUp/PageDown/Home/End must not scroll it in the background while one is open: the user would
-  // close the panel to find the transcript scrolled and the "↑ scrolled" banner showing, with no
-  // visible keypress of theirs against the transcript to explain why.
+  // branch is a modal panel that owns the keyboard. The transcript Box above (flexGrow/minHeight={0})
+  // still renders unconditionally regardless of which branch is active, so on a terminal taller
+  // than the open panel's own content it stays partially visible above it, not fully occluded — but
+  // PageUp/PageDown/Home/End must still not scroll it in the background while a panel is open: the
+  // user would close the panel to find the transcript scrolled and the "↑ scrolled" banner showing,
+  // with no visible keypress of theirs against the transcript to explain why.
   const noPanelOpen =
     state.pendingApproval === undefined &&
     state.pendingModelPicker === undefined &&
@@ -323,8 +325,8 @@ export function App({
   });
 
   return (
-    // `rows - 1`, not `rows`, on every platform (reverted from a Windows-only gate found by
-    // review): Windows' own `isWindowsConsole && (wasFullscreen || isFullscreen)` full-redraw path
+    // `rows - 1`, not `rows`, on every platform, not just a Windows-only gate: Windows' own
+    // `isWindowsConsole && (wasFullscreen || isFullscreen)` full-redraw path
     // (Ink's own resolveOutput) is real and Windows-specific, but it is not the only reason this
     // needs to stay one row short. At a FULL `rows`, `isFullscreen` becomes true on every platform
     // (Ink's own `outputHeight >= viewportRows`), and mid-run `console.*` output (patchConsole,
