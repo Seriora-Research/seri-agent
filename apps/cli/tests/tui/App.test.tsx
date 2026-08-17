@@ -2013,7 +2013,12 @@ describe("App", () => {
 
       dispatch({
         type: "config-step",
-        state: { step: "enter-value", key: "SERI_SOME_OTHER_KEY", busy: false, error: "Invalid value" },
+        state: {
+          step: "enter-value",
+          key: "SERI_SOME_OTHER_KEY",
+          busy: false,
+          error: "Invalid value",
+        },
       });
       await flush();
 

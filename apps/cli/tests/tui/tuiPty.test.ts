@@ -4767,6 +4767,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(frame).toContain("line-299.txt");
         expect(frame).not.toContain("line-0.txt");
         expect(frame).toContain("┌"); // InputBox's own border
+        expect(frame).not.toContain("╭");
       } finally {
         child.kill("SIGKILL");
       }
