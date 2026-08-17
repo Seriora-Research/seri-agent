@@ -4,7 +4,7 @@
 import { Box, Text, useInput } from "ink";
 import { approvalPromptText } from "../../cli/output";
 import type { ApprovalAnswer } from "../../loop/loop";
-import { WARNING_MARK, theme } from "../theme";
+import { theme, WARNING_MARK } from "../theme";
 
 // approvalPromptText (cli/output.ts), not a hand-copied template: round 7 code review found this
 // line written out twice (here and in makeApprovalPrompt's own rl.question call, cli.ts) — same
