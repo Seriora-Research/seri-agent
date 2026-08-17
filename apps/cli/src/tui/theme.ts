@@ -18,11 +18,11 @@ export const theme = {
 export const ERROR_MARK = "✕ ";
 export const WARNING_MARK = "! ";
 
-// The reverse-video row highlight, shared by every selectable-list panel instead of five call sites
-// each composing the same two props by hand. `backgroundColor` alone would paint default-foreground
-// text on ANSI black, which in many dark themes is indistinguishable from the terminal background —
-// `inverse` is what actually swaps the glyphs to the terminal's own default foreground on top of
-// that band, verified against Ink's own Text.js applying chalk.inverse last.
+// The reverse-video row highlight — the theme-token half of ListRow (components.tsx), which is
+// the one caller. `backgroundColor` alone would paint default-foreground text on ANSI black,
+// which in many dark themes is indistinguishable from the terminal background — `inverse` is
+// what actually swaps the glyphs to the terminal's own default foreground on top of that band,
+// verified against Ink's own Text.js applying chalk.inverse last.
 export function selectedRowStyle(
   isSelected: boolean,
 ): Pick<TextProps, "backgroundColor" | "inverse"> {
