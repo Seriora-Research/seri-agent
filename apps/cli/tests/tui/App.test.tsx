@@ -15,6 +15,7 @@ import {
   formatRouteLabel,
   formatSetupRow,
   listWindowSize,
+  singleLine,
   slideWindow,
   visibleTranscript,
 } from "../../src/tui/format";
@@ -1414,6 +1415,21 @@ describe("App", () => {
 
     test("selection past the bottom of the window: offset slides just far enough to include it", () => {
       expect(slideWindow(0, 10, 10)).toBe(1);
+    });
+  });
+
+  describe("singleLine", () => {
+    test("collapses \\r\\n, \\r, and \\n into a single space each", () => {
+      expect(singleLine("a\r\nb\rc\nd")).toBe("a b c d");
+    });
+
+    // Regression: an unsanitized config value (`seri config set` on the CLI does not strip
+    // control bytes the way the TUI's own interactive entry does) reaching a row's render could
+    // otherwise carry a raw ESC and write an arbitrary escape sequence to the real terminal
+    // underneath the alt screen. Escaped to a visible `\xNN` form, not stripped, matching
+    // escapeControlChars' own contract (cli/output.ts).
+    test("escapes a raw ESC byte instead of passing it through to the real terminal", () => {
+      expect(singleLine("before\x1b[31mafter")).toBe("before\\x1b[31mafter");
     });
   });
 
