@@ -102,7 +102,7 @@ describe("App", () => {
     expect(frame).not.toContain("line 0");
     // The InputBox's own border (panels/InputBox.tsx) — proves the viewport left room for the
     // live region below it rather than consuming the whole frame.
-    expect(frame).toContain("╭");
+    expect(frame).toContain("┌");
   });
 
   test("PageUp shows the scrolled indicator and reveals an older line; End clears it and returns to the newest", async () => {

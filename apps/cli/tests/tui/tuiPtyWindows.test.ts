@@ -221,7 +221,7 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
         // call): this assertion is what turns that red instead of the whole test silently returning
         // "inconclusive, pass".
         expect(decodedSoFar()).toContain("RUNLOOP_READY");
-        expect(decodedSoFar()).toContain("╭");
+        expect(decodedSoFar()).toContain("┌");
 
         // Ctrl-D, same graceful-quit affordance tuiPty.test.ts's own "Ctrl-D at the input box quits
         // the same way /exit does" test uses — one write, unlike "/exit" + a separate "\r", so this
