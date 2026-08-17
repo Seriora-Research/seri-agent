@@ -135,10 +135,11 @@ function ConfigList({
       })}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
       {selectedDescription && (
-        // Same reasoning as the row Text above: a config key's own description is fixed copy today
-        // (commands.ts trims it to fit an assumed 80-column terminal), but nothing here reads the
-        // REAL terminal width, so a narrower real TTY reproduces the exact overflow that fix closed
-        // for the default width only. Truncating is the one guarantee that holds at any width.
+        // Same reasoning as ListRow's own comment (components.tsx): a config key's own description
+        // is fixed copy today (commands.ts trims it to fit an assumed 80-column terminal), but
+        // nothing here reads the REAL terminal width, so a narrower real TTY reproduces the exact
+        // overflow that fix closed for the default width only. Truncating is the one guarantee
+        // that holds at any width.
         <Text color={theme.muted} wrap="truncate-end">
           {selectedDescription}
         </Text>
