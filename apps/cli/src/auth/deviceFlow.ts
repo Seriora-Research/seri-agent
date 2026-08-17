@@ -17,7 +17,9 @@ export function getWorkosClientId(configDir?: string): string {
 }
 
 const AUTHORIZE_DEVICE_URL = "https://api.workos.com/user_management/authorize/device";
-const AUTHENTICATE_URL = "https://api.workos.com/user_management/authenticate";
+// Exported so auth/refresh.ts's grant_type=refresh_token POST hits the same endpoint rather
+// than duplicating the literal.
+export const AUTHENTICATE_URL = "https://api.workos.com/user_management/authenticate";
 
 export type DeviceAuthorization = {
   deviceCode: string;
@@ -33,6 +35,7 @@ export type TokenResult =
       status: "success";
       accessToken: string;
       refreshToken: string;
+      expiresIn: number;
       user: { id: string; email: string };
     }
   | { status: "denied" }
@@ -141,6 +144,7 @@ export async function pollForToken(
         status: "success",
         accessToken: body.access_token,
         refreshToken: body.refresh_token,
+        expiresIn: body.expires_in,
         user: { id: body.user.id, email: body.user.email },
       };
     }

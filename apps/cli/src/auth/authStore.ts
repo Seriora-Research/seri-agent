@@ -8,6 +8,11 @@ export type AuthSession = {
   userId: string;
   email: string;
   obtainedAt: string;
+  // Optional, deliberately: every existing auth.json on disk lacks it, and loadAuthSession is a
+  // bare JSON.parse with no migration step. A missing expiresAt must never be treated as
+  // "expired" — auth/refresh.ts's 401-retry path is the authority on expiry; this is only a
+  // pre-emptive hint.
+  expiresAt?: string;
 };
 
 export const AUTH_FILENAME = "auth.json";

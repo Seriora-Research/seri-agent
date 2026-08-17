@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setConfigValue } from "../../src/config/config";
 import {
   DEFAULT_WORKOS_CLIENT_ID,
   type DeviceAuthorization,
@@ -10,6 +9,7 @@ import {
   pollForToken,
   requestDeviceCode,
 } from "../../src/auth/deviceFlow";
+import { setConfigValue } from "../../src/config/config";
 
 function fakeResponse(ok: boolean, body: unknown): Response {
   return { ok, text: async () => JSON.stringify(body) } as Response;
@@ -134,6 +134,7 @@ describe("pollForToken", () => {
       fakeResponse(true, {
         access_token: "at-1",
         refresh_token: "rt-1",
+        expires_in: 300,
         user: { id: "user_1", email: "a@example.com" },
       }),
     ];
@@ -149,6 +150,7 @@ describe("pollForToken", () => {
       status: "success",
       accessToken: "at-1",
       refreshToken: "rt-1",
+      expiresIn: 300,
       user: { id: "user_1", email: "a@example.com" },
     });
     expect(sleepCalls).toEqual([5000, 5000, 5000]);

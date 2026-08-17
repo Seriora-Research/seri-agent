@@ -75,6 +75,7 @@ export async function login(
       userId: result.user.id,
       email: result.user.email,
       obtainedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + result.expiresIn * 1000).toISOString(),
     },
     configDir,
   );
