@@ -107,7 +107,7 @@ export function ModelPicker({
       column widths sum to the same ~87 chars, so it soft-wraps on the identical narrow terminals
       the row's `wrap="truncate-end"` guards against. */}
       <Text color={theme.muted} wrap="truncate-end">{`  ${MODEL_PICKER_HEADER}`}</Text>
-      {visible.map(({ item: row, isSelected }) => (
+      {visible.map(({ row, isSelected }) => (
         <ListRow
           key={`${row.entry.provider}/${row.entry.id}`}
           selected={isSelected}

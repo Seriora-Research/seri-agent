@@ -118,7 +118,7 @@ function SetupList({
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>/setup — provider API keys</Text>
-      {visible.map(({ item: row, isSelected }) => (
+      {visible.map(({ row, isSelected }) => (
         <ListRow key={row.provider} selected={isSelected} label={formatSetupRow(row)} />
       ))}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}

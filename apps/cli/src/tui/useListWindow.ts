@@ -17,7 +17,7 @@ export function useListWindow<T>(
   selected: number;
   // Each visible row paired with whether IT is the selected one — callers never see the window
   // offset or do their own `offset + localIndex` arithmetic to find out.
-  visible: { item: T; isSelected: boolean }[];
+  visible: { row: T; isSelected: boolean }[];
   remainingCount: number;
   // Returns true when the key was an arrow it handled, so the caller's own useInput can
   // `if (handleArrowKey(key)) return;` in the same position its inline arrow blocks used to sit.
@@ -62,8 +62,8 @@ export function useListWindow<T>(
 
   return {
     selected: win.selected,
-    visible: rows.slice(win.offset, win.offset + windowSize).map((item, i) => ({
-      item,
+    visible: rows.slice(win.offset, win.offset + windowSize).map((row, i) => ({
+      row,
       isSelected: win.offset + i === win.selected,
     })),
     remainingCount: remaining(rows.length, win.offset, windowSize),

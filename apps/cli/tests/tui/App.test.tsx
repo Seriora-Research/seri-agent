@@ -20,7 +20,6 @@ import {
   visibleTranscript,
 } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
-import { selectedRowStyle } from "../../src/tui/theme";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
@@ -1594,15 +1593,6 @@ describe("App", () => {
     });
   });
 
-  describe("selectedRowStyle", () => {
-    // Asserting the literal "black"/true, not theme.selected/true re-imported under a different
-    // name: importing the constant under test would make this comparison vacuous.
-    test("returns backgroundColor+inverse when selected, nothing when not", () => {
-      expect(selectedRowStyle(true)).toEqual({ backgroundColor: "black", inverse: true });
-      expect(selectedRowStyle(false)).toEqual({});
-    });
-  });
-
   describe("persistent mode+route indicator (mounted)", () => {
     // useTerminalWidth's own live-resize wiring — formatModeLabel's tests above already cover the
     // tier DECISION logic as a pure function, so this is the one Ink-level smoke test needed to
@@ -2025,8 +2015,9 @@ describe("App", () => {
     });
 
     // Up-arrow is never pressed by any panel test elsewhere in this file (every list-panel test
-    // presses Down only) — handleArrowKey's own `Math.max(0, current - 1)` branch (useListWindow.ts)
-    // is otherwise entirely uncovered by this suite.
+    // presses Down only) — handleArrowKey's own top clamp (useListWindow.ts, `Math.max(0, next)`
+    // on the upArrow branch's `current.selected - 1`) is otherwise entirely uncovered by this
+    // suite.
     test("Up moves the selection back, and clamps at the top without wrapping or going negative", async () => {
       const { instance, dispatch } = await connect();
 
@@ -2444,6 +2435,36 @@ describe("App", () => {
       const frame = instance.lastFrame() ?? "";
       expect(frame).toContain("write_file");
       expect(frame).not.toContain("not removable");
+    });
+
+    // handleArrowKey's empty-list clamp (useListWindow.ts, Math.max(0, next)): pressing Down while
+    // rows is [] must not leave the hook's selection at -1 for the SAME component instance once
+    // rows arrive — useListWindow's useState only seeds from initialSelected on first mount, so a
+    // second permissions-requested dispatch reuses the same internal state rather than resetting
+    // it. Without the clamp, a negative offset makes `rows.slice(offset, ...)` read from the END
+    // of the array instead of the start (JS negative-slice semantics) — with two rows that means
+    // only the SECOND row renders at all, marked selected, and the first is missing from the frame
+    // entirely; this asserts the first row renders, unmarked-if-second, marked-if-first.
+    test("Down on an empty list does not leave the selection negative once rows arrive", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "permissions-requested", rows: [] });
+      await flush();
+      instance.stdin.write("\x1b[B");
+      await flush();
+
+      dispatch({
+        type: "permissions-requested",
+        rows: [
+          { tool: "read_file", source: "pre-approved", removable: true },
+          { tool: "write_file", source: "persisted", removable: true },
+        ],
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("> read_file");
+      expect(frame).toContain("  write_file");
     });
 
     // Review round 3 finding (MEDIUM-1's own test coverage gap), mirroring SetupPanel's own

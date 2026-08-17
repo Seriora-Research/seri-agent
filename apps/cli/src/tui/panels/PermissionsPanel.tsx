@@ -80,7 +80,7 @@ function PermissionsList({
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>/permissions — tools approved permanently</Text>
-      {visible.map(({ item: row, isSelected }) => (
+      {visible.map(({ row, isSelected }) => (
         <ListRow key={row.tool} selected={isSelected} label={formatPermissionRow(row)} />
       ))}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}

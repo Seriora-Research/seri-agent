@@ -115,7 +115,7 @@ function ConfigList({
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>/config — settings</Text>
-      {visible.map(({ item: row, isSelected }) => (
+      {visible.map(({ row, isSelected }) => (
         <ListRow key={row.key} selected={isSelected} label={formatConfigRow(row)} />
       ))}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
