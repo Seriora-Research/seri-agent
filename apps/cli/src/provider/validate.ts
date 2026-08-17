@@ -1,5 +1,6 @@
 import { generateText as generateTextReal } from "ai";
 import type { ModelProvider } from "@seri/model-catalog";
+import { messageOf } from "../errors";
 import { getAnthropicModel } from "./anthropic";
 import { getGoogleModel } from "./google";
 import { getGroqModel } from "./groq";
@@ -41,10 +42,6 @@ export type ValidateKeyResult =
 function isAuthFailure(err: unknown): boolean {
   const statusCode = (err as { statusCode?: unknown } | null)?.statusCode;
   return statusCode === 401 || statusCode === 403;
-}
-
-function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 // D5's own mechanism: one minimal `generateText` call against the candidate key (never the

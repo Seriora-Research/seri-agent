@@ -305,8 +305,16 @@ export function createCheckpointer(opts: {
 
   // What the first snapshot of the session turned out to cover. One extra spawn, once, on the
   // already-cold first checkpoint — it needs the index, so it cannot run in start().
+  //
+  // Both conditions below are independent, not mutually exclusive, so they are collected into
+  // `messages` and reported via ONE `onWarning` call rather than one each: the TUI's own layout
+  // budget (App.tsx's `rows - 1` comment) reserves exactly one spare row to absorb a single
+  // mid-render console write without desyncing Ink's line-count bookkeeping for the rest of the
+  // session — a worktree that is both large AND has nested repos would otherwise fire two writes
+  // in the same tick, one write past that budget.
   function warnAboutScope(): void {
     const { files, nested } = summarizeIndex(gitDir, opts.worktree);
+    const messages: string[] = [];
 
     // `add -A` records a directory that is itself a git repository as a gitlink (mode 160000)
     // holding only its HEAD sha, so the shadow tree does not change AT ALL for edits inside it —
@@ -315,7 +323,7 @@ export function createCheckpointer(opts: {
     // change under a submodule or vendored clone in place. Nothing outside git can fix that, so it
     // is said out loud, for the same reason the outside-the-worktree write is.
     if (nested.length > 0) {
-      opts.onWarning(
+      messages.push(
         `${nested.join(", ")} ${nested.length === 1 ? "is a nested git repository" : "are nested git repositories"} — changes inside are not checkpointed and /undo will not revert them`,
       );
     }
@@ -327,10 +335,12 @@ export function createCheckpointer(opts: {
     // be the skipped pre-state this design already refused to accept. The size is reported instead,
     // once, so it is a number the user saw rather than one they find out from a deletion.
     if (files > LARGE_WORKTREE_FILES) {
-      opts.onWarning(
+      messages.push(
         `checkpointing ${files} files under ${opts.worktree} on every file-modifying tool call — /undo's removal pass covers all of them; a .gitignore would narrow it`,
       );
     }
+
+    if (messages.length > 0) opts.onWarning(messages.join("; "));
   }
 
   return (context) => {

@@ -9,7 +9,8 @@ import type {
   PermissionRow,
   SetupProviderRow,
 } from "../../src/tui/commands";
-import { initialTuiState, tuiReducer } from "../../src/tui/reducer";
+import { visibleTranscript } from "../../src/tui/format";
+import { initialTuiState, tuiReducer, type TuiState } from "../../src/tui/reducer";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
@@ -112,6 +113,272 @@ describe("tuiReducer: transcript-append", () => {
 
     expect(next.transcript).toEqual(["> /rewind 1"]);
     expect(next.streaming).toBe("the model's still-in-progress answer");
+  });
+});
+
+describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
+  function transcriptOf(lines: string[]) {
+    let state = initialTuiState(session());
+    for (const line of lines) state = tuiReducer(state, { type: "transcript-append", line });
+    return state;
+  }
+
+  test("a positive delta (toward older lines) increases the offset", () => {
+    const state = { ...transcriptOf(["a", "b", "c", "d", "e"]), viewportRows: 1 };
+    const next = tuiReducer(state, { type: "transcript-scroll", delta: 2 });
+    expect(next.transcriptScrollOffset).toBe(2);
+  });
+
+  test("clamps at 0 — a negative delta cannot scroll past the newest line", () => {
+    const state = { ...transcriptOf(["a", "b", "c"]), viewportRows: 1 };
+    const next = tuiReducer(state, { type: "transcript-scroll", delta: -5 });
+    expect(next.transcriptScrollOffset).toBe(0);
+  });
+
+  // A large delta must not scroll past the offset that shows a FULL viewport of the oldest
+  // lines — `transcript.length - viewportRows`, not `transcript.length - 1` (the latter would
+  // slice `visibleTranscript` down to a single oldest line pinned to the bottom by
+  // `justifyContent="flex-end"`, App.tsx, instead of a full page).
+  test("clamps at transcript.length - viewportRows — a large delta stops at a full page of the oldest lines", () => {
+    const state = { ...transcriptOf(["a", "b", "c", "d", "e"]), viewportRows: 2 };
+    const next = tuiReducer(state, { type: "transcript-scroll", delta: 100 });
+    expect(next.transcriptScrollOffset).toBe(3);
+  });
+
+  test("transcript-scroll-to top jumps to the offset that shows a full page of the oldest lines", () => {
+    const state = { ...transcriptOf(["a", "b", "c", "d", "e"]), viewportRows: 2 };
+    const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(next.transcriptScrollOffset).toBe(3);
+  });
+
+  // Regression: Home/repeated PageUp used to collapse the viewport to a single line instead of
+  // a full page.
+  test("transcript-scroll-to top: visibleTranscript then renders a full viewport of the oldest lines, not one line", () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i}`);
+    const state = { ...transcriptOf(lines), viewportRows: 5 };
+    const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+
+    const visible = visibleTranscript(
+      next.transcript,
+      5,
+      next.transcriptScrollOffset,
+      next.columns,
+    );
+    expect(visible).toEqual(["line 0", "line 1", "line 2", "line 3", "line 4"]);
+  });
+
+  test("transcript-scroll-to bottom resumes following the newest line", () => {
+    const scrolled = tuiReducer(
+      { ...transcriptOf(["a", "b", "c"]), viewportRows: 1 },
+      { type: "transcript-scroll", delta: 2 },
+    );
+    const next = tuiReducer(scrolled, { type: "transcript-scroll-to", to: "bottom" });
+    expect(next.transcriptScrollOffset).toBe(0);
+  });
+
+  // reducer.ts's own anchoring rule (see its comment on `appendLines`): a scrolled-up view must
+  // not slide out from under the reader as new lines land underneath it. `pushLine` can append TWO
+  // lines in one call (a flushed streaming answer plus the new line, as here) — the offset has to
+  // advance by however many lines actually landed, not by a hardcoded 1, or a flush-heavy sequence
+  // of turns would silently drift the anchored view.
+  test("a scrolled-up view (offset > 0) advances by the number of lines a flush actually appends", () => {
+    let state: TuiState = { ...transcriptOf(["a", "b", "c", "d", "e"]), viewportRows: 2 };
+    state = tuiReducer(state, { type: "transcript-scroll", delta: 3 });
+    expect(state.transcriptScrollOffset).toBe(3);
+
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "the model's in-progress answer" },
+    });
+    // flush: true (the default) — pushLine commits `streaming` AND `line`, two lines in one call.
+    const next = tuiReducer(state, { type: "transcript-append", line: "f" });
+
+    expect(next.transcript).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "the model's in-progress answer",
+      "f",
+    ]);
+    expect(next.transcriptScrollOffset).toBe(5);
+  });
+
+  test("a view already following the newest line (offset === 0) stays at 0 regardless of how many lines a flush appends", () => {
+    let state = transcriptOf(["a", "b", "c"]);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "streaming…" },
+    });
+    const next = tuiReducer(state, { type: "transcript-append", line: "d" });
+
+    expect(next.transcript).toEqual(["a", "b", "c", "streaming…", "d"]);
+    expect(next.transcriptScrollOffset).toBe(0);
+  });
+
+  // Regression: `state.totalVisualRows` only ever tracks the COMMITTED transcript, so a scroll
+  // bound derived from it alone stayed clamped to 0 with an empty transcript, no matter how tall
+  // an in-progress streamed answer (`state.streaming`) grew — PageUp/Home could never reach rows
+  // that `visibleTranscript` (format.ts) was already rendering above the viewport's tail.
+  test("transcript-scroll-to top reaches rows still sitting in an in-progress streamed answer, not just the committed transcript", () => {
+    const streamingLines = Array.from({ length: 20 }, (_, i) => `streamed line ${i}`);
+    let state: TuiState = { ...initialTuiState(session()), viewportRows: 5 };
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: streamingLines.join("\n") },
+    });
+
+    const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(next.transcriptScrollOffset).toBe(15);
+
+    const visible = visibleTranscript(
+      next.transcript,
+      5,
+      next.transcriptScrollOffset,
+      next.columns,
+      next.streaming,
+    );
+    expect(visible).toEqual(streamingLines.slice(0, 5));
+  });
+
+  // `transcriptScrollStreamingRows` snapshots the streaming row count already folded into
+  // `transcriptScrollOffset` by `maxScrollOffset` above — App.tsx (its own `pendingRows`
+  // compensation) reads this back to add only newly-streamed growth on top of the offset, not the
+  // full current streaming row count again. `state.streaming` hasn't grown since the dispatch
+  // above, so the snapshot must equal the same 20 rows already baked into `transcriptScrollOffset`.
+  test("transcript-scroll-to top snapshots the streaming row count already baked into the offset", () => {
+    const streamingLines = Array.from({ length: 20 }, (_, i) => `streamed line ${i}`);
+    let state: TuiState = { ...initialTuiState(session()), viewportRows: 5 };
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: streamingLines.join("\n") },
+    });
+
+    const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(next.transcriptScrollOffset).toBe(15);
+    expect(next.transcriptScrollStreamingRows).toBe(20);
+  });
+
+  // Regression: appendLines used to add a flush's FULL added-row count to `transcriptScrollOffset`
+  // even though `transcriptScrollStreamingRows` rows of that streaming text were already folded
+  // into the offset once, by the earlier `transcript-scroll-to`. Streaming another 5 rows after
+  // that snapshot (still un-flushed, so the offset doesn't move again) and then flushing counted
+  // those original 20 rows a second time, overshooting the correct anchor by exactly 20 rows and
+  // landing past the end of the transcript — `visibleTranscript` at that offset returns nothing.
+  test("a flush after more streaming happened since a scroll snapshot advances the offset only by the newly-flushed growth, not the full streamed length again", () => {
+    const streamingLines = Array.from({ length: 20 }, (_, i) => `streamed line ${i}`);
+    let state: TuiState = { ...initialTuiState(session()), viewportRows: 5 };
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: streamingLines.join("\n") },
+    });
+    state = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(state.transcriptScrollOffset).toBe(15);
+    expect(state.transcriptScrollStreamingRows).toBe(20);
+
+    const moreLines = Array.from({ length: 5 }, (_, i) => `streamed line ${20 + i}`);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: `\n${moreLines.join("\n")}` },
+    });
+
+    const next = tuiReducer(state, { type: "transcript-append", line: "(done: no-tool-call)" });
+
+    expect(next.transcriptScrollOffset).toBe(21);
+    const visible = visibleTranscript(
+      next.transcript,
+      5,
+      next.transcriptScrollOffset,
+      next.columns,
+    );
+    expect(visible).toEqual(streamingLines.slice(0, 5));
+  });
+
+  // `flush: false` (echoUserInput echoing a submission a mid-turn gate rejected — see
+  // transcript-append's own case comment) never resolves `state.streaming`: nothing moves out of
+  // it into `rawLines`, so the still-active streaming answer's own snapshot must stay exactly as
+  // the last real scroll action left it, not get reset as if this append had flushed it.
+  test("flush: false leaves transcriptScrollStreamingRows untouched — the streaming answer it snapshot is still in progress", () => {
+    const streamingLines = Array.from({ length: 20 }, (_, i) => `streamed line ${i}`);
+    let state: TuiState = { ...initialTuiState(session()), viewportRows: 5 };
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: streamingLines.join("\n") },
+    });
+    state = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(state.transcriptScrollStreamingRows).toBe(20);
+
+    const next = tuiReducer(state, {
+      type: "transcript-append",
+      line: "> /rewind 1",
+      flush: false,
+    });
+
+    expect(next.transcriptScrollStreamingRows).toBe(20);
+    expect(next.streaming).toBe(streamingLines.join("\n"));
+  });
+
+  // Regression guard: `transcript` stores LOGICAL lines, never pre-wrapped output — a multi-line
+  // string committed by one `transcript-append` must stay exactly one array entry, not several.
+  // Storing the wrapped form instead was tried and reverted: once written, a hard-wrap break is
+  // indistinguishable from a real `\n`, so a later resize could never correctly re-wrap it.
+  test("transcript-append stores one entry per call, even for a multi-line string", () => {
+    const state = initialTuiState(session());
+    const next = tuiReducer(state, {
+      type: "transcript-append",
+      line: "first line\nsecond line\nthird line",
+    });
+
+    expect(next.transcript).toEqual(["first line\nsecond line\nthird line"]);
+  });
+});
+
+describe("tuiReducer: viewport-resized", () => {
+  test("updates columns and viewportRows", () => {
+    const state = initialTuiState(session());
+    const next = tuiReducer(state, { type: "viewport-resized", columns: 60, viewportRows: 12 });
+
+    expect(next.columns).toBe(60);
+    expect(next.viewportRows).toBe(12);
+  });
+
+  // The bug this action's own re-clamp exists to close: a resize that GROWS viewportRows (a taller
+  // terminal) shrinks the max valid offset (`totalRows - viewportRows`), which can leave a
+  // previously-valid `transcriptScrollOffset` past the new maximum.
+  test("re-clamps transcriptScrollOffset when a growing viewportRows makes it invalid", () => {
+    let state = initialTuiState(session());
+    for (let i = 0; i < 10; i++) {
+      state = tuiReducer(state, { type: "transcript-append", line: `line ${i}` });
+    }
+    state = { ...state, viewportRows: 3 };
+    state = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(state.transcriptScrollOffset).toBe(7); // 10 rows - 3 viewportRows
+
+    const next = tuiReducer(state, { type: "viewport-resized", columns: 80, viewportRows: 8 });
+    expect(next.transcriptScrollOffset).toBe(2); // 10 rows - 8 viewportRows
+  });
+
+  // Regression guard (found by review): the transcript used to hard-wrap AT WRITE TIME, so a
+  // narrowing resize left already-committed entries wrapped at the OLD width forever — the exact
+  // "one entry doesn't equal one visual row" bug this file exists to close, just re-entered through
+  // the resize door instead of through a long append. Storing logical lines and deriving visual rows
+  // on read (transcriptVisualRows, format.ts) means a resize can only ever change how MANY rows the
+  // clamp reports, never lose the ability to reach any of them.
+  test("a narrowing resize re-derives the total row count instead of trusting stale wrapped output", () => {
+    const long = "a".repeat(200); // 200 chars, no spaces — always hard-wraps, at any width
+    let state = tuiReducer(initialTuiState(session()), { type: "transcript-append", line: long });
+    state = tuiReducer(state, { type: "viewport-resized", columns: 100, viewportRows: 5 });
+    state = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    const offsetAt100Cols = state.transcriptScrollOffset; // 2 rows at 100 cols, minus 5 viewportRows
+
+    // Narrow to 20 columns: the SAME logical entry now needs far more visual rows (10, not 2) — a
+    // write-time-wrapped design would still report the OLD row count here and under-clamp.
+    const narrowed = tuiReducer(state, { type: "viewport-resized", columns: 20, viewportRows: 5 });
+    const reClamped = tuiReducer(narrowed, { type: "transcript-scroll-to", to: "top" });
+
+    expect(reClamped.transcriptScrollOffset).toBeGreaterThan(offsetAt100Cols);
+    expect(reClamped.transcriptScrollOffset).toBe(5); // 10 rows at 20 cols, minus 5 viewportRows
   });
 });
 

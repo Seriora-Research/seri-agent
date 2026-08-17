@@ -12,26 +12,20 @@ import type * as PtyModule from "node-pty";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
-// The tui-feedback-delay investigation's own reproduction target: a fake runLoop that emits a
-// write_file tool-call followed (after a short delay standing in for real tool execution time) by
-// its tool-result, so the reducer (tui/reducer.ts's applyLoopEvent) appends the exact
-// "✓ write_file done" confirmation line (cli/output.ts's toolResultLine) to the transcript — the
-// same line users reported as delayed on-screen. No approval prompt is involved: these are raw
-// LoopEvents fed directly to the reducer, bypassing runLoop's own gate entirely, the same shortcut
-// tuiPty.test.ts's own childScript* helpers already take for events that don't need one.
-function childScriptToolWrite(dir: string): string {
+// altScreen.ts's own invariant: one continuous `\x1b[?1049h`/`\x1b[?1049l` pair per launch. A quit-capable
+// runLoop rather than a hanging one: this test needs the process to actually exit on its own (via
+// Ctrl-D) so `\x1b[?1049l`'s own "exactly once, after the child exits" claim has something real to
+// observe, not a `term.kill()` from the test harness racing whatever cleanup would have run.
+function childScriptAltScreen(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `async function* runLoopFake(opts) {`,
     `  console.log("\\nRUNLOOP_READY");`,
-    `  yield { type: "tool-call", name: "write_file", args: { path: "done.md", content: "done" } };`,
-    `  await new Promise((resolve) => setTimeout(resolve, 50));`,
-    `  yield { type: "tool-result", name: "write_file", result: "ok" };`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
     `}`,
-    `await cli.run(["crea", "done.md", "con", "el", "texto", "done"], {`,
+    `await cli.run(["do", "a", "task"], {`,
     `  runLoop: runLoopFake,`,
     `  getGroqModel: () => ({}),`,
     `  loadAgentsFile: () => "",`,
@@ -43,11 +37,12 @@ function childScriptToolWrite(dir: string): string {
   ].join("\n");
 }
 
-// The two DEC private-mode-2026 (synchronized output) escape sequences Ink's write-synchronized.js
-// wraps every <Static> flush in (ink.js's renderInteractiveFrame) — see this loop's own background
-// notes for the exact file:line citations.
-const BSU = Buffer.from([0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x68]); // \x1b[?2026h
-const ESU = Buffer.from([0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x6c]); // \x1b[?2026l
+// altScreen.ts's own hand-rolled pair, byte-for-byte what Ink itself writes for `alternateScreen`
+// — `\x1b[?1049h`/`\x1b[?1049l`, not the DEC-2026 synchronized-output bracket
+// the old version of this test searched for (that subject — `<Static>`'s own bsu/esu-wrapped flush
+// — no longer exists; App.tsx renders the transcript as a measured viewport instead).
+const ALT_SCREEN_ENTER = Buffer.from([0x1b, 0x5b, 0x3f, 0x31, 0x30, 0x34, 0x39, 0x68]); // \x1b[?1049h
+const ALT_SCREEN_EXIT = Buffer.from([0x1b, 0x5b, 0x3f, 0x31, 0x30, 0x34, 0x39, 0x6c]); // \x1b[?1049l
 
 function findAllOffsets(haystack: Buffer, needle: Buffer): number[] {
   const offsets: number[] = [];
@@ -76,6 +71,10 @@ function startChildNodePty(pty: typeof PtyModule, scriptPath: string, cwd: strin
   const chunks: Chunk[] = [];
   let decoded = "";
   let exited = false;
+  let resolveExited!: (result: { exitCode: number; signal?: number }) => void;
+  const exitedPromise = new Promise<{ exitCode: number; signal?: number }>((resolve) => {
+    resolveExited = resolve;
+  });
 
   term.onData((data) => {
     // node-pty's own windowsTerminal.js ignores the `encoding` option outright (a console.warn,
@@ -87,8 +86,9 @@ function startChildNodePty(pty: typeof PtyModule, scriptPath: string, cwd: strin
     decoded += data;
     chunks.push({ time: Date.now(), buf, decodedSoFar: decoded });
   });
-  term.onExit(() => {
+  term.onExit((result) => {
     exited = true;
+    resolveExited(result);
   });
 
   const waitFor = async (line: string, deadlineMs: number): Promise<boolean> => {
@@ -99,7 +99,7 @@ function startChildNodePty(pty: typeof PtyModule, scriptPath: string, cwd: strin
     return decoded.includes(line);
   };
 
-  return { term, chunks, waitFor, decodedSoFar: () => decoded };
+  return { term, chunks, waitFor, decodedSoFar: () => decoded, exited: exitedPromise };
 }
 
 // Same orphan risk as the winpty version, different mechanism: ConPTY's wrapped child is a
@@ -148,7 +148,7 @@ function timeAtOffset(chunks: Chunk[], offset: number): number {
 // on every runner regardless of which OS's tests it goes on to skip. The `import("node-pty")`
 // inside the test body below is what actually keeps ubuntu/macos from ever requesting the module.
 describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
-  "the Ink TUI's synchronized-output protocol on a real Windows console (node-pty/ConPTY)",
+  "the Ink TUI's alt-screen lifecycle on a real Windows console (node-pty/ConPTY)",
   () => {
     let dir: string;
 
@@ -164,12 +164,16 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     });
 
-    test("bsu/esu pairing and timing around a write_file confirmation line", async () => {
-      const scriptPath = join(dir, "child-tool-write.mjs");
-      writeFileSync(scriptPath, childScriptToolWrite(dir));
+    test("alt-screen enter/exit lifecycle on a real Windows console", async () => {
+      const scriptPath = join(dir, "child-altscreen.mjs");
+      writeFileSync(scriptPath, childScriptAltScreen(dir));
 
       const pty = await import("node-pty");
-      const { term, chunks, waitFor, decodedSoFar } = startChildNodePty(pty, scriptPath, dir);
+      const { term, chunks, waitFor, decodedSoFar, exited } = startChildNodePty(
+        pty,
+        scriptPath,
+        dir,
+      );
       try {
         // The welcome splash now mounts ahead of the normal flow on every interactive launch —
         // dismissed here the same way tuiPty.test.ts's own startChild does: wait for its wordmark
@@ -196,112 +200,68 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
           } catch {}
         }
 
-        // A single wait covers the whole turn: "(done: ...)" only appears after RUNLOOP_READY, the
-        // tool-call line, and the tool-result confirmation line have all already been flushed.
-        // Checked directly, not discarded: a regression here used to fall through to the
-        // less-specific RUNLOOP_READY/╭ checks below (which can still pass) before eventually
-        // failing ~20s later on an unrelated resultChunkIndex check — this fails immediately, at
-        // the actual point of regression, naming what never appeared (same shape as the sibling
-        // tuiPty.test.ts's own sawLine).
+        // "(done: ...)" only appears once RUNLOOP_READY and the turn's own completion have both
+        // already been flushed — checked directly, not discarded, so a regression fails immediately
+        // at the actual point of regression rather than ~20s later on an unrelated check further
+        // down (same shape as the sibling tuiPty.test.ts's own sawLine).
         const sawDone = await waitFor("(done: no-tool-call)", 20_000);
         if (!sawDone) {
           throw new Error(
             `child never printed "(done: no-tool-call)"; got ${JSON.stringify(decodedSoFar())}`,
           );
         }
-        // Trailing bytes (the closing esu, if any) can arrive a beat after the decoded text does —
-        // give them a moment before the buffer is treated as final.
-        await new Promise((r) => setTimeout(r, 300));
 
-        // A vacuous-pass guard, checked BEFORE the "no bsu/esu found" inconclusive branch below:
+        // A vacuous-pass guard, checked BEFORE the "no ?1049h/l found" inconclusive branch below:
         // a TUI that silently failed to mount at all (e.g. isTTY resolving false) would also
-        // produce zero bsu/esu bytes, and without this check that failure would be indistinguishable
-        // from — and reported the same as — winpty/ConPTY fidelity noise. RUNLOOP_READY is plain
+        // produce zero ?1049h/l bytes, and without this check that failure would be indistinguishable
+        // from — and reported the same as — ConPTY fidelity noise. RUNLOOP_READY is plain
         // console.log, printed whether or not Ink ever mounted, so the box-drawing corner is the
-        // real signal: it only appears once Ink has actually rendered the ApprovalBox/input-box
-        // border for real. Mutation-tested (isTTY forced to `false` in childScriptToolWrite's own
-        // `cli.run` call): this assertion is what turns that red instead of the whole test silently
-        // returning "inconclusive, pass".
+        // real signal: it only appears once Ink has actually rendered the input box's own border for
+        // real. Mutation-tested (isTTY forced to `false` in childScriptAltScreen's own `cli.run`
+        // call): this assertion is what turns that red instead of the whole test silently returning
+        // "inconclusive, pass".
         expect(decodedSoFar()).toContain("RUNLOOP_READY");
         expect(decodedSoFar()).toContain("╭");
 
-        const all = Buffer.concat(chunks.map((c) => c.buf));
-        const events = [
-          ...findAllOffsets(all, BSU).map((offset) => ({ offset, type: "bsu" as const })),
-          ...findAllOffsets(all, ESU).map((offset) => ({ offset, type: "esu" as const })),
-        ].sort((a, b) => a.offset - b.offset);
+        // Ctrl-D, same graceful-quit affordance tuiPty.test.ts's own "Ctrl-D at the input box quits
+        // the same way /exit does" test uses — one write, unlike "/exit" + a separate "\r", so this
+        // has only one more write to fall over if the KNOWN OPEN ISSUE above is still live.
+        try {
+          term.write("\x04");
+        } catch {}
 
-        if (events.length === 0) {
+        const exitResult = await Promise.race([
+          exited,
+          new Promise<"the run never settled">((r) =>
+            setTimeout(() => r("the run never settled"), 20_000),
+          ),
+        ]);
+        if (exitResult === "the run never settled") {
+          throw new Error(`child never exited after Ctrl-D; got ${JSON.stringify(decodedSoFar())}`);
+        }
+        // Trailing bytes (the exit sequence itself) can arrive a beat after the process handle
+        // reports exited — give them a moment before the buffer is treated as final.
+        await new Promise((r) => setTimeout(r, 300));
+
+        const all = Buffer.concat(chunks.map((c) => c.buf));
+        const enterCount = findAllOffsets(all, ALT_SCREEN_ENTER).length;
+        const exitCount = findAllOffsets(all, ALT_SCREEN_EXIT).length;
+
+        if (enterCount === 0 && exitCount === 0) {
           console.log(
             [
-              "NODE-PTY INCONCLUSIVE: no bsu/esu bytes found in the raw capture.",
+              "NODE-PTY INCONCLUSIVE: no \\x1b[?1049h or \\x1b[?1049l bytes found in the raw capture.",
+              "Not established that ConPTY surfaces this sequence to a node-pty reader verbatim",
+              "(it re-serializes rather than forwarding bytes — see this file's own header comment",
+              "on the sibling ?2026h/l case this test used to check).",
               `decoded stdout: ${JSON.stringify(decodedSoFar())}`,
               `raw stdout (hex): ${all.toString("hex")}`,
             ].join("\n"),
           );
           return;
         }
-
-        // Where the confirmation flush lives, needed by both (b) and (c) below.
-        const resultChunkIndex = chunks.findIndex((c) =>
-          c.decodedSoFar.includes("✓ write_file done"),
-        );
-        expect(resultChunkIndex).toBeGreaterThanOrEqual(0);
-        const resultVisibleTime = chunks[resultChunkIndex].time;
-        // Bytes preceding and including the chunk the confirmation text first appears in.
-        const resultByteOffset = chunks
-          .slice(0, resultChunkIndex + 1)
-          .reduce((sum, c) => sum + c.buf.length, 0);
-
-        // (b) bsu/esu alternate strictly, starting with bsu, never orphaned and never doubled, and
-        // nothing left open, THROUGH the confirmation flush — not the entire remaining capture:
-        // the 300ms tail above is enough for the confirmation flush's own esu to land, but a later,
-        // slower frame's bsu (a subsequent Static flush this test doesn't otherwise wait for) could
-        // still be mid-flight with its esu not yet arrived when the snapshot above was taken, and
-        // that has nothing to do with the claim this test is actually making. This is a sanity check
-        // on ConPTY's OWN re-serialized output stream, not on what Ink literally wrote to its pty: a
-        // real capture of this exact scenario decoded to
-        // `...\x1b[?2026h\x1b[m\x1b[?2026l\x1b[5;1H✓ write_file done...` — bsu, an SGR reset, esu,
-        // THEN the cursor move and the text, with nothing resembling "✓ write_file done" between bsu
-        // and esu at all (three of the four pairs captured were fully empty; the fourth — this one
-        // — held only the 3-byte SGR reset). Ink's own literal write is `bsu → staticOutput → esu`
-        // as one call (ink.js:779-790) with the rendered frame INSIDE the bracket; what this harness
-        // observes instead is ConPTY's own synthesized bracket around its own screen-buffer diff,
-        // since ConPTY applies the child's VT stream to an internal buffer and re-serializes its own
-        // output for the reader rather than forwarding bytes verbatim. This pairing check therefore
-        // says nothing about whether INK's own bracket was well-formed — that's established by
-        // reading ink.js:779-790, not by this capture — it only confirms ConPTY's re-serialization
-        // is itself internally consistent.
-        const relevantEvents = events.filter((e) => e.offset < resultByteOffset);
-        let open = false;
-        for (const e of relevantEvents) {
-          if (e.type === "bsu") {
-            expect(open).toBe(false);
-            open = true;
-          } else {
-            expect(open).toBe(true);
-            open = false;
-          }
-        }
-        expect(open).toBe(false);
-
-        // (c) bounded latency between the write_file confirmation flush's esu and the confirmation
-        // text becoming visible. Not evidence either way about Ink/seri: since the bracket is
-        // ConPTY's own synthesized one (see (b)'s comment) and Windows' console host does not
-        // implement DEC 2026 (the pair has zero visible effect there), this observation falsifies
-        // "the sync bracket is holding a stale frame open" on THIS path rather than confirming
-        // anything about who would be at fault if it were true — nothing is actually being
-        // synchronized here. What's left worth asserting: the bracket and the content near it still
-        // land close together in wall-clock time; a real stall in seri's own event pipeline (as
-        // opposed to ConPTY's harmless re-ordering) would show up as a large gap here instead.
-        // The esu nearest resultByteOffset, not simply the last esu in the whole capture (a later,
-        // unrelated Static flush — e.g. a subsequent turn — would otherwise be picked instead).
-        const nearestEsuOffset = findAllOffsets(all, ESU)
-          .filter((offset) => offset < resultByteOffset)
-          .at(-1);
-        expect(nearestEsuOffset).toBeDefined();
-        const nearestEsuTime = timeAtOffset(chunks, nearestEsuOffset as number);
-        expect(Math.abs(resultVisibleTime - nearestEsuTime)).toBeLessThan(500);
+        expect(enterCount).toBe(1);
+        expect(exitCount).toBe(1);
       } finally {
         // `term.kill()` forks node-pty's own `conpty_console_list_agent` helper to enumerate and
         // force-kill every process in the console (windowsPtyAgent.js's own `kill`), and that
@@ -314,6 +274,6 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
         } catch {}
         killOrphansByScriptPath(scriptPath);
       }
-    }, 60_000);
+    }, 90_000);
   },
 );

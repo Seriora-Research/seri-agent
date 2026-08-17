@@ -71,6 +71,36 @@ function childScriptInput(dir: string): string {
   ].join("\n");
 }
 
+// App.tsx's own viewport: a transcript longer than any real terminal's row count, built
+// fast (no real I/O per iteration) rather than 300 separate turns — one turn yielding 300
+// tool-call events, each a distinct, greppable transcript line (`read_file`'s own args embed the
+// iteration number). `read_file` specifically: applyLoopEvent (reducer.ts) only sets `pendingTool`
+// for write_file/edit, so this never renders the pending-write box the viewport tests don't care
+// about.
+function childScriptManyLines(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  for (let i = 0; i < 300; i++) {`,
+    `    yield { type: "tool-call", name: "read_file", args: { path: "line-" + i + ".txt" } };`,
+    `  }`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Pins the `interactive: true` fix (cli.ts's own comment on its render() call): without it, Ink's
 // own CI auto-detection (`is-in-ci`, keyed on the `CI`/`CONTINUOUS_INTEGRATION` env vars) treats a
 // real pty as non-interactive whenever `CI` is set — exactly GitHub Actions' own default for every
@@ -151,6 +181,32 @@ function childScriptRejects(dir: string): string {
   ].join("\n");
 }
 
+// Publishes its own pid: the harness's `child` is the python3 pty allocator, not this bun
+// grandchild, so a test that needs to send SIGTERM to the process actually running the TUI has to
+// read the pid from here rather than signalling `child` itself. Otherwise identical to
+// childScriptInput — a runLoop that never settles, so the TUI is still mounted (and the alt screen
+// still entered) when the signal arrives.
+function childScriptSigterm(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `console.log("\\nPID=" + process.pid);`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // H-3: a runLoop that resolves per call, reporting how many times it has been invoked and how
 // many messages it was handed — the two facts that prove a second, free-form task submission
 // actually re-invoked driveLoop against the LIVE (accumulated) session, rather than the TUI
@@ -169,6 +225,12 @@ function childScriptMultiTurn(dir: string): string {
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls + " messages=" + opts.messages.length);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    // RUNLOOP_DONE, not a count of the rendered "(done: no-tool-call)" line: console.log is exact
+    // (Ink's own patchConsole routes it through `log()`, written once, never re-emitted by a later
+    // repaint), and it fires here, before the "done" yield, only once the prior messages-updated
+    // event above has already been fully handled by the consuming for-await loop (generators only
+    // resume a later statement once the consumer has finished processing the value just yielded).
+    `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
     `}`,
@@ -208,6 +270,9 @@ function childScriptModelSwitch(dir: string): string {
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " messages=" + opts.messages.length + " systemHasModelId=" + opts.system.includes(opts.model.id));`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
+    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
     `}`,
@@ -241,6 +306,9 @@ function childScriptModelMultiRoute(dir: string): string {
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " provider=" + opts.provider);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
+    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
     `}`,
@@ -278,6 +346,9 @@ function childScriptModelPickRerouted(dir: string): string {
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " provider=" + opts.provider);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
+    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
     `}`,
@@ -315,10 +386,14 @@ function childScriptModelSwitchMultiToolCall(dir: string): string {
     `    yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "tool-call-1" }] };`,
     `    yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "tool-call-2" }] };`,
     `    yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "tool-call-3" }] };`,
+    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
+    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    `    console.log("\\nRUNLOOP_DONE " + calls);`,
     `    yield { type: "done", reason: "no-tool-call" };`,
     `    return opts.messages;`,
     `  }`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
     `}`,
@@ -552,6 +627,9 @@ function childScriptMultiTurnUsage(dir: string): string {
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls);`,
     `  yield { type: "usage", usage: { inputTokens: 10 * calls, outputTokens: 20 * calls } };`,
+    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
+    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
     `}`,
@@ -1183,13 +1261,44 @@ async function startChild(
   child: ReturnType<typeof spawn>;
   exited: Promise<Exit>;
   sawLine: (line: string) => Promise<void>;
-  // MEDIUM-C: the transcript prints the identical "(done: no-tool-call)" line for every turn in a
-  // multi-turn session, so `sawLine` (a plain substring check) is already true for turn 2's own
-  // occurrence the instant turn 1's happens — this counts occurrences instead, so a caller can
-  // wait for the SECOND (or Nth) one specifically rather than racing turn 2's own completion
-  // against an assertion that turn 1 alone already satisfies.
+  // For a still-live child (an InputBox's own typed-text echo, a panel's live row content, console
+  // output), `sawLine`/`sawLineTimes` below are already exact: neither `<Static>` nor its viewport
+  // replacement (App.tsx) ever owned that content, so a repaint cannot re-emit it a second time
+  // beyond what actually changed. `sawLineTimes` is for the one case that still needs a COUNT rather
+  // than a bare substring check: the transcript prints the identical "(done: no-tool-call)" line for
+  // every turn in a multi-turn session, so `sawLine` is already true for turn 2's own occurrence the
+  // instant turn 1's happens — this counts occurrences instead, so a caller can wait for the SECOND
+  // (or Nth) one specifically rather than racing turn 2's own completion against an assertion that
+  // turn 1 alone already satisfies.
   sawLineTimes: (line: string, count: number) => Promise<void>;
-  occurrences: (line: string) => number;
+  // The raw, cumulative count — every byte the child ever wrote, exact for console output/escape
+  // sequences (Ink's own patchConsole writes those through `log()` once per call, never re-emitted
+  // by a later repaint) and for an absence check (`.toBe(0)`) regardless of source, since a repaint
+  // can only ever repeat something that already rendered, never fabricate an occurrence from
+  // nothing. NOT reliable for counting how many times TRANSCRIPT content (previously `<Static>`,
+  // now the measured viewport, App.tsx) has rendered: every repaint re-emits the WHOLE frame's text
+  // (Ink's own `log-update.js` erases and rewrites on any change, `incrementalRendering` unset) — a
+  // transcript line committed once still recurs in the raw capture on every later, unrelated
+  // repaint. `frameOccurrences`/`sawInFrameTimes`, below, are for that case.
+  rawOccurrences: (line: string) => number;
+  // The accumulated capture so far, live — mirrors tuiPtyWindows.test.ts's own `decodedSoFar()`.
+  // Needed by the SIGTERM lifecycle test below, which has to read a value (the child's own pid)
+  // out of the pty capture WHILE the process is still running, not just assert against it once
+  // `exited` resolves.
+  stdoutSoFar: () => string;
+  // The plain text of the most recently completed frame, stripped of ANSI. Unlike `rawOccurrences`
+  // (which sees EVERY byte the child ever wrote, cumulative, and so overcounts repainted transcript
+  // content), this reads only what is actually on screen right now — a transcript line that
+  // rendered once and has not changed since is counted exactly once here, regardless of how many
+  // unrelated repaints happened after it first appeared.
+  lastFrame: () => string;
+  // Count within `lastFrame()` — the transcript counterpart of `rawOccurrences`, for content that
+  // used to depend on `<Static>`'s write-once guarantee (a transcript line, not a live region like
+  // InputBox or a panel's own rows, which `rawOccurrences`/`sawLineTimes` already handle correctly).
+  frameOccurrences: (line: string) => number;
+  // The `lastFrame()` counterpart of `sawLineTimes` — bounded poll (same 20ms/20s idiom as
+  // `sawLine`) until `frameOccurrences(line) >= count`.
+  sawInFrameTimes: (line: string, count: number) => Promise<void>;
 }> {
   const args = ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, scriptPath];
   const child = spawn("python3", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
@@ -1213,7 +1322,19 @@ async function startChild(
     });
   });
 
-  const occurrences = (line: string): number => stdout.split(line).length - 1;
+  const rawOccurrences = (line: string): number => stdout.split(line).length - 1;
+
+  const lastFrame = (): string => {
+    const bsu = "\x1b[?2026h";
+    const esu = "\x1b[?2026l";
+    const start = stdout.lastIndexOf(bsu);
+    if (start === -1) return "";
+    const end = stdout.indexOf(esu, start + bsu.length);
+    if (end === -1) return "";
+    return stdout.slice(start + bsu.length, end).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
+  };
+
+  const frameOccurrences = (line: string): number => lastFrame().split(line).length - 1;
 
   const sawLine = async (line: string): Promise<void> => {
     const deadline = Date.now() + 20_000;
@@ -1227,13 +1348,25 @@ async function startChild(
 
   const sawLineTimes = async (line: string, count: number): Promise<void> => {
     const deadline = Date.now() + 20_000;
-    while (occurrences(line) < count && spawnError === undefined && Date.now() < deadline)
+    while (rawOccurrences(line) < count && spawnError === undefined && Date.now() < deadline)
       await new Promise((r) => setTimeout(r, 20));
     if (spawnError !== undefined)
       throw new Error(`could not spawn python3 (pty allocator): ${spawnError.message}`);
-    if (occurrences(line) < count)
+    if (rawOccurrences(line) < count)
       throw new Error(
-        `child printed ${JSON.stringify(line)} ${occurrences(line)} time(s), wanted ${count}; got ${JSON.stringify(stdout)}`,
+        `child printed ${JSON.stringify(line)} ${rawOccurrences(line)} time(s), wanted ${count}; got ${JSON.stringify(stdout)}`,
+      );
+  };
+
+  const sawInFrameTimes = async (line: string, count: number): Promise<void> => {
+    const deadline = Date.now() + 20_000;
+    while (frameOccurrences(line) < count && spawnError === undefined && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 20));
+    if (spawnError !== undefined)
+      throw new Error(`could not spawn python3 (pty allocator): ${spawnError.message}`);
+    if (frameOccurrences(line) < count)
+      throw new Error(
+        `frame contains ${JSON.stringify(line)} ${frameOccurrences(line)} time(s), wanted ${count}; got ${JSON.stringify(lastFrame())}`,
       );
   };
 
@@ -1262,7 +1395,17 @@ async function startChild(
     } catch {}
   }
 
-  return { child, exited, sawLine, sawLineTimes, occurrences };
+  return {
+    child,
+    exited,
+    sawLine,
+    sawLineTimes,
+    rawOccurrences,
+    stdoutSoFar: () => stdout,
+    lastFrame,
+    frameOccurrences,
+    sawInFrameTimes,
+  };
 }
 
 // Windows has no pty to allocate — same constraint as approvalPromptPty.test.ts. Real execution is
@@ -1333,7 +1476,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-cancel.mjs");
     writeFileSync(scriptPath, childScriptCancel(dir));
 
-    const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+    const { child, sawLine, frameOccurrences, sawInFrameTimes } = await startChild(scriptPath, dir);
     try {
       // Waiting for the fake runLoop's own readiness line is also what keeps the byte out of the
       // window before Ink sets raw mode (useInput's mount effect calls setRawMode(true)) — driveLoop
@@ -1345,12 +1488,17 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // connectDispatch's own echo of the initial argv task ("do a task", this file's own
       // cli.run(["do", "a", "task"], ...) argv) — covered here, not a dedicated test, since every
       // child script in this file already launches with the same argv and this is the first test
-      // to reach RUNLOOP_READY. Dispatched before RUNLOOP_READY's own console.log (connectDispatch
-      // echoes, then calls runTurn, which is what reaches the fake runLoop), but the echo only
-      // reaches the pty once Ink commits the <Static> update — waited on explicitly rather than
-      // read immediately, same reasoning as the second-turn test's own sawLineTimes wait below.
-      await sawLine("> do a task");
-      expect(occurrences("> do a task")).toBe(1);
+      // to reach RUNLOOP_READY. `sawInFrameTimes`, not `sawLine`: the raw pty stream can deliver the
+      // bytes for this line before the synchronized-output CLOSE marker for the frame that contains
+      // them, so `sawLine` (a raw substring check) can resolve one chunk ahead of `lastFrame()`
+      // actually seeing a closed frame with this line in it — `frameOccurrences` would then read an
+      // empty/stale `lastFrame()` and report 0 (macOS CI, this exact race, `> /mode` below).
+      // `frameOccurrences`, not the raw cumulative count, for the assertion itself: once rendered,
+      // this line recurs in the raw pty capture on every LATER, unrelated repaint (Ink's own
+      // log-update.js erases and rewrites the whole frame on any change) — `lastFrame()` is what's
+      // actually on screen right now, immune to that.
+      await sawInFrameTimes("> do a task", 1);
+      expect(frameOccurrences("> do a task")).toBe(1);
       child.stdin?.write("\x03");
       // stdin is deliberately left open, same reason as the sibling file: an EOF would end the run
       // its own way, before the press is ever interpreted.
@@ -1372,7 +1520,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-input.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
 
-    const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+    const { child, sawLine, frameOccurrences, sawInFrameTimes } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
 
@@ -1388,11 +1536,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("permission mode is now auto");
       // The submitted command itself, echoed into the persistent transcript exactly once — not
       // just its result. onSubmit's own transcript-append dispatch, before the command dispatch.
-      // Waited on explicitly before reading occurrences(), same as the argv-task and second-task
-      // echo checks elsewhere in this file: the echo lands via an async <Static> commit, not
-      // synchronously with the dispatch that triggered it.
-      await sawLine("> /mode");
-      expect(occurrences("> /mode")).toBe(1);
+      // `sawInFrameTimes`, not `sawLine`: the raw pty stream can deliver these bytes before the
+      // synchronized-output CLOSE marker for the frame that contains them, so a raw substring check
+      // can resolve one chunk ahead of `lastFrame()` actually seeing a closed frame with this line
+      // in it — `frameOccurrences` would then read an empty/stale `lastFrame()` and report 0 (the
+      // CI failure this line's own history traces to). `frameOccurrences`, not the raw cumulative
+      // count, for the assertion itself: this line recurs in the raw pty capture on every LATER,
+      // unrelated repaint once it has rendered once.
+      await sawInFrameTimes("> /mode", 1);
+      expect(frameOccurrences("> /mode")).toBe(1);
     } finally {
       child.kill("SIGKILL");
     }
@@ -1504,7 +1656,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-multi-turn.mjs");
     writeFileSync(scriptPath, childScriptMultiTurn(dir));
 
-    const { child, sawLine, sawLineTimes, occurrences } = await startChild(scriptPath, dir);
+    const { child, sawLine, frameOccurrences, sawInFrameTimes } = await startChild(scriptPath, dir);
     try {
       // prepareSession appended the initial task as the session's only message.
       await sawLine("RUNLOOP_CALL 1 messages=1");
@@ -1535,20 +1687,28 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_CALL 2 messages=3");
       // The second task's own text, echoed into the persistent transcript exactly once — the
       // input box's live reflection (waited on above) is not the same thing as the submitted
-      // line actually landing in Static. Waited on explicitly (not just re-checked via
-      // occurrences() below): the echo reaches the pty only once Ink commits the <Static> update,
-      // a scheduler macrotask after RUNLOOP_CALL 2's own console.log, so reading occurrences()
-      // without waiting first can race it on a slow/loaded runner.
-      await sawLineTimes("> a second task", 1);
-      expect(occurrences("> a second task")).toBe(1);
+      // line actually landing in the transcript. `sawInFrameTimes`, not `sawLine`: the raw pty
+      // stream can deliver these bytes before the synchronized-output CLOSE marker for the frame
+      // that contains them, so a raw substring check can resolve one chunk ahead of `lastFrame()`
+      // actually seeing a closed frame with this line in it — `frameOccurrences` would then read an
+      // empty/stale `lastFrame()` and report 0. `frameOccurrences`, not the raw cumulative count,
+      // for the assertion itself: once rendered, this line recurs in the raw pty capture on every
+      // LATER, unrelated repaint (Ink's own log-update.js erases and rewrites the whole frame on
+      // any change) — `lastFrame()` is what's actually on screen right now, immune to that.
+      await sawInFrameTimes("> a second task", 1);
+      expect(frameOccurrences("> a second task")).toBe(1);
 
       // Scenario c at the TUI level (feature-plan.md): a session that never invokes /model must
       // never persist anything to config.json, even after multiple successful turns — the guard
       // against write-amplification/accidentally-always-persisting. Waiting for turn 2's own
-      // "done" first is what makes this meaningful: it is only dispatched after turn 2's
-      // messages-updated has already been processed (the same ordering childScriptModelSwitch's
-      // own test relies on), so any persist that WOULD have fired already has by this point.
-      await sawLineTimes("(done: no-tool-call)", 2);
+      // completion first is what makes this meaningful: RUNLOOP_DONE is a console.log fired
+      // immediately before the fake runLoop yields its "done" event, once the prior
+      // messages-updated event (and any persist attempt it triggers) has already been fully
+      // processed by the consuming for-await loop — a marker, not a count of the rendered
+      // "(done: no-tool-call)" line itself, which (unlike under the old `<Static>` transcript)
+      // now recurs on every later repaint and would satisfy a count-based wait long before turn 2
+      // actually finishes.
+      await sawLine("RUNLOOP_DONE 2");
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
     } finally {
       child.kill("SIGKILL");
@@ -1565,7 +1725,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-switch.mjs");
     writeFileSync(scriptPath, childScriptModelSwitch(dir));
 
-    const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
+    const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       // The default model (groq.ts's own DEFAULT_MODEL) — proves the FIRST turn used it, before
       // any switch.
@@ -1611,13 +1771,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       // Scenarios a + e (feature-plan.md): the switch that just worked is now the global default
       // for every future brand-new session, not just this one — proven here on the write side.
-      // Waiting for turn 2's own "done" first: it is only dispatched after turn 2's
-      // messages-updated has already been processed by cli.ts's onEvent, which is where the
-      // persist (if any) happens — the write itself is synchronous by that point, but a captured
-      // pty stdout line and a DIFFERENT process's own filesystem read are not guaranteed to
-      // observe that moment in the same order on every runner (macOS CI, round 3: this exact
-      // ENOENT). waitForConfig polls for the actual expected value instead of assuming.
-      await sawLineTimes("(done: no-tool-call)", 2);
+      // Waiting for turn 2's own completion first (RUNLOOP_DONE, childScriptModelSwitch's own
+      // comment): it fires only after turn 2's messages-updated has already been processed by
+      // cli.ts's onEvent, which is where the persist (if any) happens — the write itself is
+      // synchronous by that point, but a captured pty stdout line and a DIFFERENT process's own
+      // filesystem read are not guaranteed to observe that moment in the same order on every
+      // runner (macOS CI, round 3: this exact ENOENT). waitForConfig polls for the actual expected
+      // value instead of assuming.
+      await sawLine("RUNLOOP_DONE 2");
       const config = await waitForConfig(
         join(dir, ".seri", "config.json"),
         (c) => c.SERI_MODEL === "llama-3.3-70b-versatile",
@@ -1638,7 +1799,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-multiroute.mjs");
     writeFileSync(scriptPath, childScriptModelMultiRoute(dir));
 
-    const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
+    const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
       await sawLine("(done: no-tool-call)");
@@ -1676,10 +1837,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
 
       await sawLine("RUNLOOP_CALL 2 model=claude-sonnet-5 provider=anthropic");
-      await sawLineTimes("(done: no-tool-call)", 2);
+      // RUNLOOP_DONE, not a count of the rendered "(done: no-tool-call)" line — see
+      // childScriptMultiTurn's own comment for why.
+      await sawLine("RUNLOOP_DONE 2");
 
-      // waitForConfig, not a bare readFileSync right after sawLineTimes — the same race macOS CI
-      // caught elsewhere in this file (waitForConfig's own comment).
+      // waitForConfig, not a bare readFileSync right after — the same race macOS CI caught
+      // elsewhere in this file (waitForConfig's own comment).
       const config = await waitForConfig(
         join(dir, ".seri", "config.json"),
         (c) => c.SERI_MODEL === "claude-sonnet-5",
@@ -1699,7 +1862,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-pick-rerouted.mjs");
     writeFileSync(scriptPath, childScriptModelPickRerouted(dir));
 
-    const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
+    const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
       await sawLine("(done: no-tool-call)");
@@ -1741,16 +1904,18 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const noticePrefix = "↻ routing claude-sonnet-5 via anthropic (your key) — no OpenRouter key";
       await sawLine(noticePrefix);
       await sawLine("configured");
-      await sawLineTimes("(done: no-tool-call)", 2);
-      // "(done: no-tool-call)" appearing in the captured pty stdout is not a reliable proxy for
-      // "config.json has already been written" — measured live, waiting on it alone flaked here.
-      // Poll for the actual content instead (waitForConfig's own comment).
+      // RUNLOOP_DONE, not a count of the rendered "(done: no-tool-call)" line — see
+      // childScriptMultiTurn's own comment for why.
+      await sawLine("RUNLOOP_DONE 2");
+      // Not a reliable proxy for "config.json has already been written" even so — measured live,
+      // waiting on driveLoop's own completion alone flaked here. Poll for the actual content
+      // instead (waitForConfig's own comment).
       const config = await waitForConfig(
         join(dir, ".seri", "config.json"),
         (c) => c.SERI_MODEL === "claude-sonnet-5",
       );
       expect(config.SERI_MODEL).toBe("claude-sonnet-5");
-      // D4: the RESOLVED pair persists, not the one literally selected in the picker.
+      // The RESOLVED pair persists, not the one literally selected in the picker.
       expect(config.SERI_PROVIDER).toBe("anthropic");
       expect(config.SERI_PROVIDER).not.toBe("openrouter");
     } finally {
@@ -1770,7 +1935,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-switch-persist-retry.mjs");
     writeFileSync(scriptPath, childScriptModelSwitch(dir));
 
-    const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
+    const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
       await sawLine("(done: no-tool-call)");
@@ -1821,9 +1986,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine(
         "RUNLOOP_CALL 3 model=llama-3.3-70b-versatile messages=5 systemHasModelId=true",
       );
-      await sawLineTimes("(done: no-tool-call)", 3);
-      // waitForConfig, not a bare readFileSync right after sawLineTimes — the same race macOS CI
-      // caught elsewhere in this file (waitForConfig's own comment).
+      // RUNLOOP_DONE, not a count of the rendered "(done: no-tool-call)" line — see
+      // childScriptMultiTurn's own comment for why.
+      await sawLine("RUNLOOP_DONE 3");
+      // waitForConfig, not a bare readFileSync right after — the same race macOS CI caught
+      // elsewhere in this file (waitForConfig's own comment).
       const config = await waitForConfig(
         join(configDir, "config.json"),
         (c) => c.SERI_MODEL === "llama-3.3-70b-versatile",
@@ -1846,7 +2013,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-switch-multi-tool-call.mjs");
     writeFileSync(scriptPath, childScriptModelSwitchMultiToolCall(dir));
 
-    const { child, sawLine, sawLineTimes, occurrences } = await startChild(scriptPath, dir);
+    const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
       await sawLine("(done: no-tool-call)");
@@ -1874,23 +2041,25 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
 
       await sawLine("RUNLOOP_CALL 2 model=llama-3.3-70b-versatile");
-      // Waiting for turn 2's own "done" (the second occurrence) is what guarantees all three of
-      // its messages-updated events — and therefore every persist attempt they could have
-      // triggered — have already been processed: "done" is only yielded, and only dispatched,
-      // after the generator's three earlier yields have all been consumed in order.
-      await sawLineTimes("(done: no-tool-call)", 2);
+      // RUNLOOP_DONE (childScriptMultiTurn's own comment): it fires only once all three of turn
+      // 2's messages-updated events — and therefore every persist attempt they could have
+      // triggered — have already been processed, since a generator only resumes a later statement
+      // once the consumer has finished handling the value just yielded.
+      await sawLine("RUNLOOP_DONE 2");
 
-      // Bug fixed here (macOS CI, round 3): this went straight to `occurrences()` with no
-      // preceding `sawLine` for the SAME text — unlike every other occurrences() check in this
+      // Bug fixed here (macOS CI, round 3): this went straight to `rawOccurrences()` with no
+      // preceding `sawLine` for the SAME text — unlike every other rawOccurrences() check in this
       // file (the argv-task/second-task echo checks, above), which all wait for the line to
-      // actually land before counting it. `occurrences()` is a synchronous snapshot of whatever is
-      // CURRENTLY captured; "(done: no-tool-call)" appearing is not proof the warning (printed
-      // earlier in the same turn, but via a different stream — printWarning is console.error, the
-      // done line is Ink's own stdout render) has also reached the captured buffer yet. Waiting for
-      // it explicitly first is what makes the count below actually mean something.
+      // actually land before counting it. `rawOccurrences()` is a synchronous snapshot of whatever
+      // is CURRENTLY captured; RUNLOOP_DONE appearing is not proof the warning (printed via a
+      // different stream — printWarning is console.error, same mechanism, but a separate call) has
+      // also reached the captured buffer yet. Waiting for it explicitly first is what makes the
+      // count below actually mean something.
       await sawLine("could not save the default model:");
-      // The actual assertion: one warning for the whole turn, not three.
-      expect(occurrences("could not save the default model:")).toBe(1);
+      // The actual assertion: one warning for the whole turn, not three. Console output (`rawOccurrences`,
+      // not `frameOccurrences`): printWarning is console.error, routed through Ink's own patchConsole
+      // — written once, never re-emitted by a later repaint the way a transcript line now is.
+      expect(rawOccurrences("could not save the default model:")).toBe(1);
       expect(existsSync(join(configDir, "config.json"))).toBe(false);
     } finally {
       child.kill("SIGKILL");
@@ -2184,7 +2353,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-multi-turn-usage.mjs");
     writeFileSync(scriptPath, childScriptMultiTurnUsage(dir));
 
-    const { child, exited, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
+    const { child, exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1");
       await sawLine("(done: no-tool-call)");
@@ -2193,10 +2362,18 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("a second task");
       child.stdin?.write("\r");
       await sawLine("RUNLOOP_CALL 2");
-      // The SECOND occurrence specifically — the plain sawLine above is already true from turn
-      // 1's own, and sending /exit before turn 2's driveLoop call has actually returned would
-      // race turnInFlight instead of testing what this test is about.
-      await sawLineTimes("(done: no-tool-call)", 2);
+      // Turn 2's own completion specifically — the plain "(done: no-tool-call)" text is already
+      // true from turn 1's own, and (unlike under the old <Static> transcript) now also recurs on
+      // every later, unrelated repaint, so counting its raw occurrences can't distinguish "turn 1
+      // repainted again" from "turn 2 actually finished". RUNLOOP_DONE (childScriptMultiTurn's own
+      // comment) is a console.log fired once, exactly at turn 2's own completion, immune to that.
+      // Sending /exit before turn 2's driveLoop call has actually returned would race turnInFlight
+      // instead of testing what this test is about — the marker fires from inside the generator,
+      // slightly AHEAD of driveLoop's own for-await loop fully unwinding, so wait100ms() gives that
+      // unwind (and runTurn's own `finally`) the same margin every other keypress-that-swaps-a-
+      // mounted-component wait in this file already relies on.
+      await sawLine("RUNLOOP_DONE 2");
+      await wait100ms();
 
       child.stdin?.write("/exit");
       await sawLine("/exit");
@@ -2262,7 +2439,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-rewind-during-stream.mjs");
     writeFileSync(scriptPath, childScriptRewindDuringStream(dir, flagPath));
 
-    const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+    const { child, sawLine, frameOccurrences, sawInFrameTimes } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
       await sawLine("STREAM_PART_1");
@@ -2274,12 +2451,19 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       writeFileSync(flagPath, "");
       await sawLine("(done: no-tool-call)");
-      // Bug fixed here (macOS CI, round 3): waited on "(done: …)" but never on "Hello world"
-      // itself before counting it — the same missing-poll shape as the persist-warning occurrences
-      // check above. Explicit wait first, matching every other occurrences() check in this file.
-      await sawLine("Hello world");
+      // Bug fixed here (macOS CI): waited on "(done: …)" but never on "Hello world" itself before
+      // counting it. That first fix used `sawLine` (a raw substring check), which is not enough on
+      // its own: the raw pty stream can deliver "Hello world"'s bytes before the synchronized-output
+      // CLOSE marker for the frame that contains them, so `sawLine` can resolve one chunk ahead of
+      // `lastFrame()` actually seeing a closed frame with this line in it — `frameOccurrences` would
+      // then read an empty/stale `lastFrame()` and report 0, the same failure shape this line was
+      // originally fixed for. `sawInFrameTimes` waits on the frame-aware read `frameOccurrences`
+      // itself uses, closing that gap. `frameOccurrences`, not the raw cumulative count, for the
+      // assertion itself: this line recurs in the raw pty capture on every later, unrelated repaint
+      // once rendered once.
+      await sawInFrameTimes("Hello world", 1);
 
-      expect(occurrences("Hello world")).toBe(1);
+      expect(frameOccurrences("Hello world")).toBe(1);
     } finally {
       child.kill("SIGKILL");
     }
@@ -2450,7 +2634,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-reroute.mjs");
     writeFileSync(scriptPath, childScriptReroute(dir));
 
-    const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+    const { child, sawLine, frameOccurrences, rawOccurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 via=anthropic provider=anthropic");
       // Split across two checks, not one long toContain/sawLine: measured on a real pty (WSL),
@@ -2464,15 +2648,19 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       // Exactly one transcript notice for this one turn — the per-turn cap D2's own acceptance
       // criterion names, not a re-print on every messages-updated event within it.
-      expect(occurrences(noticePrefix)).toBe(1);
+      // `frameOccurrences`, not the raw cumulative count: this line recurs in the raw pty capture
+      // on every later, unrelated repaint once it has rendered once.
+      expect(frameOccurrences(noticePrefix)).toBe(1);
 
       // Bug fixed here (reviewer-verifier, multi-provider-byok-phase-2): prepareSession's own
       // printWarning (D2's non-interactive-path notice, "⚠ routing…") used to fire unconditionally,
       // even on the TUI path — printing a SECOND notice for the same session-start reroute
       // alongside runTurn's own "↻ routing…" transcript line. printWarning's own "⚠ " prefix is
       // what distinguishes it from the transcript notice's "↻ " prefix, so this asserts the
-      // console-only one never appears once Ink has actually mounted.
-      expect(occurrences("⚠ routing")).toBe(0);
+      // console-only one never appears once Ink has actually mounted. `rawOccurrences`: an absence
+      // check is safe under the raw cumulative count regardless of source — a repaint can only
+      // ever repeat something that already rendered, never fabricate an occurrence from nothing.
+      expect(rawOccurrences("⚠ routing")).toBe(0);
 
       // The negative control this test's own point rests on: verified by first removing D3's own
       // fix (initializing confirmedModel/lastPersistedModel from `prepared.session` instead of
@@ -2508,12 +2696,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-no-reroute.mjs");
     writeFileSync(scriptPath, childScriptNoReroute(dir));
 
-    const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+    const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 via=or provider=openrouter");
       await sawLine("(done: no-tool-call)");
 
-      expect(occurrences("↻ routing")).toBe(0);
+      // Absence check, safe under the raw cumulative count regardless of source.
+      expect(rawOccurrences("↻ routing")).toBe(0);
     } finally {
       child.kill("SIGKILL");
     }
@@ -2775,7 +2964,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-bad-args.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2784,7 +2973,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await sawLine("/setup: invalid arguments.");
 
-        expect(occurrences("/setup — provider API keys")).toBe(0);
+        expect(rawOccurrences("/setup — provider API keys")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -2796,7 +2985,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-env-shadow.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir, { OPENAI_API_KEY: "sk-openai-env-value" }));
 
-      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2822,7 +3011,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // so the confirm-remove step never even opens: no "Remove OPENAI_API_KEY" prompt anywhere
         // in the transcript, and config.json is never even created (nothing else in this test
         // writes to it either).
-        expect(occurrences("Remove OPENAI_API_KEY")).toBe(0);
+        expect(rawOccurrences("Remove OPENAI_API_KEY")).toBe(0);
         expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
       } finally {
         child.kill("SIGKILL");
@@ -2840,7 +3029,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-env-shadow-removable.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir, { OPENAI_API_KEY: "sk-openai-env-value" }));
 
-      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2853,7 +3042,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // sibling test's non-removable one — not the old "unset it in your shell" text (which
         // would be actively wrong here: 'r' genuinely removes the config.json entry underneath).
         await sawLine("config entry underneath — removable");
-        expect(occurrences("set by $OPENAI_API_KEY in your environment")).toBe(0);
+        expect(rawOccurrences("set by $OPENAI_API_KEY in your environment")).toBe(0);
 
         // Down to openrouter, anthropic, openai — three Downs (groq=0, openrouter=1,
         // anthropic=2, openai=3).
@@ -2907,7 +3096,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-malformed-config.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine, sawLineTimes, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, sawLineTimes, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -2958,7 +3147,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // "at " and "providerKeyState" are not contiguous), which would make that substring check
         // pass vacuously either way. A stack frame's file path is not interleaved the same way
         // (confirmed the same way), so this checks for that instead.
-        expect(occurrences("provider/keys.ts")).toBe(0);
+        expect(rawOccurrences("provider/keys.ts")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -3005,11 +3194,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
     // "The banner is gone from the newest frame" (App.test.tsx's own "clears the panel entirely,
     // restoring InputBox" test) is asserted there, at the component level, via lastFrame() — this
-    // harness's `sawLine`/`occurrences` only see the WHOLE accumulated pty stdout, which still
-    // contains the banner's original bytes from mount even after Ink redraws without it (every
-    // other "X disappeared" case in this file — /setup's own cancel test — checks a FILE, not
-    // stdout, for the same reason). This test's own job is end to end: the real login()/logout()
-    // deps seam, the real reducer dispatches, and auth.json actually landing on disk.
+    // harness's own `lastFrame()`/`frameOccurrences` could check the same thing, but `sawLine`/
+    // `rawOccurrences` are what every other "X disappeared" case in this file already uses, and
+    // they see the WHOLE accumulated pty stdout, which still contains the banner's original bytes
+    // from mount even after Ink redraws without it (every other such case — /setup's own cancel
+    // test — checks a FILE, not stdout, for the same reason). This test's own job is end to end:
+    // the real login()/logout() deps seam, the real reducer dispatches, and auth.json actually
+    // landing on disk.
     test("/login shows the device panel, then resolves: 'Logged in as …' lands in the transcript, auth.json exists, and the raw access token never reaches stdout", async () => {
       const scriptPath = join(dir, "child-auth-login.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
@@ -3126,7 +3317,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-auth-login-race.mjs");
       writeFileSync(scriptPath, childScriptAuthLoginRace(dir));
 
-      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -3150,14 +3341,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await new Promise((resolve) => setTimeout(resolve, 1300));
 
         expect(existsSync(join(dir, ".seri", "auth.json"))).toBe(false);
-        // "Logged in as …" is a <Static> transcript line (App.tsx) — committed at most once, ever,
-        // never reprinted by an unrelated redraw the way a live region (the banner) can be, so
-        // occurrences() is a reliable absence check here specifically, unlike the banner text
-        // itself (measured live: it redraws multiple times over the course of this test for
-        // reasons unrelated to auth state, so a raw occurrence count on it can't tell "flipped
-        // back on" apart from "just redrew" — the auth.json check above is this test's own proof
-        // the banner's underlying STATE never flipped, which is the thing that actually matters).
-        expect(occurrences("Logged in as fake@example.com")).toBe(0);
+        // "Logged in as …" is a transcript line (App.tsx) that this run never dispatches — an
+        // absence check is safe under the raw cumulative count regardless of source (a repaint can
+        // only ever repeat something that already rendered, never fabricate an occurrence from
+        // nothing), unlike the banner text itself (measured live: it redraws multiple times over
+        // the course of this test for reasons unrelated to auth state, so a raw occurrence count on
+        // it can't tell "flipped back on" apart from "just redrew" — the auth.json check above is
+        // this test's own proof the banner's underlying STATE never flipped, which is the thing
+        // that actually matters).
+        expect(rawOccurrences("Logged in as fake@example.com")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -3333,7 +3525,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-slow-fetch-escape.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupSlowFetch(dir));
 
-      const { child, sawLine, occurrences, exited } = await startChild(scriptPath, dir);
+      const { child, sawLine, frameOccurrences, exited } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
 
@@ -3355,10 +3547,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         // A second Escape while still "closing": the re-entrancy guard must make this a no-op —
         // NOT a second run of the tail, which (pre-fix) would have re-dispatched the same
-        // transcript line a second time.
+        // transcript line a second time. `frameOccurrences`, not the raw cumulative count: a bug
+        // here would add a SECOND array entry, and both would be visible together in the current
+        // frame (a short transcript, nothing scrolled off) — the raw cumulative count can't
+        // distinguish that from an unrelated repaint of the SAME single entry.
         child.stdin?.write("\x1b");
         await wait100ms();
-        expect(occurrences("Loading available models…")).toBe(1);
+        expect(frameOccurrences("Loading available models…")).toBe(1);
 
         // The process is still alive and responsive, not deadlocked — Ctrl-C still reaches the
         // same fatal idle path every other test in this describe block's Ctrl-C test exercises.
@@ -3540,7 +3735,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-non-groq.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
 
@@ -3585,7 +3780,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(config.SERI_PROVIDER).toBe("anthropic");
         // The negative control this test exists for: the exact string pre-fix code printed here,
         // naming a provider (groq) the user never configured.
-        expect(occurrences("GROQ_API_KEY is not set")).toBe(0);
+        expect(rawOccurrences("GROQ_API_KEY is not set")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -3755,7 +3950,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-config.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -3790,7 +3985,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // read back, not see as asterisks) means the list's post-save refresh legitimately shows
         // it, by design, so a whole-run negative control would be asserting against the code's own
         // documented behavior rather than a leak.
-        expect(occurrences(value)).toBe(0);
+        expect(rawOccurrences(value)).toBe(0);
 
         child.stdin?.write("\r");
         await sawLine("Saved SERI_VERIFY_COMMAND.");
@@ -3822,7 +4017,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-config-toggle.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -3857,8 +4052,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // Negative control: this is what actually proves no free-text step ever opened — it goes
         // red on any implementation that routes the boolean through enter-value
         // (ConfigEnterValue's own header text).
-        expect(occurrences("Set Automatic verification")).toBe(0);
-        expect(occurrences("value for")).toBe(0);
+        expect(rawOccurrences("Set Automatic verification")).toBe(0);
+        expect(rawOccurrences("value for")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -3868,7 +4063,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-config-toggle-env.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir, { SERI_VERIFY_ENABLED: "false" }));
 
-      const { child, sawLine, sawLineTimes, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, sawLineTimes, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -3896,12 +4091,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(config.SERI_VERIFY_ENABLED).toBe("false");
 
         // The row itself still shows the env-sourced value after the list refreshes — the
-        // transcript sentence above already contains "Automatic verification: off" as a
-        // substring (it's the prefix of "off in config, ..."), so three total occurrences (the
-        // first render, the message, the refreshed render) is what proves the row never
-        // independently rendered "on".
+        // transcript sentence above already contains "Automatic verification: off" as a substring
+        // (it's the prefix of "off in config, ..."), so three total occurrences (the first render,
+        // the message, the refreshed render) is what proves the row never independently rendered
+        // "on". `rawOccurrences`, not `frameOccurrences`: this is an absence check (`.toBe(0)`),
+        // safe under the raw cumulative count regardless of source.
         await sawLineTimes("Automatic verification: off", 3);
-        expect(occurrences("Automatic verification: on")).toBe(0);
+        expect(rawOccurrences("Automatic verification: on")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -4034,24 +4230,24 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-bare.mjs");
       writeFileSync(scriptPath, childScriptBare(dir));
 
-      const { child, sawLine, exited, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, exited, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         // The mode-indicator/input box's own default-session label (modeIndicator, reducer.ts) —
         // proof the TUI actually mounted rather than the process just sitting there.
         await sawLine("[approve-each]");
         // Negative control: nothing auto-started a turn. wait100ms first, matching every other
-        // occurrences()-based negative control in this file (the seedConfig-adjacent /setup tests
-        // above) — occurrences() is a synchronous snapshot, so it has to be given time to be wrong
-        // before it can prove RUNLOOP_READY genuinely never printed.
+        // rawOccurrences()-based negative control in this file (the seedConfig-adjacent /setup
+        // tests above) — rawOccurrences() is a synchronous snapshot, so it has to be given time to
+        // be wrong before it can prove RUNLOOP_READY genuinely never printed.
         await wait100ms();
-        expect(occurrences("RUNLOOP_READY")).toBe(0);
+        expect(rawOccurrences("RUNLOOP_READY")).toBe(0);
 
         child.stdin?.write("do a task");
         await sawLine("do a task");
         child.stdin?.write("\r");
         await sawLine("RUNLOOP_READY");
         await sawLine("> do a task");
-        expect(occurrences("RUNLOOP_READY")).toBe(1);
+        expect(rawOccurrences("RUNLOOP_READY")).toBe(1);
 
         child.stdin?.write("\x04");
         const result = await Promise.race([
@@ -4224,7 +4420,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
     // Regression guard: commandError (reducer.ts) used to have no clearing action at all, so
     // App.tsx's unconditional render of it kept the banner on screen through every later render —
-    // including a later, successful command's own. `occurrences(errorText) === 0` cannot prove a
+    // including a later, successful command's own. `rawOccurrences(errorText) === 0` cannot prove a
     // clear here: startChild's stdout is an ever-accumulating raw buffer, so text already printed
     // can never be "un-printed" from it. Instead: Ink re-renders the whole tree on every state
     // change, so a still-set commandError gets RE-PRINTED as part of every later render too — this
@@ -4238,7 +4434,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-profile-new-cleared.mjs");
       writeFileSync(scriptPath, childScriptBare(dir));
 
-      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("[approve-each]");
 
@@ -4249,12 +4445,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         child.stdin?.write("/mode");
         await sawLine("/mode");
-        const baseline = occurrences("Usage: /profile new <name>");
+        const baseline = rawOccurrences("Usage: /profile new <name>");
 
         child.stdin?.write("\r");
         await sawLine("permission mode is now auto");
 
-        expect(occurrences("Usage: /profile new <name>")).toBe(baseline);
+        expect(rawOccurrences("Usage: /profile new <name>")).toBe(baseline);
       } finally {
         child.kill("SIGKILL");
       }
@@ -4297,7 +4493,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-splash-authenticated.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine, occurrences } = await startChild(scriptPath, dir, {
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
         dismissSplash: false,
       });
       try {
@@ -4305,8 +4501,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("> Continue");
         await wait100ms();
 
-        expect(occurrences("Log in")).toBe(0);
-        expect(occurrences("Sign up")).toBe(0);
+        expect(rawOccurrences("Log in")).toBe(0);
+        expect(rawOccurrences("Sign up")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -4388,16 +4584,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-continue-answered.mjs");
       writeFileSync(scriptPath, childScriptContinue(dir));
 
-      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         // Liveness proof before the negative control, same convention as "bare seri"'s own
         // negative control above: the mode indicator (this seed's `permissionMode: "read-only"`)
         // proves the child mounted AND resumed the seeded session, not merely that it never got
-        // that far — occurrences() staying at 0 for a process that never mounted would pass for
+        // that far — rawOccurrences() staying at 0 for a process that never mounted would pass for
         // the wrong reason.
         await sawLine("[read-only]");
         await wait100ms();
-        expect(occurrences("RUNLOOP_READY")).toBe(0);
+        expect(rawOccurrences("RUNLOOP_READY")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -4409,10 +4605,222 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-continue-pending.mjs");
       writeFileSync(scriptPath, childScriptContinue(dir));
 
-      const { child, sawLine, occurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        expect(occurrences("RUNLOOP_READY")).toBe(1);
+        expect(rawOccurrences("RUNLOOP_READY")).toBe(1);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
+
+  // D1-D3 (altScreen.ts, signals.ts, cli.ts's own enterAltScreen/exitAltScreen call sites): one
+  // continuous alt-screen session per launch, entered once before the first Ink mount and exited
+  // exactly once on every exit path — never left active, and never torn down twice.
+  describe("alt-screen enter/exit lifecycle", () => {
+    test("/exit: enters the alt screen once and exits it once, after Ink's own teardown", async () => {
+      const scriptPath = join(dir, "child-altscreen-exit.mjs");
+      writeFileSync(scriptPath, childScriptQuit(dir));
+
+      const { child, exited, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        await sawLine("(done: no-tool-call)");
+
+        child.stdin?.write("/exit");
+        await sawLine("/exit");
+        child.stdin?.write("\r");
+
+        const result = await Promise.race([
+          exited,
+          new Promise<"the run never settled">((r) =>
+            setTimeout(() => r("the run never settled"), 15_000),
+          ),
+        ]);
+        expect(result).not.toBe("the run never settled");
+
+        const { stdout } = result as Exit;
+        expect(rawOccurrences("\x1b[?1049h")).toBe(1);
+        expect(rawOccurrences("\x1b[?1049l")).toBe(1);
+        expect(stdout.lastIndexOf("\x1b[?1049l")).toBeGreaterThan(stdout.indexOf("\x1b[?1049h"));
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // H-4's own scenario (the "second Ctrl-C" test above), re-asserted for the alt screen: the
+    // fatal path runs signals.ts's own `cleanups` (Ink's `instance.unmount()` among them) before
+    // `onSignalCleanupLast`'s `exitAltScreen` — proven here by the exit sequence still landing
+    // exactly once despite the process dying by signal rather than returning from run().
+    test("fatal Ctrl-C: exits the alt screen exactly once when the process dies by signal", async () => {
+      const scriptPath = join(dir, "child-altscreen-fatal-ctrlc.mjs");
+      writeFileSync(scriptPath, childScriptCancel(dir));
+
+      const { child, exited, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        child.stdin?.write("\x03");
+        await sawLine("RUNLOOP_ABORTED aborted=true");
+        // The first press's cancel slot is now spent (same reasoning as the "second Ctrl-C" test
+        // above) — this second press finds it empty and falls through to signals.ts's fatal path.
+        child.stdin?.write("\x03");
+
+        // Asserted on "settled", not on `signal`/`code` — same reason the "second Ctrl-C" test
+        // above only checks this much: `child` here is the python3 pty allocator, and its own `-c`
+        // script (`pty.spawn(sys.argv[1:])`, startChild's own comment) never forwards the return
+        // value to `sys.exit`, so python3 always exits normally once that call returns, regardless
+        // of how the grandchild actually died. Not independently checkable from outside the dying
+        // process on this pty harness.
+        const result = await Promise.race([
+          exited,
+          new Promise<"the run never settled">((r) =>
+            setTimeout(() => r("the run never settled"), 15_000),
+          ),
+        ]);
+        expect(result).not.toBe("the run never settled");
+        expect(rawOccurrences("\x1b[?1049l")).toBe(1);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("SIGTERM: exits the alt screen exactly once", async () => {
+      const scriptPath = join(dir, "child-altscreen-sigterm.mjs");
+      writeFileSync(scriptPath, childScriptSigterm(dir));
+
+      const { child, exited, sawLine, rawOccurrences, stdoutSoFar } = await startChild(
+        scriptPath,
+        dir,
+      );
+      try {
+        await sawLine("PID=");
+        await sawLine("RUNLOOP_READY");
+        const pidMatch = /PID=(\d+)/.exec(stdoutSoFar());
+        if (pidMatch === null) throw new Error(`no PID= line in ${JSON.stringify(stdoutSoFar())}`);
+        // The pid of the bun process actually running the TUI — not `child.pid`, the python3 pty
+        // allocator's own pid (this function's own header comment). Killed directly, bypassing the
+        // pty entirely, the same way a real `Stop-Process`/systemd stop reaches the process rather
+        // than the terminal it happens to be attached to.
+        process.kill(Number(pidMatch[1]), "SIGTERM");
+
+        const result = await Promise.race([
+          exited,
+          new Promise<"the run never settled">((r) =>
+            setTimeout(() => r("the run never settled"), 15_000),
+          ),
+        ]);
+        expect(result).not.toBe("the run never settled");
+
+        expect(rawOccurrences("\x1b[?1049l")).toBe(1);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // H-2's own scenario ("driveLoop rejecting settles run() instead of hanging forever", above),
+    // re-asserted for the alt screen: run()'s `try { runResult = await runTui(...) } catch (err) {
+    // return fatalDuringTui(err, ...) }` (cli.ts) is what exits it here, via `fatalDuringTui`'s own
+    // `exitAltScreen()` call — not the unconditional `exitAltScreen()` right before `printUsage`,
+    // which sits after that try/catch and is never reached once `runTui` has thrown.
+    test("uncaught throw: exits the alt screen exactly once", async () => {
+      const scriptPath = join(dir, "child-altscreen-rejects.mjs");
+      writeFileSync(scriptPath, childScriptRejects(dir));
+
+      const { exited, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        const result = await Promise.race([
+          exited,
+          new Promise<"the run never settled">((r) =>
+            setTimeout(() => r("the run never settled"), 15_000),
+          ),
+        ]);
+        expect(result).not.toBe("the run never settled");
+
+        expect(rawOccurrences("\x1b[?1049l")).toBe(1);
+      } finally {
+        // Already exited in the success case; harmless if the process is already gone.
+      }
+    }, 60_000);
+  });
+
+  // App.tsx's own viewport: the transcript is now a measured, tail-anchored, scrollable
+  // region rather than an append-only `<Static>` — these are the real-terminal counterpart of
+  // App.test.tsx's own viewport tests, on a real pty rather than ink-testing-library's stub.
+  describe("transcript viewport scrolling", () => {
+    test("a transcript longer than the terminal shows the newest line and hides the oldest, with the InputBox still visible", async () => {
+      const scriptPath = join(dir, "child-viewport-overflow.mjs");
+      writeFileSync(scriptPath, childScriptManyLines(dir));
+
+      const { child, sawLine, lastFrame, sawInFrameTimes } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        // `sawInFrameTimes`, not `sawLine`: the raw pty stream can deliver these bytes before the
+        // synchronized-output CLOSE marker for the frame that contains them, so a raw substring
+        // check can resolve one chunk ahead of `lastFrame()` actually seeing a closed frame with
+        // this line in it — reading `lastFrame()` right after would then race an empty/stale frame.
+        await sawInFrameTimes("line-299.txt", 1);
+
+        const frame = lastFrame();
+        expect(frame).toContain("line-299.txt");
+        expect(frame).not.toContain("line-0.txt");
+        expect(frame).toContain("╭"); // InputBox's own border
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("PageUp shows the scrolled indicator and scrolls the newest line out of view", async () => {
+      const scriptPath = join(dir, "child-viewport-pageup.mjs");
+      writeFileSync(scriptPath, childScriptManyLines(dir));
+
+      const { child, sawLine, lastFrame, sawInFrameTimes } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        await sawLine("line-299.txt");
+        await sawLine("(done: no-tool-call)");
+
+        child.stdin?.write("\x1b[5~"); // Page Up
+        // `sawInFrameTimes`, not `sawLine`, immediately before reading `lastFrame()` below — same
+        // raw-vs-frame race as above.
+        await sawInFrameTimes("↑ scrolled — End to follow", 1);
+
+        const frame = lastFrame();
+        expect(frame).toContain("↑ scrolled — End to follow");
+        expect(frame).not.toContain("line-299.txt");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("End clears the scrolled indicator and returns the newest line to view", async () => {
+      const scriptPath = join(dir, "child-viewport-end.mjs");
+      writeFileSync(scriptPath, childScriptManyLines(dir));
+
+      const { child, sawLine, lastFrame } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+        await sawLine("line-299.txt");
+        await sawLine("(done: no-tool-call)");
+
+        child.stdin?.write("\x1b[5~"); // Page Up
+        await sawLine("↑ scrolled — End to follow");
+
+        child.stdin?.write("\x1b[F"); // End
+        // No new distinctive text to `sawLine` on here — the indicator's own DISAPPEARANCE is what
+        // this asserts, so it has to be polled on `lastFrame()` directly rather than waited for via
+        // `sawLine`'s cumulative-capture semantics (the same reasoning `stdoutSoFar`'s own comment
+        // gives for why a live snapshot, not the cumulative one, is what's needed here).
+        const deadline = Date.now() + 5_000;
+        while (lastFrame().includes("↑ scrolled") && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 20));
+        }
+
+        const frame = lastFrame();
+        expect(frame).not.toContain("↑ scrolled");
+        expect(frame).toContain("line-299.txt");
       } finally {
         child.kill("SIGKILL");
       }

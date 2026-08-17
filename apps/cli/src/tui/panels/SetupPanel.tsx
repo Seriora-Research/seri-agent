@@ -4,9 +4,10 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
-import { formatSetupRow } from "../format";
+import { formatSetupRow, remaining, singleLine } from "../format";
 import type { SetupState } from "../reducer";
 import { theme } from "../theme";
+import { useListWindow } from "../useListWindow";
 
 // /setup's own live state (tui/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-exclusion
 // role, dispatching to one of three step-specific sub-components below rather than one component
@@ -75,6 +76,7 @@ function SetupList({
   // `selectedIndex` already has, for the identical reason (transient UI data with no reason to
   // round-trip through cli.ts on every arrow key).
   const [selected, setSelected] = useState(pendingSetup.selected);
+  const { offset, windowSize, onSelectionMove } = useListWindow(selected);
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {
@@ -82,11 +84,19 @@ function SetupList({
       return;
     }
     if (key.upArrow) {
-      setSelected((current) => Math.max(0, current - 1));
+      setSelected((current) => {
+        const next = Math.max(0, current - 1);
+        onSelectionMove(next);
+        return next;
+      });
       return;
     }
     if (key.downArrow) {
-      setSelected((current) => Math.min(rows.length - 1, current + 1));
+      setSelected((current) => {
+        const next = Math.min(rows.length - 1, current + 1);
+        onSelectionMove(next);
+        return next;
+      });
       return;
     }
     const row = rows[selected];
@@ -119,15 +129,29 @@ function SetupList({
     }
   });
 
+  const visible = rows.slice(offset, offset + windowSize);
+  const remainingCount = remaining(rows.length, offset, windowSize);
+
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
       <Text color={theme.muted}>/setup — provider API keys</Text>
-      {rows.map((row, index) => (
-        <Text key={row.provider} color={index === selected ? theme.accent : undefined}>
-          {index === selected ? "> " : "  "}
-          {formatSetupRow(row)}
-        </Text>
-      ))}
+      {visible.map((row, localIndex) => {
+        const index = offset + localIndex;
+        return (
+          // `wrap="truncate-end"` (found by review, same reasoning as ConfigPanel's own row Text):
+          // a config-entry value here is arbitrary user input, and PANEL_CHROME_ROWS (format.ts)
+          // budgets exactly one row per list row regardless of how wide it is.
+          <Text
+            key={row.provider}
+            color={index === selected ? theme.accent : undefined}
+            wrap="truncate-end"
+          >
+            {index === selected ? "> " : "  "}
+            {formatSetupRow(row)}
+          </Text>
+        );
+      })}
+      {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
       <Text color={theme.muted}>
         ↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close
       </Text>
@@ -185,7 +209,14 @@ function SetupEnterKey({
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
       <Text color={theme.muted}>{`${keyName} for ${provider}`}</Text>
       <Text>{"*".repeat(value.length)}</Text>
-      {error !== undefined && <Text color={theme.error}>{error}</Text>}
+      {/* singleLine + wrap="truncate-end": error comes from messageOf(err) — an Error#message is
+      unbounded and free to carry a literal newline, and this panel budgets exactly one row for it,
+      same reasoning as App.tsx's own commandError guard. */}
+      {error !== undefined && (
+        <Text color={theme.error} wrap="truncate-end">
+          {singleLine(error)}
+        </Text>
+      )}
       {busy ? (
         <Text color={theme.muted}>Validating…</Text>
       ) : (

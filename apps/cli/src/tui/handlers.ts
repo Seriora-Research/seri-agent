@@ -10,6 +10,7 @@ import { login as loginReal, logout as logoutReal } from "../auth/commands";
 import { getWorkosClientId } from "../auth/deviceFlow";
 import type { CliDeps } from "../cli";
 import { configBoolean, loadConfig, setConfigValue, unsetConfigValue } from "../config/config";
+import { messageOf } from "../errors";
 import { forgetGrant, loadGrants } from "../permissions/store";
 import { PROVIDER_API_KEY_NAMES, type ProviderKeyState, providerKeyState } from "../provider/keys";
 import { validateProviderKey } from "../provider/validate";
@@ -37,13 +38,18 @@ export function createSetupHandlers(opts: {
   dispatch: Dispatch;
   getPendingSetup: () => SetupState | undefined;
   configDir: string;
+  // Called after `setup-resolved` when a list refresh failed and the panel had to close itself.
+  // runTui needs nothing more — clearing `pendingSetup` returns the user to InputBox. The
+  // guided-setup mount has no InputBox and resolves only through its own `closed` promise, so it
+  // passes that promise's resolve here; without it, closing the panel there hangs the process.
+  onPanelClosed?: () => void;
 }): {
   onSetupSelect: (provider: ModelProvider) => void;
   onSetupKeyEntered: (provider: ModelProvider, value: string) => Promise<void>;
   onSetupRemove: (provider: ModelProvider) => void;
   onSetupBack: () => void;
 } {
-  const { dispatch, getPendingSetup, configDir } = opts;
+  const { dispatch, getPendingSetup, configDir, onPanelClosed } = opts;
 
   function setupListState(selectedProvider?: ModelProvider): SetupState {
     const rows = decideSetupOpen(configDir);
@@ -57,23 +63,27 @@ export function createSetupHandlers(opts: {
     return { step: "list", rows, selected };
   }
 
-  // A shared "refresh the list, degrade to command-error if that throws" primitive (code-review
-  // finding, PR #73, round 2): decideSetupOpen reads config.json, and a malformed file is exactly
-  // as reachable once the panel is already open (a racing second `seri` process, a hand edit) as it
-  // is at the /setup-OPEN interceptor (cli.ts) — which the round 1 fix already guarded. Used by
-  // onSetupRemove's success path and onSetupBack — round 1 missed both, reached only from INSIDE an
+  // A shared "refresh the list, degrade to command-error if that throws" primitive: decideSetupOpen
+  // reads config.json, and a malformed file is exactly as reachable once the panel is already open
+  // (a racing second `seri` process, a hand edit) as it is at the /setup-OPEN interceptor (cli.ts).
+  // Used by onSetupRemove's success path and onSetupBack — both reached only from INSIDE an
   // already-open panel, with nothing above them to catch a throw out of their own `useInput`
-  // callback. NOT used by onSetupKeyEntered's own success path (round 3, item #3): that one needs
-  // its OWN inline catch instead, to reset `busy: false` on a refresh failure rather than just
-  // showing a command-error while leaving the panel's own busy gate stuck — see its own comment.
+  // callback, so the catch also dispatches `setup-resolved` to close the panel rather than leaving
+  // it stuck on whatever step it was (mirroring dispatchConfigList/dispatchPermissionsList), and
+  // calls `onPanelClosed` for callers (the guided-setup mount) that need to resolve their own
+  // promise when that happens. NOT used by onSetupKeyEntered's own success path: that one needs its
+  // OWN inline catch instead, to reset `busy: false` on a refresh failure rather than just showing a
+  // command-error while leaving the panel's own busy gate stuck — see its own comment.
   function dispatchSetupList(selectedProvider?: ModelProvider): void {
     try {
       dispatch({ type: "setup-step", state: setupListState(selectedProvider) });
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
+      dispatch({ type: "setup-resolved" });
+      onPanelClosed?.();
     }
   }
 
@@ -133,7 +143,7 @@ export function createSetupHandlers(opts: {
           provider,
           keyName,
           busy: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: messageOf(err),
         },
       });
       return;
@@ -145,14 +155,12 @@ export function createSetupHandlers(opts: {
           ? `Saved ${keyName}.`
           : `Saved ${keyName}. ⚠ ${result.warning}`,
     });
-    // NOT dispatchSetupList (code-review finding, PR #73, round 3, item #3): that helper's own
-    // catch only dispatches command-error, which never touches `pendingSetup` — leaving THIS
-    // function's own `busy: true` (set above, before the validate/write round-trip) stuck forever
-    // if the refresh read (setupListState -> decideSetupOpen -> config.json) throws, the exact
-    // lockout class the write-failure catch above already fixed, just reached by a different
-    // trigger (the post-write refresh failing, not the write itself). Resetting `busy: false`
-    // here, inline, the same shape that catch already uses, is what actually clears it —
-    // SetupEnterKey's own `if (busy) return;` gate is what makes that necessary.
+    // NOT dispatchSetupList: that helper's own catch closes the whole panel on a refresh failure
+    // (dispatching `setup-resolved`), which would be the wrong recovery here — the write above just
+    // succeeded and only the REFRESH after it failed, so resetting `busy: false` and showing the
+    // error on this same key lets the user retry or Esc out, instead of losing the key they were on
+    // for a failure in the read that happened after their write already landed. SetupEnterKey's own
+    // `if (busy) return;` gate is what makes resetting `busy: false` here necessary.
     try {
       dispatch({ type: "setup-step", state: setupListState(provider) });
     } catch (err) {
@@ -163,7 +171,7 @@ export function createSetupHandlers(opts: {
           provider,
           keyName,
           busy: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: messageOf(err),
         },
       });
     }
@@ -183,7 +191,7 @@ export function createSetupHandlers(opts: {
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
         return;
       }
@@ -201,7 +209,7 @@ export function createSetupHandlers(opts: {
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       return;
     }
@@ -303,7 +311,7 @@ export function createAuthHandlers(opts: {
         type: "auth-step",
         state: {
           step: "result",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
           error: true,
         },
       });
@@ -322,7 +330,7 @@ export function createAuthHandlers(opts: {
         type: "auth-step",
         state: {
           step: "result",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
           error: true,
         },
       });
@@ -394,7 +402,7 @@ export function createConfigHandlers(opts: {
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       dispatch({ type: "config-resolved" });
     }
@@ -424,7 +432,7 @@ export function createConfigHandlers(opts: {
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       return;
     }
@@ -451,7 +459,7 @@ export function createConfigHandlers(opts: {
           step: "enter-value",
           key,
           busy: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: messageOf(err),
         },
       });
       return;
@@ -476,7 +484,7 @@ export function createConfigHandlers(opts: {
           step: "enter-value",
           key,
           busy: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: messageOf(err),
         },
       });
     }
@@ -501,7 +509,7 @@ export function createConfigHandlers(opts: {
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
         return;
       }
@@ -523,7 +531,7 @@ export function createConfigHandlers(opts: {
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       return;
     }
@@ -589,7 +597,7 @@ export function createPermissionsHandlers(opts: {
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       dispatch({ type: "permissions-resolved" });
     }
@@ -629,7 +637,7 @@ export function createPermissionsHandlers(opts: {
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
         return;
       }
@@ -679,7 +687,7 @@ export function createPermissionsHandlers(opts: {
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       return;
     }

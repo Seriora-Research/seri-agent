@@ -1,19 +1,36 @@
-// Root TUI component (Phase 4, feature-plan.md). Structurally correct and wired to Phase 2's
-// reducer, not feature-complete: Phase 5 wires this to driveLoop and cli.ts's slash-command
-// dispatch. <Static> is the direct replacement for output.ts's console.log/process.stdout.write
-// calls — the same append-only, never-repainted transcript, rendered by Ink instead of printed
-// directly. Everything below it is a live region: status/spinner, a pending-write placeholder, the
-// mode indicator, and a basic input box, all re-rendered in place rather than scrolled.
+// Root TUI component, rendered full-screen in the alternate screen buffer (altScreen.ts's own
+// enter/exit calls, cli.ts). The transcript is a measured, tail-anchored, scrollable viewport
+// (visibleTranscript, format.ts) rather than an append-only <Static> region — a terminal-width- and
+// -height-bounded slice of `state.transcript` PLUS the in-progress `state.streaming` answer as its
+// own newest entry, following the newest row by default and scrollable with PageUp/PageDown/Home/
+// End. Everything below it is a live region: status/spinner, a pending-write placeholder, the mode
+// indicator, and a basic input box, all re-rendered in place.
 
 import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import { Box, Static, Text, useApp, useInput, useStdout } from "ink";
-import { useEffect, useReducer, useState } from "react";
+import {
+  Box,
+  type DOMElement,
+  Text,
+  useApp,
+  useBoxMetrics,
+  useInput,
+  useStdout,
+  useWindowSize,
+} from "ink";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
-import { DEFAULT_COLUMNS, formatModeLabel } from "./format";
+import {
+  DEFAULT_COLUMNS,
+  FALLBACK_CHROME_ROWS,
+  formatModeLabel,
+  singleLine,
+  transcriptVisualRows,
+  visibleTranscript,
+} from "./format";
 import { ApprovalBox } from "./panels/ApprovalBox";
 import { AuthBanner, AuthPanel } from "./panels/AuthPanel";
 import { ConfigPanel } from "./panels/ConfigPanel";
@@ -141,16 +158,28 @@ export type AppProps = {
   onSplashContinue?: () => void;
 };
 
+// A pty can genuinely report `stdout.columns` as a real but unusable `0` for the first render or
+// two, before its window-size ioctl has actually landed (reproduced live over a real pty in WSL):
+// `state.columns` reaching `wrapForTranscript` as 0 clamps to 1 there — not a crash, but a
+// transcript wrapped to ONE CHARACTER PER ROW, which is worse than the silent corruption that
+// clamp was written to prevent. `|| DEFAULT_COLUMNS`, not `??`: `||` treats `0`
+// the same as `undefined`/`null`, which is exactly the substitution a column count of zero needs —
+// there is no real terminal width `0` is ever the correct value for.
+function resolveWidth(columns: number | undefined): number {
+  return columns || DEFAULT_COLUMNS;
+}
+
 // D5 (byok-open3-route-indicator feature-plan.md): no such hook existed in this file before — the
 // persistent mode-indicator (App, below) needs to know the terminal's current column width, live,
-// to pick its 3-tier layout. See DEFAULT_COLUMNS's own comment for what the `?? DEFAULT_COLUMNS`
-// fallback actually guards (a genuine non-TTY production stdout), and what it does not.
+// to pick its 3-tier layout. See DEFAULT_COLUMNS's own comment for what the fallback actually
+// guards (a genuine non-TTY production stdout, or the real pty startup race above), and what it
+// does not.
 function useTerminalWidth(): number {
   const { stdout } = useStdout();
-  const [width, setWidth] = useState(stdout.columns ?? DEFAULT_COLUMNS);
+  const [width, setWidth] = useState(resolveWidth(stdout.columns));
 
   useEffect(() => {
-    const onResize = () => setWidth(stdout.columns ?? DEFAULT_COLUMNS);
+    const onResize = () => setWidth(resolveWidth(stdout.columns));
     stdout.on("resize", onResize);
     return () => {
       stdout.off("resize", onResize);
@@ -193,7 +222,67 @@ export function App({
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
   const { exit } = useApp();
   const width = useTerminalWidth();
+  const { rows } = useWindowSize();
   const modeLabel = formatModeLabel(state.modeIndicator, route, width);
+
+  // The transcript viewport's own height comes from flexbox's leftover space (flexGrow, below),
+  // not from how many lines it renders — so measuring it back with useBoxMetrics cannot create a
+  // feedback loop where changing the slice changes the measurement. `hasMeasured` is false only for
+  // the one frame before Ink's first layout pass; FALLBACK_CHROME_ROWS is a placeholder for that
+  // frame alone, not a real chrome-height estimate.
+  const viewportRef = useRef<DOMElement | null>(null);
+  const { height: measuredRows, hasMeasured } = useBoxMetrics(viewportRef);
+  // `Math.max(1, ...)` on BOTH branches: the measured one had no floor. The
+  // transcript Box has `minHeight={0}`, so on a short enough terminal — or one where the sibling
+  // rows above/below it (mode indicator, an open commandError line) already consume the whole
+  // `rows - 1` budget — Yoga can genuinely measure it down to 0. `visibleTranscript(transcript, 0,
+  // ...)` then computes `start === end`, an empty slice: an in-progress streamed answer renders as
+  // nothing, not as "not enough room," with no visible sign anything is wrong until the layout
+  // recovers.
+  const viewportRows = Math.max(1, hasMeasured ? measuredRows : rows - FALLBACK_CHROME_ROWS);
+  // One line of overlap between pages, same convention a terminal pager's own PageUp/PageDown use.
+  const pageSize = Math.max(1, viewportRows - 1);
+
+  // Read the render-time `visibleTranscript` call's own comment for why this exists: a scrolled-up
+  // `transcriptScrollOffset` (reducer.ts) only ever advances when a flush actually happens
+  // (`appendLines`), so without this, a streamed answer's OWN growth (not yet flushed) would drift
+  // the visible window toward newer content one row at a time and then snap back at flush. `0` when
+  // `state.streaming` is empty: `transcriptVisualRows` always returns >= 1 even for `""` (a blank
+  // committed line is meaningful; an ABSENT streaming answer is not), so this guards that case
+  // explicitly rather than let a spurious extra row of offset apply while nothing is streaming.
+  //
+  // Only the GROWTH since `transcriptScrollOffset` was last set is added, not the full current
+  // `pendingRows`: `transcriptScrollOffset` itself already includes whatever streaming row count
+  // existed at the moment a scroll action last set it (`maxScrollOffset`, reducer.ts, folds
+  // `state.streaming`'s own row count into the ceiling it clamps against). Adding the CURRENT total
+  // on top of that every render double-counts those already-baked-in rows — `transcriptOffset` then
+  // overshoots the combined committed+streaming stack `visibleTranscript` slices, and the viewport
+  // renders a gap instead of a full page. `transcriptScrollStreamingRows` is the reducer's own
+  // snapshot of what was already baked in, so only the delta needs compensating for here.
+  const pendingRows =
+    state.streaming.length > 0 ? transcriptVisualRows([state.streaming], state.columns) : 0;
+  const transcriptOffset =
+    state.transcriptScrollOffset > 0
+      ? state.transcriptScrollOffset +
+        Math.max(0, pendingRows - state.transcriptScrollStreamingRows)
+      : 0;
+
+  // `columns`/`viewportRows` live on TuiState itself (reducer.ts's own comment on those fields) —
+  // this is the one place that ever measures them, so it's the one place that ever dispatches them
+  // in. Two things ride on this same action: `appendLines` (reducer.ts) needs the current width to
+  // wrap new transcript content to real visual rows, and a resize that GROWS `viewportRows` with no
+  // keypress at all needs `transcriptScrollOffset` re-clamped against the new max (the reducer's own
+  // `viewport-resized` case does both) — useListWindow's own effect handles the identical resize
+  // case for panel lists, just against component state instead of the reducer's.
+  //
+  // Declared before `connectDispatch`'s own effect, not after: on mount, React runs effects in
+  // declaration order within the same commit, and cli.ts's `runTui` dispatches the initial task
+  // echo and any queued startup notices from INSIDE that later effect (connectDispatch's own
+  // callback) — this one has to land first so `state.columns` is already the real measured width
+  // by the time anything gets wrapped, not the placeholder `initialTuiState` seeds it with.
+  useEffect(() => {
+    dispatch({ type: "viewport-resized", columns: width, viewportRows });
+  }, [width, viewportRows]);
 
   useEffect(() => {
     connectDispatch?.(dispatch);
@@ -207,15 +296,46 @@ export function App({
     onSessionChange?.(state.session);
   }, [state.session, onSessionChange]);
 
+  // True exactly when InputBox is the render ternary's own active branch, below — every other
+  // branch is a modal panel that owns the keyboard. The transcript Box above (flexGrow/minHeight={0})
+  // still renders unconditionally regardless of which branch is active, so on a terminal taller
+  // than the open panel's own content it stays partially visible above it, not fully occluded — but
+  // PageUp/PageDown/Home/End must still not scroll it in the background while a panel is open: the
+  // user would close the panel to find the transcript scrolled and the "↑ scrolled" banner showing,
+  // with no visible keypress of theirs against the transcript to explain why.
+  const noPanelOpen =
+    state.pendingApproval === undefined &&
+    state.pendingModelPicker === undefined &&
+    state.pendingSetup === undefined &&
+    state.pendingAuth === undefined &&
+    state.pendingConfig === undefined &&
+    state.pendingPermissions === undefined &&
+    !state.pendingSplash;
+
   // A second, independent useInput from InputBox's own — Ink delivers the same keypress to every
   // registered handler, so this fires regardless of what InputBox does with the same press (today,
   // nothing: InputBox's own handler skips any key.ctrl input).
   useInput((input, key) => {
     if (key.ctrl && input === "c") onCancel?.();
+    if (!noPanelOpen) return;
+    if (key.pageUp) dispatch({ type: "transcript-scroll", delta: pageSize });
+    if (key.pageDown) dispatch({ type: "transcript-scroll", delta: -pageSize });
+    if (key.home) dispatch({ type: "transcript-scroll-to", to: "top" });
+    if (key.end) dispatch({ type: "transcript-scroll-to", to: "bottom" });
   });
 
   return (
-    <Box flexDirection="column">
+    // `rows - 1`, not `rows`, on every platform, not just a Windows-only gate: Windows' own
+    // `isWindowsConsole && (wasFullscreen || isFullscreen)` full-redraw path
+    // (Ink's own resolveOutput) is real and Windows-specific, but it is not the only reason this
+    // needs to stay one row short. At a FULL `rows`, `isFullscreen` becomes true on every platform
+    // (Ink's own `outputHeight >= viewportRows`), and mid-run `console.*` output (patchConsole,
+    // e.g. a checkpoint/archivist warning) then erases and rewrites `rows` lines for a write that
+    // adds its own lines on top — the terminal scrolls, but nothing off Windows re-triggers the
+    // full-clear path to notice, so log-update's own line-count bookkeeping goes stale and every
+    // later frame paints at the wrong offset for the REST OF THE SESSION. `rows - 1` leaves exactly
+    // the one spare row that absorbs a single console write without ever scrolling the viewport.
+    <Box flexDirection="column" height={rows - 1}>
       {/* Rendered ABOVE the render ternary below, not as one of its branches — unlike
       ApprovalBox/ModelPicker/SetupPanel this never replaces InputBox, it sits alongside it.
       `state.pendingAuth === undefined` (not just `state.authOffer`) is the derived half of the
@@ -228,8 +348,42 @@ export function App({
       <AuthBanner
         show={state.authOffer && state.pendingAuth === undefined && !state.pendingSplash}
       />
-      <Static items={state.transcript}>{(line, index) => <Text key={index}>{line}</Text>}</Static>
-      {state.streaming.length > 0 && <Text>{state.streaming}</Text>}
+      {/* flexGrow/flexShrink/minHeight={0} give this box whatever height is left over after
+      every sibling below has laid out — `viewportRows` (above) reads that back via useBoxMetrics,
+      not the other way around, so there is no feedback loop from the slice into the measurement.
+      `visibleTranscript` (format.ts) already wraps every entry to `state.columns` and caps the
+      VISUAL row count at `viewportRows`, so `overflowY`/`justifyContent="flex-end"` are a pure
+      backstop now, not load-bearing truncation — anchoring to the end means a genuine one-frame
+      overshoot falls off the top (oldest), not the bottom (newest).
+      The in-progress answer (`state.streaming`) is passed as `visibleTranscript`'s own `pending`
+      parameter rather than rendered as its own unbounded `<Text>` below the box (the original
+      shape) or spread into a `[...state.transcript, state.streaming]` array (tried and reverted:
+      that allocated a full copy of the transcript on every streamed token, exactly what
+      `visibleTranscript`'s own tail-walk exists to avoid paying).
+      `effectiveOffset` below is what keeps a scrolled-up reader's view from drifting toward newer
+      content as the answer grows and then snapping back the instant it flushes: `appendLines`
+      (reducer.ts) already advances `transcriptScrollOffset` by a flush's own row count for exactly
+      this reason, and pending rows need the identical treatment applied live, since they are not
+      yet a dispatched action `appendLines` could react to. */}
+      <Box
+        ref={viewportRef}
+        flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        minHeight={0}
+        overflowY="hidden"
+        justifyContent="flex-end"
+      >
+        {visibleTranscript(
+          state.transcript,
+          viewportRows,
+          transcriptOffset,
+          state.columns,
+          state.streaming,
+        ).map((line, index) => (
+          <Text key={index}>{line}</Text>
+        ))}
+      </Box>
       {state.pendingTool !== undefined && (
         <Box borderStyle="round" borderColor={theme.warning}>
           {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: pendingTool is set
@@ -242,9 +396,30 @@ export function App({
       )}
       <Box flexDirection="row" justifyContent="space-between">
         <Text color={theme.accent}>{modeLabel}</Text>
-        {state.status.length > 0 && <Text color={theme.muted}>{state.status}</Text>}
+        <Box flexDirection="row" gap={1}>
+          {/* `noPanelOpen` too, not just the offset: while a panel is open, End
+          is swallowed by the exact same gate `noPanelOpen` already puts on the transcript-scroll
+          keys above — the banner would otherwise keep telling the user to press a key that does
+          nothing until they close the panel first. */}
+          {state.transcriptScrollOffset > 0 && noPanelOpen && (
+            <Text color={theme.muted}>↑ scrolled — End to follow</Text>
+          )}
+          {state.status.length > 0 && <Text color={theme.muted}>{state.status}</Text>}
+        </Box>
       </Box>
-      {state.commandError !== undefined && <Text color={theme.error}>{state.commandError}</Text>}
+      {/* APP_CHROME_ROWS (format.ts) reserves exactly one row for this line, but a slash-command
+      catch's own messageOf(err) is an Error#message — unbounded length AND free to carry a literal
+      `\n` (a multi-line validation error, a JSON-parse error citing surrounding context). Ink
+      renders an embedded newline as a real line break regardless of `wrap`, which only governs a
+      single line's own overflow — `singleLine` collapses any embedded break first, matching
+      ConfigPanel's own row values (format.ts's own comment), then `wrap="truncate-end"` guards
+      what's left from overflowing on a narrow terminal. Either alone would leave the other case
+      free to push an open panel's own bottom row past the alt-screen viewport. */}
+      {state.commandError !== undefined && (
+        <Text color={theme.error} wrap="truncate-end">
+          {singleLine(state.commandError)}
+        </Text>
+      )}
       {/* Findings 1+5: mutually exclusive with InputBox — a pending approval question is the only
       thing this run is waiting on, and answering it (not typing a task or slash command) is the
       only input that means anything until it clears. Extended to a third state for /model, a

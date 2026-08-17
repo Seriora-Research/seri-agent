@@ -6,8 +6,10 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import type { PermissionRow } from "../commands";
+import { remaining } from "../format";
 import type { PermissionsPanelState } from "../reducer";
 import { theme } from "../theme";
+import { useListWindow } from "../useListWindow";
 
 // /permissions' own live state (tui/reducer.ts's pendingPermissions) — mirrors SetupPanel's
 // step-dispatcher shape with one fewer step.
@@ -51,6 +53,7 @@ function PermissionsList({
 }) {
   const { rows } = pendingPermissions;
   const [selected, setSelected] = useState(pendingPermissions.selected);
+  const { offset, windowSize, onSelectionMove } = useListWindow(selected);
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {
@@ -58,11 +61,19 @@ function PermissionsList({
       return;
     }
     if (key.upArrow) {
-      setSelected((current) => Math.max(0, current - 1));
+      setSelected((current) => {
+        const next = Math.max(0, current - 1);
+        onSelectionMove(next);
+        return next;
+      });
       return;
     }
     if (key.downArrow) {
-      setSelected((current) => Math.min(rows.length - 1, current + 1));
+      setSelected((current) => {
+        const next = Math.min(rows.length - 1, current + 1);
+        onSelectionMove(next);
+        return next;
+      });
       return;
     }
     const row = rows[selected];
@@ -78,15 +89,30 @@ function PermissionsList({
     }
   });
 
+  const visible = rows.slice(offset, offset + windowSize);
+  const remainingCount = remaining(rows.length, offset, windowSize);
+
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
       <Text color={theme.muted}>/permissions — tools approved permanently</Text>
-      {rows.map((row, index) => (
-        <Text key={row.tool} color={index === selected ? theme.accent : undefined}>
-          {index === selected ? "> " : "  "}
-          {formatPermissionRow(row)}
-        </Text>
-      ))}
+      {visible.map((row, localIndex) => {
+        const index = offset + localIndex;
+        return (
+          // `wrap="truncate-end"`: PERSISTABLE_TOOL_NAMES (permissions/store.ts) bounds `row.tool`
+          // to "write_file"/"edit" today, so this row can't actually overflow yet — matching the
+          // guard ConfigPanel/SetupPanel/ModelPicker's own row Text already carries for the same
+          // one-row-per-list-row budget keeps this panel consistent with the others regardless.
+          <Text
+            key={row.tool}
+            color={index === selected ? theme.accent : undefined}
+            wrap="truncate-end"
+          >
+            {index === selected ? "> " : "  "}
+            {formatPermissionRow(row)}
+          </Text>
+        );
+      })}
+      {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
       <Text color={theme.muted}>↑/↓ move · r/Delete remove · Esc/Ctrl-D close</Text>
     </Box>
   );

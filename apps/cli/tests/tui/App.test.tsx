@@ -14,6 +14,10 @@ import {
   formatModelRow,
   formatRouteLabel,
   formatSetupRow,
+  listWindowSize,
+  singleLine,
+  slideWindow,
+  visibleTranscript,
 } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
 
@@ -74,13 +78,221 @@ describe("App", () => {
     expect(instance.lastFrame()).toContain("[read-only]");
   });
 
-  test("a transcript-append dispatch grows the static transcript", async () => {
+  test("a transcript-append dispatch grows the transcript viewport", async () => {
     const { instance, dispatch } = await connect();
 
     dispatch({ type: "transcript-append", line: "Session s1: permission mode is now auto" });
     await flush();
 
     expect(instance.lastFrame()).toContain("Session s1: permission mode is now auto");
+  });
+
+  // Tail-anchored, not head-anchored — 300 lines is comfortably more than any real terminal's
+  // row count, so the viewport MUST be showing a slice, and that slice must be the newest end.
+  test("a transcript longer than the viewport shows the newest line and hides the oldest, with InputBox still visible", async () => {
+    const { instance, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush();
+
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("line 299");
+    expect(frame).not.toContain("line 0");
+    // The InputBox's own border (panels/InputBox.tsx) — proves the viewport left room for the
+    // live region below it rather than consuming the whole frame.
+    expect(frame).toContain("╭");
+  });
+
+  test("PageUp shows the scrolled indicator and reveals an older line; End clears it and returns to the newest", async () => {
+    const { instance, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush();
+    expect(instance.lastFrame()).not.toContain("↑ scrolled");
+
+    instance.stdin.write("\x1b[5~"); // Page Up
+    await flush();
+    let frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("↑ scrolled — End to follow");
+    expect(frame).not.toContain("line 299");
+
+    instance.stdin.write("\x1b[F"); // End
+    await flush();
+    frame = instance.lastFrame() ?? "";
+    expect(frame).not.toContain("↑ scrolled");
+    expect(frame).toContain("line 299");
+  });
+
+  // Regression guard: PageUp/PageDown/Home/End used to fire regardless of which render-ternary
+  // branch was active, mutating transcriptScrollOffset in the background while a modal panel
+  // (here /config) fully occluded the transcript. Closing the panel would then reveal a
+  // transcript scrolled up with no visible keypress of the user's own against it to explain why.
+  test("PageUp while a modal panel is open does not scroll the transcript in the background", async () => {
+    const { instance, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    dispatch({
+      type: "config-requested",
+      rows: [
+        {
+          key: "SERI_VERIFY_ENABLED",
+          masked: "",
+          source: "unset",
+          removable: false,
+          kind: "boolean",
+          on: true,
+        },
+      ],
+    });
+    await flush();
+
+    instance.stdin.write("\x1b[5~"); // Page Up
+    await flush();
+    expect(instance.lastFrame()).not.toContain("↑ scrolled");
+
+    dispatch({ type: "config-resolved" });
+    await flush();
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).not.toContain("↑ scrolled");
+    expect(frame).toContain("line 299");
+  });
+
+  // Regression guard (found independently by two automated PR reviewers): `transcriptScrollOffset`
+  // used to be re-clamped only inside the `transcript-scroll`/`transcript-scroll-to` actions
+  // themselves, both fired only by a keypress — a terminal resize that GROWS the viewport fires
+  // neither, so a scrolled-up offset stayed pinned to the height the viewport had when it was set,
+  // and `visibleTranscript` kept showing exactly that many lines instead of growing to fill the
+  // taller box. Scrolling to the very top makes this observable without depending on the exact
+  // chrome-row math: the highest line number shown must increase once the terminal grows, since
+  // more of the already-loaded transcript becomes visible below the fixed top edge.
+  test("a resize while scrolled to the top reveals more of the transcript, not a static slice", async () => {
+    const { instance, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    instance.stdin.write("\x1b[H"); // Home
+    await flush();
+
+    const highestLineShown = (frame: string) =>
+      Math.max(...[...frame.matchAll(/line (\d+)/g)].map((m) => Number(m[1])));
+    const highestBefore = highestLineShown(instance.lastFrame() ?? "");
+
+    // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a plain
+    // assignment, not overriding one (same cast the windowSize-shrink test above already uses).
+    instance.stdout.rows = 40;
+    instance.stdout.emit("resize");
+    await flush();
+
+    expect(highestLineShown(instance.lastFrame() ?? "")).toBeGreaterThan(highestBefore);
+  });
+
+  // Regression guard (found by review): before `visibleTranscript`/the scroll clamp derived visual
+  // rows from `state.transcript` on read (format.ts's own `transcriptVisualRows`), a single streamed
+  // answer with embedded newlines committed as ONE transcript array entry — the clamp's `max` was
+  // always <= 0 regardless of how many rows that one entry actually needed, so PageUp/Home could
+  // never move the offset at all and whatever the box couldn't fit was silently clipped by
+  // `overflowY="hidden"` with no way to reach it. 300 lines, not a small number: on a real, tall
+  // terminal (this test's own stdout height comes from the REAL host process, not a fixture —
+  // ink-testing-library's stub stdout has no `rows` getter) a short answer can fit entirely without
+  // the bug ever being exercised, which is exactly why a short version of this test can pass on a
+  // broken build. `"answer line 0"` alone doesn't prove reachability either — `overflowY="hidden"`
+  // clips from the TOP, so line 0 is the one line a broken build already keeps; the tail
+  // (`"answer line 299"`) is the one only the fix can reach.
+  test("a single answer with more lines than the viewport is fully reachable by scrolling, not silently dropped", async () => {
+    const { instance, dispatch } = await connect();
+
+    const answer = Array.from({ length: 300 }, (_, i) => `answer line ${i}`).join("\n");
+    dispatch({ type: "transcript-append", line: answer });
+    await flush();
+
+    expect(instance.lastFrame() ?? "").toContain("answer line 299");
+
+    instance.stdin.write("\x1b[H"); // Home
+    await flush();
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("answer line 0");
+    expect(frame).toContain("↑ scrolled");
+  });
+
+  // Regression guard (found by review): folding the in-progress answer into the same scrollable
+  // viewport as the committed transcript (so it stops being unbounded/unwrapped, the test above's
+  // own fix) came with a second bug the first fix's own tests never exercised — a scrolled-up
+  // reader's `transcriptScrollOffset` only advances at FLUSH (`appendLines`, reducer.ts), so nothing
+  // compensated for `state.streaming` growing WHILE still in progress: the visible window drifted
+  // toward newer content one row at a time as the answer streamed, then jumped back the instant it
+  // flushed. Asserts the strongest form directly: the rendered frame must not change AT ALL while
+  // scrolled away from the tail, streaming or not.
+  test("a scrolled-up reader's view neither drifts while an answer streams nor jumps when it flushes", async () => {
+    const { instance, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    instance.stdin.write("\x1b[5~"); // Page Up — scroll away from the tail
+    await flush();
+    const anchored = instance.lastFrame() ?? "";
+    expect(anchored).toContain("↑ scrolled");
+
+    for (let i = 0; i < 10; i++) {
+      dispatch({ type: "loop-event", event: { type: "text-delta", text: `chunk ${i}\n` } });
+      await flush();
+      expect(instance.lastFrame() ?? "").toBe(anchored);
+    }
+
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush();
+    expect(instance.lastFrame() ?? "").toBe(anchored);
+  });
+
+  // Regression guard: Home/PageUp dispatched WHILE an answer is already streaming sets
+  // `transcriptScrollOffset` to a value that already includes the current streaming row count
+  // (`maxScrollOffset`, reducer.ts). `transcriptOffset`'s own `pendingRows` compensation (App.tsx)
+  // used to add the CURRENT streaming row count on top of that every render regardless, double-
+  // counting the rows already folded into the offset — the combined total overshot the transcript's
+  // own visual-row length, `visibleTranscript` (format.ts) sliced down to nothing, and the viewport
+  // rendered blank instead of a full page of the streamed answer.
+  test("Home pressed mid-stream (no further streaming) reveals a full page of the streamed answer, not a blank gap", async () => {
+    const { instance, dispatch } = await connect();
+
+    const answer = Array.from({ length: 300 }, (_, i) => `answer line ${i}`).join("\n");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    await flush();
+
+    instance.stdin.write("\x1b[H"); // Home
+    await flush();
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("answer line 0");
+    expect(frame).toContain("↑ scrolled");
+  });
+
+  // Same bug as above, but with genuine post-scroll growth: confirms the delta compensation
+  // (`pendingRows - transcriptScrollStreamingRows`) neither double-counts the rows already baked
+  // into the offset at scroll time nor drops the rows that stream in afterward — the view stays
+  // anchored on the same content exactly like the already-committed-transcript case above.
+  test("more text streaming in after Home is pressed mid-stream keeps the view anchored, not double- or under-counted", async () => {
+    const { instance, dispatch } = await connect();
+
+    const answer = Array.from({ length: 300 }, (_, i) => `answer line ${i}`).join("\n");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    await flush();
+
+    instance.stdin.write("\x1b[H"); // Home
+    await flush();
+    const anchored = instance.lastFrame() ?? "";
+    expect(anchored).toContain("answer line 0");
+
+    for (let i = 0; i < 10; i++) {
+      dispatch({ type: "loop-event", event: { type: "text-delta", text: `\nmore ${i}` } });
+      await flush();
+      expect(instance.lastFrame() ?? "").toBe(anchored);
+    }
   });
 
   test("a tool-call loop-event sets the running status, and tool-result clears it", async () => {
@@ -484,6 +696,13 @@ describe("App", () => {
 
     test("shows a +N more hint once the filtered list exceeds the visible window", async () => {
       const { instance, dispatch } = await connect();
+      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so this doesn't
+      // depend on the host terminal's real height (App.test.tsx's own listWindowSize describe).
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
       const entries = Array.from({ length: 12 }, (_, i) =>
         row({ id: `model-${i}`, displayName: `Model ${i}` }),
       );
@@ -494,7 +713,38 @@ describe("App", () => {
       expect(instance.lastFrame()).toContain("+2 more — keep typing to narrow");
     });
 
-    // C1: the real bug — the visible window used to always be the first MODEL_PICKER_WINDOW
+    // Regression guard: `remaining` used to be `filtered.length - visible.length`, which counts
+    // entries hidden ABOVE the window too and stays flat at `filtered.length - windowSize` for as
+    // long as the window is full — the hint never counted down while scrolling toward the bottom,
+    // and never disappeared even once every remaining entry was on screen.
+    test("the +N more hint count decreases while scrolling down, disappearing at the bottom", async () => {
+      const { instance, dispatch } = await connect();
+      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so this doesn't
+      // depend on the host terminal's real height (App.test.tsx's own listWindowSize describe).
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
+      const entries = Array.from({ length: 12 }, (_, i) =>
+        row({ id: `model-${i}`, displayName: `Model ${i}` }),
+      );
+
+      dispatch({ type: "model-picker-requested", entries });
+      await flush();
+      expect(instance.lastFrame()).toContain("+2 more — keep typing to narrow");
+
+      for (let i = 0; i < 11; i++) {
+        instance.stdin.write("\x1b[B"); // Down arrow
+        await flush();
+      }
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Model 11");
+      expect(frame).not.toContain("more — keep typing to narrow");
+    });
+
+    // C1: the real bug — the visible window used to always be the first LIST_WINDOW_MAX
     // entries regardless of `selectedIndex`, so Down past the 10th entry moved the highlight
     // somewhere nothing on screen showed. Down 15 times over 20 entries lands well past the
     // original window; this checks BOTH halves the task's own comment calls out: the list actually
@@ -629,6 +879,15 @@ describe("App", () => {
 
     test("the list step shows all five provider rows, masked values included", async () => {
       const { instance, dispatch } = await connect();
+      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so all 5 rows
+      // fit regardless of the host terminal's real height (App.test.tsx's own listWindowSize
+      // describe) — a shrunk window truncates SetupPanel's own fixed 5-row list just like any
+      // other panel's.
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
 
       dispatch({ type: "setup-requested", rows: setupRows() });
       await flush();
@@ -1070,7 +1329,7 @@ describe("App", () => {
       );
     });
 
-    // D5's own negative control: below 52 cols the row reverts to EXACTLY today's pre-change
+    // Negative control: below 52 cols the row reverts to EXACTLY today's pre-change
     // output — mode indicator only, regardless of what `route` carries — proving the model+route
     // label can never crowd the spinner/status text off screen at any width.
     test("minimal width (<52 cols): mode indicator only, byte-identical to the pre-change row", () => {
@@ -1099,6 +1358,98 @@ describe("App", () => {
       expect(formatModeLabel("[approve-each]", undefined, 100)).toBe("[approve-each]");
       expect(formatModeLabel("[approve-each]", undefined, 60)).toBe("[approve-each]");
       expect(formatModeLabel("[approve-each]", undefined, 10)).toBe("[approve-each]");
+    });
+  });
+
+  describe("visibleTranscript", () => {
+    test("a transcript shorter than the viewport is shown in full", () => {
+      expect(visibleTranscript(["a", "b", "c"], 5, 0, 80)).toEqual(["a", "b", "c"]);
+    });
+
+    // tail-anchored, not head-anchored — a transcript longer than the viewport shows its NEWEST
+    // lines by default, matching what scrolled-by terminal output would already show.
+    test("a transcript longer than the viewport shows the newest lines, not the oldest", () => {
+      expect(visibleTranscript(["a", "b", "c", "d", "e"], 3, 0, 80)).toEqual(["c", "d", "e"]);
+    });
+
+    test("a positive offset slides the window toward older lines", () => {
+      expect(visibleTranscript(["a", "b", "c", "d", "e"], 3, 1, 80)).toEqual(["b", "c", "d"]);
+    });
+
+    test("an offset large enough to reach the start still returns at most `rows` lines", () => {
+      expect(visibleTranscript(["a", "b", "c"], 5, 10, 80)).toEqual([]);
+    });
+
+    // Regression guard: a logical entry longer than `columns` used to count as exactly one row no
+    // matter how many rows it actually rendered — the "one entry, many rows" bug this file exists
+    // to close. A single 25-word-boundary-free entry, wrapped at 10 columns, must occupy exactly
+    // as many array slots as it needs, and the tail-walk must still respect `rows`.
+    test("a single entry longer than `columns` counts as multiple visual rows, not one", () => {
+      const long = "a".repeat(25); // 25 chars, no spaces — forces `hard: true` breaking
+      expect(visibleTranscript([long], 3, 0, 10)).toEqual(["aaaaaaaaaa", "aaaaaaaaaa", "aaaaa"]);
+      // Scrolled up by exactly one visual row: the newest row drops off the bottom.
+      expect(visibleTranscript([long], 3, 1, 10)).toEqual(["aaaaaaaaaa", "aaaaaaaaaa"]);
+    });
+
+    // A resize changes `columns` with no change to the logical `lines` array at all — this is only
+    // meaningful because the transcript stores logical lines, not pre-wrapped rows (reducer.ts's own
+    // comment on `TuiState.transcript`): the same entries must re-wrap differently at a new width,
+    // proving nothing was destroyed by the earlier (narrower) width's own wrapping.
+    test("the same transcript re-wraps differently when `columns` changes, nothing is lost", () => {
+      const long = "a".repeat(25);
+      expect(visibleTranscript([long], 10, 0, 10)).toHaveLength(3);
+      expect(visibleTranscript([long], 10, 0, 25)).toHaveLength(1);
+      expect(visibleTranscript([long], 10, 0, 5)).toHaveLength(5);
+    });
+  });
+
+  describe("slideWindow", () => {
+    // The exact "clamp, don't re-center" cases ModelPicker's own moveSelection relies on.
+    test("selection still inside the window: offset does not move", () => {
+      expect(slideWindow(0, 5, 10)).toBe(0);
+    });
+
+    test("selection above the window: offset jumps up to the selection", () => {
+      expect(slideWindow(5, 2, 10)).toBe(2);
+    });
+
+    test("selection past the bottom of the window: offset slides just far enough to include it", () => {
+      expect(slideWindow(0, 10, 10)).toBe(1);
+    });
+  });
+
+  describe("singleLine", () => {
+    test("collapses \\r\\n, \\r, and \\n into a single space each", () => {
+      expect(singleLine("a\r\nb\rc\nd")).toBe("a b c d");
+    });
+
+    // Regression: an unsanitized config value (`seri config set` on the CLI does not strip
+    // control bytes the way the TUI's own interactive entry does) reaching a row's render could
+    // otherwise carry a raw ESC and write an arbitrary escape sequence to the real terminal
+    // underneath the alt screen. Escaped to a visible `\xNN` form, not stripped, matching
+    // escapeControlChars' own contract (cli/output.ts).
+    test("escapes a raw ESC byte instead of passing it through to the real terminal", () => {
+      expect(singleLine("before\x1b[31mafter")).toBe("before\\x1b[31mafter");
+    });
+  });
+
+  describe("listWindowSize", () => {
+    // listWindowSize is a pure function of `rows`, tested here at hand-picked inputs — it does NOT
+    // describe what `rows` ink-testing-library's own Stdout stub resolves to. That stub exposes no
+    // `rows` getter at all, so `useWindowSize().rows` falls through to the HOST terminal's real
+    // height rather than any fixed value; tests that depend on an exact window size pin
+    // `instance.stdout.rows` explicitly instead of relying on a stub default.
+    test("a tall terminal clamps to LIST_WINDOW_MAX (10)", () => {
+      expect(listWindowSize(24)).toBe(10);
+    });
+
+    test("a short terminal clamps to MIN_LIST_WINDOW (3), never fewer", () => {
+      expect(listWindowSize(5)).toBe(3);
+    });
+
+    test("a terminal in between returns rows minus the panel chrome budget", () => {
+      expect(listWindowSize(18)).toBe(9);
+      expect(listWindowSize(15)).toBe(6);
     });
   });
 
@@ -1696,6 +2047,166 @@ describe("App", () => {
       const frame = instance.lastFrame() ?? "";
       expect(frame).toContain("Unset SERI_SOME_OTHER_KEY (SERI_SOME_OTHER_KEY)");
     });
+
+    // Same regression guard as the permissions panel's own truncation test below.
+    test("a row count past the window budget truncates and shows a +N more footer", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "config-requested",
+        rows: Array.from({ length: 15 }, (_, i) => ({
+          key: `FAKE_KEY_${i}`,
+          masked: "",
+          source: "unset" as const,
+          removable: false,
+          kind: "string" as const,
+        })),
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("FAKE_KEY_0");
+      expect(frame).not.toContain("FAKE_KEY_14");
+      expect(frame).toMatch(/\+\d+ more/);
+    });
+
+    // Regression guard: a panel re-mounted with a non-zero seeded `selected` (cli.ts's own
+    // findIndex-computed seed after a save/unset/remove) used to always start its own window at
+    // offset 0, scrolling the acted-on row's own `>` marker off-screen on a list longer than the
+    // window, until the next arrow key. useListWindow now seeds its offset from the initial
+    // selection via the same slideWindow rule an arrow press already uses.
+    test("re-mounting with a non-zero seeded selection keeps that row's own marker in view", async () => {
+      const { instance, dispatch } = await connect();
+
+      const rows = Array.from({ length: 15 }, (_, i) => ({
+        key: `FAKE_KEY_${i}`,
+        masked: "",
+        source: "unset" as const,
+        removable: false,
+        kind: "string" as const,
+      }));
+      dispatch({ type: "config-step", state: { step: "list", rows, selected: 12 } });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("> FAKE_KEY_12");
+    });
+
+    // Regression guard: `remaining` used to be `rows.length - visible.length`, which counts rows
+    // hidden ABOVE the window too and stays flat at `rows.length - windowSize` for as long as the
+    // window is full — the footer never counted down while scrolling toward the bottom, and never
+    // reached 0 even once every remaining row was on screen.
+    test("the +N more footer count decreases while scrolling down, reaching 0 at the bottom", async () => {
+      const { instance, dispatch } = await connect();
+      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so this doesn't
+      // depend on the host terminal's real height (App.test.tsx's own listWindowSize describe).
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
+
+      const rows = Array.from({ length: 15 }, (_, i) => ({
+        key: `FAKE_KEY_${i}`,
+        masked: "",
+        source: "unset" as const,
+        removable: false,
+        kind: "string" as const,
+      }));
+      dispatch({ type: "config-requested", rows });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("+5 more");
+
+      for (let i = 0; i < 14; i++) {
+        instance.stdin.write("\x1b[B"); // Down
+        await flush();
+      }
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("> FAKE_KEY_14");
+      expect(frame).not.toContain("+0 more");
+      expect(frame).not.toMatch(/\+\d+ more/);
+    });
+
+    // Regression guard: `windowSize` is recomputed live from useWindowSize().rows on every render,
+    // but `offset` previously only changed via an explicit arrow press (onSelectionMove) — a
+    // terminal resize that shrinks windowSize could leave the currently selected row outside
+    // [offset, offset + windowSize) with no keypress to trigger a recompute. ink-testing-library's
+    // own Stdout stub has no real `rows` getter (only `columns` is fixed), so it can be assigned
+    // directly and a "resize" event emitted to make useWindowSize (both App.tsx's own call and
+    // useListWindow's) pick up the new value, the same mechanism a real terminal resize uses.
+    test("a windowSize shrink after a selection move keeps the selected row in view without a keypress", async () => {
+      const { instance, dispatch } = await connect();
+
+      const rows = Array.from({ length: 15 }, (_, i) => ({
+        key: `FAKE_KEY_${i}`,
+        masked: "",
+        source: "unset" as const,
+        removable: false,
+        kind: "string" as const,
+      }));
+      dispatch({ type: "config-requested", rows });
+      await flush();
+
+      // Select row 9 — still inside the default (10-row) window, so offset stays 0.
+      for (let i = 0; i < 9; i++) {
+        instance.stdin.write("\x1b[B"); // Down
+        await flush();
+      }
+      expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_9");
+
+      // Shrink to a 3-row window (listWindowSize(11) = clamp(11 - 8, 3, 10) = 3) — with offset
+      // still 0, row 9 would fall outside [0, 3) unless something re-clamps it.
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one; that's what makes the fake resize below observable.
+      instance.stdout.rows = 11;
+      instance.stdout.emit("resize");
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_9");
+    });
+
+    // Regression guard: useListWindow's row budget used to reserve only the root Box's own spare
+    // row and the unconditional mode-indicator row (APP_CHROME_ROWS, format.ts) — not commandError
+    // or AuthBanner, both of which can be showing at the same time as a panel. On a 20-row
+    // terminal that overflowed the alt-screen viewport, unrecoverable until the panel closed or the
+    // terminal resized (no scrollback on the alt screen).
+    test("a panel opened under an auth banner and a command error still fits the viewport", async () => {
+      const { instance, dispatch } = await connect();
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 20;
+      instance.stdout.emit("resize");
+      await flush();
+
+      dispatch({ type: "auth-offer", show: true });
+      dispatch({ type: "command-error", message: "boom" });
+      // Row 0 is a known key (configKeyInfo has a description for it) so the selected row's
+      // description line renders too, matching ConfigPanel's own tallest real case — a bare
+      // FAKE_KEY row has no description and would silently under-count the panel's real height.
+      const rows: ConfigRow[] = [
+        configRows()[0] as ConfigRow,
+        ...Array.from({ length: 14 }, (_, i) => ({
+          key: `FAKE_KEY_${i}`,
+          masked: "",
+          source: "unset" as const,
+          removable: false,
+          kind: "string" as const,
+        })),
+      ];
+      dispatch({ type: "config-requested", rows });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      // Content that doesn't fit the fixed-height root Box (App.tsx's `height={rows - 1}`) doesn't
+      // grow the frame taller — Ink overlaps two rows' worth of text onto one instead. Pre-fix, that
+      // overlap lands on the mode-indicator row (overwritten by the command-error line) and the
+      // panel's own header line vanishes entirely; both must render intact once the reservation
+      // accounts for AuthBanner and commandError.
+      expect(frame).toContain("[approve-each]");
+      expect(frame).toContain("/config — settings");
+      expect(frame).toContain("Esc/Ctrl-D close");
+    });
   });
 
   describe("permissions panel", () => {
@@ -1760,6 +2271,63 @@ describe("App", () => {
       await flush();
 
       expect(removed).toEqual(["write_file"]);
+    });
+
+    // useListWindow's own window budget (listWindowSize) — 15 rows, more than any real terminal's
+    // clamped window under ink-testing-library (LIST_WINDOW_MAX, format.ts's own comment), so this
+    // must truncate and show the footer.
+    test("a row count past the window budget truncates and shows a +N more footer", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "permissions-requested",
+        rows: Array.from({ length: 15 }, (_, i) => ({
+          tool: `tool_${i}`,
+          source: "persisted" as const,
+          removable: true,
+        })),
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("tool_0");
+      expect(frame).not.toContain("tool_14");
+      expect(frame).toMatch(/\+\d+ more/);
+    });
+
+    // Regression guard: `remaining` used to be `rows.length - visible.length`, which counts rows
+    // hidden ABOVE the window too and stays flat at `rows.length - windowSize` for as long as the
+    // window is full — the footer never counted down while scrolling toward the bottom, and never
+    // reached 0 even once every remaining row was on screen.
+    test("the +N more footer count decreases while scrolling down, reaching 0 at the bottom", async () => {
+      const { instance, dispatch } = await connect();
+      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so this doesn't
+      // depend on the host terminal's real height (App.test.tsx's own listWindowSize describe).
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
+
+      dispatch({
+        type: "permissions-requested",
+        rows: Array.from({ length: 15 }, (_, i) => ({
+          tool: `tool_${i}`,
+          source: "persisted" as const,
+          removable: true,
+        })),
+      });
+      await flush();
+      expect(instance.lastFrame() ?? "").toContain("+5 more");
+
+      for (let i = 0; i < 14; i++) {
+        instance.stdin.write("\x1b[B"); // Down
+        await flush();
+      }
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("> tool_14");
+      expect(frame).not.toMatch(/\+\d+ more/);
     });
   });
 

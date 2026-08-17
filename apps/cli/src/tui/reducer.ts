@@ -8,6 +8,7 @@ import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
 import type { SessionState } from "../session/session";
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
+import { DEFAULT_COLUMNS, transcriptVisualRows } from "./format";
 
 // /setup's own live state (D5-D8, feature-plan.md) — a three-step flow, mirrored on the reducer
 // the same way /model's picker is: "list" shows all five providers, "enter-key" is the masked
@@ -59,8 +60,44 @@ export type PermissionsPanelState =
 
 export type TuiState = {
   session: SessionState<ModelMessage>;
-  // Append-only committed lines — the <Static> transcript's source in Phase 4.
+  // Append-only committed LOGICAL lines — one entry per `transcript-append`/pushLine call, never
+  // re-split or re-joined here. Rendered by App.tsx as a scrollable viewport (visibleTranscript,
+  // format.ts), which wraps each entry to `columns` VISUAL rows on read, not on write: a hard-wrap
+  // break is indistinguishable from a real `\n` once written, so storing the wrapped output would
+  // make a resize lossy (the old width's wrapping can never be un-done to re-wrap at the new one).
+  // Keeping this array untouched is what makes a resize a free re-derivation instead of a rewrite.
   transcript: string[];
+  // VISUAL rows from the BOTTOM of the (wrapped) transcript the viewport is scrolled up by. 0 =
+  // following the latest row (the default, and the state End returns to). Advanced by pushLine
+  // while > 0, by however many visual rows a flush actually added — see `appendLines`' own
+  // comment — so a scrolled-up view stays anchored on the same content as new rows arrive, rather
+  // than sliding out from under the reader mid-read.
+  transcriptScrollOffset: number;
+  // The visual row count `state.streaming` had the last time `transcriptScrollOffset` was set
+  // (`transcript-scroll`/`transcript-scroll-to`/`viewport-resized`) — that streaming row count is
+  // already baked into `transcriptScrollOffset` itself (`maxScrollOffset` folds it in), so App.tsx
+  // must add only the GROWTH since then when it compensates for streaming rows not yet flushed into
+  // `transcript`, not the current total: adding the total on top double-counts the rows already
+  // present at dispatch time.
+  transcriptScrollStreamingRows: number;
+  // The terminal's own current width and the transcript viewport's own current height, in rows —
+  // kept on state (not threaded through every `transcript-scroll` action the way `viewportRows`
+  // used to be) so the scroll clamp and a resize both read the same two numbers from one place
+  // instead of re-deriving them at every call site. Seeded from `DEFAULT_COLUMNS`/a small
+  // placeholder here — App.tsx's own resize effect corrects both to the real measured values
+  // before the first real transcript content is ever appended (see that effect's own comment for
+  // why the ordering is guaranteed, not assumed).
+  columns: number;
+  viewportRows: number;
+  // `transcriptVisualRows(transcript, columns)` (format.ts), cached rather than recomputed by every
+  // scroll/resize case below (found by review): that function re-wraps the ENTIRE transcript, and
+  // PageUp/PageDown auto-repeat at the OS key-repeat rate, so recomputing it per dispatch meant
+  // holding either key re-wrapped the whole session's history on every repeat tick. Kept correct by
+  // construction, not by re-deriving: `appendLines` advances it by the NEW lines' own row count
+  // (cheap, proportional to what was just added) and `viewport-resized` is the only case that ever
+  // recomputes it from scratch, and only when `columns` actually changed — the one time the cached
+  // value can no longer be trusted, since every existing entry re-wraps to a different row count.
+  totalVisualRows: number;
   // The model's in-progress answer, not yet committed to the transcript — the live region's
   // content in Phase 4, flushed into `transcript` the moment a non-text event needs to report.
   streaming: string;
@@ -144,6 +181,13 @@ export function initialTuiState(
   return {
     session,
     transcript: [],
+    transcriptScrollOffset: 0,
+    transcriptScrollStreamingRows: 0,
+    columns: DEFAULT_COLUMNS,
+    // Not a real chrome-height estimate, same spirit as App.tsx's own FALLBACK_CHROME_ROWS
+    // placeholder — corrected by the first `viewport-resized` dispatch before it can matter.
+    viewportRows: 1,
+    totalVisualRows: 0,
     streaming: "",
     status: "",
     modeIndicator: modeIndicator(session.permissionMode),
@@ -167,6 +211,21 @@ export type TuiAction =
   // echo that must not fragment an in-progress streamed answer into two transcript entries (see
   // pushLine's own comment).
   | { type: "transcript-append"; line: string; flush?: boolean }
+  // Scrolls the transcript viewport. Positive `delta` moves toward older rows, clamped to
+  // `[0, transcriptVisualRows(transcript, columns) - viewportRows]` — the offset at which
+  // visibleTranscript shows a full `viewportRows`-tall page of the oldest content, not just the
+  // single oldest row (`totalRows - 1` would slice down to one row pinned to the bottom by
+  // `justifyContent="flex-end"`, App.tsx).
+  | { type: "transcript-scroll"; delta: number }
+  | { type: "transcript-scroll-to"; to: "top" | "bottom" }
+  // Dispatched by App.tsx's own resize effect whenever the measured terminal width or transcript
+  // viewport height changes (mount included — see that effect's own comment). One action for both
+  // numbers, not two, since a real terminal resize changes both at once and a caller that dispatched
+  // them separately could transiently wrap new content to a stale width while the height was
+  // already current, or vice versa. Also re-clamps `transcriptScrollOffset` against the new
+  // `viewportRows`, which is what closes the "grow the terminal while scrolled up" bug this action
+  // replaced a zero-delta `transcript-scroll` workaround for.
+  | { type: "viewport-resized"; columns: number; viewportRows: number }
   | { type: "loop-event"; event: LoopEvent }
   | { type: "command-error"; message: string }
   | { type: "command-error-cleared" }
@@ -249,6 +308,58 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     // typed mid-stream reordered the transcript against the model's own still-in-progress answer.
     case "transcript-append":
       return pushLine(state, action.line, action.flush ?? true);
+    case "transcript-scroll": {
+      const streamingRows = streamingVisualRows(state.streaming, state.columns);
+      const max = maxScrollOffset(state.totalVisualRows, streamingRows, state.viewportRows);
+      const next = Math.min(max, Math.max(0, state.transcriptScrollOffset + action.delta));
+      return {
+        ...state,
+        transcriptScrollOffset: next,
+        transcriptScrollStreamingRows: streamingRows,
+      };
+    }
+    case "transcript-scroll-to": {
+      const streamingRows = streamingVisualRows(state.streaming, state.columns);
+      return {
+        ...state,
+        transcriptScrollOffset:
+          action.to === "top"
+            ? maxScrollOffset(state.totalVisualRows, streamingRows, state.viewportRows)
+            : 0,
+        transcriptScrollStreamingRows: streamingRows,
+      };
+    }
+    case "viewport-resized": {
+      // Only a genuine `columns` change invalidates the cache: every existing entry re-wraps to a
+      // different row count then, and that's the one time re-deriving it from scratch is correct
+      // AND unavoidable — `viewportRows` alone changing (the far more common case, since it tracks
+      // measured box height and can jitter by a row across renders) never changes how many VISUAL
+      // rows the transcript occupies, only how many of them fit on screen at once.
+      const totalVisualRows =
+        action.columns === state.columns
+          ? state.totalVisualRows
+          : transcriptVisualRows(state.transcript, action.columns);
+      // Same reasoning as `totalVisualRows` above: streaming's own visual row count can only change
+      // when `columns` itself changes, so a `viewportRows`-only resize reuses the existing snapshot
+      // instead of paying a full re-wrap of the streaming answer.
+      const transcriptScrollStreamingRows =
+        action.columns === state.columns
+          ? state.transcriptScrollStreamingRows
+          : streamingVisualRows(state.streaming, action.columns);
+      const max = maxScrollOffset(
+        totalVisualRows,
+        transcriptScrollStreamingRows,
+        action.viewportRows,
+      );
+      return {
+        ...state,
+        columns: action.columns,
+        viewportRows: action.viewportRows,
+        totalVisualRows,
+        transcriptScrollOffset: Math.min(max, state.transcriptScrollOffset),
+        transcriptScrollStreamingRows,
+      };
+    }
     case "loop-event":
       return applyLoopEvent(state, action.event);
     case "command-error":
@@ -326,6 +437,32 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
   }
 }
 
+// The in-progress streamed answer's own visual row count at `columns` wide — `state.totalVisualRows`
+// only ever tracks the COMMITTED transcript (see its own comment), so a scroll-bound clamp that
+// used that cache alone could never reach rows still sitting in `state.streaming`: with an empty or
+// short committed transcript and a streamed answer taller than one viewport, PageUp/Home computed
+// their ceiling from `totalVisualRows` and could never move `transcriptScrollOffset` past 0, even
+// though `visibleTranscript` (format.ts) renders `streaming` as real content above the viewport's
+// tail. Only called from the three keypress/resize cases below — never from "text" (applyLoopEvent,
+// below), which fires once per streamed token and cannot afford to re-wrap `streaming` on every one.
+function streamingVisualRows(streaming: string, columns: number): number {
+  return streaming.length > 0 ? transcriptVisualRows([streaming], columns) : 0;
+}
+
+// The furthest `transcriptScrollOffset` can go: every visual row that exists, committed plus
+// in-progress, minus the ones already on screen. Takes the streaming answer's own row count
+// pre-computed rather than re-deriving it from `streaming`/`columns` itself: every call site also
+// needs that same row count for `transcriptScrollStreamingRows` (the offset's own snapshot of it),
+// so computing it once and passing it to both avoids wrapping the streaming answer twice per
+// dispatch.
+function maxScrollOffset(
+  totalVisualRows: number,
+  streamingRows: number,
+  viewportRows: number,
+): number {
+  return Math.max(0, totalVisualRows + streamingRows - viewportRows);
+}
+
 // Commits any pending streamed text as its own transcript line before appending `line`, so a
 // tool-call/done/error that arrives mid-stream does not discard the model's partial answer.
 // `flush: false` (a submission echo — see TuiAction's own comment) skips that flush-transfer
@@ -333,10 +470,43 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
 // later, whole, by whatever event finishes the turn) and not cleared either (clearing it would
 // silently drop the model's in-progress text instead of just deferring its commit).
 function pushLine(state: TuiState, line: string, flush = true): TuiState {
-  if (!flush) return { ...state, transcript: [...state.transcript, line] };
-  const transcript =
-    state.streaming.length > 0 ? [...state.transcript, state.streaming] : state.transcript;
-  return { ...state, transcript: [...transcript, line], streaming: "" };
+  if (!flush) return appendLines(state, [line]);
+  const appended = state.streaming.length > 0 ? [state.streaming, line] : [line];
+  return { ...appendLines(state, appended, state.transcriptScrollStreamingRows), streaming: "" };
+}
+
+// Appends one or more LOGICAL lines, untouched — no wrapping here; see TuiState.transcript's own
+// comment for why the entries themselves must stay whatever was passed in. `addedRows` (the VISUAL
+// row count the new lines add at the current `columns`, not `rawLines.length`) does two things:
+// advances `totalVisualRows` (the cache `transcript-scroll`'s own clamp trusts — see that field's
+// own comment) unconditionally, since it must stay correct regardless of scroll position; and, only
+// while the viewport is scrolled up (`transcriptScrollOffset > 0`), advances the offset by the same
+// amount so a scrolled-up view stays anchored on the same content as new rows arrive, rather than
+// sliding out from under the reader mid-read by fewer rows than what actually landed underneath it.
+//
+// `resolvedStreamingRows` is how many of those `addedRows` were already streaming text that a prior
+// scroll action (transcript-scroll/-to/viewport-resized) had already folded into
+// `transcriptScrollOffset` via `transcriptScrollStreamingRows` (see that field's own comment and
+// App.tsx's matching delta-not-total logic). `pushLine`'s flush path moves `state.streaming` verbatim
+// into `rawLines`, so without subtracting that back out, `addedRows` would double-count rows the
+// offset already accounts for and overshoot past the content the reader was anchored on. The
+// no-flush path never touches `streaming`, so it passes the default 0 — nothing to subtract, and
+// `transcriptScrollStreamingRows` must stay as-is since that still-active streaming hasn't resolved.
+function appendLines(state: TuiState, rawLines: string[], resolvedStreamingRows = 0): TuiState {
+  const addedRows = transcriptVisualRows(rawLines, state.columns);
+  return {
+    ...state,
+    transcript: [...state.transcript, ...rawLines],
+    totalVisualRows: state.totalVisualRows + addedRows,
+    transcriptScrollOffset:
+      state.transcriptScrollOffset > 0
+        ? state.transcriptScrollOffset + Math.max(0, addedRows - resolvedStreamingRows)
+        : 0,
+    // Only reset once the snapshot has actually been resolved into `rawLines` above (flush path) —
+    // a no-flush append leaves streaming's own still-growing content, and its snapshot, untouched.
+    transcriptScrollStreamingRows:
+      resolvedStreamingRows > 0 ? 0 : state.transcriptScrollStreamingRows,
+  };
 }
 
 function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {

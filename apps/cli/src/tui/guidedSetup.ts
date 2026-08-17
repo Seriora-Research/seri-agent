@@ -6,6 +6,7 @@
 // cli.ts itself.
 import { randomUUID } from "node:crypto";
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
+import { messageOf } from "../errors";
 import { catalogWithFallback } from "../provider/catalog";
 import { persistDefaultModel } from "../provider/defaults";
 import { configuredProviders } from "../provider/keys";
@@ -75,13 +76,18 @@ export async function runGuidedSetup(
     reactDispatch?.(action);
   };
 
+  let resolveClosed!: () => void;
+
+  // An arrow, not a bare `resolveClosed` reference: this call happens before `resolveClosed` is
+  // assigned (below), so passing the binding directly would capture `undefined` — the arrow defers
+  // the read of `resolveClosed` until `onPanelClosed` is actually invoked, by which point it is set.
   const { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack } = createSetupHandlers({
     dispatch,
     getPendingSetup: () => liveState.pendingSetup,
     configDir,
+    onPanelClosed: () => resolveClosed(),
   });
 
-  let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
     resolveClosed = resolve;
   });
@@ -90,8 +96,8 @@ export async function runGuidedSetup(
   // `model-picker-resolved`, `state.pendingModelPicker` stays set and `ModelPicker` stays mounted
   // with its own local filter/selection intact — the user gets a visible reason instead of the
   // panel silently doing nothing. `command-error`, not `transcript-append`: it is a single-slot
-  // field rendered above the picker, so holding Escape replaces one line instead of flooding
-  // `<Static>`. Ctrl-C is still the way out and needs no code here — see `onCancel`, below.
+  // field rendered above the picker, so holding Escape replaces one line instead of flooding the
+  // transcript. Ctrl-C is still the way out and needs no code here — see `onCancel`, below.
   function onGuidedModelPickerCancel(): void {
     dispatch({ type: "command-error", message: GUIDED_MODEL_REQUIRED });
   }
@@ -109,7 +115,7 @@ export async function runGuidedSetup(
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
       return; // picker stays up; Ctrl-C is the way out
     }

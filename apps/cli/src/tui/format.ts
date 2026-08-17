@@ -3,16 +3,187 @@
 // cli-commands-to-tui feature-plan.md) verbatim: a pure move, no behavior change.
 
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
+import wrapAnsi from "wrap-ansi";
+import { escapeControlChars } from "../cli/output";
 import type { ResolvedRoute } from "../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "./commands";
 
-// The most a picker window ever shows at once, regardless of how many entries match the current
-// filter — the catalog easily runs into the hundreds (models.dev's own OpenRouter listing), and
-// rendering all of them would scroll the picker itself out of view, the same reasoning
-// truncateArgsDisplay already applies to a single long line. `selectedIndex` can move past this
-// many rows (arrow-key navigation over the full filtered list, not just what's on screen) — see
-// `scrollOffset` (panels/ModelPicker.tsx) for how the visible window slides to keep it in view.
-export const MODEL_PICKER_WINDOW = 10;
+// Shared by every list panel (ModelPicker, ConfigPanel, PermissionsPanel, SetupPanel) via
+// useListWindow.ts — the most any of their windows ever shows at once, regardless of how many
+// entries/rows match the current filter. The catalog easily runs into the hundreds (models.dev's
+// own OpenRouter listing), and rendering all of them would scroll the panel itself out of view, the
+// same reasoning truncateArgsDisplay already applies to a single long line; `LIST_WINDOW_MAX` is the
+// ceiling on a tall terminal, `MIN_LIST_WINDOW` (below) the floor on a short one. `selectedIndex` can
+// move past this many rows (arrow-key navigation over the full filtered list, not just what's on
+// screen) — see `slideWindow`/`useListWindow.ts` for how the visible window slides to keep it in
+// view.
+// `MIN_LIST_WINDOW` is a floor for a short terminal, not a value any of today's real panels reach
+// (SetupPanel's own 5 providers already fits under it) — enough rows that a floor-clamped panel
+// still shows more than one entry at a time. `PANEL_CHROME_ROWS` is how much of a panel's own
+// height is spent on its border, header/filter line, and "+N more" footer rather than list rows —
+// sized against ConfigPanel's own list step, the tallest of the four: unlike PermissionsPanel/
+// SetupPanel, it can render a "+N more" footer AND a selectedDescription line at once (one row
+// each), on top of the border/header/hint every panel already has.
+export const LIST_WINDOW_MAX = 10;
+export const MIN_LIST_WINDOW = 3;
+export const PANEL_CHROME_ROWS = 9;
+
+// Every row a panel's own budget has to share with the rest of App.tsx's render, reserved
+// unconditionally rather than threaded through as props: the root Box's own spare row (App.tsx,
+// `height={rows - 1}`), the unconditional mode-indicator row, a `commandError` line (one row,
+// shown above the panel), and AuthBanner's three-row bordered Box (shown above everything when
+// signed out) — 1 + 1 + 1 + 3 = 6. Unconditional because `commandError`/`authOffer` live on
+// reducer state inside App, out of scope for the four panel components that call
+// `useListWindow(selected)` with nothing else in scope — threading both flags into every one of
+// them (plus App itself) costs far more than the alternative: over-reserving these six rows when
+// neither is actually showing costs at most one list row on a 24-row terminal and nothing at all
+// on a 25+ row one, while under-reserving pushes a panel row off the alt screen with no scrollback
+// to recover it.
+//
+// Does NOT also reserve for `pendingTool`'s own three-row bordered Box, even though a panel can
+// genuinely be open while a write_file/edit call is in flight (/model, /setup, /config, and
+// /permissions are all handled before the turnInFlight guard) — tried once (bumping this to 9) and
+// reverted: on a real 24-row terminal, that shrank the /model picker's default window from 9 rows
+// to 6, pushing the bundled fallback manifest's own default model (one of only 6 groq entries in a
+// 350-entry catalog) out of the picker's default unfiltered view — a real, more commonly hit
+// regression than the pendingTool overflow it was meant to close. Left as a known gap rather than
+// re-fixed here; a real fix needs either a shorter LIST_WINDOW_MAX floor or measuring pendingTool's
+// own height live instead of reserving for it unconditionally.
+export const APP_CHROME_ROWS = 6;
+
+// The transcript viewport's placeholder height for the one frame before useBoxMetrics has ever
+// measured the live region below it (App.tsx) — not the real budget, just enough that the first
+// frame renders a plausible slice of the transcript instead of an empty one.
+export const FALLBACK_CHROME_ROWS = 6;
+
+// Hard-wraps `text` to `columns` VISUAL rows, ANSI-aware (a bash/git tool result can carry real
+// color codes, and wrap-ansi tracks them across the break rather than losing the reset). `hard:
+// true` force-breaks a single word/token longer than `columns` (an unbroken path or URL) instead of
+// overflowing it. `trim: false` keeps leading whitespace exactly as written: tool output routinely
+// carries meaningful indentation (a diff, a code snippet), and wrap-ansi's own default trims it.
+// `Math.max(1, columns)`: a genuinely zero-width terminal (a resize race, an odd PTY state — real,
+// not hypothetical: `stdout.columns` can report 0 for a real pty's first render or two) would
+// otherwise hand wrap-ansi a 0 budget, which it accepts silently and degrades to one character per
+// row rather than throwing — a defensive floor here regardless of what upstream substitution
+// `resolveWidth` (App.tsx) already applies. Always returns at least one entry, even for `""`, so
+// an intentional blank separator line survives as one.
+//
+// This is called from `transcript`'s OWN read path (visibleTranscript/transcriptVisualRows, below)
+// and the transcript never stores its own wrapped output — deliberately: a hard-wrap break is
+// indistinguishable from a real `\n` once written, so a version that wrapped at write time could
+// never correctly re-wrap on a resize (there is no way to un-wrap what was already split). Deriving
+// from the untouched logical lines on every read is what makes a resize free instead of lossy.
+export function wrapForTranscript(text: string, columns: number): string[] {
+  return wrapAnsi(text, Math.max(1, columns), { hard: true, trim: false }).split("\n");
+}
+
+// The total number of VISUAL rows `lines` (logical, unwrapped) occupies at `columns` wide — what
+// the scroll clamp (reducer.ts's `transcript-scroll`/`transcript-scroll-to`/`viewport-resized`
+// cases) needs to know the real maximum offset. O(transcript length): fine on a keypress/resize
+// (the only callers), not fine per-render, which is exactly why `visibleTranscript` below does NOT
+// call this — it only ever wraps the tail slice it actually needs.
+export function transcriptVisualRows(lines: string[], columns: number): number {
+  let total = 0;
+  for (const line of lines) total += wrapForTranscript(line, columns).length;
+  return total;
+}
+
+// The visible slice of a committed transcript for a viewport `rows` tall, `offset` VISUAL rows up
+// from the newest (0 = following the latest line). Tail-anchored, not head-anchored: a transcript
+// longer than the viewport keeps showing its NEWEST rows by default, the same thing the terminal
+// itself would show if these lines had just scrolled by normally.
+//
+// Walks `lines` from the newest entry backward, wrapping each one, stopping as soon as
+// `offset + rows` visual rows have accumulated (or the transcript runs out) — bounded by how deep
+// the reader has scrolled, not by total session length, so this stays cheap on every render of a
+// long-running session (called once per streamed token while a turn is in progress) instead of
+// re-wrapping the whole history every frame. NOTE: at the deepest possible scroll (Home, offset ===
+// totalVisualRows - viewportRows) this bound degrades to the full transcript, same as the O(n)
+// clamp — unavoidable without caching wrapped output, which is the one thing this file's own
+// `wrapForTranscript` comment explains storing at write time can never safely do.
+//
+// Collected newest-line-first via `push` (O(1) amortized), each line's OWN rows kept in their
+// normal top-to-bottom order — `.reverse()` at the end restores overall chronological order in one
+// O(collected lines) pass. `unshift(...wrapped)` in this same loop was O(current
+// tail length) per call, making the accumulation up to O(scroll-depth²): cheap while scrolled near
+// the bottom, but the exact case a reader scrolled deep into a long session (or a fast streamed
+// answer on a tall terminal) would actually hit every render.
+//
+// `pending` (App.tsx's `state.streaming`, the in-progress answer not yet committed to `lines`) is
+// wrapped and seeded into the accumulation FIRST, ahead of the backward walk over `lines` — not
+// spread into a `[...lines, pending]` array at the call site (a prior version of this function did
+// exactly that, tried and reverted): that allocated a full copy of the committed transcript on every
+// call, i.e. every streamed token, for a function whose entire point is staying proportional to
+// scroll depth instead of session length. Wrapping in the SAME accumulation `lines` itself feeds
+// keeps `pending`'s own row count part of one coherent walk rather than a second, disconnected one.
+export function visibleTranscript(
+  lines: string[],
+  rows: number,
+  offset: number,
+  columns: number,
+  pending = "",
+): string[] {
+  const collected: string[][] = [];
+  let collectedRows = 0;
+  if (pending.length > 0) {
+    const wrapped = wrapForTranscript(pending, columns);
+    collected.push(wrapped);
+    collectedRows += wrapped.length;
+  }
+  for (let i = lines.length - 1; i >= 0 && collectedRows < offset + rows; i--) {
+    const wrapped = wrapForTranscript(lines[i], columns);
+    collected.push(wrapped);
+    collectedRows += wrapped.length;
+  }
+  const tail = collected.reverse().flat();
+  const end = Math.max(0, tail.length - offset);
+  const start = Math.max(0, end - rows);
+  return tail.slice(start, end);
+}
+
+// For a list-panel row rendered with `wrap="truncate-end"` (ConfigPanel, SetupPanel): that prop
+// only guards a value wider than the panel — it does nothing for a literal newline, which Ink still
+// renders as a real line break regardless of wrap mode. A non-secret config value can carry one:
+// the TUI's own interactive entry steps strip `\r`/`\n` as they're typed (InputBox's own
+// paste-terminator handling), but `seri config set` on the CLI (config/config.ts's setConfigValue)
+// does not, so a value written that way can still reach a row's own render with one in it — and
+// SetupPanel's own `maskValue` output (config/commands.ts) keeps a value's first/last 4 characters
+// verbatim, so a newline in either survives the masking too. Collapsed to a single space, not
+// stripped to nothing, so an oddly space-joined value at least stays legible about where the break
+// was.
+//
+// `escapeControlChars` runs SECOND, on what's left after the collapse above (so it never touches
+// the `\r`/`\n` this function already turned into spaces): the same unsanitized `seri config set`
+// path that can carry a raw newline can carry any other control byte too, including ESC — an
+// escape sequence in a config value would otherwise reach Ink's `<Text>` and write directly to the
+// real terminal underneath the alt screen. `escapeControlChars` already exists for exactly this
+// class of untrusted-content render (cli/output.ts's own comment on it).
+export function singleLine(value: string): string {
+  return escapeControlChars(value.replace(/\r\n|\r|\n/g, " "));
+}
+
+// The "clamp, don't re-center" rule lifted verbatim out of ModelPicker's own `moveSelection`
+// (panels/ModelPicker.tsx) — factored out so useListWindow.ts can share it across every list panel
+// instead of each reimplementing the picker's own sliding-window arithmetic.
+export function slideWindow(offset: number, selected: number, windowSize: number): number {
+  if (selected < offset) return selected;
+  if (selected >= offset + windowSize) return selected - windowSize + 1;
+  return offset;
+}
+
+// How many rows a list panel's own window can show for a terminal `rows` tall — clamped between
+// `MIN_LIST_WINDOW` and `LIST_WINDOW_MAX`, never derived past either even on a very tall terminal.
+export function listWindowSize(rows: number): number {
+  return Math.min(LIST_WINDOW_MAX, Math.max(MIN_LIST_WINDOW, rows - PANEL_CHROME_ROWS));
+}
+
+// A list panel's own "+N more" footer count: rows strictly BELOW the window, not
+// `total - visible.length`, which counts rows hidden ABOVE the window too and stays flat at
+// `total - windowSize` for as long as the window is full — the footer would never count down while
+// scrolling toward the bottom, and never disappear even once every remaining row was on screen.
+export function remaining(total: number, offset: number, windowSize: number): number {
+  return Math.max(0, total - offset - windowSize);
+}
 
 // Column widths for formatModelRow/MODEL_PICKER_HEADER below — plain padded strings, not a table
 // component: this repo hand-rolls its TUI deliberately (App.tsx's own file-level comment) and Ink
@@ -37,9 +208,11 @@ export const COST_WIDTH = 18;
 export const MODE_LABEL_FULL_COLS = 76;
 export const MODE_LABEL_COMPACT_COLS = 52;
 
-// A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined` —
-// this is what `stdout.columns ?? DEFAULT_COLUMNS` (useTerminalWidth, App.tsx) guards against. It
-// is NOT what makes App.test.tsx's own Ink component tests land in the full tier:
+// A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined`,
+// and a real pty can separately report a genuine but unusable `columns === 0` for its first render
+// or two — both are what `resolveWidth`'s `stdout.columns || DEFAULT_COLUMNS` (App.tsx) guards
+// against; `||`, not `??`, is what makes the zero case fall back too. It is NOT what makes
+// App.test.tsx's own Ink component tests land in the full tier:
 // ink-testing-library's stub stdout returns a real `columns: 100`, so those tests are already in
 // the full tier on the actual value, not this fallback.
 export const DEFAULT_COLUMNS = 80;
@@ -210,10 +383,16 @@ export function envShadowReason(keyName: string): string {
 export function formatSetupRow(row: SetupProviderRow): string {
   const name = truncatePad(row.provider, PROVIDER_WIDTH);
   if (row.source === "unset") return `${name} not set`;
+  // `singleLine`, not `row.masked` raw: `maskValue` keeps a value's first/last 4
+  // characters verbatim, so a literal newline in either survives masking — see `singleLine`'s own
+  // comment for how it reaches here. `?? ""`: `masked` is `undefined` only for the "unset" source
+  // already returned above, never for "env"/"config" — the fallback is unreachable in practice, not
+  // a real case being papered over.
+  const masked = singleLine(row.masked ?? "");
   if (row.source === "env") {
     return row.removable
-      ? `${name} ${row.masked} (env, config entry underneath — removable)`
+      ? `${name} ${masked} (env, config entry underneath — removable)`
       : `${name} ${envShadowReason(row.keyName)}`;
   }
-  return `${name} ${row.masked} (config)`;
+  return `${name} ${masked} (config)`;
 }

@@ -44,6 +44,7 @@ import {
 import { configCommand as configCommandReal } from "./config/commands";
 import { loadVerifyConfig } from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
+import { messageOf } from "./errors";
 import type { PermissionMode } from "./gate/gate";
 import {
   type ApprovalAnswer,
@@ -86,6 +87,7 @@ import { deliverSignal, onSignalCancel, onSignalCleanup, raiseSignal } from "./s
 import { withSubagents } from "./subagents/dispatch";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
+import { enterAltScreen, exitAltScreen } from "./tui/altScreen";
 import {
   type CommandDirs,
   checkpointTarget,
@@ -678,7 +680,7 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
       options: PARSE_OPTIONS,
     }));
   } catch (err) {
-    return usageError(err instanceof Error ? err.message : String(err));
+    return usageError(messageOf(err));
   }
 
   // Set here, before any validation below that can return a usage error early: every call to
@@ -762,7 +764,7 @@ async function runSelftest(deps: CliDeps): Promise<number> {
     console.log(`selftest ok: ripgrep ${rgVersion(resolveRg())}`);
     return 0;
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(messageOf(err));
     return 1;
   }
 }
@@ -777,7 +779,7 @@ async function handleAuthCommand(
       const configDir = deps.authConfigDir ?? getConfigDir();
       await loginFn(positionals[0], getWorkosClientId(configDir), configDir);
     } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
+      console.error(messageOf(err));
       return 1;
     }
     return 0;
@@ -787,7 +789,7 @@ async function handleAuthCommand(
     try {
       logoutFn(deps.authConfigDir ?? getConfigDir());
     } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
+      console.error(messageOf(err));
       return 1;
     }
     return 0;
@@ -814,7 +816,7 @@ function handleConfigCommand(positionals: string[], deps: CliDeps): number | und
     );
     return code;
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(messageOf(err));
     return 1;
   }
 }
@@ -834,7 +836,7 @@ function handlePermissionsCommand(positionals: string[], deps: CliDeps): number 
     );
     return code;
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(messageOf(err));
     return 1;
   }
 }
@@ -900,7 +902,7 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
       await command.run(commandArgs, dirs(ctx));
       return 0;
     } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
+      console.error(messageOf(err));
       return 1;
     }
   }
@@ -918,10 +920,18 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
     await command.run(loadSession<ModelMessage>(id, ctx.sessionsDir), commandArgs, dirs(ctx));
     return 0;
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(messageOf(err));
     return 1;
   }
 }
+
+// A queued startup notice, tagged with the stream it was headed for — `fatalDuringTui` routes each
+// one to `console.log`/`console.error` accordingly so a stdout-origin line (a routine "Session …
+// created.") never gets reclassified as stderr-origin (a warning) just because both funnelled
+// through the same queue. The TUI flush site (runTui's own `connectDispatch`) ignores `stream`
+// deliberately: every queued line lands in the transcript either way, regardless of which stream
+// it would have gone to on a non-TTY run.
+type PreMountMessage = { text: string; stream: "stdout" | "stderr" };
 
 // Everything the loop is driven with, resolved before the first model call so a failure to build
 // any of it is an exit code rather than a half-started turn.
@@ -978,6 +988,14 @@ type PreparedRun = {
   // session" (renderMemoryTier's own doc comment) means loaded HERE and nowhere else; a write made
   // mid-session takes effect next session, not this one.
   memory: LoadedMemory;
+  // Startup notices (session-created, permission warnings, pre-approved tools, the cross-project
+  // checkpoint mismatch) that prepareSession would otherwise print directly. On the TUI path they
+  // are queued here instead: prepareSession runs after enterAltScreen() but before runTui's own
+  // Ink render(), so a direct console write in that gap lands on the alt-screen buffer and is gone
+  // the instant the TUI's first frame paints over it. runTui flushes this into the transcript at
+  // mount. Empty on the non-TTY path, which still writes these directly (no alt screen there). Each
+  // entry keeps the stream it was headed for — see PreMountMessage's own comment.
+  preMountMessages: PreMountMessage[];
 };
 
 // Shared by prepareSession's own non-TTY notice and runTui's runTurn (below) — the two used to
@@ -1005,6 +1023,26 @@ function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider | 
   return `routing ${route.model} via ${route.provider} (your key) — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
 }
 
+// The one place a TTY-path failure becomes an exit code, used by every catch between
+// `enterAltScreen()` and `runTui`'s own mount (this function's own catches, and `run()`'s two
+// try/catches around the steps on either side of `prepareSession`): exits the alt screen before
+// printing anything (undiscarded messages need the primary screen restored first — the same
+// reasoning `checkZeroKeysConfigured`'s own catch used to state on its own), then flushes any
+// `preMountMessages` queued so far ahead of the fatal message itself, rather than dropping them —
+// a queued "Session X created." or fallback-catalog warning would otherwise vanish with no trace
+// once the run is already ending here instead of ever reaching runTui's own flush site
+// (connectDispatch). Safe to call with `err` from ANY throw in this window, caught or uncaught:
+// this is also what closes the "stack trace printed into the discarded alt-screen buffer" failure
+// mode for a genuinely uncaught exception, since `run()`'s own top-level catches route here too.
+function fatalDuringTui(err: unknown, preMountMessages: readonly PreMountMessage[] = []): number {
+  exitAltScreen();
+  for (const queued of preMountMessages) {
+    (queued.stream === "stdout" ? console.log : console.error)(queued.text);
+  }
+  console.error(messageOf(err));
+  return 1;
+}
+
 async function prepareSession(
   ctx: RunContext,
   deps: CliDeps,
@@ -1012,57 +1050,69 @@ async function prepareSession(
   isTTY: boolean,
 ): Promise<PreparedRun | number> {
   const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
-  // Resolved before loadOrCreateSession, not after (code-review finding, PR #73, round 3, item
-  // #4): that function's own model/provider backfill (resolveDefaultModel) needs the SAME
-  // configDir routing/getModel below already use, not the ambient default — a sandboxed
-  // `authConfigDir` caller used to get session.model/session.provider read from the wrong
-  // config.json entirely. `configDir` matches `seri config`'s own resolution (D7), so a key
-  // `/setup` or `seri config set` just wrote is picked up on the very next run.
-  const configDir = deps.authConfigDir ?? getConfigDir();
+  // See PreparedRun.preMountMessages' own comment: queued instead of printed on the TUI path,
+  // printed immediately (unchanged) everywhere else. Two queueing sinks, not one: `emit` is for
+  // stdout-origin lines (session-created, printPreApproved's own default), `warn` for stderr-origin
+  // ones (printWarning's three call sites, getModelCatalog's fallback warning) — collapsing both
+  // into one queue with no stream tag used to make `fatalDuringTui` print every one of them to
+  // stderr regardless of origin, reclassifying a routine notice as an error.
+  const preMountMessages: PreMountMessage[] = [];
+  const emit = isTTY
+    ? (text: string) => preMountMessages.push({ text, stream: "stdout" })
+    : console.log;
+  const warn = isTTY
+    ? (text: string) => preMountMessages.push({ text, stream: "stderr" })
+    : console.error;
+  // Passed as printWarning's own `sink` param — `undefined` on the non-TTY path keeps its existing
+  // default (console.error) exactly as before.
+  const warnSink = isTTY ? warn : undefined;
 
-  let session: RunSession;
-  let modelRecorded: boolean;
+  // One try wrapping everything from here through the final `return`: every fallible call in this
+  // function — loadOrCreateSession, resolveRoute/getModel, saveSession, checkpointTarget,
+  // loadGrants, createCheckpointer/loadVerifyConfig, loadMemory — shares this one catch, so nothing
+  // in here can discard `preMountMessages` by falling outside it. `configDir` is resolved in here
+  // too, not above the try: that function's own model/provider backfill, resolveDefaultModel,
+  // needs the SAME configDir routing/getModel below already use, not the ambient default — a
+  // sandboxed `authConfigDir` caller used to get session.model/session.provider read from the wrong
+  // config.json entirely; `configDir` matches `seri config`'s own resolution, so a key `/setup` or
+  // `seri config set` just wrote is picked up on the very next run. Being inside the try is what
+  // makes `run()`'s own isTTY try/catch around this function's call site provably unreachable, see
+  // that call site's own comment.
   try {
-    ({ session, modelRecorded } = loadOrCreateSession(
+    const configDir = deps.authConfigDir ?? getConfigDir();
+    const { session, modelRecorded } = loadOrCreateSession(
       ctx.resuming,
       ctx.resumeId,
       ctx.sessionsDir,
       loadAgentsFileFn,
       configDir,
-    ));
-  } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    return 1;
-  }
+    );
 
-  if (!ctx.resuming) console.log(`Session ${session.id} created.`);
+    if (!ctx.resuming) emit(`Session ${session.id} created.`);
 
-  if (runStart(ctx) === "task") {
-    session.messages.push({ role: "user", content: ctx.taskText });
-  }
+    if (runStart(ctx) === "task") {
+      session.messages.push({ role: "user", content: ctx.taskText });
+    }
 
-  // Loaded once, here, alongside the model resolution it feeds — /model (runTui's own runTurn)
-  // reuses this SAME catalog on every later turn rather than reloading it, but @seri/model-catalog
-  // caches for the rest of the process either way (catalog.ts's own loadCatalog).
-  const catalog = await getModelCatalog();
-  // D3 (feature-plan.md): resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
-  // stays a pure, environment-independent switch with its own test file.
-  // Bug fixed here (code-review, PR #73): `configuredProviders` (called by `resolveRoute` below)
-  // reads config.json — `getApiKey`'s own `loadConfig` call, which does a bare `JSON.parse` — so a
-  // corrupted config.json throws SYNCHRONOUSLY, the same failure mode `getModel` itself already
-  // guards against below. Before routing-priority resolution existed, that same read only ever
-  // happened INSIDE getAnthropicModel/etc., already inside this try. Moving it inside here too is
-  // what restores "a corrupted config.json prints a clean error and exits 1," not an uncaught
-  // crash on every session start.
-  let route: ReturnType<typeof resolveRoute>;
-  let model: LanguageModel;
-  try {
-    route = resolveRoute(
+    // Loaded once, here, alongside the model resolution it feeds — /model (runTui's own runTurn)
+    // reuses this SAME catalog on every later turn rather than reloading it, but @seri/model-catalog
+    // caches for the rest of the process either way (catalog.ts's own loadCatalog).
+    const catalog = await getModelCatalog(undefined, warnSink);
+    // D3 (feature-plan.md): resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
+    // stays a pure, environment-independent switch with its own test file.
+    // Bug fixed here (code-review, PR #73): `configuredProviders` (called by `resolveRoute` below)
+    // reads config.json — `getApiKey`'s own `loadConfig` call, which does a bare `JSON.parse` — so a
+    // corrupted config.json throws SYNCHRONOUSLY, the same failure mode `getModel` itself already
+    // guards against below. Before routing-priority resolution existed, that same read only ever
+    // happened INSIDE getAnthropicModel/etc. — no longer a distinct case now that one try covers the
+    // whole function, but the reasoning ("a corrupted config.json prints a clean error and exits 1,"
+    // not an uncaught crash) is still exactly why this needs to be inside the try at all.
+    const route = resolveRoute(
       catalog,
       { model: session.model, provider: session.provider ?? DEFAULT_PROVIDER },
       configuredProviders(configDir),
     );
-    model = getModel(
+    const model = getModel(
       route.model,
       route.provider,
       session.id,
@@ -1075,106 +1125,114 @@ async function prepareSession(
       },
       configDir,
     );
-  } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    return 1;
-  }
-  // D2: a rerouted pair is never silent — the piped/non-interactive path gets the notice here,
-  // gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent into the transcript
-  // once per turn, and this call ALSO runs on the TUI path (this function has no other reason to
-  // know isTTY), so without the gate a session-start reroute printed twice for the same turn: once
-  // here (before Ink even mounts) and again from runTurn.
-  if (route.rerouted && !isTTY) {
-    printWarning(rerouteNotice(route, session.provider));
-  }
-  // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
-  // cost and context-window come from the wrong provider's entry.
-  const catalogEntry = findCatalogEntry(catalog, route.model, route.provider);
+    // D2: a rerouted pair is never silent — the piped/non-interactive path gets the notice here,
+    // gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent into the transcript
+    // once per turn, and this call ALSO runs on the TUI path (this function has no other reason to
+    // know isTTY), so without the gate a session-start reroute printed twice for the same turn: once
+    // here (before Ink even mounts) and again from runTurn.
+    if (route.rerouted && !isTTY) {
+      printWarning(rerouteNotice(route, session.provider));
+    }
+    // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
+    // cost and context-window come from the wrong provider's entry.
+    const catalogEntry = findCatalogEntry(catalog, route.model, route.provider);
 
-  // A model this run merely RESOLVED is deliberately left out of the file. getGroqModel accepts any
-  // string — an unknown id is not rejected here, it comes back as a provider 404 mid-run — so
-  // pinning at creation mints a session that can never succeed, and `--continue`, the obvious retry,
-  // re-reads the bad id and fails identically while a corrected SERI_MODEL is ignored. driveLoop's
-  // messages-updated save records it instead, which loop.ts only emits after a turn the provider
-  // actually answered (loop.ts:264 for text, :276 for tool calls; a failure yields `error` and no
-  // messages-updated at all), so what gets pinned is a model that demonstrably worked.
-  //
-  // opencode solves this upstream of the call, looking the id up in a provider catalog and failing
-  // with `ModelNotFoundError` plus did-you-mean suggestions before anything is stored. seri has no
-  // catalog until Stage 7a, so "pin only what answered" is the catalog-free half of that guarantee.
-  // A model the session already recorded is untouched: it earned its place the same way.
-  saveSession(modelRecorded ? session : { ...session, model: undefined }, ctx.sessionsDir);
+    // A model this run merely RESOLVED is deliberately left out of the file. getGroqModel accepts
+    // any string — an unknown id is not rejected here, it comes back as a provider 404 mid-run — so
+    // pinning at creation mints a session that can never succeed, and `--continue`, the obvious
+    // retry, re-reads the bad id and fails identically while a corrected SERI_MODEL is ignored.
+    // driveLoop's messages-updated save records it instead, which loop.ts only emits after a turn
+    // the provider actually answered (loop.ts:264 for text, :276 for tool calls; a failure yields
+    // `error` and no messages-updated at all), so what gets pinned is a model that demonstrably
+    // worked.
+    //
+    // opencode solves this upstream of the call, looking the id up in a provider catalog and
+    // failing with `ModelNotFoundError` plus did-you-mean suggestions before anything is stored.
+    // seri has no catalog until Stage 7a, so "pin only what answered" is the catalog-free half of
+    // that guarantee. A model the session already recorded is untouched: it earned its place the
+    // same way.
+    saveSession(modelRecorded ? session : { ...session, model: undefined }, ctx.sessionsDir);
 
-  // Checkpointing is enabled by exactly this call, which is also why rolling it back is a one-line
-  // revert: `runLoop`, the session store, the gate and every tool are unmodified, and the store
-  // lives entirely outside the user's repository.
-  const { storeDir, worktree } = checkpointTarget(session, dirs(ctx));
+    // Checkpointing is enabled by exactly this call, which is also why rolling it back is a
+    // one-line revert: `runLoop`, the session store, the gate and every tool are unmodified, and
+    // the store lives entirely outside the user's repository.
+    const { storeDir, worktree } = checkpointTarget(session, dirs(ctx));
 
-  // Read here and nowhere else. NOTE FOR A FUTURE SCHEDULER (docs/BUILD-PLAN.md, "Unattended
-  // permission surface" open item): an unattended run must NOT copy this line. Every entry in
-  // that file was written by a human answering a live prompt in a run they were watching; that
-  // is consent for that run, not standing consent for one on a timer. Seeding a scheduled run
-  // from here is docs/ARCHITECTURE.md:202's "base safety layer disabled on a timer" arriving
-  // through a file instead of a flag.
-  const grants = loadGrants(ctx.permissionsDir, worktree, printWarning);
-  const allowedTools = effectiveTools(grants);
-  const permissionMode = skipPermissions ? "auto" : session.permissionMode;
-  // approve-each only: in read-only the gate blocks these tools before it ever consults the
-  // allowlist (gate.ts:14), and in auto everything is allowed anyway — printing "pre-approved" in
-  // either would be a sentence the run does not honour.
-  if (permissionMode === "approve-each" && allowedTools.length > 0) printPreApproved(allowedTools);
+    // Read here and nowhere else. NOTE FOR A FUTURE SCHEDULER (docs/BUILD-PLAN.md, "Unattended
+    // permission surface" open item): an unattended run must NOT copy this line. Every entry in
+    // that file was written by a human answering a live prompt in a run they were watching; that
+    // is consent for that run, not standing consent for one on a timer. Seeding a scheduled run
+    // from here is docs/ARCHITECTURE.md:202's "base safety layer disabled on a timer" arriving
+    // through a file instead of a flag.
+    const grants = loadGrants(ctx.permissionsDir, worktree, (msg) => printWarning(msg, warnSink));
+    const allowedTools = effectiveTools(grants);
+    const permissionMode = skipPermissions ? "auto" : session.permissionMode;
+    // approve-each only: in read-only the gate blocks these tools before it ever consults the
+    // allowlist (gate.ts:14), and in auto everything is allowed anyway — printing "pre-approved" in
+    // either would be a sentence the run does not honour. `isTTY ? emit : undefined`, not
+    // `warnSink`: printPreApproved's own default sink is console.log, so queueing it under the
+    // stderr-tagged `warn` would misclassify a routine notice as an error once fatalDuringTui
+    // routes by stream.
+    if (permissionMode === "approve-each" && allowedTools.length > 0) {
+      printPreApproved(allowedTools, isTTY ? emit : undefined);
+    }
 
-  // `write_file`, `bash` and `powershell` write relative to process.cwd(), while the snapshot
-  // covers the project root. Anywhere inside the project is fine — that is the whole point of
-  // resolving the root, and it is why a subdirectory launch no longer trips this. What is left is
-  // a genuine cross-project resume: it would snapshot one project while the tools edit another,
-  // and a later /undo would run its removal pass in the ORIGINAL project, deleting untracked files
-  // a human made there. Said out loud rather than left to be discovered by the deletion.
-  const inProject = relative(worktree, process.cwd());
-  if (inProject === ".." || inProject.startsWith(`..${sep}`) || isAbsolute(inProject)) {
-    printWarning(
-      `this session's files are checkpointed under ${worktree}, but tools run in ${process.cwd()} — /undo will act on ${worktree}`,
+    // `write_file`, `bash` and `powershell` write relative to process.cwd(), while the snapshot
+    // covers the project root. Anywhere inside the project is fine — that is the whole point of
+    // resolving the root, and it is why a subdirectory launch no longer trips this. What is left is
+    // a genuine cross-project resume: it would snapshot one project while the tools edit another,
+    // and a later /undo would run its removal pass in the ORIGINAL project, deleting untracked
+    // files a human made there. Said out loud rather than left to be discovered by the deletion.
+    const inProject = relative(worktree, process.cwd());
+    if (inProject === ".." || inProject.startsWith(`..${sep}`) || isAbsolute(inProject)) {
+      printWarning(
+        `this session's files are checkpointed under ${worktree}, but tools run in ${process.cwd()} — /undo will act on ${worktree}`,
+        warnSink,
+      );
+    }
+
+    // Verification is enabled by exactly this composition, and rolling it back is deleting the
+    // outer call: `runLoop`, the gate, the session store and every tool are unmodified, and
+    // `verify/` becomes dead code rather than something that has to be unpicked.
+    //
+    // Outside withCheckpoints, not inside: the checkpoint has to be taken BEFORE the write
+    // (checkpoint/wrapTools.ts:18-22) and the check has to run AFTER it, so this is the order that
+    // puts each on the correct side. The AbortSignal the check is run with is the one runLoop hands
+    // `execute` (loop.ts:331), which is driveLoop's controller — the same Ctrl-C that stops a bash
+    // command stops a check.
+    const checkpointer = createCheckpointer({
+      storeDir,
+      worktree,
+      sessionId: session.id,
+      onWarning: printWarning,
+    });
+    const tools = withVerification(
+      withCheckpoints(toolDefinitions, checkpointer),
+      loadVerifyConfig(),
     );
+
+    // Loaded once, here, alongside everything else this function resolves once per run — this is
+    // what "frozen per session" means (memory/store.ts's own renderMemoryTier doc comment).
+    const memory = loadMemory({ configDir, worktree });
+
+    return {
+      session,
+      storeDir,
+      tools,
+      model,
+      permissionMode,
+      worktree,
+      allowedTools,
+      catalog,
+      catalogEntry,
+      route,
+      checkpointer,
+      memory,
+      preMountMessages,
+    };
+  } catch (err) {
+    return fatalDuringTui(err, preMountMessages);
   }
-
-  // Verification is enabled by exactly this composition, and rolling it back is deleting the outer
-  // call: `runLoop`, the gate, the session store and every tool are unmodified, and `verify/`
-  // becomes dead code rather than something that has to be unpicked.
-  //
-  // Outside withCheckpoints, not inside: the checkpoint has to be taken BEFORE the write
-  // (checkpoint/wrapTools.ts:18-22) and the check has to run AFTER it, so this is the order that
-  // puts each on the correct side. The AbortSignal the check is run with is the one runLoop hands
-  // `execute` (loop.ts:331), which is driveLoop's controller — the same Ctrl-C that stops a bash
-  // command stops a check.
-  const checkpointer = createCheckpointer({
-    storeDir,
-    worktree,
-    sessionId: session.id,
-    onWarning: printWarning,
-  });
-  const tools = withVerification(
-    withCheckpoints(toolDefinitions, checkpointer),
-    loadVerifyConfig(),
-  );
-
-  // Loaded once, here, alongside everything else this function resolves once per run — this is
-  // what "frozen per session" means (memory/store.ts's own renderMemoryTier doc comment).
-  const memory = loadMemory({ configDir, worktree });
-
-  return {
-    session,
-    storeDir,
-    tools,
-    model,
-    permissionMode,
-    worktree,
-    allowedTools,
-    catalog,
-    catalogEntry,
-    route,
-    checkpointer,
-    memory,
-  };
 }
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
@@ -1450,7 +1508,7 @@ async function driveLoop(
           appendBarrier(storeDir, session.id, "compaction");
         } catch (err) {
           printWarning(
-            `could not record the compaction barrier, so /rewind may not be able to cross this point: ${err instanceof Error ? err.message : String(err)}`,
+            `could not record the compaction barrier, so /rewind may not be able to cross this point: ${messageOf(err)}`,
           );
         }
       }
@@ -1482,7 +1540,7 @@ async function driveLoop(
             printGrantPersisted(event.name, worktree);
         } catch (err) {
           printWarning(
-            `could not save the permanent approval for ${event.name}, so seri will ask again next time: ${err instanceof Error ? err.message : String(err)}`,
+            `could not save the permanent approval for ${event.name}, so seri will ask again next time: ${messageOf(err)}`,
           );
         }
       }
@@ -1567,8 +1625,11 @@ function checkZeroKeysConfigured(configDir: string): boolean | number {
   try {
     return configuredProviders(configDir).size === 0;
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    return 1;
+    // The alt screen is still active here (entered by run()'s own isTTY block, above), and this
+    // message is terminal for the run — nothing re-enters it after this catch returns. No
+    // `preMountMessages` to flush: this runs before `prepareSession` (the only thing that queues
+    // any) is ever called.
+    return fatalDuringTui(err);
   }
 }
 
@@ -1775,7 +1836,7 @@ async function runTui(
     try {
       saveSession(toPersist, ctx.sessionsDir);
     } catch (err) {
-      const message = `could not save the session: ${err instanceof Error ? err.message : String(err)}`;
+      const message = `could not save the session: ${messageOf(err)}`;
       printWarning(message);
       for (const { reject } of resolvers) reject(new Error(message));
       return;
@@ -2072,7 +2133,7 @@ async function runTui(
                 persistDefaultModel({ model: modelId, provider }, configDir);
                 lastPersistedModel = { model: modelId, provider };
               } catch (err) {
-                const message = err instanceof Error ? err.message : String(err);
+                const message = messageOf(err);
                 printWarning(`could not save the default model: ${message}`);
               }
             }
@@ -2179,17 +2240,28 @@ async function runTui(
           connectDispatch: undefined,
         }),
       );
-      void instance.waitUntilExit().then(() => {
-        resolveRunTui({
-          doneReason,
-          cancelledBy: undefined,
-          usage,
-          cost,
-          refusedWithoutRunning,
-          archivist,
-          ranAnyTurn,
+      // `.catch(rejectRunTui)`: Ink's own `unmount(error)` rejects
+      // `waitUntilExit()`'s promise when the argument is an Error (a render crash, for instance) —
+      // without this, that rejection had nowhere to go (a `void`ed promise with no rejection
+      // handler), so `settled` above never settled at all: `await runTui(...)` at this function's
+      // own call site hung forever, with the alt screen still up, instead of hitting the catch that
+      // is supposed to cover exactly this case.
+      void instance
+        .waitUntilExit()
+        .then(() => {
+          resolveRunTui({
+            doneReason,
+            cancelledBy: undefined,
+            usage,
+            cost,
+            refusedWithoutRunning,
+            archivist,
+            ranAnyTurn,
+          });
+        })
+        .catch((err: unknown) => {
+          rejectRunTui(err instanceof Error ? err : new Error(String(err)));
         });
-      });
     };
     if (turnInFlight) {
       // MEDIUM-5: without this, cancelling a still-running turn on the way out (this whole
@@ -2264,7 +2336,7 @@ async function runTui(
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
       }
       return;
@@ -2282,7 +2354,7 @@ async function runTui(
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
       }
       return;
@@ -2320,7 +2392,7 @@ async function runTui(
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
       }
       return;
@@ -2348,7 +2420,7 @@ async function runTui(
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
       }
       return;
@@ -2366,7 +2438,7 @@ async function runTui(
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
       }
       return;
@@ -2392,7 +2464,7 @@ async function runTui(
       } catch (err) {
         dispatch({
           type: "command-error",
-          message: err instanceof Error ? err.message : String(err),
+          message: messageOf(err),
         });
       }
       return;
@@ -2451,7 +2523,7 @@ async function runTui(
     } catch (err) {
       dispatch({
         type: "command-error",
-        message: err instanceof Error ? err.message : String(err),
+        message: messageOf(err),
       });
     }
   }
@@ -2513,6 +2585,14 @@ async function runTui(
       },
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
+        // See PreparedRun.preMountMessages' own comment: prepareSession queued these instead of
+        // printing them directly, since it runs after enterAltScreen() but before this mount.
+        // `.stream` is ignored deliberately (PreMountMessage's own comment): every queued line
+        // lands in the transcript either way, regardless of which console stream it would have
+        // gone to on a non-TTY run.
+        for (const { text } of prepared.preMountMessages) {
+          dispatch({ type: "transcript-append", line: text });
+        }
         // Stage C: the non-blocking login/signup offer (AuthBanner) — true iff no auth session is
         // saved yet, computed fresh at mount the same way decideSetupOpen/decideModelPickerOpen are
         // computed fresh on their own open, not cached from prepareSession.
@@ -2661,33 +2741,51 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // than a branch inside the block below, so a corrected zeroKeysConfigured/runGuidedSetup diff
   // never also has to account for this mount.
   if (isTTY) {
-    await runWelcomeSplash(ctx.configDir, deps);
-  }
-
-  if (isTTY) {
-    const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
-    if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
-    // getModelCatalog() deliberately NOT awaited here (code-review finding, PR #91): awaiting it
-    // before runGuidedSetup blocked /setup from ever painting until the models.dev fetch settled
-    // (up to FETCH_TIMEOUT_MS) — a blank terminal on exactly the flow this feature exists to make
-    // instant. The fetch still starts immediately; runGuidedSetup's own onSetupClose only consumes
-    // the resolved catalog once it actually needs it, by which point a real user has almost always
-    // already typed a key and closed the panel.
+    // Wrapped, unlike the rest of this function's own `return N` early exits: `run()` has never
+    // had a top-level `.catch` (its only caller, `import.meta.main`, does
+    // `run(...).then((code) => process.exit(code))`), and neither Bun nor this file installs an
+    // `uncaughtException`/`unhandledRejection` handler — a real throw here would print its own
+    // stack trace INTO the still-active alt-screen buffer, which `process.on("exit",
+    // exitAltScreen)` then silently discards on the way out, leaving the user with a dead process
+    // and zero visible diagnostics. `fatalDuringTui` (prepareSession's own bailout, shared here) is
+    // what every other terminal-for-the-run failure in this window already routes through.
     //
-    // This IS a fetch running in parallel with a live Ink render — the exact hazard Decision 5
-    // (byok-guided-setup-default-model bugfix report) originally avoided by construction, loading
-    // the catalog fully BEFORE `runGuidedSetup` ever mounted. It is safe here only because Ink
-    // 7.1.1's `render()` defaults `patchConsole: true` (ink/build/render.js) — `getModelCatalog`'s
-    // own `printWarning` (a `console.error` call, provider/catalog.ts) gets routed above the live
-    // frame instead of corrupting it, on every offline first run. A future Ink upgrade or an
-    // explicit `patchConsole: false` on this `render()` call (there is none today — `runGuidedSetup`
-    // only passes `exitOnCtrlC`/`interactive`) would silently reintroduce that hazard.
-    if (zeroKeysConfigured) {
-      await runGuidedSetup(ctx.configDir, getModelCatalog());
+    // `enterAltScreen()` itself is INSIDE this try, not just the calls after it: its own
+    // `entered = true` runs before its write, so a thrown write still leaves `exitAltScreen`
+    // (called by `fatalDuringTui` below) able to attempt — and safely no-op-on-failure — a real
+    // restore, rather than the throw escaping before any of this machinery is even reachable.
+    try {
+      enterAltScreen();
+      await runWelcomeSplash(ctx.configDir, deps);
+      const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
+      if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
+      // getModelCatalog() deliberately NOT awaited here (code-review finding, PR #91): awaiting it
+      // before runGuidedSetup blocked /setup from ever painting until the models.dev fetch settled
+      // (up to FETCH_TIMEOUT_MS) — a blank terminal on exactly the flow this feature exists to make
+      // instant. The fetch still starts immediately; runGuidedSetup's own onSetupClose only consumes
+      // the resolved catalog once it actually needs it, by which point a real user has almost always
+      // already typed a key and closed the panel.
+      //
+      // This IS a fetch running in parallel with a live Ink render — the exact hazard Decision 5
+      // (byok-guided-setup-default-model bugfix report) originally avoided by construction, loading
+      // the catalog fully BEFORE `runGuidedSetup` ever mounted. It is safe here only because Ink
+      // 7.1.1's `render()` defaults `patchConsole: true` (ink/build/render.js) — `getModelCatalog`'s
+      // own `printWarning` (a `console.error` call, provider/catalog.ts) gets routed above the live
+      // frame instead of corrupting it, on every offline first run. A future Ink upgrade or an
+      // explicit `patchConsole: false` on this `render()` call (there is none today — `runGuidedSetup`
+      // only passes `exitOnCtrlC`/`interactive`) would silently reintroduce that hazard.
+      if (zeroKeysConfigured) {
+        await runGuidedSetup(ctx.configDir, getModelCatalog());
+      }
+    } catch (err) {
+      return fatalDuringTui(err);
     }
   }
 
-  const prepared = await prepareSession(ctx, deps, skipPermissions, isTTY);
+  // prepareSession reports failure as a return value (its own comment: "nothing fallible in this
+  // function can [throw uncaught] again by omission"), so the TTY and non-TTY paths need no
+  // different handling here — both are covered by the `typeof prepared === "number"` check below.
+  const prepared: PreparedRun | number = await prepareSession(ctx, deps, skipPermissions, isTTY);
   if (typeof prepared === "number") return prepared;
 
   // The non-interactive branch below still calls driveLoop unconditionally on a bare
@@ -2697,20 +2795,37 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // gate above only rejects `runStart(ctx) === "idle"`, not "resume"), and closing it needs its
   // own reproduction and test coverage rather than reusing the TUI-mount fix's evidence for a
   // different call site. Tracked as a known gap, not an oversight.
+  let runResult: DriveLoopResult;
+  if (isTTY) {
+    // Same reasoning as the try/catch above this function's own welcome-splash/guided-setup block:
+    // a throw out of runTui (a reducer bug, a rendering error, anything Ink itself doesn't already
+    // catch) would otherwise reach `import.meta.main`'s bare `.then`, print its stack into the
+    // still-active alt screen, and lose it the instant `process.on("exit")` restores the primary
+    // one. `prepared.preMountMessages` is flushed here too, for the same reason `prepareSession`'s
+    // own catches flush it: this IS the only other path that can end the run before runTui's own
+    // `connectDispatch` ever gets a chance to.
+    try {
+      runResult = await runTui(prepared, ctx, deps, maxTurns, skipPermissions);
+    } catch (err) {
+      return fatalDuringTui(err, prepared.preMountMessages);
+    }
+  } else {
+    runResult = await driveLoop(
+      prepared,
+      ctx,
+      deps,
+      maxTurns,
+      printEvent,
+      () => prepared.permissionMode,
+      (session) => saveSession(session, ctx.sessionsDir),
+      makeApprovalPrompt(deps.createInterface),
+      createArchivistState(prepared.session),
+    );
+  }
   const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning, archivist, ranAnyTurn } =
-    isTTY
-      ? await runTui(prepared, ctx, deps, maxTurns, skipPermissions)
-      : await driveLoop(
-          prepared,
-          ctx,
-          deps,
-          maxTurns,
-          printEvent,
-          () => prepared.permissionMode,
-          (session) => saveSession(session, ctx.sessionsDir),
-          makeApprovalPrompt(deps.createInterface),
-          createArchivistState(prepared.session),
-        );
+    runResult;
+
+  exitAltScreen();
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are

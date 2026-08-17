@@ -4,8 +4,10 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import { type ConfigRow, configKeyInfo } from "../commands";
+import { remaining, singleLine } from "../format";
 import type { ConfigPanelState } from "../reducer";
 import { theme } from "../theme";
+import { useListWindow } from "../useListWindow";
 
 // /config's own live state (tui/reducer.ts's pendingConfig) — mirrors SetupPanel's
 // step-dispatcher exactly: one branch per step, since each has genuinely different input
@@ -69,6 +71,7 @@ function ConfigList({
   // Seeded from the reducer's own `selected`, then moved locally — SetupList's own split between
   // "reducer supplies the starting point, the component owns live navigation".
   const [selected, setSelected] = useState(pendingConfig.selected);
+  const { offset, windowSize, onSelectionMove } = useListWindow(selected);
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "d")) {
@@ -76,11 +79,19 @@ function ConfigList({
       return;
     }
     if (key.upArrow) {
-      setSelected((current) => Math.max(0, current - 1));
+      setSelected((current) => {
+        const next = Math.max(0, current - 1);
+        onSelectionMove(next);
+        return next;
+      });
       return;
     }
     if (key.downArrow) {
-      setSelected((current) => Math.min(rows.length - 1, current + 1));
+      setSelected((current) => {
+        const next = Math.min(rows.length - 1, current + 1);
+        onSelectionMove(next);
+        return next;
+      });
       return;
     }
     const row = rows[selected];
@@ -111,17 +122,40 @@ function ConfigList({
   const actionHint = selectedRow?.kind === "boolean" ? "toggle" : "set";
   const selectedDescription =
     selectedRow === undefined ? undefined : configKeyInfo(selectedRow.key).description;
+  const visible = rows.slice(offset, offset + windowSize);
+  const remainingCount = remaining(rows.length, offset, windowSize);
 
   return (
     <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
       <Text color={theme.muted}>/config — settings</Text>
-      {rows.map((row, index) => (
-        <Text key={row.key} color={index === selected ? theme.accent : undefined}>
-          {index === selected ? "> " : "  "}
-          {formatConfigRow(row)}
+      {visible.map((row, localIndex) => {
+        const index = offset + localIndex;
+        return (
+          // `wrap="truncate-end"`: a config VALUE is arbitrary user input (`seri config set
+          // SERI_VERIFY_COMMAND "…"`, say), unlike every other panel's fixed-shape rows (a tool
+          // name, a provider). PANEL_CHROME_ROWS (format.ts) budgets exactly one row per list row —
+          // Ink's default wrap would soft-wrap a long value into a second row and overflow that
+          // budget the same way the SERI_VERIFY_COMMAND description string itself once did.
+          <Text
+            key={row.key}
+            color={index === selected ? theme.accent : undefined}
+            wrap="truncate-end"
+          >
+            {index === selected ? "> " : "  "}
+            {formatConfigRow(row)}
+          </Text>
+        );
+      })}
+      {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
+      {selectedDescription && (
+        // Same reasoning as the row Text above: a config key's own description is fixed copy today
+        // (commands.ts trims it to fit an assumed 80-column terminal), but nothing here reads the
+        // REAL terminal width, so a narrower real TTY reproduces the exact overflow that fix closed
+        // for the default width only. Truncating is the one guarantee that holds at any width.
+        <Text color={theme.muted} wrap="truncate-end">
+          {selectedDescription}
         </Text>
-      ))}
-      {selectedDescription && <Text color={theme.muted}>{selectedDescription}</Text>}
+      )}
       <Text
         color={theme.muted}
       >{`↑/↓ move · Enter/a ${actionHint} · r/Delete unset · Esc/Ctrl-D close`}</Text>
@@ -140,7 +174,7 @@ function formatConfigRow(row: ConfigRow): string {
   const label = configKeyInfo(row.key).label;
   if (row.kind === "boolean") return `${label}: ${row.on ? "on" : "off"}${sourceTag(row)}`;
   if (row.source === "unset") return `${label}: not set`;
-  return `${label}: ${row.masked}${sourceTag(row)}`;
+  return `${label}: ${singleLine(row.masked)}${sourceTag(row)}`;
 }
 
 function ConfigEnterValue({
@@ -188,7 +222,14 @@ function ConfigEnterValue({
       <Text color={theme.muted}>{`Set ${label} (${key})`}</Text>
       <Text color={theme.muted}>{description}</Text>
       <Text>{"*".repeat(value.length)}</Text>
-      {error !== undefined && <Text color={theme.error}>{error}</Text>}
+      {/* singleLine + wrap="truncate-end": error comes from messageOf(err) — an Error#message is
+      unbounded and free to carry a literal newline, and this panel budgets exactly one row for it,
+      same reasoning as App.tsx's own commandError guard. */}
+      {error !== undefined && (
+        <Text color={theme.error} wrap="truncate-end">
+          {singleLine(error)}
+        </Text>
+      )}
       {busy ? (
         <Text color={theme.muted}>Saving…</Text>
       ) : (
