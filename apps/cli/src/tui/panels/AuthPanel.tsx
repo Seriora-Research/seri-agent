@@ -72,9 +72,12 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
       borderColor={state.error ? theme.error : theme.muted}
       flexDirection="column"
     >
-      {/* singleLine + wrap="truncate-end": the error case comes from messageOf(err) — an
-      Error#message is unbounded and free to carry a literal newline, and this panel budgets
-      exactly one row for it, same reasoning as App.tsx's own commandError guard. */}
+      {/* Not ErrorLine (components.tsx): the mark, bold, and color here are all conditional on
+      state.error (blank/unbold/undefined on success), and the outer Box's own borderColor toggles
+      with it too — ErrorLine's contract is a constant-styled alert line, which this line isn't.
+      singleLine collapses an embedded newline from messageOf(err) first, then wrap="truncate-end"
+      guards what's left from overflowing the one row this panel budgets for it — either alone
+      would leave the other case free to push this box past the alt-screen viewport. */}
       <Text bold={state.error} color={state.error ? theme.error : undefined} wrap="truncate-end">
         {state.error ? ERROR_MARK : ""}
         {singleLine(state.message)}
