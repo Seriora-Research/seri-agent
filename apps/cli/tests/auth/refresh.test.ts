@@ -58,6 +58,36 @@ describe("refreshAccessToken", () => {
 
     expect(result.status).toBe("error");
   });
+
+  // gateway.ts's authedFetch falls back to the original 401 response when refreshAccessToken
+  // does not succeed — a thrown network error (offline, DNS failure) must reach that same
+  // fallback, not replace the 401 with an uncaught rejection.
+  test("a fetchFn rejection (offline, DNS failure) returns {status: 'error'} without throwing", async () => {
+    const fetchFn = async () => {
+      throw new Error("fetch failed");
+    };
+
+    const result = await refreshAccessToken(
+      "client_123",
+      "rt-old",
+      fetchFn as unknown as typeof fetch,
+    );
+
+    expect(result.status).toBe("error");
+  });
+
+  // A 200 with a malformed body must not persist undefined tokens.
+  test("a 200 response missing token fields returns {status: 'error'}", async () => {
+    const fetchFn = async () => fakeResponse(true, 200, { expires_in: 300 });
+
+    const result = await refreshAccessToken(
+      "client_123",
+      "rt-old",
+      fetchFn as unknown as typeof fetch,
+    );
+
+    expect(result.status).toBe("error");
+  });
 });
 
 describe("refreshSession", () => {
@@ -109,6 +139,22 @@ describe("refreshSession", () => {
       obtainedAt: "2026-01-01T00:00:00.000Z",
     });
     const fetchFn = async () => fakeResponse(false, 400, { error: "invalid_grant" });
+
+    const updated = await refreshSession(configDir, fetchFn as unknown as typeof fetch);
+
+    expect(updated).toBeUndefined();
+    expect(loadAuthSession(configDir)?.accessToken).toBe("at-old");
+  });
+
+  test("a malformed 200 response leaves the stored session untouched", async () => {
+    seedAuthJson({
+      accessToken: "at-old",
+      refreshToken: "rt-old",
+      userId: "user_1",
+      email: "a@example.com",
+      obtainedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const fetchFn = async () => fakeResponse(true, 200, { expires_in: 300 });
 
     const updated = await refreshSession(configDir, fetchFn as unknown as typeof fetch);
 

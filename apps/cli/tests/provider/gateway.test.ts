@@ -119,6 +119,33 @@ describe("getGatewayModel — outgoing request", () => {
     expect(captured?.headers.get("X-Seri-Session-Id")).toBe("session-1");
     expect(captured?.headers.get("X-Seri-Idempotency-Key")).toBeTruthy();
   });
+
+  // loop.ts reuses ONE model instance across every tool-call round-trip and compaction call in
+  // a turn, so a key minted once at construction time (rather than per outgoing request) would
+  // be shared by every request that model ever makes — the ledger's ON CONFLICT DO NOTHING
+  // upsert then silently drops every request after the first, under-billing and under-counting
+  // the Free daily cap.
+  test("two separate logical requests through the same constructed client carry different idempotency keys", async () => {
+    process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";
+    seedAuthJson(tmpRoot);
+    const keys: (string | null)[] = [];
+    const fetchFn = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      keys.push(new Headers(init?.headers).get("X-Seri-Idempotency-Key"));
+      return sseResponse();
+    }) as unknown as typeof fetch;
+
+    const model = getGatewayModel("some-model", "openrouter", "session-1", tmpRoot, {
+      fetchFn,
+      refreshSession: refreshNeverCalled,
+    });
+    await streamText({ model, prompt: "first turn" }).text;
+    await streamText({ model, prompt: "second turn" }).text;
+
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBeTruthy();
+    expect(keys[1]).toBeTruthy();
+    expect(keys[0]).not.toBe(keys[1]);
+  });
 });
 
 describe("getGatewayModel — 401 retry", () => {

@@ -18,25 +18,33 @@ function gatewayBaseUrl(configDir: string): string {
   return getApiKey("SERI_GATEWAY_URL", configDir) ?? DEFAULT_GATEWAY_URL;
 }
 
-// The retry-once-on-401 wrapper (D4): replays the SAME request — including its
-// X-Seri-Idempotency-Key header, already set by createOpenAI's own `headers` option below — with
-// a refreshed Authorization header. One retry, never a loop: only the FIRST fetchFn call's
-// status is ever inspected; whatever the retried call returns is returned as-is.
+// Mints a fresh X-Seri-Idempotency-Key on every invocation of the returned fetch — one logical
+// request, one key — and the retry-once-on-401 wrapper (D4) below reuses that SAME key for its
+// own replay, never a new one. `loop.ts` reuses one LanguageModel across every tool-call
+// round-trip and compaction call in a turn, so createOpenAI's own static `headers` option (fixed
+// once at construction) is the wrong place for this: every request built from this model would
+// otherwise share one key, and the ledger's `ON CONFLICT (idempotency_key) DO NOTHING` upsert
+// would silently drop every request after the first.
 function authedFetch(
   configDir: string,
   fetchFn: typeof fetch,
   refreshSession: typeof refreshSessionReal,
 ) {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const response = await fetchFn(input, init);
+    const headers = new Headers(init?.headers);
+    headers.set("X-Seri-Idempotency-Key", crypto.randomUUID());
+    const requestInit = { ...init, headers };
+
+    const response = await fetchFn(input, requestInit);
     if (response.status !== 401) return response;
 
     const refreshed = await refreshSession(configDir, fetchFn);
     if (!refreshed) return response;
 
-    const headers = new Headers(init?.headers);
+    // Same idempotency key as the first attempt, on purpose: this is a retry of the SAME
+    // logical request, not a second one — minting a new key here would double-bill it.
     headers.set("Authorization", `Bearer ${refreshed.accessToken}`);
-    return fetchFn(input, { ...init, headers });
+    return fetchFn(input, { ...requestInit, headers });
   };
 }
 
@@ -47,8 +55,7 @@ type GatewayDeps = {
 
 // D2's BYOK guard, D4's sticky-routing/idempotency headers. `sessionId` is the CLI session id
 // (sticky routing / prompt-cache behaviour, injected server-side as `session_id`); the
-// idempotency key is a UUID minted once per logical request here and reused unchanged by
-// authedFetch's own retry.
+// idempotency key itself is minted per-request inside authedFetch, not here — see its comment.
 export function getGatewayModel(
   modelId: string,
   provider: ModelProvider,
@@ -73,7 +80,6 @@ export function getGatewayModel(
     apiKey: session.accessToken,
     headers: {
       "X-Seri-Session-Id": sessionId,
-      "X-Seri-Idempotency-Key": crypto.randomUUID(),
     },
     // Cast needed only because bun-types augments the global `fetch` type with a static
     // `preconnect` member that @ai-sdk/openai's own FetchFunction type then inherits in this

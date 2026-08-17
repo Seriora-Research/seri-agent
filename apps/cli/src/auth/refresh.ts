@@ -19,27 +19,44 @@ async function parseResponseBody(response: Response): Promise<any> {
 // A raw fetch POST, matching deviceFlow.ts's pollForToken/requestDeviceCode style rather than
 // introducing @workos-inc/node client-side. Never throws — a caller (refreshSession below, or
 // gateway.ts's authedFetch) treats a failed refresh as "could not refresh", not as an
-// exception to propagate.
+// exception to propagate. That includes fetchFn itself rejecting (offline, DNS failure): caught
+// here so authedFetch's fallback to the original 401 response is reached instead of an uncaught
+// rejection replacing it.
 export async function refreshAccessToken(
   clientId: string,
   refreshToken: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<RefreshResult> {
-  const response = await fetchFn(AUTHENTICATE_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: clientId,
-    }).toString(),
-  });
+  let response: Response;
+  try {
+    response = await fetchFn(AUTHENTICATE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: clientId,
+      }).toString(),
+    });
+  } catch (error) {
+    return { status: "error", message: `WorkOS refresh request failed: ${String(error)}` };
+  }
   const body = await parseResponseBody(response);
   if (!response.ok) {
     return {
       status: "error",
       message: `WorkOS refresh failed with status ${response.status}: ${JSON.stringify(body)}`,
     };
+  }
+  // A 200 with an unexpected body shape must not persist undefined tokens into auth.json — the
+  // same trust boundary as pollForToken's own response.ok check, applied to the fields inside it.
+  if (
+    typeof body.access_token !== "string" ||
+    !body.access_token ||
+    typeof body.refresh_token !== "string" ||
+    !body.refresh_token
+  ) {
+    return { status: "error", message: "WorkOS refresh response is missing token fields" };
   }
   return {
     status: "success",
