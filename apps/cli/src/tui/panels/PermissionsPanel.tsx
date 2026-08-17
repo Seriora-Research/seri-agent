@@ -6,9 +6,10 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import type { PermissionRow } from "../commands";
+import { ListRow } from "../components";
 import { remaining } from "../format";
 import type { PermissionsPanelState } from "../reducer";
-import { selectedRowStyle, theme, WARNING_MARK } from "../theme";
+import { theme, WARNING_MARK } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /permissions' own live state (tui/reducer.ts's pendingPermissions) — mirrors SetupPanel's
@@ -98,14 +99,7 @@ function PermissionsList({
       {visible.map((row, localIndex) => {
         const index = offset + localIndex;
         return (
-          // `wrap="truncate-end"`: PERSISTABLE_TOOL_NAMES (permissions/store.ts) bounds `row.tool`
-          // to "write_file"/"edit" today, so this row can't actually overflow yet — matching the
-          // guard ConfigPanel/SetupPanel/ModelPicker's own row Text already carries for the same
-          // one-row-per-list-row budget keeps this panel consistent with the others regardless.
-          <Text key={row.tool} {...selectedRowStyle(index === selected)} wrap="truncate-end">
-            {index === selected ? "> " : "  "}
-            {formatPermissionRow(row)}
-          </Text>
+          <ListRow key={row.tool} selected={index === selected} label={formatPermissionRow(row)} />
         );
       })}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}

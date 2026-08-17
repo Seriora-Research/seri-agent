@@ -4,9 +4,10 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import { type ConfigRow, configKeyInfo } from "../commands";
+import { ListRow } from "../components";
 import { remaining, singleLine } from "../format";
 import type { ConfigPanelState } from "../reducer";
-import { ERROR_MARK, selectedRowStyle, theme, WARNING_MARK } from "../theme";
+import { ERROR_MARK, theme, WARNING_MARK } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /config's own live state (tui/reducer.ts's pendingConfig) — mirrors SetupPanel's
@@ -131,15 +132,7 @@ function ConfigList({
       {visible.map((row, localIndex) => {
         const index = offset + localIndex;
         return (
-          // `wrap="truncate-end"`: a config VALUE is arbitrary user input (`seri config set
-          // SERI_VERIFY_COMMAND "…"`, say), unlike every other panel's fixed-shape rows (a tool
-          // name, a provider). PANEL_CHROME_ROWS (format.ts) budgets exactly one row per list row —
-          // Ink's default wrap would soft-wrap a long value into a second row and overflow that
-          // budget the same way the SERI_VERIFY_COMMAND description string itself once did.
-          <Text key={row.key} {...selectedRowStyle(index === selected)} wrap="truncate-end">
-            {index === selected ? "> " : "  "}
-            {formatConfigRow(row)}
-          </Text>
+          <ListRow key={row.key} selected={index === selected} label={formatConfigRow(row)} />
         );
       })}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}

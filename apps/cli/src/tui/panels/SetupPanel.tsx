@@ -4,9 +4,10 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
+import { ListRow } from "../components";
 import { formatSetupRow, remaining, singleLine } from "../format";
 import type { SetupState } from "../reducer";
-import { ERROR_MARK, selectedRowStyle, theme, WARNING_MARK } from "../theme";
+import { ERROR_MARK, theme, WARNING_MARK } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /setup's own live state (tui/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-exclusion
@@ -138,13 +139,11 @@ function SetupList({
       {visible.map((row, localIndex) => {
         const index = offset + localIndex;
         return (
-          // `wrap="truncate-end"` (found by review, same reasoning as ConfigPanel's own row Text):
-          // a config-entry value here is arbitrary user input, and PANEL_CHROME_ROWS (format.ts)
-          // budgets exactly one row per list row regardless of how wide it is.
-          <Text key={row.provider} {...selectedRowStyle(index === selected)} wrap="truncate-end">
-            {index === selected ? "> " : "  "}
-            {formatSetupRow(row)}
-          </Text>
+          <ListRow
+            key={row.provider}
+            selected={index === selected}
+            label={formatSetupRow(row)}
+          />
         );
       })}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}

@@ -612,6 +612,36 @@ describe("App", () => {
     });
   });
 
+  describe("welcome splash", () => {
+    // D2 (ListRow always applies wrap="truncate-end", including here): before this, WelcomeSplash's
+    // own row Text carried no wrap prop at all, so a label wider than the terminal soft-wrapped
+    // onto a second row instead of truncating — this pins both halves, the marker at a normal width
+    // and the truncation at a narrow one.
+    test("rows carry the ListRow marker, and truncate rather than wrap at a narrow width", async () => {
+      const { instance, dispatch } = await connect();
+      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
+      // plain assignment, not overriding one.
+      instance.stdout.rows = 30;
+      instance.stdout.emit("resize");
+      await flush();
+
+      dispatch({ type: "auth-offer", show: true });
+      dispatch({ type: "splash-requested" });
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain("> Log in");
+
+      // `columns` IS a getter-only accessor on ink-testing-library's Stdout prototype (unlike
+      // `rows` above), so a plain assignment throws in strict mode — defineProperty shadows it
+      // with an own data property instead.
+      Object.defineProperty(instance.stdout, "columns", { value: 24, configurable: true });
+      instance.stdout.emit("resize");
+      await flush();
+
+      expect(instance.lastFrame() ?? "").not.toContain("logging in");
+    });
+  });
+
   describe("model picker", () => {
     function entry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
       return {
@@ -814,6 +844,9 @@ describe("App", () => {
       const frame = instance.lastFrame() ?? "";
       expect(frame).toContain("Model 15");
       expect(frame).not.toContain("Model 0 ");
+      // Pins the ListRow marker: formatModelRow leads with the display name, so it sits right
+      // after "> ".
+      expect(frame).toContain("> Model 15");
 
       instance.stdin.write("\r");
       await flush();
@@ -931,6 +964,8 @@ describe("App", () => {
       expect(frame).toContain("sk-o...abcd");
       // The env row shows D8's own disabled-remove reason, not a masked value.
       expect(frame).toContain("set by $ANTHROPIC_API_KEY in your environment");
+      // Pins the ListRow marker itself, in front of the first (selected) row's own label.
+      expect(frame).toContain(`> ${formatSetupRow(setupRows()[0] as SetupProviderRow)}`);
     });
 
     // Bug fixed here (code-review, PR #73, round 3, item #1): Enter is dead in the real TUI twice

@@ -3,7 +3,8 @@
 
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
-import { selectedRowStyle, theme } from "../theme";
+import { ListRow } from "../components";
+import { theme } from "../theme";
 
 export function WelcomeSplash({
   authenticated,
@@ -45,10 +46,7 @@ export function WelcomeSplash({
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text>SERI</Text>
       {items.map((item, index) => (
-        <Text key={item.label} {...selectedRowStyle(index === selected)}>
-          {index === selected ? "> " : "  "}
-          {item.label}
-        </Text>
+        <ListRow key={item.label} selected={index === selected} label={item.label} />
       ))}
       <Text color={theme.muted}>↑/↓ move · Enter select · Esc continue</Text>
     </Box>

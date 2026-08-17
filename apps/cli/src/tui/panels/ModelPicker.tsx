@@ -5,8 +5,9 @@ import type { ModelProvider } from "@seri/model-catalog";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import type { ModelPickerEntry } from "../commands";
+import { ListRow } from "../components";
 import { formatModelRow, MODEL_PICKER_HEADER, matchesFilter, remaining } from "../format";
-import { selectedRowStyle, theme } from "../theme";
+import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /model's own live state (tui/reducer.ts's pendingModelPicker) — mirrors ApprovalBox's shape
@@ -119,25 +120,18 @@ export function ModelPicker({
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text>{filterQuery.length > 0 ? filterQuery : " "}</Text>
-      {/* Same reasoning as the row Text below: MODEL_PICKER_HEADER's own fixed column widths sum to
-      the same ~87 chars, so it soft-wraps on the identical narrow terminals the row fix guards
-      against. */}
+      {/* Same reasoning as ListRow's own comment (components.tsx): MODEL_PICKER_HEADER's own fixed
+      column widths sum to the same ~87 chars, so it soft-wraps on the identical narrow terminals
+      the row's `wrap="truncate-end"` guards against. */}
       <Text color={theme.muted} wrap="truncate-end">{`  ${MODEL_PICKER_HEADER}`}</Text>
       {visible.map((row, localIndex) => {
         const index = scrollOffset + localIndex;
         return (
-          // `wrap="truncate-end"` (found by review, same reasoning as ConfigPanel's own row Text):
-          // formatModelRow's fixed column widths sum to ~87 chars — real on any terminal narrower
-          // than that, not a hypothetical edge case — and PANEL_CHROME_ROWS (format.ts) budgets
-          // exactly one row per list row regardless.
-          <Text
+          <ListRow
             key={`${row.entry.provider}/${row.entry.id}`}
-            {...selectedRowStyle(index === selectedIndex)}
-            wrap="truncate-end"
-          >
-            {index === selectedIndex ? "> " : "  "}
-            {formatModelRow(row)}
-          </Text>
+            selected={index === selectedIndex}
+            label={formatModelRow(row)}
+          />
         );
       })}
       {remainingCount > 0 && (
