@@ -4,10 +4,10 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import { type ConfigRow, configKeyInfo } from "../commands";
-import { ErrorLine, ListRow } from "../components";
+import { ErrorLine, ListRow, WarningBox } from "../components";
 import { remaining, singleLine } from "../format";
 import type { ConfigPanelState } from "../reducer";
-import { theme, WARNING_MARK } from "../theme";
+import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /config's own live state (tui/reducer.ts's pendingConfig) — mirrors SetupPanel's
@@ -249,12 +249,5 @@ function ConfigConfirmUnset({
     onConfigBack?.();
   });
 
-  return (
-    <Box borderStyle="single" borderColor={theme.warning}>
-      <Text color={theme.warning} bold>
-        {WARNING_MARK}
-        {`Unset ${label} (${key})? [y]es / [N]o`}
-      </Text>
-    </Box>
-  );
+  return <WarningBox message={`Unset ${label} (${key})? [y]es / [N]o`} />;
 }

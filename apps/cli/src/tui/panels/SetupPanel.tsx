@@ -4,10 +4,10 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
-import { ErrorLine, ListRow } from "../components";
+import { ErrorLine, ListRow, WarningBox } from "../components";
 import { formatSetupRow, remaining } from "../format";
 import type { SetupState } from "../reducer";
-import { theme, WARNING_MARK } from "../theme";
+import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /setup's own live state (tui/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-exclusion
@@ -241,12 +241,5 @@ function SetupConfirmRemove({
     onSetupBack?.();
   });
 
-  return (
-    <Box borderStyle="single" borderColor={theme.warning}>
-      <Text color={theme.warning} bold>
-        {WARNING_MARK}
-        {`Remove ${keyName} (${provider})? [y]es / [N]o`}
-      </Text>
-    </Box>
-  );
+  return <WarningBox message={`Remove ${keyName} (${provider})? [y]es / [N]o`} />;
 }

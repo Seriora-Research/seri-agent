@@ -1224,6 +1224,7 @@ describe("App", () => {
         },
       });
       await flush();
+      expect(instance.lastFrame() ?? "").toContain("! Remove OPENROUTER_API_KEY");
       instance.stdin.write("n");
       await flush();
 

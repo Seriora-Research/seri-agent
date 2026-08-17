@@ -6,10 +6,10 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import type { PermissionRow } from "../commands";
-import { ListRow } from "../components";
+import { ListRow, WarningBox } from "../components";
 import { remaining } from "../format";
 import type { PermissionsPanelState } from "../reducer";
-import { theme, WARNING_MARK } from "../theme";
+import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /permissions' own live state (tui/reducer.ts's pendingPermissions) — mirrors SetupPanel's
@@ -141,12 +141,5 @@ function PermissionsConfirmRemove({
     onPermissionsBack?.();
   });
 
-  return (
-    <Box borderStyle="single" borderColor={theme.warning}>
-      <Text color={theme.warning} bold>
-        {WARNING_MARK}
-        {`Remove ${tool}? [y]es / [N]o`}
-      </Text>
-    </Box>
-  );
+  return <WarningBox message={`Remove ${tool}? [y]es / [N]o`} />;
 }
