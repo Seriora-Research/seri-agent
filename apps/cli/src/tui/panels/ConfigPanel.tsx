@@ -42,7 +42,7 @@ export function ConfigPanel({
     const { key } = pendingConfig;
     return (
       <ConfirmPrompt
-        message={`Unset ${configKeyInfo(key).label} (${key})? [y]es / [N]o`}
+        subject={`Unset ${configKeyInfo(key).label} (${key})`}
         onConfirm={() => onConfigUnset?.(key)}
         onCancel={() => onConfigBack?.()}
       />
@@ -72,7 +72,7 @@ function ConfigList({
   const { rows } = pendingConfig;
   // Seeded from the reducer's own `selected`, then moved locally — SetupList's own split between
   // "reducer supplies the starting point, the component owns live navigation".
-  const { selected, offset, visible, remainingCount, handleArrowKey } = useListWindow(
+  const { selected, visible, remainingCount, handleArrowKey } = useListWindow(
     rows,
     pendingConfig.selected,
   );
@@ -115,10 +115,9 @@ function ConfigList({
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>/config — settings</Text>
-      {visible.map((row, localIndex) => {
-        const index = offset + localIndex;
-        return <ListRow key={row.key} selected={index === selected} label={formatConfigRow(row)} />;
-      })}
+      {visible.map(({ item: row, isSelected }) => (
+        <ListRow key={row.key} selected={isSelected} label={formatConfigRow(row)} />
+      ))}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
       {selectedDescription && (
         // Same reasoning as ListRow's own comment (components.tsx): a config key's own description

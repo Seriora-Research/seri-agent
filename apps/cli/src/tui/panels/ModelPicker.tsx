@@ -32,16 +32,15 @@ export function ModelPicker({
   const filtered =
     filterQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, filterQuery));
 
-  // C1 fix: the window rendered used to always be `filtered.slice(0, windowSize)` — the first N
-  // entries, regardless of the selection — so Down past the visible window moved the highlight
-  // somewhere nothing on screen showed, and with 279 catalog entries most of the list was
-  // unreachable. `scrollOffset` is the top of the currently-rendered window, from useListWindow —
-  // it only moves when the selection would otherwise land outside it (`handleArrowKey`), not
-  // recomputed fresh from the selection on every render, which would re-center the window on every
-  // keypress instead of sliding it only when actually needed.
+  // Fixes a prior bug where the window rendered always started at `filtered.slice(0, windowSize)`
+  // — the first N entries, regardless of the selection — so Down past the visible window moved
+  // the highlight somewhere nothing on screen showed, and with 279 catalog entries most of the
+  // list was unreachable. `useListWindow`'s own window only moves when the selection would
+  // otherwise land outside it (`handleArrowKey`), not recomputed fresh from the selection on every
+  // render, which would re-center the window on every keypress instead of sliding it only when
+  // actually needed.
   const {
     selected: selectedIndex,
-    offset: scrollOffset,
     visible,
     remainingCount,
     handleArrowKey,
@@ -108,16 +107,13 @@ export function ModelPicker({
       column widths sum to the same ~87 chars, so it soft-wraps on the identical narrow terminals
       the row's `wrap="truncate-end"` guards against. */}
       <Text color={theme.muted} wrap="truncate-end">{`  ${MODEL_PICKER_HEADER}`}</Text>
-      {visible.map((row, localIndex) => {
-        const index = scrollOffset + localIndex;
-        return (
-          <ListRow
-            key={`${row.entry.provider}/${row.entry.id}`}
-            selected={index === selectedIndex}
-            label={formatModelRow(row)}
-          />
-        );
-      })}
+      {visible.map(({ item: row, isSelected }) => (
+        <ListRow
+          key={`${row.entry.provider}/${row.entry.id}`}
+          selected={isSelected}
+          label={formatModelRow(row)}
+        />
+      ))}
       {remainingCount > 0 && (
         <Text color={theme.muted}>+{remainingCount} more — keep typing to narrow</Text>
       )}

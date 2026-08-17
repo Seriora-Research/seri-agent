@@ -44,7 +44,7 @@ export function SetupPanel({
     const { provider, keyName } = pendingSetup;
     return (
       <ConfirmPrompt
-        message={`Remove ${keyName} (${provider})? [y]es / [N]o`}
+        subject={`Remove ${keyName} (${provider})`}
         onConfirm={() => onSetupRemove?.(provider)}
         onCancel={() => onSetupBack?.()}
       />
@@ -77,7 +77,7 @@ function SetupList({
   // supplies the starting point, the component owns live navigation" split ModelPicker's own
   // `selectedIndex` already has, for the identical reason (transient UI data with no reason to
   // round-trip through cli.ts on every arrow key).
-  const { selected, offset, visible, remainingCount, handleArrowKey } = useListWindow(
+  const { selected, visible, remainingCount, handleArrowKey } = useListWindow(
     rows,
     pendingSetup.selected,
   );
@@ -118,12 +118,9 @@ function SetupList({
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>/setup — provider API keys</Text>
-      {visible.map((row, localIndex) => {
-        const index = offset + localIndex;
-        return (
-          <ListRow key={row.provider} selected={index === selected} label={formatSetupRow(row)} />
-        );
-      })}
+      {visible.map(({ item: row, isSelected }) => (
+        <ListRow key={row.provider} selected={isSelected} label={formatSetupRow(row)} />
+      ))}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
       <Text color={theme.muted}>
         ↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close

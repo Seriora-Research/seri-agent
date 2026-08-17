@@ -1,6 +1,6 @@
 // Shared list-window state for every panel that renders a scrollable row list (ModelPicker,
 // ConfigPanel, PermissionsPanel, SetupPanel) — owns the row array, the selection index, and the
-// window `offset` slid by `slideWindow`'s own clamp-don't-re-center rule as the selection moves.
+// window offset slid by `slideWindow`'s own clamp-don't-re-center rule as the selection moves.
 // Component-local, not reducer state: these lists are transient and panel-scoped, and (unlike the
 // transcript's scroll offset) no external event stream mutates them — the same distinction
 // reducer.ts's own TuiState.transcriptScrollOffset comment draws.
@@ -15,9 +15,9 @@ export function useListWindow<T>(
   initialSelected = 0,
 ): {
   selected: number;
-  offset: number;
-  windowSize: number;
-  visible: T[];
+  // Each visible row paired with whether IT is the selected one — callers never see the window
+  // offset or do their own `offset + localIndex` arithmetic to find out.
+  visible: { item: T; isSelected: boolean }[];
   remainingCount: number;
   // Returns true when the key was an arrow it handled, so the caller's own useInput can
   // `if (handleArrowKey(key)) return;` in the same position its inline arrow blocks used to sit.
@@ -35,44 +35,52 @@ export function useListWindow<T>(
   // APP_CHROME_ROWS' own comment (format.ts) for why that reservation is unconditional rather than
   // threaded through as props.
   const windowSize = listWindowSize(terminalRows - APP_CHROME_ROWS);
-  const [selected, setSelected] = useState(initialSelected);
-  // Seeded from `initialSelected` via the same slideWindow rule handleArrowKey uses, not a bare 0:
-  // a panel can mount with a non-zero seeded selection (ConfigPanel/PermissionsPanel/SetupPanel all
-  // re-dispatch their own `selected` after a save/unset/remove), and a hardcoded-0 offset would
-  // scroll that row off-screen until the next arrow key on a list longer than the window.
-  const [offset, setOffset] = useState(() => slideWindow(0, initialSelected, windowSize));
+  // `selected` and `offset` move together as one unit, in one updater: every place either changes
+  // derives the other via `slideWindow`'s clamp-don't-re-center rule, so nothing can apply one
+  // without the other. Two independent `useState`s used to mean `handleArrowKey` called `setOffset`
+  // FROM INSIDE `setSelected`'s own updater — only safe because `slideWindow` is idempotent, and a
+  // leftover of `selected`/`offset` having been split across the hook and its caller before this
+  // hook owned both.
+  const [win, setWin] = useState(() => ({
+    selected: initialSelected,
+    offset: slideWindow(0, initialSelected, windowSize),
+  }));
 
   // A terminal resize can shrink `windowSize` with no keypress at all — `handleArrowKey` above
   // only re-slides on an explicit arrow press, so without this a shrink can leave the currently
-  // selected row outside the visible window until the next arrow key happens to
-  // notice. Re-runs the identical clamp-don't-re-center rule, keyed on `windowSize` (`selected`
-  // too, since it can also change between renders) — a redundant call on an ordinary arrow press
-  // is a no-op (handleArrowKey already applied the same result synchronously), so this only does
-  // real work on a resize.
+  // selected row outside the visible window until the next arrow key happens to notice. Re-runs
+  // the identical clamp-don't-re-center rule; a redundant call on an ordinary arrow press is a
+  // no-op (handleArrowKey already applied the same result synchronously), so this only does real
+  // work on a resize. `selected`/`offset` living in one state means this effect only needs
+  // `windowSize` as a dependency — `win` itself already changed atomically wherever `selected` did.
   useEffect(() => {
-    setOffset((current) => slideWindow(current, selected, windowSize));
-  }, [selected, windowSize]);
+    setWin((current) => ({
+      selected: current.selected,
+      offset: slideWindow(current.offset, current.selected, windowSize),
+    }));
+  }, [windowSize]);
 
   return {
-    selected,
-    offset,
-    windowSize,
-    visible: rows.slice(offset, offset + windowSize),
-    remainingCount: remaining(rows.length, offset, windowSize),
+    selected: win.selected,
+    visible: rows.slice(win.offset, win.offset + windowSize).map((item, i) => ({
+      item,
+      isSelected: win.offset + i === win.selected,
+    })),
+    remainingCount: remaining(rows.length, win.offset, windowSize),
     handleArrowKey: (key) => {
       if (!key.upArrow && !key.downArrow) return false;
-      setSelected((current) => {
+      setWin((current) => {
         const next = key.upArrow
-          ? Math.max(0, current - 1)
-          : Math.min(rows.length - 1, current + 1);
-        setOffset((currentOffset) => slideWindow(currentOffset, next, windowSize));
-        return next;
+          ? current.selected - 1
+          : Math.min(rows.length - 1, current.selected + 1);
+        // Math.max(0, ...) on the RESULT, not just the upArrow branch: rows.length === 0 makes
+        // the downArrow clamp above evaluate to Math.min(-1, n) = -1, so an empty list's own
+        // selection would otherwise go negative on a single Down press.
+        const selected = Math.max(0, next);
+        return { selected, offset: slideWindow(current.offset, selected, windowSize) };
       });
       return true;
     },
-    reset: () => {
-      setSelected(0);
-      setOffset(0);
-    },
+    reset: () => setWin({ selected: 0, offset: 0 }),
   };
 }

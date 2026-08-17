@@ -28,7 +28,7 @@ export function PermissionsPanel({
     const { tool } = pendingPermissions;
     return (
       <ConfirmPrompt
-        message={`Remove ${tool}? [y]es / [N]o`}
+        subject={`Remove ${tool}`}
         onConfirm={() => onPermissionsRemove?.(tool)}
         onCancel={() => onPermissionsBack?.()}
       />
@@ -53,7 +53,7 @@ function PermissionsList({
   onPermissionsClose?: (leftoverInput?: string) => void;
 }) {
   const { rows } = pendingPermissions;
-  const { selected, offset, visible, remainingCount, handleArrowKey } = useListWindow(
+  const { selected, visible, remainingCount, handleArrowKey } = useListWindow(
     rows,
     pendingPermissions.selected,
   );
@@ -80,12 +80,9 @@ function PermissionsList({
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>/permissions — tools approved permanently</Text>
-      {visible.map((row, localIndex) => {
-        const index = offset + localIndex;
-        return (
-          <ListRow key={row.tool} selected={index === selected} label={formatPermissionRow(row)} />
-        );
-      })}
+      {visible.map(({ item: row, isSelected }) => (
+        <ListRow key={row.tool} selected={isSelected} label={formatPermissionRow(row)} />
+      ))}
       {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
       <Text color={theme.muted}>↑/↓ move · r/Delete remove · Esc/Ctrl-D close</Text>
     </Box>
