@@ -4,7 +4,7 @@
 import { Box, Text, useInput } from "ink";
 import { approvalPromptText } from "../../cli/output";
 import type { ApprovalAnswer } from "../../loop/loop";
-import { theme } from "../theme";
+import { theme, WARNING_MARK } from "../theme";
 
 // approvalPromptText (cli/output.ts), not a hand-copied template: round 7 code review found this
 // line written out twice (here and in makeApprovalPrompt's own rl.question call, cli.ts) — same
@@ -64,8 +64,11 @@ export function ApprovalBox({
   });
 
   return (
-    <Box borderStyle="round" borderColor={theme.warning}>
-      <Text color={theme.warning}>{approvalPromptText(toolName, args, offersAlways)}</Text>
+    <Box borderStyle="single" borderColor={theme.warning}>
+      <Text color={theme.warning} bold>
+        {WARNING_MARK}
+        {approvalPromptText(toolName, args, offersAlways)}
+      </Text>
     </Box>
   );
 }

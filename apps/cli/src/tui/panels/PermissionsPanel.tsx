@@ -8,7 +8,7 @@ import { useState } from "react";
 import type { PermissionRow } from "../commands";
 import { remaining } from "../format";
 import type { PermissionsPanelState } from "../reducer";
-import { theme } from "../theme";
+import { selectedRowStyle, theme, WARNING_MARK } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /permissions' own live state (tui/reducer.ts's pendingPermissions) — mirrors SetupPanel's
@@ -93,7 +93,7 @@ function PermissionsList({
   const remainingCount = remaining(rows.length, offset, windowSize);
 
   return (
-    <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+    <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>/permissions — tools approved permanently</Text>
       {visible.map((row, localIndex) => {
         const index = offset + localIndex;
@@ -102,11 +102,7 @@ function PermissionsList({
           // to "write_file"/"edit" today, so this row can't actually overflow yet — matching the
           // guard ConfigPanel/SetupPanel/ModelPicker's own row Text already carries for the same
           // one-row-per-list-row budget keeps this panel consistent with the others regardless.
-          <Text
-            key={row.tool}
-            color={index === selected ? theme.accent : undefined}
-            wrap="truncate-end"
-          >
+          <Text key={row.tool} {...selectedRowStyle(index === selected)} wrap="truncate-end">
             {index === selected ? "> " : "  "}
             {formatPermissionRow(row)}
           </Text>
@@ -152,8 +148,11 @@ function PermissionsConfirmRemove({
   });
 
   return (
-    <Box borderStyle="round" borderColor={theme.warning}>
-      <Text color={theme.warning}>{`Remove ${tool}? [y]es / [N]o`}</Text>
+    <Box borderStyle="single" borderColor={theme.warning}>
+      <Text color={theme.warning} bold>
+        {WARNING_MARK}
+        {`Remove ${tool}? [y]es / [N]o`}
+      </Text>
     </Box>
   );
 }

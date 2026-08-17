@@ -20,6 +20,7 @@ import {
   visibleTranscript,
 } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
+import { selectedRowStyle } from "../../src/tui/theme";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
@@ -78,6 +79,16 @@ describe("App", () => {
     expect(instance.lastFrame()).toContain("[read-only]");
   });
 
+  // `not.toContain("╭")` is what makes this non-vacuous across all 17 borderStyle sites at once —
+  // a stray "round" reintroduced anywhere would still leave "┌" present elsewhere on screen.
+  test("borders render with square corners, not rounded ones", async () => {
+    const { instance } = await connect();
+
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("┌");
+    expect(frame).not.toContain("╭");
+  });
+
   test("a transcript-append dispatch grows the transcript viewport", async () => {
     const { instance, dispatch } = await connect();
 
@@ -102,7 +113,7 @@ describe("App", () => {
     expect(frame).not.toContain("line 0");
     // The InputBox's own border (panels/InputBox.tsx) — proves the viewport left room for the
     // live region below it rather than consuming the whole frame.
-    expect(frame).toContain("╭");
+    expect(frame).toContain("┌");
   });
 
   test("PageUp shows the scrolled indicator and reveals an older line; End clears it and returns to the newest", async () => {
@@ -395,6 +406,23 @@ describe("App", () => {
     expect(instance.lastFrame()).toContain("…)");
   });
 
+  // The deliberate exception: a routine in-flight write_file/edit display is not an alert, so it
+  // gets neither WARNING_MARK nor bold. Without this, a later well-meaning "consistency" edit could
+  // silently reclassify a routine event as one.
+  test("the pending-tool box carries no warning mark — it is not an alert", async () => {
+    const { instance, dispatch } = await connect();
+
+    dispatch({
+      type: "loop-event",
+      event: { type: "tool-call", name: "write_file", args: { path: "a.txt", content: "x" } },
+    });
+    await flush();
+
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("write_file(");
+    expect(frame).not.toContain("! write_file");
+  });
+
   // HIGH-B/MEDIUM-C: Ctrl-D calls the onQuit prop directly — App.tsx wires it through to
   // InputBox unconditionally, so this is the same trigger runTui's own quit() attaches to.
   test("Ctrl-D calls onQuit", async () => {
@@ -433,6 +461,8 @@ describe("App", () => {
         `Approve write_file({"path":"a.txt","content":"x"})? [y]es / [a]lways (saved for this project) /`,
       );
       expect(instance.lastFrame()).toContain("[N]o");
+      // Pins both WARNING_MARK and that it sits immediately before the shared helper's own output.
+      expect(instance.lastFrame()).toContain("! Approve write_file");
     });
 
     test("y answers 'once', a answers 'always' when offered, and anything else (n, Enter, an unoffered a) answers 'no'", async () => {
@@ -1102,6 +1132,26 @@ describe("App", () => {
       expect(entered).toEqual([]);
     });
 
+    test("an enter-key error renders with the error mark", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider: "openai",
+          keyName: "OPENAI_API_KEY",
+          busy: false,
+          error: "Invalid API key",
+        },
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("✕ ");
+      expect(frame).toContain("Invalid API key");
+    });
+
     test("confirm-remove: 'y' confirms via onSetupRemove, anything else cancels back via onSetupBack", async () => {
       const removed: ModelProvider[] = [];
       const backCalls: number[] = [];
@@ -1453,6 +1503,15 @@ describe("App", () => {
     });
   });
 
+  describe("selectedRowStyle", () => {
+    // Asserting the literal "black"/true, not theme.selected/true re-imported under a different
+    // name: importing the constant under test would make this comparison vacuous.
+    test("returns backgroundColor+inverse when selected, nothing when not", () => {
+      expect(selectedRowStyle(true)).toEqual({ backgroundColor: "black", inverse: true });
+      expect(selectedRowStyle(false)).toEqual({});
+    });
+  });
+
   describe("persistent mode+route indicator (mounted)", () => {
     // useTerminalWidth's own live-resize wiring — formatModeLabel's tests above already cover the
     // tier DECISION logic as a pure function, so this is the one Ink-level smoke test needed to
@@ -1630,7 +1689,10 @@ describe("App", () => {
         state: { step: "result", message: "Signed in as a@example.com", error: false },
       });
       await flush();
-      expect(instance.lastFrame() ?? "").toContain("Signed in as a@example.com");
+      let frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Signed in as a@example.com");
+      // Its own negative control: the success result must NOT carry the error mark.
+      expect(frame).not.toContain("✕ ");
 
       dispatch({ type: "auth-requested", mode: "login" });
       await flush();
@@ -1639,7 +1701,9 @@ describe("App", () => {
         state: { step: "result", message: "Login failed: expired code", error: true },
       });
       await flush();
-      expect(instance.lastFrame() ?? "").toContain("Login failed: expired code");
+      frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("Login failed: expired code");
+      expect(frame).toContain("✕ ");
     });
 
     // auth-resolved is the reducer action createAuthHandlers' own onLogin/onLogout (tui/handlers.ts)
@@ -1944,6 +2008,25 @@ describe("App", () => {
       expect(frame).toContain("*".repeat(secret.length));
     });
 
+    test("an enter-value error renders with the error mark", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({
+        type: "config-step",
+        state: {
+          step: "enter-value",
+          key: "SERI_SOME_OTHER_KEY",
+          busy: false,
+          error: "Invalid value",
+        },
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("✕ ");
+      expect(frame).toContain("Invalid value");
+    });
+
     // Review round 3 finding (MEDIUM-1's own test coverage gap): onConfigClose is an optional
     // AppProps handler with nothing that goes red if App.tsx's own render call stopped passing it
     // through to ConfigPanel — this proves the wiring, not just that ConfigList's own Esc handling
@@ -2005,6 +2088,7 @@ describe("App", () => {
       expect(frame).toContain("[y]es");
       expect(frame).toContain("[N]o");
       expect(frame).toContain("Verify command (SERI_VERIFY_COMMAND)");
+      expect(frame).toContain("! Unset");
 
       instance.stdin.write("z"); // unrecognised key
       await flush();
@@ -2266,6 +2350,8 @@ describe("App", () => {
         state: { step: "confirm-remove", tool: "write_file" },
       });
       await flush();
+
+      expect(instance.lastFrame() ?? "").toContain("! Remove write_file");
 
       instance.stdin.write("y");
       await flush();

@@ -1,10 +1,29 @@
-// The TUI's single source of color: every component imports its color from here rather than
-// hardcoding a literal, so the ANSI-only decision (research-spec, no hex/ansi256 for this stage) has
-// exactly one place to hold the line. ANSI-16 color names only — Ink's <Text color> accepts these
-// directly.
+// The TUI's monochrome palette (docs/TUI-DESIGN.md): every component imports its color from here
+// rather than hardcoding a literal. `error`/`warning` carry no hue — ERROR_MARK/WARNING_MARK below
+// are what distinguishes an alert from ordinary text now that color no longer does, and `selected`
+// is the reverse-video row token (see selectedRowStyle). ANSI-16 color names only — Ink's <Text
+// color> accepts these directly.
 export const theme = {
-  error: "red",
-  warning: "yellow",
-  accent: "cyan",
+  error: "white",
+  warning: "white",
+  selected: "black",
   muted: "gray",
 } as const;
+
+// Prefixed onto an alert addressed to the user (a failure or a question) at the TUI call site —
+// never inside a shared formatter like approvalPromptText, which the non-interactive CLI path also
+// calls and must not have this mark applied to.
+export const ERROR_MARK = "✕ ";
+export const WARNING_MARK = "! ";
+
+// The reverse-video row highlight, shared by every selectable-list panel instead of five call sites
+// each composing the same two props by hand. `backgroundColor` alone would paint default-foreground
+// text on ANSI black, which in many dark themes is indistinguishable from the terminal background —
+// `inverse` is what actually swaps the glyphs to the terminal's own default foreground on top of
+// that band, verified against Ink's own Text.js applying chalk.inverse last.
+export function selectedRowStyle(isSelected: boolean): {
+  backgroundColor?: string;
+  inverse?: true;
+} {
+  return isSelected ? { backgroundColor: theme.selected, inverse: true } : {};
+}

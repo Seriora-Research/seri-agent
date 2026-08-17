@@ -6,7 +6,7 @@ import { useState } from "react";
 import { type ConfigRow, configKeyInfo } from "../commands";
 import { remaining, singleLine } from "../format";
 import type { ConfigPanelState } from "../reducer";
-import { theme } from "../theme";
+import { ERROR_MARK, selectedRowStyle, theme, WARNING_MARK } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /config's own live state (tui/reducer.ts's pendingConfig) — mirrors SetupPanel's
@@ -126,7 +126,7 @@ function ConfigList({
   const remainingCount = remaining(rows.length, offset, windowSize);
 
   return (
-    <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+    <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>/config — settings</Text>
       {visible.map((row, localIndex) => {
         const index = offset + localIndex;
@@ -136,11 +136,7 @@ function ConfigList({
           // name, a provider). PANEL_CHROME_ROWS (format.ts) budgets exactly one row per list row —
           // Ink's default wrap would soft-wrap a long value into a second row and overflow that
           // budget the same way the SERI_VERIFY_COMMAND description string itself once did.
-          <Text
-            key={row.key}
-            color={index === selected ? theme.accent : undefined}
-            wrap="truncate-end"
-          >
+          <Text key={row.key} {...selectedRowStyle(index === selected)} wrap="truncate-end">
             {index === selected ? "> " : "  "}
             {formatConfigRow(row)}
           </Text>
@@ -218,7 +214,7 @@ function ConfigEnterValue({
   });
 
   return (
-    <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+    <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>{`Set ${label} (${key})`}</Text>
       <Text color={theme.muted}>{description}</Text>
       <Text>{"*".repeat(value.length)}</Text>
@@ -226,7 +222,8 @@ function ConfigEnterValue({
       unbounded and free to carry a literal newline, and this panel budgets exactly one row for it,
       same reasoning as App.tsx's own commandError guard. */}
       {error !== undefined && (
-        <Text color={theme.error} wrap="truncate-end">
+        <Text color={theme.error} bold wrap="truncate-end">
+          {ERROR_MARK}
           {singleLine(error)}
         </Text>
       )}
@@ -268,8 +265,11 @@ function ConfigConfirmUnset({
   });
 
   return (
-    <Box borderStyle="round" borderColor={theme.warning}>
-      <Text color={theme.warning}>{`Unset ${label} (${key})? [y]es / [N]o`}</Text>
+    <Box borderStyle="single" borderColor={theme.warning}>
+      <Text color={theme.warning} bold>
+        {WARNING_MARK}
+        {`Unset ${label} (${key})? [y]es / [N]o`}
+      </Text>
     </Box>
   );
 }

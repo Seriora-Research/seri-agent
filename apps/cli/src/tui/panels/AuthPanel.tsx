@@ -5,7 +5,7 @@
 import { Box, Text, useInput } from "ink";
 import { singleLine } from "../format";
 import type { AuthPanelState } from "../reducer";
-import { theme } from "../theme";
+import { ERROR_MARK, theme } from "../theme";
 
 // The non-blocking login/signup offer — a single bordered row, the same visual weight as
 // ApprovalBox's own bordered box, rendered ABOVE App.tsx's render ternary rather than as one of
@@ -16,14 +16,12 @@ import { theme } from "../theme";
 export function AuthBanner({ show }: { show: boolean }) {
   if (!show) return null;
   return (
-    <Box borderStyle="round" borderColor={theme.accent}>
+    <Box borderStyle="single" borderColor={theme.muted}>
       {/* `wrap="truncate-end"`: APP_CHROME_ROWS (format.ts) counts this box as exactly 3 rows —
       2 border + 1 text. Below ~58 columns this fixed string would otherwise soft-wrap to a
       second text row, making the box 4 rows and pushing an open panel's own bottom row past the
       alt-screen viewport. */}
-      <Text color={theme.accent} wrap="truncate-end">
-        Sign in with /login, or create an account with /signup
-      </Text>
+      <Text wrap="truncate-end">Sign in with /login, or create an account with /signup</Text>
     </Box>
   );
 }
@@ -53,7 +51,7 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
 
   if (state.step === "starting") {
     return (
-      <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+      <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
         <Text color={theme.muted}>{`Starting ${state.mode}…`}</Text>
         <Text color={theme.muted}>Esc cancel</Text>
       </Box>
@@ -61,23 +59,24 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
   }
   if (state.step === "device") {
     return (
-      <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+      <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
         <Text color={theme.muted}>{`Open ${state.verificationUri} and enter this code:`}</Text>
-        <Text color={theme.accent}>{state.userCode}</Text>
+        <Text>{state.userCode}</Text>
         <Text color={theme.muted}>Esc cancel</Text>
       </Box>
     );
   }
   return (
     <Box
-      borderStyle="round"
-      borderColor={state.error ? theme.error : theme.accent}
+      borderStyle="single"
+      borderColor={state.error ? theme.error : theme.muted}
       flexDirection="column"
     >
       {/* singleLine + wrap="truncate-end": the error case comes from messageOf(err) — an
       Error#message is unbounded and free to carry a literal newline, and this panel budgets
       exactly one row for it, same reasoning as App.tsx's own commandError guard. */}
-      <Text color={state.error ? theme.error : theme.accent} wrap="truncate-end">
+      <Text bold={state.error} color={state.error ? theme.error : undefined} wrap="truncate-end">
+        {state.error ? ERROR_MARK : ""}
         {singleLine(state.message)}
       </Text>
       <Text color={theme.muted}>Enter/Esc continue</Text>
