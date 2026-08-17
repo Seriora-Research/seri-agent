@@ -34,11 +34,11 @@ export const PANEL_CHROME_ROWS = 9;
 // shown above the panel), and AuthBanner's three-row bordered Box (shown above everything when
 // signed out) — 1 + 1 + 1 + 3 = 6. Unconditional because `commandError`/`authOffer` live on
 // reducer state inside App, out of scope for the four panel components that call
-// `useListWindow(rows, selected)` with nothing else in scope — threading both flags into every one of
-// them (plus App itself) costs far more than the alternative: over-reserving these six rows when
-// neither is actually showing costs at most one list row on a 24-row terminal and nothing at all
-// on a 25+ row one, while under-reserving pushes a panel row off the alt screen with no scrollback
-// to recover it.
+// `useListWindow(rows, selected)` with nothing else in scope — threading both flags into every
+// one of them (plus App itself) costs far more than the alternative: over-reserving these six
+// rows when neither is actually showing costs at most one list row on a 24-row terminal and
+// nothing at all on a 25+ row one, while under-reserving pushes a panel row off the alt screen
+// with no scrollback to recover it.
 //
 // Does NOT also reserve for `pendingTool`'s own three-row bordered Box, even though a panel can
 // genuinely be open while a write_file/edit call is in flight (/model, /setup, /config, and

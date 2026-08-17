@@ -29,9 +29,10 @@ export function AuthBanner({ show }: { show: boolean }) {
 
 // /login and /signup's own blocking device-flow panel — mirrors SetupPanel's step-dispatcher
 // shape, one branch per step. `onDismiss` is called from Escape on every step, plus Enter on
-// "result" (ConfirmPrompt's own Esc-cancels convention, components.tsx, is the closest
-// precedent for "either key just closes it" — used on "result" only, where an explicit
-// confirmation reads naturally; Escape alone covers "starting"/"device").
+// "result" only, where an explicit confirmation reads naturally (Escape alone covers
+// "starting"/"device"). This panel's own explicit `key.escape` check below is what makes Escape
+// work here — unlike `ConfirmPrompt` (components.tsx), which never inspects `key.escape` and
+// treats a bare Escape as an inert stray keypress, not a cancel.
 //
 // Bug fix (thermo-nuclear + code-review, round 4): before Escape worked here at all, neither it
 // nor Ctrl-C (wired to onCancel, not to clearing pendingAuth — a raw Ctrl-C during "starting"/

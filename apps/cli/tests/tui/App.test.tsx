@@ -1877,8 +1877,9 @@ describe("App", () => {
       expect(resolved).toEqual([0]);
     });
 
-    // Escape, mirroring ConfirmPrompt's own Esc-cancels convention (components.tsx) — the
-    // dismissal precedent this fix follows.
+    // Escape on the result step: AuthPanel's own explicit key.escape check, not something it gets
+    // from ConfirmPrompt — that component never inspects key.escape and treats a bare Escape as
+    // an inert stray keypress there, not a cancel.
     test("Escape on the result step also calls onAuthResolved", async () => {
       const resolved: number[] = [];
       let dispatch: ((action: TuiAction) => void) | undefined;
