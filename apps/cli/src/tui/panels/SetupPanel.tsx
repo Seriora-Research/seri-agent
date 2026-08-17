@@ -6,7 +6,7 @@ import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import { formatSetupRow, remaining, singleLine } from "../format";
 import type { SetupState } from "../reducer";
-import { theme } from "../theme";
+import { ERROR_MARK, selectedRowStyle, theme, WARNING_MARK } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /setup's own live state (tui/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-exclusion
@@ -133,7 +133,7 @@ function SetupList({
   const remainingCount = remaining(rows.length, offset, windowSize);
 
   return (
-    <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+    <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>/setup — provider API keys</Text>
       {visible.map((row, localIndex) => {
         const index = offset + localIndex;
@@ -143,7 +143,7 @@ function SetupList({
           // budgets exactly one row per list row regardless of how wide it is.
           <Text
             key={row.provider}
-            color={index === selected ? theme.accent : undefined}
+            {...selectedRowStyle(index === selected)}
             wrap="truncate-end"
           >
             {index === selected ? "> " : "  "}
@@ -206,14 +206,15 @@ function SetupEnterKey({
   });
 
   return (
-    <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+    <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text color={theme.muted}>{`${keyName} for ${provider}`}</Text>
       <Text>{"*".repeat(value.length)}</Text>
       {/* singleLine + wrap="truncate-end": error comes from messageOf(err) — an Error#message is
       unbounded and free to carry a literal newline, and this panel budgets exactly one row for it,
       same reasoning as App.tsx's own commandError guard. */}
       {error !== undefined && (
-        <Text color={theme.error} wrap="truncate-end">
+        <Text color={theme.error} bold wrap="truncate-end">
+          {ERROR_MARK}
           {singleLine(error)}
         </Text>
       )}
@@ -254,8 +255,11 @@ function SetupConfirmRemove({
   });
 
   return (
-    <Box borderStyle="round" borderColor={theme.warning}>
-      <Text color={theme.warning}>{`Remove ${keyName} (${provider})? [y]es / [N]o`}</Text>
+    <Box borderStyle="single" borderColor={theme.warning}>
+      <Text color={theme.warning} bold>
+        {WARNING_MARK}
+        {`Remove ${keyName} (${provider})? [y]es / [N]o`}
+      </Text>
     </Box>
   );
 }

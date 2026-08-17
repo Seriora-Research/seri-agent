@@ -40,7 +40,7 @@ import { PermissionsPanel } from "./panels/PermissionsPanel";
 import { SetupPanel } from "./panels/SetupPanel";
 import { WelcomeSplash } from "./panels/WelcomeSplash";
 import { type Dispatch, initialTuiState, tuiReducer } from "./reducer";
-import { theme } from "./theme";
+import { ERROR_MARK, theme } from "./theme";
 
 export type AppProps = {
   session: SessionState<ModelMessage>;
@@ -385,7 +385,7 @@ export function App({
         ))}
       </Box>
       {state.pendingTool !== undefined && (
-        <Box borderStyle="round" borderColor={theme.warning}>
+        <Box borderStyle="single" borderColor={theme.warning}>
           {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: pendingTool is set
           ONLY for write_file/edit (reducer.ts), the two tools whose args carry a whole file body —
           exactly the case the helper exists for, uncapped here otherwise. */}
@@ -395,7 +395,7 @@ export function App({
         </Box>
       )}
       <Box flexDirection="row" justifyContent="space-between">
-        <Text color={theme.accent}>{modeLabel}</Text>
+        <Text>{modeLabel}</Text>
         <Box flexDirection="row" gap={1}>
           {/* `noPanelOpen` too, not just the offset: while a panel is open, End
           is swallowed by the exact same gate `noPanelOpen` already puts on the transcript-scroll
@@ -416,7 +416,8 @@ export function App({
       what's left from overflowing on a narrow terminal. Either alone would leave the other case
       free to push an open panel's own bottom row past the alt-screen viewport. */}
       {state.commandError !== undefined && (
-        <Text color={theme.error} wrap="truncate-end">
+        <Text color={theme.error} bold wrap="truncate-end">
+          {ERROR_MARK}
           {singleLine(state.commandError)}
         </Text>
       )}

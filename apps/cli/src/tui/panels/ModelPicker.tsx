@@ -6,7 +6,7 @@ import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import type { ModelPickerEntry } from "../commands";
 import { formatModelRow, MODEL_PICKER_HEADER, matchesFilter, remaining } from "../format";
-import { theme } from "../theme";
+import { selectedRowStyle, theme } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /model's own live state (tui/reducer.ts's pendingModelPicker) — mirrors ApprovalBox's shape
@@ -117,7 +117,7 @@ export function ModelPicker({
   const remainingCount = remaining(filtered.length, scrollOffset, windowSize);
 
   return (
-    <Box borderStyle="round" borderColor={theme.accent} flexDirection="column">
+    <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Text>{filterQuery.length > 0 ? filterQuery : " "}</Text>
       {/* Same reasoning as the row Text below: MODEL_PICKER_HEADER's own fixed column widths sum to
       the same ~87 chars, so it soft-wraps on the identical narrow terminals the row fix guards
@@ -132,7 +132,7 @@ export function ModelPicker({
           // exactly one row per list row regardless.
           <Text
             key={`${row.entry.provider}/${row.entry.id}`}
-            color={index === selectedIndex ? theme.accent : undefined}
+            {...selectedRowStyle(index === selectedIndex)}
             wrap="truncate-end"
           >
             {index === selectedIndex ? "> " : "  "}
