@@ -2088,7 +2088,7 @@ describe("App", () => {
       expect(frame).toContain("[y]es");
       expect(frame).toContain("[N]o");
       expect(frame).toContain("Verify command (SERI_VERIFY_COMMAND)");
-      expect(frame).toContain("! ");
+      expect(frame).toContain("! Unset");
 
       instance.stdin.write("z"); // unrecognised key
       await flush();
@@ -2351,7 +2351,7 @@ describe("App", () => {
       });
       await flush();
 
-      expect(instance.lastFrame() ?? "").toContain("! ");
+      expect(instance.lastFrame() ?? "").toContain("! Remove write_file");
 
       instance.stdin.write("y");
       await flush();

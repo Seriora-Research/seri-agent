@@ -10,7 +10,7 @@ import { selectedRowStyle, theme } from "../theme";
 import { useListWindow } from "../useListWindow";
 
 // /model's own live state (tui/reducer.ts's pendingModelPicker) — mirrors ApprovalBox's shape
-// exactly: its own useInput, a round-bordered box, mutually exclusive with InputBox. `filterQuery`
+// exactly: its own useInput, a single-bordered box, mutually exclusive with InputBox. `filterQuery`
 // and `selectedIndex` are local component state, not reducer state, for the same reason InputBox's
 // own `value` is: this is transient UI data with no reason to survive a resolve/cancel or be
 // visible to anything outside this component.
