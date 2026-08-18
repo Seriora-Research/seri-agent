@@ -29,6 +29,7 @@ import {
   FALLBACK_CHROME_ROWS,
   formatModeLabel,
   transcriptVisualRows,
+  type VisibleRow,
   visibleTranscript,
 } from "./format";
 import { ApprovalBox } from "./panels/ApprovalBox";
@@ -187,6 +188,19 @@ function useTerminalWidth(): number {
   }, [stdout]);
 
   return width;
+}
+
+// One visibleTranscript row's own render props — factored out, not inlined into the JSX below, for
+// the same reason ListRow (components.tsx) is: ink-testing-library's `lastFrame()` carries no ANSI
+// in this test environment, so `backgroundColor` is otherwise invisible to a mounted-frame
+// assertion; calling this directly lets a test pin the actual prop instead of the frame text.
+export function transcriptRowProps(
+  row: VisibleRow,
+  columns: number,
+): { text: string; backgroundColor: string | undefined } {
+  return row.role === "user"
+    ? { text: row.text.padEnd(columns), backgroundColor: theme.userBg }
+    : { text: row.text, backgroundColor: undefined };
 }
 
 export function App({
@@ -389,11 +403,14 @@ export function App({
           transcriptOffset,
           state.columns,
           state.streaming,
-        ).map((row, index) => (
-          <Text key={index} backgroundColor={row.role === "user" ? theme.userBg : undefined}>
-            {row.role === "user" ? row.text.padEnd(state.columns) : row.text}
-          </Text>
-        ))}
+        ).map((row, index) => {
+          const { text, backgroundColor } = transcriptRowProps(row, state.columns);
+          return (
+            <Text key={index} backgroundColor={backgroundColor}>
+              {text}
+            </Text>
+          );
+        })}
       </Box>
       {state.pendingTool !== undefined && (
         <Box borderStyle="single" borderColor={theme.warning}>
