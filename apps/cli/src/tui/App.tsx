@@ -260,12 +260,21 @@ export function App({
   // renders a gap instead of a full page. `transcriptScrollStreamingRows` is the reducer's own
   // snapshot of what was already baked in, so only the delta needs compensating for here.
   const pendingRows =
-    state.streaming.length > 0 ? transcriptVisualRows([state.streaming], state.columns) : 0;
+    state.streaming.length > 0
+      ? transcriptVisualRows([{ role: "assistant", text: state.streaming }], state.columns)
+      : 0;
   const transcriptOffset =
     state.transcriptScrollOffset > 0
       ? state.transcriptScrollOffset +
         Math.max(0, pendingRows - state.transcriptScrollStreamingRows)
       : 0;
+
+  // A transcript shorter than the viewport top-anchors instead of tail-anchors: bottom-pinning a
+  // half-empty screen (the default below, `flex-end`) reads as a mostly-blank terminal until the
+  // session grows past `viewportRows`, rather than starting at the top the way a real terminal's
+  // own scrollback does.
+  const contentRows = state.totalVisualRows + pendingRows;
+  const isShort = contentRows < viewportRows;
 
   // `columns`/`viewportRows` live on TuiState itself (reducer.ts's own comment on those fields) —
   // this is the one place that ever measures them, so it's the one place that ever dispatches them
@@ -372,7 +381,7 @@ export function App({
         flexShrink={1}
         minHeight={0}
         overflowY="hidden"
-        justifyContent="flex-end"
+        justifyContent={isShort ? "flex-start" : "flex-end"}
       >
         {visibleTranscript(
           state.transcript,
@@ -380,8 +389,10 @@ export function App({
           transcriptOffset,
           state.columns,
           state.streaming,
-        ).map((line, index) => (
-          <Text key={index}>{line}</Text>
+        ).map((row, index) => (
+          <Text key={index} backgroundColor={row.role === "user" ? theme.userBg : undefined}>
+            {row.role === "user" ? row.text.padEnd(state.columns) : row.text}
+          </Text>
         ))}
       </Box>
       {state.pendingTool !== undefined && (

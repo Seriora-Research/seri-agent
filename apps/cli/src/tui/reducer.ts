@@ -8,7 +8,12 @@ import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
 import type { SessionState } from "../session/session";
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
-import { DEFAULT_COLUMNS, type TranscriptEntry, type TranscriptRole, transcriptVisualRows } from "./format";
+import {
+  DEFAULT_COLUMNS,
+  type TranscriptEntry,
+  type TranscriptRole,
+  transcriptVisualRows,
+} from "./format";
 
 // /setup's own live state (D5-D8, feature-plan.md) — a three-step flow, mirrored on the reducer
 // the same way /model's picker is: "list" shows all five providers, "enter-key" is the masked
