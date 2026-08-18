@@ -20,7 +20,14 @@ export function authedFetch(
     const response = await fetchFn(input, requestInit);
     if (response.status !== 401) return response;
 
-    const refreshed = await refreshSession(configDir, fetchFn);
+    // refreshSession's own fetch (refreshAccessToken's POST to WorkOS) takes no signal of its
+    // own — without threading the caller's signal through here, a caller-supplied deadline (e.g.
+    // accountStatus.ts's ACCOUNT_STATUS_TIMEOUT_MS) bounds the first fetch and the retry below,
+    // but not a refresh hung in between, defeating the deadline entirely on a 401.
+    const boundFetchFn: typeof fetch = init?.signal
+      ? (refreshInput, refreshInit) => fetchFn(refreshInput, { ...refreshInit, signal: init.signal })
+      : fetchFn;
+    const refreshed = await refreshSession(configDir, boundFetchFn);
     if (!refreshed) return response;
 
     headers.set("Authorization", `Bearer ${refreshed.accessToken}`);
