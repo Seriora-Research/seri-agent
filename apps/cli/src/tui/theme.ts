@@ -8,6 +8,9 @@ export const theme = {
   warning: "white",
   selected: "black",
   muted: "gray",
+  // A confirmed, deliberate second use of background color (docs/TUI-DESIGN.md) — the user-message
+  // row band, not an oversight of the "reverse-video row only" rule `selected` above follows.
+  userBg: "gray",
 } as const;
 
 // Prefixed onto an alert addressed to the user (a failure or a question) at the TUI call site —
