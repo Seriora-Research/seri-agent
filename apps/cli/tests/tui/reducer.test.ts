@@ -133,6 +133,30 @@ describe("tuiReducer: transcript role tagging", () => {
     ]);
   });
 
+  // Regression: echoUserInput (cli.ts) is the only call site that ever dispatches `role: "user"`,
+  // and it always passes `flush: false` (deliberately, so a rejected/echoed submission never
+  // fragments an in-progress streamed answer — see pushLine's own comment). The separator used to
+  // be computed only on the `flush: true` branch, so this exact combination — the only one a real
+  // user turn ever produces — silently skipped the leading blank line.
+  test('role: "user", flush: false (the actual echoUserInput dispatch shape) still gets a leading blank separator', () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "transcript-append",
+      line: "first",
+    });
+    state = tuiReducer(state, {
+      type: "transcript-append",
+      line: "> hello",
+      role: "user",
+      flush: false,
+    });
+
+    expect(state.transcript).toEqual([
+      { role: "system", text: "first" },
+      { role: "system", text: "" },
+      { role: "user", text: "> hello" },
+    ]);
+  });
+
   test('the very first entry in a fresh session gets no leading separator, even with role: "user"', () => {
     const state = tuiReducer(initialTuiState(session()), {
       type: "transcript-append",

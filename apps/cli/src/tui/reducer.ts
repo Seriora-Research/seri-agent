@@ -488,11 +488,15 @@ function pushLine(
   role: TranscriptRole = "system",
   flush = true,
 ): TuiState {
-  if (!flush) return appendLines(state, [{ role, text: line }]);
-  const flushedStreaming: TranscriptEntry[] =
-    state.streaming.length > 0 ? [{ role: "assistant", text: state.streaming }] : [];
+  // Computed before the `flush` branch below, not inside the `flush: true` half of it: echoUserInput
+  // (cli.ts) — the only call site that ever dispatches `role: "user"` — always passes `flush: false`,
+  // so a separator that only existed on the `flush: true` path would never actually fire for a real
+  // user turn.
   const separator: TranscriptEntry[] =
     role === "user" && state.transcript.length > 0 ? [{ role: "system", text: "" }] : [];
+  if (!flush) return appendLines(state, [...separator, { role, text: line }]);
+  const flushedStreaming: TranscriptEntry[] =
+    state.streaming.length > 0 ? [{ role: "assistant", text: state.streaming }] : [];
   const appended = [...flushedStreaming, ...separator, { role, text: line }];
   return { ...appendLines(state, appended, state.transcriptScrollStreamingRows), streaming: "" };
 }
