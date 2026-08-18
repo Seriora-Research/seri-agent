@@ -77,14 +77,26 @@ export function wrapForTranscript(text: string, columns: number): string[] {
   return wrapAnsi(text, Math.max(1, columns), { hard: true, trim: false }).split("\n");
 }
 
-// The total number of VISUAL rows `lines` (logical, unwrapped) occupies at `columns` wide — what
+export type TranscriptRole = "user" | "assistant" | "system";
+export type TranscriptEntry = { role: TranscriptRole; text: string };
+export type VisibleRow = { role: TranscriptRole; text: string };
+
+// The string an entry actually wraps/renders as — assistant entries get the `●` marker prefixed
+// here, at read time, rather than stored in the entry's own `text`. `transcriptVisualRows` and
+// `visibleTranscript` both funnel through this one helper so they can never disagree on how many
+// visual rows an assistant entry occupies (a divergence there would drift the scroll-offset math).
+function displayText(entry: TranscriptEntry): string {
+  return entry.role === "assistant" ? `● ${entry.text}` : entry.text;
+}
+
+// The total number of VISUAL rows `entries` (logical, unwrapped) occupies at `columns` wide — what
 // the scroll clamp (reducer.ts's `transcript-scroll`/`transcript-scroll-to`/`viewport-resized`
 // cases) needs to know the real maximum offset. O(transcript length): fine on a keypress/resize
 // (the only callers), not fine per-render, which is exactly why `visibleTranscript` below does NOT
 // call this — it only ever wraps the tail slice it actually needs.
-export function transcriptVisualRows(lines: string[], columns: number): number {
+export function transcriptVisualRows(entries: TranscriptEntry[], columns: number): number {
   let total = 0;
-  for (const line of lines) total += wrapForTranscript(line, columns).length;
+  for (const entry of entries) total += wrapForTranscript(displayText(entry), columns).length;
   return total;
 }
 
@@ -93,7 +105,7 @@ export function transcriptVisualRows(lines: string[], columns: number): number {
 // longer than the viewport keeps showing its NEWEST rows by default, the same thing the terminal
 // itself would show if these lines had just scrolled by normally.
 //
-// Walks `lines` from the newest entry backward, wrapping each one, stopping as soon as
+// Walks `entries` from the newest entry backward, wrapping each one, stopping as soon as
 // `offset + rows` visual rows have accumulated (or the transcript runs out) — bounded by how deep
 // the reader has scrolled, not by total session length, so this stays cheap on every render of a
 // long-running session (called once per streamed token while a turn is in progress) instead of
@@ -109,29 +121,37 @@ export function transcriptVisualRows(lines: string[], columns: number): number {
 // the bottom, but the exact case a reader scrolled deep into a long session (or a fast streamed
 // answer on a tall terminal) would actually hit every render.
 //
-// `pending` (App.tsx's `state.streaming`, the in-progress answer not yet committed to `lines`) is
-// wrapped and seeded into the accumulation FIRST, ahead of the backward walk over `lines` — not
-// spread into a `[...lines, pending]` array at the call site (a prior version of this function did
+// `pending` (App.tsx's `state.streaming`, the in-progress answer not yet committed to `entries`) is
+// wrapped and seeded into the accumulation FIRST, ahead of the backward walk over `entries` — not
+// spread into a `[...entries, pending]` array at the call site (a prior version of this function did
 // exactly that, tried and reverted): that allocated a full copy of the committed transcript on every
 // call, i.e. every streamed token, for a function whose entire point is staying proportional to
-// scroll depth instead of session length. Wrapping in the SAME accumulation `lines` itself feeds
+// scroll depth instead of session length. Wrapping in the SAME accumulation `entries` itself feeds
 // keeps `pending`'s own row count part of one coherent walk rather than a second, disconnected one.
 export function visibleTranscript(
-  lines: string[],
+  entries: TranscriptEntry[],
   rows: number,
   offset: number,
   columns: number,
   pending = "",
-): string[] {
-  const collected: string[][] = [];
+): VisibleRow[] {
+  const collected: VisibleRow[][] = [];
   let collectedRows = 0;
   if (pending.length > 0) {
-    const wrapped = wrapForTranscript(pending, columns);
+    const pendingEntry: TranscriptEntry = { role: "assistant", text: pending };
+    const wrapped = wrapForTranscript(displayText(pendingEntry), columns).map((text) => ({
+      role: pendingEntry.role,
+      text,
+    }));
     collected.push(wrapped);
     collectedRows += wrapped.length;
   }
-  for (let i = lines.length - 1; i >= 0 && collectedRows < offset + rows; i--) {
-    const wrapped = wrapForTranscript(lines[i], columns);
+  for (let i = entries.length - 1; i >= 0 && collectedRows < offset + rows; i--) {
+    const entry = entries[i];
+    const wrapped = wrapForTranscript(displayText(entry), columns).map((text) => ({
+      role: entry.role,
+      text,
+    }));
     collected.push(wrapped);
     collectedRows += wrapped.length;
   }
