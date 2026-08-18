@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "./fetchWithTimeout";
 import { filterCatalogEntries } from "./filter";
 import type { ModelCatalog, ModelCatalogEntry, ModelProvider } from "./types";
 
@@ -107,17 +108,13 @@ export async function loadCatalog(
       return manifest;
     }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
-      const response = await fetchFn(MODELS_DEV_URL, { signal: controller.signal });
+      const response = await fetchWithTimeout(fetchFn, MODELS_DEV_URL, FETCH_TIMEOUT_MS);
       if (!response.ok) throw new Error(`models.dev returned ${response.status}`);
       const raw = (await response.json()) as RawCatalogResponse;
       return { fetchedAt: new Date().toISOString(), entries: mapRawCatalog(raw) };
     } catch {
       return manifest;
-    } finally {
-      clearTimeout(timer);
     }
   })();
   return cachedPromise;
