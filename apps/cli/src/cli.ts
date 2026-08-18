@@ -1042,6 +1042,14 @@ function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider | 
   return `routing ${route.model} via ${route.provider} (your key) — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
 }
 
+// D2's gateway counterpart to rerouteNotice above: a viaGateway route is served through the
+// user's own seri plan, not a key they brought, so the piped/non-interactive path needs the same
+// "never silent" notice a BYOK reroute already gets — otherwise a scripted run consumes gateway
+// quota with zero indication it left the user's own keys at all.
+function gatewayNotice(route: ResolvedRoute, requestedProvider: ModelProvider): string {
+  return `routing ${route.model} via ${route.provider} on your seri plan — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
+}
+
 // The one place a TTY-path failure becomes an exit code, used by every catch between
 // `enterAltScreen()` and `runTui`'s own mount (this function's own catches, and `run()`'s two
 // try/catches around the steps on either side of `prepareSession`): exits the alt screen before
@@ -1175,13 +1183,17 @@ async function prepareSession(
       plan,
     );
     const model = dispatchModel(route, session.id, configDir, deps);
-    // D2: a rerouted pair is never silent — the piped/non-interactive path gets the notice here,
-    // gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent into the transcript
-    // once per turn, and this call ALSO runs on the TUI path (this function has no other reason to
-    // know isTTY), so without the gate a session-start reroute printed twice for the same turn: once
-    // here (before Ink even mounts) and again from runTurn.
+    // D2: a rerouted OR gateway-served pair is never silent — the piped/non-interactive path gets
+    // the notice here, gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent
+    // into the transcript once per turn for a reroute, and this call ALSO runs on the TUI path
+    // (this function has no other reason to know isTTY), so without the gate a session-start
+    // reroute printed twice for the same turn: once here (before Ink even mounts) and again from
+    // runTurn. `rerouted` and `viaGateway` are mutually exclusive (routing.ts's own ResolvedRoute
+    // comment), so at most one of these ever fires.
     if (route.rerouted && !isTTY) {
       printWarning(rerouteNotice(route, session.provider));
+    } else if (route.viaGateway && !isTTY) {
+      printWarning(gatewayNotice(route, requestedProvider));
     }
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
     // cost and context-window come from the wrong provider's entry.
