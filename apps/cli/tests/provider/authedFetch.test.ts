@@ -48,7 +48,7 @@ describe("authedFetch — refresh call inherits the caller's AbortSignal", () =>
       return calls.length === 1 ? jsonResponse({}, 401) : jsonResponse({ ok: true });
     }) as unknown as typeof fetch;
 
-    const refreshSession: typeof refreshSessionReal = (async (_configDir, refreshFetchFn) => {
+    const refreshSession: typeof refreshSessionReal = async (_configDir, refreshFetchFn) => {
       await refreshFetchFn?.("https://example.invalid/refresh", {});
       return {
         accessToken: "at-2",
@@ -57,7 +57,7 @@ describe("authedFetch — refresh call inherits the caller's AbortSignal", () =>
         email: "a@example.com",
         obtainedAt: "2026-01-01T00:00:00.000Z",
       };
-    }) as unknown as typeof refreshSessionReal;
+    };
 
     await authedFetch(
       tmpRoot,
@@ -77,7 +77,7 @@ describe("authedFetch — refresh call inherits the caller's AbortSignal", () =>
     }) as unknown as typeof fetch;
 
     let refreshReceivedSameFetchFn = false;
-    const refreshSession: typeof refreshSessionReal = (async (_configDir, refreshFetchFn) => {
+    const refreshSession: typeof refreshSessionReal = async (_configDir, refreshFetchFn) => {
       refreshReceivedSameFetchFn = refreshFetchFn === fetchFn;
       return {
         accessToken: "at-2",
@@ -86,7 +86,7 @@ describe("authedFetch — refresh call inherits the caller's AbortSignal", () =>
         email: "a@example.com",
         obtainedAt: "2026-01-01T00:00:00.000Z",
       };
-    }) as unknown as typeof refreshSessionReal;
+    };
 
     await authedFetch(tmpRoot, fetchFn, refreshSession)("https://example.invalid/thing");
 
