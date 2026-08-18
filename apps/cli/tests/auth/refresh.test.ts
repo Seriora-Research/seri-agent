@@ -103,6 +103,25 @@ describe("refreshAccessToken", () => {
 
     expect(result).toEqual({ status: "success", accessToken: "at-new", refreshToken: "rt-new" });
   });
+
+  // A connection drop while reading the body must not escape as an uncaught rejection — that
+  // would propagate out of refreshSession and stop authedFetch from returning the original 401.
+  test("a body-read rejection returns {status: 'error'} without throwing", async () => {
+    const fetchFn = async () =>
+      ({
+        ok: true,
+        status: 200,
+        text: async () => Promise.reject(new Error("stream reset")),
+      }) as unknown as Response;
+
+    const result = await refreshAccessToken(
+      "client_123",
+      "rt-old",
+      fetchFn as unknown as typeof fetch,
+    );
+
+    expect(result.status).toBe("error");
+  });
 });
 
 describe("refreshSession", () => {
@@ -219,5 +238,65 @@ describe("refreshSession", () => {
     const updated = await refreshSession(configDir, fetchFn as unknown as typeof fetch);
 
     expect(updated?.accessToken).toBe("at-new");
+  });
+
+  // The race this guards against: two 401 handlers both read the same on-disk rotating refresh
+  // token before either submits it. Without sharing one in-flight promise, one call's fetch
+  // would win at WorkOS and the other would receive {status: "error"}, stranding that caller on
+  // its original 401 even though a valid rotated pair now exists on disk.
+  test("concurrent calls for the same configDir share one refresh and both resolve to it", async () => {
+    seedAuthJson({
+      accessToken: "at-old",
+      refreshToken: "rt-old",
+      userId: "user_1",
+      email: "a@example.com",
+      obtainedAt: "2026-01-01T00:00:00.000Z",
+    });
+    let fetchCalls = 0;
+    const fetchFn = async () => {
+      fetchCalls++;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return fakeResponse(true, 200, {
+        access_token: "at-new",
+        refresh_token: "rt-new",
+        expires_in: 300,
+      });
+    };
+
+    const [first, second] = await Promise.all([
+      refreshSession(configDir, fetchFn as unknown as typeof fetch),
+      refreshSession(configDir, fetchFn as unknown as typeof fetch),
+    ]);
+
+    expect(fetchCalls).toBe(1);
+    expect(first?.accessToken).toBe("at-new");
+    expect(second?.accessToken).toBe("at-new");
+    expect(loadAuthSession(configDir)?.accessToken).toBe("at-new");
+  });
+
+  // Once the shared in-flight refresh has settled, the next call must not keep reusing its
+  // (now-stale) result — it has to trigger a fresh refresh.
+  test("a later call after the in-flight refresh settles triggers a new refresh", async () => {
+    seedAuthJson({
+      accessToken: "at-old",
+      refreshToken: "rt-old",
+      userId: "user_1",
+      email: "a@example.com",
+      obtainedAt: "2026-01-01T00:00:00.000Z",
+    });
+    let fetchCalls = 0;
+    const fetchFn = async () => {
+      fetchCalls++;
+      return fakeResponse(true, 200, {
+        access_token: `at-${fetchCalls}`,
+        refresh_token: `rt-${fetchCalls}`,
+        expires_in: 300,
+      });
+    };
+
+    await refreshSession(configDir, fetchFn as unknown as typeof fetch);
+    await refreshSession(configDir, fetchFn as unknown as typeof fetch);
+
+    expect(fetchCalls).toBe(2);
   });
 });

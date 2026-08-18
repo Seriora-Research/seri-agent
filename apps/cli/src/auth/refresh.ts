@@ -30,7 +30,15 @@ export async function refreshAccessToken(
   } catch (error) {
     return { status: "error", message: `WorkOS refresh request failed: ${String(error)}` };
   }
-  const body = await parseResponseBody(response);
+  // response.text() (inside parseResponseBody) can reject if the connection drops mid-read —
+  // caught here too, or that rejection would escape refreshAccessToken's no-throw contract and
+  // stop authedFetch from falling back to the original 401 response.
+  let body: Record<string, unknown>;
+  try {
+    body = await parseResponseBody(response);
+  } catch (error) {
+    return { status: "error", message: `WorkOS refresh response unreadable: ${String(error)}` };
+  }
   if (!response.ok) {
     return {
       status: "error",
@@ -57,11 +65,32 @@ export async function refreshAccessToken(
   };
 }
 
-// WorkOS rotates refresh tokens on every use, so the response's refresh_token — not the one
-// this call started with — is what has to be persisted, or the next refresh fails.
-export async function refreshSession(
+// Concurrent 401s against the same configDir (e.g. dispatch_subagents running several reader
+// subagents against the same gateway model) can each read the same on-disk refresh token before
+// either submits it. WorkOS accepts only one use of a rotating refresh token, so the loser would
+// get {status: "error"} and strand its caller on the original 401 even though a valid rotated
+// pair now exists on disk. One in-flight promise per configDir makes every concurrent caller
+// share the same refresh instead of racing separate ones.
+const inFlightRefreshes = new Map<string, Promise<AuthSession | undefined>>();
+
+export function refreshSession(
   configDir: string,
   fetchFn: typeof fetch = fetch,
+): Promise<AuthSession | undefined> {
+  const existing = inFlightRefreshes.get(configDir);
+  if (existing) return existing;
+
+  const promise = refreshSessionOnce(configDir, fetchFn);
+  inFlightRefreshes.set(configDir, promise);
+  promise.finally(() => inFlightRefreshes.delete(configDir));
+  return promise;
+}
+
+// WorkOS rotates refresh tokens on every use, so the response's refresh_token — not the one
+// this call started with — is what has to be persisted, or the next refresh fails.
+async function refreshSessionOnce(
+  configDir: string,
+  fetchFn: typeof fetch,
 ): Promise<AuthSession | undefined> {
   const session = loadAuthSession(configDir);
   if (!session) return undefined;
