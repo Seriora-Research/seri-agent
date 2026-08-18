@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "@seri/model-catalog";
 import { type AuthSession, expiresAtFrom, loadAuthSession, saveAuthSession } from "./authStore";
 import { AUTHENTICATE_URL, getWorkosClientId, parseResponseBody } from "./deviceFlow";
 
@@ -5,64 +6,82 @@ export type RefreshResult =
   | { status: "success"; accessToken: string; refreshToken: string; expiresIn?: number }
   | { status: "error"; message: string };
 
+// Matches accountStatus.ts's own ACCOUNT_STATUS_TIMEOUT_MS — the established value for this
+// codebase's best-effort, fail-closed network calls. This bounds the refresh regardless of
+// whether any caller ever supplies its own signal: refreshSession's own in-flight dedup (below)
+// shares this one call across every concurrent 401 for a configDir, so its lifetime cannot depend
+// on any single caller's own deadline — see authedFetch.ts's own comment on why binding a
+// caller's signal here would let that caller's cancellation abort every other caller's wait too.
+const REFRESH_TIMEOUT_MS = 10_000;
+
 // A raw fetch POST, matching deviceFlow.ts's pollForToken/requestDeviceCode style rather than
 // introducing @workos-inc/node client-side. Never throws — a caller (refreshSession below, or
 // gateway.ts's authedFetch) treats a failed refresh as "could not refresh", not as an
-// exception to propagate. That includes fetchFn itself rejecting (offline, DNS failure): caught
-// here so authedFetch's fallback to the original 401 response is reached instead of an uncaught
-// rejection replacing it.
+// exception to propagate. That includes fetchFn itself rejecting (offline, DNS failure, or this
+// call's own REFRESH_TIMEOUT_MS deadline firing): caught here so authedFetch's fallback to the
+// original 401 response is reached instead of an uncaught rejection replacing it.
 export async function refreshAccessToken(
   clientId: string,
   refreshToken: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<RefreshResult> {
-  let response: Response;
   try {
-    response = await fetchFn(AUTHENTICATE_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-        client_id: clientId,
-      }).toString(),
-    });
+    return await fetchWithTimeout(
+      fetchFn,
+      AUTHENTICATE_URL,
+      REFRESH_TIMEOUT_MS,
+      async (response): Promise<RefreshResult> => {
+        // response.text() (inside parseResponseBody) can reject if the connection drops mid-read
+        // — caught here, inside the same deadline `fetchWithTimeout` still has armed, so a body
+        // that stalls mid-stream trips REFRESH_TIMEOUT_MS same as a connection that never
+        // responds at all, rather than escaping refreshAccessToken's no-throw contract.
+        let body: Record<string, unknown>;
+        try {
+          body = await parseResponseBody(response);
+        } catch (error) {
+          return {
+            status: "error",
+            message: `WorkOS refresh response unreadable: ${String(error)}`,
+          };
+        }
+        if (!response.ok) {
+          return {
+            status: "error",
+            message: `WorkOS refresh failed with status ${response.status}: ${JSON.stringify(body)}`,
+          };
+        }
+        // A 200 with an unexpected body shape must not persist undefined tokens into auth.json —
+        // the same trust boundary as pollForToken's own response.ok check, applied to the fields
+        // inside it. expires_in is deliberately NOT required here: WorkOS's real response carries
+        // no such field (confirmed live), so its absence is the normal shape, not a malformed one.
+        if (
+          typeof body.access_token !== "string" ||
+          !body.access_token ||
+          typeof body.refresh_token !== "string" ||
+          !body.refresh_token
+        ) {
+          return { status: "error", message: "WorkOS refresh response is missing token fields" };
+        }
+        return {
+          status: "success",
+          accessToken: body.access_token,
+          refreshToken: body.refresh_token,
+          expiresIn: typeof body.expires_in === "number" ? body.expires_in : undefined,
+        };
+      },
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+          client_id: clientId,
+        }).toString(),
+      },
+    );
   } catch (error) {
     return { status: "error", message: `WorkOS refresh request failed: ${String(error)}` };
   }
-  // response.text() (inside parseResponseBody) can reject if the connection drops mid-read —
-  // caught here too, or that rejection would escape refreshAccessToken's no-throw contract and
-  // stop authedFetch from falling back to the original 401 response.
-  let body: Record<string, unknown>;
-  try {
-    body = await parseResponseBody(response);
-  } catch (error) {
-    return { status: "error", message: `WorkOS refresh response unreadable: ${String(error)}` };
-  }
-  if (!response.ok) {
-    return {
-      status: "error",
-      message: `WorkOS refresh failed with status ${response.status}: ${JSON.stringify(body)}`,
-    };
-  }
-  // A 200 with an unexpected body shape must not persist undefined tokens into auth.json — the
-  // same trust boundary as pollForToken's own response.ok check, applied to the fields inside
-  // it. expires_in is deliberately NOT required here: WorkOS's real response carries no such
-  // field (confirmed live), so its absence is the normal shape, not a malformed one.
-  if (
-    typeof body.access_token !== "string" ||
-    !body.access_token ||
-    typeof body.refresh_token !== "string" ||
-    !body.refresh_token
-  ) {
-    return { status: "error", message: "WorkOS refresh response is missing token fields" };
-  }
-  return {
-    status: "success",
-    accessToken: body.access_token,
-    refreshToken: body.refresh_token,
-    expiresIn: typeof body.expires_in === "number" ? body.expires_in : undefined,
-  };
 }
 
 // Concurrent 401s against the same configDir (e.g. dispatch_subagents running several reader

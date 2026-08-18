@@ -37,15 +37,19 @@ export async function fetchAccountPlan(
     // call forever — the fail-closed catch below only fires once the fetch REJECTS, never while it
     // is merely pending, so an unbounded request here blocks prepareSession (and therefore CLI
     // startup) indefinitely. fetchWithTimeout's own comment explains why this is a plain
-    // AbortController + setTimeout under the hood rather than AbortSignal.timeout().
-    const response = await fetchWithTimeout(
+    // AbortController + setTimeout under the hood rather than AbortSignal.timeout(), and why the
+    // body read below happens inside its own `read` callback rather than after it returns — the
+    // deadline has to cover a stalled body just as much as a connection that never responds.
+    return await fetchWithTimeout(
       authedFetch(configDir, fetchFn, refreshSession),
       `${gatewayBaseUrl(configDir)}/account-status`,
       deps.timeoutMs ?? ACCOUNT_STATUS_TIMEOUT_MS,
+      async (response) => {
+        if (!response.ok) return null;
+        const body = await response.json();
+        return toPlan(body?.plan);
+      },
     );
-    if (!response.ok) return null;
-    const body = await response.json();
-    return toPlan(body?.plan);
   } catch {
     return null;
   }
