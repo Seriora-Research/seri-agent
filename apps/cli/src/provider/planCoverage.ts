@@ -1,4 +1,4 @@
-import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
+import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@seri/model-catalog";
 import { isPaidPlan, type Plan } from "@seri/plans";
 
 // The only provider apps/server's gateway route currently forwards to — apps/server/lib/quota.ts's
@@ -9,19 +9,14 @@ import { isPaidPlan, type Plan } from "@seri/plans";
 // an equivalent constant when a second provider is actually wired there — out of scope here.
 export const GATEWAY_PROVIDER: ModelProvider = "openrouter";
 
-// The same isZeroPriceModel predicate apps/server/lib/quota.ts:42-49 enforces server-side,
-// re-derived here rather than imported since apps/cli cannot reach into apps/server/lib — keep
-// the two in sync manually if Free-tier eligibility ever changes. A missing/unknown `pricing`
-// is NOT zero-price — fail closed, same posture quota.ts's own comment states.
+// isZeroPriceEntry is the same predicate apps/server/lib/quota.ts's own isZeroPriceModel enforces
+// server-side, shared via @seri/model-catalog rather than re-derived by hand — both apps already
+// depend on that package for ModelCatalogEntry itself.
 //
 // Every paid plan reaches every model (pricing-tiers.md's "gate spend, not models" rule), so
 // coverage there needs no pricing check at all.
 export function planCoverage(entry: ModelCatalogEntry, plan: Plan | null): boolean {
   if (plan === null) return false;
   if (isPaidPlan(plan)) return true;
-  return (
-    entry.pricing !== undefined &&
-    entry.pricing.inputPerMTok === 0 &&
-    entry.pricing.outputPerMTok === 0
-  );
+  return isZeroPriceEntry(entry);
 }

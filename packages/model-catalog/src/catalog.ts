@@ -130,3 +130,16 @@ export function findCatalogEntry(
 ): ModelCatalogEntry | undefined {
   return catalog.entries.find((entry) => entry.id === id && entry.provider === provider);
 }
+
+// Shared by apps/server's Free-tier gate (quota.ts's own isZeroPriceModel) and apps/cli's own
+// gateway-coverage predicate (provider/planCoverage.ts) — previously duplicated by hand across
+// the two apps since neither can import the other's workspace. A missing entry, or an entry
+// whose `pricing` is `undefined` (meaning "unknown", not "free"), is NOT zero-price — fail
+// closed, the same posture catalog.ts's own empty-manifest fallback takes.
+export function isZeroPriceEntry(entry: ModelCatalogEntry | undefined): boolean {
+  return (
+    entry?.pricing !== undefined &&
+    entry.pricing.inputPerMTok === 0 &&
+    entry.pricing.outputPerMTok === 0
+  );
+}
