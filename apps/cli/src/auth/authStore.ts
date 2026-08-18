@@ -15,6 +15,16 @@ export type AuthSession = {
   expiresAt?: string;
 };
 
+// WorkOS's real token/refresh responses carry no expires_in field (confirmed live) — a missing
+// or non-finite value returns undefined rather than computing `new Date(NaN)`, whose
+// toISOString() throws. Shared by auth/commands.ts's login and auth/refresh.ts's refreshSession,
+// the two places that populate AuthSession.expiresAt.
+export function expiresAtFrom(expiresIn: number | undefined): string | undefined {
+  return typeof expiresIn === "number" && Number.isFinite(expiresIn)
+    ? new Date(Date.now() + expiresIn * 1000).toISOString()
+    : undefined;
+}
+
 export const AUTH_FILENAME = "auth.json";
 
 function authPath(configDir: string): string {

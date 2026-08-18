@@ -1,20 +1,9 @@
-import { type AuthSession, loadAuthSession, saveAuthSession } from "./authStore";
-import { AUTHENTICATE_URL, getWorkosClientId } from "./deviceFlow";
+import { type AuthSession, expiresAtFrom, loadAuthSession, saveAuthSession } from "./authStore";
+import { AUTHENTICATE_URL, getWorkosClientId, parseResponseBody } from "./deviceFlow";
 
 export type RefreshResult =
   | { status: "success"; accessToken: string; refreshToken: string; expiresIn?: number }
   | { status: "error"; message: string };
-
-// Matches deviceFlow.ts's own parseResponseBody: a non-JSON error body must not throw an
-// unhandled SyntaxError.
-async function parseResponseBody(response: Response): Promise<any> {
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { error: text.slice(0, 200) };
-  }
-}
 
 // A raw fetch POST, matching deviceFlow.ts's pollForToken/requestDeviceCode style rather than
 // introducing @workos-inc/node client-side. Never throws — a caller (refreshSession below, or
@@ -87,16 +76,11 @@ export async function refreshSession(
   // A stale expiresAt carried over from the previous session would describe the OLD token, not
   // this one — worse than no hint at all — so a missing expiresIn clears it rather than keeping
   // the old value.
-  const expiresAt =
-    typeof result.expiresIn === "number" && Number.isFinite(result.expiresIn)
-      ? new Date(Date.now() + result.expiresIn * 1000).toISOString()
-      : undefined;
-
   const updated: AuthSession = {
     ...session,
     accessToken: result.accessToken,
     refreshToken: result.refreshToken,
-    expiresAt,
+    expiresAt: expiresAtFrom(result.expiresIn),
   };
   saveAuthSession(updated, configDir);
   return updated;

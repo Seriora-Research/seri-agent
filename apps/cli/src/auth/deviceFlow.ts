@@ -51,7 +51,8 @@ export type TokenResult =
   // tui/handlers.ts).
   | { status: "aborted" };
 
-async function parseResponseBody(response: Response): Promise<any> {
+// Exported so auth/refresh.ts's refreshAccessToken reuses this instead of a verbatim copy.
+export async function parseResponseBody(response: Response): Promise<Record<string, unknown>> {
   const text = await response.text();
   try {
     return JSON.parse(text);
@@ -69,7 +70,10 @@ export async function requestDeviceCode(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ client_id: clientId }),
   });
-  const body = await parseResponseBody(response);
+  // WorkOS's own response fields are trusted directly, same as every other field this file
+  // reads off a real WorkOS response — the typed Record<string, unknown> return above is for
+  // refresh.ts's own already-checked usage, not a new validation requirement here.
+  const body: any = await parseResponseBody(response);
   if (!response.ok) {
     throw new Error(
       `WorkOS device authorization failed with status ${response.status}: ${JSON.stringify(body)}`,
@@ -135,7 +139,7 @@ export async function pollForToken(
         client_id: clientId,
       }).toString(),
     });
-    const body = await parseResponseBody(response);
+    const body: any = await parseResponseBody(response);
     // Re-checked here, not just at the top of the loop: an abort that lands WHILE this iteration's
     // own sleep+fetch is already in flight (the exact race a real WorkOS poll can hit, since a
     // device code stays valid for minutes) must still discard whatever this poll just resolved to
