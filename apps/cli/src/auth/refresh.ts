@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "@seri/model-catalog";
 import { type AuthSession, expiresAtFrom, loadAuthSession, saveAuthSession } from "./authStore";
 import { AUTHENTICATE_URL, getWorkosClientId, parseResponseBody } from "./deviceFlow";
 
@@ -5,12 +6,20 @@ export type RefreshResult =
   | { status: "success"; accessToken: string; refreshToken: string; expiresIn?: number }
   | { status: "error"; message: string };
 
+// Matches accountStatus.ts's own ACCOUNT_STATUS_TIMEOUT_MS — the established value for this
+// codebase's best-effort, fail-closed network calls. This bounds the refresh regardless of
+// whether any caller ever supplies its own signal: refreshSession's own in-flight dedup (below)
+// shares this one call across every concurrent 401 for a configDir, so its lifetime cannot depend
+// on any single caller's own deadline — see authedFetch.ts's own comment on why binding a
+// caller's signal here would let that caller's cancellation abort every other caller's wait too.
+const REFRESH_TIMEOUT_MS = 10_000;
+
 // A raw fetch POST, matching deviceFlow.ts's pollForToken/requestDeviceCode style rather than
 // introducing @workos-inc/node client-side. Never throws — a caller (refreshSession below, or
 // gateway.ts's authedFetch) treats a failed refresh as "could not refresh", not as an
-// exception to propagate. That includes fetchFn itself rejecting (offline, DNS failure): caught
-// here so authedFetch's fallback to the original 401 response is reached instead of an uncaught
-// rejection replacing it.
+// exception to propagate. That includes fetchFn itself rejecting (offline, DNS failure, or this
+// call's own REFRESH_TIMEOUT_MS deadline firing): caught here so authedFetch's fallback to the
+// original 401 response is reached instead of an uncaught rejection replacing it.
 export async function refreshAccessToken(
   clientId: string,
   refreshToken: string,
@@ -18,7 +27,7 @@ export async function refreshAccessToken(
 ): Promise<RefreshResult> {
   let response: Response;
   try {
-    response = await fetchFn(AUTHENTICATE_URL, {
+    response = await fetchWithTimeout(fetchFn, AUTHENTICATE_URL, REFRESH_TIMEOUT_MS, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({

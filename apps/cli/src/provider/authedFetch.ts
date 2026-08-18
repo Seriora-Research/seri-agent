@@ -1,4 +1,5 @@
-import { loadAuthSession } from "../auth/authStore";
+import { onAbort } from "../abort";
+import { type AuthSession, loadAuthSession } from "../auth/authStore";
 import { refreshSession as refreshSessionReal } from "../auth/refresh";
 
 // The Authorization header is read fresh here, from disk, on every call — not baked into a
@@ -20,15 +21,30 @@ export function authedFetch(
     const response = await fetchFn(input, requestInit);
     if (response.status !== 401) return response;
 
-    // refreshSession's own fetch (refreshAccessToken's POST to WorkOS) takes no signal of its
-    // own — without threading the caller's signal through here, a caller-supplied deadline (e.g.
-    // accountStatus.ts's ACCOUNT_STATUS_TIMEOUT_MS) bounds the first fetch and the retry below,
-    // but not a refresh hung in between, defeating the deadline entirely on a 401.
-    const boundFetchFn: typeof fetch = init?.signal
-      ? (((refreshInput, refreshInit) =>
-          fetchFn(refreshInput, { ...refreshInit, signal: init.signal })) as typeof fetch)
-      : fetchFn;
-    const refreshed = await refreshSession(configDir, boundFetchFn);
+    // refreshSession's own in-flight map (auth/refresh.ts) dedupes concurrent 401s against the
+    // same configDir into ONE shared refresh — its own comment names the real caller this exists
+    // for: dispatch_subagents running several reader subagents against the same gateway model.
+    // Binding THIS caller's signal into that shared operation (a prior version of this function
+    // did) would let whichever caller happens to arrive first hand ITS OWN cancellation the power
+    // to abort every other concurrent caller's wait too, even though their own deadlines never
+    // expired. So the signal only races THIS caller's own wait for the result — never the shared
+    // operation itself, which has its own independent bounded lifetime
+    // (refresh.ts's own REFRESH_TIMEOUT_MS) regardless of whether any caller ever supplies one.
+    const signal = init?.signal ?? undefined;
+    const refreshed = await new Promise<AuthSession | undefined>((resolve, reject) => {
+      const pending = refreshSession(configDir, fetchFn);
+      const abort = onAbort(signal, () => reject(signal?.reason));
+      pending.then(
+        (value) => {
+          abort.dispose();
+          resolve(value);
+        },
+        (error) => {
+          abort.dispose();
+          reject(error);
+        },
+      );
+    });
     if (!refreshed) return response;
 
     headers.set("Authorization", `Bearer ${refreshed.accessToken}`);

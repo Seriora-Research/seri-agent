@@ -10,15 +10,20 @@
 // here), not `typeof fetch`: a caller that wraps the real fetch (apps/cli's authedFetch, say)
 // returns a plain function lacking the static members bun-types augments the global `fetch` type
 // with (`.preconnect`), and this accepts either without a cast at the call site.
+// `init` is optional and merged under `signal` (never over it — a caller-supplied `init.signal`
+// would defeat the one thing this function exists to guarantee) so a POST body/headers caller
+// (auth/refresh.ts's own refreshAccessToken) can reuse this instead of hand-rolling the same
+// controller/timer/clearTimeout dance a second time.
 export async function fetchWithTimeout(
   fetchFn: (input: string, init?: RequestInit) => Promise<Response>,
   url: string,
   timeoutMs: number,
+  init?: RequestInit,
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetchFn(url, { signal: controller.signal });
+    return await fetchFn(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
