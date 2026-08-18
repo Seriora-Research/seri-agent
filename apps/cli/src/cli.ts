@@ -70,6 +70,7 @@ import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anth
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
+import { getGatewayModel as getGatewayModelReal } from "./provider/gateway";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { configuredProviders, PROVIDER_DISPLAY_NAMES, tuiMissingKeyMessage } from "./provider/keys";
@@ -127,6 +128,12 @@ export type CliDeps = {
   getAnthropicModel?: typeof getAnthropicModelReal;
   getOpenAIModel?: typeof getOpenAIModelReal;
   getGoogleModel?: typeof getGoogleModelReal;
+  // Not one of the five above: a gateway route's provider is always GATEWAY_PROVIDER
+  // (planCoverage.ts) but its credential is the WorkOS session, not a local provider key — getModel
+  // has no notion of the gateway at all (deliberately, D3's own comment on it staying a pure,
+  // environment-independent provider switch). dispatchModel below is what branches on
+  // route.viaGateway before either getModel or this is ever called.
+  getGatewayModel?: typeof getGatewayModelReal;
   loadAgentsFile?: typeof loadAgentsFileReal;
   sessionsDir?: string;
   checkpointsDir?: string;
@@ -1052,6 +1059,38 @@ function fatalDuringTui(err: unknown, preMountMessages: readonly PreMountMessage
   return 1;
 }
 
+// Dispatches to getGatewayModel instead of getModel's provider switch when the route resolved via
+// the gateway (routing.ts's Rule 4) — a gateway route's provider is always GATEWAY_PROVIDER
+// (planCoverage.ts), which getModel would otherwise treat as "needs a local key for that provider"
+// and throw missingKeyError on, since getModel has no notion of the gateway at all (D3's own
+// comment: it stays a pure, environment-independent provider switch). Both prepareSession and
+// runTurn's own resolveRoute call sites route their getModel dispatch through this one function
+// instead of duplicating the branch.
+export function dispatchModel(
+  route: ResolvedRoute,
+  sessionId: string,
+  configDir: string,
+  deps: CliDeps,
+): LanguageModel {
+  if (route.viaGateway) {
+    const getGatewayModelFn = deps.getGatewayModel ?? getGatewayModelReal;
+    return getGatewayModelFn(route.model, route.provider, sessionId, configDir);
+  }
+  return getModel(
+    route.model,
+    route.provider,
+    sessionId,
+    {
+      getGroqModel: deps.getGroqModel,
+      getOpenRouterModel: deps.getOpenRouterModel,
+      getAnthropicModel: deps.getAnthropicModel,
+      getOpenAIModel: deps.getOpenAIModel,
+      getGoogleModel: deps.getGoogleModel,
+    },
+    configDir,
+  );
+}
+
 async function prepareSession(
   ctx: RunContext,
   deps: CliDeps,
@@ -1127,19 +1166,7 @@ async function prepareSession(
       configuredProviders(configDir),
       plan,
     );
-    const model = getModel(
-      route.model,
-      route.provider,
-      session.id,
-      {
-        getGroqModel: deps.getGroqModel,
-        getOpenRouterModel: deps.getOpenRouterModel,
-        getAnthropicModel: deps.getAnthropicModel,
-        getOpenAIModel: deps.getOpenAIModel,
-        getGoogleModel: deps.getGoogleModel,
-      },
-      configDir,
-    );
+    const model = dispatchModel(route, session.id, configDir, deps);
     // D2: a rerouted pair is never silent — the piped/non-interactive path gets the notice here,
     // gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent into the transcript
     // once per turn, and this call ALSO runs on the TUI path (this function has no other reason to
@@ -2044,19 +2071,7 @@ async function runTui(
         configuredProviders(configDir),
         prepared.plan,
       );
-      model = getModel(
-        route.model,
-        route.provider,
-        sessionId,
-        {
-          getGroqModel: deps.getGroqModel,
-          getOpenRouterModel: deps.getOpenRouterModel,
-          getAnthropicModel: deps.getAnthropicModel,
-          getOpenAIModel: deps.getOpenAIModel,
-          getGoogleModel: deps.getGoogleModel,
-        },
-        configDir,
-      );
+      model = dispatchModel(route, sessionId, configDir, deps);
     } catch (err) {
       // tuiMissingKeyMessage, not a bare err.message: this catch is reachable ONLY from inside an
       // already-running TUI turn (runTurn, called solely by runTui), where /setup is a keystroke
