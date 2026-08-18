@@ -246,10 +246,13 @@ describe("run (task invocation)", () => {
     ).toBe(true);
   });
 
-  // D2's gateway counterpart: a viaGateway route (no local key anywhere, but a logged-in plan
-  // covers it) must warn on the non-interactive path exactly like a BYOK reroute already does —
-  // otherwise a scripted run silently bills against the user's own seri plan with no indication
-  // it ever left their own keys.
+  // The gateway counterpart to the reroute-notice tests above: a viaGateway route (no local key
+  // anywhere, but a logged-in plan covers it) must warn on the non-interactive path exactly like a
+  // BYOK reroute already does — otherwise a scripted run silently bills against the user's own
+  // seri plan with no indication it ever left their own keys. This is a genuinely blank first run
+  // (no --provider, no SERI_PROVIDER, no seeded session) — session.provider stays undefined, so
+  // the notice must not blame DEFAULT_PROVIDER ("Groq") for a provider the user never named
+  // (matches rerouteNotice's own undefined-provider branch, tested above).
   test("routes via the gateway when no local key covers the model, and warns (non-interactive path)", async () => {
     delete process.env.GROQ_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
@@ -297,8 +300,76 @@ describe("run (task invocation)", () => {
       errors.some(
         (line) =>
           line.includes("routing openai/gpt-oss-120b via openrouter") &&
+          line.includes("on your seri plan"),
+      ),
+    ).toBe(true);
+    // The regression: session.provider was never set on this blank first run, so the notice must
+    // not blame DEFAULT_PROVIDER ("Groq") for a provider the user never requested.
+    expect(errors.some((line) => line.includes("key configured"))).toBe(false);
+  });
+
+  // The defined-provider sibling of the test above: a resumed session that explicitly pinned
+  // "openrouter" (mirroring "a resumed session's reroute notice blames its own persisted
+  // provider" above) DID name a provider, and that provider genuinely has no key — so this time
+  // the notice must include the blame clause, naming the provider the session actually requested.
+  test("routes via the gateway on a resumed session, and blames the session's own persisted provider", async () => {
+    delete process.env.GROQ_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    process.env.SERI_GATEWAY_URL = "http://localhost:9/api/gateway";
+    const seeded: SessionState = {
+      id: "gateway-on-resume",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      model: "openai/gpt-oss-120b",
+      provider: "openrouter",
+      messages: [],
+    };
+    saveSession(seeded, sessionsDir);
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      getConfigDir(),
+    );
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("/account-status")) {
+        return new Response(JSON.stringify({ plan: "pro" }), { status: 200 });
+      }
+      return realFetch(input);
+    }) as typeof fetch;
+
+    const { fake, capture } = fakeRunLoop();
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+
+    let code: number;
+    try {
+      code = await run(["--resume", "gateway-on-resume", "another", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      });
+    } finally {
+      console.error = originalError;
+      globalThis.fetch = realFetch;
+      delete process.env.SERI_GATEWAY_URL;
+    }
+
+    expect(code).toBe(0);
+    expect(capture()?.provider).toBe("openrouter");
+    expect(
+      errors.some(
+        (line) =>
+          line.includes("routing openai/gpt-oss-120b via openrouter") &&
           line.includes("on your seri plan") &&
-          line.includes("no Groq key configured"),
+          line.includes("no OpenRouter key configured"),
       ),
     ).toBe(true);
   });

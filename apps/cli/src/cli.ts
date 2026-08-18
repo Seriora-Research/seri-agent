@@ -77,7 +77,7 @@ import { configuredProviders, PROVIDER_DISPLAY_NAMES, tuiMissingKeyMessage } fro
 import { dispatchModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
-import { gatewayCoverage, type ResolvedRoute, resolveRoute } from "./provider/routing";
+import { gatewayCoverageInGroup, type ResolvedRoute, resolveRoute } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
 import { awaitsReply } from "./session/awaitsReply";
 import {
@@ -129,9 +129,9 @@ export type CliDeps = {
   getGoogleModel?: typeof getGoogleModelReal;
   // Not one of the five above: a gateway route's provider is always GATEWAY_PROVIDER
   // (planCoverage.ts) but its credential is the WorkOS session, not a local provider key — getModel
-  // has no notion of the gateway at all (deliberately, D3's own comment on it staying a pure,
-  // environment-independent provider switch). dispatchModel below is what branches on
-  // route.viaGateway before either getModel or this is ever called.
+  // has no notion of the gateway at all (deliberately: it stays a pure, environment-independent
+  // provider switch). dispatchModel below is what branches on route.viaGateway before either
+  // getModel or this is ever called.
   getGatewayModel?: typeof getGatewayModelReal;
   loadAgentsFile?: typeof loadAgentsFileReal;
   sessionsDir?: string;
@@ -1042,11 +1042,18 @@ function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider | 
   return `routing ${route.model} via ${route.provider} (your key) — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
 }
 
-// D2's gateway counterpart to rerouteNotice above: a viaGateway route is served through the
-// user's own seri plan, not a key they brought, so the piped/non-interactive path needs the same
-// "never silent" notice a BYOK reroute already gets — otherwise a scripted run consumes gateway
-// quota with zero indication it left the user's own keys at all.
-function gatewayNotice(route: ResolvedRoute, requestedProvider: ModelProvider): string {
+// The gateway counterpart to rerouteNotice above: a viaGateway route is served through the
+// user's own seri plan, not a key they brought, so both the piped/non-interactive path and a live
+// TUI turn need the same "never silent" notice a BYOK reroute already gets — otherwise a run
+// consumes gateway quota with zero indication it ever left the user's own keys. Same
+// `ModelProvider | undefined` signature and the same undefined branch as rerouteNotice, for the
+// same reason: a genuinely blank first run named no provider at all, so blaming one (Groq, via
+// DEFAULT_PROVIDER) in the "no X key configured" clause would name a provider the user never
+// touched.
+function gatewayNotice(route: ResolvedRoute, requestedProvider: ModelProvider | undefined): string {
+  if (requestedProvider === undefined) {
+    return `routing ${route.model} via ${route.provider} on your seri plan`;
+  }
   return `routing ${route.model} via ${route.provider} on your seri plan — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
 }
 
@@ -1132,7 +1139,7 @@ async function prepareSession(
     // The catalog load and the plan fetch are independent network calls — run them together rather
     // than stacking their latency. `plan` is still fetched even when `requestedProvider` already
     // has a configured key (resolveRoute's own Rule 1 below would discard it for THIS route): the
-    // same `prepared.plan` also feeds /model's own gatewayCoverage predicate for every OTHER model
+    // same `prepared.plan` also feeds /model's own gatewayCoverageInGroup predicate for every OTHER model
     // in the catalog the user might switch to later in the session (tuiPty.test.ts's "a logged-in
     // session's account-status fetch happens once at session start" — asserts the fetch happens
     // even though its own fixture sets GROQ_API_KEY, the DEFAULT_PROVIDER). `accountStatus.ts`'s
@@ -1151,17 +1158,20 @@ async function prepareSession(
       plan,
     );
     const model = dispatchModel(route, session.id, configDir, deps);
-    // D2: a rerouted OR gateway-served pair is never silent — the piped/non-interactive path gets
+    // A rerouted OR gateway-served pair is never silent — the piped/non-interactive path gets
     // the notice here, gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent
-    // into the transcript once per turn for a reroute, and this call ALSO runs on the TUI path
+    // into the transcript once per turn for either case, and this call ALSO runs on the TUI path
     // (this function has no other reason to know isTTY), so without the gate a session-start
     // reroute printed twice for the same turn: once here (before Ink even mounts) and again from
     // runTurn. `rerouted` and `viaGateway` are mutually exclusive (routing.ts's own ResolvedRoute
-    // comment), so at most one of these ever fires.
+    // comment), so at most one of these ever fires. Both notices take `session.provider` directly
+    // (not the locally-defaulted `requestedProvider`), matching rerouteNotice's own undefined-aware
+    // contract: blaming DEFAULT_PROVIDER for a blank first run that never named one is worse than
+    // naming none.
     if (route.rerouted && !isTTY) {
       printWarning(rerouteNotice(route, session.provider));
     } else if (route.viaGateway && !isTTY) {
-      printWarning(gatewayNotice(route, requestedProvider));
+      printWarning(gatewayNotice(route, session.provider));
     }
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
     // cost and context-window come from the wrong provider's entry.
@@ -2073,10 +2083,17 @@ async function runTui(
       return;
     }
     const { model: modelId, provider } = route;
+    // A rerouted OR gateway-served pair is never silent on the TUI path either — see
+    // prepareSession's own identical notice for the piped/non-interactive path, above.
     if (route.rerouted) {
       dispatch({
         type: "transcript-append",
         line: `↻ ${rerouteNotice(route, requestedProvider)}`,
+      });
+    } else if (route.viaGateway) {
+      dispatch({
+        type: "transcript-append",
+        line: `↻ ${gatewayNotice(route, requestedProvider)}`,
       });
     }
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one.
@@ -2356,11 +2373,14 @@ async function runTui(
           entries: decideModelPickerOpen(
             prepared.catalog,
             configuredProviders(configDir),
-            // gatewayCoverage, not a bare planCoverage(entry, plan): the picker's own coverage
-            // must agree with resolveRoute's (routing.ts's own comment on why they share one
-            // function) — a row's OWN entry can be priced/planned differently than its OpenRouter-
-            // catalog sibling, which is the only thing the gateway actually forwards to.
-            (entry) => gatewayCoverage(prepared.catalog, entry, prepared.plan) !== undefined,
+            // gatewayCoverageInGroup, not a bare planCoverage(entry, plan): the picker's own
+            // coverage must agree with resolveRoute's (routing.ts's own comment on why they share
+            // one function) — a row's OWN entry can be priced/planned differently than its
+            // OpenRouter-catalog sibling, which is the only thing the gateway actually forwards to.
+            // The group variant, not gatewayCoverage itself: decideModelPickerOpen already grouped
+            // the whole catalog once and hands back each entry's own group here, so this avoids
+            // re-deriving it via routesFor's own scan on every one of the ~350 rows it emits.
+            (entry, group) => gatewayCoverageInGroup(group, prepared.plan) !== undefined,
           ),
         });
       } catch (err) {
