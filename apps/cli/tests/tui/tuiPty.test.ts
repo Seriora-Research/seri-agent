@@ -318,6 +318,10 @@ function childScriptPlanClearedOnLogout(dir: string): string {
     `process.env.HOME = ${JSON.stringify(dir)};`,
     `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
     `process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";`,
+    // A configured groq key only to skip the blank-first-run guided-setup gate (decideAuthOffer's
+    // own sibling gate, guidedSetup.ts) — this test never dispatches a real groq call, and the
+    // target row (~openai/gpt-latest, openrouter) has no groq sibling to reroute to instead.
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `const authStore = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/auth/authStore.ts")).href)});`,
     `const paths = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/config/paths.ts")).href)});`,

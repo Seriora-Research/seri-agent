@@ -77,8 +77,7 @@ import { configuredProviders, PROVIDER_DISPLAY_NAMES, tuiMissingKeyMessage } fro
 import { getModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
-import { planCoverage } from "./provider/planCoverage";
-import { type ResolvedRoute, resolveRoute } from "./provider/routing";
+import { gatewayCoverage, type ResolvedRoute, resolveRoute } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
 import { awaitsReply } from "./session/awaitsReply";
 import {
@@ -2372,7 +2371,11 @@ async function runTui(
           entries: decideModelPickerOpen(
             prepared.catalog,
             configuredProviders(configDir),
-            (entry) => planCoverage(entry, prepared.plan),
+            // gatewayCoverage, not a bare planCoverage(entry, plan): the picker's own coverage
+            // must agree with resolveRoute's (routing.ts's own comment on why they share one
+            // function) — a row's OWN entry can be priced/planned differently than its OpenRouter-
+            // catalog sibling, which is the only thing the gateway actually forwards to.
+            (entry) => gatewayCoverage(prepared.catalog, entry, prepared.plan) !== undefined,
           ),
         });
       } catch (err) {

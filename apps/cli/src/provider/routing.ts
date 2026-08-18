@@ -61,6 +61,26 @@ export type ResolvedRoute = {
   viaGateway: boolean;
 };
 
+// The single lookup both resolveRoute's own gateway branch AND the /model picker's coverage
+// predicate (cli.ts, decideModelPickerOpen's own planCoverage callback) must share — the exact
+// drift risk D1's own comment on `byRoutePriority` already names for the reroute case, now applying
+// to the gateway case too: without ONE shared function, the picker could show "provided" for an
+// entry resolveRoute would never actually route through the gateway (or the reverse), the two
+// surfaces silently disagreeing about what the same row means. Returns the OpenRouter-catalog
+// sibling entry when the gateway can actually serve `entry`'s route group under `plan`, `undefined`
+// otherwise — `undefined` rather than a bare boolean so a caller that also needs the resolved
+// model/provider (resolveRoute) doesn't have to re-look it up a second time.
+export function gatewayCoverage(
+  catalog: ModelCatalog,
+  entry: ModelCatalogEntry,
+  plan: Plan | null,
+): ModelCatalogEntry | undefined {
+  const gatewayEntry = routesFor(catalog.entries, entry).find(
+    (candidate) => candidate.provider === GATEWAY_PROVIDER,
+  );
+  return gatewayEntry !== undefined && planCoverage(gatewayEntry, plan) ? gatewayEntry : undefined;
+}
+
 // D2's three-rule priority order, implemented as a pure function: no `process.env`, no
 // `loadConfig` — `configured` is the caller's own single source of truth (apps/cli/src/provider/
 // keys.ts's `configuredProviders`), which is what keeps every test here independent of the
@@ -103,16 +123,8 @@ export function resolveRoute(
   // outcome; a configured sibling above still wins over it unconditionally, since this branch is
   // never reached when one exists.
   if (candidates.length === 0) {
-    // planCoverage must be evaluated against GATEWAY_PROVIDER's OWN catalog listing, not `entry`
-    // (whichever provider was actually requested): apps/server/lib/quota.ts's own isZeroPriceModel
-    // always resolves pricing via findCatalogEntry(catalog, modelId, "openrouter") — the gateway
-    // only ever forwards to GATEWAY_PROVIDER — and models.dev sources pricing per-provider-listing,
-    // so a requested provider's own price can disagree with GATEWAY_PROVIDER's. Reuses `routesFor`
-    // (the same sibling grouping Rule 2 above already uses) rather than a second lookup mechanism.
-    const gatewayEntry = routesFor(catalog.entries, entry).find(
-      (candidate) => candidate.provider === GATEWAY_PROVIDER,
-    );
-    if (gatewayEntry !== undefined && planCoverage(gatewayEntry, plan)) {
+    const gatewayEntry = gatewayCoverage(catalog, entry, plan);
+    if (gatewayEntry !== undefined) {
       // model/provider become GATEWAY_PROVIDER's own — the id the server's catalog lookup and
       // upstream forward will actually recognize, not the originally-requested provider's id.
       // `rerouted: false`, not true: that flag means "a locally configured key exists on a
