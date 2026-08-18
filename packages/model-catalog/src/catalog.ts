@@ -102,7 +102,7 @@ export async function loadCatalog(
 ): Promise<ModelCatalog> {
   if (cachedPromise) return cachedPromise;
 
-  const promise = (async () => {
+  cachedPromise = (async () => {
     if (process.env.SERI_DISABLE_MODELS_FETCH) {
       return manifest;
     }
@@ -120,18 +120,7 @@ export async function loadCatalog(
       clearTimeout(timer);
     }
   })();
-  cachedPromise = promise;
-  // A fallback result (this promise resolving to `manifest` itself, the same-reference check
-  // callers use to detect it) must not be cached for the process lifetime the way a genuine
-  // fetched catalog is — apps/server's own EMPTY_MANIFEST fallback would otherwise fail every
-  // Free-tier request's isZeroPriceModel check forever after a single transient fetch failure.
-  // Clearing the cache here makes the NEXT loadCatalog call the retry, while every caller
-  // already awaiting THIS promise (the concurrent-callers race the caching above closes) still
-  // gets the fallback it needs right now.
-  void promise.then((result) => {
-    if (result === manifest) cachedPromise = undefined;
-  });
-  return promise;
+  return cachedPromise;
 }
 
 export function findCatalogEntry(
