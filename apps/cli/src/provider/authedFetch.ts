@@ -25,8 +25,8 @@ export function authedFetch(
     // accountStatus.ts's ACCOUNT_STATUS_TIMEOUT_MS) bounds the first fetch and the retry below,
     // but not a refresh hung in between, defeating the deadline entirely on a 401.
     const boundFetchFn: typeof fetch = init?.signal
-      ? ((refreshInput, refreshInit) =>
-          fetchFn(refreshInput, { ...refreshInit, signal: init.signal })) as typeof fetch
+      ? (((refreshInput, refreshInit) =>
+          fetchFn(refreshInput, { ...refreshInit, signal: init.signal })) as typeof fetch)
       : fetchFn;
     const refreshed = await refreshSession(configDir, boundFetchFn);
     if (!refreshed) return response;
