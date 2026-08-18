@@ -30,6 +30,10 @@ const catalog: ModelCatalog = {
     entry({ id: "claude-sonnet-5", provider: "anthropic" }),
     entry({ id: "anthropic/claude-sonnet-5", provider: "openrouter" }),
     entry({ id: "solo-model", provider: "groq" }),
+    // A groq-native model WITH an OpenRouter-catalog sibling — Rule 4's own fixture, distinct from
+    // solo-model (which has none) so the two can't be confused.
+    entry({ id: "shared-model", provider: "groq" }),
+    entry({ id: "groq/shared-model", provider: "openrouter" }),
   ],
 };
 
@@ -166,7 +170,34 @@ describe("resolveRoute", () => {
   });
 
   describe("Rule 4: route via gateway", () => {
-    test("no key anywhere and the plan covers the entry: viaGateway true, rerouted false", () => {
+    test("no key anywhere, an OpenRouter sibling exists, and the plan covers it: viaGateway true, routed to the OpenRouter entry", () => {
+      const route = resolveRoute(
+        catalog,
+        { model: "shared-model", provider: "groq" },
+        new Set(),
+        "pro",
+      );
+      expect(route).toEqual({
+        model: "groq/shared-model",
+        provider: "openrouter",
+        rerouted: false,
+        viaGateway: true,
+      });
+    });
+
+    test("no key anywhere and plan: null leaves viaGateway false, unchanged from today", () => {
+      const route = resolveRoute(
+        catalog,
+        { model: "shared-model", provider: "groq" },
+        new Set(),
+      );
+      expect(route.viaGateway).toBe(false);
+    });
+
+    // A provider-exclusive model (no OpenRouter-catalog sibling at all) never shows viaGateway,
+    // even under a covering plan — correct, not a regression: the gateway only ever forwards to
+    // GATEWAY_PROVIDER, so it structurally cannot serve a model that provider doesn't list.
+    test("a model with no OpenRouter sibling is never gateway-covered, even under a paid plan", () => {
       const route = resolveRoute(
         catalog,
         { model: "solo-model", provider: "groq" },
@@ -177,27 +208,70 @@ describe("resolveRoute", () => {
         model: "solo-model",
         provider: "groq",
         rerouted: false,
-        viaGateway: true,
+        viaGateway: false,
       });
     });
 
-    test("no key anywhere and plan: null leaves viaGateway false, unchanged from today", () => {
-      const route = resolveRoute(catalog, { model: "solo-model", provider: "groq" }, new Set());
-      expect(route.viaGateway).toBe(false);
-    });
-
-    test("no key anywhere, plan: free, and a priced (non-zero) entry: viaGateway false", () => {
-      const pricedCatalog: ModelCatalog = {
+    // Coverage is evaluated against GATEWAY_PROVIDER's own listing, not the requested provider's —
+    // this is the exact mismatch a naive "check whatever entry was requested" implementation gets
+    // wrong. The groq entry here is zero-priced; the OpenRouter sibling is not — a check against
+    // the wrong entry would wrongly cover this under Free.
+    test("free: coverage checks the OpenRouter sibling's price, not the requested (groq) entry's price", () => {
+      const mismatchCatalog: ModelCatalog = {
         fetchedAt: "2026-08-11T00:00:00.000Z",
-        entries: [entry({ id: "priced-model", provider: "groq", pricing: { inputPerMTok: 1, outputPerMTok: 1 } })],
+        entries: [
+          entry({
+            id: "mismatch-model",
+            provider: "groq",
+            pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+          }),
+          entry({
+            id: "groq/mismatch-model",
+            provider: "openrouter",
+            pricing: { inputPerMTok: 1, outputPerMTok: 1 },
+          }),
+        ],
       };
       const route = resolveRoute(
-        pricedCatalog,
-        { model: "priced-model", provider: "groq" },
+        mismatchCatalog,
+        { model: "mismatch-model", provider: "groq" },
         new Set(),
         "free",
       );
       expect(route.viaGateway).toBe(false);
+    });
+
+    // The inverse of the mismatch test above: the requested (groq) entry is priced, but the
+    // OpenRouter sibling — the one actually checked — is zero-priced, so Free DOES cover it, and
+    // the returned route points at the OpenRouter entry.
+    test("free: covers via the OpenRouter sibling's zero price even when the requested entry is priced", () => {
+      const mismatchCatalog: ModelCatalog = {
+        fetchedAt: "2026-08-11T00:00:00.000Z",
+        entries: [
+          entry({
+            id: "mismatch-model-2",
+            provider: "groq",
+            pricing: { inputPerMTok: 1, outputPerMTok: 1 },
+          }),
+          entry({
+            id: "groq/mismatch-model-2",
+            provider: "openrouter",
+            pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+          }),
+        ],
+      };
+      const route = resolveRoute(
+        mismatchCatalog,
+        { model: "mismatch-model-2", provider: "groq" },
+        new Set(),
+        "free",
+      );
+      expect(route).toEqual({
+        model: "groq/mismatch-model-2",
+        provider: "openrouter",
+        rerouted: false,
+        viaGateway: true,
+      });
     });
 
     // Regression: Rule 1 (own-key-wins) is unaffected by a non-null covering plan — an explicit

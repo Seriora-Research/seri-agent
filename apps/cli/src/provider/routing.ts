@@ -8,7 +8,7 @@ import {
 } from "@seri/model-catalog";
 import type { Plan } from "@seri/plans";
 import { PROVIDER_API_KEY_NAMES } from "./keys";
-import { planCoverage } from "./planCoverage";
+import { GATEWAY_PROVIDER, planCoverage } from "./planCoverage";
 
 // D2 (feature-plan.md): "native-direct" for tie-breaking is these three providers specifically —
 // not derived from routeKey's own vendor string, which would also call groq/openrouter "direct"
@@ -99,11 +99,33 @@ export function resolveRoute(
     (candidate) => candidate.provider !== requested.provider && configured.has(candidate.provider),
   );
   // Reached only when no sibling provider has a configured key either — Rule 1 and Rule 2 have
-  // both already failed to find one. The gateway covering `entry` under `plan` is the 4th outcome;
-  // a configured sibling above still wins over it unconditionally, since this branch is never
-  // reached when one exists.
+  // both already failed to find one. The gateway covering the model under `plan` is the 4th
+  // outcome; a configured sibling above still wins over it unconditionally, since this branch is
+  // never reached when one exists.
   if (candidates.length === 0) {
-    return { ...noReroute, viaGateway: planCoverage(entry, plan) };
+    // planCoverage must be evaluated against GATEWAY_PROVIDER's OWN catalog listing, not `entry`
+    // (whichever provider was actually requested): apps/server/lib/quota.ts's own isZeroPriceModel
+    // always resolves pricing via findCatalogEntry(catalog, modelId, "openrouter") — the gateway
+    // only ever forwards to GATEWAY_PROVIDER — and models.dev sources pricing per-provider-listing,
+    // so a requested provider's own price can disagree with GATEWAY_PROVIDER's. Reuses `routesFor`
+    // (the same sibling grouping Rule 2 above already uses) rather than a second lookup mechanism.
+    const gatewayEntry = routesFor(catalog.entries, entry).find(
+      (candidate) => candidate.provider === GATEWAY_PROVIDER,
+    );
+    if (gatewayEntry !== undefined && planCoverage(gatewayEntry, plan)) {
+      // model/provider become GATEWAY_PROVIDER's own — the id the server's catalog lookup and
+      // upstream forward will actually recognize, not the originally-requested provider's id.
+      // `rerouted: false`, not true: that flag means "a locally configured key exists on a
+      // sibling provider" (Rule 2), which is not the case here — formatRouteLabel keeps
+      // "→ provider" and "provided" as distinct, mutually exclusive states.
+      return {
+        model: gatewayEntry.id,
+        provider: gatewayEntry.provider,
+        rerouted: false,
+        viaGateway: true,
+      };
+    }
+    return noReroute;
   }
 
   // Rule 2: native-direct over aggregator, ties within a tier broken by CATALOG_PROVIDERS order —
