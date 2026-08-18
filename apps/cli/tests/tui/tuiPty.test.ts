@@ -246,6 +246,66 @@ function childScriptMultiTurn(dir: string): string {
   ].join("\n");
 }
 
+// A logged-in session's account-status fetch (prepareSession's own fetchAccountPlan call, feeding
+// resolveRoute/decideModelPickerOpen's plan-coverage predicate) must happen once at session start,
+// not once per turn — the same "reused across turns" guarantee childScriptMultiTurn's own sibling
+// test already holds `RUNLOOP_CALL` count to, applied to the account-status fetch instead of the
+// model call. `authStore.saveAuthSession` seeds a session BEFORE `cli.run` — mirrors
+// childScriptAuth's own live login, minus the device-flow round trip this script has no need to
+// exercise — and `globalThis.fetch` is patched (childScriptGuidedSetupSlowFetch's own precedent)
+// to answer only the account-status URL and count how many times it's asked.
+function childScriptAccountStatusOnce(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const authStore = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/auth/authStore.ts")).href)});`,
+    `const paths = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/config/paths.ts")).href)});`,
+    `authStore.saveAuthSession(`,
+    `  {`,
+    `    accessToken: "at-1",`,
+    `    refreshToken: "rt-1",`,
+    `    userId: "user-1",`,
+    `    email: "fake@example.com",`,
+    `    obtainedAt: new Date().toISOString(),`,
+    `  },`,
+    `  paths.getConfigDir(),`,
+    `);`,
+    `let accountStatusCalls = 0;`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) => {`,
+    `  if (typeof url === "string" && url.includes("/account-status")) {`,
+    `    accountStatusCalls++;`,
+    `    console.log("\\nACCOUNT_STATUS_CALL " + accountStatusCalls);`,
+    `    return Promise.resolve(new Response(JSON.stringify({ plan: "pro" }), { status: 200 }));`,
+    `  }`,
+    `  return realFetch(url, opts);`,
+    `};`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " messages=" + opts.messages.length);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
+    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    `  console.log("\\nRUNLOOP_DONE " + calls);`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Stage 7a Slice 4: the actual /model bug fix, proven with a real second turn the same way
 // childScriptMultiTurn proves H-3 above — a fake runLoop that reports which model id and how many
 // messages EACH call actually received, so a live /model switch (a real picker, driven by real
@@ -1710,6 +1770,30 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // actually finishes.
       await sawLine("RUNLOOP_DONE 2");
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  test("a logged-in session's account-status fetch happens once at session start, reused across turns", async () => {
+    const scriptPath = join(dir, "child-account-status-once.mjs");
+    writeFileSync(scriptPath, childScriptAccountStatusOnce(dir));
+
+    const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 messages=1");
+      await sawLine("RUNLOOP_DONE 1");
+      expect(rawOccurrences("ACCOUNT_STATUS_CALL")).toBe(1);
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      await sawLine("RUNLOOP_CALL 2 messages=3");
+      await sawLine("RUNLOOP_DONE 2");
+      // Still exactly 1: the second turn's own resolveRoute call reused `prepared.plan` rather
+      // than fetching account-status again.
+      expect(rawOccurrences("ACCOUNT_STATUS_CALL")).toBe(1);
     } finally {
       child.kill("SIGKILL");
     }

@@ -10,6 +10,7 @@ import {
   type ModelCatalogEntry,
   type ModelProvider,
 } from "@seri/model-catalog";
+import type { Plan } from "@seri/plans";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
@@ -64,6 +65,7 @@ import { decideMemoryCommand, memoryCommandAccepts } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
+import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
@@ -74,6 +76,7 @@ import { configuredProviders, PROVIDER_DISPLAY_NAMES, tuiMissingKeyMessage } fro
 import { getModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
+import { planCoverage } from "./provider/planCoverage";
 import { type ResolvedRoute, resolveRoute } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
 import { awaitsReply } from "./session/awaitsReply";
@@ -981,6 +984,12 @@ type PreparedRun = {
   // turn 1 actually runs on a rerouted one trips their inequality guards on turn 1 and persists a
   // switch the session never asked for — see those variables' own comments.
   route: ResolvedRoute;
+  // Fetched once here, at session start, and reused for the life of the run (runTurn's own
+  // per-turn resolveRoute call and the /model handler both read this instead of fetching again) —
+  // no mid-session refresh, so a plan change mid-run shows stale until the next `seri` start. Null
+  // for a logged-out/BYOK-only session or on any fetch failure (accountStatus.ts's own fail-closed
+  // contract).
+  plan: Plan | null;
   // The same OnBeforeMutation `tools`' own withCheckpoints was built with — driveLoop's
   // withSubagents reuses it for one pre-dispatch snapshot instead of building a second one.
   checkpointer: OnBeforeMutation;
@@ -1107,10 +1116,16 @@ async function prepareSession(
     // happened INSIDE getAnthropicModel/etc. — no longer a distinct case now that one try covers the
     // whole function, but the reasoning ("a corrupted config.json prints a clean error and exits 1,"
     // not an uncaught crash) is still exactly why this needs to be inside the try at all.
+    // Fetched once here, before the routing decision that needs it — a BYOK-only/logged-out
+    // session never reaches the network (accountStatus.ts's own login guard), and a logged-in
+    // session's fetch failure fails closed to null, matching what routing already did before this
+    // field existed.
+    const plan = await fetchAccountPlan(configDir);
     const route = resolveRoute(
       catalog,
       { model: session.model, provider: session.provider ?? DEFAULT_PROVIDER },
       configuredProviders(configDir),
+      plan,
     );
     const model = getModel(
       route.model,
@@ -1226,6 +1241,7 @@ async function prepareSession(
       catalog,
       catalogEntry,
       route,
+      plan,
       checkpointer,
       memory,
       preMountMessages,
@@ -2026,6 +2042,7 @@ async function runTui(
         prepared.catalog,
         { model: requestedModel, provider: requestedProvider ?? DEFAULT_PROVIDER },
         configuredProviders(configDir),
+        prepared.plan,
       );
       model = getModel(
         route.model,
@@ -2329,9 +2346,15 @@ async function runTui(
       try {
         dispatch({
           type: "model-picker-requested",
-          // D1/D2 (feature-plan.md): re-read fresh on every open, not cached from prepareSession —
-          // a key added mid-session via /setup must show up in the very next /model open.
-          entries: decideModelPickerOpen(prepared.catalog, configuredProviders(configDir)),
+          // configuredProviders is re-read fresh on every open, not cached from prepareSession — a
+          // key added mid-session via /setup must show up in the very next /model open. `plan` is
+          // NOT re-fetched here: prepareSession's own value, carried on `prepared` for the life of
+          // the run.
+          entries: decideModelPickerOpen(
+            prepared.catalog,
+            configuredProviders(configDir),
+            (entry) => planCoverage(entry, prepared.plan),
+          ),
         });
       } catch (err) {
         dispatch({
