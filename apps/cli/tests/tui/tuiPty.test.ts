@@ -1887,6 +1887,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("Logged out.");
 
       child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
       await sawLine("GPT OSS 120B");
       child.stdin?.write("gpt-latest");
       await sawLine("gpt-latest");
