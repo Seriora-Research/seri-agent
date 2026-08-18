@@ -1860,7 +1860,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-plan-cleared-on-logout.mjs");
     writeFileSync(scriptPath, childScriptPlanClearedOnLogout(dir));
 
-    const { child, sawLine, lastFrame } = await startChild(scriptPath, dir);
+    const { child, sawLine, sawInFrameTimes, lastFrame } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
 
@@ -1872,10 +1872,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("GPT OSS 120B");
 
       // Narrows to exactly one entry across the whole catalog — verified directly against the
-      // bundled catalog-manifest.json before writing this string.
+      // bundled catalog-manifest.json before writing this string. sawInFrameTimes, not sawLine:
+      // this same filter text is typed a second time later in this test, and sawLine's cumulative
+      // check would resolve instantly on that second occurrence's own OLD (pre-keystroke) content.
       child.stdin?.write("gpt-latest");
-      await sawLine("gpt-latest");
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await sawInFrameTimes("gpt-latest", 1);
       expect(lastFrame()).toContain("provided");
 
       child.stdin?.write("\x1b"); // Escape: cancels the picker without selecting
@@ -1891,8 +1892,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await sawLine("GPT OSS 120B");
       child.stdin?.write("gpt-latest");
-      await sawLine("gpt-latest");
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await sawInFrameTimes("gpt-latest", 1);
       // The regression: without cli.ts's own /logout handler clearing prepared.plan, this row would
       // still read "provided" here, from the plan a session that no longer exists once had.
       expect(lastFrame()).not.toContain("provided");
