@@ -86,7 +86,9 @@ describe("fetchAccountPlan — 401 retry", () => {
     const calls: Headers[] = [];
     const fetchFn = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       calls.push(new Headers(init?.headers));
-      return calls.length === 1 ? jsonResponse({ code: "token_invalid" }, 401) : jsonResponse({ plan: "max" });
+      return calls.length === 1
+        ? jsonResponse({ code: "token_invalid" }, 401)
+        : jsonResponse({ plan: "max" });
     }) as unknown as typeof fetch;
 
     const plan = await fetchAccountPlan(tmpRoot, { fetchFn, refreshSession: fakeRefresh("at-2") });
@@ -144,7 +146,9 @@ describe("fetchAccountPlan — failure paths fail closed to null", () => {
     seedAuthJson(tmpRoot);
     const fetchFn = ((_input: RequestInfo | URL, init?: RequestInit) =>
       new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(new Error("The operation was aborted")));
+        init?.signal?.addEventListener("abort", () =>
+          reject(new Error("The operation was aborted")),
+        );
       })) as unknown as typeof fetch;
 
     const start = Date.now();

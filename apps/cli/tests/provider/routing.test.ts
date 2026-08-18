@@ -186,11 +186,7 @@ describe("resolveRoute", () => {
     });
 
     test("no key anywhere and plan: null leaves viaGateway false, unchanged from today", () => {
-      const route = resolveRoute(
-        catalog,
-        { model: "shared-model", provider: "groq" },
-        new Set(),
-      );
+      const route = resolveRoute(catalog, { model: "shared-model", provider: "groq" }, new Set());
       expect(route.viaGateway).toBe(false);
     });
 
