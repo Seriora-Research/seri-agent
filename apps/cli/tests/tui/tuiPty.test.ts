@@ -306,6 +306,59 @@ function childScriptAccountStatusOnce(dir: string): string {
   ].join("\n");
 }
 
+// Regression for CodeRabbit's PR #123 finding: prepared.plan was fetched once at session start and
+// never refreshed — a successful /logout left the previous (possibly paid) plan in place, so
+// resolveRoute/decideModelPickerOpen kept reflecting a plan the user no longer has. Starts already
+// logged in with plan "pro" (so ~openai/gpt-latest, a real OpenRouter catalog entry with no local
+// key, shows "provided"), then logs out and re-opens /model to prove that same entry's row drops
+// back to "no key" — cli.ts's own /logout handler now clears prepared.plan directly rather than
+// leaving it stale.
+function childScriptPlanClearedOnLogout(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const authStore = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/auth/authStore.ts")).href)});`,
+    `const paths = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/config/paths.ts")).href)});`,
+    `authStore.saveAuthSession(`,
+    `  {`,
+    `    accessToken: "at-1",`,
+    `    refreshToken: "rt-1",`,
+    `    userId: "user-1",`,
+    `    email: "fake@example.com",`,
+    `    obtainedAt: new Date().toISOString(),`,
+    `  },`,
+    `  paths.getConfigDir(),`,
+    `);`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) => {`,
+    `  if (typeof url === "string" && url.includes("/account-status")) {`,
+    `    return Promise.resolve(new Response(JSON.stringify({ plan: "pro" }), { status: 200 }));`,
+    `  }`,
+    `  return realFetch(url, opts);`,
+    `};`,
+    `function logoutFake(configDir, onMessage) {`,
+    `  authStore.clearAuthSession(configDir);`,
+    `  (onMessage ?? console.log)("Logged out.");`,
+    `}`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  logout: logoutFake,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Stage 7a Slice 4: the actual /model bug fix, proven with a real second turn the same way
 // childScriptMultiTurn proves H-3 above — a fake runLoop that reports which model id and how many
 // messages EACH call actually received, so a live /model switch (a real picker, driven by real
@@ -1794,6 +1847,50 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // Still exactly 1: the second turn's own resolveRoute call reused `prepared.plan` rather
       // than fetching account-status again.
       expect(rawOccurrences("ACCOUNT_STATUS_CALL")).toBe(1);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  test("a real /logout clears the cached plan: a gateway-covered picker row drops back to 'no key'", async () => {
+    const scriptPath = join(dir, "child-plan-cleared-on-logout.mjs");
+    writeFileSync(scriptPath, childScriptPlanClearedOnLogout(dir));
+
+    const { child, sawLine, lastFrame } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      // Sync point: the bundled fallback manifest's own default groq entry is always inside the
+      // picker's default (unfiltered) top-10 window, proving the picker actually mounted.
+      await sawLine("GPT OSS 120B");
+
+      // Narrows to exactly one entry across the whole catalog — verified directly against the
+      // bundled catalog-manifest.json before writing this string.
+      child.stdin?.write("gpt-latest");
+      await sawLine("gpt-latest");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(lastFrame()).toContain("provided");
+
+      child.stdin?.write("\x1b"); // Escape: cancels the picker without selecting
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("/logout");
+      await sawLine("/logout");
+      child.stdin?.write("\r");
+      await sawLine("Logged out.");
+
+      child.stdin?.write("/model");
+      await sawLine("GPT OSS 120B");
+      child.stdin?.write("gpt-latest");
+      await sawLine("gpt-latest");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      // The regression: without cli.ts's own /logout handler clearing prepared.plan, this row would
+      // still read "provided" here, from the plan a session that no longer exists once had.
+      expect(lastFrame()).not.toContain("provided");
+      expect(lastFrame()).toContain("no key");
     } finally {
       child.kill("SIGKILL");
     }

@@ -992,10 +992,14 @@ type PreparedRun = {
   // switch the session never asked for — see those variables' own comments.
   route: ResolvedRoute;
   // Fetched once here, at session start, and reused for the life of the run (runTurn's own
-  // per-turn resolveRoute call and the /model handler both read this instead of fetching again) —
-  // no mid-session refresh, so a plan change mid-run shows stale until the next `seri` start. Null
-  // for a logged-out/BYOK-only session or on any fetch failure (accountStatus.ts's own fail-closed
-  // contract).
+  // per-turn resolveRoute call and the /model handler both read this instead of fetching again on
+  // every turn/picker-open) — mutated in place, not re-fetched, so a plain read anywhere else in
+  // the run always sees the current value. Null for a logged-out/BYOK-only session or on any fetch
+  // failure (accountStatus.ts's own fail-closed contract). The two exceptions that DO refresh it
+  // mid-run are the /login and /logout TUI handlers (runTui's own `onLogin`/`onLogout` call
+  // sites) — without that, a successful /login left the startup `null` in place, and a successful
+  // /logout left the previous (possibly paid) plan in place, so `resolveRoute`/`/model` could keep
+  // reflecting stale auth state after either.
   plan: Plan | null;
   // The same OnBeforeMutation `tools`' own withCheckpoints was built with — driveLoop's
   // withSubagents reuses it for one pre-dispatch snapshot instead of building a second one.
@@ -2406,6 +2410,13 @@ async function runTui(
         return;
       }
       await onLogin(name === "/signup" ? "signup" : "login");
+      // PreparedRun.plan's own comment: onLogin resolves the same way on success and failure (its
+      // own try/catch degrades to a rendered auth-step, never a rejection), so this always
+      // re-fetches — on a failed/abandoned attempt loadAuthSession still finds nothing and
+      // fetchAccountPlan's own login guard short-circuits back to null, the same value `prepared.
+      // plan` already held; on success this is what makes a freshly-logged-in plan visible to
+      // resolveRoute/`/model` without waiting for the next `seri` restart.
+      prepared.plan = await fetchAccountPlan(configDir);
       return;
     }
     if (name === "/logout") {
@@ -2414,6 +2425,12 @@ async function runTui(
         return;
       }
       await onLogout();
+      // Cleared directly rather than re-fetched: fetchAccountPlan would return null here anyway
+      // (its own login guard sees no session once logout succeeds), and if logout itself somehow
+      // failed, null is still the fail-closed answer PreparedRun.plan's own comment already commits
+      // to — never let a stale paid plan keep resolveRoute/`/model` showing "provided" after the
+      // user asked to log out.
+      prepared.plan = null;
       return;
     }
     // /config and /permissions, like /login, /signup and /logout just above: intercepted here rather
