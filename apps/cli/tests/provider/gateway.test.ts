@@ -113,7 +113,7 @@ describe("getGatewayModel — login requirement", () => {
 });
 
 describe("getGatewayModel — outgoing request", () => {
-  test("carries the access token, session id, idempotency key, and a URL under SERI_GATEWAY_URL", async () => {
+  test("carries the access token, session id, and a URL under SERI_GATEWAY_URL", async () => {
     process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";
     seedAuthJson(tmpRoot);
     let captured: { url: string; headers: Headers } | undefined;
@@ -131,33 +131,6 @@ describe("getGatewayModel — outgoing request", () => {
     expect(captured?.url.startsWith("http://localhost:9999/api/gateway")).toBe(true);
     expect(captured?.headers.get("Authorization")).toBe("Bearer at-1");
     expect(captured?.headers.get("X-Seri-Session-Id")).toBe("session-1");
-    expect(captured?.headers.get("X-Seri-Idempotency-Key")).toBeTruthy();
-  });
-
-  // loop.ts reuses ONE model instance across every tool-call round-trip and compaction call in
-  // a turn, so a key minted once at construction time (rather than per outgoing request) would
-  // be shared by every request that model ever makes, making the CLI's own tracing/correlation
-  // value useless for telling separate requests apart.
-  test("two separate logical requests through the same constructed client carry different idempotency keys", async () => {
-    process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";
-    seedAuthJson(tmpRoot);
-    const keys: (string | null)[] = [];
-    const fetchFn = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      keys.push(new Headers(init?.headers).get("X-Seri-Idempotency-Key"));
-      return sseResponse();
-    }) as unknown as typeof fetch;
-
-    const model = getGatewayModel("some-model", "openrouter", "session-1", tmpRoot, {
-      fetchFn,
-      refreshSession: refreshNeverCalled,
-    });
-    await streamText({ model, prompt: "first turn" }).text;
-    await streamText({ model, prompt: "second turn" }).text;
-
-    expect(keys).toHaveLength(2);
-    expect(keys[0]).toBeTruthy();
-    expect(keys[1]).toBeTruthy();
-    expect(keys[0]).not.toBe(keys[1]);
   });
 });
 
@@ -172,7 +145,7 @@ describe("getGatewayModel — 401 retry", () => {
     return { fetchFn, calls };
   }
 
-  test("answers 401 then 200: retries exactly once, with the new token and the same idempotency key", async () => {
+  test("answers 401 then 200: retries exactly once, with the new token", async () => {
     process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";
     seedAuthJson(tmpRoot);
     const { fetchFn, calls } = stubFetch([unauthorized, sseResponse]);
@@ -186,9 +159,6 @@ describe("getGatewayModel — 401 retry", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]?.headers.get("Authorization")).toBe("Bearer at-1");
     expect(calls[1]?.headers.get("Authorization")).toBe("Bearer at-2");
-    expect(calls[0]?.headers.get("X-Seri-Idempotency-Key")).toBe(
-      calls[1]?.headers.get("X-Seri-Idempotency-Key"),
-    );
   });
 
   test("a second 401 is not retried again — exactly two fetches total", async () => {

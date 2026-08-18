@@ -23,17 +23,9 @@ function gatewayBaseUrl(configDir: string): string {
 // non-empty apiKey to construct, so this is only a placeholder to satisfy that.
 const UNUSED_PLACEHOLDER_KEY = "seri-gateway";
 
-// Mints a fresh X-Seri-Idempotency-Key on every invocation of the returned fetch — one logical
-// request, one key. This is the CLI's own tracing/correlation value only: the server mints its
-// own idempotency key for the usage ledger and does not trust this header for billing or dedup.
-// Still minted per-request rather than once at construction, because `loop.ts` reuses one
-// LanguageModel across every tool-call round-trip and compaction call in a turn — a value fixed
-// at construction time would tag every request in a turn with the same key, making it useless
-// for telling them apart.
-//
-// The Authorization header is likewise read fresh here, from disk, on every call — not baked
-// into createOpenAI's config at construction time — so a token refreshed by THIS wrapper's own
-// retry (below) is picked up by every later request the same model makes, not just the one that
+// The Authorization header is read fresh here, from disk, on every call — not baked into
+// createOpenAI's config at construction time — so a token refreshed by THIS wrapper's own retry
+// (below) is picked up by every later request the same model makes, not just the one that
 // triggered the refresh.
 function authedFetch(
   configDir: string,
@@ -42,7 +34,6 @@ function authedFetch(
 ) {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const headers = new Headers(init?.headers);
-    headers.set("X-Seri-Idempotency-Key", crypto.randomUUID());
     const session = loadAuthSession(configDir);
     if (session) headers.set("Authorization", `Bearer ${session.accessToken}`);
     const requestInit = { ...init, headers };
@@ -53,8 +44,6 @@ function authedFetch(
     const refreshed = await refreshSession(configDir, fetchFn);
     if (!refreshed) return response;
 
-    // Same idempotency key as the first attempt, on purpose: this is a retry of the SAME
-    // logical request for tracing purposes, not a second one.
     headers.set("Authorization", `Bearer ${refreshed.accessToken}`);
     return fetchFn(input, { ...requestInit, headers });
   };
@@ -65,10 +54,10 @@ type GatewayDeps = {
   refreshSession?: typeof refreshSessionReal;
 };
 
-// The BYOK guard, plus the sticky-routing/idempotency headers a gateway request needs.
-// `sessionId` is the CLI session id (sticky routing / prompt-cache behaviour, injected
-// server-side as `session_id`); the idempotency key and the Authorization header are both set
-// per-request inside authedFetch, not here — see its comment.
+// The BYOK guard, plus the sticky-routing header a gateway request needs. `sessionId` is the
+// CLI session id (sticky routing / prompt-cache behaviour, injected server-side as
+// `session_id`); the Authorization header is set per-request inside authedFetch, not here —
+// see its comment.
 export function getGatewayModel(
   modelId: string,
   provider: ModelProvider,
