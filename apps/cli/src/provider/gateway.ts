@@ -15,7 +15,9 @@ import { configuredProviders } from "./keys";
 // this, so pointing the CLI at a local apps/server needs no rebuild.
 const DEFAULT_GATEWAY_URL = "https://gateway.seriora.ai/api/gateway";
 
-function gatewayBaseUrl(configDir: string): string {
+// Exported so accountStatus.ts can reach the same server without a second SERI_GATEWAY_URL
+// resolution — both files talk to the same apps/server deployment.
+export function gatewayBaseUrl(configDir: string): string {
   return getApiKey("SERI_GATEWAY_URL", configDir) ?? DEFAULT_GATEWAY_URL;
 }
 
