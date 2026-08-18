@@ -109,10 +109,11 @@ export async function loadCatalog(
     }
 
     try {
-      const response = await fetchWithTimeout(fetchFn, MODELS_DEV_URL, FETCH_TIMEOUT_MS);
-      if (!response.ok) throw new Error(`models.dev returned ${response.status}`);
-      const raw = (await response.json()) as RawCatalogResponse;
-      return { fetchedAt: new Date().toISOString(), entries: mapRawCatalog(raw) };
+      return await fetchWithTimeout(fetchFn, MODELS_DEV_URL, FETCH_TIMEOUT_MS, async (response) => {
+        if (!response.ok) throw new Error(`models.dev returned ${response.status}`);
+        const raw = (await response.json()) as RawCatalogResponse;
+        return { fetchedAt: new Date().toISOString(), entries: mapRawCatalog(raw) };
+      });
     } catch {
       return manifest;
     }
