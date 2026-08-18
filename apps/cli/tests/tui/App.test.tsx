@@ -1526,6 +1526,28 @@ describe("App", () => {
       expect(formatModeLabel("[approve-each]", undefined, 60)).toBe("[approve-each]");
       expect(formatModeLabel("[approve-each]", undefined, 10)).toBe("[approve-each]");
     });
+
+    test("full width with a gateway-served route: 'provided'", () => {
+      const viaGateway = route({ viaGateway: true });
+      expect(formatModeLabel("[approve-each]", viaGateway, 100)).toBe(
+        "[approve-each]  claude-sonnet-5 · provided",
+      );
+    });
+
+    // Defensive: resolveRoute's own contract makes rerouted && viaGateway both true unreachable,
+    // but formatModeLabel must not rely on that — a rerouted route always reads "→ provider",
+    // never "provided", regardless of what viaGateway carries.
+    test("a rerouted route still reads '→ <provider>' even if viaGateway were also true", () => {
+      const reroutedAndGateway = route({
+        provider: "openrouter",
+        rerouted: true,
+        reason: "ANTHROPIC_API_KEY",
+        viaGateway: true,
+      });
+      expect(formatModeLabel("[approve-each]", reroutedAndGateway, 100)).toBe(
+        "[approve-each]  claude-sonnet-5 · → openrouter",
+      );
+    });
   });
 
   describe("visibleTranscript", () => {
