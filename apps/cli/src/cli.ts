@@ -1787,7 +1787,7 @@ async function runTui(
   // submission's own branch runs (onSubmit's own comment), so a fresh command-error this
   // submission goes on to produce still lands afterward and is unaffected.
   const echoUserInput = (text: string): void => {
-    dispatch({ type: "transcript-append", line: `> ${text.trim()}`, flush: false });
+    dispatch({ type: "transcript-append", line: `> ${text.trim()}`, role: "user", flush: false });
     dispatch({ type: "command-error-cleared" });
   };
   let turnInFlight = false;
