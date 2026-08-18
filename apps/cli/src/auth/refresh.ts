@@ -82,7 +82,12 @@ export function refreshSession(
 
   const promise = refreshSessionOnce(configDir, fetchFn);
   inFlightRefreshes.set(configDir, promise);
-  promise.finally(() => inFlightRefreshes.delete(configDir));
+  // .finally() returns a NEW promise that also rejects when `promise` does — discarding it
+  // uncaught would be a second, unhandled rejection on top of the one `promise` itself carries
+  // back to the caller, even though the caller handles that one. The .catch(() => {}) here is
+  // only for THIS derived promise; it does not touch `promise`'s own rejection, which the caller
+  // returned below still carries and must still handle.
+  promise.finally(() => inFlightRefreshes.delete(configDir)).catch(() => {});
   return promise;
 }
 

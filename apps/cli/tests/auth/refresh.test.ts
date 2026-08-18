@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AUTH_FILENAME, loadAuthSession } from "../../src/auth/authStore";
@@ -298,5 +298,44 @@ describe("refreshSession", () => {
     await refreshSession(configDir, fetchFn as unknown as typeof fetch);
 
     expect(fetchCalls).toBe(2);
+  });
+
+  // saveAuthSession's writeFileSync can genuinely throw (a read-only config dir, disk full) —
+  // the caller's own `await refreshSession(...)` rejection is expected and fine, but the
+  // in-flight map's internal `promise.finally(() => ...)` creates a SEPARATE derived promise
+  // that also rejects; left uncaught, that is a second, unrelated unhandled rejection on top of
+  // the one the caller is already handling.
+  test("a save failure rejects the caller without also emitting an unhandled rejection", async () => {
+    seedAuthJson({
+      accessToken: "at-old",
+      refreshToken: "rt-old",
+      userId: "user_1",
+      email: "a@example.com",
+      obtainedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const fetchFn = async () =>
+      fakeResponse(true, 200, { access_token: "at-new", refresh_token: "rt-new", expires_in: 300 });
+    const authPath = join(configDir, AUTH_FILENAME);
+    // POSIX: write permission is checked on the file itself for an overwrite. Windows: Node
+    // honors the target file's own read-only attribute for a write — same combination
+    // apps/cli/tests/config/config.test.ts's own sabotaged-write test already verified works on
+    // both platforms.
+    chmodSync(configDir, 0o555);
+    chmodSync(authPath, 0o444);
+
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      await expect(refreshSession(configDir, fetchFn as unknown as typeof fetch)).rejects.toThrow();
+      // Lets any dangling promise's rejection microtask surface before asserting on it.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      chmodSync(configDir, 0o755);
+      chmodSync(authPath, 0o644);
+    }
   });
 });
