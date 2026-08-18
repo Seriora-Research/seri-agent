@@ -1145,28 +1145,33 @@ async function prepareSession(
       session.messages.push({ role: "user", content: ctx.taskText });
     }
 
-    // Loaded once, here, alongside the model resolution it feeds — /model (runTui's own runTurn)
-    // reuses this SAME catalog on every later turn rather than reloading it, but @seri/model-catalog
-    // caches for the rest of the process either way (catalog.ts's own loadCatalog).
-    const catalog = await getModelCatalog(undefined, warnSink);
     // D3 (feature-plan.md): resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
     // stays a pure, environment-independent switch with its own test file.
-    // Bug fixed here (code-review, PR #73): `configuredProviders` (called by `resolveRoute` below)
-    // reads config.json — `getApiKey`'s own `loadConfig` call, which does a bare `JSON.parse` — so a
-    // corrupted config.json throws SYNCHRONOUSLY, the same failure mode `getModel` itself already
-    // guards against below. Before routing-priority resolution existed, that same read only ever
-    // happened INSIDE getAnthropicModel/etc. — no longer a distinct case now that one try covers the
-    // whole function, but the reasoning ("a corrupted config.json prints a clean error and exits 1,"
-    // not an uncaught crash) is still exactly why this needs to be inside the try at all.
-    // Fetched once here, before the routing decision that needs it — a BYOK-only/logged-out
-    // session never reaches the network (accountStatus.ts's own login guard), and a logged-in
-    // session's fetch failure fails closed to null, matching what routing already did before this
-    // field existed.
-    const plan = await fetchAccountPlan(configDir);
+    // Read here, before the routing decision that needs it: `getApiKey`'s own `loadConfig` call
+    // does a bare `JSON.parse`, so a corrupted config.json throws SYNCHRONOUSLY — the same failure
+    // mode `getModel` itself already guards against below, and why this needs to be inside the try
+    // at all ("a corrupted config.json prints a clean error and exits 1," not an uncaught crash).
+    const configured = configuredProviders(configDir);
+    const requestedProvider = session.provider ?? DEFAULT_PROVIDER;
+    // The catalog load and the plan fetch are independent network calls — run them together rather
+    // than stacking their latency. `plan` is still fetched even when `requestedProvider` already
+    // has a configured key (resolveRoute's own Rule 1 below would discard it for THIS route): the
+    // same `prepared.plan` also feeds /model's own gatewayCoverage predicate for every OTHER model
+    // in the catalog the user might switch to later in the session (tuiPty.test.ts's "a logged-in
+    // session's account-status fetch happens once at session start" — asserts the fetch happens
+    // even though its own fixture sets GROQ_API_KEY, the DEFAULT_PROVIDER). `accountStatus.ts`'s
+    // own login guard already skips the fetch for a BYOK-only/logged-out session. Loaded once,
+    // here, alongside the model resolution it feeds — /model (runTui's own runTurn) reuses this
+    // SAME catalog on every later turn rather than reloading it, but @seri/model-catalog caches
+    // for the rest of the process either way (catalog.ts's own loadCatalog).
+    const [catalog, plan] = await Promise.all([
+      getModelCatalog(undefined, warnSink),
+      fetchAccountPlan(configDir),
+    ]);
     const route = resolveRoute(
       catalog,
-      { model: session.model, provider: session.provider ?? DEFAULT_PROVIDER },
-      configuredProviders(configDir),
+      { model: session.model, provider: requestedProvider },
+      configured,
       plan,
     );
     const model = dispatchModel(route, session.id, configDir, deps);
