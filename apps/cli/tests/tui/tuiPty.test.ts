@@ -1890,7 +1890,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("/model");
       await sawLine("/model");
       child.stdin?.write("\r");
-      await sawLine("GPT OSS 120B");
+      // A real wait, not sawLine("GPT OSS 120B"): that line already appeared during the FIRST
+      // picker open above, so the cumulative check would resolve instantly here too, racing the
+      // actual component mount the same way childScriptModelSwitch's own comment documents for
+      // the InputBox->ModelPicker transition.
+      await new Promise((resolve) => setTimeout(resolve, 100));
       child.stdin?.write("gpt-latest");
       await sawInFrameTimes("gpt-latest", 1);
       // The regression: without cli.ts's own /logout handler clearing prepared.plan, this row would
