@@ -306,8 +306,8 @@ function childScriptAccountStatusOnce(dir: string): string {
   ].join("\n");
 }
 
-// Regression for CodeRabbit's PR #123 finding: prepared.plan was fetched once at session start and
-// never refreshed — a successful /logout left the previous (possibly paid) plan in place, so
+// Regression: prepared.plan was fetched once at session start and never refreshed — a successful
+// /logout left the previous (possibly paid) plan in place, so
 // resolveRoute/decideModelPickerOpen kept reflecting a plan the user no longer has. Starts already
 // logged in with plan "pro" (so ~openai/gpt-latest, a real OpenRouter catalog entry with no local
 // key, shows "provided"), then logs out and re-opens /model to prove that same entry's row drops
