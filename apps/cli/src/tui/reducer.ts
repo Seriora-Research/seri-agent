@@ -8,7 +8,7 @@ import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
 import type { SessionState } from "../session/session";
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
-import { DEFAULT_COLUMNS, transcriptVisualRows } from "./format";
+import { DEFAULT_COLUMNS, type TranscriptEntry, type TranscriptRole, transcriptVisualRows } from "./format";
 
 // /setup's own live state (D5-D8, feature-plan.md) — a three-step flow, mirrored on the reducer
 // the same way /model's picker is: "list" shows all five providers, "enter-key" is the masked
@@ -66,7 +66,10 @@ export type TuiState = {
   // break is indistinguishable from a real `\n` once written, so storing the wrapped output would
   // make a resize lossy (the old width's wrapping can never be un-done to re-wrap at the new one).
   // Keeping this array untouched is what makes a resize a free re-derivation instead of a rewrite.
-  transcript: string[];
+  // Each entry carries a `role` ("user"/"assistant"/"system") alongside its logical text — used at
+  // render time to top-anchor a short transcript, band a user turn's rows with a background color,
+  // and prefix an assistant answer with its own marker (App.tsx), without changing what gets stored.
+  transcript: TranscriptEntry[];
   // VISUAL rows from the BOTTOM of the (wrapped) transcript the viewport is scrolled up by. 0 =
   // following the latest row (the default, and the state End returns to). Advanced by pushLine
   // while > 0, by however many visual rows a flush actually added — see `appendLines`' own
@@ -210,7 +213,7 @@ export type TuiAction =
   // `flush` defaults to true (every existing caller relies on that) — set to false by a submission
   // echo that must not fragment an in-progress streamed answer into two transcript entries (see
   // pushLine's own comment).
-  | { type: "transcript-append"; line: string; flush?: boolean }
+  | { type: "transcript-append"; line: string; role?: TranscriptRole; flush?: boolean }
   // Scrolls the transcript viewport. Positive `delta` moves toward older rows, clamped to
   // `[0, transcriptVisualRows(transcript, columns) - viewportRows]` — the offset at which
   // visibleTranscript shows a full `viewportRows`-tall page of the oldest content, not just the
@@ -307,7 +310,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     // WHILE a turn may still be streaming text — without flushing here first, a /mode or /exit
     // typed mid-stream reordered the transcript against the model's own still-in-progress answer.
     case "transcript-append":
-      return pushLine(state, action.line, action.flush ?? true);
+      return pushLine(state, action.line, action.role ?? "system", action.flush ?? true);
     case "transcript-scroll": {
       const streamingRows = streamingVisualRows(state.streaming, state.columns);
       const max = maxScrollOffset(state.totalVisualRows, streamingRows, state.viewportRows);
@@ -446,7 +449,9 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
 // tail. Only called from the three keypress/resize cases below — never from "text" (applyLoopEvent,
 // below), which fires once per streamed token and cannot afford to re-wrap `streaming` on every one.
 function streamingVisualRows(streaming: string, columns: number): number {
-  return streaming.length > 0 ? transcriptVisualRows([streaming], columns) : 0;
+  return streaming.length > 0
+    ? transcriptVisualRows([{ role: "assistant", text: streaming }], columns)
+    : 0;
 }
 
 // The furthest `transcriptScrollOffset` can go: every visual row that exists, committed plus
@@ -469,9 +474,21 @@ function maxScrollOffset(
 // entirely and leaves `state.streaming` untouched: not moved into `transcript` (still committed
 // later, whole, by whatever event finishes the turn) and not cleared either (clearing it would
 // silently drop the model's in-progress text instead of just deferring its commit).
-function pushLine(state: TuiState, line: string, flush = true): TuiState {
-  if (!flush) return appendLines(state, [line]);
-  const appended = state.streaming.length > 0 ? [state.streaming, line] : [line];
+// A blank `{role: "system", text: ""}` separator is inserted immediately before `line` when it is
+// a new user turn (`role === "user"`) following existing content — `wrapForTranscript` (format.ts)
+// already guarantees `""` survives as exactly one row, so this needs no new row-accounting path.
+function pushLine(
+  state: TuiState,
+  line: string,
+  role: TranscriptRole = "system",
+  flush = true,
+): TuiState {
+  if (!flush) return appendLines(state, [{ role, text: line }]);
+  const flushedStreaming: TranscriptEntry[] =
+    state.streaming.length > 0 ? [{ role: "assistant", text: state.streaming }] : [];
+  const separator: TranscriptEntry[] =
+    role === "user" && state.transcript.length > 0 ? [{ role: "system", text: "" }] : [];
+  const appended = [...flushedStreaming, ...separator, { role, text: line }];
   return { ...appendLines(state, appended, state.transcriptScrollStreamingRows), streaming: "" };
 }
 
@@ -492,7 +509,11 @@ function pushLine(state: TuiState, line: string, flush = true): TuiState {
 // offset already accounts for and overshoot past the content the reader was anchored on. The
 // no-flush path never touches `streaming`, so it passes the default 0 — nothing to subtract, and
 // `transcriptScrollStreamingRows` must stay as-is since that still-active streaming hasn't resolved.
-function appendLines(state: TuiState, rawLines: string[], resolvedStreamingRows = 0): TuiState {
+function appendLines(
+  state: TuiState,
+  rawLines: TranscriptEntry[],
+  resolvedStreamingRows = 0,
+): TuiState {
   const addedRows = transcriptVisualRows(rawLines, state.columns);
   return {
     ...state,
