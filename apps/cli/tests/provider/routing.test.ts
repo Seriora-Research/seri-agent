@@ -76,6 +76,7 @@ describe("resolveRoute", () => {
       model: "anthropic/claude-sonnet-5",
       provider: "openrouter",
       rerouted: false,
+      viaGateway: false,
     });
   });
 
@@ -101,6 +102,7 @@ describe("resolveRoute", () => {
       model: "anthropic/claude-sonnet-5",
       provider: "openrouter",
       rerouted: false,
+      viaGateway: false,
     });
   });
 
@@ -110,7 +112,12 @@ describe("resolveRoute", () => {
       { model: "claude-sonnet-5", provider: "anthropic" },
       new Set(["anthropic", "openrouter"]),
     );
-    expect(route).toEqual({ model: "claude-sonnet-5", provider: "anthropic", rerouted: false });
+    expect(route).toEqual({
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      rerouted: false,
+      viaGateway: false,
+    });
   });
 
   test("nothing configured leaves the pair unchanged, and getModel on it still throws the legacy message", () => {
@@ -123,6 +130,7 @@ describe("resolveRoute", () => {
       model: "anthropic/claude-sonnet-5",
       provider: "openrouter",
       rerouted: false,
+      viaGateway: false,
     });
     expect(() => getModel(route.model, route.provider, "test-session-id")).toThrow(
       "OPENROUTER_API_KEY is not set. Run: seri config set OPENROUTER_API_KEY <your-key>",
@@ -135,7 +143,12 @@ describe("resolveRoute", () => {
       { model: "solo-model", provider: "groq" },
       new Set(["anthropic", "openrouter", "openai", "google"]),
     );
-    expect(route).toEqual({ model: "solo-model", provider: "groq", rerouted: false });
+    expect(route).toEqual({
+      model: "solo-model",
+      provider: "groq",
+      rerouted: false,
+      viaGateway: false,
+    });
   });
 
   test("an id absent from the catalog is left unchanged and never throws", () => {
@@ -144,6 +157,79 @@ describe("resolveRoute", () => {
       { model: "not-in-the-catalog", provider: "groq" },
       new Set(["anthropic", "openrouter"]),
     );
-    expect(route).toEqual({ model: "not-in-the-catalog", provider: "groq", rerouted: false });
+    expect(route).toEqual({
+      model: "not-in-the-catalog",
+      provider: "groq",
+      rerouted: false,
+      viaGateway: false,
+    });
+  });
+
+  describe("Rule 4: route via gateway", () => {
+    test("no key anywhere and the plan covers the entry: viaGateway true, rerouted false", () => {
+      const route = resolveRoute(
+        catalog,
+        { model: "solo-model", provider: "groq" },
+        new Set(),
+        "pro",
+      );
+      expect(route).toEqual({
+        model: "solo-model",
+        provider: "groq",
+        rerouted: false,
+        viaGateway: true,
+      });
+    });
+
+    test("no key anywhere and plan: null leaves viaGateway false, unchanged from today", () => {
+      const route = resolveRoute(catalog, { model: "solo-model", provider: "groq" }, new Set());
+      expect(route.viaGateway).toBe(false);
+    });
+
+    test("no key anywhere, plan: free, and a priced (non-zero) entry: viaGateway false", () => {
+      const pricedCatalog: ModelCatalog = {
+        fetchedAt: "2026-08-11T00:00:00.000Z",
+        entries: [entry({ id: "priced-model", provider: "groq", pricing: { inputPerMTok: 1, outputPerMTok: 1 } })],
+      };
+      const route = resolveRoute(
+        pricedCatalog,
+        { model: "priced-model", provider: "groq" },
+        new Set(),
+        "free",
+      );
+      expect(route.viaGateway).toBe(false);
+    });
+
+    // Regression: Rule 1 (own-key-wins) is unaffected by a non-null covering plan — an explicit
+    // pick whose own provider has a key still returns unchanged even when `plan` would otherwise
+    // cover it.
+    test("regression: Rule 1 wins over a covering plan when the requested provider has its own key", () => {
+      const route = resolveRoute(
+        catalog,
+        { model: "solo-model", provider: "groq" },
+        new Set(["groq"]),
+        "pro",
+      );
+      expect(route).toEqual({
+        model: "solo-model",
+        provider: "groq",
+        rerouted: false,
+        viaGateway: false,
+      });
+    });
+
+    // Regression: a configured sibling still wins over gateway coverage — when both a sibling key
+    // AND planCoverage are available, the reroute-to-sibling outcome is returned, never
+    // viaGateway: true.
+    test("regression: a configured sibling wins over gateway coverage", () => {
+      const route = resolveRoute(
+        catalog,
+        { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
+        new Set(["anthropic"]),
+        "pro",
+      );
+      expect(route.rerouted).toBe(true);
+      expect(route.viaGateway).toBe(false);
+    });
   });
 });
