@@ -8,7 +8,26 @@ export type AuthSession = {
   userId: string;
   email: string;
   obtainedAt: string;
+  // Optional, deliberately: every existing auth.json on disk lacks it, and loadAuthSession is a
+  // bare JSON.parse with no migration step. A missing expiresAt must never be treated as
+  // "expired" — auth/refresh.ts's 401-retry path is the authority on expiry; this is only a
+  // pre-emptive hint.
+  expiresAt?: string;
 };
+
+// WorkOS's real token/refresh responses carry no expires_in field (confirmed live) — a missing,
+// negative, or non-finite value returns undefined rather than computing `new Date(NaN)`, whose
+// toISOString() throws. A finite but out-of-Date-range value (Date's range is ~±273,790 years
+// from the epoch) produces the same NaN internally, so the computed Date's own validity is
+// checked too, not just expiresIn's. Shared by auth/commands.ts's login and auth/refresh.ts's
+// refreshSession, the two places that populate AuthSession.expiresAt.
+export function expiresAtFrom(expiresIn: number | undefined): string | undefined {
+  if (typeof expiresIn !== "number" || !Number.isFinite(expiresIn) || expiresIn < 0) {
+    return undefined;
+  }
+  const expiresAt = new Date(Date.now() + expiresIn * 1000);
+  return Number.isFinite(expiresAt.getTime()) ? expiresAt.toISOString() : undefined;
+}
 
 export const AUTH_FILENAME = "auth.json";
 

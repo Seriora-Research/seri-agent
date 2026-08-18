@@ -196,6 +196,26 @@ describe("loadCatalog", () => {
     expect(calls).toBe(1);
     expect(firstResult).toEqual(secondResult);
   });
+
+  // A fallback result IS cached for the process lifetime too, same as a genuine fetch — a
+  // caller with a usable, permanent fallback (apps/cli's bundled FALLBACK_MANIFEST) relies on
+  // this to avoid re-attempting a live fetch (10s timeout) on every later call while offline. A
+  // caller whose fallback is deliberately unusable (apps/server's EMPTY_MANIFEST) is responsible
+  // for its own retry policy — see apps/server/lib/catalog.ts's resetCatalogCache() call.
+  test("fetch failure: the fallback IS cached for the process — a later call does not re-fetch", async () => {
+    let calls = 0;
+    const failingFetch: typeof fetch = (async () => {
+      calls += 1;
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+
+    const first = await loadCatalog(fallbackManifest, failingFetch);
+    const second = await loadCatalog(fallbackManifest, failingFetch);
+
+    expect(first).toBe(fallbackManifest);
+    expect(second).toBe(fallbackManifest);
+    expect(calls).toBe(1);
+  });
 });
 
 describe("findCatalogEntry", () => {

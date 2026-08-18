@@ -1,4 +1,4 @@
-import { clearAuthSession, loadAuthSession, saveAuthSession } from "./authStore";
+import { clearAuthSession, expiresAtFrom, loadAuthSession, saveAuthSession } from "./authStore";
 import { openBrowser } from "./browser";
 import { pollForToken, requestDeviceCode } from "./deviceFlow";
 
@@ -75,6 +75,7 @@ export async function login(
       userId: result.user.id,
       email: result.user.email,
       obtainedAt: new Date().toISOString(),
+      expiresAt: expiresAtFrom(result.expiresIn),
     },
     configDir,
   );

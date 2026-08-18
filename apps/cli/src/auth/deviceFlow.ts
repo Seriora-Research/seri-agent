@@ -17,7 +17,9 @@ export function getWorkosClientId(configDir?: string): string {
 }
 
 const AUTHORIZE_DEVICE_URL = "https://api.workos.com/user_management/authorize/device";
-const AUTHENTICATE_URL = "https://api.workos.com/user_management/authenticate";
+// Exported so auth/refresh.ts's grant_type=refresh_token POST hits the same endpoint rather
+// than duplicating the literal.
+export const AUTHENTICATE_URL = "https://api.workos.com/user_management/authenticate";
 
 export type DeviceAuthorization = {
   deviceCode: string;
@@ -33,6 +35,10 @@ export type TokenResult =
       status: "success";
       accessToken: string;
       refreshToken: string;
+      // Optional: WorkOS's real device-flow token response carries no expires_in field at all
+      // (confirmed live) — this is not a malformed response, it is the normal shape. Callers
+      // must treat a missing value as "no expiry hint available", never as an error.
+      expiresIn?: number;
       user: { id: string; email: string };
     }
   | { status: "denied" }
@@ -45,7 +51,8 @@ export type TokenResult =
   // tui/handlers.ts).
   | { status: "aborted" };
 
-async function parseResponseBody(response: Response): Promise<any> {
+// Exported so auth/refresh.ts's refreshAccessToken reuses this instead of a verbatim copy.
+export async function parseResponseBody(response: Response): Promise<Record<string, unknown>> {
   const text = await response.text();
   try {
     return JSON.parse(text);
@@ -63,7 +70,10 @@ export async function requestDeviceCode(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ client_id: clientId }),
   });
-  const body = await parseResponseBody(response);
+  // WorkOS's own response fields are trusted directly, same as every other field this file
+  // reads off a real WorkOS response — the typed Record<string, unknown> return above is for
+  // refresh.ts's own already-checked usage, not a new validation requirement here.
+  const body: any = await parseResponseBody(response);
   if (!response.ok) {
     throw new Error(
       `WorkOS device authorization failed with status ${response.status}: ${JSON.stringify(body)}`,
@@ -129,7 +139,7 @@ export async function pollForToken(
         client_id: clientId,
       }).toString(),
     });
-    const body = await parseResponseBody(response);
+    const body: any = await parseResponseBody(response);
     // Re-checked here, not just at the top of the loop: an abort that lands WHILE this iteration's
     // own sleep+fetch is already in flight (the exact race a real WorkOS poll can hit, since a
     // device code stays valid for minutes) must still discard whatever this poll just resolved to
@@ -141,6 +151,7 @@ export async function pollForToken(
         status: "success",
         accessToken: body.access_token,
         refreshToken: body.refresh_token,
+        expiresIn: body.expires_in,
         user: { id: body.user.id, email: body.user.email },
       };
     }

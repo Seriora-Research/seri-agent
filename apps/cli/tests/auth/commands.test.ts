@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadAuthSession } from "../../src/auth/authStore";
 import { login } from "../../src/auth/commands";
 import type { DeviceAuthorization, TokenResult } from "../../src/auth/deviceFlow";
 
@@ -20,6 +24,34 @@ function deps(pollResult: TokenResult) {
 }
 
 describe("login", () => {
+  let configDir: string;
+
+  beforeEach(() => {
+    configDir = mkdtempSync(join(tmpdir(), "seri-login-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  // The real-world WorkOS response shape: no expires_in field at all (confirmed live). A
+  // session must still save successfully, with expiresAt simply absent — not a crash.
+  test("saves a session with expiresAt absent when pollForToken resolves success without expiresIn", async () => {
+    await login("login", "client_123", configDir, {
+      ...deps({
+        status: "success",
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        user: { id: "user_1", email: "a@example.com" },
+      }),
+    });
+
+    const session = loadAuthSession(configDir);
+    expect(session?.accessToken).toBe("at-1");
+    expect(session?.refreshToken).toBe("rt-1");
+    expect(session?.expiresAt).toBeUndefined();
+  });
+
   test("throws 'Authorization was denied.' when pollForToken resolves denied", async () => {
     await expect(
       login("login", "client_123", "fake-config-dir", deps({ status: "denied" })),

@@ -67,6 +67,7 @@
         "@polar-sh/nextjs": "^0.9.6",
         "@polar-sh/sdk": "^0.47.1",
         "@seri/plans": "workspace:*",
+        "@seri/provisioning": "workspace:*",
         "@seri/ui": "workspace:*",
         "@supabase/supabase-js": "^2.111.0",
         "@tailwindcss/postcss": "^4",
@@ -91,14 +92,17 @@
       "version": "0.0.1",
       "dependencies": {
         "@polar-sh/nextjs": "^0.9.6",
+        "@polar-sh/sdk": "^0.47.1",
+        "@seri/model-catalog": "workspace:*",
         "@seri/plans": "workspace:*",
+        "@seri/provisioning": "workspace:*",
         "@supabase/supabase-js": "^2.111.0",
+        "jose": "^5.10.0",
         "next": "^16.2.12",
         "react": "^19.2.8",
         "react-dom": "^19.2.8",
       },
       "devDependencies": {
-        "@polar-sh/sdk": "^0.47.1",
         "@types/node": "^26.0.0",
         "@types/react": "^19.0.0",
         "bun-types": "^1.3.14",
@@ -146,6 +150,17 @@
     "packages/plans": {
       "name": "@seri/plans",
       "version": "0.0.1",
+      "devDependencies": {
+        "bun-types": "^1.3.14",
+        "typescript": "^5.7.2",
+      },
+    },
+    "packages/provisioning": {
+      "name": "@seri/provisioning",
+      "version": "0.0.1",
+      "dependencies": {
+        "@supabase/supabase-js": "^2.111.0",
+      },
       "devDependencies": {
         "bun-types": "^1.3.14",
         "typescript": "^5.7.2",
@@ -342,6 +357,8 @@
     "@seri/plans": ["@seri/plans@workspace:packages/plans"],
 
     "@seri/portal": ["@seri/portal@workspace:apps/portal"],
+
+    "@seri/provisioning": ["@seri/provisioning@workspace:packages/provisioning"],
 
     "@seri/server": ["@seri/server@workspace:apps/server"],
 
