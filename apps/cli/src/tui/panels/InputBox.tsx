@@ -71,7 +71,7 @@ export function InputBox({
   });
 
   return (
-    <Box borderStyle="single" borderColor={theme.muted}>
+    <Box borderStyle="single" borderColor={theme.muted} borderLeft={false} borderRight={false}>
       <Text>{value.length > 0 ? value : " "}</Text>
     </Box>
   );
