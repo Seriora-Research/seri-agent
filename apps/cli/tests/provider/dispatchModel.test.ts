@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dispatchModel } from "../../src/cli";
+import { dispatchModel } from "../../src/provider/model";
 import type { ResolvedRoute } from "../../src/provider/routing";
 
 // Regression for the gap this PR's own manual e2e testing found live: getGatewayModel

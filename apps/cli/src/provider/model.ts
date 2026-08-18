@@ -2,11 +2,13 @@ import type { ModelProvider } from "@seri/model-catalog";
 import type { LanguageModel } from "ai";
 import { getApiKey } from "../config/config";
 import { getAnthropicModel as getAnthropicModelReal } from "./anthropic";
+import { getGatewayModel as getGatewayModelReal } from "./gateway";
 import { getGoogleModel as getGoogleModelReal } from "./google";
 import { getGroqModel as getGroqModelReal } from "./groq";
 import { missingKeyError, PROVIDER_API_KEY_NAMES } from "./keys";
 import { getOpenAIModel as getOpenAIModelReal } from "./openai";
 import { getOpenRouterModel as getOpenRouterModelReal } from "./openrouter";
+import type { ResolvedRoute } from "./routing";
 
 // Optional injected fns, mirroring cli.ts's own CliDeps (all five fields, same names) — lets
 // tests exercise the dispatch without constructing a real provider.
@@ -103,4 +105,28 @@ export function getModel(
       // guarantee.
       throw new Error(`Unknown model provider: ${JSON.stringify(provider)}`);
   }
+}
+
+type DispatchModelDeps = ModelDeps & {
+  getGatewayModel?: typeof getGatewayModelReal;
+};
+
+// Dispatches to getGatewayModel instead of getModel's provider switch when the route resolved via
+// the gateway (routing.ts's Rule 4) — a gateway route's provider is always GATEWAY_PROVIDER
+// (planCoverage.ts), which getModel would otherwise treat as "needs a local key for that provider"
+// and throw missingKeyError on, since getModel has no notion of the gateway at all (this file's
+// own getModel comment: it stays a pure, environment-independent provider switch). Both
+// prepareSession and runTurn's own resolveRoute call sites (cli.ts) route their getModel dispatch
+// through this one function instead of duplicating the branch.
+export function dispatchModel(
+  route: ResolvedRoute,
+  sessionId: string,
+  configDir: string,
+  deps: DispatchModelDeps,
+): LanguageModel {
+  if (route.viaGateway) {
+    const getGatewayModelFn = deps.getGatewayModel ?? getGatewayModelReal;
+    return getGatewayModelFn(route.model, route.provider, sessionId, configDir);
+  }
+  return getModel(route.model, route.provider, sessionId, deps, configDir);
 }

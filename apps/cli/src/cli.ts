@@ -74,7 +74,7 @@ import { getGatewayModel as getGatewayModelReal } from "./provider/gateway";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { configuredProviders, PROVIDER_DISPLAY_NAMES, tuiMissingKeyMessage } from "./provider/keys";
-import { getModel } from "./provider/model";
+import { dispatchModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
 import { gatewayCoverage, type ResolvedRoute, resolveRoute } from "./provider/routing";
@@ -1068,38 +1068,6 @@ function fatalDuringTui(err: unknown, preMountMessages: readonly PreMountMessage
   }
   console.error(messageOf(err));
   return 1;
-}
-
-// Dispatches to getGatewayModel instead of getModel's provider switch when the route resolved via
-// the gateway (routing.ts's Rule 4) — a gateway route's provider is always GATEWAY_PROVIDER
-// (planCoverage.ts), which getModel would otherwise treat as "needs a local key for that provider"
-// and throw missingKeyError on, since getModel has no notion of the gateway at all (D3's own
-// comment: it stays a pure, environment-independent provider switch). Both prepareSession and
-// runTurn's own resolveRoute call sites route their getModel dispatch through this one function
-// instead of duplicating the branch.
-export function dispatchModel(
-  route: ResolvedRoute,
-  sessionId: string,
-  configDir: string,
-  deps: CliDeps,
-): LanguageModel {
-  if (route.viaGateway) {
-    const getGatewayModelFn = deps.getGatewayModel ?? getGatewayModelReal;
-    return getGatewayModelFn(route.model, route.provider, sessionId, configDir);
-  }
-  return getModel(
-    route.model,
-    route.provider,
-    sessionId,
-    {
-      getGroqModel: deps.getGroqModel,
-      getOpenRouterModel: deps.getOpenRouterModel,
-      getAnthropicModel: deps.getAnthropicModel,
-      getOpenAIModel: deps.getOpenAIModel,
-      getGoogleModel: deps.getGoogleModel,
-    },
-    configDir,
-  );
 }
 
 async function prepareSession(
