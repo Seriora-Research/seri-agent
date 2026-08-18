@@ -39,7 +39,10 @@ export async function refreshAccessToken(
         try {
           body = await parseResponseBody(response);
         } catch (error) {
-          return { status: "error", message: `WorkOS refresh response unreadable: ${String(error)}` };
+          return {
+            status: "error",
+            message: `WorkOS refresh response unreadable: ${String(error)}`,
+          };
         }
         if (!response.ok) {
           return {
