@@ -54,7 +54,9 @@ describe("tuiReducer: transcript-append", () => {
       line: "Session s1: permission mode is now auto",
     });
 
-    expect(next.transcript).toEqual(["Session s1: permission mode is now auto"]);
+    expect(next.transcript).toEqual([
+      { role: "system", text: "Session s1: permission mode is now auto" },
+    ]);
     expect(next.session).toBe(state.session);
   });
 
@@ -85,8 +87,8 @@ describe("tuiReducer: transcript-append", () => {
     });
 
     expect(next.transcript).toEqual([
-      "the streamed answer so far",
-      "/mode: permission mode is now auto",
+      { role: "assistant", text: "the streamed answer so far" },
+      { role: "system", text: "/mode: permission mode is now auto" },
     ]);
     expect(next.streaming).toBe("");
   });
@@ -111,8 +113,81 @@ describe("tuiReducer: transcript-append", () => {
       flush: false,
     });
 
-    expect(next.transcript).toEqual(["> /rewind 1"]);
+    expect(next.transcript).toEqual([{ role: "system", text: "> /rewind 1" }]);
     expect(next.streaming).toBe("the model's still-in-progress answer");
+  });
+});
+
+describe("tuiReducer: transcript role tagging", () => {
+  test('a role: "user" append after existing content gets a leading blank system separator', () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "transcript-append",
+      line: "first",
+    });
+    state = tuiReducer(state, { type: "transcript-append", line: "> hello", role: "user" });
+
+    expect(state.transcript).toEqual([
+      { role: "system", text: "first" },
+      { role: "system", text: "" },
+      { role: "user", text: "> hello" },
+    ]);
+  });
+
+  test('the very first entry in a fresh session gets no leading separator, even with role: "user"', () => {
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "transcript-append",
+      line: "> hello",
+      role: "user",
+    });
+
+    expect(state.transcript).toEqual([{ role: "user", text: "> hello" }]);
+  });
+
+  test('a flushed state.streaming commits as role: "assistant"', () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "loop-event",
+      event: { type: "text-delta", text: "the answer" },
+    });
+    state = tuiReducer(state, { type: "transcript-append", line: "next" });
+
+    expect(state.transcript).toEqual([
+      { role: "assistant", text: "the answer" },
+      { role: "system", text: "next" },
+    ]);
+  });
+
+  test('every applyLoopEvent case lands as role: "system"', () => {
+    const events: LoopEvent[] = [
+      { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
+      { type: "tool-result", name: "read_file", result: "ok" },
+      { type: "permission-denied", name: "write_file", reason: "declined" },
+      { type: "tool-allowed", name: "write_file" },
+      {
+        type: "compacted",
+        summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
+        evictedCount: 3,
+        usage: {
+          inputTokens: 12,
+          inputTokenDetails: {
+            noCacheTokens: 12,
+            cacheReadTokens: undefined,
+            cacheWriteTokens: undefined,
+          },
+          outputTokens: 34,
+          outputTokenDetails: { textTokens: 34, reasoningTokens: undefined },
+          totalTokens: 46,
+        },
+      },
+      { type: "retry", attempt: 1 },
+      { type: "done", reason: "no-tool-call" },
+      { type: "error", error: "boom" },
+    ];
+
+    let state = initialTuiState(session());
+    for (const event of events) {
+      state = tuiReducer(state, { type: "loop-event", event });
+      expect(state.transcript.at(-1)?.role).toBe("system");
+    }
   });
 });
 
@@ -164,7 +239,12 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
       next.transcriptScrollOffset,
       next.columns,
     );
-    expect(visible).toEqual(["line 0", "line 1", "line 2", "line 3", "line 4"]);
+    expect(visible).toEqual(
+      ["line 0", "line 1", "line 2", "line 3", "line 4"].map((text) => ({
+        role: "system",
+        text,
+      })),
+    );
   });
 
   test("transcript-scroll-to bottom resumes following the newest line", () => {
@@ -194,13 +274,13 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
     const next = tuiReducer(state, { type: "transcript-append", line: "f" });
 
     expect(next.transcript).toEqual([
-      "a",
-      "b",
-      "c",
-      "d",
-      "e",
-      "the model's in-progress answer",
-      "f",
+      { role: "system", text: "a" },
+      { role: "system", text: "b" },
+      { role: "system", text: "c" },
+      { role: "system", text: "d" },
+      { role: "system", text: "e" },
+      { role: "assistant", text: "the model's in-progress answer" },
+      { role: "system", text: "f" },
     ]);
     expect(next.transcriptScrollOffset).toBe(5);
   });
@@ -213,7 +293,13 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
     });
     const next = tuiReducer(state, { type: "transcript-append", line: "d" });
 
-    expect(next.transcript).toEqual(["a", "b", "c", "streaming…", "d"]);
+    expect(next.transcript).toEqual([
+      { role: "system", text: "a" },
+      { role: "system", text: "b" },
+      { role: "system", text: "c" },
+      { role: "assistant", text: "streaming…" },
+      { role: "system", text: "d" },
+    ]);
     expect(next.transcriptScrollOffset).toBe(0);
   });
 
@@ -239,7 +325,13 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
       next.columns,
       next.streaming,
     );
-    expect(visible).toEqual(streamingLines.slice(0, 5));
+    // The `●` marker (format.ts's own displayText) is prefixed once, onto the very first VISUAL
+    // row of the whole streamed answer, not onto every wrapped line within it.
+    expect(visible).toEqual(
+      streamingLines
+        .slice(0, 5)
+        .map((text, i) => ({ role: "assistant", text: i === 0 ? `● ${text}` : text })),
+    );
   });
 
   // `transcriptScrollStreamingRows` snapshots the streaming row count already folded into
@@ -292,7 +384,11 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
       next.transcriptScrollOffset,
       next.columns,
     );
-    expect(visible).toEqual(streamingLines.slice(0, 5));
+    expect(visible).toEqual(
+      streamingLines
+        .slice(0, 5)
+        .map((text, i) => ({ role: "assistant", text: i === 0 ? `● ${text}` : text })),
+    );
   });
 
   // `flush: false` (echoUserInput echoing a submission a mid-turn gate rejected — see
@@ -330,7 +426,9 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
       line: "first line\nsecond line\nthird line",
     });
 
-    expect(next.transcript).toEqual(["first line\nsecond line\nthird line"]);
+    expect(next.transcript).toEqual([
+      { role: "system", text: "first line\nsecond line\nthird line" },
+    ]);
   });
 });
 
@@ -399,7 +497,10 @@ describe("tuiReducer: loop-event", () => {
     let state = apply(undefined, { type: "text-delta", text: "thinking…" });
     state = apply(state, { type: "tool-call", name: "read_file", args: { path: "a.txt" } });
 
-    expect(state.transcript).toEqual(["thinking…", `→ read_file({"path":"a.txt"})`]);
+    expect(state.transcript).toEqual([
+      { role: "assistant", text: "thinking…" },
+      { role: "system", text: `→ read_file({"path":"a.txt"})` },
+    ]);
     expect(state.streaming).toBe("");
     expect(state.status).toBe("Running read_file…");
   });
@@ -409,7 +510,7 @@ describe("tuiReducer: loop-event", () => {
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
 
     expect(state.status).toBe("");
-    expect(state.transcript.at(-1)).toBe("✓ read_file done");
+    expect(state.transcript.at(-1)).toEqual({ role: "system", text: "✓ read_file done" });
   });
 
   test("permission-denied and tool-allowed each append their own line", () => {
@@ -418,17 +519,23 @@ describe("tuiReducer: loop-event", () => {
       name: "write_file",
       reason: "declined",
     });
-    expect(state.transcript.at(-1)).toBe("✗ write_file blocked");
+    expect(state.transcript.at(-1)).toEqual({ role: "system", text: "✗ write_file blocked" });
 
     state = apply(state, { type: "tool-allowed", name: "write_file" });
-    expect(state.transcript.at(-1)).toBe("✓ write_file approved for the rest of this run");
+    expect(state.transcript.at(-1)).toEqual({
+      role: "system",
+      text: "✓ write_file approved for the rest of this run",
+    });
   });
 
   test("done flushes streamed text, reports the reason, and clears status", () => {
     let state = apply(undefined, { type: "text-delta", text: "the answer" });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    expect(state.transcript).toEqual(["the answer", "(done: no-tool-call)"]);
+    expect(state.transcript).toEqual([
+      { role: "assistant", text: "the answer" },
+      { role: "system", text: "(done: no-tool-call)" },
+    ]);
     expect(state.streaming).toBe("");
     expect(state.status).toBe("");
   });
