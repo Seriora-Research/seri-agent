@@ -101,8 +101,12 @@ export function decideModelPickerOpen(
   // predicate existed. cli.ts's /model handler passes a real predicate built from
   // planCoverage.ts's per-model coverage rule and the session's fetched plan. Per-model, not
   // per-provider: Free's zero-price rule varies per model within a provider, the same reason
-  // apps/server/lib/quota.ts's own isZeroPriceModel is per-model.
-  planCoverage: (entry: ModelCatalogEntry) => boolean = () => false,
+  // apps/server/lib/quota.ts's own isZeroPriceModel is per-model. Takes the entry's own route
+  // group too (this function already has it in hand from `groups`, one row below) so a real
+  // predicate can call gatewayCoverageInGroup directly instead of re-deriving the same group via
+  // routesFor's own O(catalog size) scan on every one of the ~350 rows this loop emits.
+  planCoverage: (entry: ModelCatalogEntry, group: readonly ModelCatalogEntry[]) => boolean = () =>
+    false,
 ): ModelPickerEntry[] {
   const groups = groupRoutes(filterCatalogEntries(catalog.entries));
   const rows: ModelPickerEntry[] = [];
@@ -132,7 +136,7 @@ export function decideModelPickerOpen(
         keyConfigured,
         alternatives: group.length - 1,
         rerouteTo: keyConfigured ? undefined : rerouteTarget,
-        gatewayReachable: planCoverage(entry),
+        gatewayReachable: planCoverage(entry, group),
       });
     }
   }

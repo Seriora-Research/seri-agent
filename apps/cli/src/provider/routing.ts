@@ -61,24 +61,35 @@ export type ResolvedRoute = {
   viaGateway: boolean;
 };
 
+// The group-scoped half of gatewayCoverage, below — split out so a caller that already holds
+// `entry`'s route group (decideModelPickerOpen, which groups the whole catalog once via
+// groupRoutes before asking this per row) can reuse it directly instead of paying routesFor's own
+// O(catalog size) filter+routeKey-recompute scan again for every row in that same group.
+export function gatewayCoverageInGroup(
+  group: readonly ModelCatalogEntry[],
+  plan: Plan | null,
+): ModelCatalogEntry | undefined {
+  const gatewayEntry = group.find((candidate) => candidate.provider === GATEWAY_PROVIDER);
+  return gatewayEntry !== undefined && planCoverage(gatewayEntry, plan) ? gatewayEntry : undefined;
+}
+
 // The single lookup both resolveRoute's own gateway branch AND the /model picker's coverage
-// predicate (cli.ts, decideModelPickerOpen's own planCoverage callback) must share — the exact
-// drift risk D1's own comment on `byRoutePriority` already names for the reroute case, now applying
-// to the gateway case too: without ONE shared function, the picker could show "provided" for an
-// entry resolveRoute would never actually route through the gateway (or the reverse), the two
-// surfaces silently disagreeing about what the same row means. Returns the OpenRouter-catalog
+// predicate (cli.ts, decideModelPickerOpen's own planCoverage callback) must share — the same
+// drift risk byRoutePriority's own comment names for the reroute case, now applying to the gateway
+// case too: without ONE shared function, the picker could show "provided" for an entry resolveRoute
+// would never actually route through the gateway (or the reverse), the two surfaces silently
+// disagreeing about what the same row means. Returns the OpenRouter-catalog
 // sibling entry when the gateway can actually serve `entry`'s route group under `plan`, `undefined`
 // otherwise — `undefined` rather than a bare boolean so a caller that also needs the resolved
-// model/provider (resolveRoute) doesn't have to re-look it up a second time.
+// model/provider (resolveRoute) doesn't have to re-look it up a second time. resolveRoute calls
+// this once per turn with a single `entry`, so paying routesFor's own scan here is fine; a caller
+// iterating many entries against the same catalog should call gatewayCoverageInGroup instead.
 export function gatewayCoverage(
   catalog: ModelCatalog,
   entry: ModelCatalogEntry,
   plan: Plan | null,
 ): ModelCatalogEntry | undefined {
-  const gatewayEntry = routesFor(catalog.entries, entry).find(
-    (candidate) => candidate.provider === GATEWAY_PROVIDER,
-  );
-  return gatewayEntry !== undefined && planCoverage(gatewayEntry, plan) ? gatewayEntry : undefined;
+  return gatewayCoverageInGroup(routesFor(catalog.entries, entry), plan);
 }
 
 // D2's three-rule priority order, implemented as a pure function: no `process.env`, no
