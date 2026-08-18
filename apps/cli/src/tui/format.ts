@@ -262,12 +262,11 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
 // row names its reroute target directly, restating a raw sibling count next to it would double up
 // on the same information, or — when none of those siblings has a key either — repeat the original
 // bug of promising a fallback that does not exist.
-// D1 (byok-open3-route-indicator feature-plan.md): extracted out of formatModelRow's own inline
-// ternary so the picker's Route column and the persistent mode-indicator's route label (App.tsx's
-// own JSX) share ONE vocabulary function — they can never independently drift on what "your
-// key"/"→ provider"/"provided"/"no key" means for the same inputs. `gatewayReachable` (D7) is the
-// dead-code seam's own 4th state: always `false` in production today (decideModelPickerOpen's own
-// `planCoverage` default), so "provided" is unreachable until a real data source exists.
+// Extracted out of formatModelRow's own inline ternary so the picker's Route column and the
+// persistent mode-indicator's route label (App.tsx's own JSX) share ONE vocabulary function —
+// they can never independently drift on what "your key"/"→ provider"/"provided"/"no key" means
+// for the same inputs. `gatewayReachable` is `true` only when `decideModelPickerOpen`/
+// `formatModeLabel`'s caller passed a real plan-coverage predicate/route.
 export function formatRouteLabel(input: {
   keyConfigured: boolean;
   rerouteTo?: ModelProvider;
@@ -279,11 +278,13 @@ export function formatRouteLabel(input: {
   return "no key";
 }
 
-// D2-D5 (byok-open3-route-indicator feature-plan.md): the persistent mode-indicator row's own
-// content, factored out as a pure function for the same reason formatModelRow's own comment gives
-// — unit-testable without mounting Ink. D4: `route.rerouted` alone disambiguates "your key" from
-// "→ provider"; the "no key at all" branch of formatRouteLabel can never be reached from a live
-// route, so `gatewayReachable` is never passed here.
+// The persistent mode-indicator row's own content, factored out as a pure function for the same
+// reason formatModelRow's own comment gives — unit-testable without mounting Ink. `route.rerouted`
+// alone used to disambiguate "your key" from "→ provider", back when a gateway-served route was
+// indistinguishable from a local one here — both have `rerouted: false`. `route.viaGateway` is
+// what tells them apart now: `keyConfigured` is true only when NEITHER is set, and
+// `gatewayReachable` is threaded through so a gateway-served route reads "provided" here exactly
+// as it already does in the model picker's Route column.
 // `route` can be undefined (found 2026-08-13, AppProps.route's own comment): runGuidedSetup mounts
 // App before any provider key exists, so there is genuinely no route to show yet. Falls back to
 // the bare mode indicator, same as the narrow-terminal branch below — showing a fabricated route
@@ -302,8 +303,9 @@ export function formatModeLabel(
     route.model.length > NAME_WIDTH ? `${route.model.slice(0, NAME_WIDTH - 1)}…` : route.model;
   if (width < MODE_LABEL_FULL_COLS) return `${modeIndicator}  ${modelName}`;
   const routeLabel = formatRouteLabel({
-    keyConfigured: !route.rerouted,
+    keyConfigured: !route.rerouted && !route.viaGateway,
     rerouteTo: route.rerouted ? route.provider : undefined,
+    gatewayReachable: route.viaGateway,
   });
   return `${modeIndicator}  ${modelName} · ${routeLabel}`;
 }

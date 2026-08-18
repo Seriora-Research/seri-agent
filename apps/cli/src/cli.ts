@@ -10,6 +10,7 @@ import {
   type ModelCatalogEntry,
   type ModelProvider,
 } from "@seri/model-catalog";
+import type { Plan } from "@seri/plans";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
@@ -64,17 +65,19 @@ import { decideMemoryCommand, memoryCommandAccepts } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
+import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
+import { getGatewayModel as getGatewayModelReal } from "./provider/gateway";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { configuredProviders, PROVIDER_DISPLAY_NAMES, tuiMissingKeyMessage } from "./provider/keys";
-import { getModel } from "./provider/model";
+import { dispatchModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
-import { type ResolvedRoute, resolveRoute } from "./provider/routing";
+import { gatewayCoverageInGroup, type ResolvedRoute, resolveRoute } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
 import { awaitsReply } from "./session/awaitsReply";
 import {
@@ -124,6 +127,12 @@ export type CliDeps = {
   getAnthropicModel?: typeof getAnthropicModelReal;
   getOpenAIModel?: typeof getOpenAIModelReal;
   getGoogleModel?: typeof getGoogleModelReal;
+  // Not one of the five above: a gateway route's provider is always GATEWAY_PROVIDER
+  // (planCoverage.ts) but its credential is the WorkOS session, not a local provider key — getModel
+  // has no notion of the gateway at all (deliberately: it stays a pure, environment-independent
+  // provider switch). dispatchModel below is what branches on route.viaGateway before either
+  // getModel or this is ever called.
+  getGatewayModel?: typeof getGatewayModelReal;
   loadAgentsFile?: typeof loadAgentsFileReal;
   sessionsDir?: string;
   checkpointsDir?: string;
@@ -981,6 +990,16 @@ type PreparedRun = {
   // turn 1 actually runs on a rerouted one trips their inequality guards on turn 1 and persists a
   // switch the session never asked for — see those variables' own comments.
   route: ResolvedRoute;
+  // Fetched once here, at session start, and reused for the life of the run (runTurn's own
+  // per-turn resolveRoute call and the /model handler both read this instead of fetching again on
+  // every turn/picker-open) — mutated in place, not re-fetched, so a plain read anywhere else in
+  // the run always sees the current value. Null for a logged-out/BYOK-only session or on any fetch
+  // failure (accountStatus.ts's own fail-closed contract). The two exceptions that DO refresh it
+  // mid-run are the /login and /logout TUI handlers (runTui's own `onLogin`/`onLogout` call
+  // sites) — without that, a successful /login left the startup `null` in place, and a successful
+  // /logout left the previous (possibly paid) plan in place, so `resolveRoute`/`/model` could keep
+  // reflecting stale auth state after either.
+  plan: Plan | null;
   // The same OnBeforeMutation `tools`' own withCheckpoints was built with — driveLoop's
   // withSubagents reuses it for one pre-dispatch snapshot instead of building a second one.
   checkpointer: OnBeforeMutation;
@@ -1021,6 +1040,21 @@ function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider | 
     return `routing ${route.model} via ${route.provider} (your key)`;
   }
   return `routing ${route.model} via ${route.provider} (your key) — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
+}
+
+// The gateway counterpart to rerouteNotice above: a viaGateway route is served through the
+// user's own seri plan, not a key they brought, so both the piped/non-interactive path and a live
+// TUI turn need the same "never silent" notice a BYOK reroute already gets — otherwise a run
+// consumes gateway quota with zero indication it ever left the user's own keys. Same
+// `ModelProvider | undefined` signature and the same undefined branch as rerouteNotice, for the
+// same reason: a genuinely blank first run named no provider at all, so blaming one (Groq, via
+// DEFAULT_PROVIDER) in the "no X key configured" clause would name a provider the user never
+// touched.
+function gatewayNotice(route: ResolvedRoute, requestedProvider: ModelProvider | undefined): string {
+  if (requestedProvider === undefined) {
+    return `routing ${route.model} via ${route.provider} on your seri plan`;
+  }
+  return `routing ${route.model} via ${route.provider} on your seri plan — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
 }
 
 // The one place a TTY-path failure becomes an exit code, used by every catch between
@@ -1094,44 +1128,50 @@ async function prepareSession(
       session.messages.push({ role: "user", content: ctx.taskText });
     }
 
-    // Loaded once, here, alongside the model resolution it feeds — /model (runTui's own runTurn)
-    // reuses this SAME catalog on every later turn rather than reloading it, but @seri/model-catalog
-    // caches for the rest of the process either way (catalog.ts's own loadCatalog).
-    const catalog = await getModelCatalog(undefined, warnSink);
     // D3 (feature-plan.md): resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
     // stays a pure, environment-independent switch with its own test file.
-    // Bug fixed here (code-review, PR #73): `configuredProviders` (called by `resolveRoute` below)
-    // reads config.json — `getApiKey`'s own `loadConfig` call, which does a bare `JSON.parse` — so a
-    // corrupted config.json throws SYNCHRONOUSLY, the same failure mode `getModel` itself already
-    // guards against below. Before routing-priority resolution existed, that same read only ever
-    // happened INSIDE getAnthropicModel/etc. — no longer a distinct case now that one try covers the
-    // whole function, but the reasoning ("a corrupted config.json prints a clean error and exits 1,"
-    // not an uncaught crash) is still exactly why this needs to be inside the try at all.
+    // Read here, before the routing decision that needs it: `getApiKey`'s own `loadConfig` call
+    // does a bare `JSON.parse`, so a corrupted config.json throws SYNCHRONOUSLY — the same failure
+    // mode `getModel` itself already guards against below, and why this needs to be inside the try
+    // at all ("a corrupted config.json prints a clean error and exits 1," not an uncaught crash).
+    const configured = configuredProviders(configDir);
+    const requestedProvider = session.provider ?? DEFAULT_PROVIDER;
+    // The catalog load and the plan fetch are independent network calls — run them together rather
+    // than stacking their latency. `plan` is still fetched even when `requestedProvider` already
+    // has a configured key (resolveRoute's own Rule 1 below would discard it for THIS route): the
+    // same `prepared.plan` also feeds /model's own gatewayCoverageInGroup predicate for every OTHER model
+    // in the catalog the user might switch to later in the session (tuiPty.test.ts's "a logged-in
+    // session's account-status fetch happens once at session start" — asserts the fetch happens
+    // even though its own fixture sets GROQ_API_KEY, the DEFAULT_PROVIDER). `accountStatus.ts`'s
+    // own login guard already skips the fetch for a BYOK-only/logged-out session. Loaded once,
+    // here, alongside the model resolution it feeds — /model (runTui's own runTurn) reuses this
+    // SAME catalog on every later turn rather than reloading it, but @seri/model-catalog caches
+    // for the rest of the process either way (catalog.ts's own loadCatalog).
+    const [catalog, plan] = await Promise.all([
+      getModelCatalog(undefined, warnSink),
+      fetchAccountPlan(configDir),
+    ]);
     const route = resolveRoute(
       catalog,
-      { model: session.model, provider: session.provider ?? DEFAULT_PROVIDER },
-      configuredProviders(configDir),
+      { model: session.model, provider: requestedProvider },
+      configured,
+      plan,
     );
-    const model = getModel(
-      route.model,
-      route.provider,
-      session.id,
-      {
-        getGroqModel: deps.getGroqModel,
-        getOpenRouterModel: deps.getOpenRouterModel,
-        getAnthropicModel: deps.getAnthropicModel,
-        getOpenAIModel: deps.getOpenAIModel,
-        getGoogleModel: deps.getGoogleModel,
-      },
-      configDir,
-    );
-    // D2: a rerouted pair is never silent — the piped/non-interactive path gets the notice here,
-    // gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent into the transcript
-    // once per turn, and this call ALSO runs on the TUI path (this function has no other reason to
-    // know isTTY), so without the gate a session-start reroute printed twice for the same turn: once
-    // here (before Ink even mounts) and again from runTurn.
+    const model = dispatchModel(route, session.id, configDir, deps);
+    // A rerouted OR gateway-served pair is never silent — the piped/non-interactive path gets
+    // the notice here, gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent
+    // into the transcript once per turn for either case, and this call ALSO runs on the TUI path
+    // (this function has no other reason to know isTTY), so without the gate a session-start
+    // reroute printed twice for the same turn: once here (before Ink even mounts) and again from
+    // runTurn. `rerouted` and `viaGateway` are mutually exclusive (routing.ts's own ResolvedRoute
+    // comment), so at most one of these ever fires. Both notices take `session.provider` directly
+    // (not the locally-defaulted `requestedProvider`), matching rerouteNotice's own undefined-aware
+    // contract: blaming DEFAULT_PROVIDER for a blank first run that never named one is worse than
+    // naming none.
     if (route.rerouted && !isTTY) {
       printWarning(rerouteNotice(route, session.provider));
+    } else if (route.viaGateway && !isTTY) {
+      printWarning(gatewayNotice(route, session.provider));
     }
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
     // cost and context-window come from the wrong provider's entry.
@@ -1226,6 +1266,7 @@ async function prepareSession(
       catalog,
       catalogEntry,
       route,
+      plan,
       checkpointer,
       memory,
       preMountMessages,
@@ -2026,20 +2067,9 @@ async function runTui(
         prepared.catalog,
         { model: requestedModel, provider: requestedProvider ?? DEFAULT_PROVIDER },
         configuredProviders(configDir),
+        prepared.plan,
       );
-      model = getModel(
-        route.model,
-        route.provider,
-        sessionId,
-        {
-          getGroqModel: deps.getGroqModel,
-          getOpenRouterModel: deps.getOpenRouterModel,
-          getAnthropicModel: deps.getAnthropicModel,
-          getOpenAIModel: deps.getOpenAIModel,
-          getGoogleModel: deps.getGoogleModel,
-        },
-        configDir,
-      );
+      model = dispatchModel(route, sessionId, configDir, deps);
     } catch (err) {
       // tuiMissingKeyMessage, not a bare err.message: this catch is reachable ONLY from inside an
       // already-running TUI turn (runTurn, called solely by runTui), where /setup is a keystroke
@@ -2053,10 +2083,17 @@ async function runTui(
       return;
     }
     const { model: modelId, provider } = route;
+    // A rerouted OR gateway-served pair is never silent on the TUI path either — see
+    // prepareSession's own identical notice for the piped/non-interactive path, above.
     if (route.rerouted) {
       dispatch({
         type: "transcript-append",
         line: `↻ ${rerouteNotice(route, requestedProvider)}`,
+      });
+    } else if (route.viaGateway) {
+      dispatch({
+        type: "transcript-append",
+        line: `↻ ${gatewayNotice(route, requestedProvider)}`,
       });
     }
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one.
@@ -2329,9 +2366,22 @@ async function runTui(
       try {
         dispatch({
           type: "model-picker-requested",
-          // D1/D2 (feature-plan.md): re-read fresh on every open, not cached from prepareSession —
-          // a key added mid-session via /setup must show up in the very next /model open.
-          entries: decideModelPickerOpen(prepared.catalog, configuredProviders(configDir)),
+          // configuredProviders is re-read fresh on every open, not cached from prepareSession — a
+          // key added mid-session via /setup must show up in the very next /model open. `plan` is
+          // NOT re-fetched here: prepareSession's own value, carried on `prepared` for the life of
+          // the run.
+          entries: decideModelPickerOpen(
+            prepared.catalog,
+            configuredProviders(configDir),
+            // gatewayCoverageInGroup, not a bare planCoverage(entry, plan): the picker's own
+            // coverage must agree with resolveRoute's (routing.ts's own comment on why they share
+            // one function) — a row's OWN entry can be priced/planned differently than its
+            // OpenRouter-catalog sibling, which is the only thing the gateway actually forwards to.
+            // The group variant, not gatewayCoverage itself: decideModelPickerOpen already grouped
+            // the whole catalog once and hands back each entry's own group here, so this avoids
+            // re-deriving it via routesFor's own scan on every one of the ~350 rows it emits.
+            (entry, group) => gatewayCoverageInGroup(group, prepared.plan) !== undefined,
+          ),
         });
       } catch (err) {
         dispatch({
@@ -2368,6 +2418,13 @@ async function runTui(
         return;
       }
       await onLogin(name === "/signup" ? "signup" : "login");
+      // PreparedRun.plan's own comment: onLogin resolves the same way on success and failure (its
+      // own try/catch degrades to a rendered auth-step, never a rejection), so this always
+      // re-fetches — on a failed/abandoned attempt loadAuthSession still finds nothing and
+      // fetchAccountPlan's own login guard short-circuits back to null, the same value `prepared.
+      // plan` already held; on success this is what makes a freshly-logged-in plan visible to
+      // resolveRoute/`/model` without waiting for the next `seri` restart.
+      prepared.plan = await fetchAccountPlan(configDir);
       return;
     }
     if (name === "/logout") {
@@ -2376,6 +2433,12 @@ async function runTui(
         return;
       }
       await onLogout();
+      // Cleared directly rather than re-fetched: fetchAccountPlan would return null here anyway
+      // (its own login guard sees no session once logout succeeds), and if logout itself somehow
+      // failed, null is still the fail-closed answer PreparedRun.plan's own comment already commits
+      // to — never let a stale paid plan keep resolveRoute/`/model` showing "provided" after the
+      // user asked to log out.
+      prepared.plan = null;
       return;
     }
     // /config and /permissions, like /login, /signup and /logout just above: intercepted here rather

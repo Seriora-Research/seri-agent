@@ -4,6 +4,7 @@ import type { LanguageModel } from "ai";
 import { loadAuthSession } from "../auth/authStore";
 import { refreshSession as refreshSessionReal } from "../auth/refresh";
 import { getApiKey } from "../config/config";
+import { authedFetch } from "./authedFetch";
 import { configuredProviders } from "./keys";
 
 // Unlike every sibling in this directory, this file's credential is the session access token
@@ -14,7 +15,9 @@ import { configuredProviders } from "./keys";
 // this, so pointing the CLI at a local apps/server needs no rebuild.
 const DEFAULT_GATEWAY_URL = "https://gateway.seriora.ai/api/gateway";
 
-function gatewayBaseUrl(configDir: string): string {
+// Exported so accountStatus.ts can reach the same server without a second SERI_GATEWAY_URL
+// resolution — both files talk to the same apps/server deployment.
+export function gatewayBaseUrl(configDir: string): string {
   return getApiKey("SERI_GATEWAY_URL", configDir) ?? DEFAULT_GATEWAY_URL;
 }
 
@@ -22,32 +25,6 @@ function gatewayBaseUrl(configDir: string): string {
 // call, reading the current on-disk session fresh each time. createOpenAI still requires a
 // non-empty apiKey to construct, so this is only a placeholder to satisfy that.
 const UNUSED_PLACEHOLDER_KEY = "seri-gateway";
-
-// The Authorization header is read fresh here, from disk, on every call — not baked into
-// createOpenAI's config at construction time — so a token refreshed by THIS wrapper's own retry
-// (below) is picked up by every later request the same model makes, not just the one that
-// triggered the refresh.
-function authedFetch(
-  configDir: string,
-  fetchFn: typeof fetch,
-  refreshSession: typeof refreshSessionReal,
-) {
-  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const headers = new Headers(init?.headers);
-    const session = loadAuthSession(configDir);
-    if (session) headers.set("Authorization", `Bearer ${session.accessToken}`);
-    const requestInit = { ...init, headers };
-
-    const response = await fetchFn(input, requestInit);
-    if (response.status !== 401) return response;
-
-    const refreshed = await refreshSession(configDir, fetchFn);
-    if (!refreshed) return response;
-
-    headers.set("Authorization", `Bearer ${refreshed.accessToken}`);
-    return fetchFn(input, { ...requestInit, headers });
-  };
-}
 
 type GatewayDeps = {
   fetchFn?: typeof fetch;

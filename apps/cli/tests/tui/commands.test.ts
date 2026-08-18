@@ -207,9 +207,8 @@ describe("decideModelPickerOpen", () => {
     expect(openrouterRow?.rerouteTo).toBeUndefined();
   });
 
-  // D7 (feature-plan.md): `planCoverage` is an optional, always-false-by-default seam — the one
-  // production call site never passes a third argument, so this is the negative control proving
-  // that default keeps today's behavior byte-for-byte.
+  // `planCoverage` is an optional, always-false-by-default seam — a caller that passes nothing
+  // gets today's behavior byte-for-byte, the negative control this proves.
   test("gatewayReachable is false on every row when planCoverage is omitted", () => {
     const catalog: ModelCatalog = {
       fetchedAt: "2026-08-09T00:00:00.000Z",
@@ -233,12 +232,18 @@ describe("decideModelPickerOpen", () => {
       ],
     };
 
-    const rows = decideModelPickerOpen(catalog, new Set(), () => true);
+    const rows = decideModelPickerOpen(
+      catalog,
+      new Set(),
+      (entry) => entry.provider === "openrouter",
+    );
     const openrouterRow = rows.find((row) => row.entry.provider === "openrouter");
+    const anthropicRow = rows.find((row) => row.entry.provider === "anthropic");
 
     expect(openrouterRow?.keyConfigured).toBe(false);
     expect(openrouterRow?.rerouteTo).toBeUndefined();
     expect(openrouterRow?.gatewayReachable).toBe(true);
+    expect(anthropicRow?.gatewayReachable).toBe(false);
   });
 });
 

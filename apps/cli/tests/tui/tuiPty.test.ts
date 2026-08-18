@@ -246,6 +246,179 @@ function childScriptMultiTurn(dir: string): string {
   ].join("\n");
 }
 
+// A logged-in session's account-status fetch (prepareSession's own fetchAccountPlan call, feeding
+// resolveRoute/decideModelPickerOpen's plan-coverage predicate) must happen once at session start,
+// not once per turn — the same "reused across turns" guarantee childScriptMultiTurn's own sibling
+// test already holds `RUNLOOP_CALL` count to, applied to the account-status fetch instead of the
+// model call. `authStore.saveAuthSession` seeds a session BEFORE `cli.run` — mirrors
+// childScriptAuth's own live login, minus the device-flow round trip this script has no need to
+// exercise — and `globalThis.fetch` is patched (childScriptGuidedSetupSlowFetch's own precedent)
+// to answer only the account-status URL and count how many times it's asked.
+function childScriptAccountStatusOnce(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const authStore = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/auth/authStore.ts")).href)});`,
+    `const paths = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/config/paths.ts")).href)});`,
+    `authStore.saveAuthSession(`,
+    `  {`,
+    `    accessToken: "at-1",`,
+    `    refreshToken: "rt-1",`,
+    `    userId: "user-1",`,
+    `    email: "fake@example.com",`,
+    `    obtainedAt: new Date().toISOString(),`,
+    `  },`,
+    `  paths.getConfigDir(),`,
+    `);`,
+    `let accountStatusCalls = 0;`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) => {`,
+    `  if (typeof url === "string" && url.includes("/account-status")) {`,
+    `    accountStatusCalls++;`,
+    `    console.log("\\nACCOUNT_STATUS_CALL " + accountStatusCalls);`,
+    `    return Promise.resolve(new Response(JSON.stringify({ plan: "pro" }), { status: 200 }));`,
+    `  }`,
+    `  return realFetch(url, opts);`,
+    `};`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " messages=" + opts.messages.length);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
+    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    `  console.log("\\nRUNLOOP_DONE " + calls);`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// Regression: prepared.plan was fetched once at session start and never refreshed — a successful
+// /logout left the previous (possibly paid) plan in place, so
+// resolveRoute/decideModelPickerOpen kept reflecting a plan the user no longer has. Starts already
+// logged in with plan "pro" (so ~openai/gpt-latest, a real OpenRouter catalog entry with no local
+// key, shows "provided"), then logs out and re-opens /model to prove that same entry's row drops
+// back to "no key" — cli.ts's own /logout handler now clears prepared.plan directly rather than
+// leaving it stale.
+function childScriptPlanClearedOnLogout(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";`,
+    // A configured groq key only to skip the blank-first-run guided-setup gate (decideAuthOffer's
+    // own sibling gate, guidedSetup.ts) — this test never dispatches a real groq call, and the
+    // target row (~openai/gpt-latest, openrouter) has no groq sibling to reroute to instead.
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const authStore = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/auth/authStore.ts")).href)});`,
+    `const paths = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/config/paths.ts")).href)});`,
+    `authStore.saveAuthSession(`,
+    `  {`,
+    `    accessToken: "at-1",`,
+    `    refreshToken: "rt-1",`,
+    `    userId: "user-1",`,
+    `    email: "fake@example.com",`,
+    `    obtainedAt: new Date().toISOString(),`,
+    `  },`,
+    `  paths.getConfigDir(),`,
+    `);`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) => {`,
+    `  if (typeof url === "string" && url.includes("/account-status")) {`,
+    `    return Promise.resolve(new Response(JSON.stringify({ plan: "pro" }), { status: 200 }));`,
+    `  }`,
+    `  return realFetch(url, opts);`,
+    `};`,
+    `function logoutFake(configDir, onMessage) {`,
+    `  authStore.clearAuthSession(configDir);`,
+    `  (onMessage ?? console.log)("Logged out.");`,
+    `}`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  logout: logoutFake,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// Regression: runTui's own runTurn appended a transcript notice for `route.rerouted` but had no
+// counterpart for `route.viaGateway` — so a live TUI turn served through the gateway printed no
+// per-turn indication it was billing the user's seri plan, unlike a BYOK reroute (childScriptReroute's
+// own test proves that one already gets a "↻ routing…" line every turn). Same pinned pair as
+// childScriptPlanClearedOnLogout (~openai/gpt-latest via openrouter, no groq sibling to reroute to,
+// GROQ_API_KEY only a decoy past the guided-setup gate), but this script actually lets turn 1 run
+// (childScriptPlanClearedOnLogout's own runLoopFake never resolves) and injects `getGatewayModel` so
+// dispatchModel never attempts a real request to the fake SERI_GATEWAY_URL.
+function childScriptGatewayNoticeTui(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.SERI_MODEL = "~openai/gpt-latest";`,
+    `process.env.SERI_PROVIDER = "openrouter";`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `delete process.env.ANTHROPIC_API_KEY;`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const authStore = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/auth/authStore.ts")).href)});`,
+    `const paths = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/config/paths.ts")).href)});`,
+    `authStore.saveAuthSession(`,
+    `  {`,
+    `    accessToken: "at-1",`,
+    `    refreshToken: "rt-1",`,
+    `    userId: "user-1",`,
+    `    email: "fake@example.com",`,
+    `    obtainedAt: new Date().toISOString(),`,
+    `  },`,
+    `  paths.getConfigDir(),`,
+    `);`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) => {`,
+    `  if (typeof url === "string" && url.includes("/account-status")) {`,
+    `    return Promise.resolve(new Response(JSON.stringify({ plan: "pro" }), { status: 200 }));`,
+    `  }`,
+    `  return realFetch(url, opts);`,
+    `};`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_CALL model=" + opts.model.id + " provider=" + opts.provider);`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  getGatewayModel: (id) => ({ id, via: "gateway" }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Stage 7a Slice 4: the actual /model bug fix, proven with a real second turn the same way
 // childScriptMultiTurn proves H-3 above — a fake runLoop that reports which model id and how many
 // messages EACH call actually received, so a live /model switch (a real picker, driven by real
@@ -1710,6 +1883,109 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // actually finishes.
       await sawLine("RUNLOOP_DONE 2");
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  test("a logged-in session's account-status fetch happens once at session start, reused across turns", async () => {
+    const scriptPath = join(dir, "child-account-status-once.mjs");
+    writeFileSync(scriptPath, childScriptAccountStatusOnce(dir));
+
+    const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 messages=1");
+      await sawLine("RUNLOOP_DONE 1");
+      expect(rawOccurrences("ACCOUNT_STATUS_CALL")).toBe(1);
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      await sawLine("RUNLOOP_CALL 2 messages=3");
+      await sawLine("RUNLOOP_DONE 2");
+      // Still exactly 1: the second turn's own resolveRoute call reused `prepared.plan` rather
+      // than fetching account-status again.
+      expect(rawOccurrences("ACCOUNT_STATUS_CALL")).toBe(1);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  test("a real /logout clears the cached plan: a gateway-covered picker row drops back to 'no key'", async () => {
+    const scriptPath = join(dir, "child-plan-cleared-on-logout.mjs");
+    writeFileSync(scriptPath, childScriptPlanClearedOnLogout(dir));
+
+    const { child, sawLine, sawInFrameTimes, lastFrame } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      // Sync point: the bundled fallback manifest's own default groq entry is always inside the
+      // picker's default (unfiltered) top-10 window, proving the picker actually mounted.
+      await sawLine("GPT OSS 120B");
+
+      // Narrows to exactly one entry across the whole catalog — verified directly against the
+      // bundled catalog-manifest.json before writing this string. sawInFrameTimes, not sawLine:
+      // this same filter text is typed a second time later in this test, and sawLine's cumulative
+      // check would resolve instantly on that second occurrence's own OLD (pre-keystroke) content.
+      child.stdin?.write("gpt-latest");
+      await sawInFrameTimes("gpt-latest", 1);
+      expect(lastFrame()).toContain("provided");
+
+      child.stdin?.write("\x1b"); // Escape: cancels the picker without selecting
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("/logout");
+      await sawLine("/logout");
+      child.stdin?.write("\r");
+      await sawLine("Logged out.");
+
+      child.stdin?.write("/model");
+      await sawLine("/model");
+      child.stdin?.write("\r");
+      // A real wait, not sawLine("GPT OSS 120B"): that line already appeared during the FIRST
+      // picker open above, so the cumulative check would resolve instantly here too, racing the
+      // actual component mount the same way childScriptModelSwitch's own comment documents for
+      // the InputBox->ModelPicker transition.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      child.stdin?.write("gpt-latest");
+      await sawInFrameTimes("gpt-latest", 1);
+      // The regression: without cli.ts's own /logout handler clearing prepared.plan, this row would
+      // still read "provided" here, from the plan a session that no longer exists once had.
+      expect(lastFrame()).not.toContain("provided");
+      expect(lastFrame()).toContain("no key");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // Regression: a live turn served through the gateway must announce itself in the transcript
+  // exactly like a BYOK reroute already does (childScriptReroute's own "a routing-priority reroute
+  // active from session start..." test, above) — a user reading the transcript otherwise has no
+  // per-turn indication their own seri plan, not a key they brought, is what answered.
+  test("a live turn served through the gateway announces itself in the transcript, once", async () => {
+    const scriptPath = join(dir, "child-gateway-notice.mjs");
+    writeFileSync(scriptPath, childScriptGatewayNoticeTui(dir));
+
+    const { child, sawLine, frameOccurrences, rawOccurrences } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL model=~openai/gpt-latest provider=openrouter");
+      // Split the same way childScriptReroute's own test does: measured on a real pty, Ink can
+      // wrap this line across the terminal's own column width, landing "configured" on the
+      // following line.
+      const noticePrefix = "↻ routing ~openai/gpt-latest via openrouter on your seri plan — no";
+      await sawLine(noticePrefix);
+      await sawLine("configured");
+      await sawLine("(done: no-tool-call)");
+
+      // Exactly one transcript notice for this one turn, and no console-only "⚠ routing" line
+      // (prepareSession's own !isTTY-gated notice, dead on a real pty) — the same pair of checks
+      // childScriptReroute's own test makes for the BYOK-reroute case.
+      expect(frameOccurrences(noticePrefix)).toBe(1);
+      expect(rawOccurrences("⚠ routing")).toBe(0);
     } finally {
       child.kill("SIGKILL");
     }

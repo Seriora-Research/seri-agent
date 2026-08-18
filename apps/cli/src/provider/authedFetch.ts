@@ -1,0 +1,37 @@
+import { loadAuthSession } from "../auth/authStore";
+import { refreshSession as refreshSessionReal } from "../auth/refresh";
+
+// The Authorization header is read fresh here, from disk, on every call — not baked into a
+// caller's client config at construction time — so a token refreshed by THIS wrapper's own
+// retry (below) is picked up by every later request the same client makes, not just the one
+// that triggered the refresh. Shared by gateway.ts and accountStatus.ts, the two CLI-side
+// callers of our own server that both need the identical retry-once-on-401 behavior.
+export function authedFetch(
+  configDir: string,
+  fetchFn: typeof fetch,
+  refreshSession: typeof refreshSessionReal,
+) {
+  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const headers = new Headers(init?.headers);
+    const session = loadAuthSession(configDir);
+    if (session) headers.set("Authorization", `Bearer ${session.accessToken}`);
+    const requestInit = { ...init, headers };
+
+    const response = await fetchFn(input, requestInit);
+    if (response.status !== 401) return response;
+
+    // refreshSession's own fetch (refreshAccessToken's POST to WorkOS) takes no signal of its
+    // own — without threading the caller's signal through here, a caller-supplied deadline (e.g.
+    // accountStatus.ts's ACCOUNT_STATUS_TIMEOUT_MS) bounds the first fetch and the retry below,
+    // but not a refresh hung in between, defeating the deadline entirely on a 401.
+    const boundFetchFn: typeof fetch = init?.signal
+      ? (((refreshInput, refreshInit) =>
+          fetchFn(refreshInput, { ...refreshInit, signal: init.signal })) as typeof fetch)
+      : fetchFn;
+    const refreshed = await refreshSession(configDir, boundFetchFn);
+    if (!refreshed) return response;
+
+    headers.set("Authorization", `Bearer ${refreshed.accessToken}`);
+    return fetchFn(input, { ...requestInit, headers });
+  };
+}

@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "./fetchWithTimeout";
 import { filterCatalogEntries } from "./filter";
 import type { ModelCatalog, ModelCatalogEntry, ModelProvider } from "./types";
 
@@ -107,17 +108,13 @@ export async function loadCatalog(
       return manifest;
     }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
-      const response = await fetchFn(MODELS_DEV_URL, { signal: controller.signal });
+      const response = await fetchWithTimeout(fetchFn, MODELS_DEV_URL, FETCH_TIMEOUT_MS);
       if (!response.ok) throw new Error(`models.dev returned ${response.status}`);
       const raw = (await response.json()) as RawCatalogResponse;
       return { fetchedAt: new Date().toISOString(), entries: mapRawCatalog(raw) };
     } catch {
       return manifest;
-    } finally {
-      clearTimeout(timer);
     }
   })();
   return cachedPromise;
@@ -129,4 +126,17 @@ export function findCatalogEntry(
   provider: ModelProvider,
 ): ModelCatalogEntry | undefined {
   return catalog.entries.find((entry) => entry.id === id && entry.provider === provider);
+}
+
+// Shared by apps/server's Free-tier gate (quota.ts's own isZeroPriceModel) and apps/cli's own
+// gateway-coverage predicate (provider/planCoverage.ts) — previously duplicated by hand across
+// the two apps since neither can import the other's workspace. A missing entry, or an entry
+// whose `pricing` is `undefined` (meaning "unknown", not "free"), is NOT zero-price — fail
+// closed, the same posture catalog.ts's own empty-manifest fallback takes.
+export function isZeroPriceEntry(entry: ModelCatalogEntry | undefined): boolean {
+  return (
+    entry?.pricing !== undefined &&
+    entry.pricing.inputPerMTok === 0 &&
+    entry.pricing.outputPerMTok === 0
+  );
 }

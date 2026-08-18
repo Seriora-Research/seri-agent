@@ -6,7 +6,9 @@ import {
   type ModelProvider,
   routesFor,
 } from "@seri/model-catalog";
+import type { Plan } from "@seri/plans";
 import { PROVIDER_API_KEY_NAMES } from "./keys";
+import { GATEWAY_PROVIDER, planCoverage } from "./planCoverage";
 
 // D2 (feature-plan.md): "native-direct" for tie-breaking is these three providers specifically —
 // not derived from routeKey's own vendor string, which would also call groq/openrouter "direct"
@@ -51,7 +53,44 @@ export type ResolvedRoute = {
   // "a reroute is never silent" rule. Not a full sentence: the message shape belongs to the
   // presentation layer (cli.ts), same split as everywhere else in this codebase.
   reason?: string;
+  // True only when no local/native/aggregator key exists ANYWHERE for this model (Rule 1 and
+  // Rule 2 have both already failed to find one) and the caller's plan covers the entry — the
+  // gateway is the fallback for a provider the user never brought a key for, never a substitute
+  // for one they did. Non-optional, like `rerouted`: every consumer gets a real boolean, no
+  // `undefined` case to handle.
+  viaGateway: boolean;
 };
+
+// The group-scoped half of gatewayCoverage, below — split out so a caller that already holds
+// `entry`'s route group (decideModelPickerOpen, which groups the whole catalog once via
+// groupRoutes before asking this per row) can reuse it directly instead of paying routesFor's own
+// O(catalog size) filter+routeKey-recompute scan again for every row in that same group.
+export function gatewayCoverageInGroup(
+  group: readonly ModelCatalogEntry[],
+  plan: Plan | null,
+): ModelCatalogEntry | undefined {
+  const gatewayEntry = group.find((candidate) => candidate.provider === GATEWAY_PROVIDER);
+  return gatewayEntry !== undefined && planCoverage(gatewayEntry, plan) ? gatewayEntry : undefined;
+}
+
+// The single lookup both resolveRoute's own gateway branch AND the /model picker's coverage
+// predicate (cli.ts, decideModelPickerOpen's own planCoverage callback) must share — the same
+// drift risk byRoutePriority's own comment names for the reroute case, now applying to the gateway
+// case too: without ONE shared function, the picker could show "provided" for an entry resolveRoute
+// would never actually route through the gateway (or the reverse), the two surfaces silently
+// disagreeing about what the same row means. Returns the OpenRouter-catalog
+// sibling entry when the gateway can actually serve `entry`'s route group under `plan`, `undefined`
+// otherwise — `undefined` rather than a bare boolean so a caller that also needs the resolved
+// model/provider (resolveRoute) doesn't have to re-look it up a second time. resolveRoute calls
+// this once per turn with a single `entry`, so paying routesFor's own scan here is fine; a caller
+// iterating many entries against the same catalog should call gatewayCoverageInGroup instead.
+export function gatewayCoverage(
+  catalog: ModelCatalog,
+  entry: ModelCatalogEntry,
+  plan: Plan | null,
+): ModelCatalogEntry | undefined {
+  return gatewayCoverageInGroup(routesFor(catalog.entries, entry), plan);
+}
 
 // D2's three-rule priority order, implemented as a pure function: no `process.env`, no
 // `loadConfig` — `configured` is the caller's own single source of truth (apps/cli/src/provider/
@@ -61,6 +100,7 @@ export function resolveRoute(
   catalog: ModelCatalog,
   requested: { model: string; provider: ModelProvider },
   configured: ReadonlySet<ModelProvider>,
+  plan: Plan | null = null,
 ): ResolvedRoute {
   // Every early-return branch below stays on `requested` unchanged (code-review finding, PR #73,
   // round 2, item #9 — the four branches used to hand-duplicate this identical literal).
@@ -68,6 +108,7 @@ export function resolveRoute(
     model: requested.model,
     provider: requested.provider,
     rerouted: false,
+    viaGateway: false,
   };
 
   // Rule 1: an explicit pick whose own provider has a key wins, unconditionally — never
@@ -88,7 +129,25 @@ export function resolveRoute(
   const candidates = routesFor(catalog.entries, entry).filter(
     (candidate) => candidate.provider !== requested.provider && configured.has(candidate.provider),
   );
+  // Reached only when no sibling provider has a configured key either — Rule 1 and Rule 2 have
+  // both already failed to find one. The gateway covering the model under `plan` is the 4th
+  // outcome; a configured sibling above still wins over it unconditionally, since this branch is
+  // never reached when one exists.
   if (candidates.length === 0) {
+    const gatewayEntry = gatewayCoverage(catalog, entry, plan);
+    if (gatewayEntry !== undefined) {
+      // model/provider become GATEWAY_PROVIDER's own — the id the server's catalog lookup and
+      // upstream forward will actually recognize, not the originally-requested provider's id.
+      // `rerouted: false`, not true: that flag means "a locally configured key exists on a
+      // sibling provider" (Rule 2), which is not the case here — formatRouteLabel keeps
+      // "→ provider" and "provided" as distinct, mutually exclusive states.
+      return {
+        model: gatewayEntry.id,
+        provider: gatewayEntry.provider,
+        rerouted: false,
+        viaGateway: true,
+      };
+    }
     return noReroute;
   }
 
@@ -107,5 +166,6 @@ export function resolveRoute(
     provider: chosen.provider,
     rerouted: true,
     reason: PROVIDER_API_KEY_NAMES[requested.provider],
+    viaGateway: false,
   };
 }
