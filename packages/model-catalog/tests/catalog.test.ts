@@ -196,6 +196,40 @@ describe("loadCatalog", () => {
     expect(calls).toBe(1);
     expect(firstResult).toEqual(secondResult);
   });
+
+  // apps/server's own EMPTY_MANIFEST fallback would otherwise fail isZeroPriceModel for every
+  // Free-tier request for the rest of the process's life after one transient models.dev failure
+  // — a fallback result must not be cached the way a genuine fetched catalog is.
+  test("fetch failure: does not permanently cache the fallback — a later call retries", async () => {
+    let calls = 0;
+    const failingFetch: typeof fetch = (async () => {
+      calls += 1;
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+
+    const first = await loadCatalog(fallbackManifest, failingFetch);
+    const second = await loadCatalog(fallbackManifest, failingFetch);
+
+    expect(first).toBe(fallbackManifest);
+    expect(second).toBe(fallbackManifest);
+    expect(calls).toBe(2);
+  });
+
+  test("fetch failure then success: the call after a failed fetch can still succeed", async () => {
+    let calls = 0;
+    const fetchFn: typeof fetch = (async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("network down");
+      return { ok: true, status: 200, json: async () => rawApiResponse() } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const first = await loadCatalog(fallbackManifest, fetchFn);
+    const second = await loadCatalog(fallbackManifest, fetchFn);
+
+    expect(first).toBe(fallbackManifest);
+    expect(second).not.toBe(fallbackManifest);
+    expect(second.entries.length).toBeGreaterThan(0);
+  });
 });
 
 describe("findCatalogEntry", () => {
