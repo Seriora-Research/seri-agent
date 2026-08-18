@@ -5,7 +5,7 @@ import { render } from "ink-testing-library";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
-import { App } from "../../src/tui/App";
+import { App, transcriptRowProps } from "../../src/tui/App";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import { ListRow } from "../../src/tui/components";
 import {
@@ -18,6 +18,8 @@ import {
   listWindowSize,
   singleLine,
   slideWindow,
+  type TranscriptEntry,
+  type VisibleRow,
   visibleTranscript,
 } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
@@ -86,13 +88,31 @@ describe("App", () => {
   });
 
   // `not.toContain("╭")` is what makes this non-vacuous across all 14 borderStyle sites at once —
-  // a stray "round" reintroduced anywhere would still leave "┌" present elsewhere on screen.
+  // a stray "round" reintroduced anywhere would still leave a rounded corner present elsewhere on
+  // screen. `"─"`, not `"┌"`: InputBox (the only bordered element visible at this default state)
+  // borders top/bottom only now — `borderLeft={false} borderRight={false}` drops its corner glyphs
+  // entirely, not just its side rules.
   test("borders render with square corners, not rounded ones", async () => {
     const { instance } = await connect();
 
     const frame = instance.lastFrame() ?? "";
-    expect(frame).toContain("┌");
+    expect(frame).toContain("─");
     expect(frame).not.toContain("╭");
+  });
+
+  // InputBox (panels/InputBox.tsx) borders top/bottom only — `borderLeft={false}
+  // borderRight={false}` drops both the vertical side rules and every corner glyph, not just the
+  // sides, since Ink only draws a corner where two borders meet.
+  test("InputBox has a top/bottom horizontal rule only — no vertical sides, no corner glyphs", async () => {
+    const { instance } = await connect();
+
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("─");
+    expect(frame).not.toContain("│");
+    expect(frame).not.toContain("┌");
+    expect(frame).not.toContain("┐");
+    expect(frame).not.toContain("└");
+    expect(frame).not.toContain("┘");
   });
 
   test("a command-error dispatch renders the ErrorLine mark and message", async () => {
@@ -128,9 +148,9 @@ describe("App", () => {
     const frame = instance.lastFrame() ?? "";
     expect(frame).toContain("line 299");
     expect(frame).not.toContain("line 0");
-    // The InputBox's own border (panels/InputBox.tsx) — proves the viewport left room for the
-    // live region below it rather than consuming the whole frame.
-    expect(frame).toContain("┌");
+    // The InputBox's own top/bottom border rule (panels/InputBox.tsx) — proves the viewport left
+    // room for the live region below it rather than consuming the whole frame.
+    expect(frame).toContain("─");
   });
 
   test("PageUp shows the scrolled indicator and reveals an older line; End clears it and returns to the newest", async () => {
@@ -321,6 +341,60 @@ describe("App", () => {
       await flush();
       expect(instance.lastFrame() ?? "").toBe(anchored);
     }
+  });
+
+  // Design decision 1 (see the feature plan this ships under): a transcript shorter than the
+  // viewport top-anchors (`justifyContent: "flex-start"`) instead of bottom-padding a mostly-empty
+  // screen — the appended content must land near the very top of the frame, not down near InputBox.
+  test("a short transcript top-anchors: content appears near the top of the frame, not bottom-padded", async () => {
+    const { instance, dispatch } = await connect();
+
+    dispatch({ type: "transcript-append", line: "hello" });
+    await flush();
+
+    const lines = (instance.lastFrame() ?? "").split("\n");
+    const contentIndex = lines.findIndex((line) => line.includes("hello"));
+    expect(contentIndex).toBeGreaterThanOrEqual(0);
+    expect(contentIndex).toBeLessThan(3);
+  });
+
+  // Design decision 2: a committed assistant answer's own first visual row is prefixed with the
+  // `●` marker (format.ts's own displayText) — applied at render/wrap time, never stored on the
+  // entry itself.
+  test("a committed assistant answer's frame line starts with the ● marker", async () => {
+    const { instance, dispatch } = await connect();
+
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: "the answer" } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush();
+
+    const lines = (instance.lastFrame() ?? "").split("\n");
+    expect(lines.some((line) => line.trimStart().startsWith("● the answer"))).toBe(true);
+  });
+
+  // Design decision 3: the user-message background band is a per-row `backgroundColor`, not a
+  // bordered Box — invisible to a mounted-frame assertion since ink-testing-library's `lastFrame()`
+  // carries no ANSI in this test environment (see the `ListRow` describe block's own comment on the
+  // identical problem for the reverse-video row). Pinning `transcriptRowProps` (App.tsx) directly,
+  // the same fix applied there.
+  describe("transcriptRowProps", () => {
+    test('a role: "user" row is padded to `columns` and carries theme.userBg', () => {
+      expect(transcriptRowProps({ role: "user", text: "> hi" }, 10)).toEqual({
+        text: "> hi      ",
+        backgroundColor: "gray",
+      });
+    });
+
+    test('a role: "system"/"assistant" row is left as-is with no background', () => {
+      expect(transcriptRowProps({ role: "system", text: "hi" }, 10)).toEqual({
+        text: "hi",
+        backgroundColor: undefined,
+      });
+      expect(transcriptRowProps({ role: "assistant", text: "● hi" }, 10)).toEqual({
+        text: "● hi",
+        backgroundColor: undefined,
+      });
+    });
   });
 
   test("a tool-call loop-event sets the running status, and tool-result clears it", async () => {
@@ -1551,22 +1625,36 @@ describe("App", () => {
   });
 
   describe("visibleTranscript", () => {
+    // Every case below stays role: "system" throughout — same string, same columns → same row
+    // count as before the role tag existed, the "identical to a plain string" half of this file's
+    // own contract (see the role-specific cases at the end of this block for the other half).
+    const asEntries = (lines: string[]): TranscriptEntry[] =>
+      lines.map((text) => ({ role: "system", text }));
+    const asRows = (lines: string[]): VisibleRow[] =>
+      lines.map((text) => ({ role: "system", text }));
+
     test("a transcript shorter than the viewport is shown in full", () => {
-      expect(visibleTranscript(["a", "b", "c"], 5, 0, 80)).toEqual(["a", "b", "c"]);
+      expect(visibleTranscript(asEntries(["a", "b", "c"]), 5, 0, 80)).toEqual(
+        asRows(["a", "b", "c"]),
+      );
     });
 
     // tail-anchored, not head-anchored — a transcript longer than the viewport shows its NEWEST
     // lines by default, matching what scrolled-by terminal output would already show.
     test("a transcript longer than the viewport shows the newest lines, not the oldest", () => {
-      expect(visibleTranscript(["a", "b", "c", "d", "e"], 3, 0, 80)).toEqual(["c", "d", "e"]);
+      expect(visibleTranscript(asEntries(["a", "b", "c", "d", "e"]), 3, 0, 80)).toEqual(
+        asRows(["c", "d", "e"]),
+      );
     });
 
     test("a positive offset slides the window toward older lines", () => {
-      expect(visibleTranscript(["a", "b", "c", "d", "e"], 3, 1, 80)).toEqual(["b", "c", "d"]);
+      expect(visibleTranscript(asEntries(["a", "b", "c", "d", "e"]), 3, 1, 80)).toEqual(
+        asRows(["b", "c", "d"]),
+      );
     });
 
     test("an offset large enough to reach the start still returns at most `rows` lines", () => {
-      expect(visibleTranscript(["a", "b", "c"], 5, 10, 80)).toEqual([]);
+      expect(visibleTranscript(asEntries(["a", "b", "c"]), 5, 10, 80)).toEqual([]);
     });
 
     // Regression guard: a logical entry longer than `columns` used to count as exactly one row no
@@ -1575,9 +1663,13 @@ describe("App", () => {
     // as many array slots as it needs, and the tail-walk must still respect `rows`.
     test("a single entry longer than `columns` counts as multiple visual rows, not one", () => {
       const long = "a".repeat(25); // 25 chars, no spaces — forces `hard: true` breaking
-      expect(visibleTranscript([long], 3, 0, 10)).toEqual(["aaaaaaaaaa", "aaaaaaaaaa", "aaaaa"]);
+      expect(visibleTranscript(asEntries([long]), 3, 0, 10)).toEqual(
+        asRows(["aaaaaaaaaa", "aaaaaaaaaa", "aaaaa"]),
+      );
       // Scrolled up by exactly one visual row: the newest row drops off the bottom.
-      expect(visibleTranscript([long], 3, 1, 10)).toEqual(["aaaaaaaaaa", "aaaaaaaaaa"]);
+      expect(visibleTranscript(asEntries([long]), 3, 1, 10)).toEqual(
+        asRows(["aaaaaaaaaa", "aaaaaaaaaa"]),
+      );
     });
 
     // A resize changes `columns` with no change to the logical `lines` array at all — this is only
@@ -1586,9 +1678,32 @@ describe("App", () => {
     // proving nothing was destroyed by the earlier (narrower) width's own wrapping.
     test("the same transcript re-wraps differently when `columns` changes, nothing is lost", () => {
       const long = "a".repeat(25);
-      expect(visibleTranscript([long], 10, 0, 10)).toHaveLength(3);
-      expect(visibleTranscript([long], 10, 0, 25)).toHaveLength(1);
-      expect(visibleTranscript([long], 10, 0, 5)).toHaveLength(5);
+      expect(visibleTranscript(asEntries([long]), 10, 0, 10)).toHaveLength(3);
+      expect(visibleTranscript(asEntries([long]), 10, 0, 25)).toHaveLength(1);
+      expect(visibleTranscript(asEntries([long]), 10, 0, 5)).toHaveLength(5);
+    });
+
+    // An assistant entry's row count reflects its own "●" marker (format.ts's own displayText) —
+    // a string that exactly fits `columns` for a system/user entry can spill into an extra wrapped
+    // row for an assistant one, since the marker adds two characters before wrapping ever happens.
+    test("an assistant entry's `●` marker can push a boundary-length string into an extra row", () => {
+      const exact = "a".repeat(10); // exactly `columns` wide before any marker is added
+      expect(visibleTranscript([{ role: "system", text: exact }], 3, 0, 10)).toEqual([
+        { role: "system", text: exact },
+      ]);
+      expect(visibleTranscript([{ role: "assistant", text: exact }], 3, 0, 10)).toEqual([
+        { role: "assistant", text: "● " },
+        { role: "assistant", text: "aaaaaaaaaa" },
+      ]);
+    });
+
+    // `pending` (the in-progress streamed answer, App.tsx's own `state.streaming`) is wrapped
+    // through the exact same `displayText` path as a committed entry — its own returned rows must
+    // come back tagged role: "assistant", marker included, same as a committed assistant entry.
+    test('the `pending` parameter comes back tagged role: "assistant", marker included', () => {
+      expect(visibleTranscript([], 3, 0, 80, "the in-progress answer")).toEqual([
+        { role: "assistant", text: "● the in-progress answer" },
+      ]);
     });
   });
 
