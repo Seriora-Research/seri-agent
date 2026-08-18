@@ -32,6 +32,7 @@
     "@ai-sdk/openai": "^4.0.36",
     "@openrouter/ai-sdk-provider": "^3.0.0",
     "@seri/model-catalog": "workspace:*",
+    "@seri/plans": "workspace:*",
     "@vscode/ripgrep": "^1.18.0",
     "ai": "^7.0.47",
     "ink": "^7.1.1",
