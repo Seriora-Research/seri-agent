@@ -2679,8 +2679,7 @@ async function runTui(
         if (shouldRunTurn) currentTurn = runTurn(prepared.session);
       },
     }),
-    // See renderOptions.ts's own comments on `interactive`/`incrementalRendering` for why each
-    // of these is set the way it is.
+    // See renderOptions.ts's own comment on `interactive` for why it's set the way it is.
     MAIN_TUI_RENDER_OPTIONS,
   );
 

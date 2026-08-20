@@ -1,6 +1,4 @@
-// The main TUI mount's own Ink `render()` options (`cli.ts`'s `runTui`) — pulled out so
-// `inputRenderCost.test.tsx`'s regression test can import the SAME object instead of a
-// hardcoded copy, which would keep passing even if `cli.ts` ever reverted `incrementalRendering`.
+// The main TUI mount's own Ink `render()` options (`cli.ts`'s `runTui`).
 import type { RenderOptions } from "ink";
 
 // `interactive: true` — without it, Ink's own auto-detection (`ink.js`'s `resolveInteractiveOption`,
@@ -19,20 +17,7 @@ import type { RenderOptions } from "ink";
 // decision is correct here, not just a test workaround: a real user running seri interactively
 // inside any environment that happens to set `CI=true` (some devcontainers and cloud IDEs do,
 // even for a genuinely interactive session) would hit the identical silent degradation.
-//
-// `incrementalRendering: true` — without it, `log-update.js`'s default writer
-// (`createStandard`) erases and re-emits the ENTIRE frame on every changed frame: every
-// transcript row, unchanged or not, plus the mode line and borders. Holding Backspace repeats
-// at up to ~30 keystrokes/second, each one re-emitting the whole screen regardless of how
-// little of it changed. `createIncremental` skips a transcript row whose text is identical to
-// the previous frame and emits a bare cursor move instead, so cost scales with what actually
-// changed (the input box) rather than with how much is on screen. This only reaches
-// `createIncremental`'s writer at all because `App.tsx` already renders its root `Box` at
-// `height={rows - 1}`, one row short of the terminal — see that `Box`'s own comment: at a full
-// `rows`, Ink's fullscreen/clearTerminal path bypasses `this.log` (and `incrementalRendering`
-// with it) entirely, so this option depends on `App.tsx` staying one row short.
 export const MAIN_TUI_RENDER_OPTIONS: RenderOptions = {
   exitOnCtrlC: false,
   interactive: true,
-  incrementalRendering: true,
 };
