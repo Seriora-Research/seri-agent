@@ -114,9 +114,12 @@ async function measureBackspaceCost(options: {
       done: false,
     }),
     {
-      stdout,
-      stdin,
-      stderr,
+      // Ink's own RenderOptions types stdout/stdin/stderr as real Node streams; these fakes only
+      // implement the subset Ink actually calls (same minimal shape ink-testing-library's own
+      // Stdout/Stdin fakes use against the same option).
+      stdout: stdout as unknown as NodeJS.WriteStream,
+      stdin: stdin as unknown as NodeJS.ReadStream,
+      stderr: stderr as unknown as NodeJS.WriteStream,
       interactive: true,
       exitOnCtrlC: false,
       patchConsole: false,
