@@ -72,7 +72,12 @@ export function InputBox({
 
   return (
     <Box borderStyle="single" borderColor={theme.muted} borderLeft={false} borderRight={false}>
-      <Text>{value.length > 0 ? value : " "}</Text>
+      {/* "> " matches the same marker the transcript's own user-turn echo uses (cli.ts's
+      echoUserInput), so it's visually clear where typed text goes. There is no cursor-position
+      tracking here — useInput only appends to/deletes from the end of `value` — so a block cursor
+      always trails the text rather than needing its own coordinate. */}
+      <Text>{`> ${value}`}</Text>
+      <Text inverse> </Text>
     </Box>
   );
 }
