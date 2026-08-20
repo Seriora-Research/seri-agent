@@ -1666,6 +1666,26 @@ describe("App", () => {
       expect(frame).not.toContain("your key");
       expect(frame).not.toContain("→");
     });
+
+    // Regression test for issue #132: the status bar used to read the `route` PROP, frozen at
+    // mount, so a live /model switch (cli.ts's runTurn re-resolving a fresh route every turn)
+    // never reached it — only a session quit/remount picked up the new model. `route-updated` is
+    // the reducer action that closes this: dispatching it must move the rendered label without
+    // remounting <App>.
+    test("status bar reflects a route-updated dispatch without remounting", async () => {
+      const { instance, dispatch } = await connect();
+      expect(instance.lastFrame() ?? "").toContain("claude-sonnet-5");
+
+      dispatch({
+        type: "route-updated",
+        route: route({ model: "gpt-4o", provider: "openai" }),
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("gpt-4o");
+      expect(frame).not.toContain("claude-sonnet-5");
+    });
   });
 
   // Stage A scaffolding (cli-commands-to-tui feature-plan.md): nothing dispatches
