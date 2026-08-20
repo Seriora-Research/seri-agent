@@ -381,7 +381,7 @@ describe("App", () => {
     test('a role: "user" row is padded to `columns` and carries theme.userBg', () => {
       expect(transcriptRowProps({ role: "user", text: "> hi" }, 10)).toEqual({
         text: "> hi      ",
-        backgroundColor: "gray",
+        backgroundColor: "#333333",
       });
     });
 
