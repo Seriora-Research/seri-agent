@@ -6,6 +6,7 @@ import type { ModelMessage } from "ai";
 import { toolAllowedLine, toolResultLine } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
+import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
 import { DEFAULT_COLUMNS, transcriptVisualRows } from "./format";
@@ -168,6 +169,12 @@ export type TuiState = {
   // `pendingAuth` already use. `runTui` and `runGuidedSetup` never dispatch it, so their own
   // separate App instances never render WelcomeSplash for the same launch.
   pendingSplash: boolean;
+  // The status bar's own model+route label reads this, not `AppProps.route` (App.tsx's own
+  // comment on that prop) — the prop only seeds this field at mount; every later switch reaches
+  // the label by dispatching `route-updated` instead, the same "reducer state, not a caller-held
+  // copy" shape `session` above already uses. Optional for the identical reason `AppProps.route`
+  // is: runGuidedSetup mounts App before any provider key/route exists yet.
+  route: ResolvedRoute | undefined;
 };
 
 function modeIndicator(mode: PermissionMode): string {
@@ -176,10 +183,11 @@ function modeIndicator(mode: PermissionMode): string {
 
 export function initialTuiState(
   session: SessionState<ModelMessage>,
-  opts?: { showSplash?: boolean },
+  opts?: { showSplash?: boolean; route?: ResolvedRoute },
 ): TuiState {
   return {
     session,
+    route: opts?.route,
     transcript: [],
     transcriptScrollOffset: 0,
     transcriptScrollStreamingRows: 0,
@@ -283,7 +291,12 @@ export type TuiAction =
   | { type: "permissions-step"; state: PermissionsPanelState }
   | { type: "permissions-resolved"; leftoverInput?: string }
   | { type: "splash-requested" }
-  | { type: "splash-resolved" };
+  | { type: "splash-resolved" }
+  // Dispatched by runTurn (cli.ts) right after its own per-turn `resolveRoute` call succeeds —
+  // the fix for issue #132: the status bar's label used to be frozen at mount (App.tsx's own
+  // `route` prop, never re-read after the initial render), so a /model switch's own freshly
+  // resolved route never reached it. `state.route` is what the label now reads.
+  | { type: "route-updated"; route: ResolvedRoute };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -434,6 +447,8 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return { ...state, pendingSplash: true };
     case "splash-resolved":
       return { ...state, pendingSplash: false };
+    case "route-updated":
+      return { ...state, route: action.route };
   }
 }
 

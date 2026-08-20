@@ -2083,6 +2083,10 @@ async function runTui(
       return;
     }
     const { model: modelId, provider } = route;
+    // Issue #132 fix: the status bar reads `state.route` (reducer), not a prop frozen at mount —
+    // dispatching the freshly resolved route here, every turn, is what makes a /model switch (or
+    // any other mid-session reroute) show up without waiting for the session to quit and remount.
+    dispatch({ type: "route-updated", route });
     // A rerouted OR gateway-served pair is never silent on the TUI path either — see
     // prepareSession's own identical notice for the piped/non-interactive path, above.
     if (route.rerouted) {
