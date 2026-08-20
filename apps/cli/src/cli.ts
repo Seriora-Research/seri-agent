@@ -1726,7 +1726,7 @@ async function runTui(
   // and deliberately stays effect-driven — `onSessionChange` below still only fires from React's
   // own effect, MEDIUM-1's own accepted, documented, narrow trade-off (persistence lagging by a
   // tick) is unrelated to reads racing ahead of a stale copy, which is what this closes.
-  let liveState: TuiState = initialTuiState(prepared.session);
+  let liveState: TuiState = initialTuiState(prepared.session, { route: prepared.route });
   // B2 fix (MEDIUM-5): the model/provider onSessionChange (below) actually WRITES to disk, kept
   // deliberately separate from `liveState.session.model`/`.provider` (what a picked model changes
   // immediately, so the next runTurn attempts it — onModelSelected's own comment) — mirrors
@@ -1975,7 +1975,7 @@ async function runTui(
   // but `confirmedModel` (below) does NOT move here, so onSessionChange keeps writing the OLD,
   // still-working model/provider to disk until a turn actually succeeds on the new one.
   function onModelSelected(
-    pick: { model: string; provider: ModelProvider },
+    pick: { model: string; provider: ModelProvider; keyConfigured: boolean },
     leftoverInput?: string,
   ): void {
     dispatch({ type: "model-picker-resolved", pick, leftoverInput });

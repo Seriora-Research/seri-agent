@@ -547,7 +547,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
 
     state = tuiReducer(state, {
       type: "model-picker-resolved",
-      pick: { model: entry.id, provider: entry.provider },
+      pick: { model: entry.id, provider: entry.provider, keyConfigured: true },
     });
 
     expect(state.pendingModelPicker).toBeUndefined();
@@ -573,7 +573,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
 
     state = tuiReducer(state, {
       type: "model-picker-resolved",
-      pick: { model: entry.id, provider: entry.provider },
+      pick: { model: entry.id, provider: entry.provider, keyConfigured: true },
     });
 
     expect(state.session.model).toBe(entry.id);
@@ -606,7 +606,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
 
     state = tuiReducer(state, {
       type: "model-picker-resolved",
-      pick: { model: entry.id, provider: entry.provider },
+      pick: { model: entry.id, provider: entry.provider, keyConfigured: true },
       leftoverInput: "another query",
     });
 
@@ -622,7 +622,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
 
     state = tuiReducer(state, {
       type: "model-picker-resolved",
-      pick: { model: entry.id, provider: entry.provider },
+      pick: { model: entry.id, provider: entry.provider, keyConfigured: true },
     });
 
     expect(state.pendingInputPrefill).toBeUndefined();
@@ -635,7 +635,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     });
     state = tuiReducer(state, {
       type: "model-picker-resolved",
-      pick: { model: entry.id, provider: entry.provider },
+      pick: { model: entry.id, provider: entry.provider, keyConfigured: true },
       leftoverInput: "another query",
     });
     expect(state.pendingInputPrefill).toBe("another query");

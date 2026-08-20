@@ -109,7 +109,11 @@ export async function runGuidedSetup(
   // own `resolveDefaultModel` reads it instead of falling back to groq's default. The try/catch
   // mirrors `onSetupKeyEntered`'s own write-failure posture: degrade to a visible message and
   // leave the user in control, never resolve into a state the next step cannot survive.
-  function onGuidedModelSelected(pick: { model: string; provider: ModelProvider }): void {
+  function onGuidedModelSelected(pick: {
+    model: string;
+    provider: ModelProvider;
+    keyConfigured: boolean;
+  }): void {
     try {
       persistDefaultModel(pick, configDir);
     } catch (err) {

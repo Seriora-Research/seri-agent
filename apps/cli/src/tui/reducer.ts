@@ -254,7 +254,12 @@ export type TuiAction =
   // fix already applied to `messages-updated` itself (see that case's own comment).
   | {
       type: "model-picker-resolved";
-      pick?: { model: string; provider: ModelProvider };
+      // `keyConfigured` (ModelPickerEntry's own field, threaded through from the picker row —
+      // ModelPicker.tsx) is what tells the optimistic `route` update below whether it may claim
+      // "your key": it does NOT determine which provider a reroute/gateway hop would land on
+      // (that's `resolveRoute`'s job, which needs the catalog/configured-providers/plan this
+      // reducer doesn't have), only whether one is needed at all.
+      pick?: { model: string; provider: ModelProvider; keyConfigured: boolean };
       // Text typed after a combined-chunk terminator (see `pendingInputPrefill`'s own comment) —
       // present only on the rare chunked-input path, absent on every ordinary Enter.
       leftoverInput?: string;
@@ -400,23 +405,31 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       // `route` is also updated optimistically here, not just `session` — otherwise the status
       // bar (which reads `state.route`) stays on the OLD model until the next turn's
       // `route-updated` dispatch (cli.ts's runTurn), one full turn after the pick that's visibly
-      // supposed to have already switched it. `rerouted`/`viaGateway` are reset to `false` since a
-      // pick is never itself a reroute — only `resolveRoute` (next turn) can determine that, and
-      // its own `route-updated` dispatch overwrites this optimistic value with the authoritative
-      // one at that point.
-      return action.pick === undefined
-        ? { ...state, pendingModelPicker: undefined, pendingInputPrefill: action.leftoverInput }
-        : {
-            ...state,
-            pendingModelPicker: undefined,
-            pendingInputPrefill: action.leftoverInput,
-            session: {
-              ...state.session,
-              model: action.pick.model,
-              provider: action.pick.provider,
-            },
-            route: { model: action.pick.model, provider: action.pick.provider, rerouted: false, viaGateway: false },
-          };
+      // supposed to have already switched it. Only done when `keyConfigured` is true, though: that's
+      // the one case this reducer can resolve on its own (Rule 1 of `resolveRoute`, routing.ts — a
+      // provider with its own key always wins unrerouted). When it's false, the picked provider will
+      // be rerouted or gateway-served, but WHERE it lands is `resolveRoute`'s computation (it needs
+      // the catalog/configured-providers/plan this reducer doesn't have) — guessing `rerouted: false`
+      // here would render "your key" for a provider the user doesn't actually have a key for, exactly
+      // the fabricated-route claim `formatModeLabel`'s own comment says to avoid. `state.route` is
+      // left as-is (stale for the one turn until `route-updated` supplies the real answer) rather
+      // than asserting something false.
+      if (action.pick === undefined) {
+        return { ...state, pendingModelPicker: undefined, pendingInputPrefill: action.leftoverInput };
+      }
+      return {
+        ...state,
+        pendingModelPicker: undefined,
+        pendingInputPrefill: action.leftoverInput,
+        session: {
+          ...state.session,
+          model: action.pick.model,
+          provider: action.pick.provider,
+        },
+        route: action.pick.keyConfigured
+          ? { model: action.pick.model, provider: action.pick.provider, rerouted: false, viaGateway: false }
+          : state.route,
+      };
     case "input-prefill-consumed":
       return { ...state, pendingInputPrefill: undefined };
     case "setup-requested":

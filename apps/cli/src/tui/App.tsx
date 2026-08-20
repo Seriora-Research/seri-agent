@@ -111,7 +111,7 @@ export type AppProps = {
   // resolved this pick — see `pendingInputPrefill`'s own comment (reducer.ts). Absent on the
   // ordinary single-Enter path.
   onModelSelected?: (
-    pick: { model: string; provider: ModelProvider },
+    pick: { model: string; provider: ModelProvider; keyConfigured: boolean },
     leftoverInput?: string,
   ) => void;
   onModelPickerCancel?: () => void;
