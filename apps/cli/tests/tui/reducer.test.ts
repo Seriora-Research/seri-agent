@@ -9,7 +9,7 @@ import type {
   PermissionRow,
   SetupProviderRow,
 } from "../../src/tui/commands";
-import { visibleTranscript } from "../../src/tui/format";
+import { visibleTranscript, wrapPendingRows } from "../../src/tui/format";
 import { initialTuiState, tuiReducer, type TuiState } from "../../src/tui/reducer";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -347,7 +347,7 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
       5,
       next.transcriptScrollOffset,
       next.columns,
-      next.streaming,
+      wrapPendingRows(next.streaming, next.columns),
     );
     // The `●` marker (format.ts's own displayText) is prefixed once, onto the very first VISUAL
     // row of the whole streamed answer, not onto every wrapped line within it.
