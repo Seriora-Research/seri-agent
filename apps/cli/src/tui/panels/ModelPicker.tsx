@@ -22,7 +22,7 @@ export function ModelPicker({
 }: {
   entries: ModelPickerEntry[];
   onModelSelected?: (
-    pick: { model: string; provider: ModelProvider },
+    pick: { model: string; provider: ModelProvider; keyConfigured: boolean },
     leftoverInput?: string,
   ) => void;
   onModelPickerCancel?: () => void;
@@ -58,7 +58,11 @@ export function ModelPicker({
     if (key.return) {
       const row = filtered[selectedIndex];
       if (row !== undefined) {
-        onModelSelected?.({ model: row.entry.id, provider: row.entry.provider });
+        onModelSelected?.({
+          model: row.entry.id,
+          provider: row.entry.provider,
+          keyConfigured: row.keyConfigured,
+        });
       }
       return;
     }
@@ -96,7 +100,10 @@ export function ModelPicker({
       nextQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, nextQuery));
     const row = nextFiltered[0];
     if (row !== undefined) {
-      onModelSelected?.({ model: row.entry.id, provider: row.entry.provider }, after || undefined);
+      onModelSelected?.(
+        { model: row.entry.id, provider: row.entry.provider, keyConfigured: row.keyConfigured },
+        after || undefined,
+      );
     }
   });
 

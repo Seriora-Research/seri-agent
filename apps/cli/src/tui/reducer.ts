@@ -6,6 +6,7 @@ import type { ModelMessage } from "ai";
 import { toolAllowedLine, toolResultLine } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
+import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
 import {
@@ -176,6 +177,12 @@ export type TuiState = {
   // `pendingAuth` already use. `runTui` and `runGuidedSetup` never dispatch it, so their own
   // separate App instances never render WelcomeSplash for the same launch.
   pendingSplash: boolean;
+  // The status bar's own model+route label reads this, not `AppProps.route` (App.tsx's own
+  // comment on that prop) — the prop only seeds this field at mount; every later switch reaches
+  // the label by dispatching `route-updated` instead, the same "reducer state, not a caller-held
+  // copy" shape `session` above already uses. Optional for the identical reason `AppProps.route`
+  // is: runGuidedSetup mounts App before any provider key/route exists yet.
+  route: ResolvedRoute | undefined;
 };
 
 function modeIndicator(mode: PermissionMode): string {
@@ -184,10 +191,11 @@ function modeIndicator(mode: PermissionMode): string {
 
 export function initialTuiState(
   session: SessionState<ModelMessage>,
-  opts?: { showSplash?: boolean },
+  opts?: { showSplash?: boolean; route?: ResolvedRoute },
 ): TuiState {
   return {
     session,
+    route: opts?.route,
     transcript: [],
     transcriptScrollOffset: 0,
     transcriptScrollStreamingRows: 0,
@@ -254,7 +262,12 @@ export type TuiAction =
   // fix already applied to `messages-updated` itself (see that case's own comment).
   | {
       type: "model-picker-resolved";
-      pick?: { model: string; provider: ModelProvider };
+      // `keyConfigured` (ModelPickerEntry's own field, threaded through from the picker row —
+      // ModelPicker.tsx) is what tells the optimistic `route` update below whether it may claim
+      // "your key": it does NOT determine which provider a reroute/gateway hop would land on
+      // (that's `resolveRoute`'s job, which needs the catalog/configured-providers/plan this
+      // reducer doesn't have), only whether one is needed at all.
+      pick?: { model: string; provider: ModelProvider; keyConfigured: boolean };
       // Text typed after a combined-chunk terminator (see `pendingInputPrefill`'s own comment) —
       // present only on the rare chunked-input path, absent on every ordinary Enter.
       leftoverInput?: string;
@@ -291,7 +304,12 @@ export type TuiAction =
   | { type: "permissions-step"; state: PermissionsPanelState }
   | { type: "permissions-resolved"; leftoverInput?: string }
   | { type: "splash-requested" }
-  | { type: "splash-resolved" };
+  | { type: "splash-resolved" }
+  // Dispatched by runTurn (cli.ts) right after its own per-turn `resolveRoute` call succeeds —
+  // the fix for issue #132: the status bar's label used to be frozen at mount (App.tsx's own
+  // `route` prop, never re-read after the initial render), so a /model switch's own freshly
+  // resolved route never reached it. `state.route` is what the label now reads.
+  | { type: "route-updated"; route: ResolvedRoute };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -391,18 +409,35 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       // Merged into `state.session` (this reducer's own current session), not a caller-captured
       // one — see TuiAction's own comment on `pick`. `permissionMode` is untouched by a pick, so
       // (unlike session-updated, above) there is no `modeIndicator` to recompute here.
-      return action.pick === undefined
-        ? { ...state, pendingModelPicker: undefined, pendingInputPrefill: action.leftoverInput }
-        : {
-            ...state,
-            pendingModelPicker: undefined,
-            pendingInputPrefill: action.leftoverInput,
-            session: {
-              ...state.session,
-              model: action.pick.model,
-              provider: action.pick.provider,
-            },
-          };
+      //
+      // `route` is also updated optimistically here, not just `session` — otherwise the status
+      // bar (which reads `state.route`) stays on the OLD model until the next turn's
+      // `route-updated` dispatch (cli.ts's runTurn), one full turn after the pick that's visibly
+      // supposed to have already switched it. Only done when `keyConfigured` is true, though: that's
+      // the one case this reducer can resolve on its own (Rule 1 of `resolveRoute`, routing.ts — a
+      // provider with its own key always wins unrerouted). When it's false, the picked provider will
+      // be rerouted or gateway-served, but WHERE it lands is `resolveRoute`'s computation (it needs
+      // the catalog/configured-providers/plan this reducer doesn't have) — guessing `rerouted: false`
+      // here would render "your key" for a provider the user doesn't actually have a key for, exactly
+      // the fabricated-route claim `formatModeLabel`'s own comment says to avoid. `state.route` is
+      // left as-is (stale for the one turn until `route-updated` supplies the real answer) rather
+      // than asserting something false.
+      if (action.pick === undefined) {
+        return { ...state, pendingModelPicker: undefined, pendingInputPrefill: action.leftoverInput };
+      }
+      return {
+        ...state,
+        pendingModelPicker: undefined,
+        pendingInputPrefill: action.leftoverInput,
+        session: {
+          ...state.session,
+          model: action.pick.model,
+          provider: action.pick.provider,
+        },
+        route: action.pick.keyConfigured
+          ? { model: action.pick.model, provider: action.pick.provider, rerouted: false, viaGateway: false }
+          : state.route,
+      };
     case "input-prefill-consumed":
       return { ...state, pendingInputPrefill: undefined };
     case "setup-requested":
@@ -442,6 +477,8 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return { ...state, pendingSplash: true };
     case "splash-resolved":
       return { ...state, pendingSplash: false };
+    case "route-updated":
+      return { ...state, route: action.route };
   }
 }
 

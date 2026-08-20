@@ -806,7 +806,8 @@ describe("App", () => {
     // migrate or drop; the reducer's own model-picker-resolved merges it onto whatever session is
     // current when the pick resolves (reducer.test.ts covers that merge directly).
     test("typing filters the list, and Enter resolves the highlighted entry", async () => {
-      const selected: Array<{ model: string; provider: ModelProvider }> = [];
+      const selected: Array<{ model: string; provider: ModelProvider; keyConfigured: boolean }> =
+        [];
       let dispatch: ((action: TuiAction) => void) | undefined;
       const startingSession = session({ messages: [{ role: "user", content: "hi" }] });
       const instance = render(
@@ -839,7 +840,9 @@ describe("App", () => {
       instance.stdin.write("\r");
       await flush();
 
-      expect(selected).toEqual([{ model: "llama-3.1-8b-instant", provider: "groq" }]);
+      expect(selected).toEqual([
+        { model: "llama-3.1-8b-instant", provider: "groq", keyConfigured: true },
+      ]);
     });
 
     test("Escape and Ctrl-D both cancel without resolving a model", async () => {
@@ -933,7 +936,8 @@ describe("App", () => {
     // AND the row Enter resolves is the one actually highlighted — an off-by-one in the scroll math
     // would resolve a neighbour instead.
     test("Down past the visible window scrolls the list, and Enter selects the highlighted row", async () => {
-      const selected: Array<{ model: string; provider: ModelProvider }> = [];
+      const selected: Array<{ model: string; provider: ModelProvider; keyConfigured: boolean }> =
+        [];
       let dispatch: ((action: TuiAction) => void) | undefined;
       const instance = render(
         <App
@@ -972,7 +976,7 @@ describe("App", () => {
       instance.stdin.write("\r");
       await flush();
 
-      expect(selected).toEqual([{ model: "model-15", provider: "groq" }]);
+      expect(selected).toEqual([{ model: "model-15", provider: "groq", keyConfigured: true }]);
     });
   });
 
@@ -1788,6 +1792,67 @@ describe("App", () => {
       const frame = instance.lastFrame() ?? "";
       expect(frame).not.toContain("your key");
       expect(frame).not.toContain("→");
+    });
+
+    // Regression test for issue #132: the status bar used to read the `route` PROP, frozen at
+    // mount, so a live /model switch (cli.ts's runTurn re-resolving a fresh route every turn)
+    // never reached it — only a session quit/remount picked up the new model. `route-updated` is
+    // the reducer action that closes this: dispatching it must move the rendered label without
+    // remounting <App>.
+    test("status bar reflects a route-updated dispatch without remounting", async () => {
+      const { instance, dispatch } = await connect();
+      expect(instance.lastFrame() ?? "").toContain("claude-sonnet-5");
+
+      dispatch({
+        type: "route-updated",
+        route: route({ model: "gpt-4o", provider: "openai" }),
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("gpt-4o");
+      expect(frame).not.toContain("claude-sonnet-5");
+    });
+
+    // Follow-up to the regression above: a `/model` pick dispatches `model-picker-resolved`,
+    // which only ever merged into `state.session` — the status bar (reading `state.route`) stayed
+    // on the OLD model until the next turn's `route-updated` dispatch (cli.ts's runTurn). A picked
+    // model should be reflected the moment it's picked, not one turn later.
+    test("status bar updates immediately from a /model pick, before any turn re-resolves the route", async () => {
+      const { instance, dispatch } = await connect();
+      expect(instance.lastFrame() ?? "").toContain("claude-sonnet-5");
+
+      dispatch({
+        type: "model-picker-resolved",
+        pick: { model: "gpt-4o", provider: "openai", keyConfigured: true },
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("gpt-4o");
+      expect(frame).not.toContain("claude-sonnet-5");
+    });
+
+    // Picking a provider with no configured key means the picker itself doesn't know where
+    // resolveRoute will actually route it (a sibling reroute or the gateway) — only the NEXT
+    // turn's route-updated dispatch does. Optimistically claiming `rerouted: false` here would
+    // render "your key" for a provider the user doesn't have a key for: a fabricated route,
+    // exactly what formatModeLabel's own comment says to avoid. The bar should stay on the OLD
+    // route rather than assert a wrong one.
+    test("a /model pick with no configured key leaves the status bar on the old route, not a fabricated one", async () => {
+      const { instance, dispatch } = await connect();
+      expect(instance.lastFrame() ?? "").toContain("claude-sonnet-5");
+      expect(instance.lastFrame() ?? "").toContain("your key");
+
+      dispatch({
+        type: "model-picker-resolved",
+        pick: { model: "some-unconfigured-model", provider: "openrouter", keyConfigured: false },
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("claude-sonnet-5");
+      expect(frame).not.toContain("some-unconfigured-model");
     });
   });
 

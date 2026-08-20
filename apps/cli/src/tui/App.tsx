@@ -46,19 +46,20 @@ import { theme } from "./theme";
 
 export type AppProps = {
   session: SessionState<ModelMessage>;
-  // D2-D4 (byok-open3-route-indicator feature-plan.md): the persistent mode-indicator's model+route
-  // label reads this — resolved once at session start (PreparedRun.route, cli.ts) and passed down,
-  // NOT re-derived on a later /model switch (D4's stated scope boundary). The key itself is
-  // required, not optional: making it optional would let a future call site silently omit it
-  // instead of failing to compile (code-review finding: this is exactly what let the OTHER
-  // `createElement(App, ...)` call site, cli.ts's `finishQuit` re-render, go unnoticed). The VALUE
-  // is `| undefined` because a third call site (runGuidedSetup, cli.ts) mounts App before any
-  // provider key exists at all — genuinely no PreparedRun/route to pass (found 2026-08-13: PR #86
-  // made this required assuming only 2 call sites existed, both post-PreparedRun; PR #87 had
-  // already added this third one on a branch that predated #86's route requirement, so neither PR
-  // could see the conflict at review time). formatModeLabel drops the model+route suffix entirely
-  // when this is undefined, rather than showing a fabricated route ("your key" during a flow where
-  // there is provably no key yet would be actively wrong, not just a placeholder).
+  // Seeds the reducer's own `state.route` at mount (`initialTuiState(session, { route })`, below)
+  // — the persistent mode-indicator's model+route label reads `state.route`, not this prop
+  // directly, so a later /model switch reaches the label by dispatching `route-updated` into the
+  // reducer instead of this prop ever changing. The key itself is required, not optional: making
+  // it optional would let a future call site silently omit it instead of failing to compile
+  // (code-review finding: this is exactly what let the OTHER `createElement(App, ...)` call site,
+  // cli.ts's `finishQuit` re-render, go unnoticed). The VALUE is `| undefined` because a third call
+  // site (runGuidedSetup, cli.ts) mounts App before any provider key exists at all — genuinely no
+  // PreparedRun/route to pass (found 2026-08-13: PR #86 made this required assuming only 2 call
+  // sites existed, both post-PreparedRun; PR #87 had already added this third one on a branch that
+  // predated #86's route requirement, so neither PR could see the conflict at review time).
+  // formatModeLabel drops the model+route suffix entirely when `state.route` is undefined, rather
+  // than showing a fabricated route ("your key" during a flow where there is provably no key yet
+  // would be actively wrong, not just a placeholder).
   route: ResolvedRoute | undefined;
   // The seam Phase 5 wires driveLoop's dispatch through: called once on mount with the reducer's
   // own dispatch function, the same shape `useReducer` returns. Optional because Phase 4's tests
@@ -112,7 +113,7 @@ export type AppProps = {
   // resolved this pick — see `pendingInputPrefill`'s own comment (reducer.ts). Absent on the
   // ordinary single-Enter path.
   onModelSelected?: (
-    pick: { model: string; provider: ModelProvider },
+    pick: { model: string; provider: ModelProvider; keyConfigured: boolean },
     leftoverInput?: string,
   ) => void;
   onModelPickerCancel?: () => void;
@@ -237,11 +238,11 @@ export function App({
   onSplashSignup,
   onSplashContinue,
 }: AppProps) {
-  const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session));
+  const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session, { route }));
   const { exit } = useApp();
   const width = useTerminalWidth();
   const { rows } = useWindowSize();
-  const modeLabel = formatModeLabel(state.modeIndicator, route, width);
+  const modeLabel = formatModeLabel(state.modeIndicator, state.route, width);
 
   // The transcript viewport's own height comes from flexbox's leftover space (flexGrow, below),
   // not from how many lines it renders — so measuring it back with useBoxMetrics cannot create a
