@@ -121,6 +121,10 @@ async function measureBackspaceCost(options: {
       exitOnCtrlC: false,
       patchConsole: false,
       maxFps: 1000,
+      // Mirrors the main TUI mount's own options (`cli.ts`'s `runTui`) rather than importing
+      // them — this suite mounts `<App>` directly everywhere else (App.test.tsx) rather than
+      // reaching into `cli.ts`, which also runs process-level setup on import.
+      incrementalRendering: true,
     },
   );
   await flush();
