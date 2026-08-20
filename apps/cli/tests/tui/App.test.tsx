@@ -1686,6 +1686,25 @@ describe("App", () => {
       expect(frame).toContain("gpt-4o");
       expect(frame).not.toContain("claude-sonnet-5");
     });
+
+    // Follow-up to the regression above: a `/model` pick dispatches `model-picker-resolved`,
+    // which only ever merged into `state.session` — the status bar (reading `state.route`) stayed
+    // on the OLD model until the next turn's `route-updated` dispatch (cli.ts's runTurn). A picked
+    // model should be reflected the moment it's picked, not one turn later.
+    test("status bar updates immediately from a /model pick, before any turn re-resolves the route", async () => {
+      const { instance, dispatch } = await connect();
+      expect(instance.lastFrame() ?? "").toContain("claude-sonnet-5");
+
+      dispatch({
+        type: "model-picker-resolved",
+        pick: { model: "gpt-4o", provider: "openai" },
+      });
+      await flush();
+
+      const frame = instance.lastFrame() ?? "";
+      expect(frame).toContain("gpt-4o");
+      expect(frame).not.toContain("claude-sonnet-5");
+    });
   });
 
   // Stage A scaffolding (cli-commands-to-tui feature-plan.md): nothing dispatches

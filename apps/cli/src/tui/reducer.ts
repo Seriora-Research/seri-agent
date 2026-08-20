@@ -396,6 +396,14 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       // Merged into `state.session` (this reducer's own current session), not a caller-captured
       // one — see TuiAction's own comment on `pick`. `permissionMode` is untouched by a pick, so
       // (unlike session-updated, above) there is no `modeIndicator` to recompute here.
+      //
+      // `route` is also updated optimistically here, not just `session` — otherwise the status
+      // bar (which reads `state.route`) stays on the OLD model until the next turn's
+      // `route-updated` dispatch (cli.ts's runTurn), one full turn after the pick that's visibly
+      // supposed to have already switched it. `rerouted`/`viaGateway` are reset to `false` since a
+      // pick is never itself a reroute — only `resolveRoute` (next turn) can determine that, and
+      // its own `route-updated` dispatch overwrites this optimistic value with the authoritative
+      // one at that point.
       return action.pick === undefined
         ? { ...state, pendingModelPicker: undefined, pendingInputPrefill: action.leftoverInput }
         : {
@@ -407,6 +415,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
               model: action.pick.model,
               provider: action.pick.provider,
             },
+            route: { model: action.pick.model, provider: action.pick.provider, rerouted: false, viaGateway: false },
           };
     case "input-prefill-consumed":
       return { ...state, pendingInputPrefill: undefined };
