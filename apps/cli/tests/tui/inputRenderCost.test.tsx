@@ -175,4 +175,41 @@ describe("TUI input render cost", () => {
 
     expect(writes).toBeGreaterThanOrEqual(20);
   });
+
+  // Metric: marginal bytes written to stdout per extra visible transcript row, per keystroke.
+  // `log-update.js`'s default writer (`createStandard`) re-emits the ENTIRE frame — every
+  // transcript row, unchanged or not — on every changed frame; its incremental writer
+  // (`createIncremental`) skips a row whose text didn't change and emits a bare 3-byte
+  // `cursorNextLine` instead. `rowsLarge - rowsSmall` extra unchanged transcript rows isolate
+  // exactly that per-row cost: identical content and identical input, differing only in how many
+  // on-screen rows a backspace's frame has to carry along.
+  //
+  // `16`: a 5x headroom over the 3-byte `cursorNextLine` floor, while staying an order of
+  // magnitude below the pre-fix per-row cost (a 90-column row with theme colours re-emitted in
+  // full runs on the order of 100-200 bytes) — this is a statement about behaviour ("an unchanged
+  // row costs a cursor move, not a repaint"), not a tuned number.
+  test("an unchanged transcript row costs a cursor move per keystroke, not a repaint", async () => {
+    const n = 20;
+    const rowsSmall = 20;
+    const rowsLarge = 60;
+
+    const small = await measureBackspaceCost({
+      rows: rowsSmall,
+      transcriptLines: 300,
+      inputLength: 300,
+      n,
+    });
+    const large = await measureBackspaceCost({
+      rows: rowsLarge,
+      transcriptLines: 300,
+      inputLength: 300,
+      n,
+    });
+
+    const marginalBytesPerRow = (large.bytes - small.bytes) / (n * (rowsLarge - rowsSmall));
+
+    expect(large.writes).toBeGreaterThanOrEqual(n);
+    expect(small.writes).toBeGreaterThanOrEqual(n);
+    expect(marginalBytesPerRow).toBeLessThan(16);
+  });
 });
