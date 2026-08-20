@@ -105,4 +105,27 @@ describe("InputBox throttled repaints", () => {
 
     instance.unmount();
   });
+
+  test("a keystroke right after submit gets its own immediate render, not a throttle delay left over from before Enter", async () => {
+    const submitted: string[] = [];
+    const instance = render(
+      createElement(InputBox, { onSubmit: (v: string) => submitted.push(v) }),
+    );
+    await flush();
+
+    // All three writes land in the same synchronous burst — no real time elapses between the
+    // leading-edge flush of "hi" and the "y" typed right after Enter, the same way a fast human
+    // submit-then-type does. Only one `flush()` at the end: if "y" is stuck behind a scheduled
+    // timer left over from a stale `lastFlushRef`, this single settled macrotask (far short of
+    // THROTTLE_MS) isn't enough time for that timer to fire.
+    instance.stdin.write("hi"); // leading-edge flush, since it's the first keystroke this mount
+    instance.stdin.write("\r"); // Enter, submits "hi" and clears the input
+    instance.stdin.write("y"); // typed immediately after submit
+    await flush();
+
+    expect(submitted).toEqual(["hi"]);
+    expect(instance.lastFrame()).toContain("y");
+
+    instance.unmount();
+  });
 });

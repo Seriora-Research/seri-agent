@@ -1,6 +1,3 @@
-// Extracted out of App.tsx (Stage A, cli-commands-to-tui feature-plan.md) verbatim: a pure move,
-// no behavior change.
-
 import { Box, Text, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
 import { theme } from "../theme";
@@ -79,6 +76,10 @@ export function InputBox({
       // to fire after this and repopulate the just-cleared box with pre-submit content.
       pendingValueRef.current = "";
       setValue("");
+      // Forget when the last flush happened, not just what it flushed: a keystroke typed right
+      // after this submit starts a fresh interaction and must get its own leading-edge render,
+      // not be throttled against a flush that predates this submit.
+      lastFlushRef.current = 0;
       return;
     }
     // Ctrl-D, the normal Unix "end input" convention — HIGH-1's other trigger for the same quit
