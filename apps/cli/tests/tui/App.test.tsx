@@ -343,9 +343,9 @@ describe("App", () => {
     }
   });
 
-  // Design decision 1 (see the feature plan this ships under): a transcript shorter than the
-  // viewport top-anchors (`justifyContent: "flex-start"`) instead of bottom-padding a mostly-empty
-  // screen — the appended content must land near the very top of the frame, not down near InputBox.
+  // A transcript shorter than the viewport top-anchors (`justifyContent: "flex-start"`) instead of
+  // bottom-padding a mostly-empty screen — the appended content must land near the very top of the
+  // frame, not down near InputBox.
   test("a short transcript top-anchors: content appears near the top of the frame, not bottom-padded", async () => {
     const { instance, dispatch } = await connect();
 
@@ -358,9 +358,8 @@ describe("App", () => {
     expect(contentIndex).toBeLessThan(3);
   });
 
-  // Design decision 2: a committed assistant answer's own first visual row is prefixed with the
-  // `●` marker (format.ts's own displayText) — applied at render/wrap time, never stored on the
-  // entry itself.
+  // A committed assistant answer's own first visual row is prefixed with the `●` marker
+  // (format.ts's own displayText) — applied at render/wrap time, never stored on the entry itself.
   test("a committed assistant answer's frame line starts with the ● marker", async () => {
     const { instance, dispatch } = await connect();
 
@@ -372,11 +371,11 @@ describe("App", () => {
     expect(lines.some((line) => line.trimStart().startsWith("● the answer"))).toBe(true);
   });
 
-  // Design decision 3: the user-message background band is a per-row `backgroundColor`, not a
-  // bordered Box — invisible to a mounted-frame assertion since ink-testing-library's `lastFrame()`
-  // carries no ANSI in this test environment (see the `ListRow` describe block's own comment on the
-  // identical problem for the reverse-video row). Pinning `transcriptRowProps` (App.tsx) directly,
-  // the same fix applied there.
+  // The user-message background band is a per-row `backgroundColor`, not a bordered Box — invisible
+  // to a mounted-frame assertion since ink-testing-library's `lastFrame()` carries no ANSI in this
+  // test environment (see the `ListRow` describe block's own comment on the identical problem for
+  // the reverse-video row). Pinning `transcriptRowProps` (App.tsx) directly, the same fix applied
+  // there.
   describe("transcriptRowProps", () => {
     test('a role: "user" row is padded to `columns` and carries theme.userBg', () => {
       expect(transcriptRowProps({ role: "user", text: "> hi" }, 10)).toEqual({

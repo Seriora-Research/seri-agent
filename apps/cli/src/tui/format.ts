@@ -79,7 +79,9 @@ export function wrapForTranscript(text: string, columns: number): string[] {
 
 export type TranscriptRole = "user" | "assistant" | "system";
 export type TranscriptEntry = { role: TranscriptRole; text: string };
-export type VisibleRow = { role: TranscriptRole; text: string };
+// One wrapped/visual line of a TranscriptEntry — same shape today, kept as its own name since a
+// logical entry and its visual rows are conceptually distinct (one entry wraps to N rows).
+export type VisibleRow = TranscriptEntry;
 
 // The string an entry actually wraps/renders as — assistant entries get the `●` marker prefixed
 // here, at read time, rather than stored in the entry's own `text`. `transcriptVisualRows` and
