@@ -72,6 +72,64 @@ function anchored(log: CheckpointRecord[]): AnchoredRecord[] {
   );
 }
 
+// Curated verbs, not shell parsing — the same tradeoff Hermes (github.com/NousResearch/hermes-agent)
+// ships with for its own destructive-command gate. A real parser would need two grammars (bash and
+// PowerShell), their aliases, and their quoting rules; a word-boundary regex scan needs none of
+// that and costs nothing extra per call, so `bash("ls")`/`bash("git status")` — the common case,
+// most `bash` calls read rather than write — can skip writeTree's two spawns entirely instead of
+// paying them to discover nothing changed. Word-boundary (`\b`), not substring: a bare `mv` must
+// not fire on a filename that happens to contain those letters, e.g. `mv2.txt`.
+//
+// Accepted residual risk, same one Hermes accepts: an unrecognised or obfuscated destructive
+// command (a dynamically-built string, a shell alias, `find -delete`, a script that shells out to
+// `rm` two levels down) skips writeTree and is not recoverable via /undo. A false positive here
+// only costs one extra git spawn; a false negative costs undo coverage for that one call — so the
+// list leans broad rather than narrow.
+const DESTRUCTIVE_COMMAND_PATTERNS: RegExp[] = [
+  // bash
+  /\brm\b/,
+  /\brmdir\b/,
+  /\bmv\b/,
+  /\bcp\b/,
+  /\binstall\b/,
+  /\bsed\b.*-i\b/,
+  /\btruncate\b/,
+  /\bdd\b/,
+  /\bshred\b/,
+  /\bgit\s+reset\b/,
+  /\bgit\s+clean\b/,
+  /\bgit\s+checkout\b/,
+  // PowerShell
+  /\bRemove-Item\b/i,
+  /\bdel\b/i,
+  /\berase\b/i,
+  /\bri\b/i,
+  /\bMove-Item\b/i,
+  /\bren\b/i,
+  /\bRename-Item\b/i,
+  /\bCopy-Item\b.*-Force\b/i,
+  /\bSet-Content\b/i,
+  /\bClear-Content\b/i,
+  /\bOut-File\b/i,
+  // output redirection, both shells — coarse on purpose (Hermes takes the same approach): it does
+  // not distinguish `>` from a `->` or a comparison inside a quoted string, so it also fires on a
+  // handful of read-only commands (e.g. `echo "a > b"`), which only costs the spawn it exists to
+  // save on the destructive case.
+  />{1,2}/,
+];
+
+function isDestructiveCommand(command: string): boolean {
+  return DESTRUCTIVE_COMMAND_PATTERNS.some((pattern) => pattern.test(command));
+}
+
+// bash/powershell are the only tools whose mutation is buried inside an arbitrary command string —
+// see warnIfNotCheckpointed's identical note. Non-string/absent `command` (a malformed tool call)
+// is treated as destructive: whatever it is, this function cannot say it is safe to skip.
+function commandOf(args: unknown): string | undefined {
+  const command = (args as { command?: unknown }).command;
+  return typeof command === "string" ? command : undefined;
+}
+
 // One store per project, under <configDir>/checkpoints. `worktree` is the project root from
 // `projectRoot`, not the directory seri was started in, so every session in one repository shares
 // a store however deep in it the user was standing.
@@ -357,16 +415,31 @@ export function createCheckpointer(opts: {
 
       warnIfNotCheckpointed(context.tool, context.args, context.toolCallId);
 
-      const tree = writeTree(gitDir, opts.worktree);
-      if (!scoped) {
+      // writeTree's own two spawns (`add -A` + `write-tree`) run only when the call might have
+      // changed something: `write_file` always might; a bash/powershell call only when its command
+      // matches DESTRUCTIVE_COMMAND_PATTERNS; and the very first checkpoint of the session always
+      // does regardless of command, because there is no earlier tree yet to reuse — skipping it
+      // there would append a record with no valid tree at all.
+      const command = commandOf(context.args);
+      const mustSnapshot =
+        context.tool === "write_file" ||
+        previousTree === undefined ||
+        command === undefined ||
+        isDestructiveCommand(command);
+
+      // `previousTree` is only reused here when `mustSnapshot` is false, which — per the OR above —
+      // means this is not the first checkpoint, so `previousTree` is already a string.
+      const tree = mustSnapshot ? writeTree(gitDir, opts.worktree) : (previousTree as string);
+      if (mustSnapshot && !scoped) {
         scoped = true;
         warnAboutScope();
       }
-      // The one optimisation taken: an unchanged tree means nothing happened since the last
-      // checkpoint, so commit-tree and update-ref are skipped — 48.5 ms instead of 107.2 ms,
-      // measured. This is the common case, because most `bash` calls read rather than write
-      // (`ls`, `bun test`, `git status`). The record is still appended, reusing the previous tree
-      // and commit, so the conversation anchor for /rewind is never lost to the optimisation.
+      // An unchanged tree means nothing happened since the last checkpoint, so commit-tree and
+      // update-ref are skipped — 48.5 ms instead of 107.2 ms, measured. This is also what makes a
+      // gated-off bash/powershell call cheap end to end: `tree` above is `previousTree` reused, so
+      // this condition is false and neither commit-tree nor update-ref run. Either way the record
+      // below is still appended, reusing the previous tree and commit, so the conversation anchor
+      // for /rewind is never lost to either optimisation.
       if (tree !== previousTree || previousCommit === undefined) {
         previousCommit = commitTree(gitDir, opts.worktree, tree, previousCommit);
         updateRef(gitDir, sessionRef(opts.sessionId), previousCommit);
