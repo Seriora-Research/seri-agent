@@ -395,6 +395,15 @@ describe("App", () => {
         backgroundColor: undefined,
       });
     });
+
+    // "> 你好" is 4 UTF-16 units but 6 terminal cells (each CJK char is 2 cells wide) — padEnd(10)
+    // would overpad to 14 cells. Pad by display width so the row lands on exactly `columns`.
+    test("a role: \"user\" row with wide (CJK) characters pads to `columns` cells, not UTF-16 units", () => {
+      expect(transcriptRowProps({ role: "user", text: "> 你好" }, 10)).toEqual({
+        text: "> 你好    ",
+        backgroundColor: "#333333",
+      });
+    });
   });
 
   test("a tool-call loop-event sets the running status, and tool-result clears it", async () => {

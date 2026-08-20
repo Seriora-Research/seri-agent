@@ -19,6 +19,7 @@ import {
   useWindowSize,
 } from "ink";
 import { useEffect, useReducer, useRef, useState } from "react";
+import stringWidth from "string-width";
 import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
@@ -198,9 +199,12 @@ export function transcriptRowProps(
   row: VisibleRow,
   columns: number,
 ): { text: string; backgroundColor: string | undefined } {
-  return row.role === "user"
-    ? { text: row.text.padEnd(columns), backgroundColor: theme.userBg }
-    : { text: row.text, backgroundColor: undefined };
+  if (row.role !== "user") return { text: row.text, backgroundColor: undefined };
+  // `padEnd` counts UTF-16 units, not terminal cells — a CJK/wide-char row would overpad past
+  // `columns`. `stringWidth` measures display width instead (same measure `wrap-ansi` already
+  // uses to wrap this same text upstream).
+  const padding = " ".repeat(Math.max(0, columns - stringWidth(row.text)));
+  return { text: row.text + padding, backgroundColor: theme.userBg };
 }
 
 export function App({
