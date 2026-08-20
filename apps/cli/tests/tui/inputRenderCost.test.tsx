@@ -15,6 +15,7 @@ import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
 import { App } from "../../src/tui/App";
 import type { TuiAction } from "../../src/tui/reducer";
+import { MAIN_TUI_RENDER_OPTIONS } from "../../src/tui/renderOptions";
 
 // A fake TTY stdout: fixed 100 columns (matches App.test.tsx's assumption that width doesn't
 // vary across these tests), a configurable row count (the axis under test), and counters for
@@ -120,14 +121,11 @@ async function measureBackspaceCost(options: {
       stdout: stdout as unknown as NodeJS.WriteStream,
       stdin: stdin as unknown as NodeJS.ReadStream,
       stderr: stderr as unknown as NodeJS.WriteStream,
-      interactive: true,
-      exitOnCtrlC: false,
       patchConsole: false,
       maxFps: 1000,
-      // Mirrors the main TUI mount's own options (`cli.ts`'s `runTui`) rather than importing
-      // them — this suite mounts `<App>` directly everywhere else (App.test.tsx) rather than
-      // reaching into `cli.ts`, which also runs process-level setup on import.
-      incrementalRendering: true,
+      // The main TUI mount's own options (`cli.ts`'s `runTui`), imported rather than copied so a
+      // revert of `incrementalRendering` there fails this suite instead of leaving it green.
+      ...MAIN_TUI_RENDER_OPTIONS,
     },
   );
   await flush();
