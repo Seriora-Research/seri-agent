@@ -26,7 +26,9 @@ let bashResolution: { command: string; available: boolean } | undefined;
 // PATH directory, so isBashAvailable and resolveBashCommand each calling it independently scanned
 // PATH twice per runBash call for a result that cannot change mid-process.
 function detectBash(): { command: string; available: boolean } {
-  const found = findOnPath("bash") ?? WIN32_GIT_BASH_PATHS.find(existsSync);
+  const found =
+    findOnPath("bash") ??
+    (process.platform === "win32" ? WIN32_GIT_BASH_PATHS.find(existsSync) : undefined);
   return { command: found ?? "bash", available: found !== undefined };
 }
 
