@@ -9,23 +9,38 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { ModelMessage } from "ai";
-import { render } from "ink";
-import { createElement } from "react";
+import stringWidth from "string-width";
 import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
-import { App } from "../../src/tui/App";
+import type { TranscriptRole } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
-import { MAIN_TUI_RENDER_OPTIONS } from "../../src/tui/renderOptions";
+
+// `chalk` (used by `ink/build/colorize.js`) detects its color level once, at import time, from
+// this process's real stdout — before this file's own top-level code would otherwise run,
+// because ESM hoists *static* imports above everything else in the importing module. `ink`,
+// `react`, `App`, and `renderOptions` are therefore imported dynamically below, after FORCE_COLOR
+// is set, which keeps this assignment in program order ahead of the module graph that reads it
+// (a dynamic `import()` is a plain expression, not hoisted). Without this, level stays 0 whenever
+// the real test process's stdout isn't a TTY, `colorize` becomes a no-op, and every test below
+// would measure nothing and pass vacuously — see the negative-control assertion further down.
+process.env.FORCE_COLOR = "3";
+const { render } = await import("ink");
+const { createElement } = await import("react");
+const { App } = await import("../../src/tui/App");
+const { MAIN_TUI_RENDER_OPTIONS } = await import("../../src/tui/renderOptions");
 
 // A fake TTY stdout: fixed 100 columns (matches App.test.tsx's assumption that width doesn't
 // vary across these tests), a configurable row count (the axis under test), and counters for
 // every byte/call written to it — the thing a real terminal emulator has to parse and repaint.
+// `raw` accumulates the actual written text (not just its length) so a test can assert on the
+// bytes' own content, not only their count.
 class FakeTty extends EventEmitter {
   isTTY = true as const;
   columns = 100;
   rows: number;
   bytes = 0;
   writes = 0;
+  raw = "";
 
   constructor(rows: number) {
     super();
@@ -35,6 +50,7 @@ class FakeTty extends EventEmitter {
   write = (chunk: string): boolean => {
     this.bytes += chunk.length;
     this.writes += 1;
+    this.raw += chunk;
     return true;
   };
 }
@@ -86,20 +102,22 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function ninetyColumnLine(i: number): string {
-  return `transcript line ${i} `.padEnd(90, ".");
-}
+// A realistic short user turn — 33 display cells, the same representative row the root-cause
+// measurement in the bugfix report used.
+const MESSAGE = "> how do I refactor this function";
 
-// Mounts <App> through Ink's real interactive path, seeds `transcriptLines` lines of transcript
-// (enough to fill the viewport at any `rows` under test), types a fixed-length input as a single
-// paste chunk, then does N backspaces and reports the bytes/writes that cost the terminal.
+// Mounts <App> through Ink's real interactive path, seeds `seedCount` transcript rows of a fixed
+// `role` (all the same `MESSAGE` text, so only the role differs between two runs), types a
+// fixed-length input as a single paste chunk, then does N backspaces and reports the bytes/writes
+// that cost the terminal.
 async function measureBackspaceCost(options: {
   rows: number;
-  transcriptLines: number;
+  role: TranscriptRole;
+  seedCount: number;
   inputLength: number;
   n: number;
-}): Promise<{ bytes: number; writes: number }> {
-  const { rows, transcriptLines, inputLength, n } = options;
+}): Promise<{ bytes: number; writes: number; raw: string }> {
+  const { rows, role, seedCount, inputLength, n } = options;
   const stdout = new FakeTty(rows);
   const stdin = new FakeStdin();
   const stderr = new FakeTty(rows);
@@ -122,7 +140,9 @@ async function measureBackspaceCost(options: {
       stdin: stdin as unknown as NodeJS.ReadStream,
       stderr: stderr as unknown as NodeJS.WriteStream,
       patchConsole: false,
-      maxFps: 1000,
+      // No `maxFps` override: this measures the real mount's own frame-write cost, and (per the
+      // bugfix report's root-cause reading) InputBox's own 50ms local throttle is already coarser
+      // than Ink's ~33ms default, so it dominates the render cadence here regardless.
       // The main TUI mount's own options (`cli.ts`'s `runTui`), imported rather than copied so a
       // revert of `incrementalRendering` there fails this suite instead of leaving it green.
       ...MAIN_TUI_RENDER_OPTIONS,
@@ -131,90 +151,96 @@ async function measureBackspaceCost(options: {
   await flush();
   if (dispatch === undefined) throw new Error("connectDispatch never fired");
 
-  for (let i = 0; i < transcriptLines; i++) {
-    dispatch({ type: "transcript-append", line: ninetyColumnLine(i) });
+  for (let i = 0; i < seedCount; i++) {
+    dispatch({ type: "transcript-append", line: MESSAGE, role });
   }
   await flush();
 
   stdin.write("x".repeat(inputLength));
   await flush();
 
-  // Warm-up: absorb the first few backspaces' one-time costs (e.g. cliCursor.hide's first write,
-  // and an occasional extra commit when a backspace crosses InputBox's own line-wrap boundary and
-  // the transcript viewport gets remeasured a tick later) before the counters below start, so the
-  // measured window only reflects steady-state cost. 10ms, not the 1ms maxFps throttle window
-  // alone: measured directly (bun scratch runs against this same harness) — the wrap-boundary
-  // recommit lands a few ms after the throttled write, and 3ms left it bleeding into the next
-  // keystroke's count often enough to be visible in the totals.
+  // Warm-up: absorb the first few backspaces' one-time costs (e.g. cliCursor.hide's first write)
+  // before the counters below start, so the measured window only reflects steady-state cost.
+  //
+  // 60ms between keystrokes, not a tighter spacing: InputBox's own THROTTLE_MS (50ms) coalesces
+  // several rapid keystrokes into one flush/frame, which would make `n` backspaces produce far
+  // fewer than `n` real frames — measured directly against an earlier draft of this harness at
+  // 10ms spacing, where 20 backspaces produced only ~5 real frames and silently diluted the
+  // per-row byte metric below by that same ~4x factor. 60ms clears the 50ms throttle window, so
+  // each backspace gets its own flush and `n` is an accurate frame count for the metric below.
   for (let i = 0; i < 5; i++) {
     stdin.write("\x7f");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 60));
   }
 
   stdout.bytes = 0;
   stdout.writes = 0;
+  stdout.raw = "";
 
   for (let i = 0; i < n; i++) {
     stdin.write("\x7f");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 60));
   }
 
   instance.unmount();
-  return { bytes: stdout.bytes, writes: stdout.writes };
+  return { bytes: stdout.bytes, writes: stdout.writes, raw: stdout.raw };
 }
 
 describe("TUI input render cost", () => {
-  // Ink's synchronized-output wrapping (`ink.js`'s `throttledLog`, `write-synchronized.js`) writes
-  // a begin/end escape around every changed frame in addition to the frame itself, so a keystroke
-  // that changes the frame costs more than one stdout.write() call even before this file's fix —
-  // measured directly against this harness, not assumed. `toBeGreaterThanOrEqual`, not `toBe`, is
-  // what keeps this a real "not coalesced" guard under that multi-write-per-frame reality: N
-  // keystrokes that got merged into fewer than N frames would still fail loudly here.
-  test("the harness mounts and each keystroke produces at least one frame write, not a coalesced batch", async () => {
-    const { writes } = await measureBackspaceCost({
-      rows: 20,
-      transcriptLines: 300,
-      inputLength: 300,
-      n: 20,
-    });
+  // theme.userBg's opening truecolor background code — colorize.js (via chalk.bgHex) is what
+  // emits this, and output.js only keeps a padded row's trailing spaces when the row carries an
+  // SGR like this one (see the file-level comment on `FORCE_COLOR` above).
+  const USER_BG_SGR = "\x1b[48;2;51;51;51m";
 
-    expect(writes).toBeGreaterThanOrEqual(20);
-  });
-
-  // Metric: marginal bytes written to stdout per extra visible transcript row, per keystroke.
-  // `log-update.js`'s default writer (`createStandard`) re-emits the ENTIRE frame — every
-  // transcript row, unchanged or not — on every changed frame; its incremental writer
-  // (`createIncremental`) skips a row whose text didn't change and emits a bare 3-byte
-  // `cursorNextLine` instead. `rowsLarge - rowsSmall` extra unchanged transcript rows isolate
-  // exactly that per-row cost: identical content and identical input, differing only in how many
-  // on-screen rows a backspace's frame has to carry along.
-  //
-  // `16`: a 5x headroom over the 3-byte `cursorNextLine` floor, while staying an order of
-  // magnitude below the pre-fix per-row cost (a 90-column row with theme colours re-emitted in
-  // full runs on the order of 100-200 bytes) — this is a statement about behaviour ("an unchanged
-  // row costs a cursor move, not a repaint"), not a tuned number.
-  test("an unchanged transcript row costs a cursor move per keystroke, not a repaint", async () => {
+  // Metric: marginal bytes written to stdout per visible role:"user" transcript row, per
+  // keystroke. Two runs, identical terminal geometry and message text, differing only in role
+  // mix (all-"system" vs all-"user"): `pushLine` (reducer.ts) inserts a blank role:"system"
+  // separator before every role:"user" turn but the first, so `seedCount` user dispatches yield
+  // `2 * seedCount - 1` transcript rows — only `seedCount` of which are actually role:"user".
+  // `rows` is generous enough that every seeded row stays inside the viewport (asserted below),
+  // so `visibleUserRows` is exactly `seedCount`, not an estimate.
+  test("a visible user-role transcript row costs its message width per keystroke, not the full terminal width", async () => {
     const n = 20;
-    const rowsSmall = 20;
-    const rowsLarge = 60;
+    const seedCount = 6;
+    const rows = 40;
 
-    const small = await measureBackspaceCost({
-      rows: rowsSmall,
-      transcriptLines: 300,
+    const userRun = await measureBackspaceCost({
+      rows,
+      role: "user",
+      seedCount,
       inputLength: 300,
       n,
     });
-    const large = await measureBackspaceCost({
-      rows: rowsLarge,
-      transcriptLines: 300,
+    const systemRun = await measureBackspaceCost({
+      rows,
+      role: "system",
+      seedCount,
       inputLength: 300,
       n,
     });
 
-    const marginalBytesPerRow = (large.bytes - small.bytes) / (n * (rowsLarge - rowsSmall));
+    // Negative control: without a real SGR in the captured bytes, the byte comparison below would
+    // pass for the wrong reason (nothing in either run costs any color at all).
+    expect(userRun.raw).toContain(USER_BG_SGR);
 
-    expect(large.writes).toBeGreaterThanOrEqual(n);
-    expect(small.writes).toBeGreaterThanOrEqual(n);
-    expect(marginalBytesPerRow).toBeLessThan(16);
+    expect(2 * seedCount - 1).toBeLessThanOrEqual(rows); // sanity: nothing scrolled out of view
+    const visibleUserRows = seedCount;
+
+    const marginal = (userRun.bytes - systemRun.bytes) / (n * visibleUserRows);
+
+    // Threshold, derived not tuned. theme.userBg's fixed SGR overhead is 21 bytes (open
+    // "\x1b[48;2;51;51;51m", 16 bytes, + close "\x1b[49m", 5 bytes). Every seeded row here uses
+    // the identical MESSAGE text, so `messageWidth` cancels out of the user/system diff and
+    // `marginal` reduces to SGR_OVERHEAD + (bandWidth - messageWidth): pre-fix the band is
+    // `columns` (100) wide regardless of message length, measured at 88 bytes/row/keystroke on
+    // this machine; post-fix the band is at most the widest visible message — `messageWidth`
+    // itself here — collapsing the formula to just SGR_OVERHEAD (measured at 21). SLACK=10 keeps
+    // this threshold (64) roughly centred between the two, not hugging either one: 24 bytes of
+    // headroom against the pre-fix value, 43 against the post-fix one.
+    const SGR_OVERHEAD = 21;
+    const messageWidth = stringWidth(MESSAGE);
+    const SLACK = 10;
+
+    expect(marginal).toBeLessThan(SGR_OVERHEAD + messageWidth + SLACK);
   });
 });
