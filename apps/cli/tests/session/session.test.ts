@@ -186,6 +186,25 @@ describe("saveSession (JSONL append-only persistence)", () => {
     writeSpy.mockRestore();
     appendSpy.mockRestore();
   });
+
+  test("falls back to a full rewrite when the file was deleted out of band, instead of appending onto nothing", () => {
+    const state: SessionState = {
+      id: "deleted",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ n: 1 }],
+    };
+    saveSession(state, sessionsDir);
+    fs.rmSync(join(sessionsDir, "deleted.jsonl"));
+
+    const grown: SessionState = { ...state, messages: [...state.messages, { n: 2 }] };
+    saveSession(grown, sessionsDir);
+
+    // A headerless append here would leave loadSession misparsing the first message as the header,
+    // silently returning id/cwd/permissionMode all undefined instead of the real session.
+    expect(loadSession("deleted", sessionsDir)).toEqual(grown);
+  });
 });
 
 describe("findMostRecentSession", () => {

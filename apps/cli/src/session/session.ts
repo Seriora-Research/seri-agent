@@ -108,8 +108,12 @@ export function saveSession(state: SessionState, sessionsDir: string): void {
   const path = sessionPath(sessionsDir, state.id);
   const prevCount = persistedCounts.get(path);
   const sameHeader = prevCount !== undefined && persistedHeaders.get(path) === headerJson;
+  // The append fast path assumes the header it is appending onto is still on disk. If the file was
+  // deleted out of band, appendFileSync would silently create a new headerless one, and loadSession
+  // would then misparse the first message as the header.
+  const fileExists = existsSync(path);
 
-  if (sameHeader && state.messages.length > prevCount) {
+  if (sameHeader && state.messages.length > prevCount && fileExists) {
     // The hot path: nothing but new messages changed since the last save, so only they are
     // serialized — the messages already on disk are never touched.
     appendFileSync(
@@ -119,7 +123,7 @@ export function saveSession(state: SessionState, sessionsDir: string): void {
         .map((message) => `${JSON.stringify(message)}\n`)
         .join(""),
     );
-  } else if (!sameHeader || state.messages.length < prevCount) {
+  } else if (!sameHeader || state.messages.length < prevCount || !fileExists) {
     // First save for this id in this process, a header field changed (e.g. /mode), or a /rewind
     // shrink — none of those are expressible as an append, so the whole file is rebuilt.
     writeSessionFile(
