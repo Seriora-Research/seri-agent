@@ -29,6 +29,17 @@ describe("loadLedger", () => {
     writeFileSync(join(storeDir, "ledger.json"), "{not valid json");
     expect(loadLedger(storeDir)).toEqual({});
   });
+
+  // Valid JSON that isn't a plain object -- null[path] throws on both read and write, and
+  // filterSafeToDelete's call site in restoreTo has no try/catch around it, so an unguarded
+  // `null` here would fail /undo outright instead of degrading to "nothing verified".
+  test.each(["null", "[]", "42", '"a string"'])(
+    "fails safe (empty ledger) on valid but non-object JSON: %s",
+    (content) => {
+      writeFileSync(join(storeDir, "ledger.json"), content);
+      expect(loadLedger(storeDir)).toEqual({});
+    },
+  );
 });
 
 describe("recordWrite", () => {
@@ -92,5 +103,22 @@ describe("filterSafeToDelete", () => {
     writeFileSync(join(storeDir, "ledger.json"), "{not valid json");
 
     expect(filterSafeToDelete(storeDir, worktree, ["a.txt"])).toEqual([]);
+  });
+
+  test("a ledger file holding literal null excludes every candidate rather than throwing", () => {
+    const path = join(worktree, "a.txt");
+    writeFileSync(path, "seri wrote this\n");
+    recordWrite(storeDir, path, "seri wrote this\n");
+    writeFileSync(join(storeDir, "ledger.json"), "null");
+
+    expect(filterSafeToDelete(storeDir, worktree, ["a.txt"])).toEqual([]);
+  });
+
+  test("recordWrite does not throw when the existing ledger file holds literal null", () => {
+    writeFileSync(join(storeDir, "ledger.json"), "null");
+    const path = join(worktree, "a.txt");
+
+    expect(() => recordWrite(storeDir, path, "hello\n")).not.toThrow();
+    expect(loadLedger(storeDir)[path]).toMatch(/^[0-9a-f]{64}$/);
   });
 });

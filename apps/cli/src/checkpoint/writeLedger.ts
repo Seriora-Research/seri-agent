@@ -18,10 +18,16 @@ function hash(content: string): string {
 // A corrupt or missing ledger fails SAFE, not open: "nothing is verified as seri-authored" only
 // ever makes filterSafeToDelete MORE conservative — it skips more, never deletes more — the same
 // "one warning, latch off, never silently over-delete" posture createCheckpointer's own error
-// latch already applies to the rest of this subsystem.
+// latch already applies to the rest of this subsystem. Valid-but-wrong-shaped JSON (`null`, an
+// array, a bare number) is treated the same as a parse failure, not just a parse failure itself:
+// `null[path]` throws in both recordWrite's write and filterSafeToDelete's read, and the latter
+// has no try/catch around its call in restoreTo, so an unguarded `null` here would fail /undo
+// outright instead of degrading to "nothing verified" the way this comment promises.
 export function loadLedger(storeDir: string): Record<string, string> {
   try {
-    return JSON.parse(readFileSync(ledgerPath(storeDir), "utf8"));
+    const parsed: unknown = JSON.parse(readFileSync(ledgerPath(storeDir), "utf8"));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed as Record<string, string>;
   } catch {
     return {};
   }
