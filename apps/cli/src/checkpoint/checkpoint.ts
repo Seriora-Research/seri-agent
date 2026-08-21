@@ -97,6 +97,12 @@ const DESTRUCTIVE_COMMAND_PATTERNS: RegExp[] = [
   /\bmv\b/,
   /\bcp\b/,
   /\binstall\b/,
+  // \b does not fire between "n" and "i" (both word characters, no boundary there), so
+  // /\binstall\b/ alone never matches "uninstall" — verified directly: that regex against
+  // "npm uninstall lodash" returns false, silently letting a real dependency removal skip the
+  // snapshot. A separate pattern, not folding "un" into the existing one, keeps the un-prefixed
+  // "install" match intact rather than making both conditional on the same alternation.
+  /\buninstall\b/,
   /\bsed\b.*-i\b/,
   /\btruncate\b/,
   /\bdd\b/,

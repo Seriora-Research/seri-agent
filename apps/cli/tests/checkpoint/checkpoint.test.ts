@@ -14,6 +14,7 @@ import { basename, join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
 import {
   appendBarrier,
+  type CheckpointRecord,
   checkpointStoreDir,
   createCheckpointer,
   pruneSessions,
@@ -21,7 +22,6 @@ import {
   restoreCommit,
   rewindConversation,
   undoFiles,
-  type CheckpointRecord,
 } from "../../src/checkpoint/checkpoint";
 import {
   applyRestore,
@@ -34,7 +34,7 @@ import {
   updateRef,
   writeTree,
 } from "../../src/checkpoint/shadowGit";
-import { withCheckpoints, type MutationContext } from "../../src/checkpoint/wrapTools";
+import { type MutationContext, withCheckpoints } from "../../src/checkpoint/wrapTools";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
 import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
@@ -474,6 +474,12 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     "git apply patch.diff",
     "tee out.txt",
     "patch -p1 < patch.diff",
+    // \b does not fire between "n" and "i" (both word characters) — /\binstall\b/ alone never
+    // matched "uninstall" (verified: false against this exact string before the fix). "git rm"/
+    // "git mv" are NOT added here even though a review flagged them as missing: the plain
+    // /\brm\b/ and /\bmv\b/ patterns already match "git rm ..."/"git mv ..." as a substring word,
+    // verified directly — a dedicated git-rm/git-mv pattern would have been dead weight.
+    "npm uninstall lodash",
   ])(
     "a destructive bash call restages the worktree: %s",
     (command) => {
