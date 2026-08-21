@@ -76,3 +76,43 @@ export function withCheckpoints(
     }),
   ) as ToolSet;
 }
+
+// The after-only half of withCheckpoints, for a caller that must record write provenance without
+// taking withCheckpoints' pre-mutation snapshot. subagents/roles.ts's buildRoleToolSet deliberately
+// never wraps a role's tools with withCheckpoints — a per-child snapshot would append a
+// child-derived rewindTo to the PARENT session's rewind log (dispatch.ts's own pre-dispatch-snapshot
+// comment) — which left every subagent write_file call unrecorded in the write ledger:
+// filterSafeToDelete (writeLedger.ts) has no provenance for a subagent-written file, so /undo can
+// never prove it safe to delete and preserves it forever instead. This restores that provenance
+// without reintroducing the per-child snapshot onBeforeMutation would require.
+export function withMutationRecording(tools: ToolSet, onAfterMutation: OnAfterMutation): ToolSet {
+  const mutating = new Set<string>(FS_MUTATING_TOOL_NAMES);
+
+  return Object.fromEntries(
+    Object.entries(tools).map(([name, definition]) => {
+      const execute = definition.execute;
+      if (!mutating.has(name) || execute === undefined) return [name, definition];
+
+      return [
+        name,
+        {
+          ...definition,
+          // async, not Promise.resolve(execute(...)).then(...): this wraps a synchronous throw
+          // from execute into a rejection the same way an async execute's own throw would be,
+          // so onAfterMutation is skipped on failure either way instead of only on one of them.
+          execute: async (args: unknown, options: ToolExecutionOptions<Record<string, unknown>>) => {
+            const context: MutationContext = {
+              tool: name,
+              toolCallId: options.toolCallId,
+              args,
+              rewindTo: options.messages.length - 1,
+            };
+            const value = await execute(args, options);
+            onAfterMutation(context);
+            return value;
+          },
+        },
+      ];
+    }),
+  ) as ToolSet;
+}

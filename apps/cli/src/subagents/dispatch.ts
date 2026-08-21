@@ -3,7 +3,7 @@ import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "a
 import { tool } from "ai";
 import { z } from "zod";
 import { joinTiers } from "../agents/systemPrompt";
-import type { MutationContext, OnBeforeMutation } from "../checkpoint/wrapTools";
+import type { MutationContext, OnAfterMutation, OnBeforeMutation } from "../checkpoint/wrapTools";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent, runLoop } from "../loop/loop";
 import type { CostReport } from "../provider/cost";
@@ -57,7 +57,10 @@ export type SubagentRuntime = {
   // current mode rather than the one driveLoop composed this runtime with.
   permissionMode: () => PermissionMode;
   allowedTools: readonly string[];
-  checkpointer?: OnBeforeMutation;
+  // onAfterMutation is optional here even though the concrete Checkpointer (checkpoint.ts) always
+  // has one: this type is the generic contract runOne/buildRoleToolSet code against, and a test
+  // double or a future caller with no write ledger is still a valid OnBeforeMutation without it.
+  checkpointer?: OnBeforeMutation & { onAfterMutation?: OnAfterMutation };
   onChildUsage?: (usage: LanguageModelUsage, cost: CostReport | undefined) => void;
   maxIterations?: number;
 };
@@ -232,7 +235,7 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
 
       function runOne(task: SubagentTask) {
         return runSubagent({
-          tools: buildRoleToolSet(task.role),
+          tools: buildRoleToolSet(task.role, runtime.checkpointer?.onAfterMutation),
           system: joinTiers(runtime.system, roleAddendum(task.role)),
           messages: [{ role: "user", content: task.goal }],
           runtime,

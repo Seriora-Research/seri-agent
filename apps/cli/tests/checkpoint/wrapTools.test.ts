@@ -6,7 +6,11 @@ import { join } from "node:path";
 import { tool, type ModelMessage, type ToolExecutionOptions, type ToolSet } from "ai";
 import { z } from "zod";
 import { initShadow, isGitAvailable, writeTree } from "../../src/checkpoint/shadowGit";
-import { withCheckpoints, type MutationContext } from "../../src/checkpoint/wrapTools";
+import {
+  withCheckpoints,
+  withMutationRecording,
+  type MutationContext,
+} from "../../src/checkpoint/wrapTools";
 
 const messages: ModelMessage[] = [
   { role: "user", content: "do the task" },
@@ -173,6 +177,66 @@ describe("withCheckpoints", () => {
     expect(await wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts())).toEqual({
       written: 3,
     });
+  });
+});
+
+describe("withMutationRecording", () => {
+  test("runs onAfterMutation after the tool resolves, with no before-hook at all", async () => {
+    const order: string[] = [];
+    const wrapped = withMutationRecording(
+      fakeTools(() => {
+        order.push("execute");
+        return "ok";
+      }),
+      () => order.push("after"),
+    );
+
+    expect(await wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts())).toBe("ok");
+    expect(order).toEqual(["execute", "after"]);
+  });
+
+  test("does not run onAfterMutation when the tool call throws synchronously", async () => {
+    let calls = 0;
+    const wrapped = withMutationRecording(
+      fakeTools(() => {
+        throw new Error("disk full");
+      }),
+      () => {
+        calls++;
+      },
+    );
+
+    await expect(wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts())).rejects.toThrow(
+      "disk full",
+    );
+    expect(calls).toBe(0);
+  });
+
+  test("records every filesystem-mutating tool, not just write_file", async () => {
+    const calls: MutationContext[] = [];
+    const wrapped = withMutationRecording(
+      fakeTools(() => "ok"),
+      (context) => calls.push(context),
+    );
+
+    for (const name of ["write_file", "bash", "powershell"]) {
+      await wrapped[name]?.execute?.({ path: "a.txt" }, execOpts());
+    }
+
+    expect(calls.map((call) => call.tool)).toEqual(["write_file", "bash", "powershell"]);
+  });
+
+  test("returns non-mutating tools by reference and never records them", async () => {
+    const calls: MutationContext[] = [];
+    const tools = fakeTools(() => "ok");
+    const wrapped = withMutationRecording(tools, (context) => calls.push(context));
+
+    for (const name of ["read_file", "edit", "grep", "glob"]) {
+      expect(wrapped[name]).toBe(tools[name]);
+      await wrapped[name]?.execute?.({ path: "a.txt" }, execOpts());
+    }
+
+    expect(calls).toEqual([]);
   });
 });
 
