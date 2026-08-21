@@ -114,8 +114,7 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-// A realistic short user turn — 33 display cells, the same representative row the root-cause
-// measurement in the bugfix report used.
+// A realistic short user turn — 33 display cells, a representative short user turn.
 const MESSAGE = "> how do I refactor this function";
 
 // Mounts <App> through Ink's real interactive path, seeds `seedCount` transcript rows of a fixed
@@ -145,6 +144,10 @@ async function measureBackspaceCost(options: {
       done: false,
     }),
     {
+      // Spread first, not last: this test's own explicit options below (stdout/stdin/stderr,
+      // patchConsole) are what this suite actually depends on, so a future key added to the shared
+      // `MAIN_TUI_RENDER_OPTIONS` const can't silently override one of them.
+      ...MAIN_TUI_RENDER_OPTIONS,
       // Ink's own RenderOptions types stdout/stdin/stderr as real Node streams; these fakes only
       // implement the subset Ink actually calls (same minimal shape ink-testing-library's own
       // Stdout/Stdin fakes use against the same option).
@@ -152,12 +155,9 @@ async function measureBackspaceCost(options: {
       stdin: stdin as unknown as NodeJS.ReadStream,
       stderr: stderr as unknown as NodeJS.WriteStream,
       patchConsole: false,
-      // No `maxFps` override: this measures the real mount's own frame-write cost, and (per the
-      // bugfix report's root-cause reading) InputBox's own 50ms local throttle is already coarser
-      // than Ink's ~33ms default, so it dominates the render cadence here regardless.
-      // The main TUI mount's own options (`cli.ts`'s `runTui`), imported rather than copied so a
-      // revert of `incrementalRendering` there fails this suite instead of leaving it green.
-      ...MAIN_TUI_RENDER_OPTIONS,
+      // No `maxFps` override: this measures the real mount's own frame-write cost, and InputBox's
+      // own 50ms local throttle (InputBox.tsx's own THROTTLE_MS) is already coarser than Ink's
+      // ~33ms default, so it dominates the render cadence here regardless.
     },
   );
   await flush();
