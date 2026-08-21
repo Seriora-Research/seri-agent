@@ -20,6 +20,7 @@ import { saveAuthSession } from "../../src/auth/authStore";
 import { getConfigDir } from "../../src/config/paths";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
+import { recordWrite } from "../../src/checkpoint/writeLedger";
 import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS } from "../../src/cli";
 import { USAGE } from "../../src/cli/output";
 import { setConfigValue } from "../../src/config/config";
@@ -2791,15 +2792,23 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     // additive: it recreated new.ts and left old.ts sitting beside it, a state that had never
     // existed, under a line reading "To get it back". The assertion that discriminates is
     // old.ts being gone again, not new.ts coming back.
+    const storeDir = checkpointStoreDir(checkpointsDir, workTree);
     writeFileSync(join(workTree, "old.ts"), "old\n");
     createCheckpointer({
-      storeDir: checkpointStoreDir(checkpointsDir, workTree),
+      storeDir,
       worktree: workTree,
       sessionId: SESSION_ID,
       onWarning: () => {},
     })({ tool: "write_file", toolCallId: "c1", args: { path: "old.ts" }, rewindTo: 1 });
+    // The agent's own write_file call, not a second checkpoint: recordWrite is what write_file's
+    // onAfterMutation populates on every successful write, independent of whether a new snapshot
+    // was taken. Both old.ts and new.ts need it — the removal pass, in both directions this test
+    // exercises (the /undo below and the /restore that recovers from it), now requires this proof
+    // before it will delete either.
+    recordWrite(storeDir, join(workTree, "old.ts"), "old\n");
     rmSync(join(workTree, "old.ts"));
     writeFileSync(join(workTree, "new.ts"), "new\n");
+    recordWrite(storeDir, join(workTree, "new.ts"), "new\n");
     saveSession(
       { id: SESSION_ID, cwd: workTree, systemPrompt: "", permissionMode: "auto", messages },
       sessionsDir,

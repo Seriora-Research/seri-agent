@@ -21,12 +21,13 @@ import { login as loginReal, logout as logoutReal } from "./auth/commands";
 import { getWorkosClientId } from "./auth/deviceFlow";
 import {
   appendBarrier,
+  type Checkpointer,
   createCheckpointer,
   type RestorePlan,
   type RestoreResult,
 } from "./checkpoint/checkpoint";
 import { projectRoot } from "./checkpoint/shadowGit";
-import { type OnBeforeMutation, withCheckpoints } from "./checkpoint/wrapTools";
+import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
   approvalPromptText,
   archivistLine,
@@ -1001,9 +1002,13 @@ type PreparedRun = {
   // /logout left the previous (possibly paid) plan in place, so `resolveRoute`/`/model` could keep
   // reflecting stale auth state after either.
   plan: Plan | null;
-  // The same OnBeforeMutation `tools`' own withCheckpoints was built with — driveLoop's
-  // withSubagents reuses it for one pre-dispatch snapshot instead of building a second one.
-  checkpointer: OnBeforeMutation;
+  // The same Checkpointer `tools`' own withCheckpoints was built with — driveLoop's
+  // withSubagents reuses it (as an OnBeforeMutation; Checkpointer is one, plus the two extras
+  // below) for one pre-dispatch snapshot instead of building a second one. `Checkpointer`, not
+  // `OnBeforeMutation`, so runTui's own /undo and /restore handling (its own comment near
+  // `invalidate()`'s call site) can reach `.invalidate()` on the SAME live instance, not a second
+  // one it would have no way to build.
+  checkpointer: Checkpointer;
   // Loaded once here, alongside everything else this object resolves once per run — "frozen per
   // session" (renderMemoryTier's own doc comment) means loaded HERE and nowhere else; a write made
   // mid-session takes effect next session, not this one.
@@ -1248,7 +1253,7 @@ async function prepareSession(
       onWarning: printWarning,
     });
     const tools = withVerification(
-      withCheckpoints(toolDefinitions, checkpointer),
+      withCheckpoints(toolDefinitions, checkpointer, checkpointer.onAfterMutation),
       loadVerifyConfig(),
     );
 
@@ -2587,6 +2592,17 @@ async function runTui(
       // returns.
       if (name === "/rewind") {
         resetArchivistForRewind(archivistState, liveState.session.messages);
+      }
+      // /undo and /restore just forced the worktree to a state this closure's live `checkpointer`
+      // never saw happen — it is the SAME instance every ongoing tool call in this TUI session
+      // checkpoints through, and its own `previousTree`/`previousCommit` are now stale: the next
+      // non-destructive bash/powershell call would reuse `previousTree` (createCheckpointer's own
+      // "gate first checkpoint of a process" comment explains why that reuse exists at all) as
+      // though nothing had happened since it was recorded, when the restore just rewrote the
+      // worktree out from under it. `invalidate()` clears that state so the very next mutating call
+      // takes a real snapshot instead of trusting a tree the restore already invalidated.
+      if (name === "/undo" || name === "/restore") {
+        prepared.checkpointer.invalidate();
       }
     } catch (err) {
       dispatch({
