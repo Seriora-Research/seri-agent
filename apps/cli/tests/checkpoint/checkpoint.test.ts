@@ -791,6 +791,36 @@ describe.skipIf(!isGitAvailable())("undoFiles (write-ledger deletion gate)", () 
   );
 });
 
+describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
+  test(
+    "re-derives previousCommit from the session ref, so a checkpoint taken after a restore chains onto it",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+      writeFileSync(join(workTree, "a.txt"), "v2\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      // undoFiles moves the session ref on its own, exactly as restoreTo does in production — this
+      // closure's own previousCommit has no way to know that happened without invalidate().
+      const result = undo(1);
+
+      snapshot.invalidate();
+      writeFileSync(join(workTree, "a.txt"), "v3\n");
+      snapshot(mutation({ toolCallId: "c3" }));
+
+      // The new checkpoint must chain onto the pre-undo commit restoreTo minted — proving
+      // invalidate() re-read the ref rather than parenting the next commit on the stale,
+      // pre-restore commit this closure had cached before the undo ran.
+      const gitDir = join(storeDir, "git");
+      const commit = toolRecords().at(-1)?.commit ?? "";
+      expect(plainGit(gitDir, ["rev-list", commit]).split("\n").filter(Boolean)).toContain(
+        result.preUndoCommit,
+      );
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+});
+
 describe.skipIf(!isGitAvailable())("rewindConversation", () => {
   test(
     "steps over distinct rewind anchors, newest first",
