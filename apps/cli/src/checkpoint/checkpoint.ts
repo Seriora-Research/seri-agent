@@ -82,9 +82,11 @@ function anchored(log: CheckpointRecord[]): AnchoredRecord[] {
 //
 // Accepted residual risk, same one Hermes accepts: an unrecognised or obfuscated destructive
 // command (a dynamically-built string, a shell alias, `find -delete`, a script that shells out to
-// `rm` two levels down) skips writeTree and is not recoverable via /undo. A false positive here
-// only costs one extra git spawn; a false negative costs undo coverage for that one call — so the
-// list leans broad rather than narrow.
+// `rm` two levels down) skips writeTree, and because it was never captured in any tree, /undo will
+// delete its output if you roll back to before it existed — a restore-to-tree operation treats
+// anything not in the target tree as extraneous and removes it. A false positive here only costs
+// one extra git spawn; a false negative costs undo coverage for that one call — so the list leans
+// broad rather than narrow.
 const DESTRUCTIVE_COMMAND_PATTERNS: RegExp[] = [
   // bash
   /\brm\b/,
@@ -99,6 +101,11 @@ const DESTRUCTIVE_COMMAND_PATTERNS: RegExp[] = [
   /\bgit\s+reset\b/,
   /\bgit\s+clean\b/,
   /\bgit\s+checkout\b/,
+  /\bgit\s+restore\b/,
+  /\bgit\s+stash\b/,
+  /\bgit\s+apply\b/,
+  /\btee\b/,
+  /\bpatch\b/,
   // PowerShell
   /\bRemove-Item\b/i,
   /\bdel\b/i,
