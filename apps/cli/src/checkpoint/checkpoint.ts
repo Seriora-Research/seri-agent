@@ -262,6 +262,13 @@ export function createCheckpointer(opts: {
   let seq = 0;
   let previousTree: string | undefined;
   let previousCommit: string | undefined;
+  // Tracks whether THIS process has taken a real snapshot yet, independent of `previousTree`:
+  // `start()` seeds `previousTree` from the session's existing log on --resume, so on a resumed
+  // session `previousTree` is already a string before this process has written a single tree of
+  // its own. Gating on `previousTree === undefined` there would reuse that stale tree — left over
+  // from before the process restarted — for the resumed session's first call, silently skipping the
+  // real snapshot that would have caught anything the user or filesystem changed in between.
+  let snapshottedThisProcess = false;
 
   function start(): boolean {
     // Degrade, never fail: refusing to edit files because an *undo* feature is unavailable makes
@@ -417,19 +424,21 @@ export function createCheckpointer(opts: {
 
       // writeTree's own two spawns (`add -A` + `write-tree`) run only when the call might have
       // changed something: `write_file` always might; a bash/powershell call only when its command
-      // matches DESTRUCTIVE_COMMAND_PATTERNS; and the very first checkpoint of the session always
-      // does regardless of command, because there is no earlier tree yet to reuse — skipping it
-      // there would append a record with no valid tree at all.
+      // matches DESTRUCTIVE_COMMAND_PATTERNS; and the very first checkpoint of THIS PROCESS always
+      // does regardless of command, because a resumed session's `previousTree` came from an earlier
+      // process and cannot be trusted to still match what is on disk now.
       const command = commandOf(context.args);
       const mustSnapshot =
         context.tool === "write_file" ||
-        previousTree === undefined ||
+        !snapshottedThisProcess ||
         command === undefined ||
         isDestructiveCommand(command);
 
       // `previousTree` is only reused here when `mustSnapshot` is false, which — per the OR above —
-      // means this is not the first checkpoint, so `previousTree` is already a string.
+      // means this process has already taken one real snapshot, so `previousTree` is already a
+      // string from that call.
       const tree = mustSnapshot ? writeTree(gitDir, opts.worktree) : (previousTree as string);
+      if (mustSnapshot) snapshottedThisProcess = true;
       if (mustSnapshot && !scoped) {
         scoped = true;
         warnAboutScope();

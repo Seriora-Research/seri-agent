@@ -390,6 +390,29 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
     },
     GIT_TEST_TIMEOUT_MS,
   );
+
+  test(
+    "a resumed session's first call snapshots for real even when it is a non-destructive bash command",
+    () => {
+      // --resume seeds `previousTree` from the log's last checkpoint before this process has taken
+      // any snapshot of its own. Without a per-process flag a harmless `ls` right after resuming
+      // reused that stale tree and missed the change made below, which is exactly the gap `/undo`
+      // could fall into if the filesystem changed between the previous process exiting and this one
+      // resuming.
+      checkpointer()(mutation({ toolCallId: "c1" }));
+      writeFileSync(join(workTree, "a.txt"), "after\n");
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "ls" }, rewindTo: 2 });
+
+      const records = toolRecords();
+      expect(records).toHaveLength(2);
+      expect(records[1]?.tree).not.toBe(records[0]?.tree);
+      expect(
+        plainGit(join(storeDir, "git"), ["show", `${records[1]?.tree}:a.txt`]),
+      ).toBe("after\n");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
 });
 
 describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate)", () => {
