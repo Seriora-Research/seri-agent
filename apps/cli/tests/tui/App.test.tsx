@@ -803,6 +803,20 @@ describe("App", () => {
       expect(instance.lastFrame()).toContain("Llama 3.3 70B");
     });
 
+    test("shows a placeholder hint before typing, and hides it once a filter is typed", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "model-picker-requested", entries: [row()] });
+      await flush();
+
+      expect(instance.lastFrame()).toContain('Type to filter — try "free" or "paid"…');
+
+      instance.stdin.write("8b");
+      await flush();
+
+      expect(instance.lastFrame()).not.toContain('Type to filter — try "free" or "paid"…');
+    });
+
     // The concrete mechanical proof of "context preserved" (feature-plan.md's own acceptance
     // criterion): onModelSelected only ever carries the picked model/provider — `messages` (and
     // everything else about the session) is never part of the pick at all, so there is nothing to
