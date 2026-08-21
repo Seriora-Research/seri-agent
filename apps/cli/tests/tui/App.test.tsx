@@ -1,11 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
-import type { ModelMessage } from "ai";
 import { render } from "ink-testing-library";
+import stringWidth from "string-width";
 import type { ApprovalAnswer } from "../../src/loop/loop";
-import type { ResolvedRoute } from "../../src/provider/routing";
-import type { SessionState } from "../../src/session/session";
-import { App, transcriptRowProps } from "../../src/tui/App";
+import { App } from "../../src/tui/App";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import { ListRow } from "../../src/tui/components";
 import {
@@ -19,6 +17,7 @@ import {
   matchesFilter,
   singleLine,
   slideWindow,
+  transcriptRowsProps,
   type TranscriptEntry,
   type VisibleRow,
   visibleTranscript,
@@ -26,37 +25,7 @@ import {
   wrapPendingRows,
 } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
-
-function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
-  return {
-    id: "s1",
-    cwd: "/repo",
-    systemPrompt: "",
-    permissionMode: "approve-each",
-    messages: [],
-    ...overrides,
-  };
-}
-
-// AppProps.route is required (D3's own invariant: a PreparedRun cannot exist without a resolved
-// route) — every <App> mount in this file needs one, not just the tests that care about its
-// rendered content.
-function route(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
-  return {
-    model: "claude-sonnet-5",
-    provider: "anthropic",
-    rerouted: false,
-    viaGateway: false,
-    ...overrides,
-  };
-}
-
-// A render/dispatch is not reflected in lastFrame() synchronously — same finding as the Phase 3
-// spike for useInput, just needing a macrotask tick here rather than a microtask (Ink's own frame
-// write is throttled independently of React's own update scheduling).
-function flush(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
+import { flush, route, session } from "./helpers";
 
 async function connect() {
   let dispatch: ((action: TuiAction) => void) | undefined;
@@ -377,34 +346,56 @@ describe("App", () => {
   // The user-message background band is a per-row `backgroundColor`, not a bordered Box — invisible
   // to a mounted-frame assertion since ink-testing-library's `lastFrame()` carries no ANSI in this
   // test environment (see the `ListRow` describe block's own comment on the identical problem for
-  // the reverse-video row). Pinning `transcriptRowProps` (App.tsx) directly, the same fix applied
+  // the reverse-video row). Pinning `transcriptRowsProps` (format.ts) directly, the same fix applied
   // there.
-  describe("transcriptRowProps", () => {
-    test('a role: "user" row is padded to `columns` and carries theme.userBg', () => {
-      expect(transcriptRowProps({ role: "user", text: "> hi" }, 10)).toEqual({
-        text: "> hi      ",
-        backgroundColor: "#333333",
-      });
+  describe("transcriptRowsProps", () => {
+    test('every visible role: "user" row is padded to the widest visible role: "user" row\'s width, and carries theme.userBg', () => {
+      const rows: VisibleRow[] = [
+        { role: "user", text: "> hi" },
+        { role: "user", text: "> a much longer message" },
+      ];
+      const widest = stringWidth("> a much longer message");
+      expect(transcriptRowsProps(rows)).toEqual([
+        { text: `> hi${" ".repeat(widest - stringWidth("> hi"))}`, backgroundColor: "#333333" },
+        { text: "> a much longer message", backgroundColor: "#333333" },
+      ]);
     });
 
-    test('a role: "system"/"assistant" row is left as-is with no background', () => {
-      expect(transcriptRowProps({ role: "system", text: "hi" }, 10)).toEqual({
-        text: "hi",
-        backgroundColor: undefined,
-      });
-      expect(transcriptRowProps({ role: "assistant", text: "● hi" }, 10)).toEqual({
-        text: "● hi",
-        backgroundColor: undefined,
-      });
-    });
-
-    // "> 你好" is 4 UTF-16 units but 6 terminal cells (each CJK char is 2 cells wide) — padEnd(10)
-    // would overpad to 14 cells. Pad by display width so the row lands on exactly `columns`.
-    test('a role: "user" row with wide (CJK) characters pads to `columns` cells, not UTF-16 units', () => {
-      expect(transcriptRowProps({ role: "user", text: "> 你好" }, 10)).toEqual({
-        text: "> 你好    ",
+    // The non-user row's own text is deliberately longer than either user row: the band width must
+    // stay derived from the widest role:"user" row alone, not widen to match a longer non-user row —
+    // pins the `row.role === "user"` filter in the band-width reduce itself, not just the padding.
+    test('role: "system"/"assistant" rows pass through untouched, with no padding and no background', () => {
+      const rows: VisibleRow[] = [
+        { role: "user", text: "> hi" },
+        { role: "system", text: "a much longer system row than either user row" },
+        { role: "assistant", text: "● hi" },
+        { role: "user", text: "> a bit longer message" },
+      ];
+      const widestUser = stringWidth("> a bit longer message");
+      const result = transcriptRowsProps(rows);
+      expect(result[0]).toEqual({
+        text: `> hi${" ".repeat(widestUser - stringWidth("> hi"))}`,
         backgroundColor: "#333333",
       });
+      expect(result[1]).toEqual({
+        text: "a much longer system row than either user row",
+        backgroundColor: undefined,
+      });
+      expect(result[2]).toEqual({ text: "● hi", backgroundColor: undefined });
+    });
+
+    // "> 你好" is 4 UTF-16 units but 6 terminal cells (each CJK char is 2 cells wide) — `padEnd`
+    // would overpad it past the band's own edge. Pad by display width so a wide-char row still
+    // lands on exactly the band width in cells.
+    test('a role: "user" row with wide (CJK) characters pads to the band width in cells, not UTF-16 units', () => {
+      const rows: VisibleRow[] = [
+        { role: "user", text: "> 你好" },
+        { role: "user", text: "> hi there" },
+      ];
+      expect(transcriptRowsProps(rows)).toEqual([
+        { text: "> 你好    ", backgroundColor: "#333333" },
+        { text: "> hi there", backgroundColor: "#333333" },
+      ]);
     });
   });
 
