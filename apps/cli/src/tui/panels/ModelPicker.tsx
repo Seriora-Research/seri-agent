@@ -109,7 +109,13 @@ export function ModelPicker({
 
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
-      <Text>{filterQuery.length > 0 ? filterQuery : " "}</Text>
+      <Box>
+        {/* Same "> " + trailing block-cursor convention as InputBox.tsx, so the filter row reads
+        as a text input rather than a static label. */}
+        <Text>{`> ${filterQuery}`}</Text>
+        {filterQuery.length === 0 && <Text color={theme.muted}>Type to filter…</Text>}
+        <Text inverse> </Text>
+      </Box>
       {/* Same reasoning as ListRow's own comment (components.tsx): MODEL_PICKER_HEADER's own fixed
       column widths sum to the same ~87 chars, so it soft-wraps on the identical narrow terminals
       the row's `wrap="truncate-end"` guards against. */}
