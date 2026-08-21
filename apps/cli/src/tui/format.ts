@@ -2,8 +2,7 @@
 // terminal" property reducer.ts already has. Extracted out of App.tsx (Stage A,
 // cli-commands-to-tui feature-plan.md) verbatim: a pure move, no behavior change.
 
-import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
-import { isZeroPriceEntry } from "@seri/model-catalog";
+import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@seri/model-catalog";
 import wrapAnsi from "wrap-ansi";
 import { escapeControlChars } from "../cli/output";
 import type { ResolvedRoute } from "../provider/routing";
