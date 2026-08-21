@@ -481,6 +481,9 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     // /\brm\b/ and /\bmv\b/ patterns already match "git rm ..."/"git mv ..." as a substring word,
     // verified directly — a dedicated git-rm/git-mv pattern would have been dead weight.
     "npm uninstall lodash",
+    // A standard POSIX single-file delete, distinct from `rm` — not a substring of any covered
+    // word, so it needs its own pattern rather than being caught incidentally.
+    "unlink file.txt",
   ])(
     "a destructive bash call restages the worktree: %s",
     (command) => {

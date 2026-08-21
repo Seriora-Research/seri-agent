@@ -94,6 +94,9 @@ const DESTRUCTIVE_COMMAND_PATTERNS: RegExp[] = [
   // bash
   /\brm\b/,
   /\brmdir\b/,
+  // A standard POSIX single-file delete, distinct from `rm` — not a substring of any covered
+  // word, unlike `git rm`/`git mv`, which the plain /\brm\b//\bmv\b/ patterns already catch.
+  /\bunlink\b/,
   /\bmv\b/,
   /\bcp\b/,
   /\binstall\b/,
