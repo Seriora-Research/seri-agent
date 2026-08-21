@@ -8,13 +8,7 @@ import { theme } from "../theme";
 // intentional typing, is spaced further apart than this and always gets its own immediate
 // (leading-edge) repaint. Scoped to InputBox's own local state only — does not touch Ink's
 // global `maxFps`, so it has no effect on unrelated render paths like streamed model output.
-//
-// Matched to Ink's own ~33ms (`maxFps: 30`) global repaint throttle, not set below it: a lower
-// value here schedules a React commit that still has to wait out Ink's own throttle before it can
-// paint, so the end-to-end keystroke-to-frame latency floors at Ink's cadence regardless — measured
-// directly (a full-viewport transcript, rapid keystroke burst): flat at ~35ms median for values at
-// or below this floor, dropping to ~21ms once the two cadences are matched instead of racing.
-const THROTTLE_MS = 33;
+const THROTTLE_MS = 50;
 
 export function InputBox({
   onSubmit,
