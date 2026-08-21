@@ -348,7 +348,7 @@ export function App({
     state.columns,
     memoizedPending,
   );
-  const rowProps = transcriptRowsProps(visibleRows, state.columns);
+  const rowProps = transcriptRowsProps(visibleRows);
 
   return (
     // `rows - 1`, not `rows`, on every platform, not just a Windows-only gate: Windows' own

@@ -181,16 +181,15 @@ export function visibleTranscript(
 //
 // The user-message band's own width is the widest currently visible role:"user" row (`stringWidth`,
 // not `padEnd`: a CJK/wide-char row is fewer UTF-16 units than terminal cells, so `padEnd` would
-// underpad it past the band's own edge). Every row `visibleTranscript` (above) returns is already at
-// most `Math.max(1, columns)` cells wide — `wrapForTranscript`'s own bound — so the widest visible
-// user row can never exceed `columns` either; no additional clamp is needed here. A uniform band
-// across all visible user rows (rather than padding each row to only its own width) is what makes it
-// read as one band instead of a ragged per-message highlight — a deliberate design choice
-// (docs/TUI-DESIGN.md's own note on `theme.userBg` as a confirmed, deliberate second use of
-// background color), not a leftover of this being computed once for the whole array.
+// underpad it past the band's own edge). Every row `visibleTranscript` (above) returns is already
+// wrapped to the terminal width, so this function only measures and pads relative to what's already
+// there — it never needs to know the terminal width itself. A uniform band across all visible user
+// rows (rather than padding each row to only its own width) is what makes it read as one band
+// instead of a ragged per-message highlight — a deliberate design choice (docs/TUI-DESIGN.md's own
+// note on `theme.userBg` as a confirmed, deliberate second use of background color), not a leftover
+// of this being computed once for the whole array.
 export function transcriptRowsProps(
   visibleRows: VisibleRow[],
-  columns: number,
 ): { text: string; backgroundColor: string | undefined }[] {
   const bandWidth = visibleRows.reduce(
     (widest, row) => (row.role === "user" ? Math.max(widest, stringWidth(row.text)) : widest),
