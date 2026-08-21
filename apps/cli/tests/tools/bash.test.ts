@@ -3,7 +3,12 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { isBashAvailable, runBash } from "../../src/tools/bash";
+import {
+  _detectBashForTests,
+  _resetBashResolutionForTests,
+  isBashAvailable,
+  runBash,
+} from "../../src/tools/bash";
 
 function countSleepProcesses(): number {
   const probe = spawnSync(
@@ -55,6 +60,43 @@ describe("runBash", () => {
       rmSync(stubDir, { recursive: true, force: true });
     }
   }, 15000);
+
+  // Regression guard for the negative-caching bug: caching the FOUND case (above) is safe because
+  // it cannot un-become true, but caching "not found" would make a mid-session PATH fix (installing
+  // Git Bash, or correcting a broken PATH, without restarting seri) invisible for the rest of the
+  // process — pre-fix, isBashAvailable()/resolveBashCommand() each re-scanned PATH on every call, so
+  // this recovered automatically; the memoization fix had to preserve it for the failure direction
+  // even while caching the success direction. Uses _detectBashForTests' injectable finder rather
+  // than clearing process.env.PATH: this machine has real Git Bash at a WIN32_GIT_BASH_PATHS
+  // fallback location, so an empty PATH alone does not reproduce "not found anywhere" here.
+  test("a call after a failed resolution re-runs find instead of trusting the cached failure", () => {
+    _resetBashResolutionForTests();
+    try {
+      let calls = 0;
+      const notFound = () => {
+        calls++;
+        return undefined;
+      };
+
+      expect(_detectBashForTests(notFound).available).toBe(false);
+      expect(_detectBashForTests(notFound).available).toBe(false);
+      expect(calls).toBe(2); // not cached: find() ran again on the second call
+
+      const found = () => "/usr/bin/bash";
+      expect(_detectBashForTests(found)).toEqual({ command: "/usr/bin/bash", available: true });
+      // Now cached: a THIRD finder is never consulted once a real one has succeeded.
+      const neverCalled = () => {
+        throw new Error("must not be called once a positive result is cached");
+      };
+      expect(_detectBashForTests(neverCalled)).toEqual({
+        command: "/usr/bin/bash",
+        available: true,
+      });
+    } finally {
+      // The fake "/usr/bin/bash" above must not leak into every other test's real bash calls.
+      _resetBashResolutionForTests();
+    }
+  });
 });
 
 // Windows-only because the leak this guards against is a Windows behavior, and the probe reads
