@@ -355,20 +355,32 @@ describe("App", () => {
         { role: "user", text: "> a much longer message" },
       ];
       const widest = stringWidth("> a much longer message");
-      expect(transcriptRowsProps(rows, 80)).toEqual([
+      expect(transcriptRowsProps(rows)).toEqual([
         { text: `> hi${" ".repeat(widest - stringWidth("> hi"))}`, backgroundColor: "#333333" },
         { text: "> a much longer message", backgroundColor: "#333333" },
       ]);
     });
 
+    // The non-user row's own text is deliberately longer than either user row: the band width must
+    // stay derived from the widest role:"user" row alone, not widen to match a longer non-user row —
+    // pins the `row.role === "user"` filter in the band-width reduce itself, not just the padding.
     test('role: "system"/"assistant" rows pass through untouched, with no padding and no background', () => {
       const rows: VisibleRow[] = [
-        { role: "user", text: "> a much longer message" },
-        { role: "system", text: "hi" },
+        { role: "user", text: "> hi" },
+        { role: "system", text: "a much longer system row than either user row" },
         { role: "assistant", text: "● hi" },
+        { role: "user", text: "> a bit longer message" },
       ];
-      const result = transcriptRowsProps(rows, 80);
-      expect(result[1]).toEqual({ text: "hi", backgroundColor: undefined });
+      const widestUser = stringWidth("> a bit longer message");
+      const result = transcriptRowsProps(rows);
+      expect(result[0]).toEqual({
+        text: `> hi${" ".repeat(widestUser - stringWidth("> hi"))}`,
+        backgroundColor: "#333333",
+      });
+      expect(result[1]).toEqual({
+        text: "a much longer system row than either user row",
+        backgroundColor: undefined,
+      });
       expect(result[2]).toEqual({ text: "● hi", backgroundColor: undefined });
     });
 
@@ -380,7 +392,7 @@ describe("App", () => {
         { role: "user", text: "> 你好" },
         { role: "user", text: "> hi there" },
       ];
-      expect(transcriptRowsProps(rows, 80)).toEqual([
+      expect(transcriptRowsProps(rows)).toEqual([
         { text: "> 你好    ", backgroundColor: "#333333" },
         { text: "> hi there", backgroundColor: "#333333" },
       ]);
