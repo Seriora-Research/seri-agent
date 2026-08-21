@@ -444,6 +444,41 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
     expect(message).toBe("Already at checkpoint 1; no file changed.");
   }, 30_000);
 
+  // The message must not claim "no file changed" when a candidate WAS identified for deletion but
+  // held back because the write ledger has no proof seri wrote it (writeLedger.ts's own
+  // filterSafeToDelete) — restored/deleted both empty is not the same thing as an empty plan.
+  test("reports preserved files instead of claiming no change when a candidate was held back", () => {
+    const snapshot = checkpointer();
+    snapshot({
+      tool: "write_file",
+      toolCallId: "c1",
+      args: { path: join(workTree, "a.txt") },
+      rewindTo: 1,
+    });
+    // Written directly, bypassing the checkpointer's onAfterMutation — no ledger entry, so a
+    // restore back past this point cannot prove seri wrote it.
+    writeFileSync(join(workTree, "b.txt"), "created outside write_file\n");
+    snapshot({
+      tool: "write_file",
+      toolCallId: "c2",
+      args: { path: join(workTree, "a.txt") },
+      rewindTo: 2,
+    });
+
+    const { plan, message } = decideUndo(session(), ["2"], {
+      sessionsDir: join(root, "sessions"),
+      checkpointsDir,
+      configDir: root,
+    });
+
+    expect(plan.restored).toEqual([]);
+    expect(plan.deleted).toEqual([]);
+    expect(plan.preserved).toEqual(["b.txt"]);
+    expect(message).toBe(
+      "Already at checkpoint 2; no file restored or deleted, but 1 file(s) preserved (no proof seri wrote them, or edited since).",
+    );
+  }, 30_000);
+
   // M-5 regression: onPlan (undoFiles' own callback) has to fire BEFORE the restore/removal pass
   // mutates the worktree, matching output.ts's own documented guarantee on undoPlanLines ("before
   // the restore happens, not after") — restoring that for the console path is the whole reason
