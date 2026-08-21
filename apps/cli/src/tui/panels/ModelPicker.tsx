@@ -113,7 +113,9 @@ export function ModelPicker({
         {/* Same "> " + trailing block-cursor convention as InputBox.tsx, so the filter row reads
         as a text input rather than a static label. */}
         <Text>{`> ${filterQuery}`}</Text>
-        {filterQuery.length === 0 && <Text color={theme.muted}>Type to filter…</Text>}
+        {filterQuery.length === 0 && (
+          <Text color={theme.muted}>Type to filter — try "free" or "paid"…</Text>
+        )}
         <Text inverse> </Text>
       </Box>
       {/* Same reasoning as ListRow's own comment (components.tsx): MODEL_PICKER_HEADER's own fixed
