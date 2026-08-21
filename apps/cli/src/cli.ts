@@ -2611,8 +2611,22 @@ async function runTui(
       // already rewritten — the checkpointer must resync on that throwing path too, not only on
       // success. `invalidate()` clears the stale state so the very next mutating call takes a real
       // snapshot instead of trusting a tree the restore already invalidated.
+      //
+      // In its own try/catch: invalidate() spawns git (resolveRef), which can throw the same way
+      // every other git spawn in this subsystem can (index.lock contention between two seri
+      // processes, a full disk). onSubmit is called fire-and-forget from InputBox, so an
+      // uncaught throw here would leave the TUI as an unhandled rejection instead of the
+      // command-error the surrounding catch above already exists to report — and would silently
+      // replace whatever error that catch just handled.
       if (name === "/undo" || name === "/restore") {
-        prepared.checkpointer.invalidate();
+        try {
+          prepared.checkpointer.invalidate();
+        } catch (err) {
+          dispatch({
+            type: "command-error",
+            message: `could not resync checkpointing after ${name}; the next mutating tool call will still take a fresh snapshot: ${messageOf(err)}`,
+          });
+        }
       }
     }
   }
