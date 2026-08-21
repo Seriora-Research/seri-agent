@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isBashAvailable, runBash } from "../../src/tools/bash";
 import { readFile } from "../../src/tools/readFile";
 import { writeFile } from "../../src/tools/writeFile";
 
@@ -90,6 +91,25 @@ describe("writeFile", () => {
     writeFile(filePath, "new\ncontent\n");
     expect(readFileSync(filePath, "utf8")).toBe("new\r\ncontent\r\n");
   });
+
+  // eolCache.ts: bash/powershell can touch any file, not just the one a prior read_file cached the
+  // EOL for, so a shell call in between has to drop the whole cache rather than leave writeFile
+  // trusting a line-ending style that command may have just changed on disk.
+  test.skipIf(!isBashAvailable())(
+    "a shell command between a read and a write invalidates the cached EOL",
+    async () => {
+      const filePath = join(tmpRoot, "crlf-then-shell.txt");
+      writeFileSync(filePath, "old\r\ncontent\r\n");
+      readFile(filePath);
+
+      await runBash("echo hi");
+      writeFileSync(filePath, "old\ncontent\n");
+
+      writeFile(filePath, "new\ncontent\n");
+      expect(readFileSync(filePath, "utf8")).toBe("new\ncontent\n");
+    },
+    15000,
+  );
 
   test("retries on EBUSY then succeeds", () => {
     const filePath = join(tmpRoot, "locked.txt");

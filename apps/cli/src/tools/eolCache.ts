@@ -11,3 +11,11 @@ export function getCachedEol(path: string): "LF" | "CRLF" | undefined {
 export function setCachedEol(path: string, eol: "LF" | "CRLF"): void {
   eolCache.set(path, eol);
 }
+
+// Called after every bash/powershell call: a shell command can touch any file, not just the one a
+// prior read_file cached, and there is no way to know which paths it reached — so the whole cache
+// is dropped rather than one entry, trading away the read → edit → write fast path's benefit only
+// when a shell command actually ran in between.
+export function clearEolCache(): void {
+  eolCache.clear();
+}

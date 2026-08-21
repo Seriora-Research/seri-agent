@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
+import { clearEolCache } from "./eolCache";
 import { type ProcessResult, spawnCollect } from "./spawnCollect";
 
 const WIN32_GIT_BASH_PATHS = [
@@ -52,5 +53,12 @@ export async function runBash(
     throw new Error("bash is not available on this system");
   }
 
-  return spawnCollect(resolveBashCommand(), ["-c", command], timeoutMs, signal);
+  try {
+    return await spawnCollect(resolveBashCommand(), ["-c", command], timeoutMs, signal);
+  } finally {
+    // A command can touch any file, not just one readFile/writeFile already cached the EOL for —
+    // and it may have changed a file's line endings before writeFile gets to it, so the whole cache
+    // is invalidated rather than trusting whatever it held before this call ran.
+    clearEolCache();
+  }
 }
