@@ -873,6 +873,41 @@ describe.skipIf(!isGitAvailable())("undoFiles (write-ledger deletion gate)", () 
     },
     GIT_TEST_TIMEOUT_MS,
   );
+
+  // TOCTOU regression guard: onPlan is the one caller-supplied hook restoreTo calls between the
+  // ledger check that decides what gets printed as `plan.deleted` and the actual deletion — the
+  // real window a concurrent editor would race through in production. Editing the file from inside
+  // onPlan simulates exactly that race deterministically, without timing.
+  test(
+    "a file that passed the ledger check but was modified before the actual delete is preserved, not deleted",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
+
+      writeFileSync(join(workTree, "raced.txt"), "seri's content\n");
+      recordWrite(storeDir, join(workTree, "raced.txt"), "seri's content\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      const result = undoFiles({
+        storeDir,
+        worktree: workTree,
+        sessionId: SESSION,
+        steps: 2,
+        onPlan: (plan) => {
+          // The first check passed — raced.txt hashes to what recordWrite vouched for.
+          expect(plan.deleted).toContain("raced.txt");
+          writeFileSync(join(workTree, "raced.txt"), "edited after the plan was printed\n");
+        },
+      });
+
+      expect(result.deleted).not.toContain("raced.txt");
+      expect(result.preserved).toContain("raced.txt");
+      expect(readFileSync(join(workTree, "raced.txt"), "utf8")).toBe(
+        "edited after the plan was printed\n",
+      );
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
 });
 
 describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {

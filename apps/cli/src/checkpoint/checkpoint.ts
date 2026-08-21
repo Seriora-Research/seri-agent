@@ -670,12 +670,26 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
     preserved,
   };
   opts.onPlan(plan);
+  // Re-verified here, not reused from the check above: diffTree and onPlan both ran between that
+  // check and this point — an unbounded gap (onPlan is caller-supplied) and a non-trivial one
+  // (diffTree spawns git), either of which is enough time for a concurrent editor to replace a
+  // file's content after it was verified as seri-authored but before it is actually deleted.
+  // Re-checking narrows the window to checkout-index's own runtime, the smallest gap these
+  // synchronous, non-atomic primitives can achieve. The RETURNED result reflects this final check,
+  // not the plan already printed via onPlan — a path that fails revalidation moves from `deleted`
+  // to `preserved` in what is reported to have actually happened.
+  const stillSafe = new Set(filterSafeToDelete(opts.storeDir, opts.worktree, plan.deleted));
+  const finalDeleted = plan.deleted.filter((path) => stillSafe.has(path));
+  const finalPreserved = [
+    ...plan.preserved,
+    ...plan.deleted.filter((path) => !stillSafe.has(path)),
+  ];
   // In a try/finally, not a plain call after: checkout-index rewrites every restored file's
-  // on-disk EOL before the loop that deletes `plan.deleted` even starts, so a throw partway
+  // on-disk EOL before the loop that deletes `finalDeleted` even starts, so a throw partway
   // through applyRestore (a failed rmSync, a killed git process) still leaves the cache poisoned
   // with pre-restore values unless it is cleared regardless of how applyRestore exits.
   try {
-    applyRestore(gitDir, opts.worktree, plan.deleted);
+    applyRestore(gitDir, opts.worktree, finalDeleted);
   } finally {
     // checkout-index can rewrite a restored file's on-disk EOL without going through
     // writeFile.ts/readFile.ts (shadowGit.ts's own core.autocrlf=false comment on why), leaving the
@@ -686,6 +700,8 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
 
   return {
     ...plan,
+    deleted: finalDeleted,
+    preserved: finalPreserved,
     preUndoCommit,
     recoverCommand: `seri --resume ${opts.sessionId} /restore ${preUndoCommit}`,
   };
