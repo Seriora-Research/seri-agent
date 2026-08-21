@@ -41,14 +41,19 @@ afterAll(() => {
   chalk.level = originalChalkLevel;
 });
 
-// A fake TTY stdout: fixed 100 columns (matches App.test.tsx's assumption that width doesn't
-// vary across these tests), a configurable row count (the axis under test), and counters for
-// every byte/call written to it — the thing a real terminal emulator has to parse and repaint.
-// `raw` accumulates the actual written text (not just its length) so a test can assert on the
-// bytes' own content, not only their count.
+// FakeTty's own fixed column width — matches App.test.tsx's assumption that width doesn't vary
+// across these tests. Named rather than inlined into `FakeTty` below so the marginal-bytes
+// assertion at the bottom of this file can derive its own threshold from the same value, instead
+// of hardcoding a number that would silently drift out of sync with it.
+const TEST_COLUMNS = 100;
+
+// A fake TTY stdout: fixed `TEST_COLUMNS` columns, a configurable row count (the axis under
+// test), and counters for every byte/call written to it — the thing a real terminal emulator has
+// to parse and repaint. `raw` accumulates the actual written text (not just its length) so a test
+// can assert on the bytes' own content, not only their count.
 class FakeTty extends EventEmitter {
   isTTY = true as const;
-  columns = 100;
+  columns = TEST_COLUMNS;
   rows: number;
   bytes = 0;
   writes = 0;
@@ -238,21 +243,35 @@ describe("TUI input render cost", () => {
     expect(2 * seedCount - 1).toBeLessThanOrEqual(rows); // sanity: nothing scrolled out of view
     const visibleUserRows = seedCount;
 
+    // `writes` guards against the exact dilution this file's own 60ms-spacing comment above
+    // documents: at a tighter spacing, several keystrokes coalesce into one flush/frame, so far
+    // fewer than `n` real frames land and the `marginal` metric below is computed against a
+    // shrunken denominator without anything here noticing. Every real (non-coalesced) frame writes
+    // to `stdout` at least once, so if all `n` backspaces got their own frame, `writes` is at least
+    // `n` — this doesn't depend on exactly how many `stdout.write()` calls one frame costs
+    // (measured empirically at 3 here, an Ink/log-update internal this test has no reason to pin),
+    // only on there having been at least `n` real frames.
+    expect(userRun.writes).toBeGreaterThanOrEqual(n);
+    expect(systemRun.writes).toBeGreaterThanOrEqual(n);
+
     const marginal = (userRun.bytes - systemRun.bytes) / (n * visibleUserRows);
 
-    // Threshold, derived not tuned. theme.userBg's fixed SGR overhead is 21 bytes (open
-    // "\x1b[48;2;51;51;51m", 16 bytes, + close "\x1b[49m", 5 bytes). Every seeded row here uses
-    // the identical MESSAGE text, so `messageWidth` cancels out of the user/system diff and
-    // `marginal` reduces to SGR_OVERHEAD + (bandWidth - messageWidth): pre-fix the band is
-    // `columns` (100) wide regardless of message length, measured at 88 bytes/row/keystroke on
-    // this machine; post-fix the band is at most the widest visible message — `messageWidth`
-    // itself here — collapsing the formula to just SGR_OVERHEAD (measured at 21). SLACK=10 keeps
-    // this threshold (64) roughly centred between the two, not hugging either one: 24 bytes of
-    // headroom against the pre-fix value, 43 against the post-fix one.
+    // Threshold, derived not tuned, and anchored on `TEST_COLUMNS` rather than a bare number so a
+    // change to FakeTty's own column width moves this threshold with it instead of leaving it able
+    // to silently stop discriminating between the two behaviors below. theme.userBg's fixed SGR
+    // overhead is 21 bytes (open "\x1b[48;2;51;51;51m", 16 bytes, + close "\x1b[49m", 5 bytes).
+    // Every seeded row here uses the identical MESSAGE text, so `messageWidth` cancels out of the
+    // user/system diff and `marginal` reduces to SGR_OVERHEAD + (bandWidth - messageWidth):
+    // pre-fix, the band was `TEST_COLUMNS` wide regardless of message length; post-fix, the band is
+    // at most the widest visible message — `messageWidth` itself here — collapsing the formula to
+    // just SGR_OVERHEAD. The threshold sits at the midpoint of those two derived values, not
+    // hugging either one.
     const SGR_OVERHEAD = 21;
     const messageWidth = stringWidth(MESSAGE);
-    const SLACK = 10;
+    const preFixMarginal = SGR_OVERHEAD + (TEST_COLUMNS - messageWidth);
+    const postFixMarginal = SGR_OVERHEAD;
+    const threshold = (preFixMarginal + postFixMarginal) / 2;
 
-    expect(marginal).toBeLessThan(SGR_OVERHEAD + messageWidth + SLACK);
+    expect(marginal).toBeLessThan(threshold);
   });
 });
