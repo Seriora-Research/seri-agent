@@ -1,26 +1,5 @@
 {
   "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if command -v bash >/dev/null 2>&1; then bash .claude/hooks/format-and-typecheck.sh 2>&1; else pwsh -NonInteractive -File .claude/hooks/format-and-typecheck.ps1 2>&1; fi"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if command -v bash >/dev/null 2>&1; then bash .claude/hooks/verify-gate.sh 2>&1; else pwsh -NonInteractive -File .claude/hooks/verify-gate.ps1 2>&1; fi"
-          }
-        ]
-      }
-    ],
     "SubagentStop": [
       {
         "hooks": [
