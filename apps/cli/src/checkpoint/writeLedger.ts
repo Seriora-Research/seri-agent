@@ -43,6 +43,14 @@ export function loadLedger(storeDir: string): Record<string, string> {
 // restore of this path more conservative than it needs to be, never less safe, but silently wrong
 // all the same.
 export function recordWrite(storeDir: string, absolutePath: string, content: string): void {
+  // Read-modify-write, not a transaction: two seri processes recording different paths for the
+  // same project at nearly the same instant can each load the ledger before either writes it back,
+  // and whichever atomicWriteFile call lands last silently drops the other's entry. Not fixed with
+  // a lock, deliberately — the failure direction is the same accepted one as the case-folding note
+  // on filterSafeToDelete below: the dropped path just has no ledger entry, which makes a later
+  // restore preserve it rather than delete it, never the other way around. Locking a JSON
+  // read-modify-write across processes for a race this narrow, whose worst case is already the
+  // subsystem's own default-safe behaviour, would add real complexity for no change in outcome.
   const ledger = loadLedger(storeDir);
   ledger[absolutePath] = hash(content);
   // Atomic (temp file + rename), same as the rest of this checkpoint subsystem: a torn write here
