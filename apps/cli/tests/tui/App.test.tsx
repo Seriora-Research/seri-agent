@@ -2,10 +2,11 @@ import { describe, expect, test } from "bun:test";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { render } from "ink-testing-library";
+import stringWidth from "string-width";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
-import { App, transcriptRowProps } from "../../src/tui/App";
+import { App, computeBandWidth, transcriptRowProps } from "../../src/tui/App";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import { ListRow } from "../../src/tui/components";
 import {
@@ -409,6 +410,26 @@ describe("App", () => {
         text: "> 你好    ",
         backgroundColor: "#333333",
       });
+    });
+  });
+
+  // The band-width computation itself — App.tsx's call site feeds this into transcriptRowProps
+  // above. What distinguishes the shipped "uniform band" from a per-row band (each row padded to
+  // only its own width) is that every visible role:"user" row gets the SAME bandWidth back; a
+  // per-row band would instead return each row's own width.
+  describe("computeBandWidth", () => {
+    test("returns the widest visible role: user row's width, for every row alike", () => {
+      const rows: VisibleRow[] = [
+        { role: "user", text: "> hi" },
+        { role: "user", text: "> a much longer message" },
+        { role: "system", text: "an even longer system row that should not count" },
+      ];
+      expect(computeBandWidth(rows, 80)).toBe(stringWidth("> a much longer message"));
+    });
+
+    test("clamps to columns when the widest visible message would exceed it", () => {
+      const rows: VisibleRow[] = [{ role: "user", text: "> ".padEnd(50, "x") }];
+      expect(computeBandWidth(rows, 20)).toBe(20);
     });
   });
 

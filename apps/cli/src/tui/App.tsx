@@ -208,6 +208,22 @@ export function transcriptRowProps(
   return { text: row.text + padding, backgroundColor: theme.userBg };
 }
 
+// The user-message band's own width — the widest currently visible role:"user" row, clamped to
+// `columns` (visibleTranscript already wraps every row to at most `columns` wide, so this only
+// guards a stale-columns edge case, not the common one). A uniform band across all visible user
+// rows reads as one band; padding each row to only its own width (the cheaper option) would
+// instead read as a ragged per-message highlight. Factored out, same reason as
+// `transcriptRowProps` above: a test can pin this directly instead of only the padding it feeds.
+export function computeBandWidth(visibleRows: VisibleRow[], columns: number): number {
+  return Math.min(
+    columns,
+    visibleRows.reduce(
+      (widest, row) => (row.role === "user" ? Math.max(widest, stringWidth(row.text)) : widest),
+      0,
+    ),
+  );
+}
+
 export function App({
   session,
   route,
@@ -365,18 +381,7 @@ export function App({
     state.columns,
     memoizedPending,
   );
-  // The user-message band's own width — the widest currently visible role:"user" row, clamped to
-  // `columns` (visibleTranscript already wraps every row to at most `columns` wide, so this only
-  // guards a stale-columns edge case, not the common one). A uniform band across all visible user
-  // rows reads as one band; padding each row to only its own width (the cheaper option) would
-  // instead read as a ragged per-message highlight.
-  const bandWidth = Math.min(
-    state.columns,
-    visibleRows.reduce(
-      (widest, row) => (row.role === "user" ? Math.max(widest, stringWidth(row.text)) : widest),
-      0,
-    ),
-  );
+  const bandWidth = computeBandWidth(visibleRows, state.columns);
 
   return (
     // `rows - 1`, not `rows`, on every platform, not just a Windows-only gate: Windows' own
