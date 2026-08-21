@@ -18,7 +18,7 @@ import {
   useStdout,
   useWindowSize,
 } from "ink";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import stringWidth from "string-width";
 import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
@@ -29,9 +29,9 @@ import {
   DEFAULT_COLUMNS,
   FALLBACK_CHROME_ROWS,
   formatModeLabel,
-  transcriptVisualRows,
   type VisibleRow,
   visibleTranscript,
+  wrapPendingRows,
 } from "./format";
 import { ApprovalBox } from "./panels/ApprovalBox";
 import { AuthBanner, AuthPanel } from "./panels/AuthPanel";
@@ -265,8 +265,8 @@ export function App({
   // Read the render-time `visibleTranscript` call's own comment for why this exists: a scrolled-up
   // `transcriptScrollOffset` (reducer.ts) only ever advances when a flush actually happens
   // (`appendLines`), so without this, a streamed answer's OWN growth (not yet flushed) would drift
-  // the visible window toward newer content one row at a time and then snap back at flush. `0` when
-  // `state.streaming` is empty: `transcriptVisualRows` always returns >= 1 even for `""` (a blank
+  // the visible window toward newer content one row at a time and then snap back at flush. `[]` when
+  // `state.streaming` is empty: `wrapPendingRows` always returns >= 1 row even for `""` (a blank
   // committed line is meaningful; an ABSENT streaming answer is not), so this guards that case
   // explicitly rather than let a spurious extra row of offset apply while nothing is streaming.
   //
@@ -278,10 +278,16 @@ export function App({
   // overshoots the combined committed+streaming stack `visibleTranscript` slices, and the viewport
   // renders a gap instead of a full page. `transcriptScrollStreamingRows` is the reducer's own
   // snapshot of what was already baked in, so only the delta needs compensating for here.
-  const pendingRows =
-    state.streaming.length > 0
-      ? transcriptVisualRows([{ role: "assistant", text: state.streaming }], state.columns)
-      : 0;
+  //
+  // `useMemo`, keyed on `[state.streaming, state.columns]`: without it, `wrapPendingRows` re-wrapped
+  // the entire, ever-growing streamed string from scratch on every render (this computation and the
+  // `visibleTranscript` call below both needed it), rather than only when the streamed text or the
+  // terminal width actually changed.
+  const memoizedPending = useMemo(
+    () => (state.streaming.length > 0 ? wrapPendingRows(state.streaming, state.columns) : []),
+    [state.streaming, state.columns],
+  );
+  const pendingRows = memoizedPending.length;
   const transcriptOffset =
     state.transcriptScrollOffset > 0
       ? state.transcriptScrollOffset +
@@ -383,11 +389,11 @@ export function App({
       VISUAL row count at `viewportRows`, so `overflowY`/`justifyContent="flex-end"` are a pure
       backstop now, not load-bearing truncation — anchoring to the end means a genuine one-frame
       overshoot falls off the top (oldest), not the bottom (newest).
-      The in-progress answer (`state.streaming`) is passed as `visibleTranscript`'s own `pending`
-      parameter rather than rendered as its own unbounded `<Text>` below the box (the original
-      shape) or spread into a `[...state.transcript, state.streaming]` array (tried and reverted:
-      that allocated a full copy of the transcript on every streamed token, exactly what
-      `visibleTranscript`'s own tail-walk exists to avoid paying).
+      The in-progress answer (`state.streaming`, wrapped via `memoizedPending` above) is passed as
+      `visibleTranscript`'s own `pendingRows` parameter rather than rendered as its own unbounded
+      `<Text>` below the box (the original shape) or spread into a `[...state.transcript,
+      state.streaming]` array (tried and reverted: that allocated a full copy of the transcript on
+      every streamed token, exactly what `visibleTranscript`'s own tail-walk exists to avoid paying).
       `effectiveOffset` below is what keeps a scrolled-up reader's view from drifting toward newer
       content as the answer grows and then snapping back the instant it flushes: `appendLines`
       (reducer.ts) already advances `transcriptScrollOffset` by a flush's own row count for exactly
@@ -407,7 +413,7 @@ export function App({
           viewportRows,
           transcriptOffset,
           state.columns,
-          state.streaming,
+          memoizedPending,
         ).map((row, index) => {
           const { text, backgroundColor } = transcriptRowProps(row, state.columns);
           return (

@@ -21,12 +21,13 @@ import { login as loginReal, logout as logoutReal } from "./auth/commands";
 import { getWorkosClientId } from "./auth/deviceFlow";
 import {
   appendBarrier,
+  type Checkpointer,
   createCheckpointer,
   type RestorePlan,
   type RestoreResult,
 } from "./checkpoint/checkpoint";
 import { projectRoot } from "./checkpoint/shadowGit";
-import { type OnBeforeMutation, withCheckpoints } from "./checkpoint/wrapTools";
+import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
   approvalPromptText,
   archivistLine,
@@ -445,11 +446,12 @@ function loadOrCreateSession(
   sessionsDir: string,
   loadAgentsFileFn: typeof loadAgentsFileReal,
   configDir: string,
+  onTruncated: () => void = () => {},
 ): { session: RunSession; modelRecorded: boolean } {
   if (resuming) {
     const id = resumeId ?? findMostRecentSession(sessionsDir);
     if (!id) throw new Error("No session to resume.");
-    const loaded = loadSession<ModelMessage>(id, sessionsDir);
+    const loaded = loadSession<ModelMessage>(id, sessionsDir, onTruncated);
     // The two stored fields are treated differently on purpose.
     //
     // `systemPrompt` is rebuilt every time, never replayed: it is a product of this binary's
@@ -927,7 +929,12 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
     // awaiting here would let this function return before their own continuation (recordBarrier,
     // the final message) ran at all, since nothing else keeps the process alive for a background
     // continuation to finish in once run() returns and the real binary calls process.exit(code).
-    await command.run(loadSession<ModelMessage>(id, ctx.sessionsDir), commandArgs, dirs(ctx));
+    const loaded = loadSession<ModelMessage>(id, ctx.sessionsDir, () =>
+      printWarning(
+        "the last message in this session's saved history was incomplete (an interrupted save) and has been dropped — everything before it is intact",
+      ),
+    );
+    await command.run(loaded, commandArgs, dirs(ctx));
     return 0;
   } catch (err) {
     console.error(messageOf(err));
@@ -1001,9 +1008,13 @@ type PreparedRun = {
   // /logout left the previous (possibly paid) plan in place, so `resolveRoute`/`/model` could keep
   // reflecting stale auth state after either.
   plan: Plan | null;
-  // The same OnBeforeMutation `tools`' own withCheckpoints was built with — driveLoop's
-  // withSubagents reuses it for one pre-dispatch snapshot instead of building a second one.
-  checkpointer: OnBeforeMutation;
+  // The same Checkpointer `tools`' own withCheckpoints was built with — driveLoop's
+  // withSubagents reuses it (as an OnBeforeMutation; Checkpointer is one, plus the two extras
+  // below) for one pre-dispatch snapshot instead of building a second one. `Checkpointer`, not
+  // `OnBeforeMutation`, so runTui's own /undo and /restore handling (its own comment near
+  // `invalidate()`'s call site) can reach `.invalidate()` on the SAME live instance, not a second
+  // one it would have no way to build.
+  checkpointer: Checkpointer;
   // Loaded once here, alongside everything else this object resolves once per run — "frozen per
   // session" (renderMemoryTier's own doc comment) means loaded HERE and nowhere else; a write made
   // mid-session takes effect next session, not this one.
@@ -1121,6 +1132,11 @@ async function prepareSession(
       ctx.sessionsDir,
       loadAgentsFileFn,
       configDir,
+      () =>
+        printWarning(
+          "the last message in this session's saved history was incomplete (an interrupted save) and has been dropped — everything before it is intact",
+          warnSink,
+        ),
     );
 
     if (!ctx.resuming) emit(`Session ${session.id} created.`);
@@ -1248,7 +1264,7 @@ async function prepareSession(
       onWarning: printWarning,
     });
     const tools = withVerification(
-      withCheckpoints(toolDefinitions, checkpointer),
+      withCheckpoints(toolDefinitions, checkpointer, checkpointer.onAfterMutation),
       loadVerifyConfig(),
     );
 
@@ -2593,6 +2609,36 @@ async function runTui(
         type: "command-error",
         message: messageOf(err),
       });
+    } finally {
+      // /undo and /restore just forced the worktree to a state this closure's live `checkpointer`
+      // never saw happen — it is the SAME instance every ongoing tool call in this TUI session
+      // checkpoints through, and its own `previousTree`/`previousCommit` are now stale: the next
+      // non-destructive bash/powershell call would reuse `previousTree` (createCheckpointer's own
+      // "gate first checkpoint of a process" comment explains why that reuse exists at all) as
+      // though nothing had happened since it was recorded, when the restore just rewrote the
+      // worktree out from under it. In `finally` rather than after the call: applyRestore's own
+      // comment (shadowGit.ts) explains it checks out files before removing the post-snapshot ones,
+      // so an EPERM/EBUSY thrown by the removal half on Windows still lands after the worktree was
+      // already rewritten — the checkpointer must resync on that throwing path too, not only on
+      // success. `invalidate()` clears the stale state so the very next mutating call takes a real
+      // snapshot instead of trusting a tree the restore already invalidated.
+      //
+      // In its own try/catch: invalidate() spawns git (resolveRef), which can throw the same way
+      // every other git spawn in this subsystem can (index.lock contention between two seri
+      // processes, a full disk). onSubmit is called fire-and-forget from InputBox, so an
+      // uncaught throw here would leave the TUI as an unhandled rejection instead of the
+      // command-error the surrounding catch above already exists to report — and would silently
+      // replace whatever error that catch just handled.
+      if (name === "/undo" || name === "/restore") {
+        try {
+          prepared.checkpointer.invalidate();
+        } catch (err) {
+          dispatch({
+            type: "command-error",
+            message: `could not resync checkpointing after ${name}; the next mutating tool call will still take a fresh snapshot: ${messageOf(err)}`,
+          });
+        }
+      }
     }
   }
 

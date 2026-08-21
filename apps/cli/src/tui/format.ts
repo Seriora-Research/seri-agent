@@ -102,6 +102,18 @@ export function transcriptVisualRows(entries: TranscriptEntry[], columns: number
   return total;
 }
 
+// Wraps the in-progress streamed answer (App.tsx's own `state.streaming`) the same way a committed
+// assistant entry wraps, via `displayText` — factored out of `visibleTranscript` so App.tsx can
+// memoize the result across renders (`useMemo`, keyed on `[state.streaming, state.columns]`)
+// instead of re-wrapping the full, ever-growing streamed string from scratch on every token.
+export function wrapPendingRows(pending: string, columns: number): VisibleRow[] {
+  const pendingEntry: TranscriptEntry = { role: "assistant", text: pending };
+  return wrapForTranscript(displayText(pendingEntry), columns).map((text) => ({
+    role: pendingEntry.role,
+    text,
+  }));
+}
+
 // The visible slice of a committed transcript for a viewport `rows` tall, `offset` VISUAL rows up
 // from the newest (0 = following the latest line). Tail-anchored, not head-anchored: a transcript
 // longer than the viewport keeps showing its NEWEST rows by default, the same thing the terminal
@@ -123,30 +135,27 @@ export function transcriptVisualRows(entries: TranscriptEntry[], columns: number
 // the bottom, but the exact case a reader scrolled deep into a long session (or a fast streamed
 // answer on a tall terminal) would actually hit every render.
 //
-// `pending` (App.tsx's `state.streaming`, the in-progress answer not yet committed to `entries`) is
-// wrapped and seeded into the accumulation FIRST, ahead of the backward walk over `entries` — not
-// spread into a `[...entries, pending]` array at the call site (a prior version of this function did
-// exactly that, tried and reverted): that allocated a full copy of the committed transcript on every
-// call, i.e. every streamed token, for a function whose entire point is staying proportional to
-// scroll depth instead of session length. Wrapping in the SAME accumulation `entries` itself feeds
-// keeps `pending`'s own row count part of one coherent walk rather than a second, disconnected one.
+// `pendingRows` (App.tsx's `state.streaming`, already wrapped via `wrapPendingRows` above) is
+// seeded into the accumulation FIRST, ahead of the backward walk over `entries` — not spread into a
+// `[...entries, pending]` array at the call site (a prior version of this function did exactly
+// that, tried and reverted): that allocated a full copy of the committed transcript on every call,
+// i.e. every streamed token, for a function whose entire point is staying proportional to scroll
+// depth instead of session length. `wrapPendingRows` used to run inline here, re-wrapping the whole
+// streamed string from scratch on every call; App.tsx now memoizes it once per `[state.streaming,
+// state.columns]` change and passes the already-wrapped rows in, so this function itself no longer
+// pays for the wrap at all.
 export function visibleTranscript(
   entries: TranscriptEntry[],
   rows: number,
   offset: number,
   columns: number,
-  pending = "",
+  pendingRows: VisibleRow[] = [],
 ): VisibleRow[] {
   const collected: VisibleRow[][] = [];
   let collectedRows = 0;
-  if (pending.length > 0) {
-    const pendingEntry: TranscriptEntry = { role: "assistant", text: pending };
-    const wrapped = wrapForTranscript(displayText(pendingEntry), columns).map((text) => ({
-      role: pendingEntry.role,
-      text,
-    }));
-    collected.push(wrapped);
-    collectedRows += wrapped.length;
+  if (pendingRows.length > 0) {
+    collected.push(pendingRows);
+    collectedRows += pendingRows.length;
   }
   for (let i = entries.length - 1; i >= 0 && collectedRows < offset + rows; i--) {
     const entry = entries[i];

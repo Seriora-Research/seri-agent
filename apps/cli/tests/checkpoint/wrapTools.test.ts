@@ -3,10 +3,14 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tool, type ModelMessage, type ToolExecutionOptions, type ToolSet } from "ai";
+import { type ModelMessage, type ToolExecutionOptions, type ToolSet, tool } from "ai";
 import { z } from "zod";
 import { initShadow, isGitAvailable, writeTree } from "../../src/checkpoint/shadowGit";
-import { withCheckpoints, type MutationContext } from "../../src/checkpoint/wrapTools";
+import {
+  type MutationContext,
+  withCheckpoints,
+  withMutationRecording,
+} from "../../src/checkpoint/wrapTools";
 
 const messages: ModelMessage[] = [
   { role: "user", content: "do the task" },
@@ -121,6 +125,140 @@ describe("withCheckpoints", () => {
         rewindTo: messages.length - 1,
       },
     ]);
+  });
+
+  test("onAfterMutation runs after the tool resolves, with the same context onBeforeMutation saw", async () => {
+    const order: string[] = [];
+    const wrapped = withCheckpoints(
+      fakeTools(() => {
+        order.push("execute");
+        return "ok";
+      }),
+      () => order.push("before"),
+      (context) => {
+        order.push("after");
+        expect(context).toEqual({
+          tool: "write_file",
+          toolCallId: "c1",
+          args: { path: "a.txt" },
+          rewindTo: messages.length - 1,
+        });
+      },
+    );
+
+    expect(await wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts())).toBe("ok");
+    expect(order).toEqual(["before", "execute", "after"]);
+  });
+
+  test("onAfterMutation does not run when the tool call rejects", async () => {
+    let afterCalled = false;
+    const wrapped = withCheckpoints(
+      fakeTools(() => {
+        throw new Error("disk full");
+      }),
+      () => {},
+      () => {
+        afterCalled = true;
+      },
+    );
+
+    await expect(wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts())).rejects.toThrow(
+      "disk full",
+    );
+    expect(afterCalled).toBe(false);
+  });
+
+  test("omitting onAfterMutation leaves the tool's result passed through exactly as before", async () => {
+    const wrapped = withCheckpoints(
+      fakeTools(() => ({ written: 3 })),
+      () => {},
+    );
+
+    expect(await wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts())).toEqual({
+      written: 3,
+    });
+  });
+
+  // fakeTools' own definitions are built via tool(), which is an identity function, not an async
+  // wrapper — so a hand-built ToolSet whose execute is a plain, non-async function (unlike every
+  // fakeTools case above) is the only way to prove a throw from execute is turned into a rejected
+  // promise rather than propagating as a synchronous throw out of wrapped.execute itself.
+  test("wraps a synchronous throw from a non-async execute as a rejected promise", async () => {
+    const tools: ToolSet = {
+      write_file: {
+        ...fakeTools(() => "ok").write_file,
+        execute: () => {
+          throw new Error("disk full");
+        },
+      },
+    } as ToolSet;
+    const wrapped = withCheckpoints(tools, () => {});
+
+    let result: unknown;
+    expect(() => {
+      result = wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts());
+    }).not.toThrow();
+    await expect(result).rejects.toThrow("disk full");
+  });
+});
+
+describe("withMutationRecording", () => {
+  test("runs onAfterMutation after the tool resolves, with no before-hook at all", async () => {
+    const order: string[] = [];
+    const wrapped = withMutationRecording(
+      fakeTools(() => {
+        order.push("execute");
+        return "ok";
+      }),
+      () => order.push("after"),
+    );
+
+    expect(await wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts())).toBe("ok");
+    expect(order).toEqual(["execute", "after"]);
+  });
+
+  test("does not run onAfterMutation when the tool call throws synchronously", async () => {
+    let calls = 0;
+    const wrapped = withMutationRecording(
+      fakeTools(() => {
+        throw new Error("disk full");
+      }),
+      () => {
+        calls++;
+      },
+    );
+
+    await expect(wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts())).rejects.toThrow(
+      "disk full",
+    );
+    expect(calls).toBe(0);
+  });
+
+  test("records every filesystem-mutating tool, not just write_file", async () => {
+    const calls: MutationContext[] = [];
+    const wrapped = withMutationRecording(
+      fakeTools(() => "ok"),
+      (context) => calls.push(context),
+    );
+
+    for (const name of ["write_file", "bash", "powershell"]) {
+      await wrapped[name]?.execute?.({ path: "a.txt" }, execOpts());
+    }
+
+    expect(calls.map((call) => call.tool)).toEqual(["write_file", "bash", "powershell"]);
+  });
+
+  test("returns non-mutating tools by reference and never records them", async () => {
+    const calls: MutationContext[] = [];
+    const tools = fakeTools(() => "ok");
+    const wrapped = withMutationRecording(tools, (context) => calls.push(context));
+
+    for (const name of ["read_file", "edit", "grep", "glob"]) {
+      expect(wrapped[name]).toBe(tools[name]);
+      await wrapped[name]?.execute?.({ path: "a.txt" }, execOpts());
+    }
+
+    expect(calls).toEqual([]);
   });
 });
 

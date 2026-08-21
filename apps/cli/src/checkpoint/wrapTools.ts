@@ -22,11 +22,22 @@ export type MutationContext = {
 // bug in their own test suite. The type forbids it.
 export type OnBeforeMutation = (context: MutationContext) => void;
 
+// Unlike OnBeforeMutation, running late is exactly the point: this fires only once the mutation
+// has actually landed, so a caller building a write ledger from it (checkpoint.ts's own
+// recordWrite) never records a path the tool call went on to fail before finishing. Optional and
+// void like its counterpart, for the same reason — nothing here needs the result value, and a
+// callback that could reject would need its own error policy this file has no opinion on.
+export type OnAfterMutation = (context: MutationContext) => void;
+
 // Pure function over a ToolSet: `toolDefinitions` stays a module-level const, `runLoop` is not
 // touched, and checkpointing stays a consumer policy rather than a loop concern (AGENTS.md's
 // "the loop is a library" invariant does not have to bend). runLoop only calls `execute` after
 // the permission gate approves, so a denied tool cannot produce a checkpoint.
-export function withCheckpoints(tools: ToolSet, onBeforeMutation: OnBeforeMutation): ToolSet {
+export function withCheckpoints(
+  tools: ToolSet,
+  onBeforeMutation: OnBeforeMutation,
+  onAfterMutation?: OnAfterMutation,
+): ToolSet {
   const mutating = new Set<string>(FS_MUTATING_TOOL_NAMES);
 
   return Object.fromEntries(
@@ -40,17 +51,38 @@ export function withCheckpoints(tools: ToolSet, onBeforeMutation: OnBeforeMutati
         name,
         {
           ...definition,
-          execute: (args: unknown, options: ToolExecutionOptions<Record<string, unknown>>) => {
-            onBeforeMutation({
+          execute: async (
+            args: unknown,
+            options: ToolExecutionOptions<Record<string, unknown>>,
+          ) => {
+            const context: MutationContext = {
               tool: name,
               toolCallId: options.toolCallId,
               args,
               rewindTo: options.messages.length - 1,
-            });
-            return execute(args, options);
+            };
+            onBeforeMutation(context);
+            const value = await execute(args, options);
+            if (onAfterMutation !== undefined) onAfterMutation(context);
+            return value;
           },
         },
       ];
     }),
   ) as ToolSet;
+}
+
+// The after-only half of withCheckpoints, for a caller that must record write provenance without
+// taking withCheckpoints' pre-mutation snapshot. subagents/roles.ts's buildRoleToolSet deliberately
+// never wraps a role's tools with withCheckpoints — a per-child snapshot would append a
+// child-derived rewindTo to the PARENT session's rewind log (dispatch.ts's own pre-dispatch-snapshot
+// comment) — which left every subagent write_file call unrecorded in the write ledger:
+// filterSafeToDelete (writeLedger.ts) has no provenance for a subagent-written file, so /undo can
+// never prove it safe to delete and preserves it forever instead. This restores that provenance
+// without reintroducing the per-child snapshot a real onBeforeMutation would require — the no-op
+// passed here does nothing, so no snapshot is taken, while withCheckpoints' own execute wrapper
+// (async, so a synchronous throw from `execute` still skips onAfterMutation exactly as it does for
+// withCheckpoints' own callers) is not duplicated a second time for this one.
+export function withMutationRecording(tools: ToolSet, onAfterMutation: OnAfterMutation): ToolSet {
+  return withCheckpoints(tools, () => {}, onAfterMutation);
 }

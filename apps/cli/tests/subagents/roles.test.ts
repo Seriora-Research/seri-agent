@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ToolExecutionOptions } from "ai";
+import type { MutationContext } from "../../src/checkpoint/wrapTools";
 import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
 import {
   buildRoleToolSet,
@@ -6,6 +11,10 @@ import {
   roleAddendum,
   roleMutatesFilesystem,
 } from "../../src/subagents/roles";
+
+function execOpts(): ToolExecutionOptions<Record<string, unknown>> {
+  return { toolCallId: "c1", messages: [], context: {} };
+}
 
 describe("buildRoleToolSet", () => {
   test("explore and plan are both exactly read_file/grep/glob, and identical to each other", () => {
@@ -33,11 +42,35 @@ describe("buildRoleToolSet", () => {
     }
   });
 
-  test("each tool definition is the same object reference as toolDefinitions', not wrapped", () => {
+  test("each tool definition is the same object reference as toolDefinitions', not wrapped when no onAfterMutation is given", () => {
     const tools = buildRoleToolSet("code");
     for (const [name, definition] of Object.entries(tools)) {
       expect(definition).toBe(toolDefinitions[name as keyof typeof toolDefinitions]);
     }
+  });
+
+  // Round-trip regression for the write-ledger gap: a `code` subagent's write_file was never
+  // wrapped with anything at all, so its writes were never recorded (writeLedger.ts's recordWrite)
+  // and a later /undo could never prove one of its files safe to delete — see wrapTools.ts's
+  // withMutationRecording for the full mechanism this closes.
+  test("write_file is recorded via onAfterMutation when one is provided, with no other tool wrapped", async () => {
+    const calls: MutationContext[] = [];
+    const tools = buildRoleToolSet("code", (context) => calls.push(context));
+
+    expect(tools.read_file).toBe(toolDefinitions.read_file);
+    expect(tools.write_file).not.toBe(toolDefinitions.write_file);
+
+    const root = mkdtempSync(join(tmpdir(), "seri-role-tools-test-"));
+    const path = join(root, "a.txt");
+    try {
+      await tools.write_file?.execute?.({ path, content: "hello" }, execOpts());
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.tool).toBe("write_file");
+    expect((calls[0]?.args as { path: string }).path).toBe(path);
   });
 });
 

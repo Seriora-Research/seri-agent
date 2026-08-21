@@ -163,13 +163,18 @@ export function printPreApproved(
 // Called before the restore happens, not after. Every path here comes from git's own output, so
 // an ignored file can never appear under "restored" or "deleted"; the ones that were written and
 // skipped are listed separately rather than left for the user to notice was missing. The deletion
-// list matters most: the removal pass takes every untracked, non-ignored file, including ones a
-// human made by hand in another terminal.
+// list is already ledger-filtered by the time it reaches here (checkpoint.ts's own restoreTo) —
+// only a path seri can still prove it wrote is ever in it; `preserved` is everything that would
+// once have been deleted alongside it but is not proven, printed with its own honest reason
+// rather than left for the user to wonder why a file they expected gone is still there.
 export function undoPlanLines(plan: RestorePlan, sink: (line: string) => void = console.log): void {
   if (plan.diff) sink(plan.diff);
   for (const path of plan.restored) sink(`restored ${path}`);
   for (const path of plan.deleted) sink(`deleted  ${path}`);
   if (plan.ignored.length > 0) sink(`not restored (gitignored): ${plan.ignored.join(", ")}`);
+  if (plan.preserved.length > 0) {
+    sink(`preserved (no proof seri wrote them, or edited since): ${plan.preserved.join(", ")}`);
+  }
 }
 
 // Restoring is never the operation that loses work: the state it just replaced was committed first.

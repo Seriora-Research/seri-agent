@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { foldsCase } from "../caseFold";
+import { clearEolCache } from "../tools/eolCache";
 import {
   applyRestore,
   commitTree,
@@ -21,7 +22,8 @@ import {
   updateRef,
   writeTree,
 } from "./shadowGit";
-import type { OnBeforeMutation } from "./wrapTools";
+import type { MutationContext, OnAfterMutation, OnBeforeMutation } from "./wrapTools";
+import { filterSafeToDelete, recordWrite } from "./writeLedger";
 
 // The newest 20 sessions are always intact. Measured: ~4.4 KB of store per snapshot (222 KB over
 // 50 snapshots of this 106-file repo), and git's content dedup makes repeated edits to a large
@@ -70,6 +72,84 @@ function anchored(log: CheckpointRecord[]): AnchoredRecord[] {
   return log.filter(
     (record): record is AnchoredRecord => record.kind === "tool" || record.kind === "pre-undo",
   );
+}
+
+// Curated verbs, not shell parsing — the same tradeoff Hermes (github.com/NousResearch/hermes-agent)
+// ships with for its own destructive-command gate. A real parser would need two grammars (bash and
+// PowerShell), their aliases, and their quoting rules; a word-boundary regex scan needs none of
+// that and costs nothing extra per call, so `bash("ls")`/`bash("git status")` — the common case,
+// most `bash` calls read rather than write — can skip writeTree's two spawns entirely instead of
+// paying them to discover nothing changed. Word-boundary (`\b`), not substring: a bare `mv` must
+// not fire on a filename that happens to contain those letters, e.g. `mv2.txt`.
+//
+// Accepted residual risk, same one Hermes accepts: an unrecognised or obfuscated destructive
+// command (a dynamically-built string, a shell alias, `find -delete`, a script that shells out to
+// `rm` two levels down) skips writeTree, so anything it creates was never captured in any tree and
+// never recorded in the write ledger either. /undo's removal pass only deletes ledger-verified
+// paths, so a file from an unrecognised command is not in the ledger and is preserved rather than
+// deleted — but that means /undo silently leaves it behind instead of restoring the pre-command
+// state for it. A false positive here only costs one extra git spawn; a false negative costs undo
+// coverage for that one call — so the list leans broad rather than narrow.
+const DESTRUCTIVE_COMMAND_PATTERNS: RegExp[] = [
+  // bash
+  /\brm\b/,
+  /\brmdir\b/,
+  // A standard POSIX single-file delete, distinct from `rm` — not a substring of any covered
+  // word, unlike `git rm`/`git mv`, which the plain /\brm\b//\bmv\b/ patterns already catch.
+  /\bunlink\b/,
+  /\bmv\b/,
+  /\bcp\b/,
+  /\binstall\b/,
+  // \b does not fire between "n" and "i" (both word characters, no boundary there), so
+  // /\binstall\b/ alone never matches "uninstall" — verified directly: that regex against
+  // "npm uninstall lodash" returns false, silently letting a real dependency removal skip the
+  // snapshot. A separate pattern, not folding "un" into the existing one, keeps the un-prefixed
+  // "install" match intact rather than making both conditional on the same alternation.
+  /\buninstall\b/,
+  // `s` flag: without it, `.` cannot cross a `\n`, so a command split across lines by a backslash
+  // continuation (`sed \` + newline + `  -i ...`) never matches — a real, plausible shape for a
+  // multi-line command string, not just a single physical line.
+  /\bsed\b.*-i\b/s,
+  /\btruncate\b/,
+  /\bdd\b/,
+  /\bshred\b/,
+  /\bgit\s+reset\b/,
+  /\bgit\s+clean\b/,
+  /\bgit\s+checkout\b/,
+  /\bgit\s+restore\b/,
+  /\bgit\s+stash\b/,
+  /\bgit\s+apply\b/,
+  /\btee\b/,
+  /\bpatch\b/,
+  // PowerShell
+  /\bRemove-Item\b/i,
+  /\bdel\b/i,
+  /\berase\b/i,
+  /\bri\b/i,
+  /\bMove-Item\b/i,
+  /\bren\b/i,
+  /\bRename-Item\b/i,
+  /\bCopy-Item\b.*-Force\b/is,
+  /\bSet-Content\b/i,
+  /\bClear-Content\b/i,
+  /\bOut-File\b/i,
+  // output redirection, both shells — coarse on purpose (Hermes takes the same approach): it does
+  // not distinguish `>` from a `->` or a comparison inside a quoted string, so it also fires on a
+  // handful of read-only commands (e.g. `echo "a > b"`), which only costs the spawn it exists to
+  // save on the destructive case.
+  />{1,2}/,
+];
+
+function isDestructiveCommand(command: string): boolean {
+  return DESTRUCTIVE_COMMAND_PATTERNS.some((pattern) => pattern.test(command));
+}
+
+// bash/powershell are the only tools whose mutation is buried inside an arbitrary command string —
+// see warnIfNotCheckpointed's identical note. Non-string/absent `command` (a malformed tool call)
+// is treated as destructive: whatever it is, this function cannot say it is safe to skip.
+function commandOf(args: unknown): string | undefined {
+  const command = (args as { command?: unknown }).command;
+  return typeof command === "string" ? command : undefined;
 }
 
 // One store per project, under <configDir>/checkpoints. `worktree` is the project root from
@@ -187,13 +267,25 @@ export function pruneSessions(storeDir: string, keep?: string): void {
   gc(gitDir);
 }
 
+// The value createCheckpointer returns: still directly callable as an OnBeforeMutation (every
+// existing caller — withCheckpoints, dispatch.ts's subagent runtime — keeps calling it exactly
+// that way), plus two capabilities only the caller that actually holds the live instance needs.
+// `onAfterMutation` is the write-ledger half of the destructive-restore fix (writeLedger.ts's own
+// header comment): wired into withCheckpoints as the third argument, alongside the same handler
+// as the first. `invalidate` is restoreTo's own escape hatch for a live checkpointer's stale
+// state — see its call site's comment in restoreTo, below.
+export type Checkpointer = OnBeforeMutation & {
+  onAfterMutation: OnAfterMutation;
+  invalidate: () => void;
+};
+
 export function createCheckpointer(opts: {
   storeDir: string;
   worktree: string;
   sessionId: string;
   onWarning: (message: string) => void;
   gitAvailable?: () => boolean;
-}): OnBeforeMutation {
+}): Checkpointer {
   const gitAvailable = opts.gitAvailable ?? isGitAvailable;
   const gitDir = gitDirOf(opts.storeDir);
   const scopeCache = new Map<string, PathScope>();
@@ -204,6 +296,13 @@ export function createCheckpointer(opts: {
   let seq = 0;
   let previousTree: string | undefined;
   let previousCommit: string | undefined;
+  // Tracks whether THIS process has taken a real snapshot yet, independent of `previousTree`:
+  // `start()` seeds `previousTree` from the session's existing log on --resume, so on a resumed
+  // session `previousTree` is already a string before this process has written a single tree of
+  // its own. Gating on `previousTree === undefined` there would reuse that stale tree — left over
+  // from before the process restarted — for the resumed session's first call, silently skipping the
+  // real snapshot that would have caught anything the user or filesystem changed in between.
+  let snapshottedThisProcess = false;
 
   function start(): boolean {
     // Degrade, never fail: refusing to edit files because an *undo* feature is unavailable makes
@@ -330,20 +429,19 @@ export function createCheckpointer(opts: {
 
     // `add -A` covers the whole worktree minus its ignores, so a project with no .gitignore at all
     // — seri launched in $HOME, or beside an unignored node_modules — hashes every file on every
-    // mutating tool call, and /undo's removal pass then reaches every untracked file made since,
-    // across all of it. No limit is imposed: a threshold that silently narrowed the snapshot would
+    // mutating tool call. No limit is imposed: a threshold that silently narrowed the snapshot would
     // be the skipped pre-state this design already refused to accept. The size is reported instead,
     // once, so it is a number the user saw rather than one they find out from a deletion.
     if (files > LARGE_WORKTREE_FILES) {
       messages.push(
-        `checkpointing ${files} files under ${opts.worktree} on every file-modifying tool call — /undo's removal pass covers all of them; a .gitignore would narrow it`,
+        `checkpointing ${files} files under ${opts.worktree} on every file-modifying tool call — /undo's removal pass only covers files it recorded writing; a .gitignore would narrow it`,
       );
     }
 
     if (messages.length > 0) opts.onWarning(messages.join("; "));
   }
 
-  return (context) => {
+  const handler: OnBeforeMutation = (context) => {
     if (!enabled) return;
 
     try {
@@ -357,16 +455,33 @@ export function createCheckpointer(opts: {
 
       warnIfNotCheckpointed(context.tool, context.args, context.toolCallId);
 
-      const tree = writeTree(gitDir, opts.worktree);
-      if (!scoped) {
+      // writeTree's own two spawns (`add -A` + `write-tree`) run only when the call might have
+      // changed something: `write_file` always might; a bash/powershell call only when its command
+      // matches DESTRUCTIVE_COMMAND_PATTERNS; and the very first checkpoint of THIS PROCESS always
+      // does regardless of command, because a resumed session's `previousTree` came from an earlier
+      // process and cannot be trusted to still match what is on disk now.
+      const command = commandOf(context.args);
+      const mustSnapshot =
+        context.tool === "write_file" ||
+        !snapshottedThisProcess ||
+        command === undefined ||
+        isDestructiveCommand(command);
+
+      // `previousTree` is only reused here when `mustSnapshot` is false, which — per the OR above —
+      // means this process has already taken one real snapshot, so `previousTree` is already a
+      // string from that call.
+      const tree = mustSnapshot ? writeTree(gitDir, opts.worktree) : (previousTree as string);
+      if (mustSnapshot) snapshottedThisProcess = true;
+      if (mustSnapshot && !scoped) {
         scoped = true;
         warnAboutScope();
       }
-      // The one optimisation taken: an unchanged tree means nothing happened since the last
-      // checkpoint, so commit-tree and update-ref are skipped — 48.5 ms instead of 107.2 ms,
-      // measured. This is the common case, because most `bash` calls read rather than write
-      // (`ls`, `bun test`, `git status`). The record is still appended, reusing the previous tree
-      // and commit, so the conversation anchor for /rewind is never lost to the optimisation.
+      // An unchanged tree means nothing happened since the last checkpoint, so commit-tree and
+      // update-ref are skipped — 48.5 ms instead of 107.2 ms, measured. This is also what makes a
+      // gated-off bash/powershell call cheap end to end: `tree` above is `previousTree` reused, so
+      // this condition is false and neither commit-tree nor update-ref run. Either way the record
+      // below is still appended, reusing the previous tree and commit, so the conversation anchor
+      // for /rewind is never lost to either optimisation.
       if (tree !== previousTree || previousCommit === undefined) {
         previousCommit = commitTree(gitDir, opts.worktree, tree, previousCommit);
         updateRef(gitDir, sessionRef(opts.sessionId), previousCommit);
@@ -394,6 +509,51 @@ export function createCheckpointer(opts: {
       );
     }
   };
+
+  // Only write_file's own path is attributable — see writeLedger.ts's own header comment on why
+  // bash/powershell output never reaches here. Best-effort and silent on failure: a ledger write
+  // that fails (a full disk, a read-only store) only ever makes filterSafeToDelete MORE
+  // conservative for this one path, never less safe, so it does not warrant the primary handler's
+  // "latch off for the rest of the session" reaction to a genuinely broken store above — this is
+  // never the thing standing between a user and undo working at all.
+  const onAfterMutation: OnAfterMutation = (context: MutationContext) => {
+    if (!enabled || context.tool !== "write_file") return;
+    const path = (context.args as { path?: unknown }).path;
+    if (typeof path !== "string") return;
+    try {
+      // Resolved against process.cwd(), same as scopeOf above and for the identical reason:
+      // writeFile.ts hands the declared path straight to node:fs, so that is the absolute path
+      // that is actually on disk and the one filterSafeToDelete must be able to find again.
+      const absolute = resolve(path);
+      recordWrite(opts.storeDir, absolute, readFileSync(absolute, "utf8"));
+    } catch {}
+  };
+
+  // restoreTo's own signal that disk was just forcibly rewritten out from under this closure's
+  // `previousTree`/`previousCommit` — see its call site's comment for what goes wrong without it.
+  // `previousCommit` is re-resolved from the ref rather than cleared to undefined: restoreTo has
+  // already moved the ref to the pre-undo commit by the time this runs, and clearing to undefined
+  // would make the NEXT checkpoint a rootless commit instead of one that chains onto it — the same
+  // resumed-session derivation start() already does, run again because disk changed a second time
+  // without a new process to call start() for it.
+  const invalidate = (): void => {
+    previousTree = undefined;
+    // Before resolveRef, which throws only when git itself fails to spawn (shadowGit.ts's own
+    // run()/spawnGit — a non-zero exit, like a ref genuinely not resolving, already returns
+    // gracefully as `undefined` and never reaches here): if it does throw, this must still be
+    // false, or a later non-destructive, non-write_file call would see `mustSnapshot` false, skip
+    // writeTree, and reuse `previousTree` — which is `undefined` by this point — as a checkpoint's
+    // tree, corrupting that record rather than merely chaining the next commit onto a stale parent
+    // (the lesser failure `previousCommit` staying unresolved below produces instead).
+    snapshottedThisProcess = false;
+    previousCommit = resolveRef(gitDir, sessionRef(opts.sessionId));
+  };
+
+  // Object.assign, not `handler as Checkpointer`: the assign's return type is the intersection of
+  // its arguments' types, so TypeScript verifies both extra properties are actually present at the
+  // call site — a cast would compile even if one were forgotten, silently leaving that property
+  // undefined on the object every caller trusts to be a real Checkpointer.
+  return Object.assign(handler, { onAfterMutation, invalidate });
 }
 
 function toolRecords(log: CheckpointRecord[]): ToolRecord[] {
@@ -425,6 +585,13 @@ export type RestorePlan = {
   restored: string[];
   deleted: string[];
   ignored: string[];
+  // Candidates planRestore's own tree diff considered extraneous but the write ledger could not
+  // vouch for (writeLedger.ts's own filterSafeToDelete) — no proof seri ever wrote them, or the
+  // proof it has no longer matches what is on disk. NOT the same reason as `ignored` (a path the
+  // project's own .gitignore excludes) and deliberately not folded into it: conflating "seri
+  // can't prove authorship" with "the project declared this out of scope" would misinform the
+  // user about why one of their files was left alone.
+  preserved: string[];
 };
 
 export type RestoreResult = RestorePlan & {
@@ -459,6 +626,22 @@ function ignoredSince(log: CheckpointRecord[], index: number): string[] {
   ).map((record) => record.path);
 }
 
+// restoreTo's own positive-proof gate, split out because it runs twice against the same candidate
+// list: once for the plan reported via onPlan, again immediately before applyRestore to close the
+// TOCTOU window between them (see that call site's own comment on why the second check exists at
+// all).
+function partitionByLedger(
+  storeDir: string,
+  worktree: string,
+  candidates: string[],
+): { safe: string[]; unsafe: string[] } {
+  const safeSet = new Set(filterSafeToDelete(storeDir, worktree, candidates));
+  return {
+    safe: candidates.filter((path) => safeSet.has(path)),
+    unsafe: candidates.filter((path) => !safeSet.has(path)),
+  };
+}
+
 function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): RestoreResult {
   const gitDir = gitDirOf(opts.storeDir);
   // Before the ref moves and before a record is written, so a bad argument costs nothing. Without
@@ -487,19 +670,64 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
     at: new Date().toISOString(),
   });
 
+  const candidates = planRestore(gitDir, opts.worktree, treeish);
+  // The removal pass' own positive-proof gate, applied to the PLAN — before onPlan, not just
+  // before applyRestore — so what is printed to the user is what actually happens rather than a
+  // list the apply step goes on to narrow behind their back. planRestore's `deleted` only knows a
+  // path is absent from the target tree; it has no idea whether seri ever wrote it, which is what
+  // let a hand-edited or newly-created file the agent never touched get swept up as "extraneous"
+  // and deleted by a restore that predates it. filterSafeToDelete narrows the list to paths a
+  // write_file ledger entry can still vouch for (writeLedger.ts's own header comment); everything
+  // else moves to `preserved` instead of silently vanishing from both the plan and the disk.
+  const { safe: deleted, unsafe: preserved } = partitionByLedger(
+    opts.storeDir,
+    opts.worktree,
+    candidates.deleted,
+  );
+
   const plan: RestorePlan = {
     tree: treeish,
     // Before planRestore, which rewrites the index. Display only, and non-fatal by design — see
     // diffTree.
     diff: diffTree(gitDir, opts.worktree, treeish),
-    ...planRestore(gitDir, opts.worktree, treeish),
+    restored: candidates.restored,
+    deleted,
     ignored,
+    preserved,
   };
   opts.onPlan(plan);
-  applyRestore(gitDir, opts.worktree, plan.deleted);
+  // Re-verified here, not reused from the check above: diffTree and onPlan both ran between that
+  // check and this point — an unbounded gap (onPlan is caller-supplied) and a non-trivial one
+  // (diffTree spawns git), either of which is enough time for a concurrent editor to replace a
+  // file's content after it was verified as seri-authored but before it is actually deleted.
+  // Re-checking narrows the window to checkout-index's own runtime, the smallest gap these
+  // synchronous, non-atomic primitives can achieve. The RETURNED result reflects this final check,
+  // not the plan already printed via onPlan — a path that fails revalidation moves from `deleted`
+  // to `preserved` in what is reported to have actually happened.
+  const { safe: finalDeleted, unsafe: newlyUnsafe } = partitionByLedger(
+    opts.storeDir,
+    opts.worktree,
+    plan.deleted,
+  );
+  const finalPreserved = [...plan.preserved, ...newlyUnsafe];
+  // In a try/finally, not a plain call after: checkout-index rewrites every restored file's
+  // on-disk EOL before the loop that deletes `finalDeleted` even starts, so a throw partway
+  // through applyRestore (a failed rmSync, a killed git process) still leaves the cache poisoned
+  // with pre-restore values unless it is cleared regardless of how applyRestore exits.
+  try {
+    applyRestore(gitDir, opts.worktree, finalDeleted);
+  } finally {
+    // checkout-index can rewrite a restored file's on-disk EOL without going through
+    // writeFile.ts/readFile.ts (shadowGit.ts's own core.autocrlf=false comment on why), leaving the
+    // EOL cache trusting a line-ending style the restore may have just changed — same reason
+    // bash.ts/powershell.ts already clear it after every shell call.
+    clearEolCache();
+  }
 
   return {
     ...plan,
+    deleted: finalDeleted,
+    preserved: finalPreserved,
     preUndoCommit,
     recoverCommand: `seri --resume ${opts.sessionId} /restore ${preUndoCommit}`,
   };

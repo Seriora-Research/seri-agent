@@ -14,6 +14,7 @@ import { basename, join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
 import {
   appendBarrier,
+  type CheckpointRecord,
   checkpointStoreDir,
   createCheckpointer,
   pruneSessions,
@@ -21,7 +22,6 @@ import {
   restoreCommit,
   rewindConversation,
   undoFiles,
-  type CheckpointRecord,
 } from "../../src/checkpoint/checkpoint";
 import {
   applyRestore,
@@ -34,9 +34,11 @@ import {
   updateRef,
   writeTree,
 } from "../../src/checkpoint/shadowGit";
-import { withCheckpoints, type MutationContext } from "../../src/checkpoint/wrapTools";
+import { type MutationContext, withCheckpoints } from "../../src/checkpoint/wrapTools";
+import { recordWrite } from "../../src/checkpoint/writeLedger";
 import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
+import { getCachedEol, setCachedEol } from "../../src/tools/eolCache";
 
 // The cold first snapshot measured 300 ms on Windows and these tests take several each. Same
 // 30 s margin as shadowGit.test.ts, for the same reason.
@@ -390,6 +392,198 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
     },
     GIT_TEST_TIMEOUT_MS,
   );
+
+  test(
+    "a resumed session's first call snapshots for real even when it is a non-destructive bash command",
+    () => {
+      // --resume seeds `previousTree` from the log's last checkpoint before this process has taken
+      // any snapshot of its own. Without a per-process flag a harmless `ls` right after resuming
+      // reused that stale tree and missed the change made below, which is exactly the gap `/undo`
+      // could fall into if the filesystem changed between the previous process exiting and this one
+      // resuming.
+      checkpointer()(mutation({ toolCallId: "c1" }));
+      writeFileSync(join(workTree, "a.txt"), "after\n");
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "ls" }, rewindTo: 2 });
+
+      const records = toolRecords();
+      expect(records).toHaveLength(2);
+      expect(records[1]?.tree).not.toBe(records[0]?.tree);
+      expect(plainGit(join(storeDir, "git"), ["show", `${records[1]?.tree}:a.txt`])).toBe(
+        "after\n",
+      );
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+});
+
+describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate)", () => {
+  test(
+    "snapshots for real on the very first call of a session, even a harmless bash command",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+
+      const records = toolRecords();
+      expect(records).toHaveLength(1);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[0]?.tree ?? ""]),
+      ).toContain("a.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a non-destructive bash call reuses the previous tree instead of restaging the worktree",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      writeFileSync(join(workTree, "new.txt"), "new\n");
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "git status" }, rewindTo: 2 });
+
+      const records = toolRecords();
+      expect(records).toHaveLength(2);
+      expect(records[1]?.tree).toBe(records[0]?.tree);
+      expect(records[1]?.commit).toBe(records[0]?.commit);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).not.toContain("new.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a destructive bash call restages the worktree",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      writeFileSync(join(workTree, "new.txt"), "new\n");
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "rm -rf build" }, rewindTo: 2 });
+
+      const records = toolRecords();
+      expect(records[1]?.tree).not.toBe(records[0]?.tree);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).toContain("new.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test.each([
+    "git restore file.txt",
+    "git stash",
+    "git apply patch.diff",
+    "tee out.txt",
+    "patch -p1 < patch.diff",
+    // \b does not fire between "n" and "i" (both word characters) — /\binstall\b/ alone never
+    // matched "uninstall" (verified: false against this exact string before the fix). "git rm"/
+    // "git mv" are NOT added here even though a review flagged them as missing: the plain
+    // /\brm\b/ and /\bmv\b/ patterns already match "git rm ..."/"git mv ..." as a substring word,
+    // verified directly — a dedicated git-rm/git-mv pattern would have been dead weight.
+    "npm uninstall lodash",
+    // A standard POSIX single-file delete, distinct from `rm` — not a substring of any covered
+    // word, so it needs its own pattern rather than being caught incidentally.
+    "unlink file.txt",
+  ])(
+    "a destructive bash call restages the worktree: %s",
+    (command) => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      writeFileSync(join(workTree, "new.txt"), "new\n");
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command }, rewindTo: 2 });
+
+      const records = toolRecords();
+      expect(records[1]?.tree).not.toBe(records[0]?.tree);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).toContain("new.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  // Regression guard for the missing `s` (dotAll) flag: without it, `.` in `/\bsed\b.*-i\b/` cannot
+  // cross a newline, so a command split by a backslash line-continuation — a real, plausible shape
+  // for a multi-line bash command, not a contrived one — never matched and silently skipped the
+  // snapshot a genuine `sed -i` should have forced.
+  test(
+    "a destructive bash call restages the worktree even when split across lines by a backslash continuation",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      writeFileSync(join(workTree, "new.txt"), "new\n");
+      snapshot({
+        tool: "bash",
+        toolCallId: "c2",
+        args: { command: "sed \\\n  -i 's/a/b/' file.txt" },
+        rewindTo: 2,
+      });
+
+      const records = toolRecords();
+      expect(records[1]?.tree).not.toBe(records[0]?.tree);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).toContain("new.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  // Same dotAll gap on the PowerShell side: /\bCopy-Item\b.*-Force\b/i needed the same fix.
+  test(
+    "a destructive PowerShell call restages the worktree even when split across lines by a backtick continuation",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({
+        tool: "powershell",
+        toolCallId: "c1",
+        args: { command: "Get-ChildItem" },
+        rewindTo: 1,
+      });
+      writeFileSync(join(workTree, "new.txt"), "new\n");
+      snapshot({
+        tool: "powershell",
+        toolCallId: "c2",
+        args: { command: "Copy-Item a.txt b.txt `\n  -Force" },
+        rewindTo: 2,
+      });
+
+      const records = toolRecords();
+      expect(records[1]?.tree).not.toBe(records[0]?.tree);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).toContain("new.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "write_file always restages, regardless of a preceding non-destructive bash call",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      writeFileSync(join(workTree, "new.txt"), "new\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      const records = toolRecords();
+      expect(records[1]?.tree).not.toBe(records[0]?.tree);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).toContain("new.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "still appends one record per call when writeTree is skipped, so /undo's per-call granularity is unaffected",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "git status" }, rewindTo: 2 });
+      snapshot({ tool: "bash", toolCallId: "c3", args: { command: "pwd" }, rewindTo: 3 });
+
+      expect(toolRecords().map((record) => record.toolCallId)).toEqual(["c1", "c2", "c3"]);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
 });
 
 describe.skipIf(!isGitAvailable())("undoFiles", () => {
@@ -400,6 +594,10 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       snapshot(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "after\n");
       writeFileSync(join(workTree, "new.txt"), "new\n");
+      // Stands in for write_file's own onAfterMutation (checkpoint.ts's real createCheckpointer
+      // calls this after every successful write_file) — the ledger is what proves seri, not the
+      // user, made this file, which is what the removal pass below now requires before deleting it.
+      recordWrite(storeDir, join(workTree, "new.txt"), "new\n");
       snapshot(mutation({ toolCallId: "c2" }));
 
       const result = undo(2);
@@ -596,6 +794,277 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       checkpointer()(mutation());
 
       expect(() => undo(5)).toThrow("This session has 1 checkpoint(s) to undo to; asked for 5.");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+});
+
+describe.skipIf(!isGitAvailable())("undoFiles (write-ledger deletion gate)", () => {
+  test(
+    "an out-of-band file created after a skipped bash call survives — the file this fix exists for",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
+
+      // The gap Repro-B exploited: a non-destructive bash call between the checkpoint and the
+      // out-of-band edit reuses the previous tree (DESTRUCTIVE_COMMAND_PATTERNS' own comment), so
+      // nothing looks at disk again until the next real snapshot — which never comes, because /undo
+      // fires next instead.
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "ls" }, rewindTo: 2 });
+
+      // Made directly with node:fs, the way a user's own editor would — never through write_file,
+      // so it can never have a ledger entry.
+      writeFileSync(join(workTree, "user-made.txt"), "the user's own work\n");
+
+      // Negative control: planRestore's raw output — what the removal pass saw before this fix's
+      // ledger gate narrowed it — does list the file as extraneous against the target tree. If this
+      // assertion ever stops holding, the assertions below are no longer proving anything.
+      const gitDir = join(storeDir, "git");
+      const target = toolRecords()[0]?.tree ?? "";
+      expect(planRestore(gitDir, workTree, target).deleted).toContain("user-made.txt");
+
+      const result = undo(1);
+
+      expect(result.deleted).not.toContain("user-made.txt");
+      expect(result.preserved).toContain("user-made.txt");
+      expect(existsSync(join(workTree, "user-made.txt"))).toBe(true);
+      expect(readFileSync(join(workTree, "user-made.txt"), "utf8")).toBe("the user's own work\n");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a file seri actually wrote through write_file, and that legitimately should not exist after the restore, is still deleted",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
+
+      writeFileSync(join(workTree, "seri-made.txt"), "seri wrote this\n");
+      recordWrite(storeDir, join(workTree, "seri-made.txt"), "seri wrote this\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      const result = undo(2);
+
+      expect(result.deleted).toContain("seri-made.txt");
+      expect(result.preserved).not.toContain("seri-made.txt");
+      expect(existsSync(join(workTree, "seri-made.txt"))).toBe(false);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a file seri wrote, then something else modified afterward, is preserved rather than deleted",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
+
+      writeFileSync(join(workTree, "written-then-edited.txt"), "seri's content\n");
+      recordWrite(storeDir, join(workTree, "written-then-edited.txt"), "seri's content\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      // Edited by something else after seri wrote it — the ledger's hash no longer matches what is
+      // on disk.
+      writeFileSync(join(workTree, "written-then-edited.txt"), "edited by someone else\n");
+
+      const result = undo(2);
+
+      expect(result.deleted).not.toContain("written-then-edited.txt");
+      expect(result.preserved).toContain("written-then-edited.txt");
+      expect(readFileSync(join(workTree, "written-then-edited.txt"), "utf8")).toBe(
+        "edited by someone else\n",
+      );
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  // TOCTOU regression guard: onPlan is the one caller-supplied hook restoreTo calls between the
+  // ledger check that decides what gets printed as `plan.deleted` and the actual deletion — the
+  // real window a concurrent editor would race through in production. Editing the file from inside
+  // onPlan simulates exactly that race deterministically, without timing.
+  test(
+    "a file that passed the ledger check but was modified before the actual delete is preserved, not deleted",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
+
+      writeFileSync(join(workTree, "raced.txt"), "seri's content\n");
+      recordWrite(storeDir, join(workTree, "raced.txt"), "seri's content\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      const result = undoFiles({
+        storeDir,
+        worktree: workTree,
+        sessionId: SESSION,
+        steps: 2,
+        onPlan: (plan) => {
+          // The first check passed — raced.txt hashes to what recordWrite vouched for.
+          expect(plan.deleted).toContain("raced.txt");
+          writeFileSync(join(workTree, "raced.txt"), "edited after the plan was printed\n");
+        },
+      });
+
+      expect(result.deleted).not.toContain("raced.txt");
+      expect(result.preserved).toContain("raced.txt");
+      expect(readFileSync(join(workTree, "raced.txt"), "utf8")).toBe(
+        "edited after the plan was printed\n",
+      );
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+});
+
+describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
+  test(
+    "re-derives previousCommit from the session ref, so a checkpoint taken after a restore chains onto it",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+      writeFileSync(join(workTree, "a.txt"), "v2\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      // undoFiles moves the session ref on its own, exactly as restoreTo does in production — this
+      // closure's own previousCommit has no way to know that happened without invalidate().
+      const result = undo(1);
+
+      snapshot.invalidate();
+      writeFileSync(join(workTree, "a.txt"), "v3\n");
+      snapshot(mutation({ toolCallId: "c3" }));
+
+      // The new checkpoint must chain onto the pre-undo commit restoreTo minted — proving
+      // invalidate() re-read the ref rather than parenting the next commit on the stale,
+      // pre-restore commit this closure had cached before the undo ran.
+      const gitDir = join(storeDir, "git");
+      const commit = toolRecords().at(-1)?.commit ?? "";
+      expect(plainGit(gitDir, ["rev-list", commit]).split("\n").filter(Boolean)).toContain(
+        result.preUndoCommit,
+      );
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  // restoreTo (checkpoint.ts) moves the session ref and appends the "pre-undo" record BEFORE it
+  // calls applyRestore, so a throw from applyRestore itself (an EPERM/EBUSY on Windows from a file
+  // held open by a watcher or dev server, per applyRestore's own comment in shadowGit.ts — or any
+  // other mid-restore failure) still leaves the ref moved. That is the exact case cli.ts's own
+  // onSubmit now calls invalidate() in a `finally` for, so it runs whether or not the restore
+  // itself threw. A real permission/lock throw turned out not to be reproducible deterministically
+  // on every machine this repo runs on — a read-only attribute and an open write handle both let
+  // rmSync delete the file anyway on at least one tested Windows/Bun combination. `checkout-index`
+  // reading a blob that was deleted out from under it fails identically on every platform, so that
+  // is what forces applyRestore to throw here instead.
+  test(
+    "invalidate() still lets the next checkpoint chain onto the pre-undo commit when the restore itself threw",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+      const c1Tree = toolRecords().at(-1)?.tree ?? "";
+
+      writeFileSync(join(workTree, "a.txt"), "v2\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      // checkout-index needs a.txt's blob from c1's tree to restore it — deleting the loose object
+      // makes that read fail the same way on every platform, unlike a permission-based throw.
+      const gitDir = join(storeDir, "git");
+      const blob = plainGit(gitDir, ["ls-tree", c1Tree, "--", "a.txt"]).split(/\s+/)[2] ?? "";
+      rmSync(join(gitDir, "objects", blob.slice(0, 2), blob.slice(2)), { force: true });
+
+      let threw: unknown;
+      try {
+        // Two distinct trees on the log (c1, c2), so /undo 2 is what reaches c1's state — /undo 1
+        // targets the newest anchor, c2's own tree, same as every other two-checkpoint test in this
+        // file. Restoring to c1 must check out a.txt's now-missing blob.
+        undo(2);
+      } catch (err) {
+        threw = err;
+      } finally {
+        // Mirrors cli.ts's onSubmit: invalidate() runs unconditionally, not only on success.
+        snapshot.invalidate();
+      }
+      expect(threw).toBeDefined();
+
+      writeFileSync(join(workTree, "a.txt"), "after-throw\n");
+      snapshot(mutation({ toolCallId: "c3" }));
+
+      // The pre-undo commit was minted (and the ref moved) before applyRestore threw — readLog,
+      // not undo()'s return value, since the throw meant undo(2) above never returned one.
+      const preUndoCommit = readLog(storeDir, SESSION)
+        .filter((record): record is Extract<CheckpointRecord, { kind: "pre-undo" }> => {
+          return record.kind === "pre-undo";
+        })
+        .at(-1)?.commit;
+      expect(preUndoCommit).toBeDefined();
+      const commit = toolRecords().at(-1)?.commit ?? "";
+      expect(plainGit(gitDir, ["rev-list", commit]).split("\n").filter(Boolean)).toContain(
+        preUndoCommit as string,
+      );
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  // Same throw trigger as the test above, but proving a different consequence of the same
+  // try/finally-less bug: checkout-index rewrites a restored file's on-disk EOL before applyRestore
+  // gets to the deletion loop that (via the deleted blob) throws, so a stale cache entry left behind
+  // by the throw would mislead the next write into skipping the CRLF conversion the restore just
+  // performed.
+  test(
+    "clears the EOL cache even when the restore itself threw",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+      const c1Tree = toolRecords().at(-1)?.tree ?? "";
+
+      writeFileSync(join(workTree, "a.txt"), "v2\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      const gitDir = join(storeDir, "git");
+      const blob = plainGit(gitDir, ["ls-tree", c1Tree, "--", "a.txt"]).split(/\s+/)[2] ?? "";
+      rmSync(join(gitDir, "objects", blob.slice(0, 2), blob.slice(2)), { force: true });
+
+      setCachedEol(join(workTree, "a.txt"), "CRLF");
+
+      let threw: unknown;
+      try {
+        undo(2);
+      } catch (err) {
+        threw = err;
+      }
+      expect(threw).toBeDefined();
+
+      expect(getCachedEol(join(workTree, "a.txt"))).toBeUndefined();
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  // resolveRef itself throwing (git failing to even spawn, per shadowGit.ts's spawnGit) is a
+  // narrower trigger than a non-zero exit — PATH cleared so `spawnSync("git", ...)` cannot find the
+  // binary at all, the one case shadowGit.ts's own run() throws rather than returning a failed
+  // GitResult. Proves snapshottedThisProcess is reset before that throw, not after: a stale `true`
+  // there would make the next non-destructive, non-write_file call skip writeTree and reuse
+  // previousTree — already cleared to undefined by this point — corrupting that checkpoint's tree.
+  test(
+    "invalidate() still forces a fresh snapshot on the next call when resolveRef itself throws",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+
+      const originalPath = process.env.PATH;
+      process.env.PATH = "";
+      let threw: unknown;
+      try {
+        snapshot.invalidate();
+      } catch (err) {
+        threw = err;
+      } finally {
+        process.env.PATH = originalPath;
+      }
+      expect(threw).toBeDefined();
+
+      writeFileSync(join(workTree, "a.txt"), "after-throw\n");
+      // A plain "ls" is exactly the case that would have reused the stale, now-undefined
+      // previousTree if snapshottedThisProcess had not been reset before the throw.
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "ls" }, rewindTo: 2 });
+
+      expect(toolRecords()[1]?.tree).toMatch(/^[0-9a-f]{40}$/);
     },
     GIT_TEST_TIMEOUT_MS,
   );

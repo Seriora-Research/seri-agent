@@ -436,7 +436,9 @@ export function decideUndo(
   });
   const message =
     plan.restored.length === 0 && plan.deleted.length === 0
-      ? `Already at checkpoint ${stepCount}; no file changed.`
+      ? plan.preserved.length === 0
+        ? `Already at checkpoint ${stepCount}; no file changed.`
+        : `Already at checkpoint ${stepCount}; no file restored or deleted, but ${plan.preserved.length} file(s) preserved (no proof seri wrote them, or edited since).`
       : `Undid to checkpoint ${stepCount}.`;
   return { next: session, plan, message };
 }
@@ -456,7 +458,9 @@ export function decideRestore(
   });
   const message =
     plan.restored.length === 0 && plan.deleted.length === 0
-      ? `Already at ${commit}; no file changed.`
+      ? plan.preserved.length === 0
+        ? `Already at ${commit}; no file changed.`
+        : `Already at ${commit}; no file restored or deleted, but ${plan.preserved.length} file(s) preserved (no proof seri wrote them, or edited since).`
       : `Restored ${commit}.`;
   return { next: session, plan, message };
 }

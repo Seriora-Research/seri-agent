@@ -1,12 +1,13 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, utimesSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   findMostRecentSession,
   loadSession,
-  saveSession,
   type SessionState,
+  saveSession,
 } from "../../src/session/session";
 
 let sessionsDir: string;
@@ -60,6 +61,261 @@ describe("saveSession / loadSession", () => {
   });
 });
 
+describe("saveSession (JSONL append-only persistence)", () => {
+  test("the first save for an id is a full write, and every save after it appends only the new messages", () => {
+    const writeSpy = spyOn(fs, "writeFileSync");
+    const appendSpy = spyOn(fs, "appendFileSync");
+
+    const state: SessionState = {
+      id: "hot-path",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [],
+    };
+    saveSession(state, sessionsDir);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(appendSpy).toHaveBeenCalledTimes(0);
+
+    state.messages.push({ role: "user", content: "hi" });
+    saveSession(state, sessionsDir);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(appendSpy).toHaveBeenCalledTimes(1);
+
+    state.messages.push({ role: "assistant", content: "hello" });
+    saveSession(state, sessionsDir);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(appendSpy).toHaveBeenCalledTimes(2);
+
+    expect(loadSession("hot-path", sessionsDir)).toEqual(state);
+
+    writeSpy.mockRestore();
+    appendSpy.mockRestore();
+  });
+
+  // The full-rewrite path goes through atomicWriteFile.ts's shared helper rather than a locally
+  // reimplemented temp-file + rename, which is what gives session saves the same orphaned-tmp-file
+  // sweep config.json/memory/permissions writes already have — a session save interrupted by a
+  // killed process previously left a `.<id>.jsonl.<pid>.tmp` file in sessionsDir forever, and a
+  // session transcript is exactly the kind of content (pasted secrets, full conversation) that
+  // orphan shouldn't sit on disk indefinitely.
+  test("a full-rewrite save sweeps a stale tmp file left behind by a dead process", () => {
+    const target = join(sessionsDir, "swept.jsonl");
+    const stalePath = `${target}.999999999.deadbeef.tmp`;
+    writeFileSync(stalePath, "orphaned content");
+
+    saveSession(
+      { id: "swept", cwd: ".", systemPrompt: "", permissionMode: "auto", messages: [] },
+      sessionsDir,
+    );
+
+    expect(fs.existsSync(stalePath)).toBe(false);
+  });
+
+  test("does nothing when a save repeats the same header and the same message count", () => {
+    const state: SessionState = {
+      id: "no-op",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ role: "user", content: "hi" }],
+    };
+    saveSession(state, sessionsDir);
+
+    const writeSpy = spyOn(fs, "writeFileSync");
+    const appendSpy = spyOn(fs, "appendFileSync");
+    saveSession(state, sessionsDir);
+
+    expect(writeSpy).toHaveBeenCalledTimes(0);
+    expect(appendSpy).toHaveBeenCalledTimes(0);
+
+    writeSpy.mockRestore();
+    appendSpy.mockRestore();
+  });
+
+  test("a shrink (as /rewind produces) triggers a full rewrite with the correct final content", () => {
+    const state: SessionState = {
+      id: "shrink",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ n: 1 }, { n: 2 }, { n: 3 }],
+    };
+    saveSession(state, sessionsDir);
+
+    const writeSpy = spyOn(fs, "writeFileSync");
+    const appendSpy = spyOn(fs, "appendFileSync");
+    const shrunk: SessionState = { ...state, messages: state.messages.slice(0, 1) };
+    saveSession(shrunk, sessionsDir);
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(appendSpy).toHaveBeenCalledTimes(0);
+    // Not just "a rewrite happened" — the append log genuinely cannot shrink, so this also proves
+    // the rewrite produced the right file rather than one still carrying the trimmed messages.
+    expect(loadSession("shrink", sessionsDir)).toEqual(shrunk);
+
+    writeSpy.mockRestore();
+    appendSpy.mockRestore();
+  });
+
+  test("a header-only change (e.g. /mode) triggers a full rewrite rather than a stale header", () => {
+    const state: SessionState = {
+      id: "header-change",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ n: 1 }],
+    };
+    saveSession(state, sessionsDir);
+
+    const writeSpy = spyOn(fs, "writeFileSync");
+    const appendSpy = spyOn(fs, "appendFileSync");
+    const changed: SessionState = { ...state, permissionMode: "approve-each" };
+    saveSession(changed, sessionsDir);
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(appendSpy).toHaveBeenCalledTimes(0);
+    expect(loadSession("header-change", sessionsDir)).toEqual(changed);
+
+    writeSpy.mockRestore();
+    appendSpy.mockRestore();
+  });
+
+  test("loadSession seeds save tracking, so a resumed session appends new messages instead of duplicating them", () => {
+    // Written directly rather than through saveSession, to simulate a session on disk that this
+    // process has never called saveSession for — the only way persistedCounts/persistedHeaders can
+    // be unseeded for an id whose file already exists.
+    const header = { id: "resumed", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
+    writeFileSync(
+      join(sessionsDir, "resumed.jsonl"),
+      `${JSON.stringify(header)}\n${JSON.stringify({ n: 1 })}\n`,
+    );
+
+    const loaded = loadSession<{ n: number }>("resumed", sessionsDir);
+    expect(loaded.messages).toEqual([{ n: 1 }]);
+
+    const writeSpy = spyOn(fs, "writeFileSync");
+    const appendSpy = spyOn(fs, "appendFileSync");
+    saveSession({ ...loaded, messages: [...loaded.messages, { n: 2 }] }, sessionsDir);
+
+    expect(appendSpy).toHaveBeenCalledTimes(1);
+    expect(writeSpy).toHaveBeenCalledTimes(0);
+    expect(loadSession("resumed", sessionsDir).messages).toEqual([{ n: 1 }, { n: 2 }]);
+
+    writeSpy.mockRestore();
+    appendSpy.mockRestore();
+  });
+
+  // A torn appendFileSync write (process killed, disk full) leaves a malformed trailing line —
+  // simulated here by writing the header and one good message, then a hand-truncated fragment of a
+  // second that never closes its JSON.
+  test("loadSession drops a truncated trailing line instead of throwing and losing the whole session", () => {
+    const header = { id: "torn", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
+    writeFileSync(
+      join(sessionsDir, "torn.jsonl"),
+      `${JSON.stringify(header)}\n${JSON.stringify({ n: 1 })}\n{"n": 2, "text": "unfinis`,
+    );
+
+    const loaded = loadSession<{ n: number }>("torn", sessionsDir);
+    expect(loaded.messages).toEqual([{ n: 1 }]);
+  });
+
+  test("loadSession calls onTruncated only when a line was actually dropped", () => {
+    const header = { id: "torn3", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
+    writeFileSync(
+      join(sessionsDir, "torn3.jsonl"),
+      `${JSON.stringify(header)}\n${JSON.stringify({ n: 1 })}\n{"n": 2, "text": "unfinis`,
+    );
+    let calls = 0;
+    loadSession<{ n: number }>("torn3", sessionsDir, () => {
+      calls++;
+    });
+    expect(calls).toBe(1);
+
+    const clean = { id: "clean", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
+    writeFileSync(
+      join(sessionsDir, "clean.jsonl"),
+      `${JSON.stringify(clean)}\n${JSON.stringify({ n: 1 })}\n`,
+    );
+    let cleanCalls = 0;
+    loadSession<{ n: number }>("clean", sessionsDir, () => {
+      cleanCalls++;
+    });
+    expect(cleanCalls).toBe(0);
+  });
+
+  test("a load that dropped a truncated line forces a full rewrite on the next save, not an append onto the fragment", () => {
+    const header = { id: "torn2", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
+    writeFileSync(
+      join(sessionsDir, "torn2.jsonl"),
+      `${JSON.stringify(header)}\n${JSON.stringify({ n: 1 })}\n{"n": 2, "text": "unfinis`,
+    );
+
+    const loaded = loadSession<{ n: number }>("torn2", sessionsDir);
+
+    const writeSpy = spyOn(fs, "writeFileSync");
+    const appendSpy = spyOn(fs, "appendFileSync");
+    saveSession({ ...loaded, messages: [...loaded.messages, { n: 3 }] }, sessionsDir);
+
+    expect(appendSpy).toHaveBeenCalledTimes(0);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(loadSession("torn2", sessionsDir).messages).toEqual([{ n: 1 }, { n: 3 }]);
+
+    writeSpy.mockRestore();
+    appendSpy.mockRestore();
+  });
+
+  test("falls back to a full rewrite when the file was deleted out of band, instead of appending onto nothing", () => {
+    const state: SessionState = {
+      id: "deleted",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ n: 1 }],
+    };
+    saveSession(state, sessionsDir);
+    fs.rmSync(join(sessionsDir, "deleted.jsonl"));
+
+    const grown: SessionState = { ...state, messages: [...state.messages, { n: 2 }] };
+    saveSession(grown, sessionsDir);
+
+    // A headerless append here would leave loadSession misparsing the first message as the header,
+    // silently returning id/cwd/permissionMode all undefined instead of the real session.
+    expect(loadSession("deleted", sessionsDir)).toEqual(grown);
+  });
+
+  // Two `seri --resume`d processes sharing a session id: the appended line is written directly
+  // rather than through a second saveSession call, since a real second process would have its own
+  // independent, unseeded persistedSizes/persistedCounts with no way to know about this one's.
+  test("falls back to a full rewrite instead of appending past a line another process wrote since the last save", () => {
+    const state: SessionState = {
+      id: "concurrent",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ n: 1 }],
+    };
+    saveSession(state, sessionsDir);
+
+    fs.appendFileSync(join(sessionsDir, "concurrent.jsonl"), `${JSON.stringify({ n: 99 })}\n`);
+
+    const writeSpy = spyOn(fs, "writeFileSync");
+    const appendSpy = spyOn(fs, "appendFileSync");
+    saveSession({ ...state, messages: [...state.messages, { n: 2 }] }, sessionsDir);
+
+    // An append here would land after {n:99} — not byte-level corruption, but a message from a
+    // process this one never observed silently becoming part of its own transcript.
+    expect(appendSpy).toHaveBeenCalledTimes(0);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    // The rewrite is last-writer-wins over {n:99}, same failure mode this format's full-overwrite
+    // predecessor had — a lost message, not an interleaved one.
+    expect(loadSession("concurrent", sessionsDir).messages).toEqual([{ n: 1 }, { n: 2 }]);
+
+    writeSpy.mockRestore();
+    appendSpy.mockRestore();
+  });
+});
+
 describe("findMostRecentSession", () => {
   test("returns the id of the most recently modified session", () => {
     saveSession(
@@ -78,14 +334,14 @@ describe("findMostRecentSession", () => {
     // Explicit mtimes rather than relying on real-time gaps between writes, which can be
     // too small to distinguish on a fast filesystem.
     const base = new Date("2026-01-01T00:00:00Z");
-    utimesSync(join(sessionsDir, "first.json"), base, base);
+    utimesSync(join(sessionsDir, "first.jsonl"), base, base);
     utimesSync(
-      join(sessionsDir, "second.json"),
+      join(sessionsDir, "second.jsonl"),
       new Date(base.getTime() + 60_000),
       new Date(base.getTime() + 60_000),
     );
     utimesSync(
-      join(sessionsDir, "third.json"),
+      join(sessionsDir, "third.jsonl"),
       new Date(base.getTime() + 30_000),
       new Date(base.getTime() + 30_000),
     );

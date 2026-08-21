@@ -21,6 +21,8 @@ import {
   type TranscriptEntry,
   type VisibleRow,
   visibleTranscript,
+  wrapForTranscript,
+  wrapPendingRows,
 } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
 
@@ -397,7 +399,7 @@ describe("App", () => {
 
     // "> 你好" is 4 UTF-16 units but 6 terminal cells (each CJK char is 2 cells wide) — padEnd(10)
     // would overpad to 14 cells. Pad by display width so the row lands on exactly `columns`.
-    test("a role: \"user\" row with wide (CJK) characters pads to `columns` cells, not UTF-16 units", () => {
+    test('a role: "user" row with wide (CJK) characters pads to `columns` cells, not UTF-16 units', () => {
       expect(transcriptRowProps({ role: "user", text: "> 你好" }, 10)).toEqual({
         text: "> 你好    ",
         backgroundColor: "#333333",
@@ -1709,13 +1711,33 @@ describe("App", () => {
       ]);
     });
 
-    // `pending` (the in-progress streamed answer, App.tsx's own `state.streaming`) is wrapped
-    // through the exact same `displayText` path as a committed entry — its own returned rows must
-    // come back tagged role: "assistant", marker included, same as a committed assistant entry.
-    test('the `pending` parameter comes back tagged role: "assistant", marker included', () => {
-      expect(visibleTranscript([], 3, 0, 80, "the in-progress answer")).toEqual([
-        { role: "assistant", text: "● the in-progress answer" },
-      ]);
+    // `pendingRows` (the in-progress streamed answer, App.tsx's own `state.streaming`, wrapped via
+    // `wrapPendingRows`) is wrapped through the exact same `displayText` path as a committed entry —
+    // its own returned rows must come back tagged role: "assistant", marker included, same as a
+    // committed assistant entry.
+    test('the `pendingRows` parameter comes back tagged role: "assistant", marker included', () => {
+      expect(
+        visibleTranscript([], 3, 0, 80, wrapPendingRows("the in-progress answer", 80)),
+      ).toEqual([{ role: "assistant", text: "● the in-progress answer" }]);
+    });
+
+    // `wrapPendingRows` used to run inline inside `visibleTranscript` on
+    // every call, re-wrapping the raw `state.streaming` string from scratch — it is now memoized by
+    // App.tsx and passed in pre-wrapped. This pins that the extraction produced byte-identical rows
+    // to the old inline wrapping for a representative multi-line streamed answer, not just a
+    // one-line one.
+    test("wrapPendingRows produces the same rows the old inline wrapping inside visibleTranscript used to", () => {
+      const pending =
+        "line one of a streamed answer\nline two, considerably longer than the terminal width and forced to wrap across multiple visual rows";
+      const columns = 24;
+      const legacyInlineWrap = wrapForTranscript(`● ${pending}`, columns).map((text) => ({
+        role: "assistant" as const,
+        text,
+      }));
+      expect(wrapPendingRows(pending, columns)).toEqual(legacyInlineWrap);
+      expect(visibleTranscript([], 5, 0, columns, wrapPendingRows(pending, columns))).toEqual(
+        legacyInlineWrap.slice(-5),
+      );
     });
   });
 
