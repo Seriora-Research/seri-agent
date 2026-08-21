@@ -2909,10 +2909,10 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     };
 
     // A second, independent root rather than wiping and reusing this one: saveSession's
-    // append-only tracking is keyed by session id at module scope (one process, one session, per
-    // session.ts's own design), and reusing SESSION_ID against a directory that was just deleted
-    // out from under it — rather than through saveSession/loadSession — would leave that tracking
-    // believing messages already on disk that the wipe had just removed.
+    // append-only tracking is keyed by resolved file path, not session id (ids collide across
+    // different sessionsDirs elsewhere in this suite), and wiping `sessionsDir` out from under
+    // SESSION_ID and reusing it — rather than through saveSession/loadSession — would leave that
+    // tracking still holding a count for the path whose file the wipe had just removed.
     const root2 = mkdtempSync(join(tmpdir(), "seri-cli-checkpoint-"));
     try {
       const sessionsDir2 = join(root2, "sessions");
