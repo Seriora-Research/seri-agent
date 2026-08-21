@@ -498,6 +498,60 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     GIT_TEST_TIMEOUT_MS,
   );
 
+  // Regression guard for the missing `s` (dotAll) flag: without it, `.` in `/\bsed\b.*-i\b/` cannot
+  // cross a newline, so a command split by a backslash line-continuation — a real, plausible shape
+  // for a multi-line bash command, not a contrived one — never matched and silently skipped the
+  // snapshot a genuine `sed -i` should have forced.
+  test(
+    "a destructive bash call restages the worktree even when split across lines by a backslash continuation",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      writeFileSync(join(workTree, "new.txt"), "new\n");
+      snapshot({
+        tool: "bash",
+        toolCallId: "c2",
+        args: { command: "sed \\\n  -i 's/a/b/' file.txt" },
+        rewindTo: 2,
+      });
+
+      const records = toolRecords();
+      expect(records[1]?.tree).not.toBe(records[0]?.tree);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).toContain("new.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  // Same dotAll gap on the PowerShell side: /\bCopy-Item\b.*-Force\b/i needed the same fix.
+  test(
+    "a destructive PowerShell call restages the worktree even when split across lines by a backtick continuation",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({
+        tool: "powershell",
+        toolCallId: "c1",
+        args: { command: "Get-ChildItem" },
+        rewindTo: 1,
+      });
+      writeFileSync(join(workTree, "new.txt"), "new\n");
+      snapshot({
+        tool: "powershell",
+        toolCallId: "c2",
+        args: { command: "Copy-Item a.txt b.txt `\n  -Force" },
+        rewindTo: 2,
+      });
+
+      const records = toolRecords();
+      expect(records[1]?.tree).not.toBe(records[0]?.tree);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).toContain("new.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
   test(
     "write_file always restages, regardless of a preceding non-destructive bash call",
     () => {

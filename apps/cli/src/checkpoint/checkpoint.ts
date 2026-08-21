@@ -103,7 +103,10 @@ const DESTRUCTIVE_COMMAND_PATTERNS: RegExp[] = [
   // snapshot. A separate pattern, not folding "un" into the existing one, keeps the un-prefixed
   // "install" match intact rather than making both conditional on the same alternation.
   /\buninstall\b/,
-  /\bsed\b.*-i\b/,
+  // `s` flag: without it, `.` cannot cross a `\n`, so a command split across lines by a backslash
+  // continuation (`sed \` + newline + `  -i ...`) never matches — a real, plausible shape for a
+  // multi-line command string, not just a single physical line.
+  /\bsed\b.*-i\b/s,
   /\btruncate\b/,
   /\bdd\b/,
   /\bshred\b/,
@@ -123,7 +126,7 @@ const DESTRUCTIVE_COMMAND_PATTERNS: RegExp[] = [
   /\bMove-Item\b/i,
   /\bren\b/i,
   /\bRename-Item\b/i,
-  /\bCopy-Item\b.*-Force\b/i,
+  /\bCopy-Item\b.*-Force\b/is,
   /\bSet-Content\b/i,
   /\bClear-Content\b/i,
   /\bOut-File\b/i,
