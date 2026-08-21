@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { findCatalogEntry, loadCatalog, resetCatalogCache } from "../src/catalog";
-import type { ModelCatalog } from "../src/types";
+import { findCatalogEntry, isZeroPriceEntry, loadCatalog, resetCatalogCache } from "../src/catalog";
+import type { ModelCatalog, ModelCatalogEntry } from "../src/types";
 
 const fallbackManifest: ModelCatalog = {
   fetchedAt: "2020-01-01T00:00:00Z",
@@ -227,5 +227,39 @@ describe("findCatalogEntry", () => {
 
   test("returns undefined for an id/provider combination not present", () => {
     expect(findCatalogEntry(fallbackManifest, "fallback-model", "openrouter")).toBeUndefined();
+  });
+});
+
+function entryWithPricing(pricing: ModelCatalogEntry["pricing"]): ModelCatalogEntry {
+  return { ...(fallbackManifest.entries[0] as ModelCatalogEntry), pricing };
+}
+
+// Coverage for the fail-closed contract isZeroPriceEntry's own header comment states: a missing
+// entry, or an entry whose pricing is undefined (meaning "unknown", not "free"), must never be
+// treated as zero-price — apps/server's Free-tier gate (quota.ts's decidePreflight) trusts this to
+// keep unlisted or mixed-priced models off the free tier.
+describe("isZeroPriceEntry", () => {
+  test("false for an absent entry", () => {
+    expect(isZeroPriceEntry(undefined)).toBe(false);
+  });
+
+  test("false for an entry whose pricing is undefined", () => {
+    expect(isZeroPriceEntry(entryWithPricing(undefined))).toBe(false);
+  });
+
+  test("true when both input and output are 0", () => {
+    expect(isZeroPriceEntry(entryWithPricing({ inputPerMTok: 0, outputPerMTok: 0 }))).toBe(true);
+  });
+
+  test("false when input is priced but output is 0", () => {
+    expect(isZeroPriceEntry(entryWithPricing({ inputPerMTok: 1, outputPerMTok: 0 }))).toBe(false);
+  });
+
+  test("false when output is priced but input is 0", () => {
+    expect(isZeroPriceEntry(entryWithPricing({ inputPerMTok: 0, outputPerMTok: 1 }))).toBe(false);
+  });
+
+  test("false when both are priced", () => {
+    expect(isZeroPriceEntry(entryWithPricing({ inputPerMTok: 1, outputPerMTok: 2 }))).toBe(false);
   });
 });
