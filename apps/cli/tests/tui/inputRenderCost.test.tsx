@@ -7,18 +7,15 @@
 // stubs.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
-import type { ModelMessage } from "ai";
 import { render } from "ink";
 import { createElement } from "react";
 import stringWidth from "string-width";
-import type { ResolvedRoute } from "../../src/provider/routing";
-import type { SessionState } from "../../src/session/session";
 import { App } from "../../src/tui/App";
 import type { TranscriptRole } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
 import { MAIN_TUI_RENDER_OPTIONS } from "../../src/tui/renderOptions";
+import { FakeStdin, FakeTty, flush, route, session, TEST_COLUMNS } from "./helpers";
 
 // `chalk` (used by `ink/build/colorize.js`) is not a direct dependency of this package, and its
 // color level is normally auto-detected once, at import time, from the real process's stdout —
@@ -40,84 +37,6 @@ chalk.level = 3;
 afterAll(() => {
   chalk.level = originalChalkLevel;
 });
-
-// FakeTty's own fixed column width — matches App.test.tsx's assumption that width doesn't vary
-// across these tests. Named rather than inlined into `FakeTty` below so the marginal-bytes
-// assertion at the bottom of this file can derive its own threshold from the same value, instead
-// of hardcoding a number that would silently drift out of sync with it.
-const TEST_COLUMNS = 100;
-
-// A fake TTY stdout: fixed `TEST_COLUMNS` columns, a configurable row count (the axis under
-// test), and counters for every byte/call written to it — the thing a real terminal emulator has
-// to parse and repaint. `raw` accumulates the actual written text (not just its length) so a test
-// can assert on the bytes' own content, not only their count.
-class FakeTty extends EventEmitter {
-  isTTY = true as const;
-  columns = TEST_COLUMNS;
-  rows: number;
-  bytes = 0;
-  writes = 0;
-  raw = "";
-
-  constructor(rows: number) {
-    super();
-    this.rows = rows;
-  }
-
-  write = (chunk: string): boolean => {
-    this.bytes += chunk.length;
-    this.writes += 1;
-    this.raw += chunk;
-    return true;
-  };
-}
-
-// Copied from ink-testing-library's own Stdin (build/index.js) — the no-op raw-mode plumbing Ink
-// expects from a real stdin, plus a synchronous write() that fires 'data' the way a real tty's
-// keystrokes arrive.
-class FakeStdin extends EventEmitter {
-  isTTY = true;
-  data: string | null = null;
-
-  write = (data: string): void => {
-    this.data = data;
-    this.emit("readable");
-    this.emit("data", data);
-  };
-
-  setEncoding(): void {}
-  setRawMode(): void {}
-  resume(): void {}
-  pause(): void {}
-  ref(): void {}
-  unref(): void {}
-
-  read = (): string | null => {
-    const { data } = this;
-    this.data = null;
-    return data;
-  };
-}
-
-function session(): SessionState<ModelMessage> {
-  return {
-    id: "s1",
-    cwd: "/repo",
-    systemPrompt: "",
-    permissionMode: "approve-each",
-    messages: [],
-  };
-}
-
-function route(): ResolvedRoute {
-  return { model: "claude-sonnet-5", provider: "anthropic", rerouted: false, viaGateway: false };
-}
-
-// Same two-tick finding inkInputSpike.test.tsx already documents under Ink 7 + React 19, applied
-// here at the macrotask granularity App.test.tsx's own flush() uses for a dispatch/render round trip.
-function flush(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
 
 // A realistic short user turn — 33 display cells, a representative short user turn.
 const MESSAGE = "> how do I refactor this function";

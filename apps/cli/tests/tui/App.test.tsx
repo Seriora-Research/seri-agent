@@ -1,11 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
-import type { ModelMessage } from "ai";
 import { render } from "ink-testing-library";
 import stringWidth from "string-width";
 import type { ApprovalAnswer } from "../../src/loop/loop";
-import type { ResolvedRoute } from "../../src/provider/routing";
-import type { SessionState } from "../../src/session/session";
 import { App } from "../../src/tui/App";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import { ListRow } from "../../src/tui/components";
@@ -28,37 +25,7 @@ import {
   wrapPendingRows,
 } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
-
-function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
-  return {
-    id: "s1",
-    cwd: "/repo",
-    systemPrompt: "",
-    permissionMode: "approve-each",
-    messages: [],
-    ...overrides,
-  };
-}
-
-// AppProps.route is required (D3's own invariant: a PreparedRun cannot exist without a resolved
-// route) — every <App> mount in this file needs one, not just the tests that care about its
-// rendered content.
-function route(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
-  return {
-    model: "claude-sonnet-5",
-    provider: "anthropic",
-    rerouted: false,
-    viaGateway: false,
-    ...overrides,
-  };
-}
-
-// A render/dispatch is not reflected in lastFrame() synchronously — same finding as the Phase 3
-// spike for useInput, just needing a macrotask tick here rather than a microtask (Ink's own frame
-// write is throttled independently of React's own update scheduling).
-function flush(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
+import { flush, route, session } from "./helpers";
 
 async function connect() {
   let dispatch: ((action: TuiAction) => void) | undefined;

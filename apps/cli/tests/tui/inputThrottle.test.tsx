@@ -9,17 +9,12 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { render } from "ink-testing-library";
 import { createElement } from "react";
 import { InputBox } from "../../src/tui/panels/InputBox";
+import { flush } from "./helpers";
 
 const THROTTLE_MS = 50;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// Same macrotask-tick requirement App.test.tsx's own flush() documents: a dispatch/render round
-// trip under Ink 7 + React 19 isn't reflected until a macrotask, not just a microtask, settles.
-function flush(): Promise<void> {
-  return sleep(0);
 }
 
 describe("InputBox throttled repaints", () => {
