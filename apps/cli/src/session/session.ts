@@ -91,6 +91,13 @@ export function saveSession(state: SessionState, sessionsDir: string): void {
   }
   const fileExists = onDiskSize !== undefined;
   const sizeMatches = fileExists && persistedSizes.get(path) === onDiskSize;
+  // Narrowed, not closed: statSync above and appendFileSync below are two syscalls, not one, so a
+  // second process's write landing in between is still possible — same shape as checkpoint.ts's own
+  // TOCTOU note on filterSafeToDelete, narrowed to the smallest gap available without interprocess
+  // locking. A same-size external rewrite (astronomically unlikely for real conversation content —
+  // it would need matching byte length AND get appended before this statSync fires) would also slip
+  // past this check. Closing the window fully needs a per-session interprocess lock, which is real
+  // machinery for a two-processes-resuming-the-same-id scenario the user has to actively create.
 
   if (sameHeader && sizeMatches && state.messages.length > prevCount) {
     // The hot path: nothing but new messages changed since the last save, so only they are
