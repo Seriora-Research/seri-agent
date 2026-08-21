@@ -259,6 +259,37 @@ describe("saveSession (JSONL append-only persistence)", () => {
     // silently returning id/cwd/permissionMode all undefined instead of the real session.
     expect(loadSession("deleted", sessionsDir)).toEqual(grown);
   });
+
+  // Two `seri --resume`d processes sharing a session id: the appended line is written directly
+  // rather than through a second saveSession call, since a real second process would have its own
+  // independent, unseeded persistedSizes/persistedCounts with no way to know about this one's.
+  test("falls back to a full rewrite instead of appending past a line another process wrote since the last save", () => {
+    const state: SessionState = {
+      id: "concurrent",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ n: 1 }],
+    };
+    saveSession(state, sessionsDir);
+
+    fs.appendFileSync(join(sessionsDir, "concurrent.jsonl"), `${JSON.stringify({ n: 99 })}\n`);
+
+    const writeSpy = spyOn(fs, "writeFileSync");
+    const appendSpy = spyOn(fs, "appendFileSync");
+    saveSession({ ...state, messages: [...state.messages, { n: 2 }] }, sessionsDir);
+
+    // An append here would land after {n:99} — not byte-level corruption, but a message from a
+    // process this one never observed silently becoming part of its own transcript.
+    expect(appendSpy).toHaveBeenCalledTimes(0);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    // The rewrite is last-writer-wins over {n:99}, same failure mode this format's full-overwrite
+    // predecessor had — a lost message, not an interleaved one.
+    expect(loadSession("concurrent", sessionsDir).messages).toEqual([{ n: 1 }, { n: 2 }]);
+
+    writeSpy.mockRestore();
+    appendSpy.mockRestore();
+  });
 });
 
 describe("findMostRecentSession", () => {

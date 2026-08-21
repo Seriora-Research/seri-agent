@@ -64,6 +64,14 @@ function headerOf(state: SessionState): SessionHeader {
 // message already on disk or be mistaken for the very first save.
 const persistedCounts = new Map<string, number>();
 const persistedHeaders = new Map<string, string>();
+// Byte length of what THIS process last wrote (append or full rewrite) to each path. Two
+// `seri --resume`d processes sharing a session id each keep their own prevCount/sameHeader based
+// only on what they themselves last read or wrote — the append fast path assumed that was still
+// true of the file on disk, so one process's append landed on top of bytes the other had appended
+// in the meantime, interleaving instead of merely losing one side's messages the way a full
+// overwrite (this format's predecessor) would have. Comparing the file's CURRENT size against this
+// is what tells "nothing else touched this file since my last write" apart from "something did."
+const persistedSizes = new Map<string, number>();
 
 export function saveSession(state: SessionState, sessionsDir: string): void {
   mkdirSync(sessionsDir, { recursive: true });
@@ -72,30 +80,37 @@ export function saveSession(state: SessionState, sessionsDir: string): void {
   const path = sessionPath(sessionsDir, state.id);
   const prevCount = persistedCounts.get(path);
   const sameHeader = prevCount !== undefined && persistedHeaders.get(path) === headerJson;
-  // The append fast path assumes the header it is appending onto is still on disk. If the file was
-  // deleted out of band, appendFileSync would silently create a new headerless one, and loadSession
-  // would then misparse the first message as the header.
-  const fileExists = existsSync(path);
+  // The append fast path assumes the header it is appending onto is still on disk, AND that the
+  // file's size still matches what this process itself last wrote — statSync in one call gives
+  // both "does it exist" and "is it still what I last left it at" instead of two separate checks.
+  let onDiskSize: number | undefined;
+  try {
+    onDiskSize = statSync(path).size;
+  } catch {
+    onDiskSize = undefined;
+  }
+  const fileExists = onDiskSize !== undefined;
+  const sizeMatches = fileExists && persistedSizes.get(path) === onDiskSize;
 
-  if (sameHeader && state.messages.length > prevCount && fileExists) {
+  if (sameHeader && sizeMatches && state.messages.length > prevCount) {
     // The hot path: nothing but new messages changed since the last save, so only they are
     // serialized — the messages already on disk are never touched.
-    appendFileSync(
-      path,
-      state.messages
-        .slice(prevCount)
-        .map((message) => `${JSON.stringify(message)}\n`)
-        .join(""),
-    );
-  } else if (!sameHeader || state.messages.length < prevCount || !fileExists) {
-    // First save for this id in this process, a header field changed (e.g. /mode), or a /rewind
-    // shrink — none of those are expressible as an append, so the whole file is rebuilt.
-    atomicWriteFile(
-      path,
-      `${[headerJson, ...state.messages.map((message) => JSON.stringify(message))].join("\n")}\n`,
-    );
+    const appended = state.messages
+      .slice(prevCount)
+      .map((message) => `${JSON.stringify(message)}\n`)
+      .join("");
+    appendFileSync(path, appended);
+    persistedSizes.set(path, (onDiskSize as number) + Buffer.byteLength(appended, "utf8"));
+  } else if (!sameHeader || !sizeMatches || state.messages.length < prevCount || !fileExists) {
+    // First save for this id in this process, a header field changed (e.g. /mode), a /rewind
+    // shrink, or the on-disk size no longer matches what this process itself last wrote (another
+    // process saved this same session id in the meantime) — none of those are expressible as an
+    // append, so the whole file is rebuilt from what this process currently has.
+    const content = `${[headerJson, ...state.messages.map((message) => JSON.stringify(message))].join("\n")}\n`;
+    atomicWriteFile(path, content);
+    persistedSizes.set(path, Buffer.byteLength(content, "utf8"));
   }
-  // The remaining case — same header, same message count — needs no write at all.
+  // The remaining case — same header, same message count, same on-disk size — needs no write at all.
 
   persistedCounts.set(path, state.messages.length);
   persistedHeaders.set(path, headerJson);
@@ -111,10 +126,8 @@ export function loadSession<TMessage = unknown>(
   // headerLine is never undefined: saveSession always writes the header as the file's first line
   // before any message line, and this function only reaches here once existsSync has confirmed the
   // file — written by saveSession — is present.
-  const [headerLine, ...messageLines] = readFileSync(path, "utf8").split("\n").filter(Boolean) as [
-    string,
-    ...string[],
-  ];
+  const raw = readFileSync(path, "utf8");
+  const [headerLine, ...messageLines] = raw.split("\n").filter(Boolean) as [string, ...string[]];
   const header = JSON.parse(headerLine) as SessionHeader;
 
   const messages: TMessage[] = [];
@@ -140,6 +153,7 @@ export function loadSession<TMessage = unknown>(
   if (!truncated) {
     persistedCounts.set(path, messages.length);
     persistedHeaders.set(path, headerLine);
+    persistedSizes.set(path, Buffer.byteLength(raw, "utf8"));
   }
 
   return { ...header, messages };
