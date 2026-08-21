@@ -1,4 +1,4 @@
-// The TUI's monochrome palette (docs/TUI-DESIGN.md): every component imports its color from here
+// The TUI's monochrome palette (docs/design/tui.md): every component imports its color from here
 // rather than hardcoding a literal. `error`/`warning` carry no hue — ERROR_MARK/WARNING_MARK below
 // are what distinguishes an alert from ordinary text now that color no longer does, and `selected`
 // is the reverse-video row token (see ListRow, components.tsx). ANSI-16 color names only, with one
@@ -8,7 +8,7 @@ export const theme = {
   warning: "white",
   selected: "black",
   muted: "gray",
-  // A confirmed, deliberate second use of background color (docs/TUI-DESIGN.md) — the user-message
+  // A confirmed, deliberate second use of background color (docs/design/tui.md) — the user-message
   // row band, not an oversight of the "reverse-video row only" rule `selected` above follows. An
   // explicit hex value, not the ANSI-16 `"gray"` every other token here uses: plain `"gray"`
   // downsamples to a near-white on some terminals' own ANSI-16 palettes, reading as washed-out and

@@ -5,22 +5,29 @@ Guidance for AI agents working in this repository.
 ## What this is
 
 seri is a cross-platform coding-agent CLI (ships as the `seri` binary), written in
-TypeScript on Bun. Current build stage and what's next: `docs/ROADMAP.md` (source of
-truth for status; `docs/BUILD-PLAN.md` has the reasoning behind it). `docs/ARCHITECTURE.md`
-and `docs/RESEARCH.md` are the design spec and research this plan is built from. A separate,
-parallel track (not a `docs/BUILD-PLAN.md` stage) adds optional hosted accounts/billing
-on top of the BYOK-only core — Phase A (WorkOS AuthKit device-flow auth) has shipped; see
-`.claude/loops/hosted-accounts-billing-gateway/` for the full spec and phased plan.
+TypeScript on Bun. `docs/README.md` is the map; the short version:
+
+- `docs/ROADMAP.md` — **the single source of stage state.** What is built, what is next.
+  Nothing else records status.
+- `docs/specs/<NNN>-<slug>/` — one directory per unit of work: the reasoning, the scope
+  and the acceptance criteria. Cite these by `#anchor`, never by line number.
+- `docs/ARCHITECTURE.md` — what the system is, present tense.
+- `docs/CONSTITUTION.md` — what no design may violate. Read before proposing one.
+- `docs/decisions/` — why a mechanism beat its alternative, one ADR per file.
+
+Hosted accounts and billing sit on top of the BYOK-only core: auth shipped first, then the
+hosted gateway (`docs/specs/022-hosted-gateway/`).
 
 ## Scope: code-first, not code-only
 
 Coding is the primary use and the only one this release ships for, but it is not the
 boundary of the product — seri is intended to extend into general assistant work
-(constraint #3, `docs/ARCHITECTURE.md`). It constrains what you may assume, not what
+(constraint #3, `docs/CONSTITUTION.md`). It constrains what you may assume, not what
 you may build: don't reject a design for being assistant-shaped (a design only
 coherent inside a repository is what's actually ruled out — there's no `AGENTS.md`
-outside one). Don't broaden v1 either — assistant surfaces start at Stage 8
-(post-release); everything before Stage 11 stays a coding agent.
+outside one). Don't broaden v1 either — assistant surfaces start at the daemon,
+`docs/specs/018-daemon/` (post-release); everything up to the release gate
+(`docs/specs/017-distribution/`) stays a coding agent.
 
 ## Commands
 
@@ -131,7 +138,7 @@ disproportionate-match guard against replacing far more than was asked for.
 
 **Provider**: Vercel AI SDK, five providers — Groq (`apps/cli/src/provider/groq.ts`,
 `openai/gpt-oss-120b` default, any Groq model id via `SERI_MODEL`; the measurement behind that
-default is in `docs/PROMPT-ROUTING.md`), OpenRouter (`apps/cli/src/provider/openrouter.ts`,
+default is in `docs/research/2026-08-prompt-routing.md`), OpenRouter (`apps/cli/src/provider/openrouter.ts`,
 `compatibility: "strict"`), and native Anthropic/OpenAI/Google
 (`apps/cli/src/provider/{anthropic,openai,google}.ts`) — `SERI_PROVIDER` (default `groq`) names
 which one `SERI_MODEL` is read against. A new session starts on whichever (model, provider) pair
