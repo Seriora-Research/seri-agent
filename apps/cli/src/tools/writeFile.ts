@@ -7,6 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
+import { getCachedEol, setCachedEol } from "./eolCache";
 
 const RESERVED_NAMES = new Set([
   "CON",
@@ -65,7 +66,7 @@ export function writeFile(
     throw new Error(`Cannot write to reserved device name: ${basename(path)}`);
   }
 
-  const eol = opts?.eol ?? detectEol(path);
+  const eol = opts?.eol ?? getCachedEol(path) ?? detectEol(path);
   const lf = content.replace(/\r\n/g, "\n");
   const finalContent = eol === "CRLF" ? lf.replace(/\n/g, "\r\n") : lf;
 
@@ -79,6 +80,9 @@ export function writeFile(
   for (let attempt = 1; attempt <= MAX_RENAME_ATTEMPTS; attempt++) {
     try {
       renameFn(tempPath, path);
+      // The file's EOL is now whatever was just written — cached so a read_file/write_file that
+      // follows on the same path doesn't re-detect it from disk.
+      setCachedEol(path, eol);
       return;
     } catch (err) {
       if (attempt === MAX_RENAME_ATTEMPTS || !isRetryableError(err)) {

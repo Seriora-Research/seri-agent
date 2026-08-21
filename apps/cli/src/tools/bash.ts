@@ -19,13 +19,24 @@ function findOnPath(command: string): string | null {
   return null;
 }
 
+let bashResolution: { command: string; available: boolean } | undefined;
+
+// Resolved once per process (mirrors runRipgrep.ts's resolveRg/detectRg): findOnPath walks every
+// PATH directory, so isBashAvailable and resolveBashCommand each calling it independently scanned
+// PATH twice per runBash call for a result that cannot change mid-process.
+function detectBash(): { command: string; available: boolean } {
+  const found = findOnPath("bash") ?? WIN32_GIT_BASH_PATHS.find(existsSync);
+  return { command: found ?? "bash", available: found !== undefined };
+}
+
 export function isBashAvailable(): boolean {
-  if (findOnPath("bash")) return true;
-  return process.platform === "win32" && WIN32_GIT_BASH_PATHS.some(existsSync);
+  bashResolution ??= detectBash();
+  return bashResolution.available;
 }
 
 function resolveBashCommand(): string {
-  return findOnPath("bash") ?? WIN32_GIT_BASH_PATHS.find(existsSync) ?? "bash";
+  bashResolution ??= detectBash();
+  return bashResolution.command;
 }
 
 // isAvailable last, after the two parameters production actually passes, so that production reads

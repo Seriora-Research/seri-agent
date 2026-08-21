@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { isBashAvailable, runBash } from "../../src/tools/bash";
 
 function countSleepProcesses(): number {
@@ -23,6 +26,29 @@ describe("runBash", () => {
   test("rejects before spawning when bash is unavailable", () => {
     expect(runBash("echo hi", undefined, undefined, () => false)).rejects.toThrow();
   });
+
+  // Regression guard for the PATH-resolution memoization fix: a run before this fix scanned PATH
+  // fresh on every call (once via isBashAvailable, once via resolveBashCommand), so a PATH change
+  // made mid-session could change which bash a later call actually spawns. Warms the cache with a
+  // real command first, then prepends a directory holding a broken `bash.exe` stub — if resolution
+  // were re-scanned, that stub (matched by name before any real bash further down PATH) would now
+  // win and the second command would fail instead of echoing "hi".
+  test("a PATH change after the first resolution is not observed by a later call", async () => {
+    const warm = await runBash("echo hi");
+    expect(warm.stdout.trim()).toBe("hi");
+
+    const stubDir = mkdtempSync(join(tmpdir(), "seri-bash-stub-"));
+    writeFileSync(join(stubDir, "bash.exe"), "not a real executable");
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${stubDir}${delimiter}${originalPath}`;
+    try {
+      const result = await runBash("echo hi");
+      expect(result.stdout.trim()).toBe("hi");
+    } finally {
+      process.env.PATH = originalPath;
+      rmSync(stubDir, { recursive: true, force: true });
+    }
+  }, 15000);
 });
 
 // Windows-only because the leak this guards against is a Windows behavior, and the probe reads
