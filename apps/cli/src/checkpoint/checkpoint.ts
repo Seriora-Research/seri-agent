@@ -538,8 +538,15 @@ export function createCheckpointer(opts: {
   // without a new process to call start() for it.
   const invalidate = (): void => {
     previousTree = undefined;
-    previousCommit = resolveRef(gitDir, sessionRef(opts.sessionId));
+    // Before resolveRef, which throws only when git itself fails to spawn (shadowGit.ts's own
+    // run()/spawnGit — a non-zero exit, like a ref genuinely not resolving, already returns
+    // gracefully as `undefined` and never reaches here): if it does throw, this must still be
+    // false, or a later non-destructive, non-write_file call would see `mustSnapshot` false, skip
+    // writeTree, and reuse `previousTree` — which is `undefined` by this point — as a checkpoint's
+    // tree, corrupting that record rather than merely chaining the next commit onto a stale parent
+    // (the lesser failure `previousCommit` staying unresolved below produces instead).
     snapshottedThisProcess = false;
+    previousCommit = resolveRef(gitDir, sessionRef(opts.sessionId));
   };
 
   // Object.assign, not `handler as Checkpointer`: the assign's return type is the intersection of

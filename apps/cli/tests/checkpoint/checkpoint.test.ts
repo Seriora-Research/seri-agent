@@ -1034,6 +1034,40 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
     },
     GIT_TEST_TIMEOUT_MS,
   );
+
+  // resolveRef itself throwing (git failing to even spawn, per shadowGit.ts's spawnGit) is a
+  // narrower trigger than a non-zero exit — PATH cleared so `spawnSync("git", ...)` cannot find the
+  // binary at all, the one case shadowGit.ts's own run() throws rather than returning a failed
+  // GitResult. Proves snapshottedThisProcess is reset before that throw, not after: a stale `true`
+  // there would make the next non-destructive, non-write_file call skip writeTree and reuse
+  // previousTree — already cleared to undefined by this point — corrupting that checkpoint's tree.
+  test(
+    "invalidate() still forces a fresh snapshot on the next call when resolveRef itself throws",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+
+      const originalPath = process.env.PATH;
+      process.env.PATH = "";
+      let threw: unknown;
+      try {
+        snapshot.invalidate();
+      } catch (err) {
+        threw = err;
+      } finally {
+        process.env.PATH = originalPath;
+      }
+      expect(threw).toBeDefined();
+
+      writeFileSync(join(workTree, "a.txt"), "after-throw\n");
+      // A plain "ls" is exactly the case that would have reused the stale, now-undefined
+      // previousTree if snapshottedThisProcess had not been reset before the throw.
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "ls" }, rewindTo: 2 });
+
+      expect(toolRecords()[1]?.tree).toMatch(/^[0-9a-f]{40}$/);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
 });
 
 describe.skipIf(!isGitAvailable())("rewindConversation", () => {
