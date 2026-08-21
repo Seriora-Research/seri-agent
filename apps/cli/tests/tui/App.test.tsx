@@ -1542,9 +1542,9 @@ describe("App", () => {
       expect(row.indexOf("A".repeat(40))).toBe(-1);
     });
 
-    // Issue #140's motivating case: a $0 model whose id/displayName never says "free" (the
-    // OpenRouter free-tier naming convention this mirrors, e.g. "stealth/ox-alpha") was
-    // undiscoverable by typing "free" before matchesFilter also checked pricing.
+    // A $0 model whose id/displayName never says "free" (the OpenRouter free-tier naming
+    // convention this mirrors, e.g. "stealth/ox-alpha") is still discoverable by typing "free"
+    // because matchesFilter also checks pricing, not just the name.
     test("matchesFilter matches a zero-price entry with no 'free' in its name against query 'free'", () => {
       const zeroPrice = pickerRow({
         entry: entry({
