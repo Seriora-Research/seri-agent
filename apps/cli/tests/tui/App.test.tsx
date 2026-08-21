@@ -817,6 +817,28 @@ describe("App", () => {
       expect(instance.lastFrame()).not.toContain('Type to filter — try "free" or "paid"…');
     });
 
+    // Code-review finding: Yoga's flex-shrink arbitration between the filter row's sibling Text
+    // nodes (prompt, cursor, placeholder) dropped the cursor's own inverse space entirely once the
+    // row's total content stopped fitting the terminal width — reproduced down to an exact
+    // 43-vs-42-column boundary. 42 is well within a real, unremarkable terminal width (e.g. a split
+    // pane), not an extreme edge case. The prompt's own trailing space ("> ") plus the cursor's own
+    // space are two consecutive spaces before the placeholder text; pre-fix, 42 columns collapsed
+    // that to one.
+    test("keeps the cursor's own column at a narrow width that used to drop it", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "model-picker-requested", entries: [row()] });
+      await flush();
+
+      // `columns` IS a getter-only accessor on ink-testing-library's Stdout prototype, so a plain
+      // assignment throws in strict mode — defineProperty shadows it with an own data property.
+      Object.defineProperty(instance.stdout, "columns", { value: 42, configurable: true });
+      instance.stdout.emit("resize");
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain(">  Type to filter");
+    });
+
     // The concrete mechanical proof of "context preserved" (feature-plan.md's own acceptance
     // criterion): onModelSelected only ever carries the picked model/provider — `messages` (and
     // everything else about the session) is never part of the pick at all, so there is nothing to
