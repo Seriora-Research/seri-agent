@@ -148,9 +148,10 @@ export function loadSession<TMessage = unknown>(
   // headerLine is never undefined: saveSession always writes the header as the file's first line
   // before any message line, and this function only reaches here once existsSync has confirmed the
   // file — written by saveSession — is present.
-  const [headerLine, ...messageLines] = readFileSync(path, "utf8")
-    .split("\n")
-    .filter(Boolean) as [string, ...string[]];
+  const [headerLine, ...messageLines] = readFileSync(path, "utf8").split("\n").filter(Boolean) as [
+    string,
+    ...string[],
+  ];
   const header = JSON.parse(headerLine) as SessionHeader;
   const messages = messageLines.map((line) => JSON.parse(line) as TMessage);
 

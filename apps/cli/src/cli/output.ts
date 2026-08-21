@@ -173,9 +173,7 @@ export function undoPlanLines(plan: RestorePlan, sink: (line: string) => void = 
   for (const path of plan.deleted) sink(`deleted  ${path}`);
   if (plan.ignored.length > 0) sink(`not restored (gitignored): ${plan.ignored.join(", ")}`);
   if (plan.preserved.length > 0) {
-    sink(
-      `preserved (no proof seri wrote them, or edited since): ${plan.preserved.join(", ")}`,
-    );
+    sink(`preserved (no proof seri wrote them, or edited since): ${plan.preserved.join(", ")}`);
   }
 }
 

@@ -641,7 +641,9 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
   // and deleted by a restore that predates it. filterSafeToDelete narrows the list to paths a
   // write_file ledger entry can still vouch for (writeLedger.ts's own header comment); everything
   // else moves to `preserved` instead of silently vanishing from both the plan and the disk.
-  const safeToDelete = new Set(filterSafeToDelete(opts.storeDir, opts.worktree, candidates.deleted));
+  const safeToDelete = new Set(
+    filterSafeToDelete(opts.storeDir, opts.worktree, candidates.deleted),
+  );
   const deleted = candidates.deleted.filter((path) => safeToDelete.has(path));
   const preserved = candidates.deleted.filter((path) => !safeToDelete.has(path));
 

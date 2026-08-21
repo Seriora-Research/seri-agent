@@ -776,7 +776,10 @@ describe("run (task invocation)", () => {
     try {
       const fresh = await captureLogs(() => run(["a", "task"], deps));
       expect(fresh.code).toBe(0);
-      const created = loadSession(readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, ""), sessionsDir);
+      const created = loadSession(
+        readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, ""),
+        sessionsDir,
+      );
       expect(created.model).toBe("model-from-env");
       expect(asked).toEqual(["model-from-env"]);
 

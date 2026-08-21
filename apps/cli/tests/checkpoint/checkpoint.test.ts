@@ -408,9 +408,9 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       const records = toolRecords();
       expect(records).toHaveLength(2);
       expect(records[1]?.tree).not.toBe(records[0]?.tree);
-      expect(
-        plainGit(join(storeDir, "git"), ["show", `${records[1]?.tree}:a.txt`]),
-      ).toBe("after\n");
+      expect(plainGit(join(storeDir, "git"), ["show", `${records[1]?.tree}:a.txt`])).toBe(
+        "after\n",
+      );
     },
     GIT_TEST_TIMEOUT_MS,
   );
