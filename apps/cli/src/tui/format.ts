@@ -369,16 +369,21 @@ export const MODEL_PICKER_HEADER = [
   truncatePad("Route", ROUTE_WIDTH),
 ].join(" ");
 
+function priceLabel(entry: ModelCatalogEntry): string {
+  if (entry.pricing === undefined) return "";
+  return isZeroPriceEntry(entry) ? "free" : "paid";
+}
+
 // Multi-term AND-of-ORs, not a single unsplit substring check: the query is split on whitespace,
-// and EVERY term must match at least one field (id, displayName, family, or — new in this commit —
-// provider), independently. A single-term query behaves exactly as before (id/displayName/family,
-// now also provider); a multi-term one (e.g. "sonnet-5 anthropic") is what lets a query narrow to
-// one specific ROUTE of a multi-route model rather than only ever narrowing by name. "free" and
-// "paid" are additionally special-cased against `isZeroPriceEntry`, ORed with the same haystack
-// check, so a $0 model with no "free" in its name is still discoverable while a model literally
-// named "free"/"paid" keeps matching by name too. An entry with `pricing: undefined` (price
-// genuinely unknown) mirrors `isZeroPriceEntry`'s own fail-closed direction: unknown is not
-// free, so it counts as "paid".
+// and EVERY term must match at least one field (id, displayName, family, or provider),
+// independently. A single-term query behaves exactly as before (id/displayName/family, now also
+// provider); a multi-term one (e.g. "sonnet-5 anthropic") is what lets a query narrow to one
+// specific ROUTE of a multi-route model rather than only ever narrowing by name. "free"/"paid"
+// match via `priceLabel`, a synthesized haystack entry rather than a special-cased term: an entry
+// with `pricing: undefined` (price genuinely unknown) yields `""`, which never `.includes()`s a
+// non-empty term, so it matches neither "free" nor "paid" — the same "no data, not a claim either
+// way" posture `formatCost` takes for the same entries. A model literally named "free"/"paid"
+// still matches by name via the `displayName`/`id` haystacks, unaffected by `priceLabel`.
 export function matchesFilter(row: ModelPickerEntry, query: string): boolean {
   const terms = query
     .toLowerCase()
@@ -395,13 +400,9 @@ export function matchesFilter(row: ModelPickerEntry, query: string): boolean {
     // `.toLowerCase()` on directly.
     (entry.family ?? "").toLowerCase(),
     entry.provider.toLowerCase(),
+    priceLabel(entry),
   ];
-  const matchesTerm = (term: string): boolean => {
-    if (term === "free") return isZeroPriceEntry(entry) || haystacks.some((h) => h.includes(term));
-    if (term === "paid") return !isZeroPriceEntry(entry) || haystacks.some((h) => h.includes(term));
-    return haystacks.some((h) => h.includes(term));
-  };
-  return terms.every(matchesTerm);
+  return terms.every((term) => haystacks.some((haystack) => haystack.includes(term)));
 }
 
 // D8: the disabled-remove reason, verbatim — reused by the list row (grayed prompt) and would be

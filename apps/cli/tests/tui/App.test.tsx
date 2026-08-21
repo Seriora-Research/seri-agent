@@ -1574,9 +1574,10 @@ describe("App", () => {
       expect(matchesFilter(zeroPrice, "paid")).toBe(false);
     });
 
-    test("matchesFilter matches an entry with unknown pricing against query 'paid'", () => {
+    test("matchesFilter matches neither 'free' nor 'paid' for an entry with unknown pricing", () => {
       const unknownPrice = pickerRow({ entry: entry({ pricing: undefined }) });
-      expect(matchesFilter(unknownPrice, "paid")).toBe(true);
+      expect(matchesFilter(unknownPrice, "paid")).toBe(false);
+      expect(matchesFilter(unknownPrice, "free")).toBe(false);
     });
 
     test("matchesFilter still matches a model whose displayName literally contains 'free', regardless of price", () => {
