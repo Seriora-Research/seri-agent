@@ -119,6 +119,9 @@ export function saveSession(state: SessionState, sessionsDir: string): void {
 export function loadSession<TMessage = unknown>(
   id: string,
   sessionsDir: string,
+  // Called only when a torn trailing line was dropped (below) — never for the ordinary case, so a
+  // caller that ignores it (the default) sees no behavior change from before this parameter existed.
+  onTruncated: () => void = () => {},
 ): SessionState<TMessage> {
   const path = sessionPath(sessionsDir, id);
   if (!existsSync(path)) throw new Error(`Session "${id}" not found in ${sessionsDir}`);
@@ -154,6 +157,8 @@ export function loadSession<TMessage = unknown>(
     persistedCounts.set(path, messages.length);
     persistedHeaders.set(path, headerLine);
     persistedSizes.set(path, Buffer.byteLength(raw, "utf8"));
+  } else {
+    onTruncated();
   }
 
   return { ...header, messages };

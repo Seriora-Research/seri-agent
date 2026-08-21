@@ -446,11 +446,12 @@ function loadOrCreateSession(
   sessionsDir: string,
   loadAgentsFileFn: typeof loadAgentsFileReal,
   configDir: string,
+  onTruncated: () => void = () => {},
 ): { session: RunSession; modelRecorded: boolean } {
   if (resuming) {
     const id = resumeId ?? findMostRecentSession(sessionsDir);
     if (!id) throw new Error("No session to resume.");
-    const loaded = loadSession<ModelMessage>(id, sessionsDir);
+    const loaded = loadSession<ModelMessage>(id, sessionsDir, onTruncated);
     // The two stored fields are treated differently on purpose.
     //
     // `systemPrompt` is rebuilt every time, never replayed: it is a product of this binary's
@@ -928,7 +929,12 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
     // awaiting here would let this function return before their own continuation (recordBarrier,
     // the final message) ran at all, since nothing else keeps the process alive for a background
     // continuation to finish in once run() returns and the real binary calls process.exit(code).
-    await command.run(loadSession<ModelMessage>(id, ctx.sessionsDir), commandArgs, dirs(ctx));
+    const loaded = loadSession<ModelMessage>(id, ctx.sessionsDir, () =>
+      printWarning(
+        "the last message in this session's saved history was incomplete (an interrupted save) and has been dropped — everything before it is intact",
+      ),
+    );
+    await command.run(loaded, commandArgs, dirs(ctx));
     return 0;
   } catch (err) {
     console.error(messageOf(err));
@@ -1126,6 +1132,11 @@ async function prepareSession(
       ctx.sessionsDir,
       loadAgentsFileFn,
       configDir,
+      () =>
+        printWarning(
+          "the last message in this session's saved history was incomplete (an interrupted save) and has been dropped — everything before it is intact",
+          warnSink,
+        ),
     );
 
     if (!ctx.resuming) emit(`Session ${session.id} created.`);

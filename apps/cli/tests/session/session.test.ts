@@ -220,6 +220,30 @@ describe("saveSession (JSONL append-only persistence)", () => {
     expect(loaded.messages).toEqual([{ n: 1 }]);
   });
 
+  test("loadSession calls onTruncated only when a line was actually dropped", () => {
+    const header = { id: "torn3", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
+    writeFileSync(
+      join(sessionsDir, "torn3.jsonl"),
+      `${JSON.stringify(header)}\n${JSON.stringify({ n: 1 })}\n{"n": 2, "text": "unfinis`,
+    );
+    let calls = 0;
+    loadSession<{ n: number }>("torn3", sessionsDir, () => {
+      calls++;
+    });
+    expect(calls).toBe(1);
+
+    const clean = { id: "clean", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
+    writeFileSync(
+      join(sessionsDir, "clean.jsonl"),
+      `${JSON.stringify(clean)}\n${JSON.stringify({ n: 1 })}\n`,
+    );
+    let cleanCalls = 0;
+    loadSession<{ n: number }>("clean", sessionsDir, () => {
+      cleanCalls++;
+    });
+    expect(cleanCalls).toBe(0);
+  });
+
   test("a load that dropped a truncated line forces a full rewrite on the next save, not an append onto the fragment", () => {
     const header = { id: "torn2", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
     writeFileSync(
