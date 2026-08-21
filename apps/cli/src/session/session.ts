@@ -54,12 +54,13 @@ function headerOf(state: SessionState): SessionHeader {
   };
 }
 
-// Keyed by the resolved file path rather than the bare session id: a session id is only unique
-// within one sessionsDir, and a single process legitimately touches more than one sessionsDir (the
-// test suite does this throughout, reusing short ids like "older"/"legacy" across independent
-// `mkdtempSync` dirs). Keying by id alone conflated those — a save for "older" in a fresh directory
-// read stale tracking left behind by an unrelated earlier "older" in a different directory, and
-// concluded nothing had changed when the file being saved to did not exist yet. loadSession seeds
+// Keyed by the joined `<sessionsDir>/<id>.jsonl` path rather than the bare session id: a session
+// id is only unique within one sessionsDir, and a single process legitimately touches more than
+// one sessionsDir (the test suite does this throughout, reusing short ids like "older"/"legacy"
+// across independent `mkdtempSync` dirs). Keying by id alone conflated those — a save for "older"
+// in a fresh directory read stale tracking left behind by an unrelated earlier "older" in a
+// different directory, and concluded nothing had changed when the file being saved to did not
+// exist yet. loadSession seeds
 // both maps from what it just read, so resuming a session and then saving appends only the messages
 // made since — without that seed, the first save after a resume would either re-append every
 // message already on disk or be mistaken for the very first save.

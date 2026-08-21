@@ -76,7 +76,7 @@ describe("writeFile", () => {
     }
   });
 
-  // eolCache.ts (perf-review-fixes): a write_file immediately following a read_file on the same
+  // eolCache.ts: a write_file immediately following a read_file on the same
   // path should reuse the EOL that read_file already saw, instead of re-reading the file from
   // disk. The file is mutated directly (bypassing both tools) between the read and the write —
   // if writeFile re-read it for EOL detection rather than using the cache, it would see the

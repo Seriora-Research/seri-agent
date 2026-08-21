@@ -468,6 +468,29 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     GIT_TEST_TIMEOUT_MS,
   );
 
+  test.each([
+    "git restore file.txt",
+    "git stash",
+    "git apply patch.diff",
+    "tee out.txt",
+    "patch -p1 < patch.diff",
+  ])(
+    "a destructive bash call restages the worktree: %s",
+    (command) => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      writeFileSync(join(workTree, "new.txt"), "new\n");
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command }, rewindTo: 2 });
+
+      const records = toolRecords();
+      expect(records[1]?.tree).not.toBe(records[0]?.tree);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).toContain("new.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
   test(
     "write_file always restages, regardless of a preceding non-destructive bash call",
     () => {

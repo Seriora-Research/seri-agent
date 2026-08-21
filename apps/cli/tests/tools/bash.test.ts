@@ -40,8 +40,7 @@ describe("runBash", () => {
     const stubDir = mkdtempSync(join(tmpdir(), "seri-bash-stub-"));
     // findOnPath only looks for "bash.exe" on win32 — on POSIX it looks for "bash", so a stub
     // literally named "bash.exe" is never a candidate there and this test's negative control never
-    // fires on those platforms. POSIX resolution also needs the executable bit set to be a valid
-    // candidate.
+    // fires on those platforms.
     const stubName = process.platform === "win32" ? "bash.exe" : "bash";
     const stubPath = join(stubDir, stubName);
     writeFileSync(stubPath, "not a real executable");
