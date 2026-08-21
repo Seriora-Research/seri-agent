@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { foldsCase } from "../caseFold";
+import { clearEolCache } from "../tools/eolCache";
 import {
   applyRestore,
   commitTree,
@@ -21,7 +22,8 @@ import {
   updateRef,
   writeTree,
 } from "./shadowGit";
-import type { OnBeforeMutation } from "./wrapTools";
+import type { MutationContext, OnAfterMutation, OnBeforeMutation } from "./wrapTools";
+import { filterSafeToDelete, recordWrite } from "./writeLedger";
 
 // The newest 20 sessions are always intact. Measured: ~4.4 KB of store per snapshot (222 KB over
 // 50 snapshots of this 106-file repo), and git's content dedup makes repeated edits to a large
@@ -252,13 +254,25 @@ export function pruneSessions(storeDir: string, keep?: string): void {
   gc(gitDir);
 }
 
+// The value createCheckpointer returns: still directly callable as an OnBeforeMutation (every
+// existing caller — withCheckpoints, dispatch.ts's subagent runtime — keeps calling it exactly
+// that way), plus two capabilities only the caller that actually holds the live instance needs.
+// `onAfterMutation` is the write-ledger half of the destructive-restore fix (writeLedger.ts's own
+// header comment): wired into withCheckpoints as the third argument, alongside the same handler
+// as the first. `invalidate` is restoreTo's own escape hatch for a live checkpointer's stale
+// state — see its call site's comment in restoreTo, below.
+export type Checkpointer = OnBeforeMutation & {
+  onAfterMutation: OnAfterMutation;
+  invalidate: () => void;
+};
+
 export function createCheckpointer(opts: {
   storeDir: string;
   worktree: string;
   sessionId: string;
   onWarning: (message: string) => void;
   gitAvailable?: () => boolean;
-}): OnBeforeMutation {
+}): Checkpointer {
   const gitAvailable = opts.gitAvailable ?? isGitAvailable;
   const gitDir = gitDirOf(opts.storeDir);
   const scopeCache = new Map<string, PathScope>();
@@ -415,7 +429,7 @@ export function createCheckpointer(opts: {
     if (messages.length > 0) opts.onWarning(messages.join("; "));
   }
 
-  return (context) => {
+  const handler: OnBeforeMutation = (context) => {
     if (!enabled) return;
 
     try {
@@ -483,6 +497,41 @@ export function createCheckpointer(opts: {
       );
     }
   };
+
+  // Only write_file's own path is attributable — see writeLedger.ts's own header comment on why
+  // bash/powershell output never reaches here. Best-effort and silent on failure: a ledger write
+  // that fails (a full disk, a read-only store) only ever makes filterSafeToDelete MORE
+  // conservative for this one path, never less safe, so it does not warrant the primary handler's
+  // "latch off for the rest of the session" reaction to a genuinely broken store above — this is
+  // never the thing standing between a user and undo working at all.
+  const onAfterMutation: OnAfterMutation = (context: MutationContext) => {
+    if (!enabled || context.tool !== "write_file") return;
+    const path = (context.args as { path?: unknown }).path;
+    if (typeof path !== "string") return;
+    try {
+      // Resolved against process.cwd(), same as scopeOf above and for the identical reason:
+      // writeFile.ts hands the declared path straight to node:fs, so that is the absolute path
+      // that is actually on disk and the one filterSafeToDelete must be able to find again.
+      const absolute = resolve(path);
+      recordWrite(opts.storeDir, absolute, readFileSync(absolute, "utf8"));
+    } catch {}
+  };
+
+  const checkpointer = handler as Checkpointer;
+  checkpointer.onAfterMutation = onAfterMutation;
+  // restoreTo's own signal that disk was just forcibly rewritten out from under this closure's
+  // `previousTree`/`previousCommit` — see its call site's comment for what goes wrong without it.
+  // `previousCommit` is re-resolved from the ref rather than cleared to undefined: restoreTo has
+  // already moved the ref to the pre-undo commit by the time this runs, and clearing to undefined
+  // would make the NEXT checkpoint a rootless commit instead of one that chains onto it — the same
+  // resumed-session derivation start() already does, run again because disk changed a second time
+  // without a new process to call start() for it.
+  checkpointer.invalidate = () => {
+    previousTree = undefined;
+    previousCommit = resolveRef(gitDir, sessionRef(opts.sessionId));
+    snapshottedThisProcess = false;
+  };
+  return checkpointer;
 }
 
 function toolRecords(log: CheckpointRecord[]): ToolRecord[] {
@@ -514,6 +563,13 @@ export type RestorePlan = {
   restored: string[];
   deleted: string[];
   ignored: string[];
+  // Candidates planRestore's own tree diff considered extraneous but the write ledger could not
+  // vouch for (writeLedger.ts's own filterSafeToDelete) — no proof seri ever wrote them, or the
+  // proof it has no longer matches what is on disk. NOT the same reason as `ignored` (a path the
+  // project's own .gitignore excludes) and deliberately not folded into it: conflating "seri
+  // can't prove authorship" with "the project declared this out of scope" would misinform the
+  // user about why one of their files was left alone.
+  preserved: string[];
 };
 
 export type RestoreResult = RestorePlan & {
@@ -576,16 +632,36 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
     at: new Date().toISOString(),
   });
 
+  const candidates = planRestore(gitDir, opts.worktree, treeish);
+  // The removal pass' own positive-proof gate, applied to the PLAN — before onPlan, not just
+  // before applyRestore — so what is printed to the user is what actually happens rather than a
+  // list the apply step goes on to narrow behind their back. planRestore's `deleted` only knows a
+  // path is absent from the target tree; it has no idea whether seri ever wrote it, which is what
+  // let a hand-edited or newly-created file the agent never touched get swept up as "extraneous"
+  // and deleted by a restore that predates it. filterSafeToDelete narrows the list to paths a
+  // write_file ledger entry can still vouch for (writeLedger.ts's own header comment); everything
+  // else moves to `preserved` instead of silently vanishing from both the plan and the disk.
+  const safeToDelete = new Set(filterSafeToDelete(opts.storeDir, opts.worktree, candidates.deleted));
+  const deleted = candidates.deleted.filter((path) => safeToDelete.has(path));
+  const preserved = candidates.deleted.filter((path) => !safeToDelete.has(path));
+
   const plan: RestorePlan = {
     tree: treeish,
     // Before planRestore, which rewrites the index. Display only, and non-fatal by design — see
     // diffTree.
     diff: diffTree(gitDir, opts.worktree, treeish),
-    ...planRestore(gitDir, opts.worktree, treeish),
+    restored: candidates.restored,
+    deleted,
     ignored,
+    preserved,
   };
   opts.onPlan(plan);
   applyRestore(gitDir, opts.worktree, plan.deleted);
+  // checkout-index can rewrite a restored file's on-disk EOL without going through
+  // writeFile.ts/readFile.ts (shadowGit.ts's own core.autocrlf=false comment on why), leaving the
+  // EOL cache trusting a line-ending style the restore may have just changed — same reason
+  // bash.ts/powershell.ts already clear it after every shell call.
+  clearEolCache();
 
   return {
     ...plan,

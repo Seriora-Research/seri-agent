@@ -35,6 +35,7 @@ import {
   writeTree,
 } from "../../src/checkpoint/shadowGit";
 import { withCheckpoints, type MutationContext } from "../../src/checkpoint/wrapTools";
+import { recordWrite } from "../../src/checkpoint/writeLedger";
 import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
 
@@ -506,6 +507,10 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       snapshot(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "after\n");
       writeFileSync(join(workTree, "new.txt"), "new\n");
+      // Stands in for write_file's own onAfterMutation (checkpoint.ts's real createCheckpointer
+      // calls this after every successful write_file) — the ledger is what proves seri, not the
+      // user, made this file, which is what the removal pass below now requires before deleting it.
+      recordWrite(storeDir, join(workTree, "new.txt"), "new\n");
       snapshot(mutation({ toolCallId: "c2" }));
 
       const result = undo(2);
@@ -702,6 +707,85 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       checkpointer()(mutation());
 
       expect(() => undo(5)).toThrow("This session has 1 checkpoint(s) to undo to; asked for 5.");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+});
+
+describe.skipIf(!isGitAvailable())("undoFiles (write-ledger deletion gate)", () => {
+  test(
+    "an out-of-band file created after a skipped bash call survives — the file this fix exists for",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
+
+      // The gap Repro-B exploited: a non-destructive bash call between the checkpoint and the
+      // out-of-band edit reuses the previous tree (DESTRUCTIVE_COMMAND_PATTERNS' own comment), so
+      // nothing looks at disk again until the next real snapshot — which never comes, because /undo
+      // fires next instead.
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "ls" }, rewindTo: 2 });
+
+      // Made directly with node:fs, the way a user's own editor would — never through write_file,
+      // so it can never have a ledger entry.
+      writeFileSync(join(workTree, "user-made.txt"), "the user's own work\n");
+
+      // Negative control: planRestore's raw output — what the removal pass saw before this fix's
+      // ledger gate narrowed it — does list the file as extraneous against the target tree. If this
+      // assertion ever stops holding, the assertions below are no longer proving anything.
+      const gitDir = join(storeDir, "git");
+      const target = toolRecords()[0]?.tree ?? "";
+      expect(planRestore(gitDir, workTree, target).deleted).toContain("user-made.txt");
+
+      const result = undo(1);
+
+      expect(result.deleted).not.toContain("user-made.txt");
+      expect(result.preserved).toContain("user-made.txt");
+      expect(existsSync(join(workTree, "user-made.txt"))).toBe(true);
+      expect(readFileSync(join(workTree, "user-made.txt"), "utf8")).toBe("the user's own work\n");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a file seri actually wrote through write_file, and that legitimately should not exist after the restore, is still deleted",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
+
+      writeFileSync(join(workTree, "seri-made.txt"), "seri wrote this\n");
+      recordWrite(storeDir, join(workTree, "seri-made.txt"), "seri wrote this\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      const result = undo(2);
+
+      expect(result.deleted).toContain("seri-made.txt");
+      expect(result.preserved).not.toContain("seri-made.txt");
+      expect(existsSync(join(workTree, "seri-made.txt"))).toBe(false);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a file seri wrote, then something else modified afterward, is preserved rather than deleted",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
+
+      writeFileSync(join(workTree, "written-then-edited.txt"), "seri's content\n");
+      recordWrite(storeDir, join(workTree, "written-then-edited.txt"), "seri's content\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      // Edited by something else after seri wrote it — the ledger's hash no longer matches what is
+      // on disk.
+      writeFileSync(join(workTree, "written-then-edited.txt"), "edited by someone else\n");
+
+      const result = undo(2);
+
+      expect(result.deleted).not.toContain("written-then-edited.txt");
+      expect(result.preserved).toContain("written-then-edited.txt");
+      expect(readFileSync(join(workTree, "written-then-edited.txt"), "utf8")).toBe(
+        "edited by someone else\n",
+      );
     },
     GIT_TEST_TIMEOUT_MS,
   );
