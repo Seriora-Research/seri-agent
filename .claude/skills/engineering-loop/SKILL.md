@@ -111,6 +111,37 @@ skill). Produce a structured plan/spec into `.claude/loops/<slug>/` using
 the mode template. Update STATE.md checklist.
 Present the plan and STOP for human approval.
 
+### 3b. PROMOTE the spec to `docs/specs/` (research and feature modes)
+The loop directory is **scratch**: `STATE.md`, `trajectory.md` and
+`environment.md` record *how the work was done* and are disposable. The spec
+records *what was decided to be built* — that is project documentation and it
+must not die in `.claude/loops/`.
+
+**Only after the human approves the plan** (§3's gate), copy it out:
+
+| mode | from | to |
+|---|---|---|
+| research | `research-spec.md` | `docs/specs/<NNN>-<slug>/research.md` |
+| feature | `feature-plan.md` | `docs/specs/<NNN>-<slug>/spec.md` |
+
+For **feature** mode also write `docs/specs/<NNN>-<slug>/tasks.md` — the plan's
+ordered step list as unchecked `- [ ]` boxes, one per step. EXECUTE (§4) checks
+them off as it goes; it is the implementation's progress surface.
+
+- `<NNN>` is the next free three-digit ID in `docs/specs/`. **Never reuse an ID
+  and never renumber an existing one** — they are cited from outside this repo.
+- If the task continues existing work (a successor loop, an `-impl` loop, a
+  follow-up fix), promote **into that spec's existing directory** rather than
+  allocating a new ID. One spec per unit of product, not one per loop run.
+- **bugfix mode does not promote.** A fix report records a defect, not a
+  decision about what to build. It stays in the loop directory.
+
+**Cite specs by anchor, never by line number.** Write
+`docs/specs/012-subagents/spec.md#verify-bar`, not `docs/BUILD-PLAN.md:357-391`.
+Line numbers break on the first edit of the target — every existing
+`docs/BUILD-PLAN.md:<n>` citation in `.claude/loops/**` is already stale, which
+is the evidence for this rule, not a hypothetical.
+
 ## 4. EXECUTE (feature, bugfix only — research stops after PLAN)
 - **bugfix**: FIRST have the implementer write a FAILING regression test that
   reproduces the bug; confirm it fails; THEN fix; confirm it passes. If the
@@ -118,7 +149,10 @@ Present the plan and STOP for human approval.
   or overturned before the stated fix is implemented.
 - **feature**: dispatch `implementer` subagent(s) (isolation: worktree) to
   implement the approved plan, committing per step with conventional-commit
-  messages (feat:, fix:, test:, refactor:).
+  messages (feat:, fix:, test:, refactor:). After each step lands, check off its
+  box in `docs/specs/<NNN>-<slug>/tasks.md` (§3b) — that file is the run's
+  progress surface, so it is updated as work completes, not in one batch at the
+  end.
 - For independent workstreams, dispatch up to 3 implementer subagents in
   parallel. Cap at 3 — each worktree is a near-full working-file copy.
 
@@ -131,6 +165,11 @@ Present the plan and STOP for human approval.
    addition to the plan and gate output. It reports
    CRITICAL / HIGH / MEDIUM / LOW. It must NOT edit code.
 3. Write the verdict and gate results to STATE.md and `trajectory.md`.
+4. Update this spec's row in `docs/ROADMAP.md` — state, and the PR number once
+   one is open. **`docs/ROADMAP.md` is the single source of stage state**: do
+   not restate a stage's status in `docs/ARCHITECTURE.md`, in a spec body, or
+   in a second table anywhere. A stage whose state is recorded in two places
+   is a stage whose state is wrong in one of them.
 
 ## 6. STOP CONDITION
 Set a `/goal` condition (a separate judge model reads the transcript to decide).
@@ -138,10 +177,12 @@ If the `## Goal Audit` block's `success_check` is more specific than the
 generic mode template below, use it in place of (or in addition to) the
 matching clause:
 - **research**: "A complete spec exists at `.claude/loops/<slug>/research-spec.md`,
-  every section of the template is filled, and the self-checklist at the bottom
-  is all checked; or stop after 15 turns."
+  every section of the template is filled, the self-checklist at the bottom is
+  all checked, and — once the human has approved it — the spec is promoted to
+  `docs/specs/<NNN>-<slug>/research.md` per §3b; or stop after 15 turns."
 - **feature**: "Lint, typecheck, and the full test suite pass (shown via their
-  exit codes in the transcript), git status is clean, and the reviewer-verifier
+  exit codes in the transcript), git status is clean, every box in
+  `docs/specs/<NNN>-<slug>/tasks.md` is checked, and the reviewer-verifier
   reported no CRITICAL or HIGH findings; or stop after 30 turns."
 - **bugfix**: "The new regression test that previously failed now passes, the
   full suite is green, no other test file was modified, and lint+typecheck are
