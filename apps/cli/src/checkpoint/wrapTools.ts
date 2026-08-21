@@ -51,7 +51,10 @@ export function withCheckpoints(
         name,
         {
           ...definition,
-          execute: (args: unknown, options: ToolExecutionOptions<Record<string, unknown>>) => {
+          execute: async (
+            args: unknown,
+            options: ToolExecutionOptions<Record<string, unknown>>,
+          ) => {
             const context: MutationContext = {
               tool: name,
               toolCallId: options.toolCallId,
@@ -59,17 +62,9 @@ export function withCheckpoints(
               rewindTo: options.messages.length - 1,
             };
             onBeforeMutation(context);
-            const result = execute(args, options);
-            if (onAfterMutation === undefined) return result;
-            // Every tool.execute in this codebase is built via the AI SDK's `tool()`, whose
-            // `execute` is always `async`, so a synchronous throw inside it is already a rejected
-            // promise by the time it gets here — `.then` with no second argument passes a
-            // rejection straight through unchanged, which is what keeps onAfterMutation from ever
-            // running for a call that didn't actually finish.
-            return Promise.resolve(result).then((value) => {
-              onAfterMutation(context);
-              return value;
-            });
+            const value = await execute(args, options);
+            if (onAfterMutation !== undefined) onAfterMutation(context);
+            return value;
           },
         },
       ];
@@ -100,7 +95,10 @@ export function withMutationRecording(tools: ToolSet, onAfterMutation: OnAfterMu
           // async, not Promise.resolve(execute(...)).then(...): this wraps a synchronous throw
           // from execute into a rejection the same way an async execute's own throw would be,
           // so onAfterMutation is skipped on failure either way instead of only on one of them.
-          execute: async (args: unknown, options: ToolExecutionOptions<Record<string, unknown>>) => {
+          execute: async (
+            args: unknown,
+            options: ToolExecutionOptions<Record<string, unknown>>,
+          ) => {
             const context: MutationContext = {
               tool: name,
               toolCallId: options.toolCallId,

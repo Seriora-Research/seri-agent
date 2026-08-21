@@ -3,13 +3,13 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tool, type ModelMessage, type ToolExecutionOptions, type ToolSet } from "ai";
+import { type ModelMessage, type ToolExecutionOptions, type ToolSet, tool } from "ai";
 import { z } from "zod";
 import { initShadow, isGitAvailable, writeTree } from "../../src/checkpoint/shadowGit";
 import {
+  type MutationContext,
   withCheckpoints,
   withMutationRecording,
-  type MutationContext,
 } from "../../src/checkpoint/wrapTools";
 
 const messages: ModelMessage[] = [
@@ -177,6 +177,28 @@ describe("withCheckpoints", () => {
     expect(await wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts())).toEqual({
       written: 3,
     });
+  });
+
+  // fakeTools' own definitions are built via tool(), which is an identity function, not an async
+  // wrapper — so a hand-built ToolSet whose execute is a plain, non-async function (unlike every
+  // fakeTools case above) is the only way to prove a throw from execute is turned into a rejected
+  // promise rather than propagating as a synchronous throw out of wrapped.execute itself.
+  test("wraps a synchronous throw from a non-async execute as a rejected promise", async () => {
+    const tools: ToolSet = {
+      write_file: {
+        ...fakeTools(() => "ok").write_file,
+        execute: () => {
+          throw new Error("disk full");
+        },
+      },
+    } as ToolSet;
+    const wrapped = withCheckpoints(tools, () => {});
+
+    let result: unknown;
+    expect(() => {
+      result = wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts());
+    }).not.toThrow();
+    await expect(result).rejects.toThrow("disk full");
   });
 });
 
