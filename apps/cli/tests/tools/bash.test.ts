@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { isBashAvailable, runBash } from "../../src/tools/bash";
@@ -38,7 +38,14 @@ describe("runBash", () => {
     expect(warm.stdout.trim()).toBe("hi");
 
     const stubDir = mkdtempSync(join(tmpdir(), "seri-bash-stub-"));
-    writeFileSync(join(stubDir, "bash.exe"), "not a real executable");
+    // findOnPath only looks for "bash.exe" on win32 — on POSIX it looks for "bash", so a stub
+    // literally named "bash.exe" is never a candidate there and this test's negative control never
+    // fires on those platforms. POSIX resolution also needs the executable bit set to be a valid
+    // candidate.
+    const stubName = process.platform === "win32" ? "bash.exe" : "bash";
+    const stubPath = join(stubDir, stubName);
+    writeFileSync(stubPath, "not a real executable");
+    if (process.platform !== "win32") chmodSync(stubPath, 0o755);
     const originalPath = process.env.PATH;
     process.env.PATH = `${stubDir}${delimiter}${originalPath}`;
     try {
