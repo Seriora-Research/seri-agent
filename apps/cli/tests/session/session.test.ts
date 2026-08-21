@@ -93,6 +93,25 @@ describe("saveSession (JSONL append-only persistence)", () => {
     appendSpy.mockRestore();
   });
 
+  // The full-rewrite path goes through atomicWriteFile.ts's shared helper rather than a locally
+  // reimplemented temp-file + rename, which is what gives session saves the same orphaned-tmp-file
+  // sweep config.json/memory/permissions writes already have — a session save interrupted by a
+  // killed process previously left a `.<id>.jsonl.<pid>.tmp` file in sessionsDir forever, and a
+  // session transcript is exactly the kind of content (pasted secrets, full conversation) that
+  // orphan shouldn't sit on disk indefinitely.
+  test("a full-rewrite save sweeps a stale tmp file left behind by a dead process", () => {
+    const target = join(sessionsDir, "swept.jsonl");
+    const stalePath = `${target}.999999999.deadbeef.tmp`;
+    writeFileSync(stalePath, "orphaned content");
+
+    saveSession(
+      { id: "swept", cwd: ".", systemPrompt: "", permissionMode: "auto", messages: [] },
+      sessionsDir,
+    );
+
+    expect(fs.existsSync(stalePath)).toBe(false);
+  });
+
   test("does nothing when a save repeats the same header and the same message count", () => {
     const state: SessionState = {
       id: "no-op",

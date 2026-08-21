@@ -4,13 +4,11 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  renameSync,
   statSync,
-  unlinkSync,
-  writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 import type { ModelProvider } from "@seri/model-catalog";
+import { atomicWriteFile } from "../atomicWriteFile";
 import type { PermissionMode } from "../gate/gate";
 
 export type SessionState<TMessage = unknown> = {
@@ -67,41 +65,6 @@ function headerOf(state: SessionState): SessionHeader {
 const persistedCounts = new Map<string, number>();
 const persistedHeaders = new Map<string, string>();
 
-const MAX_RENAME_ATTEMPTS = 5;
-const RETRY_DELAY_MS = 20;
-
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function isRetryableError(err: unknown): boolean {
-  const code = (err as NodeJS.ErrnoException).code;
-  return code === "EBUSY" || code === "EPERM";
-}
-
-// Same temp-file + rename retry as tools/writeFile.ts, reproduced locally rather than imported: a
-// full rewrite here still has to survive the same transient Windows EBUSY/EPERM a rename into an
-// existing file can hit (an antivirus scan, a backup tool, another handle mid-close), and this
-// module has no reason to depend on tools/ for it.
-function writeSessionFile(path: string, content: string): void {
-  const dir = dirname(path);
-  const tempPath = join(dir, `.${basename(path)}.${process.pid}.tmp`);
-  writeFileSync(tempPath, content, "utf8");
-
-  for (let attempt = 1; attempt <= MAX_RENAME_ATTEMPTS; attempt++) {
-    try {
-      renameSync(tempPath, path);
-      return;
-    } catch (err) {
-      if (attempt === MAX_RENAME_ATTEMPTS || !isRetryableError(err)) {
-        unlinkSync(tempPath);
-        throw err;
-      }
-      sleepSync(RETRY_DELAY_MS);
-    }
-  }
-}
-
 export function saveSession(state: SessionState, sessionsDir: string): void {
   mkdirSync(sessionsDir, { recursive: true });
 
@@ -127,7 +90,7 @@ export function saveSession(state: SessionState, sessionsDir: string): void {
   } else if (!sameHeader || state.messages.length < prevCount || !fileExists) {
     // First save for this id in this process, a header field changed (e.g. /mode), or a /rewind
     // shrink — none of those are expressible as an append, so the whole file is rebuilt.
-    writeSessionFile(
+    atomicWriteFile(
       path,
       `${[headerJson, ...state.messages.map((message) => JSON.stringify(message))].join("\n")}\n`,
     );

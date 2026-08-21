@@ -523,8 +523,6 @@ export function createCheckpointer(opts: {
     } catch {}
   };
 
-  const checkpointer = handler as Checkpointer;
-  checkpointer.onAfterMutation = onAfterMutation;
   // restoreTo's own signal that disk was just forcibly rewritten out from under this closure's
   // `previousTree`/`previousCommit` — see its call site's comment for what goes wrong without it.
   // `previousCommit` is re-resolved from the ref rather than cleared to undefined: restoreTo has
@@ -532,12 +530,17 @@ export function createCheckpointer(opts: {
   // would make the NEXT checkpoint a rootless commit instead of one that chains onto it — the same
   // resumed-session derivation start() already does, run again because disk changed a second time
   // without a new process to call start() for it.
-  checkpointer.invalidate = () => {
+  const invalidate = (): void => {
     previousTree = undefined;
     previousCommit = resolveRef(gitDir, sessionRef(opts.sessionId));
     snapshottedThisProcess = false;
   };
-  return checkpointer;
+
+  // Object.assign, not `handler as Checkpointer`: the assign's return type is the intersection of
+  // its arguments' types, so TypeScript verifies both extra properties are actually present at the
+  // call site — a cast would compile even if one were forgotten, silently leaving that property
+  // undefined on the object every caller trusts to be a real Checkpointer.
+  return Object.assign(handler, { onAfterMutation, invalidate });
 }
 
 function toolRecords(log: CheckpointRecord[]): ToolRecord[] {
