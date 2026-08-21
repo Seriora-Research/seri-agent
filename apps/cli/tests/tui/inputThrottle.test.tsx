@@ -10,7 +10,7 @@ import { render } from "ink-testing-library";
 import { createElement } from "react";
 import { InputBox } from "../../src/tui/panels/InputBox";
 
-const THROTTLE_MS = 50;
+const THROTTLE_MS = 33;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

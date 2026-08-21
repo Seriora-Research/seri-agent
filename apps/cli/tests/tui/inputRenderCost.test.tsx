@@ -8,26 +8,30 @@
 
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import { createRequire } from "node:module";
 import type { ModelMessage } from "ai";
+import { render } from "ink";
+import { createElement } from "react";
 import stringWidth from "string-width";
 import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
+import { App } from "../../src/tui/App";
 import type { TranscriptRole } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
+import { MAIN_TUI_RENDER_OPTIONS } from "../../src/tui/renderOptions";
 
-// `chalk` (used by `ink/build/colorize.js`) detects its color level once, at import time, from
-// this process's real stdout — before this file's own top-level code would otherwise run,
-// because ESM hoists *static* imports above everything else in the importing module. `ink`,
-// `react`, `App`, and `renderOptions` are therefore imported dynamically below, after FORCE_COLOR
-// is set, which keeps this assignment in program order ahead of the module graph that reads it
-// (a dynamic `import()` is a plain expression, not hoisted). Without this, level stays 0 whenever
-// the real test process's stdout isn't a TTY, `colorize` becomes a no-op, and every test below
-// would measure nothing and pass vacuously — see the negative-control assertion further down.
-process.env.FORCE_COLOR = "3";
-const { render } = await import("ink");
-const { createElement } = await import("react");
-const { App } = await import("../../src/tui/App");
-const { MAIN_TUI_RENDER_OPTIONS } = await import("../../src/tui/renderOptions");
+// `chalk` (used by `ink/build/colorize.js`) is not a direct dependency of this package, and its
+// color level is normally auto-detected once, at import time, from the real process's stdout —
+// which stays non-TTY (level 0, `colorize` a no-op) under `bun test`, and since module loads are
+// cached process-wide across every test file in a `bun test` run, whichever file happens to
+// import `ink` first "locks in" that level for every other file too. Resolving `chalk` through
+// `ink`'s own `require` (ink declares it as ITS dependency, so this is allowed even though this
+// package doesn't) rather than importing it directly here sidesteps both problems: it reaches the
+// exact singleton instance `colorize.js` already uses, and mutating `.level` works no matter when
+// or at what level it was first loaded, because `level` is read live on every colorize call, not
+// cached (chalk's own `applyStyle`).
+const chalk = (await import(createRequire(import.meta.resolve("ink")).resolve("chalk"))).default;
+chalk.level = 3;
 
 // A fake TTY stdout: fixed 100 columns (matches App.test.tsx's assumption that width doesn't
 // vary across these tests), a configurable row count (the axis under test), and counters for
@@ -189,7 +193,7 @@ async function measureBackspaceCost(options: {
 describe("TUI input render cost", () => {
   // theme.userBg's opening truecolor background code — colorize.js (via chalk.bgHex) is what
   // emits this, and output.js only keeps a padded row's trailing spaces when the row carries an
-  // SGR like this one (see the file-level comment on `FORCE_COLOR` above).
+  // SGR like this one (see the file-level comment on `chalk.level` above).
   const USER_BG_SGR = "\x1b[48;2;51;51;51m";
 
   // Metric: marginal bytes written to stdout per visible role:"user" transcript row, per
