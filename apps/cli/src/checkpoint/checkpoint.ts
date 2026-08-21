@@ -664,12 +664,19 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
     preserved,
   };
   opts.onPlan(plan);
-  applyRestore(gitDir, opts.worktree, plan.deleted);
-  // checkout-index can rewrite a restored file's on-disk EOL without going through
-  // writeFile.ts/readFile.ts (shadowGit.ts's own core.autocrlf=false comment on why), leaving the
-  // EOL cache trusting a line-ending style the restore may have just changed — same reason
-  // bash.ts/powershell.ts already clear it after every shell call.
-  clearEolCache();
+  // In a try/finally, not a plain call after: checkout-index rewrites every restored file's
+  // on-disk EOL before the loop that deletes `plan.deleted` even starts, so a throw partway
+  // through applyRestore (a failed rmSync, a killed git process) still leaves the cache poisoned
+  // with pre-restore values unless it is cleared regardless of how applyRestore exits.
+  try {
+    applyRestore(gitDir, opts.worktree, plan.deleted);
+  } finally {
+    // checkout-index can rewrite a restored file's on-disk EOL without going through
+    // writeFile.ts/readFile.ts (shadowGit.ts's own core.autocrlf=false comment on why), leaving the
+    // EOL cache trusting a line-ending style the restore may have just changed — same reason
+    // bash.ts/powershell.ts already clear it after every shell call.
+    clearEolCache();
+  }
 
   return {
     ...plan,

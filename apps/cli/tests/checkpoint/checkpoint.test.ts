@@ -38,6 +38,7 @@ import { type MutationContext, withCheckpoints } from "../../src/checkpoint/wrap
 import { recordWrite } from "../../src/checkpoint/writeLedger";
 import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
+import { getCachedEol, setCachedEol } from "../../src/tools/eolCache";
 
 // The cold first snapshot measured 300 ms on Windows and these tests take several each. Same
 // 30 s margin as shadowGit.test.ts, for the same reason.
@@ -904,6 +905,40 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
       expect(plainGit(gitDir, ["rev-list", commit]).split("\n").filter(Boolean)).toContain(
         preUndoCommit as string,
       );
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  // Same throw trigger as the test above, but proving a different consequence of the same
+  // try/finally-less bug: checkout-index rewrites a restored file's on-disk EOL before applyRestore
+  // gets to the deletion loop that (via the deleted blob) throws, so a stale cache entry left behind
+  // by the throw would mislead the next write into skipping the CRLF conversion the restore just
+  // performed.
+  test(
+    "clears the EOL cache even when the restore itself threw",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+      const c1Tree = toolRecords().at(-1)?.tree ?? "";
+
+      writeFileSync(join(workTree, "a.txt"), "v2\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      const gitDir = join(storeDir, "git");
+      const blob = plainGit(gitDir, ["ls-tree", c1Tree, "--", "a.txt"]).split(/\s+/)[2] ?? "";
+      rmSync(join(gitDir, "objects", blob.slice(0, 2), blob.slice(2)), { force: true });
+
+      setCachedEol(join(workTree, "a.txt"), "CRLF");
+
+      let threw: unknown;
+      try {
+        undo(2);
+      } catch (err) {
+        threw = err;
+      }
+      expect(threw).toBeDefined();
+
+      expect(getCachedEol(join(workTree, "a.txt"))).toBeUndefined();
     },
     GIT_TEST_TIMEOUT_MS,
   );
