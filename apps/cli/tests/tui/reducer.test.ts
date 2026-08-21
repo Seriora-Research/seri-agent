@@ -347,7 +347,7 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
       5,
       next.transcriptScrollOffset,
       next.columns,
-      wrapPendingRows(next.streaming, next.columns),
+      next.streaming.length > 0 ? wrapPendingRows(next.streaming, next.columns) : [],
     );
     // The `●` marker (format.ts's own displayText) is prefixed once, onto the very first VISUAL
     // row of the whole streamed answer, not onto every wrapped line within it.
