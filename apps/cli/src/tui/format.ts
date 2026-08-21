@@ -377,7 +377,9 @@ export const MODEL_PICKER_HEADER = [
 // one specific ROUTE of a multi-route model rather than only ever narrowing by name. "free" and
 // "paid" are additionally special-cased against `isZeroPriceEntry`, ORed with the same haystack
 // check, so a $0 model with no "free" in its name is still discoverable while a model literally
-// named "free"/"paid" keeps matching by name too.
+// named "free"/"paid" keeps matching by name too. An entry with `pricing: undefined` (price
+// genuinely unknown) mirrors `isZeroPriceEntry`'s own fail-closed direction: unknown is not
+// free, so it counts as "paid".
 export function matchesFilter(row: ModelPickerEntry, query: string): boolean {
   const terms = query
     .toLowerCase()
