@@ -110,13 +110,15 @@ export function ModelPicker({
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <Box>
-        {/* Same "> " + trailing block-cursor convention as InputBox.tsx, so the filter row reads
-        as a text input rather than a static label. */}
+        {/* Cursor sits immediately after the prompt/query, matching where a real caret belongs;
+        the placeholder (empty filter only) renders after it instead of between them. */}
         <Text>{`> ${filterQuery}`}</Text>
-        {filterQuery.length === 0 && (
-          <Text color={theme.muted}>Type to filter — try "free" or "paid"…</Text>
-        )}
         <Text inverse> </Text>
+        {filterQuery.length === 0 && (
+          <Text color={theme.muted} wrap="truncate-end">
+            Type to filter — try "free" or "paid"…
+          </Text>
+        )}
       </Box>
       {/* Same reasoning as ListRow's own comment (components.tsx): MODEL_PICKER_HEADER's own fixed
       column widths sum to the same ~87 chars, so it soft-wraps on the identical narrow terminals
