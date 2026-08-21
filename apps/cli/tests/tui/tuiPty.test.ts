@@ -15,9 +15,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ModelMessage } from "ai";
-import { saveSession } from "../../src/session/session";
+import { loadSession, saveSession } from "../../src/session/session";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
+const SESSION_MODULE = pathToFileURL(join(import.meta.dir, "../../src/session/session.ts")).href;
 
 // The real cli.ts, same reason as tests/cli/approvalPromptPty.test.ts: `isTTY` has to come from a
 // REAL process.stdout.isTTY on a real pty (the fix this session made to cli.ts requires it be
@@ -597,11 +598,11 @@ function childScriptModelSwitchFailure(dir: string): string {
     // D9: same HOME redirection as childScriptModelSwitch's own comment — mandatory before
     // anything else runs, so a stray persist here could never reach the developer's real config.
     `process.env.HOME = ${JSON.stringify(dir)};`,
-    `import { readdirSync, readFileSync } from "node:fs";`,
-    `import { join } from "node:path";`,
+    `import { readdirSync } from "node:fs";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const { loadSession } = await import(${JSON.stringify(SESSION_MODULE)});`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
-    `const cli = await import(${JSON.stringify(CLI)});`,
     `let calls = 0;`,
     `async function* runLoopFake(opts) {`,
     `  calls++;`,
@@ -612,8 +613,8 @@ function childScriptModelSwitchFailure(dir: string): string {
     `    return opts.messages;`,
     `  }`,
     `  yield { type: "error", error: "simulated: no working key for this provider" };`,
-    `  const sessionFile = readdirSync(${JSON.stringify(sessionsDir)}).find((f) => f.endsWith(".json"));`,
-    `  const onDisk = JSON.parse(readFileSync(join(${JSON.stringify(sessionsDir)}, sessionFile), "utf8"));`,
+    `  const sessionFile = readdirSync(${JSON.stringify(sessionsDir)}).find((f) => f.endsWith(".jsonl"));`,
+    `  const onDisk = loadSession(sessionFile.replace(/\\.jsonl$/, ""), ${JSON.stringify(sessionsDir)});`,
     `  console.log("\\nMODEL_ON_DISK_AFTER_FAILURE " + onDisk.model);`,
     `  return opts.messages;`,
     `}`,
@@ -841,10 +842,10 @@ function childScriptMultiTurnUsage(dir: string): string {
 function childScriptModePersistence(dir: string, flagPath: string): string {
   const sessionsDir = join(dir, "sessions");
   return [
-    `import { existsSync, readFileSync, readdirSync } from "node:fs";`,
-    `import { join } from "node:path";`,
+    `import { existsSync, readdirSync } from "node:fs";`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `const cli = await import(${JSON.stringify(CLI)});`,
+    `const { loadSession } = await import(${JSON.stringify(SESSION_MODULE)});`,
     `async function* runLoopFake(opts) {`,
     `  console.log("\\nRUNLOOP_READY");`,
     `  yield { type: "messages-updated", messages: opts.messages };`,
@@ -854,8 +855,8 @@ function childScriptModePersistence(dir: string, flagPath: string): string {
     `    check();`,
     `  });`,
     `  yield { type: "messages-updated", messages: opts.messages };`,
-    `  const sessionFile = readdirSync(${JSON.stringify(sessionsDir)}).find((f) => f.endsWith(".json"));`,
-    `  const modeAtResume = JSON.parse(readFileSync(join(${JSON.stringify(sessionsDir)}, sessionFile), "utf8")).permissionMode;`,
+    `  const sessionFile = readdirSync(${JSON.stringify(sessionsDir)}).find((f) => f.endsWith(".jsonl"));`,
+    `  const modeAtResume = loadSession(sessionFile.replace(/\\.jsonl$/, ""), ${JSON.stringify(sessionsDir)}).permissionMode;`,
     `  console.log("\\nMODE_AT_RESUME " + modeAtResume);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -2426,9 +2427,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // failed on the missing key rather than succeeding some other way.
       await sawLine("No Anthropic key configured. Run /setup to add one.");
 
-      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".json"));
+      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".jsonl"));
       if (sessionFile === undefined) throw new Error("no session file written yet");
-      const sessionPath = join(sessionsDir, sessionFile);
+      const sessionId = sessionFile.replace(/\.jsonl$/, "");
 
       // Polled, not asserted immediately: the pick's own persist happens in App.tsx's own
       // onSessionChange effect, which fires after the dispatch above, not synchronously with the
@@ -2436,7 +2437,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const deadline = Date.now() + 5_000;
       let onDisk: { provider?: string };
       do {
-        onDisk = JSON.parse(readFileSync(sessionPath, "utf8"));
+        onDisk = loadSession(sessionId, sessionsDir);
       } while (onDisk.provider === undefined && Date.now() < deadline);
       if (onDisk.provider === undefined) throw new Error("no provider persisted yet");
 
@@ -2612,10 +2613,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // LOW-1: a mid-turn /exit leaves the session resumable — a well-formed session file still
       // on disk, not corrupted or removed by the cancel-then-quit sequence.
       const sessionsDir = join(dir, "sessions");
-      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".json"));
+      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".jsonl"));
       if (sessionFile === undefined) throw new Error("no session file written");
-      const onDisk = JSON.parse(readFileSync(join(sessionsDir, sessionFile), "utf8"));
-      expect(onDisk.id).toBe(sessionFile.replace(/\.json$/, ""));
+      const onDisk = loadSession(sessionFile.replace(/\.jsonl$/, ""), sessionsDir);
+      expect(onDisk.id).toBe(sessionFile.replace(/\.jsonl$/, ""));
       expect(Array.isArray(onDisk.messages)).toBe(true);
       expect(onDisk.messages.length).toBeGreaterThan(0);
     } finally {
@@ -2765,16 +2766,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await sawLine("permission mode is now auto");
 
-      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".json"));
+      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".jsonl"));
       if (sessionFile === undefined) throw new Error("no session file written yet");
-      const sessionPath = join(sessionsDir, sessionFile);
+      const sessionId = sessionFile.replace(/\.jsonl$/, "");
 
       // Polled, not asserted immediately: the write happens in App.tsx's own onSessionChange
       // effect, which fires after the dispatch above, not synchronously with the keypress.
       const deadline = Date.now() + 5_000;
       let mode: string;
       do {
-        mode = JSON.parse(readFileSync(sessionPath, "utf8")).permissionMode;
+        mode = loadSession(sessionId, sessionsDir).permissionMode;
       } while (mode !== "auto" && Date.now() < deadline);
       expect(mode).toBe("auto");
 
@@ -2952,13 +2953,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // "a resumed session's reroute notice blames the last-confirmed provider" test for the
       // end-to-end consequence of that on the notice text.
       const sessionsDir = join(dir, "sessions");
-      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".json"));
+      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".jsonl"));
       if (sessionFile === undefined) throw new Error("no session file written yet");
-      const sessionPath = join(sessionsDir, sessionFile);
+      const sessionId = sessionFile.replace(/\.jsonl$/, "");
       const deadline = Date.now() + 5_000;
       let onDisk: { provider?: string };
       do {
-        onDisk = JSON.parse(readFileSync(sessionPath, "utf8"));
+        onDisk = loadSession(sessionId, sessionsDir);
       } while (onDisk.provider === undefined && Date.now() < deadline);
       expect(onDisk.provider).toBe("anthropic");
     } finally {
@@ -4570,7 +4571,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         const sessionsDir = join(dir, "sessions");
         const sessionFiles = existsSync(sessionsDir) ? readdirSync(sessionsDir) : [];
         expect(sessionFiles).toHaveLength(1);
-        const session = JSON.parse(readFileSync(join(sessionsDir, sessionFiles[0]!), "utf8"));
+        const session = loadSession(sessionFiles[0]!.replace(/\.jsonl$/, ""), sessionsDir);
         expect(session.messages).not.toContainEqual({ role: "user", content: "" });
         expect(session.messages).toEqual([]);
       } finally {
