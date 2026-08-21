@@ -1543,12 +1543,16 @@ describe("App", () => {
     });
 
     test("matchesFilter does not match a paid entry against query 'free'", () => {
-      const paid = pickerRow({ entry: entry({ pricing: { inputPerMTok: 0.59, outputPerMTok: 0.79 } }) });
+      const paid = pickerRow({
+        entry: entry({ pricing: { inputPerMTok: 0.59, outputPerMTok: 0.79 } }),
+      });
       expect(matchesFilter(paid, "free")).toBe(false);
     });
 
     test("matchesFilter matches a paid entry and not a zero-price entry against query 'paid'", () => {
-      const paid = pickerRow({ entry: entry({ pricing: { inputPerMTok: 0.59, outputPerMTok: 0.79 } }) });
+      const paid = pickerRow({
+        entry: entry({ pricing: { inputPerMTok: 0.59, outputPerMTok: 0.79 } }),
+      });
       const zeroPrice = pickerRow({
         entry: entry({ pricing: { inputPerMTok: 0, outputPerMTok: 0 } }),
       });
