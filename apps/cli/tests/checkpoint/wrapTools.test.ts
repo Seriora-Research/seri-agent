@@ -122,6 +122,58 @@ describe("withCheckpoints", () => {
       },
     ]);
   });
+
+  test("onAfterMutation runs after the tool resolves, with the same context onBeforeMutation saw", async () => {
+    const order: string[] = [];
+    const wrapped = withCheckpoints(
+      fakeTools(() => {
+        order.push("execute");
+        return "ok";
+      }),
+      () => order.push("before"),
+      (context) => {
+        order.push("after");
+        expect(context).toEqual({
+          tool: "write_file",
+          toolCallId: "c1",
+          args: { path: "a.txt" },
+          rewindTo: messages.length - 1,
+        });
+      },
+    );
+
+    expect(await wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts())).toBe("ok");
+    expect(order).toEqual(["before", "execute", "after"]);
+  });
+
+  test("onAfterMutation does not run when the tool call rejects", async () => {
+    let afterCalled = false;
+    const wrapped = withCheckpoints(
+      fakeTools(() => {
+        throw new Error("disk full");
+      }),
+      () => {},
+      () => {
+        afterCalled = true;
+      },
+    );
+
+    await expect(wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts())).rejects.toThrow(
+      "disk full",
+    );
+    expect(afterCalled).toBe(false);
+  });
+
+  test("omitting onAfterMutation leaves the tool's result passed through exactly as before", async () => {
+    const wrapped = withCheckpoints(
+      fakeTools(() => ({ written: 3 })),
+      () => {},
+    );
+
+    expect(await wrapped.write_file?.execute?.({ path: "a.txt" }, execOpts())).toEqual({
+      written: 3,
+    });
+  });
 });
 
 // The snapshot must be proven to happen BEFORE the tool wrote, not after.

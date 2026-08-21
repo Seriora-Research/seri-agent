@@ -22,11 +22,22 @@ export type MutationContext = {
 // bug in their own test suite. The type forbids it.
 export type OnBeforeMutation = (context: MutationContext) => void;
 
+// Unlike OnBeforeMutation, running late is exactly the point: this fires only once the mutation
+// has actually landed, so a caller building a write ledger from it (checkpoint.ts's own
+// recordWrite) never records a path the tool call went on to fail before finishing. Optional and
+// void like its counterpart, for the same reason — nothing here needs the result value, and a
+// callback that could reject would need its own error policy this file has no opinion on.
+export type OnAfterMutation = (context: MutationContext) => void;
+
 // Pure function over a ToolSet: `toolDefinitions` stays a module-level const, `runLoop` is not
 // touched, and checkpointing stays a consumer policy rather than a loop concern (AGENTS.md's
 // "the loop is a library" invariant does not have to bend). runLoop only calls `execute` after
 // the permission gate approves, so a denied tool cannot produce a checkpoint.
-export function withCheckpoints(tools: ToolSet, onBeforeMutation: OnBeforeMutation): ToolSet {
+export function withCheckpoints(
+  tools: ToolSet,
+  onBeforeMutation: OnBeforeMutation,
+  onAfterMutation?: OnAfterMutation,
+): ToolSet {
   const mutating = new Set<string>(FS_MUTATING_TOOL_NAMES);
 
   return Object.fromEntries(
@@ -41,13 +52,24 @@ export function withCheckpoints(tools: ToolSet, onBeforeMutation: OnBeforeMutati
         {
           ...definition,
           execute: (args: unknown, options: ToolExecutionOptions<Record<string, unknown>>) => {
-            onBeforeMutation({
+            const context: MutationContext = {
               tool: name,
               toolCallId: options.toolCallId,
               args,
               rewindTo: options.messages.length - 1,
+            };
+            onBeforeMutation(context);
+            const result = execute(args, options);
+            if (onAfterMutation === undefined) return result;
+            // Every tool.execute in this codebase is built via the AI SDK's `tool()`, whose
+            // `execute` is always `async`, so a synchronous throw inside it is already a rejected
+            // promise by the time it gets here — `.then` with no second argument passes a
+            // rejection straight through unchanged, which is what keeps onAfterMutation from ever
+            // running for a call that didn't actually finish.
+            return Promise.resolve(result).then((value) => {
+              onAfterMutation(context);
+              return value;
             });
-            return execute(args, options);
           },
         },
       ];
