@@ -380,7 +380,11 @@ describe("App", () => {
   // the reverse-video row). Pinning `transcriptRowProps` (App.tsx) directly, the same fix applied
   // there.
   describe("transcriptRowProps", () => {
-    test('a role: "user" row is padded to `columns` and carries theme.userBg', () => {
+    // The second argument is the user-message band's own width (the widest currently visible
+    // role:"user" row, clamped to `columns` — computed once at App.tsx's own call site, not by
+    // this function). `transcriptRowProps` itself just pads a user row out to whatever band width
+    // it's given, so these cases pin that padding directly against a fixed `bandWidth`.
+    test('a role: "user" row is padded to the given band width and carries theme.userBg', () => {
       expect(transcriptRowProps({ role: "user", text: "> hi" }, 10)).toEqual({
         text: "> hi      ",
         backgroundColor: "#333333",
@@ -399,8 +403,8 @@ describe("App", () => {
     });
 
     // "> 你好" is 4 UTF-16 units but 6 terminal cells (each CJK char is 2 cells wide) — padEnd(10)
-    // would overpad to 14 cells. Pad by display width so the row lands on exactly `columns`.
-    test('a role: "user" row with wide (CJK) characters pads to `columns` cells, not UTF-16 units', () => {
+    // would overpad to 14 cells. Pad by display width so the row lands on exactly `bandWidth`.
+    test('a role: "user" row with wide (CJK) characters pads to the band width in cells, not UTF-16 units', () => {
       expect(transcriptRowProps({ role: "user", text: "> 你好" }, 10)).toEqual({
         text: "> 你好    ",
         backgroundColor: "#333333",
