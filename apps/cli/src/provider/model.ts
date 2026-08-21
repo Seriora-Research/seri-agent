@@ -24,11 +24,11 @@ type ModelDeps = {
 // (Slice 4 wires that in — this commit only adds the dispatcher itself).
 //
 // Code-review finding: `provider` used to be treated as `"groq" | "openrouter"` by a bare
-// ternary — any non-"groq" string (a session.json a stale seri version wrote, a hand edit, a
+// ternary — any non-"groq" string (a session file a stale seri version wrote, a hand edit, a
 // future provider value read by an older binary) silently fell into the OpenRouter branch
-// instead of erroring. `session.ts`'s own `loadSession` is a bare `JSON.parse`, so nothing
-// upstream validates this either. A `switch` over the real `ModelProvider` union makes an
-// unrecognized value a thrown error naming the bad value, not a wrong provider silently called.
+// instead of erroring. `session.ts`'s own `loadSession` parses each line independently, so
+// nothing upstream validates this either. A `switch` over the real `ModelProvider` union makes
+// an unrecognized value a thrown error naming the bad value, not a wrong provider silently called.
 //
 // `configDir` (code-review finding, PR #73, round 2, item #2): cli.ts resolves routing against
 // `deps.authConfigDir ?? getConfigDir()`, but this dispatcher used to call each get<X>Model with
