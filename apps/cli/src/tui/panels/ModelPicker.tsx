@@ -2,13 +2,24 @@
 // no behavior change. Imports its constants/formatters from ../format.
 
 import type { ModelProvider } from "@seri/model-catalog";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import { useState } from "react";
 import type { ModelPickerEntry } from "../commands";
 import { ListRow } from "../components";
-import { formatModelRow, MODEL_PICKER_HEADER, matchesFilter } from "../format";
+import { DEFAULT_COLUMNS, formatModelRow, MODEL_PICKER_HEADER, matchesFilter } from "../format";
 import { theme } from "../theme";
 import { useListWindow } from "../useListWindow";
+
+const FILTER_PLACEHOLDER = 'Type to filter — try "free" or "paid"…';
+
+// Truncates to `width` columns with a trailing ellipsis, or returns `text` unchanged if it
+// already fits — no padding: unlike format.ts's own `truncatePad` (built for table columns that
+// must stay flush with the ones after them), this row has nothing after the cursor to align, so
+// padding would only push the cursor away from the text it's supposed to sit right next to.
+function truncateEnd(text: string, width: number): string {
+  if (width <= 0) return "";
+  return text.length > width ? `${text.slice(0, width - 1)}…` : text;
+}
 
 // /model's own live state (tui/reducer.ts's pendingModelPicker) — mirrors ApprovalBox's shape
 // exactly: its own useInput, a single-bordered box, mutually exclusive with InputBox. `filterQuery`
@@ -28,6 +39,7 @@ export function ModelPicker({
   onModelPickerCancel?: () => void;
 }) {
   const [filterQuery, setFilterQuery] = useState("");
+  const { stdout } = useStdout();
 
   const filtered =
     filterQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, filterQuery));
@@ -107,9 +119,30 @@ export function ModelPicker({
     }
   });
 
+  // Code-review finding: Yoga's flex-shrink arbitration between this row's sibling Text nodes
+  // dropped the cursor's own space entirely (not the query/placeholder) once the row's total
+  // content stopped fitting the terminal width — reproduced down to an exact 43-vs-42-column
+  // boundary, and unfixed by pinning `flexShrink={0}` on the cursor's own Box. The prompt/query
+  // and the placeholder are instead truncated here in JS, against the row's own known content
+  // width, so no sibling ever asks Yoga for more space than the row actually has and it never
+  // needs to arbitrate at all. `rowWidth` reserves 1 column for the cursor unconditionally —
+  // the one thing this row must never lose regardless of how little space is left.
+  const columns = stdout.columns || DEFAULT_COLUMNS;
+  const rowWidth = Math.max(0, columns - 2 - 1);
+  const promptText =
+    filterQuery.length === 0 ? "> " : truncateEnd(`> ${filterQuery}`, rowWidth);
+  const placeholder =
+    filterQuery.length === 0 ? truncateEnd(FILTER_PLACEHOLDER, rowWidth - 2) || undefined : undefined;
+
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
-      <Text>{filterQuery.length > 0 ? filterQuery : " "}</Text>
+      <Box>
+        {/* Cursor sits immediately after the prompt/query, matching where a real caret belongs;
+        the placeholder (empty filter only) renders after it instead of between them. */}
+        <Text wrap="truncate-end">{promptText}</Text>
+        <Text inverse> </Text>
+        {placeholder !== undefined && <Text color={theme.muted}>{placeholder}</Text>}
+      </Box>
       {/* Same reasoning as ListRow's own comment (components.tsx): MODEL_PICKER_HEADER's own fixed
       column widths sum to the same ~87 chars, so it soft-wraps on the identical narrow terminals
       the row's `wrap="truncate-end"` guards against. */}

@@ -16,6 +16,7 @@ import {
   formatRouteLabel,
   formatSetupRow,
   listWindowSize,
+  matchesFilter,
   singleLine,
   slideWindow,
   type TranscriptEntry,
@@ -802,6 +803,42 @@ describe("App", () => {
       expect(instance.lastFrame()).toContain("Llama 3.3 70B");
     });
 
+    test("shows a placeholder hint before typing, and hides it once a filter is typed", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "model-picker-requested", entries: [row()] });
+      await flush();
+
+      expect(instance.lastFrame()).toContain('Type to filter — try "free" or "paid"…');
+
+      instance.stdin.write("8b");
+      await flush();
+
+      expect(instance.lastFrame()).not.toContain('Type to filter — try "free" or "paid"…');
+    });
+
+    // Code-review finding: Yoga's flex-shrink arbitration between the filter row's sibling Text
+    // nodes (prompt, cursor, placeholder) dropped the cursor's own inverse space entirely once the
+    // row's total content stopped fitting the terminal width — reproduced down to an exact
+    // 43-vs-42-column boundary. 42 is well within a real, unremarkable terminal width (e.g. a split
+    // pane), not an extreme edge case. The prompt's own trailing space ("> ") plus the cursor's own
+    // space are two consecutive spaces before the placeholder text; pre-fix, 42 columns collapsed
+    // that to one.
+    test("keeps the cursor's own column at a narrow width that used to drop it", async () => {
+      const { instance, dispatch } = await connect();
+
+      dispatch({ type: "model-picker-requested", entries: [row()] });
+      await flush();
+
+      // `columns` IS a getter-only accessor on ink-testing-library's Stdout prototype, so a plain
+      // assignment throws in strict mode — defineProperty shadows it with an own data property.
+      Object.defineProperty(instance.stdout, "columns", { value: 42, configurable: true });
+      instance.stdout.emit("resize");
+      await flush();
+
+      expect(instance.lastFrame() ?? "").toContain(">  Type to filter");
+    });
+
     // The concrete mechanical proof of "context preserved" (feature-plan.md's own acceptance
     // criterion): onModelSelected only ever carries the picked model/provider — `messages` (and
     // everything else about the session) is never part of the pick at all, so there is nothing to
@@ -1525,6 +1562,65 @@ describe("App", () => {
       const row = formatModelRow(pickerRow({ entry: entry({ displayName: "A".repeat(40) }) }));
       expect(row).toContain("…");
       expect(row.indexOf("A".repeat(40))).toBe(-1);
+    });
+
+    // A $0 model whose id/displayName never says "free" (the OpenRouter free-tier naming
+    // convention this mirrors, e.g. "stealth/ox-alpha") is still discoverable by typing "free"
+    // because matchesFilter also checks pricing, not just the name.
+    test("matchesFilter matches a zero-price entry with no 'free' in its name against query 'free'", () => {
+      const zeroPrice = pickerRow({
+        entry: entry({
+          id: "stealth/ox-alpha",
+          displayName: "Ox Alpha",
+          pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+        }),
+      });
+      expect(matchesFilter(zeroPrice, "free")).toBe(true);
+    });
+
+    test("matchesFilter does not match a paid entry against query 'free'", () => {
+      const paid = pickerRow({
+        entry: entry({ pricing: { inputPerMTok: 0.59, outputPerMTok: 0.79 } }),
+      });
+      expect(matchesFilter(paid, "free")).toBe(false);
+    });
+
+    test("matchesFilter matches a paid entry and not a zero-price entry against query 'paid'", () => {
+      const paid = pickerRow({
+        entry: entry({ pricing: { inputPerMTok: 0.59, outputPerMTok: 0.79 } }),
+      });
+      const zeroPrice = pickerRow({
+        entry: entry({ pricing: { inputPerMTok: 0, outputPerMTok: 0 } }),
+      });
+      expect(matchesFilter(paid, "paid")).toBe(true);
+      expect(matchesFilter(zeroPrice, "paid")).toBe(false);
+    });
+
+    test("matchesFilter matches neither 'free' nor 'paid' for an entry with unknown pricing", () => {
+      const unknownPrice = pickerRow({ entry: entry({ pricing: undefined }) });
+      expect(matchesFilter(unknownPrice, "paid")).toBe(false);
+      expect(matchesFilter(unknownPrice, "free")).toBe(false);
+    });
+
+    test("matchesFilter still matches a model whose displayName literally contains 'free', regardless of price", () => {
+      const namedFree = pickerRow({
+        entry: entry({
+          displayName: "FreeChat 1",
+          pricing: { inputPerMTok: 0.59, outputPerMTok: 0.79 },
+        }),
+      });
+      expect(matchesFilter(namedFree, "free")).toBe(true);
+    });
+
+    test("matchesFilter composes 'free' with other terms across the AND-of-ORs", () => {
+      const zeroPriceGroq = pickerRow({
+        entry: entry({ provider: "groq", pricing: { inputPerMTok: 0, outputPerMTok: 0 } }),
+      });
+      const zeroPriceOpenrouter = pickerRow({
+        entry: entry({ provider: "openrouter", pricing: { inputPerMTok: 0, outputPerMTok: 0 } }),
+      });
+      expect(matchesFilter(zeroPriceGroq, "free groq")).toBe(true);
+      expect(matchesFilter(zeroPriceOpenrouter, "free groq")).toBe(false);
     });
   });
 
