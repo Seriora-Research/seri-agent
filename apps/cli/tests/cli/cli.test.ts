@@ -393,9 +393,9 @@ describe("run (task invocation)", () => {
     saveSession(older, sessionsDir);
     saveSession(newer, sessionsDir);
     const base = new Date("2026-01-01T00:00:00Z");
-    utimesSync(join(sessionsDir, "older.json"), base, base);
+    utimesSync(join(sessionsDir, "older.jsonl"), base, base);
     utimesSync(
-      join(sessionsDir, "newer.json"),
+      join(sessionsDir, "newer.jsonl"),
       new Date(base.getTime() + 60_000),
       new Date(base.getTime() + 60_000),
     );
@@ -431,9 +431,9 @@ describe("run (task invocation)", () => {
     saveSession(older, sessionsDir);
     saveSession(newer, sessionsDir);
     const base = new Date("2026-01-01T00:00:00Z");
-    utimesSync(join(sessionsDir, "older.json"), base, base);
+    utimesSync(join(sessionsDir, "older.jsonl"), base, base);
     utimesSync(
-      join(sessionsDir, "newer.json"),
+      join(sessionsDir, "newer.jsonl"),
       new Date(base.getTime() + 60_000),
       new Date(base.getTime() + 60_000),
     );
@@ -516,7 +516,7 @@ describe("run (task invocation)", () => {
     );
 
     expect(capture()?.permissionMode).toBe("approve-each");
-    const createdId = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
+    const createdId = readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
     expect(loadSession(createdId, sessionsDir).permissionMode).toBe("approve-each");
   });
 
@@ -550,7 +550,7 @@ describe("run (task invocation)", () => {
       }),
     );
 
-    const createdId = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
+    const createdId = readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
     expect(loadSession(createdId, sessionsDir).permissionMode).toBe("approve-each");
   });
 
@@ -733,9 +733,8 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], { runLoop: firstRun, loadAgentsFile: () => "", sessionsDir }),
     );
 
-    const createdId = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
-    const onDisk = JSON.parse(readFileSync(join(sessionsDir, `${createdId}.json`), "utf8"));
-    expect("allowedTools" in onDisk).toBe(false);
+    const createdId = readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
+    expect("allowedTools" in loadSession(createdId, sessionsDir)).toBe(false);
 
     const { fake: secondRun, capture } = fakeRunLoop();
     await captureLogs(() =>
@@ -776,7 +775,7 @@ describe("run (task invocation)", () => {
     try {
       const fresh = await captureLogs(() => run(["a", "task"], deps));
       expect(fresh.code).toBe(0);
-      const created = loadSession(readdirSync(sessionsDir)[0]!.replace(/\.json$/, ""), sessionsDir);
+      const created = loadSession(readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, ""), sessionsDir);
       expect(created.model).toBe("model-from-env");
       expect(asked).toEqual(["model-from-env"]);
 
@@ -862,7 +861,7 @@ describe("run (task invocation)", () => {
     // the built-in default.
     expect(firstCode).toBe(0);
     expect(askedOpenRouter).toEqual([]);
-    const firstId = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
+    const firstId = readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
     const firstSession = loadSession(firstId, sessionsDir);
     expect(firstSession.model).toBe("openai/gpt-oss-120b");
     // No provider was ever explicitly requested here (no SERI_PROVIDER, no /model pick), so
@@ -888,9 +887,9 @@ describe("run (task invocation)", () => {
     );
     expect(secondCode).toBe(0);
     expect(askedOpenRouter).toEqual(["picked-model"]);
-    const secondId = readdirSync(sessionsDir).find((f) => f.replace(/\.json$/, "") !== firstId);
+    const secondId = readdirSync(sessionsDir).find((f) => f.replace(/\.jsonl$/, "") !== firstId);
     if (secondId === undefined) throw new Error("second session file not found");
-    const secondSession = loadSession(secondId.replace(/\.json$/, ""), sessionsDir);
+    const secondSession = loadSession(secondId.replace(/\.jsonl$/, ""), sessionsDir);
     expect(secondSession.model).toBe("picked-model");
     expect(secondSession.provider).toBe("openrouter");
   });
@@ -921,7 +920,7 @@ describe("run (task invocation)", () => {
 
     expect(code).toBe(0);
     expect(askedAnthropic).toEqual(["claude-picked-model"]);
-    const id = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
+    const id = readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
     const session = loadSession(id, sessionsDir);
     expect(session.model).toBe("claude-picked-model");
     expect(session.provider).toBe("anthropic");
@@ -937,18 +936,16 @@ describe("run (task invocation)", () => {
     const asked: string[] = [];
 
     try {
-      // Written the way a pre-`model` seri wrote it: the field is absent, not undefined.
-      const legacy = {
+      // Written the way a pre-`model` seri wrote it: the field is absent from the header, not
+      // undefined. No messages, so the file is just the header line.
+      const legacyHeader = {
         id: "legacy",
         cwd: ".",
         systemPrompt: "",
         permissionMode: "read-only",
-        messages: [],
       };
-      writeFileSync(join(sessionsDir, "legacy.json"), JSON.stringify(legacy));
-      expect("model" in JSON.parse(readFileSync(join(sessionsDir, "legacy.json"), "utf8"))).toBe(
-        false,
-      );
+      writeFileSync(join(sessionsDir, "legacy.jsonl"), `${JSON.stringify(legacyHeader)}\n`);
+      expect("model" in loadSession("legacy", sessionsDir)).toBe(false);
 
       const { code } = await captureLogs(() =>
         run(["--resume", "legacy", "another", "task"], {
@@ -984,15 +981,18 @@ describe("run (task invocation)", () => {
     setConfigValue("SERI_MODEL", "picked-model");
     setConfigValue("SERI_PROVIDER", "openrouter");
 
-    // Written the way a pre-`model` seri wrote it: the field is absent, not undefined.
-    const legacy = {
+    // Written the way a pre-`model` seri wrote it: the field is absent from the header, not
+    // undefined. No messages, so the file is just the header line.
+    const legacyHeader = {
       id: "legacy-no-provider",
       cwd: ".",
       systemPrompt: "",
       permissionMode: "read-only",
-      messages: [],
     };
-    writeFileSync(join(sessionsDir, "legacy-no-provider.json"), JSON.stringify(legacy));
+    writeFileSync(
+      join(sessionsDir, "legacy-no-provider.jsonl"),
+      `${JSON.stringify(legacyHeader)}\n`,
+    );
 
     const { code } = await captureLogs(() =>
       run(["--resume", "legacy-no-provider", "another", "task"], {
@@ -1039,11 +1039,9 @@ describe("run (task invocation)", () => {
       await captureLogs(() =>
         run(["a", "task"], deps([{ type: "error", error: "model_not_found" }])),
       );
-      const id = readdirSync(sessionsDir)[0]!.replace(/\.json$/, "");
+      const id = readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
       expect(asked).toEqual(["openai/gpt-os-120b"]);
-      expect("model" in JSON.parse(readFileSync(join(sessionsDir, `${id}.json`), "utf8"))).toBe(
-        false,
-      );
+      expect("model" in loadSession(id, sessionsDir)).toBe(false);
 
       // The correction the user makes next, and the resume that has to honour it.
       process.env.SERI_MODEL = "openai/gpt-oss-120b";
@@ -2910,14 +2908,49 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       messages: loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages,
     };
 
-    rmSync(root, { recursive: true, force: true });
-    mkdirSync(workTree, { recursive: true });
-    seed();
-    await run(["--resume", SESSION_ID, "/rewind", "2"], { sessionsDir, checkpointsDir });
-    await run(["--resume", SESSION_ID, "/undo", "2"], { sessionsDir, checkpointsDir });
+    // A second, independent root rather than wiping and reusing this one: saveSession's
+    // append-only tracking is keyed by session id at module scope (one process, one session, per
+    // session.ts's own design), and reusing SESSION_ID against a directory that was just deleted
+    // out from under it — rather than through saveSession/loadSession — would leave that tracking
+    // believing messages already on disk that the wipe had just removed.
+    const root2 = mkdtempSync(join(tmpdir(), "seri-cli-checkpoint-"));
+    try {
+      const sessionsDir2 = join(root2, "sessions");
+      const checkpointsDir2 = join(root2, "checkpoints");
+      const workTree2 = join(root2, "work");
+      mkdirSync(workTree2, { recursive: true });
+      writeFileSync(join(workTree2, "a.txt"), "before\n");
+      const snapshot = createCheckpointer({
+        storeDir: checkpointStoreDir(checkpointsDir2, workTree2),
+        worktree: workTree2,
+        sessionId: SESSION_ID,
+        onWarning: () => {},
+      });
+      snapshot({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 1 });
+      writeFileSync(join(workTree2, "a.txt"), "after\n");
+      snapshot({ tool: "write_file", toolCallId: "c2", args: { path: "a.txt" }, rewindTo: 3 });
+      writeFileSync(join(workTree2, "a.txt"), "final\n");
+      saveSession(
+        { id: SESSION_ID, cwd: workTree2, systemPrompt: "", permissionMode: "auto", messages },
+        sessionsDir2,
+      );
 
-    expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe(undoFirst.file);
-    expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toEqual(undoFirst.messages);
+      await run(["--resume", SESSION_ID, "/rewind", "2"], {
+        sessionsDir: sessionsDir2,
+        checkpointsDir: checkpointsDir2,
+      });
+      await run(["--resume", SESSION_ID, "/undo", "2"], {
+        sessionsDir: sessionsDir2,
+        checkpointsDir: checkpointsDir2,
+      });
+
+      expect(readFileSync(join(workTree2, "a.txt"), "utf8")).toBe(undoFirst.file);
+      expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir2).messages).toEqual(
+        undoFirst.messages,
+      );
+    } finally {
+      rmSync(root2, { recursive: true, force: true });
+    }
     expect(undoFirst.file).toBe("before\n");
   }, 20_000);
 

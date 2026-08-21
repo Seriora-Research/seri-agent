@@ -392,6 +392,89 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   );
 });
 
+describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate)", () => {
+  test(
+    "snapshots for real on the very first call of a session, even a harmless bash command",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+
+      const records = toolRecords();
+      expect(records).toHaveLength(1);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[0]?.tree ?? ""]),
+      ).toContain("a.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a non-destructive bash call reuses the previous tree instead of restaging the worktree",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      writeFileSync(join(workTree, "new.txt"), "new\n");
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "git status" }, rewindTo: 2 });
+
+      const records = toolRecords();
+      expect(records).toHaveLength(2);
+      expect(records[1]?.tree).toBe(records[0]?.tree);
+      expect(records[1]?.commit).toBe(records[0]?.commit);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).not.toContain("new.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a destructive bash call restages the worktree",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      writeFileSync(join(workTree, "new.txt"), "new\n");
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "rm -rf build" }, rewindTo: 2 });
+
+      const records = toolRecords();
+      expect(records[1]?.tree).not.toBe(records[0]?.tree);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).toContain("new.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "write_file always restages, regardless of a preceding non-destructive bash call",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      writeFileSync(join(workTree, "new.txt"), "new\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      const records = toolRecords();
+      expect(records[1]?.tree).not.toBe(records[0]?.tree);
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).toContain("new.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "still appends one record per call when writeTree is skipped, so /undo's per-call granularity is unaffected",
+    () => {
+      const snapshot = checkpointer();
+      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "git status" }, rewindTo: 2 });
+      snapshot({ tool: "bash", toolCallId: "c3", args: { command: "pwd" }, rewindTo: 3 });
+
+      expect(toolRecords().map((record) => record.toolCallId)).toEqual(["c1", "c2", "c3"]);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+});
+
 describe.skipIf(!isGitAvailable())("undoFiles", () => {
   test(
     "restores the previous state, reports what it touched, and leaves a recovery commit",
