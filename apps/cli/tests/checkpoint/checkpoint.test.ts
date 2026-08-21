@@ -842,6 +842,65 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
     },
     GIT_TEST_TIMEOUT_MS,
   );
+
+  // restoreTo (checkpoint.ts) moves the session ref and appends the "pre-undo" record BEFORE it
+  // calls applyRestore, so a throw from applyRestore itself (an EPERM/EBUSY on Windows from a file
+  // held open by a watcher or dev server, per applyRestore's own comment in shadowGit.ts — or any
+  // other mid-restore failure) still leaves the ref moved. That is the exact case cli.ts's own
+  // onSubmit now calls invalidate() in a `finally` for, so it runs whether or not the restore
+  // itself threw. A real permission/lock throw turned out not to be reproducible deterministically
+  // on every machine this repo runs on — a read-only attribute and an open write handle both let
+  // rmSync delete the file anyway on at least one tested Windows/Bun combination. `checkout-index`
+  // reading a blob that was deleted out from under it fails identically on every platform, so that
+  // is what forces applyRestore to throw here instead.
+  test(
+    "invalidate() still lets the next checkpoint chain onto the pre-undo commit when the restore itself threw",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+      const c1Tree = toolRecords().at(-1)?.tree ?? "";
+
+      writeFileSync(join(workTree, "a.txt"), "v2\n");
+      snapshot(mutation({ toolCallId: "c2" }));
+
+      // checkout-index needs a.txt's blob from c1's tree to restore it — deleting the loose object
+      // makes that read fail the same way on every platform, unlike a permission-based throw.
+      const gitDir = join(storeDir, "git");
+      const blob = plainGit(gitDir, ["ls-tree", c1Tree, "--", "a.txt"]).split(/\s+/)[2] ?? "";
+      rmSync(join(gitDir, "objects", blob.slice(0, 2), blob.slice(2)), { force: true });
+
+      let threw: unknown;
+      try {
+        // Two distinct trees on the log (c1, c2), so /undo 2 is what reaches c1's state — /undo 1
+        // targets the newest anchor, c2's own tree, same as every other two-checkpoint test in this
+        // file. Restoring to c1 must check out a.txt's now-missing blob.
+        undo(2);
+      } catch (err) {
+        threw = err;
+      } finally {
+        // Mirrors cli.ts's onSubmit: invalidate() runs unconditionally, not only on success.
+        snapshot.invalidate();
+      }
+      expect(threw).toBeDefined();
+
+      writeFileSync(join(workTree, "a.txt"), "after-throw\n");
+      snapshot(mutation({ toolCallId: "c3" }));
+
+      // The pre-undo commit was minted (and the ref moved) before applyRestore threw — readLog,
+      // not undo()'s return value, since the throw meant undo(2) above never returned one.
+      const preUndoCommit = readLog(storeDir, SESSION)
+        .filter((record): record is Extract<CheckpointRecord, { kind: "pre-undo" }> => {
+          return record.kind === "pre-undo";
+        })
+        .at(-1)?.commit;
+      expect(preUndoCommit).toBeDefined();
+      const commit = toolRecords().at(-1)?.commit ?? "";
+      expect(plainGit(gitDir, ["rev-list", commit]).split("\n").filter(Boolean)).toContain(
+        preUndoCommit as string,
+      );
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
 });
 
 describe.skipIf(!isGitAvailable())("rewindConversation", () => {

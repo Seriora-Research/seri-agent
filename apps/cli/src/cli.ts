@@ -2593,22 +2593,27 @@ async function runTui(
       if (name === "/rewind") {
         resetArchivistForRewind(archivistState, liveState.session.messages);
       }
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: messageOf(err),
+      });
+    } finally {
       // /undo and /restore just forced the worktree to a state this closure's live `checkpointer`
       // never saw happen — it is the SAME instance every ongoing tool call in this TUI session
       // checkpoints through, and its own `previousTree`/`previousCommit` are now stale: the next
       // non-destructive bash/powershell call would reuse `previousTree` (createCheckpointer's own
       // "gate first checkpoint of a process" comment explains why that reuse exists at all) as
       // though nothing had happened since it was recorded, when the restore just rewrote the
-      // worktree out from under it. `invalidate()` clears that state so the very next mutating call
-      // takes a real snapshot instead of trusting a tree the restore already invalidated.
+      // worktree out from under it. In `finally` rather than after the call: applyRestore's own
+      // comment (shadowGit.ts) explains it checks out files before removing the post-snapshot ones,
+      // so an EPERM/EBUSY thrown by the removal half on Windows still lands after the worktree was
+      // already rewritten — the checkpointer must resync on that throwing path too, not only on
+      // success. `invalidate()` clears the stale state so the very next mutating call takes a real
+      // snapshot instead of trusting a tree the restore already invalidated.
       if (name === "/undo" || name === "/restore") {
         prepared.checkpointer.invalidate();
       }
-    } catch (err) {
-      dispatch({
-        type: "command-error",
-        message: messageOf(err),
-      });
     }
   }
 

@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { atomicWriteFile } from "../atomicWriteFile";
 
+// One entry per distinct absolute path ever written through write_file in the project's lifetime,
+// and nothing ever removes an entry — pruneSessions (checkpoint.ts) prunes the session log and the
+// shadow git history, not this file. Fine at realistic project sizes (one small JSON line per
+// path, not per write), but worth stating: the ledger only ever grows.
 function ledgerPath(storeDir: string): string {
   return join(storeDir, "ledger.json");
 }
@@ -26,14 +31,20 @@ export function loadLedger(storeDir: string): Record<string, string> {
 // disk — never for bash/powershell output. A shell command's target path(s) cannot be attributed
 // without parsing the command it ran, and an entry recorded against a guess would let a future
 // restore delete a file on the strength of a guess, which is worse than not recording it at all.
-// `content` must be the exact bytes now on disk, EOL transform included (writeFile.ts's own
-// `finalContent`) — a hash of anything else can never match what filterSafeToDelete reads back,
-// which would silently make every future restore of this path more conservative than it needs to
-// be, never less safe, but silently wrong all the same.
+// `content` must be the exact bytes now on disk, EOL transform included — the bytes read back
+// from disk once the write landed, not writeFile.ts's in-memory value — a hash of anything else
+// can never match what filterSafeToDelete reads back, which would silently make every future
+// restore of this path more conservative than it needs to be, never less safe, but silently wrong
+// all the same.
 export function recordWrite(storeDir: string, absolutePath: string, content: string): void {
   const ledger = loadLedger(storeDir);
   ledger[absolutePath] = hash(content);
-  writeFileSync(ledgerPath(storeDir), JSON.stringify(ledger));
+  // Atomic (temp file + rename), same as the rest of this checkpoint subsystem: a torn write here
+  // (killed mid-write, disk full) would make the next loadLedger parse fail and return `{}`,
+  // silently losing every previously-recorded write-provenance entry — still safe (filterSafeToDelete
+  // fails toward preserving, never deleting) but a real loss of undo coverage for every file the
+  // ledger already vouched for.
+  atomicWriteFile(ledgerPath(storeDir), JSON.stringify(ledger));
 }
 
 // Hermes' (github.com/NousResearch/hermes-agent) positive-proof rule for the identical problem,
@@ -48,6 +59,12 @@ export function filterSafeToDelete(
   worktree: string,
   candidateRelativePaths: string[],
 ): string[] {
+  // A case-insensitive filesystem with a case-variant declared path, or a symlinked project root
+  // where realpath resolution differs from process.cwd() (recordWrite's own resolve() call site),
+  // can make this exact-string join miss an entry that IS on disk. Always degrades in the safe
+  // direction: a miss here fails the `expected === undefined` check below, so the file is preserved
+  // and reported via RestorePlan.preserved rather than silently deleted — a known, accepted
+  // limitation, not a bug.
   const ledger = loadLedger(storeDir);
   return candidateRelativePaths.filter((path) => {
     const absolute = join(worktree, path);

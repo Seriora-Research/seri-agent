@@ -1721,7 +1721,7 @@ describe("App", () => {
       ]);
     });
 
-    // Fix 1 (perf-review-fixes): `wrapPendingRows` used to run inline inside `visibleTranscript` on
+    // `wrapPendingRows` used to run inline inside `visibleTranscript` on
     // every call, re-wrapping the raw `state.streaming` string from scratch — it is now memoized by
     // App.tsx and passed in pre-wrapped. This pins that the extraction produced byte-identical rows
     // to the old inline wrapping for a representative multi-line streamed answer, not just a

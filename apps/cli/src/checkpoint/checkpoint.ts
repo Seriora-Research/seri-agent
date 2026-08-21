@@ -84,11 +84,12 @@ function anchored(log: CheckpointRecord[]): AnchoredRecord[] {
 //
 // Accepted residual risk, same one Hermes accepts: an unrecognised or obfuscated destructive
 // command (a dynamically-built string, a shell alias, `find -delete`, a script that shells out to
-// `rm` two levels down) skips writeTree, and because it was never captured in any tree, /undo will
-// delete its output if you roll back to before it existed — a restore-to-tree operation treats
-// anything not in the target tree as extraneous and removes it. A false positive here only costs
-// one extra git spawn; a false negative costs undo coverage for that one call — so the list leans
-// broad rather than narrow.
+// `rm` two levels down) skips writeTree, so anything it creates was never captured in any tree and
+// never recorded in the write ledger either. /undo's removal pass only deletes ledger-verified
+// paths, so a file from an unrecognised command is not in the ledger and is preserved rather than
+// deleted — but that means /undo silently leaves it behind instead of restoring the pre-command
+// state for it. A false positive here only costs one extra git spawn; a false negative costs undo
+// coverage for that one call — so the list leans broad rather than narrow.
 const DESTRUCTIVE_COMMAND_PATTERNS: RegExp[] = [
   // bash
   /\brm\b/,
@@ -416,13 +417,12 @@ export function createCheckpointer(opts: {
 
     // `add -A` covers the whole worktree minus its ignores, so a project with no .gitignore at all
     // — seri launched in $HOME, or beside an unignored node_modules — hashes every file on every
-    // mutating tool call, and /undo's removal pass then reaches every untracked file made since,
-    // across all of it. No limit is imposed: a threshold that silently narrowed the snapshot would
+    // mutating tool call. No limit is imposed: a threshold that silently narrowed the snapshot would
     // be the skipped pre-state this design already refused to accept. The size is reported instead,
     // once, so it is a number the user saw rather than one they find out from a deletion.
     if (files > LARGE_WORKTREE_FILES) {
       messages.push(
-        `checkpointing ${files} files under ${opts.worktree} on every file-modifying tool call — /undo's removal pass covers all of them; a .gitignore would narrow it`,
+        `checkpointing ${files} files under ${opts.worktree} on every file-modifying tool call — /undo's removal pass only covers files it recorded writing; a .gitignore would narrow it`,
       );
     }
 
