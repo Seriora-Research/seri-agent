@@ -3,10 +3,12 @@
 // cli-commands-to-tui feature-plan.md) verbatim: a pure move, no behavior change.
 
 import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@seri/model-catalog";
+import stringWidth from "string-width";
 import wrapAnsi from "wrap-ansi";
 import { escapeControlChars } from "../cli/output";
 import type { ResolvedRoute } from "../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "./commands";
+import { theme } from "./theme";
 
 // Shared by every list panel (ModelPicker, ConfigPanel, PermissionsPanel, SetupPanel) via
 // useListWindow.ts — the most any of their windows ever shows at once, regardless of how many
@@ -170,6 +172,35 @@ export function visibleTranscript(
   const end = Math.max(0, tail.length - offset);
   const start = Math.max(0, end - rows);
   return tail.slice(start, end);
+}
+
+// Every visible row's own render props for App.tsx's transcript viewport — factored out as a pure
+// function, same reason `displayText` above is: ink-testing-library's `lastFrame()` carries no ANSI
+// in this test environment, so a per-row `backgroundColor` is otherwise invisible to a mounted-frame
+// assertion, and a test can pin the actual prop this returns instead.
+//
+// The user-message band's own width is the widest currently visible role:"user" row (`stringWidth`,
+// not `padEnd`: a CJK/wide-char row is fewer UTF-16 units than terminal cells, so `padEnd` would
+// underpad it past the band's own edge). Every row `visibleTranscript` (above) returns is already at
+// most `Math.max(1, columns)` cells wide — `wrapForTranscript`'s own bound — so the widest visible
+// user row can never exceed `columns` either; no additional clamp is needed here. A uniform band
+// across all visible user rows (rather than padding each row to only its own width) is what makes it
+// read as one band instead of a ragged per-message highlight — a deliberate design choice
+// (docs/TUI-DESIGN.md's own note on `theme.userBg` as a confirmed, deliberate second use of
+// background color), not a leftover of this being computed once for the whole array.
+export function transcriptRowsProps(
+  visibleRows: VisibleRow[],
+  columns: number,
+): { text: string; backgroundColor: string | undefined }[] {
+  const bandWidth = visibleRows.reduce(
+    (widest, row) => (row.role === "user" ? Math.max(widest, stringWidth(row.text)) : widest),
+    0,
+  );
+  return visibleRows.map((row) => {
+    if (row.role !== "user") return { text: row.text, backgroundColor: undefined };
+    const padding = " ".repeat(Math.max(0, bandWidth - stringWidth(row.text)));
+    return { text: row.text + padding, backgroundColor: theme.userBg };
+  });
 }
 
 // For a list-panel row rendered with `wrap="truncate-end"` (ConfigPanel, SetupPanel): that prop

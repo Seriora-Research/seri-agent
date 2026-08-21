@@ -6,7 +6,7 @@ import stringWidth from "string-width";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
-import { App, computeBandWidth, transcriptRowProps } from "../../src/tui/App";
+import { App } from "../../src/tui/App";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import { ListRow } from "../../src/tui/components";
 import {
@@ -20,6 +20,7 @@ import {
   matchesFilter,
   singleLine,
   slideWindow,
+  transcriptRowsProps,
   type TranscriptEntry,
   type VisibleRow,
   visibleTranscript,
@@ -378,58 +379,44 @@ describe("App", () => {
   // The user-message background band is a per-row `backgroundColor`, not a bordered Box — invisible
   // to a mounted-frame assertion since ink-testing-library's `lastFrame()` carries no ANSI in this
   // test environment (see the `ListRow` describe block's own comment on the identical problem for
-  // the reverse-video row). Pinning `transcriptRowProps` (App.tsx) directly, the same fix applied
+  // the reverse-video row). Pinning `transcriptRowsProps` (format.ts) directly, the same fix applied
   // there.
-  describe("transcriptRowProps", () => {
-    // The second argument is the user-message band's own width (the widest currently visible
-    // role:"user" row, clamped to `columns` — computed once at App.tsx's own call site, not by
-    // this function). `transcriptRowProps` itself just pads a user row out to whatever band width
-    // it's given, so these cases pin that padding directly against a fixed `bandWidth`.
-    test('a role: "user" row is padded to the given band width and carries theme.userBg', () => {
-      expect(transcriptRowProps({ role: "user", text: "> hi" }, 10)).toEqual({
-        text: "> hi      ",
-        backgroundColor: "#333333",
-      });
-    });
-
-    test('a role: "system"/"assistant" row is left as-is with no background', () => {
-      expect(transcriptRowProps({ role: "system", text: "hi" }, 10)).toEqual({
-        text: "hi",
-        backgroundColor: undefined,
-      });
-      expect(transcriptRowProps({ role: "assistant", text: "● hi" }, 10)).toEqual({
-        text: "● hi",
-        backgroundColor: undefined,
-      });
-    });
-
-    // "> 你好" is 4 UTF-16 units but 6 terminal cells (each CJK char is 2 cells wide) — padEnd(10)
-    // would overpad to 14 cells. Pad by display width so the row lands on exactly `bandWidth`.
-    test('a role: "user" row with wide (CJK) characters pads to the band width in cells, not UTF-16 units', () => {
-      expect(transcriptRowProps({ role: "user", text: "> 你好" }, 10)).toEqual({
-        text: "> 你好    ",
-        backgroundColor: "#333333",
-      });
-    });
-  });
-
-  // The band-width computation itself — App.tsx's call site feeds this into transcriptRowProps
-  // above. What distinguishes the shipped "uniform band" from a per-row band (each row padded to
-  // only its own width) is that every visible role:"user" row gets the SAME bandWidth back; a
-  // per-row band would instead return each row's own width.
-  describe("computeBandWidth", () => {
-    test("returns the widest visible role: user row's width, for every row alike", () => {
+  describe("transcriptRowsProps", () => {
+    test('every visible role: "user" row is padded to the widest visible role: "user" row\'s width, and carries theme.userBg', () => {
       const rows: VisibleRow[] = [
         { role: "user", text: "> hi" },
         { role: "user", text: "> a much longer message" },
-        { role: "system", text: "an even longer system row that should not count" },
       ];
-      expect(computeBandWidth(rows, 80)).toBe(stringWidth("> a much longer message"));
+      const widest = stringWidth("> a much longer message");
+      expect(transcriptRowsProps(rows, 80)).toEqual([
+        { text: `> hi${" ".repeat(widest - stringWidth("> hi"))}`, backgroundColor: "#333333" },
+        { text: "> a much longer message", backgroundColor: "#333333" },
+      ]);
     });
 
-    test("clamps to columns when the widest visible message would exceed it", () => {
-      const rows: VisibleRow[] = [{ role: "user", text: "> ".padEnd(50, "x") }];
-      expect(computeBandWidth(rows, 20)).toBe(20);
+    test('role: "system"/"assistant" rows pass through untouched, with no padding and no background', () => {
+      const rows: VisibleRow[] = [
+        { role: "user", text: "> a much longer message" },
+        { role: "system", text: "hi" },
+        { role: "assistant", text: "● hi" },
+      ];
+      const result = transcriptRowsProps(rows, 80);
+      expect(result[1]).toEqual({ text: "hi", backgroundColor: undefined });
+      expect(result[2]).toEqual({ text: "● hi", backgroundColor: undefined });
+    });
+
+    // "> 你好" is 4 UTF-16 units but 6 terminal cells (each CJK char is 2 cells wide) — `padEnd`
+    // would overpad it past the band's own edge. Pad by display width so a wide-char row still
+    // lands on exactly the band width in cells.
+    test('a role: "user" row with wide (CJK) characters pads to the band width in cells, not UTF-16 units', () => {
+      const rows: VisibleRow[] = [
+        { role: "user", text: "> 你好" },
+        { role: "user", text: "> hi there" },
+      ];
+      expect(transcriptRowsProps(rows, 80)).toEqual([
+        { text: "> 你好    ", backgroundColor: "#333333" },
+        { text: "> hi there", backgroundColor: "#333333" },
+      ]);
     });
   });
 

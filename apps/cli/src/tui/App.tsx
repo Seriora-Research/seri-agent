@@ -19,7 +19,6 @@ import {
   useWindowSize,
 } from "ink";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import stringWidth from "string-width";
 import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
@@ -29,7 +28,7 @@ import {
   DEFAULT_COLUMNS,
   FALLBACK_CHROME_ROWS,
   formatModeLabel,
-  type VisibleRow,
+  transcriptRowsProps,
   visibleTranscript,
   wrapPendingRows,
 } from "./format";
@@ -192,38 +191,6 @@ function useTerminalWidth(): number {
   return width;
 }
 
-// One visibleTranscript row's own render props — factored out, not inlined into the JSX below, for
-// the same reason ListRow (components.tsx) is: ink-testing-library's `lastFrame()` carries no ANSI
-// in this test environment, so `backgroundColor` is otherwise invisible to a mounted-frame
-// assertion; calling this directly lets a test pin the actual prop instead of the frame text.
-export function transcriptRowProps(
-  row: VisibleRow,
-  bandWidth: number,
-): { text: string; backgroundColor: string | undefined } {
-  if (row.role !== "user") return { text: row.text, backgroundColor: undefined };
-  // `padEnd` counts UTF-16 units, not terminal cells — a CJK/wide-char row would overpad past
-  // `bandWidth`. `stringWidth` measures display width instead (same measure `wrap-ansi` already
-  // uses to wrap this same text upstream).
-  const padding = " ".repeat(Math.max(0, bandWidth - stringWidth(row.text)));
-  return { text: row.text + padding, backgroundColor: theme.userBg };
-}
-
-// The user-message band's own width — the widest currently visible role:"user" row, clamped to
-// `columns` (visibleTranscript already wraps every row to at most `columns` wide, so this only
-// guards a stale-columns edge case, not the common one). A uniform band across all visible user
-// rows reads as one band; padding each row to only its own width (the cheaper option) would
-// instead read as a ragged per-message highlight. Factored out, same reason as
-// `transcriptRowProps` above: a test can pin this directly instead of only the padding it feeds.
-export function computeBandWidth(visibleRows: VisibleRow[], columns: number): number {
-  return Math.min(
-    columns,
-    visibleRows.reduce(
-      (widest, row) => (row.role === "user" ? Math.max(widest, stringWidth(row.text)) : widest),
-      0,
-    ),
-  );
-}
-
 export function App({
   session,
   route,
@@ -381,7 +348,7 @@ export function App({
     state.columns,
     memoizedPending,
   );
-  const bandWidth = computeBandWidth(visibleRows, state.columns);
+  const rowProps = transcriptRowsProps(visibleRows, state.columns);
 
   return (
     // `rows - 1`, not `rows`, on every platform, not just a Windows-only gate: Windows' own
@@ -433,14 +400,11 @@ export function App({
         overflowY="hidden"
         justifyContent={isShort ? "flex-start" : "flex-end"}
       >
-        {visibleRows.map((row, index) => {
-          const { text, backgroundColor } = transcriptRowProps(row, bandWidth);
-          return (
-            <Text key={index} backgroundColor={backgroundColor}>
-              {text}
-            </Text>
-          );
-        })}
+        {rowProps.map(({ text, backgroundColor }, index) => (
+          <Text key={index} backgroundColor={backgroundColor}>
+            {text}
+          </Text>
+        ))}
       </Box>
       {state.pendingTool !== undefined && (
         <Box borderStyle="single" borderColor={theme.warning}>
