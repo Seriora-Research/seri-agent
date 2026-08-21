@@ -3,6 +3,7 @@
 // cli-commands-to-tui feature-plan.md) verbatim: a pure move, no behavior change.
 
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
+import { isZeroPriceEntry } from "@seri/model-catalog";
 import wrapAnsi from "wrap-ansi";
 import { escapeControlChars } from "../cli/output";
 import type { ResolvedRoute } from "../provider/routing";
@@ -373,7 +374,10 @@ export const MODEL_PICKER_HEADER = [
 // and EVERY term must match at least one field (id, displayName, family, or — new in this commit —
 // provider), independently. A single-term query behaves exactly as before (id/displayName/family,
 // now also provider); a multi-term one (e.g. "sonnet-5 anthropic") is what lets a query narrow to
-// one specific ROUTE of a multi-route model rather than only ever narrowing by name.
+// one specific ROUTE of a multi-route model rather than only ever narrowing by name. "free" and
+// "paid" are additionally special-cased against `isZeroPriceEntry`, ORed with the same haystack
+// check, so a $0 model with no "free" in its name is still discoverable while a model literally
+// named "free"/"paid" keeps matching by name too.
 export function matchesFilter(row: ModelPickerEntry, query: string): boolean {
   const terms = query
     .toLowerCase()
@@ -391,7 +395,12 @@ export function matchesFilter(row: ModelPickerEntry, query: string): boolean {
     (entry.family ?? "").toLowerCase(),
     entry.provider.toLowerCase(),
   ];
-  return terms.every((term) => haystacks.some((haystack) => haystack.includes(term)));
+  const matchesTerm = (term: string): boolean => {
+    if (term === "free") return isZeroPriceEntry(entry) || haystacks.some((h) => h.includes(term));
+    if (term === "paid") return !isZeroPriceEntry(entry) || haystacks.some((h) => h.includes(term));
+    return haystacks.some((h) => h.includes(term));
+  };
+  return terms.every(matchesTerm);
 }
 
 // D8: the disabled-remove reason, verbatim — reused by the list row (grayed prompt) and would be
