@@ -6,7 +6,7 @@
 // `<App>`, just against fake streams that count bytes instead of ink-testing-library's frame
 // stubs.
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 import type { ModelMessage } from "ai";
@@ -31,7 +31,15 @@ import { MAIN_TUI_RENDER_OPTIONS } from "../../src/tui/renderOptions";
 // or at what level it was first loaded, because `level` is read live on every colorize call, not
 // cached (chalk's own `applyStyle`).
 const chalk = (await import(createRequire(import.meta.resolve("ink")).resolve("chalk"))).default;
+// Restored in afterAll below: this is the same process-wide singleton every other test file's
+// `ink` import shares, so leaving `.level` mutated here would leak color support into whichever
+// file runs after this one in the same `bun test` process.
+const originalChalkLevel = chalk.level;
 chalk.level = 3;
+
+afterAll(() => {
+  chalk.level = originalChalkLevel;
+});
 
 // A fake TTY stdout: fixed 100 columns (matches App.test.tsx's assumption that width doesn't
 // vary across these tests), a configurable row count (the axis under test), and counters for
