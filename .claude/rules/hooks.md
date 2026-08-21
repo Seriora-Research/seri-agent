@@ -4,24 +4,37 @@ paths: [".claude/hooks/**", ".claude/settings.json"]
 
 # Hook authoring rules
 
-## verify-gate scope
-verify-gate only fires when `.claude/loops/*/STATE.md` exists AND `Status` is `EXECUTE` or `VERIFY`
-AND `Mode` is not `research`. It must exit 0 silently for all other sessions and phases.
+## verify-gate and format-and-typecheck were removed (2026-08-21)
+Both `.claude/hooks/verify-gate.sh`/`.ps1` (Stop) and
+`.claude/hooks/format-and-typecheck.sh`/`.ps1` (PostToolUse, Write|Edit) were removed from
+`.claude/settings.json`'s `hooks` block. The script files themselves are left on disk —
+only the invocation was removed, so a future session that wants either back can re-add
+its `settings.json` entry without reconstructing the script.
 
-## Iteration ceiling
-verify-gate must not `exit 2` forever. After 5 consecutive failures it writes `Status: BLOCKED`
-to STATE.md and exits 0. The counter is stored in `.claude/loops/<slug>/.gate-fail-count`.
+**Why verify-gate was removed:** it ran `bun run lint && typecheck && test` across the
+whole monorepo (10 workspaces) on every single turn while a loop was in EXECUTE/VERIFY —
+redundant with the orchestrator's own deliberate gate runs at real checkpoints (merges,
+before each review round), which the engineering-loop skill's VERIFY step already
+requires. Measured live in the `perf-review-fixes` loop (2026-08-21): ~7+ minutes of
+added latency per turn, and the 5-consecutive-failure `BLOCKED` ceiling (see the old
+"Iteration ceiling" section, now removed with the hook) fired falsely **twice** in that
+one loop for two different reasons — once because the approved plan hadn't defined a
+`lint` script (the original 2026-08-01 finding this section used to describe), and again
+because the root monorepo `test` script legitimately takes longer than the hook's own
+per-invocation timeout, so a slow-but-passing run scored as a failure on every idle turn.
+User confirmation, asked directly: the hook had no observed marginal safety value in an
+attended session. Removed by explicit user decision, not a code-quality judgment call.
 
-## verify-gate assumes lint/typecheck/test scripts exist — it does not check first
-verify-gate runs `<pkg> run lint`, `<pkg> run typecheck`, and `<pkg> test` unconditionally
-whenever `package.json` exists, with no check that those scripts are actually defined.
-Verified live (Stage 0 of a fresh scaffold, 2026-08-01): the approved plan defined `test`
-and `typecheck` but not `lint`, so every Stop-hook firing during EXECUTE/VERIFY failed on
-"script not found" — unrelated to actual code correctness — and after 5 consecutive
-failures the hook auto-set `Status: BLOCKED`, a false signal. Any new JS/TS scaffold must
-define all three scripts from the first commit, even as a no-op alias (e.g.
-`"lint": "tsc --noEmit"` if no linter is configured yet), or this will recur on every
-future stage built on that scaffold.
+**Why format-and-typecheck was removed:** it read `$CLAUDE_TOOL_INPUT_FILE_PATH` as an
+environment variable, which Claude Code never sets (see "Hook input arrives as JSON on
+stdin" below) — so it was already a silent no-op on every Write/Edit, never actually
+auto-formatting or typechecking anything. Left alone, that bug looked cheap to "fix" by
+switching to stdin parsing, but doing so would have reintroduced verify-gate's exact
+problem in a **worse** shape: `tsc --noEmit` runs project-wide (line 19's own comment:
+"tsc doesn't support single-file check meaningfully"), and this hook fires once per
+Write/Edit rather than once per turn — strictly more often than verify-gate's Stop
+trigger. Removed pre-emptively rather than fixed, so the latent cost can't resurface the
+next time someone patches the stdin bug without re-deriving this tradeoff.
 
 ## block-dangerous.sh is a seatbelt, not a security boundary
 It only intercepts Bash tool calls — Read, Write, and Edit bypass it entirely.
@@ -74,12 +87,13 @@ timestamp-and-opaque-id row with no other information. Confirmed against
 rows (its evidence sources are gate tables, `DECISION:` lines, and quoted
 corrections), so nothing that was actually read is lost by dropping them.
 
-**Still unfixed as of 2026-08-06:** `block-dangerous.sh`, `block-env-read.sh`
-and `format-and-typecheck.sh` continue to read env vars and never read stdin, so
-their guard logic still never runs against real input. Both `block-*` hooks are
-therefore currently no-ops, not seatbelts. Out of scope of the 2026-08-06 hook
-repair, which covered only the four loop-aware hooks; fix them before relying on
-either one.
+**Still unfixed as of 2026-08-06:** `block-dangerous.sh` and `block-env-read.sh`
+continue to read env vars and never read stdin, so their guard logic still never runs
+against real input — both are currently no-ops, not seatbelts. Out of scope of the
+2026-08-06 hook repair, which covered only the four loop-aware hooks; fix them before
+relying on either one. (`format-and-typecheck.sh` had the identical bug but was removed
+from `settings.json` entirely on 2026-08-21 rather than fixed — see the top of this
+file — so its stdin/env-var status no longer matters; it isn't invoked.)
 
 ## A loop-aware hook must resolve WHICH loop from `session_id`, never `find … | head -1`
 Every loop-aware hook used to pick its target with
