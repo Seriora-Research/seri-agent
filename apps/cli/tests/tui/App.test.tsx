@@ -16,6 +16,7 @@ import {
   formatRouteLabel,
   formatSetupRow,
   listWindowSize,
+  matchesFilter,
   singleLine,
   slideWindow,
   type TranscriptEntry,
@@ -1525,6 +1526,55 @@ describe("App", () => {
       const row = formatModelRow(pickerRow({ entry: entry({ displayName: "A".repeat(40) }) }));
       expect(row).toContain("…");
       expect(row.indexOf("A".repeat(40))).toBe(-1);
+    });
+
+    // Issue #140's motivating case: a $0 model whose id/displayName never says "free" (the
+    // OpenRouter free-tier naming convention this mirrors, e.g. "stealth/ox-alpha") was
+    // undiscoverable by typing "free" before matchesFilter also checked pricing.
+    test("matchesFilter matches a zero-price entry with no 'free' in its name against query 'free'", () => {
+      const zeroPrice = pickerRow({
+        entry: entry({
+          id: "stealth/ox-alpha",
+          displayName: "Ox Alpha",
+          pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+        }),
+      });
+      expect(matchesFilter(zeroPrice, "free")).toBe(true);
+    });
+
+    test("matchesFilter does not match a paid entry against query 'free'", () => {
+      const paid = pickerRow({ entry: entry({ pricing: { inputPerMTok: 0.59, outputPerMTok: 0.79 } }) });
+      expect(matchesFilter(paid, "free")).toBe(false);
+    });
+
+    test("matchesFilter matches a paid entry and not a zero-price entry against query 'paid'", () => {
+      const paid = pickerRow({ entry: entry({ pricing: { inputPerMTok: 0.59, outputPerMTok: 0.79 } }) });
+      const zeroPrice = pickerRow({
+        entry: entry({ pricing: { inputPerMTok: 0, outputPerMTok: 0 } }),
+      });
+      expect(matchesFilter(paid, "paid")).toBe(true);
+      expect(matchesFilter(zeroPrice, "paid")).toBe(false);
+    });
+
+    test("matchesFilter still matches a model whose displayName literally contains 'free', regardless of price", () => {
+      const namedFree = pickerRow({
+        entry: entry({
+          displayName: "FreeChat 1",
+          pricing: { inputPerMTok: 0.59, outputPerMTok: 0.79 },
+        }),
+      });
+      expect(matchesFilter(namedFree, "free")).toBe(true);
+    });
+
+    test("matchesFilter composes 'free' with other terms across the AND-of-ORs", () => {
+      const zeroPriceGroq = pickerRow({
+        entry: entry({ provider: "groq", pricing: { inputPerMTok: 0, outputPerMTok: 0 } }),
+      });
+      const zeroPriceOpenrouter = pickerRow({
+        entry: entry({ provider: "openrouter", pricing: { inputPerMTok: 0, outputPerMTok: 0 } }),
+      });
+      expect(matchesFilter(zeroPriceGroq, "free groq")).toBe(true);
+      expect(matchesFilter(zeroPriceOpenrouter, "free groq")).toBe(false);
     });
   });
 
