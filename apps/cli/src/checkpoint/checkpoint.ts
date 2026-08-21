@@ -626,6 +626,22 @@ function ignoredSince(log: CheckpointRecord[], index: number): string[] {
   ).map((record) => record.path);
 }
 
+// restoreTo's own positive-proof gate, split out because it runs twice against the same candidate
+// list: once for the plan reported via onPlan, again immediately before applyRestore to close the
+// TOCTOU window between them (see that call site's own comment on why the second check exists at
+// all).
+function partitionByLedger(
+  storeDir: string,
+  worktree: string,
+  candidates: string[],
+): { safe: string[]; unsafe: string[] } {
+  const safeSet = new Set(filterSafeToDelete(storeDir, worktree, candidates));
+  return {
+    safe: candidates.filter((path) => safeSet.has(path)),
+    unsafe: candidates.filter((path) => !safeSet.has(path)),
+  };
+}
+
 function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): RestoreResult {
   const gitDir = gitDirOf(opts.storeDir);
   // Before the ref moves and before a record is written, so a bad argument costs nothing. Without
@@ -663,11 +679,11 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
   // and deleted by a restore that predates it. filterSafeToDelete narrows the list to paths a
   // write_file ledger entry can still vouch for (writeLedger.ts's own header comment); everything
   // else moves to `preserved` instead of silently vanishing from both the plan and the disk.
-  const safeToDelete = new Set(
-    filterSafeToDelete(opts.storeDir, opts.worktree, candidates.deleted),
+  const { safe: deleted, unsafe: preserved } = partitionByLedger(
+    opts.storeDir,
+    opts.worktree,
+    candidates.deleted,
   );
-  const deleted = candidates.deleted.filter((path) => safeToDelete.has(path));
-  const preserved = candidates.deleted.filter((path) => !safeToDelete.has(path));
 
   const plan: RestorePlan = {
     tree: treeish,
@@ -688,12 +704,12 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
   // synchronous, non-atomic primitives can achieve. The RETURNED result reflects this final check,
   // not the plan already printed via onPlan — a path that fails revalidation moves from `deleted`
   // to `preserved` in what is reported to have actually happened.
-  const stillSafe = new Set(filterSafeToDelete(opts.storeDir, opts.worktree, plan.deleted));
-  const finalDeleted = plan.deleted.filter((path) => stillSafe.has(path));
-  const finalPreserved = [
-    ...plan.preserved,
-    ...plan.deleted.filter((path) => !stillSafe.has(path)),
-  ];
+  const { safe: finalDeleted, unsafe: newlyUnsafe } = partitionByLedger(
+    opts.storeDir,
+    opts.worktree,
+    plan.deleted,
+  );
+  const finalPreserved = [...plan.preserved, ...newlyUnsafe];
   // In a try/finally, not a plain call after: checkout-index rewrites every restored file's
   // on-disk EOL before the loop that deletes `finalDeleted` even starts, so a throw partway
   // through applyRestore (a failed rmSync, a killed git process) still leaves the cache poisoned
