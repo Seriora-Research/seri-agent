@@ -153,12 +153,31 @@ export function loadSession<TMessage = unknown>(
     ...string[],
   ];
   const header = JSON.parse(headerLine) as SessionHeader;
-  const messages = messageLines.map((line) => JSON.parse(line) as TMessage);
+
+  const messages: TMessage[] = [];
+  let truncated = false;
+  for (const [index, line] of messageLines.entries()) {
+    try {
+      messages.push(JSON.parse(line) as TMessage);
+    } catch (err) {
+      // appendFileSync's write can be torn by a killed process or a full disk, and only ever at the
+      // END of the file — every earlier line was already flushed by a prior, completed save. A
+      // malformed line anywhere but last is real corruption, not a torn write, and still throws.
+      if (index !== messageLines.length - 1) throw err;
+      truncated = true;
+    }
+  }
 
   // Seeds saveSession's delta tracking so the NEXT save in this process appends rather than
-  // re-persisting everything just read back — see the comment on persistedCounts above.
-  persistedCounts.set(path, messages.length);
-  persistedHeaders.set(path, headerLine);
+  // re-persisting everything just read back — see the comment on persistedCounts above. Skipped
+  // when the trailing line was dropped: appending onto a file whose last line is still the torn
+  // fragment would concatenate the next save's first line onto it, corrupting that line too.
+  // Leaving both maps unseeded makes saveSession's `sameHeader` check false next time, forcing the
+  // full-rewrite path, which overwrites the torn fragment instead of appending past it.
+  if (!truncated) {
+    persistedCounts.set(path, messages.length);
+    persistedHeaders.set(path, headerLine);
+  }
 
   return { ...header, messages };
 }

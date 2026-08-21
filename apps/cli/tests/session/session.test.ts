@@ -6,8 +6,8 @@ import { join } from "node:path";
 import {
   findMostRecentSession,
   loadSession,
-  saveSession,
   type SessionState,
+  saveSession,
 } from "../../src/session/session";
 
 let sessionsDir: string;
@@ -182,6 +182,41 @@ describe("saveSession (JSONL append-only persistence)", () => {
     expect(appendSpy).toHaveBeenCalledTimes(1);
     expect(writeSpy).toHaveBeenCalledTimes(0);
     expect(loadSession("resumed", sessionsDir).messages).toEqual([{ n: 1 }, { n: 2 }]);
+
+    writeSpy.mockRestore();
+    appendSpy.mockRestore();
+  });
+
+  // A torn appendFileSync write (process killed, disk full) leaves a malformed trailing line —
+  // simulated here by writing the header and one good message, then a hand-truncated fragment of a
+  // second that never closes its JSON.
+  test("loadSession drops a truncated trailing line instead of throwing and losing the whole session", () => {
+    const header = { id: "torn", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
+    writeFileSync(
+      join(sessionsDir, "torn.jsonl"),
+      `${JSON.stringify(header)}\n${JSON.stringify({ n: 1 })}\n{"n": 2, "text": "unfinis`,
+    );
+
+    const loaded = loadSession<{ n: number }>("torn", sessionsDir);
+    expect(loaded.messages).toEqual([{ n: 1 }]);
+  });
+
+  test("a load that dropped a truncated line forces a full rewrite on the next save, not an append onto the fragment", () => {
+    const header = { id: "torn2", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
+    writeFileSync(
+      join(sessionsDir, "torn2.jsonl"),
+      `${JSON.stringify(header)}\n${JSON.stringify({ n: 1 })}\n{"n": 2, "text": "unfinis`,
+    );
+
+    const loaded = loadSession<{ n: number }>("torn2", sessionsDir);
+
+    const writeSpy = spyOn(fs, "writeFileSync");
+    const appendSpy = spyOn(fs, "appendFileSync");
+    saveSession({ ...loaded, messages: [...loaded.messages, { n: 3 }] }, sessionsDir);
+
+    expect(appendSpy).toHaveBeenCalledTimes(0);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(loadSession("torn2", sessionsDir).messages).toEqual([{ n: 1 }, { n: 3 }]);
 
     writeSpy.mockRestore();
     appendSpy.mockRestore();
