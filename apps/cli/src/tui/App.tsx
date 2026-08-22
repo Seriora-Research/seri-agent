@@ -24,11 +24,11 @@ import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
+import { ApprovalBox } from "./components/ApprovalBox";
 import { InputBox } from "./components/InputBox";
-import { ApprovalBox } from "./panels/ApprovalBox";
+import { ModelPicker } from "./components/ModelPicker";
 import { AuthBanner, AuthPanel } from "./panels/AuthPanel";
 import { ConfigPanel } from "./panels/ConfigPanel";
-import { ModelPicker } from "./panels/ModelPicker";
 import { PermissionsPanel } from "./panels/PermissionsPanel";
 import { SetupPanel } from "./panels/SetupPanel";
 import { WelcomeSplash } from "./panels/WelcomeSplash";
@@ -416,10 +416,11 @@ export function App({
       checked in this same order (approval, /model, /setup, /login /signup, /config, /permissions,
       then InputBox). The last three are unreachable today — nothing dispatches
       auth-requested/config-requested/permissions-requested yet (Stages C-D wire that).
-      ApprovalBox/ModelPicker/SetupPanel/AuthPanel/ConfigPanel/PermissionsPanel/WelcomeSplash are
-      still built on ink (a later migration dispatch's job to port) — each of these branches is
-      runtime-broken under this OpenTUI-based app.tsx until that dispatch lands; typecheck stays
-      green because their own prop signatures are unchanged. */}
+      ApprovalBox and ModelPicker are ported to OpenTUI; SetupPanel/AuthPanel/ConfigPanel/
+      PermissionsPanel/WelcomeSplash are still built on ink (a later migration dispatch's job to
+      port) — each of those remaining branches is runtime-broken under this OpenTUI-based app.tsx
+      until that dispatch lands; typecheck stays green because their own prop signatures are
+      unchanged. */}
       {state.pendingApproval !== undefined ? (
         <ApprovalBox
           pendingApproval={state.pendingApproval}
