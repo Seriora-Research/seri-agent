@@ -1,20 +1,23 @@
-// Extracted out of App.tsx (Stage A, cli-commands-to-tui feature-plan.md) verbatim: a pure move,
-// no behavior change.
+/** @jsxImportSource @opentui/react */
+// Ported from panels/SetupPanel.tsx: same logic, OpenTUI's element/hook names.
 
+import { decodePasteBytes } from "@opentui/core";
+import { useKeyboard, usePaste } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
-import { Box, Text, useInput } from "ink";
 import { useState } from "react";
-import { ConfirmPrompt, ErrorLine, ListRow } from "../components";
-import { formatSetupRow } from "../format";
-import type { SetupState } from "../reducer";
-import { theme } from "../theme";
-import { useListWindow } from "../useListWindow";
+import { useListWindow } from "../../hooks/useListWindow";
+import type { SetupState } from "../../state/reducer";
+import { theme } from "../../theme/theme";
+import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
+import { ErrorLine } from "../../ui/ErrorLine";
+import { ListRow } from "../../ui/ListRow";
+import { formatSetupRow } from "../../util/format";
 
-// /setup's own live state (tui/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-exclusion
-// role, dispatching to one of two step-specific sub-components below for the steps that still own
-// input handling and local state (the same reasoning ApprovalBox/ModelPicker are separate
-// components rather than one component branching internally); the confirm-remove step delegates
-// to the shared ConfirmPrompt (components.tsx) instead.
+// /setup's own live state (tui/state/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-
+// exclusion role, dispatching to one of two step-specific sub-components below for the steps that
+// still own input handling and local state (the same reasoning ApprovalBox/ModelPicker are
+// separate components rather than one component branching internally); the confirm-remove step
+// delegates to the shared ConfirmPrompt (ui/ConfirmPrompt.tsx) instead.
 export function SetupPanel({
   pendingSetup,
   onSetupSelect,
@@ -82,30 +85,25 @@ function SetupList({
     pendingSetup.selected,
   );
 
-  useInput((input, key) => {
-    if (key.escape || (key.ctrl && input === "d")) {
+  useKeyboard((key) => {
+    if (key.name === "escape" || (key.ctrl && key.name === "d")) {
       onSetupClose?.();
       return;
     }
     if (handleArrowKey(key)) return;
     const row = rows[selected];
-    // `key.return`/`key.delete` must be checked BEFORE the `input.length === 0` guard below, not
-    // after — Ink's own key parser sets `input` to `''` for every named key, Enter and Delete
-    // included (confirmed against node_modules/ink/build/parse-keypress.js and use-input.js), so
-    // an empty-input guard ahead of these two branches would make Enter/Delete dead here despite
-    // the panel's own hint text advertising them.
-    if (key.return) {
+    if (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") {
       if (row !== undefined) onSetupSelect?.(row.provider);
       return;
     }
-    if (key.delete) {
+    if (key.name === "delete") {
       if (row !== undefined && row.removable) onSetupRemove?.(row.provider);
       return;
     }
     if (key.ctrl || key.meta) return;
-    if (input.length === 0) return;
+    if (key.name.length !== 1) return;
     if (row === undefined) return;
-    const typed = input.toLowerCase();
+    const typed = key.name.toLowerCase();
     if (typed === "a") {
       onSetupSelect?.(row.provider);
       return;
@@ -116,16 +114,14 @@ function SetupList({
   });
 
   return (
-    <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
-      <Text color={theme.muted}>/setup — provider API keys</Text>
+    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+      <text fg={theme.muted}>/setup — provider API keys</text>
       {visible.map(({ row, isSelected }) => (
         <ListRow key={row.provider} selected={isSelected} label={formatSetupRow(row)} />
       ))}
-      {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
-      <Text color={theme.muted}>
-        ↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close
-      </Text>
-    </Box>
+      {remainingCount > 0 && <text fg={theme.muted}>+{remainingCount} more</text>}
+      <text fg={theme.muted}>↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close</text>
+    </box>
   );
 }
 
@@ -148,43 +144,53 @@ function SetupEnterKey({
   // until the moment it actually submits.
   const [value, setValue] = useState("");
 
-  useInput((input, key) => {
+  useKeyboard((key) => {
     if (busy) return;
-    if (key.ctrl && input === "d") {
+    if (key.ctrl && key.name === "d") {
       onSetupClose?.();
       return;
     }
-    if (key.escape) {
+    if (key.name === "escape") {
       onSetupBack?.();
       return;
     }
-    if (key.return) {
+    if (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") {
       onSetupKeyEntered?.(provider, value);
       return;
     }
-    if (key.backspace || key.delete) {
+    if (key.name === "backspace" || key.name === "delete") {
       setValue((current) => current.slice(0, -1));
       return;
     }
     if (key.ctrl || key.meta) return;
-    if (input.length === 0) return;
-    // A bare terminator embedded in a combined pty chunk (MEDIUM-E's own class, InputBox/
-    // ModelPicker above) is not handled beyond stripping it — a pasted key is never expected to
-    // contain a newline, and silently accepting one into a credential is worse than the rare
-    // dropped keystroke this simplification could cost.
-    setValue((current) => current + input.replace(/[\r\n]/g, ""));
+    if (key.sequence.length === 0) return;
+    if (key.name.length !== 1 && key.name !== "space") return;
+    setValue((current) => current + key.sequence);
+  });
+
+  // OpenTUI delivers a terminal paste as its own event (bracketed paste), never through
+  // `useKeyboard` (InputBox.tsx's own comment) — under Ink this field's typed handler also
+  // received a paste, which is why it stripped `\r\n` from whatever arrived; that stripping moves
+  // here unchanged. Unlike InputBox/ModelPicker, this deliberately does NOT split on an embedded
+  // terminator and auto-submit: a pasted key is never expected to contain a newline, and silently
+  // accepting one into a credential is worse than the rare dropped keystroke this simplification
+  // could cost (SetupEnterKey's original Ink-era comment, carried over unchanged).
+  usePaste((event) => {
+    if (busy) return;
+    const text = decodePasteBytes(event.bytes);
+    setValue((current) => current + text.replace(/[\r\n]/g, ""));
   });
 
   return (
-    <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
-      <Text color={theme.muted}>{`${keyName} for ${provider}`}</Text>
-      <Text>{"*".repeat(value.length)}</Text>
+    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+      <text fg={theme.muted}>{`${keyName} for ${provider}`}</text>
+      <text>{"*".repeat(value.length)}</text>
       <ErrorLine message={error} />
       {busy ? (
-        <Text color={theme.muted}>Validating…</Text>
+        <text fg={theme.muted}>Validating…</text>
       ) : (
-        <Text color={theme.muted}>Enter submit · Esc back · Ctrl-D close</Text>
+        <text fg={theme.muted}>Enter submit · Esc back · Ctrl-D close</text>
       )}
-    </Box>
+    </box>
   );
 }
