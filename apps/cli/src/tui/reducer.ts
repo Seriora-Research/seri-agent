@@ -423,7 +423,11 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       // left as-is (stale for the one turn until `route-updated` supplies the real answer) rather
       // than asserting something false.
       if (action.pick === undefined) {
-        return { ...state, pendingModelPicker: undefined, pendingInputPrefill: action.leftoverInput };
+        return {
+          ...state,
+          pendingModelPicker: undefined,
+          pendingInputPrefill: action.leftoverInput,
+        };
       }
       return {
         ...state,
@@ -435,7 +439,12 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           provider: action.pick.provider,
         },
         route: action.pick.keyConfigured
-          ? { model: action.pick.model, provider: action.pick.provider, rerouted: false, viaGateway: false }
+          ? {
+              model: action.pick.model,
+              provider: action.pick.provider,
+              rerouted: false,
+              viaGateway: false,
+            }
           : state.route,
       };
     case "input-prefill-consumed":
