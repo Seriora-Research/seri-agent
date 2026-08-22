@@ -1461,17 +1461,21 @@ function childScriptClear(dir: string): string {
 // externally-observable effect a private, in-process counter has — whether it crosses
 // ARCHIVIST_TOOL_CALL_INTERVAL (10) and actually triggers a run. Turn 1 emits 9 "tool-call" events
 // (observeArchivistEvent's own per-event increment, archivist.ts) — one short of the interval, so
-// the archivist stays silent — and turn 2 emits exactly 1 more. A correctly-reset counter reads 1
-// after that (well under 10, still silent); a counter that survived /clear unreset would read 10
-// and trigger. `getGroqModel: () => ({})` (the same placeholder every other script in this file
-// already uses as a model runLoopFake itself never calls) does NOT make the dispatch throw:
-// loop.ts's own runLoop catches the provider call's failure and yields a `{ type: "error" }` event
-// instead of throwing (loop.ts's own comment on that catch), so runSubagent returns normally and
-// runArchivist returns a real ArchivistReport rather than hitting its own catch/onWarning path.
-// cli.ts then dispatches that report via `archivistLine` (cli/output.ts), which is what actually
-// puts `"(archivist: ..."` in the transcript — the observable difference this test waits on.
-// `read_file`, not `write_file`: this test is about the counter alone, so no checkpointer/real
-// mutation is needed here at all.
+// the archivist stays silent — turn 2 emits exactly 1 more, and turn 3 emits 9 more again. A
+// correctly-reset counter reads 1 after turn 2 (well under 10, still silent) and 10 after turn 3
+// (triggers); a counter that survived /clear unreset would already read 10 after turn 2 (triggers
+// early, then resets itself — archivist.ts's own comment on `toolCallsSinceRun = 0` after a run —
+// leaving turn 3's 9 back under the interval, silent). The test below checks both halves: silence
+// after turn 2, then a trigger after turn 3 — either alone would pass on a counter reset to the
+// wrong value, only the pair together pins down that it actually restarted at 0. `getGroqModel: ()
+// => ({})` (the same placeholder every other script in this file already uses as a model
+// runLoopFake itself never calls) does NOT make the dispatch throw: loop.ts's own runLoop catches
+// the provider call's failure and yields a `{ type: "error" }` event instead of throwing (loop.ts's
+// own comment on that catch), so runSubagent returns normally and runArchivist returns a real
+// ArchivistReport rather than hitting its own catch/onWarning path. cli.ts then dispatches that
+// report via `archivistLine` (cli/output.ts), which is what actually puts `"(archivist: ..."` in
+// the transcript — the observable difference this test waits on. `read_file`, not `write_file`:
+// this test is about the counter alone, so no checkpointer/real mutation is needed here at all.
 //
 // `authConfigDir` (not left to its own `getConfigDir()` default) is what the archivist's own
 // enabled/disabled toggle reads (`loadMemoryConfig(ctx.configDir)`, memory/archivist.ts, fed from
@@ -1488,7 +1492,7 @@ function childScriptClearArchivist(dir: string): string {
     `async function* runLoopFake(opts) {`,
     `  calls++;`,
     `  console.log("\\nRUNLOOP_READY " + calls);`,
-    `  const n = calls === 1 ? 9 : 1;`,
+    `  const n = calls === 1 ? 9 : calls === 2 ? 1 : 9;`,
     `  for (let i = 0; i < n; i++) {`,
     `    yield { type: "tool-call", name: "read_file", args: { path: "x" + i + ".txt" } };`,
     `    yield { type: "tool-result", name: "read_file", result: "ok" };`,
@@ -5294,13 +5298,31 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("(done: no-tool-call)");
         // `archivistLine`'s own "(archivist: ..." stats line (cli/output.ts) is dispatched into
         // the transcript only when maybeRunArchivist actually returns a report — i.e. only once
-        // shouldRunArchivist's own trigger fired. Waited on with a plain timer, not `sawLine`,
-        // because this asserts an ABSENCE: `sawLine` only proves a positive.
-        await new Promise((r) => setTimeout(r, 15_000));
+        // shouldRunArchivist's own trigger fired. A bounded margin, not `sawLine`, since this half
+        // asserts an ABSENCE — but a short one: maybeRunArchivist's own model call fails fast
+        // against the fake provider (this file's own header comment above), so it does not need
+        // anywhere near as long as a real network round trip would.
+        await new Promise((r) => setTimeout(r, 2_000));
 
         // 9 pre-clear + 1 post-clear would cross ARCHIVIST_TOOL_CALL_INTERVAL (10) if the counter
         // survived /clear unreset — it must not have.
         expect(rawOccurrences("(archivist:")).toBe(0);
+
+        // The positive half: a third turn's 9 more tool calls (1 + 9 = 10) crosses the interval
+        // from wherever the counter actually sits after /clear + turn 2. If that were still 10
+        // (the un-reset bug this test guards against), it would have already fired above and reset
+        // itself before this turn ever ran (archivist.ts's own comment on `toolCallsSinceRun = 0`
+        // after a run), leaving turn 3's 9 back under the interval — so this line appearing at all,
+        // specifically now rather than after turn 2, is what proves the counter restarted at 0.
+        child.stdin?.write("do a third task");
+        await sawLine("do a third task");
+        child.stdin?.write("\r");
+
+        await sawLine("RUNLOOP_READY 3");
+        await sawLine("EMITTED 3 9");
+        await sawLine("(archivist:");
+
+        expect(rawOccurrences("(archivist:")).toBe(1);
       } finally {
         child.kill("SIGKILL");
       }
