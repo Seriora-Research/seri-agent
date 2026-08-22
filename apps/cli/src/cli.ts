@@ -1893,9 +1893,13 @@ async function runTui(
   // reassigns it live — runTurn's own driveLoop call reads THIS, not the parameter, so an override
   // takes effect on the next turn with no restart.
   let liveMaxTurns = maxTurns;
-  // Created ONCE per run, outside the per-turn loop, so the tool-call counter accumulates across
-  // every turn of this TUI session rather than resetting each time runTurn calls driveLoop.
-  const archivistState = createArchivistState(prepared.session);
+  // Created ONCE per SESSION, outside the per-turn loop, so the tool-call counter accumulates
+  // across every turn of that session rather than resetting each time runTurn calls driveLoop.
+  // `let`, not `const`: /clear (onSubmit, below) replaces this with a fresh
+  // `createArchivistState(liveState.session)` the moment it mints a new session id — a rebuild, not
+  // a reset, since the new session genuinely has nothing to skip past (unlike resetArchivistForRewind's
+  // own truncation-in-place, which deliberately leaves toolCallsSinceRun alone).
+  let archivistState = createArchivistState(prepared.session);
 
   // Resolvers waiting on onSessionChange's OWN NEXT actual persist, not merely the next dispatch
   // — tuiPresenter's own sessionUpdated (round 7 code review's finding-9 fix) pushes one every
@@ -2652,6 +2656,29 @@ async function runTui(
       // returns.
       if (name === "/rewind") {
         resetArchivistForRewind(archivistState, liveState.session.messages);
+      }
+      // Without this, `prepared.checkpointer`/`prepared.tools` — built once at session start,
+      // closing over the OLD session's id — silently keep appending checkpoints to the OLD
+      // session's git ref and log file (checkpoint.ts's own sessionRef/logPath, both keyed on
+      // sessionId) for every tool call made after /clear: no error, no warning, just checkpoints
+      // landing under a session nothing resumes anymore. `liveState.session` is already the NEW
+      // session by this point (`dispatch`, this closure's own wrapper, updates it synchronously,
+      // before command.run even returns — same guarantee the /rewind branch above relies on).
+      // `storeDir`/`worktree` are unchanged by /clear (decideClear carries `cwd` over verbatim, so
+      // checkpointTarget would resolve to the identical pair) — reused directly from `prepared`
+      // rather than recomputed. `createArchivistState`, not `resetArchivistForRewind`: the latter
+      // deliberately leaves `toolCallsSinceRun` alone (correct for a truncation of the SAME
+      // conversation), which would carry a stale tool-call count into a conversation that has none.
+      if (name === "/clear") {
+        const rebound = buildCheckpointedTools({
+          storeDir: prepared.storeDir,
+          worktree: prepared.worktree,
+          sessionId: liveState.session.id,
+          onWarning: printWarning,
+        });
+        prepared.checkpointer = rebound.checkpointer;
+        prepared.tools = rebound.tools;
+        archivistState = createArchivistState(liveState.session);
       }
     } catch (err) {
       dispatch({

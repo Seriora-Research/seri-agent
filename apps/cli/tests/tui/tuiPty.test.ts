@@ -15,6 +15,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ModelMessage } from "ai";
+import { checkpointStoreDir } from "../../src/checkpoint/checkpoint";
+import { isGitAvailable, resolveRef } from "../../src/checkpoint/shadowGit";
 import { loadSession, saveSession } from "../../src/session/session";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
@@ -1401,6 +1403,85 @@ function childScriptApproval(dir: string): string {
     `  console.log("\\nRUNLOOP_READY");`,
     `  const answer = await opts.approvalPrompt("write_file", { path: "a.txt", content: "hi" }, opts.signal);`,
     `  console.log("\\nPROMPT_ANSWER " + answer);`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// /clear's own rebind (cli.ts's onSubmit): calls the REAL, checkpoint-wrapped `opts.tools.write_file`
+// directly — not a synthetic "tool-call"/"tool-result" pair — so an actual checkpoint lands through
+// the actual checkpointer for each turn, under WHATEVER session id `opts.tools` is currently bound
+// to. Reading `opts.tools` fresh on every call (rather than a captured outer reference) is what
+// makes turn 2's write land under the checkpointer /clear rebinds, if the rebind runs at all —
+// driveLoop (cli.ts) destructures `prepared.tools` anew on every call, so this only proves the
+// rebind if `prepared.tools` was actually swapped in between.
+function childScriptClear(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_READY " + calls);`,
+    `  await opts.tools.write_file.execute(`,
+    `    { path: "note.txt", content: "turn " + calls },`,
+    `    { toolCallId: "c" + calls, messages: opts.messages },`,
+    `  );`,
+    `  console.log("\\nWROTE " + calls);`,
+    `  yield { type: "tool-call", name: "write_file", args: { path: "note.txt" } };`,
+    `  yield { type: "tool-result", name: "write_file", result: "ok" };`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
+// The archivist-counter half of /clear's own rebind: proves `archivistState` was rebuilt
+// (`createArchivistState`), not merely truncated in place the way `resetArchivistForRewind` does
+// (memory/archivist.ts's own comment on why the two are not interchangeable), through the ONLY
+// externally-observable effect a private, in-process counter has — whether it crosses
+// ARCHIVIST_TOOL_CALL_INTERVAL (10) and actually triggers a run. Turn 1 emits 9 "tool-call" events
+// (observeArchivistEvent's own per-event increment, archivist.ts) — one short of the interval, so
+// the archivist stays silent — and turn 2 emits exactly 1 more. A correctly-reset counter reads 1
+// after that (well under 10, still silent); a counter that survived /clear unreset would read 10
+// and trigger — and, dispatched against `getGroqModel: () => ({})` (the same placeholder every
+// other script in this file already uses as a model runLoopFake itself never calls), that dispatch
+// fails and archivist.ts's own runArchivist catch prints "archivist run failed" via `onWarning`, an
+// observable difference `sawLine` can wait on. `read_file`, not `write_file`: this test is about
+// the counter alone, so no checkpointer/real mutation is needed here at all.
+function childScriptClearArchivist(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_READY " + calls);`,
+    `  const n = calls === 1 ? 9 : 1;`,
+    `  for (let i = 0; i < n; i++) {`,
+    `    yield { type: "tool-call", name: "read_file", args: { path: "x" + i + ".txt" } };`,
+    `    yield { type: "tool-result", name: "read_file", result: "ok" };`,
+    `  }`,
+    `  console.log("\\nEMITTED " + calls + " " + n);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
     `}`,
@@ -5099,6 +5180,114 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         const frame = lastFrame();
         expect(frame).not.toContain("↑ scrolled");
         expect(frame).toContain("line-299.txt");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+  });
+
+  // THE risky half of /clear (cli.ts's own comment on the rebind block, onSubmit): without it,
+  // `prepared.checkpointer`/`prepared.tools` keep closing over the OLD session's id, so a tool call
+  // made after /clear silently keeps appending checkpoints to the OLD session's git ref/log —
+  // no error, no warning. `childScriptClear`'s own fake runLoop calls the REAL
+  // `opts.tools.write_file.execute` on every turn (not a synthetic tool-call/tool-result pair),
+  // reading `opts.tools` fresh each call — the only way a real checkpoint through the real
+  // checkpointer can land under whichever session id `prepared.tools` is CURRENTLY bound to.
+  describe.skipIf(!isGitAvailable())("/clear rebinds checkpointing", () => {
+    test("a tool call after /clear checkpoints under the new session; the old session's file and ref are untouched", async () => {
+      const scriptPath = join(dir, "child-clear.mjs");
+      writeFileSync(scriptPath, childScriptClear(dir));
+
+      const sessionsDir = join(dir, "sessions");
+      // `dir` is the session's own `cwd` (startChild's own `cwd` param, below, is what sets the
+      // child process's real process.cwd() — the same value loadOrCreateSession's fresh-session
+      // branch records as `session.cwd`) — not inside a real git repo, so `projectRoot` falls back
+      // to `dir` itself, matching checkpointTarget's own resolution exactly.
+      const storeDir = checkpointStoreDir(join(dir, "checkpoints"), dir);
+      const gitDir = join(storeDir, "git");
+
+      const { child, sawLine } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY 1");
+        await sawLine("WROTE 1");
+        await sawLine("(done: no-tool-call)");
+
+        const files1 = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
+        expect(files1).toHaveLength(1);
+        const oldId = (files1[0] ?? "").slice(0, -".jsonl".length);
+        const oldSnapshot = readFileSync(join(sessionsDir, `${oldId}.jsonl`));
+        const oldRef = `refs/seri/sessions/${oldId}`;
+        const oldCommitBeforeClear = resolveRef(gitDir, oldRef);
+        expect(oldCommitBeforeClear).toBeDefined();
+
+        child.stdin?.write("/clear");
+        await sawLine("/clear");
+        child.stdin?.write("\r");
+        await sawLine("Started a new session");
+
+        // clearCommand's own ordering (cli.ts) awaits sessionUpdated — and, on the TUI path,
+        // tuiPresenter's sessionUpdated does not settle until onSessionChange's own saveSession
+        // call for the new session has actually run — BEFORE printing "Started a new session", so
+        // the new file is already on disk by the time that line appears above; this loop exists
+        // only to read its id, not to wait for it.
+        const files2 = readdirSync(sessionsDir).filter(
+          (f) => f.endsWith(".jsonl") && f !== `${oldId}.jsonl`,
+        );
+        expect(files2).toHaveLength(1);
+        const newId = (files2[0] ?? "").slice(0, -".jsonl".length);
+
+        child.stdin?.write("do another task");
+        await sawLine("do another task");
+        child.stdin?.write("\r");
+
+        await sawLine("RUNLOOP_READY 2");
+        await sawLine("WROTE 2");
+        await sawLine("(done: no-tool-call)");
+
+        // The new session got a real checkpoint, through a real checkpointer.
+        const newRef = `refs/seri/sessions/${newId}`;
+        expect(resolveRef(gitDir, newRef)).toBeDefined();
+
+        // The old session's file and ref are exactly as they were before /clear — the second tool
+        // call did not also land there.
+        expect(readFileSync(join(sessionsDir, `${oldId}.jsonl`))).toEqual(oldSnapshot);
+        expect(resolveRef(gitDir, oldRef)).toBe(oldCommitBeforeClear);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("/clear rebuilds archivist state — a stale tool-call count does not survive it", async () => {
+      const scriptPath = join(dir, "child-clear-archivist.mjs");
+      writeFileSync(scriptPath, childScriptClearArchivist(dir));
+
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY 1");
+        await sawLine("EMITTED 1 9");
+        await sawLine("(done: no-tool-call)");
+
+        child.stdin?.write("/clear");
+        await sawLine("/clear");
+        child.stdin?.write("\r");
+        await sawLine("Started a new session");
+
+        child.stdin?.write("do another task");
+        await sawLine("do another task");
+        child.stdin?.write("\r");
+
+        await sawLine("RUNLOOP_READY 2");
+        await sawLine("EMITTED 2 1");
+        await sawLine("(done: no-tool-call)");
+        // `archivistLine`'s own "(archivist: ..." stats line (cli/output.ts) is dispatched into
+        // the transcript only when maybeRunArchivist actually returns a report — i.e. only once
+        // shouldRunArchivist's own trigger fired. Waited on with a plain timer, not `sawLine`,
+        // because this asserts an ABSENCE: `sawLine` only proves a positive.
+        await new Promise((r) => setTimeout(r, 15_000));
+
+        // 9 pre-clear + 1 post-clear would cross ARCHIVIST_TOOL_CALL_INTERVAL (10) if the counter
+        // survived /clear unreset — it must not have.
+        expect(rawOccurrences("(archivist:")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
