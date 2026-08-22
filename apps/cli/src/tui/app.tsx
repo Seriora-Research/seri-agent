@@ -10,17 +10,14 @@
 // pending-write placeholder, the mode indicator, and a basic input box, all re-rendered in place.
 //
 // Renderer lifecycle (mount, unmount, alt-screen entry/exit) is NOT this component's concern —
-// unlike Ink, where `App` itself called `useApp().exit()` on `done`, OpenTUI has no such hook: the
-// three callers above own the `CliRenderer` directly and destroy it themselves once a quit is
-// ready to complete (`getTuiRenderer`/`destroyTuiRenderer`, runtime/renderer.ts). `done` stays in
-// `AppProps` anyway, unused by this component's own logic, purely so `welcomeSplash.ts`/
-// `guidedSetup.ts` (which still pass it, `done: false`, for parity with `runTui`'s own call)
-// don't need their own excess-property-checking exception against this type.
+// unlike Ink, where `App` itself called `useApp().exit()` on a `done` prop, OpenTUI has no such
+// hook: the three callers above own the `CliRenderer` directly and destroy it themselves once a
+// quit is ready to complete (`getTuiRenderer`/`destroyTuiRenderer`, runtime/renderer.ts).
 import type { BoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
@@ -82,10 +79,6 @@ export type AppProps = {
   // normal Unix "end input" convention). `cli.ts`'s `quit()` is what actually ends the renderer now
   // (this component no longer calls any exit hook itself — see this file's own header comment).
   onQuit?: () => void;
-  // Kept for prop-shape compatibility with the two still-ink-based mounts that still pass it
-  // (`welcomeSplash.ts`, `guidedSetup.ts`) — unused by this component (see this file's own header
-  // comment for why the renderer no longer reads this from inside the tree).
-  done: boolean;
   // Findings 1+5 (thermo-nuclear structural review, round 6): answers the TUI-native approval
   // prompt (runTui's own tuiApprovalPrompt, cli.ts) — the ORIGINAL research-spec design ("a TUI
   // supplies a different function of the identical signature... with zero change to
@@ -205,7 +198,6 @@ export function App({
   // component instead keeps the reducer's existing windowed-slice contract (`transcriptScrollOffset`
   // et al, state/reducer.ts, unchanged) and uses `onSizeChange` (an event-driven per-renderable
   // option, not a polling hook) as the direct replacement for Ink's `useBoxMetrics` read.
-  const viewportRef = useRef<BoxRenderable | null>(null);
   const [measuredRows, setMeasuredRows] = useState(0);
   const [hasMeasured, setHasMeasured] = useState(false);
   // `Math.max(1, ...)` on BOTH branches: the measured one had no floor. The
@@ -358,7 +350,6 @@ export function App({
       flush's own row count for exactly this reason, and pending rows need the identical treatment
       applied live, since they are not yet a dispatched action `appendLines` could react to. */}
       <box
-        ref={viewportRef}
         flexDirection="column"
         flexGrow={1}
         flexShrink={1}

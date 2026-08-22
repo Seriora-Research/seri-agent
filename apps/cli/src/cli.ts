@@ -2809,10 +2809,6 @@ async function runTui(
     createElement(App, {
       session: prepared.session,
       route: prepared.route,
-      // H-3: multi-turn — the TUI never sets `done` itself here at mount. Exiting is /exit,
-      // Ctrl-D (quit(), above) or Ctrl-C's job (runtime/renderer.ts and signals.ts), not an
-      // implicit "the last turn finished" one.
-      done: false,
       onSubmit,
       onSessionChange,
       onQuit: quit,

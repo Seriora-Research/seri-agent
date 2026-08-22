@@ -11,11 +11,10 @@ import { TextAttributes } from "@opentui/core";
 //
 // Selection is reverse video, not color (Design conformance, docs/design/tui.md): a single
 // `TextAttributes.INVERSE` swaps this row's own foreground/background at render time, replacing
-// Ink/chalk's `backgroundColor={theme.selected}` + `inverse` combo — that combo existed only
-// because Ink's plain `backgroundColor` painted default-foreground text on ANSI black, which reads
-// as invisible on many dark terminal themes, and `inverse` was the second prop needed to fix it.
-// OpenTUI's own INVERSE attribute already does the full swap in one step, so `theme.selected` is
-// not read here at all.
+// Ink/chalk's own `backgroundColor` + `inverse` combo — that combo existed only because Ink's plain
+// `backgroundColor` painted default-foreground text on ANSI black, which reads as invisible on many
+// dark terminal themes, and `inverse` was the second prop needed to fix it. OpenTUI's own INVERSE
+// attribute already does the full swap in one step, so this needs no background-color token at all.
 // The marker ("> "/"  ") and `label` are two SIBLING `<text>` nodes, not one `<text>` with two
 // children — verified live (apps/cli/tests/tui/): a single `<text truncate>` whose content spans
 // more than one child (two adjacent string expressions, as `{marker}{label}` used to produce)

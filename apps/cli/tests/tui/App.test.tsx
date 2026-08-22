@@ -82,7 +82,6 @@ async function connect(
     <App
       session={session()}
       route={route()}
-      done={false}
       {...overrides}
       connectDispatch={(d) => {
         dispatch = d;

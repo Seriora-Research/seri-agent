@@ -266,7 +266,6 @@ export async function runGuidedSetup(
       // ResolvedRoute to pass. AppProps.route's own comment covers why this is `| undefined`
       // rather than a fabricated value.
       route: undefined,
-      done: false,
       onQuit: onSetupClose, // dead in this phase (InputBox/ApprovalBox never show) but wired for safety
       onModelSelected: onGuidedModelSelected,
       onModelPickerCancel: onGuidedModelPickerCancel,

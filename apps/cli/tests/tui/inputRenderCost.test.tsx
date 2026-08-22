@@ -94,7 +94,6 @@ async function measureBackspaceCost(options: {
       connectDispatch={(d) => {
         dispatch = d;
       }}
-      done={false}
     />,
   );
   await flush(setup);

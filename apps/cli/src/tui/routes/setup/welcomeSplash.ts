@@ -83,7 +83,6 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
     createElement(App, {
       session: liveState.session,
       route: undefined,
-      done: false,
       onSplashLogin,
       onSplashSignup,
       onSplashContinue,
