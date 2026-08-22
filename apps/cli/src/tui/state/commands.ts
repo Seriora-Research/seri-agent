@@ -273,11 +273,11 @@ const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
     {
       label: "Verify command",
       // Kept to the same length budget as SERI_VERIFY_ENABLED's own description, just above (both
-      // measured at 75 chars): ConfigPanel's `selectedDescription` (panels/ConfigPanel.tsx) has a
-      // single-row budget in PANEL_CHROME_ROWS (format.ts) with no wrap allowance, and a longer
-      // string here wraps to 2 rows on an 80-column terminal — one row taller than the panel's own
-      // layout budget, pushing content below it (bug found by review, confirmed reachable at the
-      // repo's own DEFAULT_COLUMNS=80).
+      // measured at 75 chars): ConfigPanel's `selectedDescription`
+      // (routes/config/ConfigPanel.tsx) has a single-row budget in PANEL_CHROME_ROWS (format.ts)
+      // with no wrap allowance, and a longer string here wraps to 2 rows on an 80-column
+      // terminal — one row taller than the panel's own layout budget, pushing content below it
+      // (bug found by review, confirmed reachable at the repo's own DEFAULT_COLUMNS=80).
       description: 'Shell command run to verify edits, e.g. "bun run check". Unset disables it.',
       kind: "string",
       takesEffectNextRun: true,

@@ -1,18 +1,22 @@
-// Structurally identical to panels/SetupPanel.tsx's own family (same step shape, same key
+/** @jsxImportSource @opentui/react */
+// Structurally identical to routes/setup/SetupPanel.tsx's own family (same step shape, same key
 // bindings), adapted from arbitrary config.json keys/values rather than provider API keys.
 
-import { Box, Text, useInput } from "ink";
+import { decodePasteBytes } from "@opentui/core";
+import { useKeyboard, usePaste } from "@opentui/react";
 import { useState } from "react";
-import { type ConfigRow, configKeyInfo } from "../commands";
-import { ConfirmPrompt, ErrorLine, ListRow } from "../components";
-import { singleLine } from "../format";
-import type { ConfigPanelState } from "../reducer";
-import { theme } from "../theme";
-import { useListWindow } from "../useListWindow";
+import { useListWindow } from "../../hooks/useListWindow";
+import { type ConfigRow, configKeyInfo } from "../../state/commands";
+import type { ConfigPanelState } from "../../state/reducer";
+import { theme } from "../../theme/theme";
+import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
+import { ErrorLine } from "../../ui/ErrorLine";
+import { ListRow } from "../../ui/ListRow";
+import { singleLine } from "../../util/format";
 
-// /config's own live state (tui/reducer.ts's pendingConfig) — mirrors SetupPanel's
+// /config's own live state (state/reducer.ts's pendingConfig) — mirrors SetupPanel's
 // step-dispatcher shape: one branch per step that still owns input handling and local state;
-// the confirm-unset step delegates to the shared ConfirmPrompt (components.tsx) instead.
+// the confirm-unset step delegates to the shared ConfirmPrompt (ui/ConfirmPrompt.tsx) instead.
 export function ConfigPanel({
   pendingConfig,
   onConfigSelect,
@@ -77,27 +81,29 @@ function ConfigList({
     pendingConfig.selected,
   );
 
-  useInput((input, key) => {
-    if (key.escape || (key.ctrl && input === "d")) {
+  useKeyboard((key) => {
+    if (key.name === "escape" || (key.ctrl && key.name === "d")) {
       onConfigClose?.();
       return;
     }
     if (handleArrowKey(key)) return;
     const row = rows[selected];
-    // key.return/key.delete are checked before the input.length === 0 guard, matching
-    // SetupList's own fix for this exact ordering (Ink reports input === '' for every named key).
-    if (key.return) {
+    // "return"/"delete" are checked before the printable-key guard below: `key.name`'s own length
+    // is what the guard uses to tell a named key ("return", "delete", "escape"...) apart from a
+    // literal character, so checking these two named keys AFTER the guard would let it silently
+    // return before their own branch ever ran.
+    if (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") {
       if (row !== undefined) onConfigSelect?.(row.key);
       return;
     }
-    if (key.delete) {
+    if (key.name === "delete") {
       if (row?.removable) onConfigUnset?.(row.key);
       return;
     }
     if (key.ctrl || key.meta) return;
-    if (input.length === 0) return;
+    if (key.sequence.length === 0 || (key.name.length !== 1 && key.name !== "space")) return;
     if (row === undefined) return;
-    const typed = input.toLowerCase();
+    const typed = key.sequence.toLowerCase();
     if (typed === "a") {
       onConfigSelect?.(row.key);
       return;
@@ -113,26 +119,26 @@ function ConfigList({
     selectedRow === undefined ? undefined : configKeyInfo(selectedRow.key).description;
 
   return (
-    <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
-      <Text color={theme.muted}>/config — settings</Text>
+    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+      <text fg={theme.muted}>/config — settings</text>
       {visible.map(({ row, isSelected }) => (
         <ListRow key={row.key} selected={isSelected} label={formatConfigRow(row)} />
       ))}
-      {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
+      {remainingCount > 0 && <text fg={theme.muted}>+{remainingCount} more</text>}
       {selectedDescription && (
-        // Same reasoning as ListRow's own comment (components.tsx): a config key's own description
-        // is fixed copy today (commands.ts trims it to fit an assumed 80-column terminal), but
-        // nothing here reads the REAL terminal width, so a narrower real TTY reproduces the exact
-        // overflow that fix closed for the default width only. Truncating is the one guarantee
-        // that holds at any width.
-        <Text color={theme.muted} wrap="truncate-end">
+        // Same reasoning as ListRow's own comment (ui/ListRow.tsx): a config key's own description
+        // is fixed copy today (state/commands.ts trims it to fit an assumed 80-column terminal),
+        // but nothing here reads the REAL terminal width, so a narrower real TTY reproduces the
+        // exact overflow that fix closed for the default width only. Truncating is the one
+        // guarantee that holds at any width.
+        <text fg={theme.muted} truncate>
           {selectedDescription}
-        </Text>
+        </text>
       )}
-      <Text
-        color={theme.muted}
-      >{`↑/↓ move · Enter/a ${actionHint} · r/Delete unset · Esc/Ctrl-D close`}</Text>
-    </Box>
+      <text
+        fg={theme.muted}
+      >{`↑/↓ move · Enter/a ${actionHint} · r/Delete unset · Esc/Ctrl-D close`}</text>
+    </box>
   );
 }
 
@@ -167,40 +173,51 @@ function ConfigEnterValue({
   const [value, setValue] = useState("");
   const { label, description } = configKeyInfo(key);
 
-  useInput((input, inputKey) => {
+  useKeyboard((inputKey) => {
     if (busy) return;
-    if (inputKey.ctrl && input === "d") {
+    if (inputKey.ctrl && inputKey.name === "d") {
       onConfigClose?.();
       return;
     }
-    if (inputKey.escape) {
+    if (inputKey.name === "escape") {
       onConfigBack?.();
       return;
     }
-    if (inputKey.return) {
+    if (inputKey.name === "return" || inputKey.name === "kpenter" || inputKey.name === "linefeed") {
       onConfigValueEntered?.(key, value);
       return;
     }
-    if (inputKey.backspace || inputKey.delete) {
+    if (inputKey.name === "backspace" || inputKey.name === "delete") {
       setValue((current) => current.slice(0, -1));
       return;
     }
     if (inputKey.ctrl || inputKey.meta) return;
-    if (input.length === 0) return;
-    setValue((current) => current + input.replace(/[\r\n]/g, ""));
+    if (inputKey.sequence.length === 0 || (inputKey.name.length !== 1 && inputKey.name !== "space"))
+      return;
+    setValue((current) => current + inputKey.sequence.replace(/[\r\n]/g, ""));
+  });
+
+  // OpenTUI delivers a terminal paste as its own event, never through `useKeyboard` — see
+  // components/InputBox.tsx's own comment. A pasted config value (an API key is the common case)
+  // is appended the same way typed text is, newlines stripped; unlike InputBox/ModelPicker, a
+  // paste here never submits on a terminator — this step only ever submits on Enter.
+  usePaste((event) => {
+    if (busy) return;
+    const text = decodePasteBytes(event.bytes).replace(/[\r\n]/g, "");
+    setValue((current) => current + text);
   });
 
   return (
-    <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
-      <Text color={theme.muted}>{`Set ${label} (${key})`}</Text>
-      <Text color={theme.muted}>{description}</Text>
-      <Text>{"*".repeat(value.length)}</Text>
+    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+      <text fg={theme.muted}>{`Set ${label} (${key})`}</text>
+      <text fg={theme.muted}>{description}</text>
+      <text>{"*".repeat(value.length)}</text>
       <ErrorLine message={error} />
       {busy ? (
-        <Text color={theme.muted}>Saving…</Text>
+        <text fg={theme.muted}>Saving…</text>
       ) : (
-        <Text color={theme.muted}>Enter submit · Esc back · Ctrl-D close</Text>
+        <text fg={theme.muted}>Enter submit · Esc back · Ctrl-D close</text>
       )}
-    </Box>
+    </box>
   );
 }
