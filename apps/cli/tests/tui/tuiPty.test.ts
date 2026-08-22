@@ -5293,4 +5293,106 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
   });
+
+  describe("/clear end-to-end", () => {
+    // MEDIUM-3's own gate (SlashCommand.mutatesRunState, cli.ts): /clear mutates run state (a
+    // brand-new session id, an emptied transcript), so it must be refused — not queued, not
+    // partially applied — while a turn is in flight, the same discipline /undo/, /restore and
+    // /rewind already get. `childScriptInput`'s own runLoop never settles, so `turnInFlight` stays
+    // true for the life of this test.
+    test("/clear during an in-flight turn is refused; session and messages are untouched", async () => {
+      const scriptPath = join(dir, "child-clear-midturn.mjs");
+      writeFileSync(scriptPath, childScriptInput(dir));
+
+      const sessionsDir = join(dir, "sessions");
+      const { child, sawLine } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/clear");
+        await sawLine("/clear");
+        child.stdin?.write("\r");
+
+        await sawLine("/clear: can't run while a turn is in flight.");
+
+        // No new session was minted, and the one in-flight session's own messages are exactly what
+        // they were before the refused /clear — a real rebind never touched anything.
+        const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
+        expect(files).toHaveLength(1);
+        const loaded = loadSession<ModelMessage>((files[0] ?? "").slice(0, -".jsonl".length), sessionsDir);
+        expect(loaded.messages).toEqual([{ role: "user", content: "do a task" }]);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    describe.skipIf(!isGitAvailable())("after a real /clear", () => {
+      // clearCommand's own load-bearing order (cli.ts's comment on it): the transcript wipe must
+      // land AFTER the message so the wipe does not erase its own confirmation, but it must ALSO
+      // land after the `> /clear` echo (already in the transcript by the time clearCommand runs)
+      // so wiping actually removes it. `lastFrame()`, not `rawOccurrences`: the raw pty capture
+      // keeps every byte ever written, including a since-cleared line's own earlier appearance —
+      // only the CURRENT frame can prove an absence.
+      test("the transcript shows the confirmation, not the echoed `> /clear`", async () => {
+        const scriptPath = join(dir, "child-clear-visible.mjs");
+        writeFileSync(scriptPath, childScriptClear(dir));
+
+        const { child, sawLine, lastFrame } = await startChild(scriptPath, dir);
+        try {
+          await sawLine("RUNLOOP_READY 1");
+          await sawLine("WROTE 1");
+          await sawLine("(done: no-tool-call)");
+
+          child.stdin?.write("/clear");
+          await sawLine("/clear");
+          child.stdin?.write("\r");
+          await sawLine("Started a new session");
+
+          const frame = lastFrame();
+          expect(frame).toContain("Started a new session");
+          expect(frame).not.toContain("> /clear");
+        } finally {
+          child.kill("SIGKILL");
+        }
+      }, 60_000);
+
+      // Complements the byte-identical `.jsonl` check in the "/clear rebinds checkpointing"
+      // describe above, at the message-array level instead of the raw file level: the old
+      // session's own conversation is exactly what it was before /clear, with nothing from the
+      // NEW session's own further turn mixed in.
+      test("the old session's messages are exactly its pre-/clear messages, none of the post-/clear turn", async () => {
+        const scriptPath = join(dir, "child-clear-persist.mjs");
+        writeFileSync(scriptPath, childScriptClear(dir));
+
+        const sessionsDir = join(dir, "sessions");
+        const { child, sawLine } = await startChild(scriptPath, dir);
+        try {
+          await sawLine("RUNLOOP_READY 1");
+          await sawLine("WROTE 1");
+          await sawLine("(done: no-tool-call)");
+
+          const files1 = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
+          expect(files1).toHaveLength(1);
+          const oldId = (files1[0] ?? "").slice(0, -".jsonl".length);
+          const preClearMessages = loadSession<ModelMessage>(oldId, sessionsDir).messages;
+
+          child.stdin?.write("/clear");
+          await sawLine("/clear");
+          child.stdin?.write("\r");
+          await sawLine("Started a new session");
+
+          child.stdin?.write("do another task");
+          await sawLine("do another task");
+          child.stdin?.write("\r");
+          await sawLine("RUNLOOP_READY 2");
+          await sawLine("WROTE 2");
+          await sawLine("(done: no-tool-call)");
+
+          expect(loadSession<ModelMessage>(oldId, sessionsDir).messages).toEqual(preClearMessages);
+        } finally {
+          child.kill("SIGKILL");
+        }
+      }, 60_000);
+    });
+  });
 });
