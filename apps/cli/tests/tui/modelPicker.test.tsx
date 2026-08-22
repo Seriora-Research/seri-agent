@@ -6,7 +6,7 @@
 // space at every terminal width tried here, so the manual JS truncation workaround from the Ink
 // version is not carried over.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
@@ -14,12 +14,25 @@ import type { ReactNode } from "react";
 import type { ModelPickerEntry } from "../../src/tui/state/commands";
 import { ModelPicker } from "../../src/tui/components/ModelPicker";
 
+// Each `createTestRenderer()` call registers its own listener on the process-wide
+// `TerminalConsoleCache` singleton (see App.test.tsx's own comment on this) — leaking it across
+// test FILES within one bun test process causes order-dependent flakiness. `afterEach` destroys
+// whatever this file's own tests created.
+const mountedRenderers: TestRendererSetup[] = [];
+
+afterEach(() => {
+  for (const setup of mountedRenderers.splice(0)) {
+    setup.renderer.destroy();
+  }
+});
+
 async function settle(setup: TestRendererSetup): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await setup.renderOnce();
 }
 
 async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
+  mountedRenderers.push(setup);
   createRoot(setup.renderer).render(node);
   await settle(setup);
   await settle(setup);

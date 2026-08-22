@@ -4,12 +4,24 @@
 // finding: @opentui/react's reconciler needs a second settled render pass after mount before
 // useKeyboard's subscription is live.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ReactNode } from "react";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import { ApprovalBox } from "../../src/tui/components/ApprovalBox";
+
+// Each `createTestRenderer()` call registers its own listener on the process-wide
+// `TerminalConsoleCache` singleton (see App.test.tsx's own comment on this) — leaking it across
+// test FILES within one bun test process causes order-dependent flakiness. `afterEach` destroys
+// whatever this file's own tests created.
+const mountedRenderers: TestRendererSetup[] = [];
+
+afterEach(() => {
+  for (const setup of mountedRenderers.splice(0)) {
+    setup.renderer.destroy();
+  }
+});
 
 async function settle(setup: TestRendererSetup): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -17,6 +29,7 @@ async function settle(setup: TestRendererSetup): Promise<void> {
 }
 
 async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
+  mountedRenderers.push(setup);
   createRoot(setup.renderer).render(node);
   await settle(setup);
   await settle(setup);

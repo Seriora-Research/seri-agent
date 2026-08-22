@@ -8,7 +8,7 @@
 // can't isolate this component's own throttle from React 18's automatic batching of synchronous
 // state updates).
 
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ReactNode } from "react";
@@ -21,6 +21,18 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Each `createTestRenderer()` call registers its own listener on the process-wide
+// `TerminalConsoleCache` singleton (see App.test.tsx's own comment on this) — leaking it across
+// test FILES within one bun test process causes order-dependent flakiness. `afterEach` destroys
+// whatever this file's own tests created.
+const mountedRenderers: TestRendererSetup[] = [];
+
+afterEach(() => {
+  for (const setup of mountedRenderers.splice(0)) {
+    setup.renderer.destroy();
+  }
+});
+
 // @opentui/react's reconciler commits on a macrotask, not a microtask (Phase 1's own finding):
 // `useKeyboard`/`usePaste` subscribe from a plain (passive) `useEffect`, which needs a SECOND
 // settled render pass after mount before the subscription actually exists — a single settle()
@@ -32,6 +44,7 @@ async function settle(setup: TestRendererSetup): Promise<void> {
 }
 
 async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
+  mountedRenderers.push(setup);
   createRoot(setup.renderer).render(node);
   await settle(setup); // commits the mount
   await settle(setup); // lets passive effects (useKeyboard/usePaste's useEffect) subscribe
