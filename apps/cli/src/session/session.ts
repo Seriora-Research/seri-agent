@@ -186,3 +186,34 @@ export function findMostRecentSession(sessionsDir: string): string | undefined {
   }
   return mostRecentId;
 }
+
+// Like findMostRecentSession, but scoped to sessions recorded from `cwd` — for a caller (/clear's
+// bare, no-`--resume` form) that mints a new session carrying the resolved one's `cwd` forward
+// verbatim: `sessionsDir` holds every session for every project on the machine, and the plain
+// most-recent-mtime pick can land on whatever project was touched last elsewhere, silently
+// pointing the new session at a directory the user isn't even standing in. Reads only the header
+// line of each candidate (JSON.parse on `readFileSync(...).split("\n", 1)[0]`), not the full
+// loadSession path, since `cwd` is the only field this needs.
+export function findMostRecentSessionForCwd(sessionsDir: string, cwd: string): string | undefined {
+  if (!existsSync(sessionsDir)) return undefined;
+
+  let mostRecentId: string | undefined;
+  let mostRecentMtime = -Infinity;
+  for (const file of readdirSync(sessionsDir)) {
+    if (!file.endsWith(".jsonl")) continue;
+    const path = join(sessionsDir, file);
+    let header: { cwd?: string };
+    try {
+      header = JSON.parse(readFileSync(path, "utf8").split("\n", 1)[0] ?? "") as { cwd?: string };
+    } catch {
+      continue;
+    }
+    if (header.cwd !== cwd) continue;
+    const mtime = statSync(path).mtimeMs;
+    if (mtime > mostRecentMtime) {
+      mostRecentMtime = mtime;
+      mostRecentId = file.slice(0, -".jsonl".length);
+    }
+  }
+  return mostRecentId;
+}

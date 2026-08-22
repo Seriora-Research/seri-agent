@@ -83,6 +83,7 @@ import { toolDefinitions } from "./provider/tools";
 import { awaitsReply } from "./session/awaitsReply";
 import {
   findMostRecentSession,
+  findMostRecentSessionForCwd,
   loadSession,
   type SessionState,
   saveSession,
@@ -936,6 +937,15 @@ function runStart(ctx: RunContext): RunStart {
 // prepareSession and a bare `/undo` (no --resume) does not fall into the new-session path. `/undo`
 // and `/rewind` are keyed on the session's own `cwd`, not the current one, so running them from a
 // different directory still finds the store the edits were recorded in.
+//
+// `/clear` is the one exception to "most recent, full stop": decideClear's own comment explains
+// that it carries the resolved session's `cwd` forward into the new one verbatim, exactly like a
+// resumed session does — but a bare `/clear` (no explicit `--resume`) has no resumed session to
+// inherit a directory from, so the plain most-recent-mtime pick can silently mint a new session
+// pointed at whatever OTHER project's session was touched last on this machine (`sessionsDir` is
+// shared across every project). Scoped to `process.cwd()` instead, matching what a bare
+// `seri "task"` with no /clear would have started fresh in. An explicit `--resume <id> /clear` is
+// unaffected — that id is honoured regardless of cwd, the same as every other slash command.
 async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> {
   const [name = "", ...commandArgs] = ctx.taskText.split(/\s+/).filter(Boolean);
   const command = SLASH_COMMANDS.get(name);
@@ -954,7 +964,11 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
     }
   }
 
-  const id = ctx.resumeId ?? findMostRecentSession(ctx.sessionsDir);
+  const id =
+    ctx.resumeId ??
+    (name === "/clear"
+      ? findMostRecentSessionForCwd(ctx.sessionsDir, process.cwd())
+      : findMostRecentSession(ctx.sessionsDir));
   if (!id) {
     console.error(`No session to run ${name} against.`);
     return 1;
@@ -2640,6 +2654,13 @@ async function runTui(
       });
       return;
     }
+    // Captured before the try: the only thing that distinguishes "/clear ran" from "/mode or
+    // /rewind ran" for the rebind below is that /clear mints a brand-new session id (decideClear's
+    // own comment) while every other command's dispatch (this closure's own `dispatch`, synchronous
+    // — the /rewind branch below already relies on this) preserves it. Keying the rebind on that
+    // actual identity change, not on `name === "/clear"`, means a future command that also mints a
+    // new session id is covered by construction instead of needing its own added branch here.
+    const sessionIdBeforeCommand = liveState.session.id;
     try {
       if (command.needsSession === false) {
         await command.run(args, dirs(ctx), tuiPresenter(dispatch, awaitNextPersist));
@@ -2659,19 +2680,32 @@ async function runTui(
       if (name === "/rewind") {
         resetArchivistForRewind(archivistState, liveState.session.messages);
       }
+    } catch (err) {
+      dispatch({
+        type: "command-error",
+        message: messageOf(err),
+      });
+    } finally {
       // Without this, `prepared.checkpointer`/`prepared.tools` — built once at session start,
       // closing over the OLD session's id — silently keep appending checkpoints to the OLD
       // session's git ref and log file (checkpoint.ts's own sessionRef/logPath, both keyed on
       // sessionId) for every tool call made after /clear: no error, no warning, just checkpoints
-      // landing under a session nothing resumes anymore. `liveState.session` is already the NEW
-      // session by this point (`dispatch`, this closure's own wrapper, updates it synchronously,
-      // before command.run even returns — same guarantee the /rewind branch above relies on).
+      // landing under a session nothing resumes anymore. In `finally`, keyed on the id actually
+      // having changed rather than on `command.run` having resolved: `tuiPresenter`'s own
+      // `sessionUpdated` (this file's own `CommandPresenter` comment) dispatches `session-updated`
+      // synchronously, before its returned promise settles, so a persistence failure that later
+      // rejects that promise still leaves `liveState.session` pointing at the new id — living in the
+      // try block above (as this used to) meant that rejection skipped the rebind entirely, stranding
+      // the checkpointer/tools on the abandoned session with no error surfaced for it.
       // `storeDir`/`worktree` are unchanged by /clear (decideClear carries `cwd` over verbatim, so
       // checkpointTarget would resolve to the identical pair) — reused directly from `prepared`
       // rather than recomputed. `createArchivistState`, not `resetArchivistForRewind`: the latter
       // deliberately leaves `toolCallsSinceRun` alone (correct for a truncation of the SAME
       // conversation), which would carry a stale tool-call count into a conversation that has none.
-      if (name === "/clear") {
+      // `prepared.session` is reassigned alongside them — every other field on `PreparedRun` this
+      // file documents as resolved once per run, and this is the one place a run-scoped `session`
+      // would otherwise keep pointing at the pre-/clear session for the rest of the process.
+      if (liveState.session.id !== sessionIdBeforeCommand) {
         const rebound = buildCheckpointedTools({
           storeDir: prepared.storeDir,
           worktree: prepared.worktree,
@@ -2680,14 +2714,9 @@ async function runTui(
         });
         prepared.checkpointer = rebound.checkpointer;
         prepared.tools = rebound.tools;
+        prepared.session = liveState.session as RunSession;
         archivistState = createArchivistState(liveState.session);
       }
-    } catch (err) {
-      dispatch({
-        type: "command-error",
-        message: messageOf(err),
-      });
-    } finally {
       // /undo and /restore just forced the worktree to a state this closure's live `checkpointer`
       // never saw happen — it is the SAME instance every ongoing tool call in this TUI session
       // checkpoints through, and its own `previousTree`/`previousCommit` are now stale: the next
