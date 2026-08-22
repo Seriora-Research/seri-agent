@@ -129,8 +129,7 @@ describe.skipIf(process.platform === "win32")(
       try {
         await sawLine("CHILD_PID ");
         const match = stdoutSoFar().match(/CHILD_PID (\d+)/);
-        if (!match)
-          throw new Error(`could not find CHILD_PID in ${JSON.stringify(stdoutSoFar())}`);
+        if (!match) throw new Error(`could not find CHILD_PID in ${JSON.stringify(stdoutSoFar())}`);
         childPid = Number.parseInt(match[1], 10);
 
         // startChild already dismissed the welcome splash above. "no-tool-call)" is reducer-driven

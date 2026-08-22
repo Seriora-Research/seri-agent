@@ -12,7 +12,11 @@ import type { CliDeps } from "../../cli";
 import { configBoolean, loadConfig, setConfigValue, unsetConfigValue } from "../../config/config";
 import { messageOf } from "../../errors";
 import { forgetGrant, loadGrants } from "../../permissions/store";
-import { PROVIDER_API_KEY_NAMES, type ProviderKeyState, providerKeyState } from "../../provider/keys";
+import {
+  PROVIDER_API_KEY_NAMES,
+  type ProviderKeyState,
+  providerKeyState,
+} from "../../provider/keys";
 import { validateProviderKey } from "../../provider/validate";
 import {
   configKeyInfo,
