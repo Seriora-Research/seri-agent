@@ -124,6 +124,7 @@ to a temporary copy.
 | `/config` | view or edit non-provider settings (e.g. the verify command) |
 | `/permissions` | view or revoke tools you've permanently approved |
 | `/undo [n]`, `/rewind [n]`, `/restore <sha>` | step back through checkpoints |
+| `/clear` | start a new session (clears the conversation) — the previous one stays recoverable with `seri --resume <id>` |
 | `/memory pending\|diff\|approve\|reject` | review and act on staged memory writes |
 | `/memory archivist on\|off` | turn the post-turn learning pass off entirely |
 | `/login`, `/signup`, `/logout` | sign in to, create, or leave a hosted seri account |
@@ -133,6 +134,13 @@ to a temporary copy.
 
 Approve-with-always still means once per tool, not a blanket grant for the session; and skipping
 approval prompts entirely for attended, high-trust work is a mode you opt into, not a default.
+
+`/clear` is a different kind of reset from the automatic compaction that trims an over-long
+conversation mid-session: compaction is transparent and partial (it summarizes older messages so
+the turn can keep going), while `/clear` is explicit and full — every message is gone from the new
+session's view, only recoverable by resuming the old one. Each `/clear` leaves the previous
+session's file on disk with no retention or cleanup policy; that's accepted, not a bug — the same
+way a plain `seri <task>` already leaves one file per session behind.
 
 ## Checking your code after a write
 
