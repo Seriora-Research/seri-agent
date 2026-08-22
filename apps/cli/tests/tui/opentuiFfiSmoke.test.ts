@@ -27,9 +27,8 @@ function runnableTarget(): Target | undefined {
 // `bun install` only fetches the host's own @opentui/core-<platform> optional dependency, so
 // cross-compiling the other 4 targets first needs `--os=* --cpu=*` to pull every platform's
 // native package onto disk -- real network/IO cost, not worth paying on every `bun test`. Set
-// SERI_OPENTUI_FFI_SMOKE=1 to run it: this is Phase 0's own stop-gate check
-// (docs/specs/025-tui-opentui-migration/tasks.md), meant to be re-run when @opentui/core is
-// bumped, not on every commit.
+// SERI_OPENTUI_FFI_SMOKE=1 to run it: meant to be re-run when @opentui/core is bumped, not on
+// every commit.
 describe.skipIf(process.env.SERI_OPENTUI_FFI_SMOKE !== "1")(
   "OpenTUI's native FFI module compiles and loads inside a `bun build --compile` binary",
   () => {

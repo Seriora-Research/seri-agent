@@ -11,8 +11,8 @@ import { isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
 // intentional typing, is spaced further apart than this and always gets its own immediate
 // (leading-edge) repaint. Scoped to InputBox's own local state only.
 //
-// Kept, not dropped, for the hand-rolled OpenTUI port too — verified, not assumed (Phase 1's own
-// open question): `useKeyboard`'s own doc comment confirms held-key repeats are delivered as
+// Kept, not dropped, for the hand-rolled OpenTUI port too — verified, not assumed:
+// `useKeyboard`'s own doc comment confirms held-key repeats are delivered as
 // ordinary press events (`repeated: true`), the same firehose Ink's `useInput` produced, and this
 // file's own render-cost test (inputRenderCost.test.tsx's OpenTUI equivalent) asserts a rapid
 // backspace burst without this throttle produces one `setValue` call per keystroke instead of one

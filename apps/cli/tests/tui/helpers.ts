@@ -32,8 +32,8 @@ export function route(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
   };
 }
 
-// @opentui/react's reconciler commits on a macrotask, not a microtask (Phase 1's own empirical
-// finding, verified independently against this exact harness) — a plain render/dispatch needs a
+// @opentui/react's reconciler commits on a macrotask, not a microtask (verified independently
+// against this exact harness) — a plain render/dispatch needs a
 // real timer tick before `renderOnce()`/`captureCharFrame()` reliably observes the committed
 // result, and a component that just (re)mounted (a panel swap, or the initial mount) needs a
 // SECOND settled pass before its own passive effects (`useKeyboard`/`usePaste`'s `useEffect`)

@@ -1,8 +1,8 @@
-// Extracted from cli.ts (code-review finding, PR #91 round 2: cli.ts is 2900+ lines and this
-// function alone — the liveState/dispatch mirror, every guided-setup-only handler closure, and the
-// two-then-three module-level UI string constants — was ~200 of them). Self-contained: the only
-// thing it needs is `createSetupHandlers`, imported directly from its own module (../../state/handlers)
-// — shared byte-identical with `runTui` (cli.ts), with no dependency back on cli.ts itself.
+// Extracted from cli.ts — the liveState/dispatch mirror, every guided-setup-only handler closure,
+// and the two-then-three module-level UI string constants together made cli.ts's own copy of this
+// function large enough to warrant its own file. Self-contained: the only thing it needs is
+// `createSetupHandlers`, imported directly from its own module (../../state/handlers) — shared
+// byte-identical with `runTui` (cli.ts), with no dependency back on cli.ts itself.
 import { randomUUID } from "node:crypto";
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
 import { createElement } from "react";
@@ -20,17 +20,17 @@ import {
 import { createSetupHandlers } from "../../state/handlers";
 import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "../../state/reducer";
 
-// `runGuidedSetup`'s own mandatory-picker copy (Decision 1/2, byok-guided-setup-default-model
-// bugfix report) — named constants rather than inlined literals, so tuiPty.test.ts's own pty
-// tests can assert a substring of the exact wording without duplicating it by hand.
+// `runGuidedSetup`'s own mandatory-picker copy — named constants rather than inlined literals, so
+// tuiPty.test.ts's own pty tests can assert a substring of the exact wording without duplicating
+// it by hand.
 const GUIDED_MODEL_PROMPT = "Pick a default model to continue.";
 const GUIDED_MODEL_REQUIRED = "Pick a model to continue — Ctrl-C to quit without saving one.";
-// Code-review finding, PR #91 round 2: the one visible line between an Escape press and the
-// picker actually appearing, whenever `catalogPromise` is still resolving at that point.
+// The one visible line between an Escape press and the picker actually appearing, whenever
+// `catalogPromise` is still resolving at that point.
 const GUIDED_MODEL_LOADING = "Loading available models…";
-// Code-review finding, PR #91 round 3: Escape/Ctrl-D pressed again while still "closing" used to
-// be a bare, silent no-op — indistinguishable from a dead key, especially from the "enter-key"
-// step (SetupEnterKey's own Ctrl-D goes straight to onSetupClose, not through onSetupBack).
+// Escape/Ctrl-D pressed again while still "closing" would otherwise be a bare, silent no-op —
+// indistinguishable from a dead key, especially from the "enter-key" step (SetupEnterKey's own
+// Ctrl-D goes straight to onSetupClose, not through onSetupBack).
 const GUIDED_MODEL_STILL_LOADING = "Still loading available models — one moment.";
 
 // Rendered only when the pre-`prepareSession` gate in `run()` finds a real TTY and zero API keys
@@ -43,14 +43,14 @@ const GUIDED_MODEL_STILL_LOADING = "Still loading available models — one momen
 // required), and are never saved to disk or read again once this function resolves — the real
 // session `prepareSession` builds afterward (run()'s own call site) is what the run actually uses.
 //
-// A two-step flow, not one (byok-guided-setup-default-model bugfix report, Decision 1): closing
-// /setup with at least one key configured does not resolve `closed` on its own — it opens the
+// A two-step flow, not one: closing /setup with at least one key configured does not resolve
+// `closed` on its own — it opens the
 // mandatory model picker (`onGuidedModelSelected`/`onGuidedModelPickerCancel`, below), which is
 // what a completed guided setup actually needs to leave `config.json` in a runnable state
 // (SERI_MODEL/SERI_PROVIDER persisted, not just a key). Declining (no key ever added) still closes
 // immediately, byte-for-byte the old single-step behavior. `catalogPromise` is started by `run()`'s
-// own call site but deliberately NOT awaited there (code-review finding, PR #91) — see that call
-// site's own comment for why, and `onSetupClose`'s own header comment for why it stays synchronous
+// own call site but deliberately NOT awaited there — see that call site's own comment for why, and
+// `onSetupClose`'s own header comment for why it stays synchronous
 // and chains `.then`/`.catch` on that promise rather than awaiting it inline.
 export async function runGuidedSetup(
   configDir: string,
@@ -58,11 +58,10 @@ export async function runGuidedSetup(
 ): Promise<void> {
   const { root } = await getTuiRenderer();
 
-  // Same synchronous-mirror pattern as runTui's own `liveState`/`dispatch` (that function's own
-  // "Findings 2/3/4/6" comment) — kept here, not shared, because runTui's copy is read from ~20
-  // call sites across a much larger closure, where genuinely unifying the two would mean rewriting
-  // every one of those reads (code-review/thermo-nuclear follow-up note, byok-guided-setup loop:
-  // deferred as too much blast radius for this PR). The invariant is the same: `dispatch` updates
+  // Same synchronous-mirror pattern as runTui's own `liveState`/`dispatch` — kept here, not
+  // shared, because runTui's copy is read from ~20 call sites across a much larger closure, where
+  // genuinely unifying the two would mean rewriting every one of those reads (deferred as too much
+  // blast radius). The invariant is the same: `dispatch` updates
   // `liveState` BEFORE handing the action to React, so anything reading `liveState` right after a
   // `dispatch` call (this function's own `onSetupClose`, `createSetupHandlers`'s `getPendingSetup`)
   // sees the post-action state synchronously rather than racing React's own effect-scheduled commit.
@@ -95,7 +94,7 @@ export async function runGuidedSetup(
     resolveClosed = resolve;
   });
 
-  // Decision 2 (bugfix report): re-prompt, never exit. Because this NEVER dispatches
+  // Re-prompt, never exit. Because this NEVER dispatches
   // `model-picker-resolved`, `state.pendingModelPicker` stays set and `ModelPicker` stays mounted
   // with its own local filter/selection intact — the user gets a visible reason instead of the
   // panel silently doing nothing. `command-error`, not `transcript-append`: it is a single-slot
@@ -106,7 +105,7 @@ export async function runGuidedSetup(
     dispatch({ type: "command-error", message: GUIDED_MODEL_REQUIRED });
   }
 
-  // Decision 4: persists synchronously, on selection — not the `messages-updated` path
+  // Persists synchronously, on selection — not the `messages-updated` path
   // (`runTurn`'s own `onEvent`), which never fires in this phase (no turn ever runs here). The
   // write is synchronous (`persistDefaultModel` -> one `setConfigValues` call), so by the time
   // `await closed` (below) returns, config.json already carries the pair and `prepareSession`'s
@@ -131,21 +130,20 @@ export async function runGuidedSetup(
     resolveClosed();
   }
 
-  // Code-review finding, PR #91 round 2: `AppProps.onSetupClose` is typed `(leftoverInput?) => void`
-  // — TypeScript silently drops a returned promise there, so an earlier `async function
-  // onSetupClose` awaiting `catalogPromise` inline was, in practice, fire-and-forget from every
-  // caller's point of view: a second Escape press while it was still pending re-entered the
-  // function and both resumes ran the tail (duplicate dispatches); and the wait itself was silent,
-  // with no feedback between the keypress and the picker appearing. `onSetupClose` stays
-  // synchronous now — the wait is chained with `.then`/`.catch` instead of `await`ed inline, which
-  // fixes both of those — and `closing` guards re-entry. `.then`'s second argument only catches
-  // `catalogPromise` itself rejecting, though, not a throw from inside the first argument's own
-  // body — that half needed its own try/catch, added in round 3 (below).
+  // `AppProps.onSetupClose` is typed `(leftoverInput?) => void` — TypeScript silently drops a
+  // returned promise there, so an `async function onSetupClose` awaiting `catalogPromise` inline
+  // would be, in practice, fire-and-forget from every caller's point of view: a second Escape press
+  // while it was still pending would re-enter the function and both resumes would run the tail
+  // (duplicate dispatches); and the wait itself would be silent, with no feedback between the
+  // keypress and the picker appearing. `onSetupClose` stays synchronous instead — the wait is
+  // chained with `.then`/`.catch` instead of `await`ed inline, which avoids both of those — and
+  // `closing` guards re-entry. `.then`'s second argument only catches `catalogPromise` itself
+  // rejecting, though, not a throw from inside the first argument's own body — that half needs its
+  // own try/catch (below).
   let closing = false;
 
   // The shared degrade for every path that must resolve this phase WITHOUT ever opening the
-  // mandatory picker (code-review finding, PR #91: this exact three-line body used to be repeated
-  // at three, now four, call sites below).
+  // mandatory picker — reused rather than repeated at each of the four call sites below.
   function closeWithoutPicker(): void {
     dispatch({ type: "setup-resolved" });
     resolveClosed();
@@ -154,8 +152,8 @@ export async function runGuidedSetup(
   function onSetupClose(): void {
     // Re-entrancy guard: a second Escape/Ctrl-D press while `catalogPromise` is still resolving
     // must not re-run the tail below racing the first on the same promise — but it still needs
-    // visible feedback (code-review finding, PR #91 round 3), not a silent no-op that looks like a
-    // dead key from the "enter-key" step, where Ctrl-D reaches onSetupClose directly.
+    // visible feedback, not a silent no-op that looks like a dead key from the "enter-key" step,
+    // where Ctrl-D reaches onSetupClose directly.
     if (closing) {
       dispatch({ type: "command-error", message: GUIDED_MODEL_STILL_LOADING });
       return;
@@ -178,7 +176,7 @@ export async function runGuidedSetup(
       return;
     }
     closing = true;
-    // Visible feedback for the wait that follows (code-review finding, PR #91 round 2): the fetch
+    // Visible feedback for the wait that follows: the fetch
     // started at run()'s own call site can still be in flight here (up to FETCH_TIMEOUT_MS), and
     // without a line here, Escape looked completely dead for however long that takes.
     dispatch({ type: "transcript-append", line: GUIDED_MODEL_LOADING });
@@ -197,8 +195,8 @@ export async function runGuidedSetup(
         // `catalogPromise` is already resolved by then, so `.then` fires on the next tick.
         if (liveState.pendingSetup?.step !== "list") return;
         try {
-          // Re-read, not the `configured` snapshot captured above (code-review finding, PR #91
-          // round 3): this wait can take up to FETCH_TIMEOUT_MS, and a remove-then-re-add
+          // Re-read, not the `configured` snapshot captured above: this wait can take up to
+          // FETCH_TIMEOUT_MS, and a remove-then-re-add
           // round-trip (`r`→`y`, then `a`) returns to the "list" step — the only thing the guard
           // above checks — without ever tripping it. Reusing the stale snapshot here could offer
           // (and persist) a default model for a provider whose key was removed in the meantime,
@@ -227,7 +225,7 @@ export async function runGuidedSetup(
             return;
           }
           // At least one key is configured and has a runnable model: a default model pick is now
-          // mandatory (Decision 1) before this phase can resolve. `model-picker-requested`
+          // mandatory before this phase can resolve. `model-picker-requested`
           // dispatched BEFORE `setup-resolved` is deliberate — App.tsx's own render ternary checks
           // `pendingModelPicker` before `pendingSetup`, so no intermediate frame can render a bare
           // `InputBox` even without React batching.
@@ -235,7 +233,7 @@ export async function runGuidedSetup(
           dispatch({ type: "model-picker-requested", entries });
           dispatch({ type: "setup-resolved" });
         } catch {
-          // Code-review finding, PR #91 round 3: this callback's own body can throw (the fresh
+          // This callback's own body can throw (the fresh
           // `configuredProviders` read above, a future change to `decideGuidedModelPickerOpen` or
           // `dispatch`) — `.then`'s second argument only catches `catalogPromise` REJECTING, not a
           // throw from inside this first argument, so an uncaught one here would become an
@@ -276,8 +274,8 @@ export async function runGuidedSetup(
       onSetupClose,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
-        // Guarded like every other decideSetupOpen call site in this file (code-review finding,
-        // byok-guided-setup PR): config.json can be corrupted between run()'s own pre-check and
+        // Guarded like every other decideSetupOpen call site in this file: config.json can be
+        // corrupted between run()'s own pre-check and
         // this effect firing (a racing second `seri` process, a hand edit). Unlike a command-error
         // dispatch (there is no InputBox/transcript visible here to show one), resolving `closed`
         // and leaving the key unadded makes `run()` fall through unconditionally (its own
@@ -287,7 +285,7 @@ export async function runGuidedSetup(
         // everywhere else, reached here without a second, differently-worded error message.
         try {
           dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
-          // Stage C: the passive AuthBanner only — this phase's own `pendingAuth` is unreachable
+          // The passive AuthBanner only — this phase's own `pendingAuth` is unreachable
           // regardless (no createAuthHandlers here, by design; see this function's own header
           // comment), but the banner is independent of that (TuiState.authOffer's own comment).
           dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
@@ -298,8 +296,8 @@ export async function runGuidedSetup(
     }),
   );
 
-  // M-2 (runTui's own comment, mirrored here — code-review finding): a fatal Ctrl-C/SIGTERM while
-  // this panel is up has no turn in flight to cancel, so `runtime/renderer.ts`'s own `deliverSignal`
+  // A fatal Ctrl-C/SIGTERM while this panel is up has no turn in flight to cancel, so
+  // `runtime/renderer.ts`'s own `deliverSignal`
   // call takes the fatal branch and kills the process by signal without ever reaching `await closed`
   // below. `getTuiRenderer`'s own registration (runtime/renderer.ts) is what puts the terminal's
   // raw-mode/stdin state back before that happens — no separate registration needed here.

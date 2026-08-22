@@ -22,10 +22,10 @@ import type { CliRendererConfig } from "@opentui/core";
 // `isTTY ? await runTui(...) : ...`) is still the only interactivity check that applies here.
 //
 // `screenMode: "alternate-screen"` — OpenTUI's renderer-level equivalent of Ink's per-mount
-// `alternateScreen` option; entered once for this renderer's own lifetime, matching Decision 1
-// (docs/specs/025-tui-opentui-migration/spec.md): `routes/setup/welcomeSplash.ts`,
-// `routes/setup/guidedSetup.ts`, and `runTui` (cli.ts) all share the one instance this config
-// creates, so this is entered once for the whole splash -> setup -> main-TUI window, not per phase.
+// `alternateScreen` option; entered once for this renderer's own lifetime: `routes/setup/
+// welcomeSplash.ts`, `routes/setup/guidedSetup.ts`, and `runTui` (cli.ts) all share the one
+// instance this config creates, so this is entered once for the whole splash -> setup -> main-TUI
+// window, not per phase.
 export const MAIN_TUI_RENDERER_CONFIG: CliRendererConfig = {
   exitOnCtrlC: false,
   exitSignals: [],

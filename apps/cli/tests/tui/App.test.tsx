@@ -33,11 +33,11 @@ import {
 import { flush, route, session } from "./helpers";
 
 // Wide enough that every "full width" formatModeLabel tier (>=76 cols) is exercised by default,
-// tall enough (>=25 rows) that every panel's own list window sits at LIST_WINDOW_MAX (10) without
+// tall enough (>=24 rows) that every panel's own list window sits at LIST_WINDOW_MAX (10) without
 // each test having to resize just to clear that floor (util/format.ts's own PANEL_CHROME_ROWS/
-// APP_CHROME_ROWS math: listWindowSize(height - 15), which reaches 10 at height >= 25). Deliberately
-// fixed rather than inherited from the real host terminal (the old ink-testing-library harness's
-// own default) — a test's expected geometry should not depend on the terminal it happens to run in.
+// APP_CHROME_ROWS math: listWindowSize(height - 14), which reaches 10 at height >= 24). Deliberately
+// fixed rather than inherited from the real host terminal — a test's expected geometry should not
+// depend on the terminal it happens to run in.
 const DEFAULT_WIDTH = 100;
 const DEFAULT_HEIGHT = 30;
 
@@ -468,8 +468,8 @@ describe("App", () => {
     expect(setup.captureCharFrame()).toContain("[auto]");
   });
 
-  // MEDIUM-E (InputBox.tsx's own comment): a paste arrives as its own bracketed-paste event under
-  // OpenTUI, never through the keyboard handler — unlike Ink, which handed a paste to `useInput` as
+  // A paste arrives as its own bracketed-paste event under OpenTUI (InputBox.tsx's own comment),
+  // never through the keyboard handler — unlike Ink, which handed a paste to `useInput` as
   // one oversized `input` chunk indistinguishable from typed keys. A pasted chunk with an embedded
   // real `\r`/`\n` must still submit at the first line rather than embedding the terminator
   // literally, the same contract `usePaste`'s own terminator-split implements.
@@ -545,8 +545,8 @@ describe("App", () => {
     expect(frame).not.toContain("! write_file");
   });
 
-  // HIGH-B/MEDIUM-C: Ctrl-D calls the onQuit prop directly — app.tsx wires it through to
-  // InputBox unconditionally, so this is the same trigger runTui's own quit() attaches to.
+  // Ctrl-D calls the onQuit prop directly — app.tsx wires it through to InputBox unconditionally,
+  // so this is the same trigger runTui's own quit() attaches to.
   test("Ctrl-D calls onQuit", async () => {
     let quit = false;
     const { setup } = await connect({ onQuit: () => (quit = true) });
@@ -665,10 +665,10 @@ describe("App", () => {
       expect(answers).toEqual(["no"]);
     });
 
-    // Round 8 code review, finding 2: a navigation/editing key carries no printable `sequence` at
-    // all, unlike an ordinary "wrong" letter — ApprovalBox's own guard (`key.sequence.length === 0
-    // || (key.name.length !== 1 && key.name !== "space")`) is what makes it a no-op rather than
-    // falling into the "anything unrecognised is 'no'" catch-all meant for actual mistyped text.
+    // A navigation/editing key carries no printable `sequence` at all, unlike an ordinary "wrong"
+    // letter — ApprovalBox's own guard (`!isPrintableKey(key)`, util/keys.ts) is what makes it a
+    // no-op rather than falling into the "anything unrecognised is 'no'" catch-all meant for
+    // actual mistyped text.
     test("navigation and editing keys (arrow, backspace) are ignored rather than treated as an implicit deny", async () => {
       const answers: ApprovalAnswer[] = [];
       const { setup, dispatch } = await connect({ onApprovalAnswer: (a) => answers.push(a) });
@@ -1073,8 +1073,7 @@ describe("App", () => {
       expect(frame).toContain(`> ${formatSetupRow(setupRows()[0] as SetupProviderRow)}`);
     });
 
-    // Bug fixed here (code-review, PR #73, round 3, item #1): Enter used to be dead in the real
-    // TUI — `"\r"`, not `"a"`, is the whole point of this test, per the panel's own hint text
+    // `"\r"`, not `"a"`, is the whole point of this test, per the panel's own hint text
     // ("Enter/a add or replace") promising both work.
     test("the list step: Enter (not the 'a' shortcut) selects the highlighted row via onSetupSelect", async () => {
       const selected: ModelProvider[] = [];
@@ -1869,7 +1868,7 @@ describe("App", () => {
       expect(setup.captureCharFrame()).toBe(before);
     });
 
-    // Stage C: the banner sits ABOVE the render ternary (app.tsx's own comment) rather than as one
+    // The banner sits ABOVE the render ternary (app.tsx's own comment) rather than as one
     // of its branches — the zeroKeys x noAuth "both at once" cell, component level: a first run
     // with no provider key opens /setup's own panel, and the banner must still render alongside it
     // rather than being replaced the way ApprovalBox/ModelPicker/SetupPanel replace each other.
@@ -2023,10 +2022,10 @@ describe("App", () => {
       expect(submitted).toEqual(["back to typing"]);
     });
 
-    // Bug fix (coordinator follow-up on Stage C): before AuthPanel's own useKeyboard existed, a
-    // failed login/signup (createAuthHandlers' own catch, tui/state/handlers.ts — a denied/expired
-    // code, a network error) left the "result" step up with no keyboard path back at all, not even
-    // Ctrl-C. Presses a REAL key (not a direct auth-resolved dispatch, which "clears the panel
+    // Without AuthPanel's own useKeyboard, a failed login/signup (createAuthHandlers' own catch,
+    // tui/state/handlers.ts — a denied/expired code, a network error) would leave the "result" step
+    // up with no keyboard path back at all, not even Ctrl-C. Presses a REAL key (not a direct
+    // auth-resolved dispatch, which "clears the panel
     // entirely" above already covers) to prove AuthPanel's own Enter/Esc handling is actually
     // wired through app.tsx's onAuthResolved prop — the same wiring-proof shape ConfigPanel's own
     // "Esc on the list step calls onConfigClose" test uses.

@@ -1,12 +1,10 @@
 /** @jsxImportSource @opentui/react */
 // InputBox.tsx (apps/cli/src/tui/components/InputBox.tsx), the OpenTUI port of the old
-// panels/InputBox.tsx. Resolves the one thing Phase 1's spike left open for the hand-rolled
-// fallback specifically (docs/specs/025-tui-opentui-migration/tasks.md): does the rapid-backspace
-// throttle (THROTTLE_MS/pendingValueRef, ported from PR #135) still do real work on this renderer,
-// or was it an Ink-only artifact? Mirrors tests/tui/inputThrottle.test.tsx's own
-// spy-on-setTimeout technique (that file's own comment explains why: frame/render count alone
-// can't isolate this component's own throttle from React 18's automatic batching of synchronous
-// state updates).
+// panels/InputBox.tsx. Verifies the rapid-backspace throttle (THROTTLE_MS/pendingValueRef, ported
+// from the Ink component) still does real work on this renderer, not just an Ink-only artifact.
+// Mirrors tests/tui/inputThrottle.test.tsx's own spy-on-setTimeout technique (that file's own
+// comment explains why: frame/render count alone can't isolate this component's own throttle from
+// React 18's automatic batching of synchronous state updates).
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
@@ -33,7 +31,7 @@ afterEach(() => {
   }
 });
 
-// @opentui/react's reconciler commits on a macrotask, not a microtask (Phase 1's own finding):
+// @opentui/react's reconciler commits on a macrotask, not a microtask:
 // `useKeyboard`/`usePaste` subscribe from a plain (passive) `useEffect`, which needs a SECOND
 // settled render pass after mount before the subscription actually exists — a single settle()
 // after mount produced zero recorded keypresses when this was first verified against this

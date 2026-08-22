@@ -1846,8 +1846,9 @@ async function runTui(
   maxTurns: number | undefined,
   skipPermissions: boolean,
 ): Promise<DriveLoopResult> {
-  // LOW-3's own reasoning (below) now starts here instead of at a synchronous `render()` call:
-  // `createCliRenderer` is async (`@opentui/core`'s own API, unlike Ink's synchronous `render`), so
+  // `root` is awaited here, at the top of this function, instead of at a synchronous `render()`
+  // call: `createCliRenderer` is async (`@opentui/core`'s own API, unlike Ink's synchronous
+  // `render`), so
   // `renderer`/`root` are obtained and awaited before anything else in this closure runs, not just
   // before the promise executor — every closure below (`quit`, `runTurn`'s catch) can only ever
   // execute from a keypress or reducer effect, neither of which can fire before this `await`
@@ -2054,7 +2055,7 @@ async function runTui(
     return skipPermissions ? "auto" : liveState.session.permissionMode;
   }
 
-  // LOW-3: `root` (this function's own top, above) is awaited before the promise executor (below),
+  // `root` (this function's own top, above) is awaited before the promise executor (below),
   // not inside it, so it is fully available before any code that reads it (runTurn's catch,
   // quit()) can possibly run — those are only ever reached from a keypress or reducer effect,
   // neither of which can fire before this function's own top-level `await` has resolved and the
@@ -2403,8 +2404,8 @@ async function runTui(
   function quit(): void {
     if (reactDispatch === undefined || quitting) return;
     quitting = true;
-    // Finding 2 (round 7 code review): Ctrl-D used to be silently swallowed while ApprovalBox was
-    // mounted instead of InputBox. Denying the pending approval is folded into the SAME graceful
+    // Without this, Ctrl-D would be silently swallowed while ApprovalBox is mounted instead of
+    // InputBox. Denying the pending approval is folded into the SAME graceful
     // quit sequence — not a separate "deny just this one prompt" path the way the old
     // readline-based prompt's own Ctrl-D-at-empty-line handling worked — so Ctrl-D keeps one
     // consistent meaning everywhere in the TUI. The turn this unblocks is still in flight
@@ -2412,10 +2413,10 @@ async function runTui(
     // still runs exactly as it would for any other in-flight-turn quit.
     if (liveState.pendingApproval !== undefined) onApprovalAnswer("no");
     // No final re-render before this, unlike the Ink original: that rerender's only purpose was
-    // flipping `done` to true so App's own effect called `useApp().exit()` — app.tsx no longer has
-    // that effect at all (this function now owns the renderer's lifecycle directly, per Decision 1,
-    // docs/specs/025-tui-opentui-migration/spec.md), so there is nothing left for a final render to
-    // trigger. `destroyTuiRenderer()` is synchronous (`CliRenderer.destroy(): void`, unlike Ink's
+    // flipping a `done` prop to true so App's own effect called `useApp().exit()` — app.tsx has no
+    // such effect at all (this function owns the renderer's lifecycle directly), so there is
+    // nothing left for a final render to trigger. `destroyTuiRenderer()` is synchronous
+    // (`CliRenderer.destroy(): void`, unlike Ink's
     // async `waitUntilExit()`), so `resolveRunTui` follows it directly, no `.then`/`.catch` needed.
     const finishQuit = (): void => {
       destroyTuiRenderer();
@@ -2820,10 +2821,10 @@ async function runTui(
       onSetupRemove,
       onSetupBack,
       onSetupClose,
-      // Stage D: /config and /permissions' own handlers — wired here, runTui's own mount, only
-      // (not runGuidedSetup's, same reasoning as onLogin/onLogout/onAuthResolved's own comment on
-      // this file's Stage C row: that mount always has `pendingSetup` set, so these panels are
-      // structurally unreachable there).
+      // /config and /permissions' own handlers — wired here, runTui's own mount, only (not
+      // runGuidedSetup's, same reasoning as onLogin/onLogout/onAuthResolved's own comment below:
+      // that mount always has `pendingSetup` set, so these panels are structurally unreachable
+      // there).
       onConfigSelect,
       onConfigValueEntered,
       onConfigUnset,
@@ -2832,8 +2833,8 @@ async function runTui(
       onPermissionsRemove,
       onPermissionsBack,
       onPermissionsClose,
-      // No auth-offer recompute here (thermo-nuclear, round 5 — proven redundant): every path
-      // that reaches this (Escape on "starting"/"device", Enter/Esc on a login-failure result, or
+      // No auth-offer recompute here — redundant: every path that reaches this (Escape on
+      // "starting"/"device", Enter/Esc on a login-failure result, or
       // a logout-failure result) never changed the auth-session file between when it was last
       // read and this firing — a login failure means saveAuthSession never ran, and a logout
       // failure's own result panel already got a truthful recompute from onLogout's own single
@@ -2855,7 +2856,7 @@ async function runTui(
         for (const { text } of prepared.preMountMessages) {
           dispatch({ type: "transcript-append", line: text });
         }
-        // Stage C: the non-blocking login/signup offer (AuthBanner) — true iff no auth session is
+        // The non-blocking login/signup offer (AuthBanner) — true iff no auth session is
         // saved yet, computed fresh at mount the same way decideSetupOpen/decideModelPickerOpen are
         // computed fresh on their own open, not cached from prepareSession.
         dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
@@ -3003,16 +3004,16 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       await runWelcomeSplash(ctx.configDir, deps);
       const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
       if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
-      // getModelCatalog() deliberately NOT awaited here (code-review finding, PR #91): awaiting it
-      // before runGuidedSetup blocked /setup from ever painting until the models.dev fetch settled
-      // (up to FETCH_TIMEOUT_MS) — a blank terminal on exactly the flow this feature exists to make
+      // getModelCatalog() deliberately NOT awaited here: awaiting it before runGuidedSetup would
+      // block /setup from ever painting until the models.dev fetch settled (up to
+      // FETCH_TIMEOUT_MS) — a blank terminal on exactly the flow this feature exists to make
       // instant. The fetch still starts immediately; runGuidedSetup's own onSetupClose only consumes
       // the resolved catalog once it actually needs it, by which point a real user has almost always
       // already typed a key and closed the panel.
       //
-      // This IS a fetch running in parallel with a live render — the exact hazard Decision 5
-      // (byok-guided-setup-default-model bugfix report) originally avoided by construction, loading
-      // the catalog fully BEFORE `runGuidedSetup` ever mounted. It is safe here because
+      // This IS a fetch running in parallel with a live render — a hazard that loading the catalog
+      // fully BEFORE `runGuidedSetup` ever mounted would avoid by construction instead. It is safe
+      // here because
       // `@opentui/core`'s `CliRenderer` defaults `consoleMode` to `"console-overlay"` for the whole
       // renderer's lifetime, not just one mount — `getModelCatalog`'s own `printWarning` (a
       // `console.error` call, provider/catalog.ts) is captured rather than written to the live

@@ -47,24 +47,19 @@ export type AppProps = {
   // Seeds the reducer's own `state.route` at mount (`initialTuiState(session, { route })`, below)
   // — the persistent mode-indicator's model+route label reads `state.route`, not this prop
   // directly, so a later /model switch reaches the label by dispatching `route-updated` into the
-  // reducer instead of this prop ever changing. The key itself is required, not optional: making
-  // it optional would let a future call site silently omit it instead of failing to compile
-  // (code-review finding: this is exactly what let the OTHER `createElement(App, ...)` call site,
-  // cli.ts's `finishQuit` re-render, go unnoticed). The VALUE is `| undefined` because a third call
-  // site (runGuidedSetup, cli.ts) mounts App before any provider key exists at all — genuinely no
-  // PreparedRun/route to pass (found 2026-08-13: PR #86 made this required assuming only 2 call
-  // sites existed, both post-PreparedRun; PR #87 had already added this third one on a branch that
-  // predated #86's route requirement, so neither PR could see the conflict at review time).
+  // reducer instead of this prop ever changing. The key itself is required, not optional: making it
+  // optional would let a future `createElement(App, ...)` call site silently omit it instead of
+  // failing to compile. The VALUE is `| undefined` because one call site (runGuidedSetup, cli.ts)
+  // mounts App before any provider key exists at all — genuinely no PreparedRun/route to pass.
   // formatModeLabel drops the model+route suffix entirely when `state.route` is undefined, rather
   // than showing a fabricated route ("your key" during a flow where there is provably no key yet
   // would be actively wrong, not just a placeholder).
   route: ResolvedRoute | undefined;
-  // The seam Phase 5 wires driveLoop's dispatch through: called once on mount with the reducer's
-  // own dispatch function, the same shape `useReducer` returns. Optional because Phase 4's tests
-  // exercise the reducer via `connectDispatch` directly, with no live loop behind it yet.
+  // The seam driveLoop's dispatch is wired through: called once on mount with the reducer's own
+  // dispatch function, the same shape `useReducer` returns. Optional because some tests exercise
+  // the reducer via `connectDispatch` directly, with no live loop behind it.
   connectDispatch?: (dispatch: Dispatch) => void;
-  // Submitted line from the input box — Phase 5 wires this to the task/slash-command dispatch;
-  // Phase 4 has nowhere real to send it yet.
+  // Submitted line from the input box, wired to the task/slash-command dispatch.
   onSubmit?: (value: string) => void;
   // Called whenever the reducer's own `state.session` changes — a mode cycle, a rewind, or the
   // loop-event reducer's own messages-updated merge. This is now the single source of truth for
@@ -74,18 +69,15 @@ export type AppProps = {
   // the initial mount call — prepareSession already saved that exact session to disk, so the first
   // call here is a harmless, idempotent rewrite of the same content, not a bug worth guarding.
   onSessionChange?: (session: SessionState<ModelMessage>) => void;
-  // HIGH-1: the TUI's own graceful-quit trigger, called on /exit (onSubmit intercepts it before
-  // the ordinary command dispatch — see runTui's own comment) and on Ctrl-D at the input box (the
+  // The TUI's own graceful-quit trigger, called on /exit (onSubmit intercepts it before the
+  // ordinary command dispatch — see runTui's own comment) and on Ctrl-D at the input box (the
   // normal Unix "end input" convention). `cli.ts`'s `quit()` is what actually ends the renderer now
   // (this component no longer calls any exit hook itself — see this file's own header comment).
   onQuit?: () => void;
-  // Findings 1+5 (thermo-nuclear structural review, round 6): answers the TUI-native approval
-  // prompt (runTui's own tuiApprovalPrompt, cli.ts) — the ORIGINAL research-spec design ("a TUI
-  // supplies a different function of the identical signature... with zero change to
-  // loop.ts/gate.ts") that every earlier round of this branch left unbuilt, leaving the TUI path
-  // calling makeApprovalPrompt's readline-based prompt instead: a SECOND stdin consumer and a
-  // SECOND SIGINT route racing the renderer's own raw-mode ownership and signals.ts's single
-  // cancel slot.
+  // Answers the TUI-native approval prompt (runTui's own tuiApprovalPrompt, cli.ts) — a real prompt
+  // rendered inside this same tree, not readline's own stdin-based prompt: a second stdin consumer
+  // and a second SIGINT route would otherwise race the renderer's own raw-mode ownership and
+  // signals.ts's single cancel slot.
   onApprovalAnswer?: (answer: ApprovalAnswer) => void;
   // /model's own two resolutions, mirroring onApprovalAnswer's shape: called from ModelPicker's own
   // keypress handler, wired by runTui to dispatch model-picker-resolved (with or without a pick)
@@ -100,8 +92,8 @@ export type AppProps = {
     leftoverInput?: string,
   ) => void;
   onModelPickerCancel?: () => void;
-  // /setup's own five resolutions (D5-D8, feature-plan.md) — mirroring onModelSelected's shape:
-  // each does nothing but call into cli.ts's own handlers, which recompute the whole next
+  // /setup's own five resolutions, mirroring onModelSelected's shape: each does nothing but call
+  // into cli.ts's own handlers, which recompute the whole next
   // SetupState (rows included) and dispatch it, the same "presentation calls a prop, cli.ts owns
   // the decision" split every other interactive command in this file already has.
   onSetupSelect?: (provider: ModelProvider) => void;
@@ -109,24 +101,19 @@ export type AppProps = {
   onSetupRemove?: (provider: ModelProvider) => void;
   onSetupBack?: () => void;
   onSetupClose?: (leftoverInput?: string) => void;
-  // Bug fix (coordinator follow-up on Stage C; extended round 4): AuthPanel's own "result" step
-  // (a device-flow failure — a denied/expired code, a network error, degraded by
-  // createAuthHandlers' (tui/handlers.ts) own catch block) had no way back to InputBox at all
-  // before this — not even Ctrl-C, which cancels the in-flight turn (runtime/renderer.ts), not
+  // AuthPanel's own "result" step (a device-flow failure — a denied/expired code, a network error,
+  // degraded by createAuthHandlers' (tui/handlers.ts) own catch block) has no way back to InputBox
+  // otherwise — not even Ctrl-C, which cancels the in-flight turn (runtime/renderer.ts), not
   // pendingAuth. Called from AuthPanel's own Escape handler on every step, plus Enter on "result" —
-  // a successful login
-  // never reaches here: createAuthHandlers.onLogin (tui/handlers.ts) dispatches auth-resolved
-  // itself, right after its own `await loginFn(...)` returns, with no user keypress involved.
+  // a successful login never reaches here: createAuthHandlers.onLogin (tui/handlers.ts) dispatches
+  // auth-resolved itself, right after its own `await loginFn(...)` returns, with no user keypress
+  // involved.
   onAuthResolved?: () => void;
-  // Stage A scaffolding (cli-commands-to-tui feature-plan.md): /config's own resolutions, mirroring
-  // onSetupSelect's own five-prop shape — ConfigPanel.tsx's own step-dispatcher needs a real prop to
-  // route Esc/Ctrl-D/Enter to once Stage D wires config-requested, rather than a panel silently
-  // stranding the user with no way back to InputBox. Optional, matching every other handler prop on
-  // this type (onSetupSelect included) — cli.ts's two mount sites and guidedSetup.ts's mount site
-  // each already supply only the subset of handlers their own mount actually uses, so making these
-  // two required would force edits to all three, outside this stage's own stated file boundary
-  // (cli.ts/guidedSetup.ts are explicitly not touched in Stage A). Unreachable today: nothing
-  // dispatches config-requested/permissions-requested yet.
+  // /config's own resolutions, mirroring onSetupSelect's own five-prop shape — ConfigPanel.tsx's
+  // own step-dispatcher routes Esc/Ctrl-D/Enter to these rather than silently stranding the user
+  // with no way back to InputBox. Optional, matching every other handler prop on this type
+  // (onSetupSelect included) — cli.ts's two mount sites and guidedSetup.ts's mount site each supply
+  // only the subset of handlers their own mount actually uses.
   onConfigSelect?: (key: string) => void;
   onConfigValueEntered?: (key: string, value: string) => void;
   onConfigUnset?: (key: string) => void;
@@ -193,8 +180,8 @@ export function App({
   // not from how many lines it renders — so measuring it back cannot create a feedback loop where
   // changing the slice changes the measurement. `hasMeasured` is false only for the frames before
   // OpenTUI's own layout pass has fired `onSizeChange` at least once; FALLBACK_CHROME_ROWS is a
-  // placeholder for those frames alone, not a real chrome-height estimate. Phase 1's own spike
-  // found `<scrollbox>` needs no measured-height read for a transcript fed its FULL content — this
+  // placeholder for those frames alone, not a real chrome-height estimate. OpenTUI's own
+  // `<scrollbox>` needs no measured-height read for a transcript fed its FULL content, but this
   // component instead keeps the reducer's existing windowed-slice contract (`transcriptScrollOffset`
   // et al, state/reducer.ts, unchanged) and uses `onSizeChange` (an event-driven per-renderable
   // option, not a polling hook) as the direct replacement for Ink's `useBoxMetrics` read.
@@ -322,13 +309,13 @@ export function App({
     <box flexDirection="column" height={rows}>
       {/* Rendered ABOVE the render ternary below, not as one of its branches — unlike
       ApprovalBox/ModelPicker/SetupPanel this never replaces InputBox, it sits alongside it.
-      `state.pendingAuth === undefined` (not just `state.authOffer`) is the derived half of the
-      fix (thermo-nuclear + code-review, round 4): `authOffer` alone used to need a matching
-      `auth-offer: false` dispatch at every point the auth panel opened, and round 2's whole bug
-      class was a call site that forgot one. The reducer already owns `pendingAuth` — "is the
-      panel currently open" is exactly what should gate "hide the redundant banner," derived here
-      instead of commanded from cli.ts. `!state.pendingSplash`: the splash mount's own login/signup
-      menu already offers the same thing, so the banner would otherwise render underneath it. */}
+      `state.pendingAuth === undefined` (not just `state.authOffer`) avoids needing a matching
+      `auth-offer: false` dispatch at every point the auth panel opens — a call site that forgets
+      one is a real bug class this closes by construction. The reducer already owns `pendingAuth` —
+      "is the panel currently open" is exactly what should gate "hide the redundant banner," derived
+      here instead of commanded from cli.ts. `!state.pendingSplash`: the splash mount's own
+      login/signup menu already offers the same thing, so the banner would otherwise render
+      underneath it. */}
       <AuthBanner
         show={state.authOffer && state.pendingAuth === undefined && !state.pendingSplash}
       />
@@ -391,19 +378,14 @@ export function App({
         </box>
       </box>
       <ErrorLine message={state.commandError} />
-      {/* Findings 1+5: mutually exclusive with InputBox — a pending approval question is the only
-      thing this run is waiting on, and answering it (not typing a task or slash command) is the
-      only input that means anything until it clears. Extended to a third state for /model, a
-      fourth for /setup, and now (Stage A scaffolding) three more for /login /signup, /config and
-      /permissions: each is the same kind of "only this input means anything right now" question,
-      checked in this same order (approval, /model, /setup, /login /signup, /config, /permissions,
-      then InputBox). The last three are unreachable today — nothing dispatches
-      auth-requested/config-requested/permissions-requested yet (Stages C-D wire that).
-      ApprovalBox, ModelPicker, SetupPanel and WelcomeSplashPanel are ported to OpenTUI; AuthPanel/
-      ConfigPanel/PermissionsPanel are still built on ink (a later migration dispatch's job to
-      port) — each of those remaining branches is runtime-broken under this OpenTUI-based app.tsx
-      until that dispatch lands; typecheck stays green because their own prop signatures are
-      unchanged. */}
+      {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
+      is waiting on, and answering it (not typing a task or slash command) is the only input that
+      means anything until it clears. Extended to a third state for /model, a fourth for /setup,
+      and three more for /login /signup, /config and /permissions: each is the same kind of "only
+      this input means anything right now" question, checked in this same order (approval, /model,
+      /setup, /login /signup, /config, /permissions, then InputBox). Every branch here — including
+      AuthPanel/ConfigPanel/PermissionsPanel — is a real, wired OpenTUI component; state/handlers.ts
+      and cli.ts dispatch auth-requested/config-requested/permissions-requested. */}
       {state.pendingApproval !== undefined ? (
         <ApprovalBox
           pendingApproval={state.pendingApproval}
