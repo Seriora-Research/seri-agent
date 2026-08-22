@@ -3657,12 +3657,19 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await new Promise((resolve) => setTimeout(resolve, 30));
         await sawLineTimes("JSON Parse error", 2);
 
-        // Restoring valid JSON and retrying proves the TUI actually recovered, not just that it
-        // survived one bad read.
+        // dispatchSetupList's own catch (the throw just above went through it, unlike onSetupRemove's
+        // own inline one) dispatches setup-resolved alongside the command-error — the panel is
+        // already closed by this point, not sitting on the list step waiting for a retry. A second
+        // bare Escape here has no panel left to act on. Restoring valid JSON and retrying proves the
+        // TUI actually recovered — /setup opens again cleanly — rather than counting on however many
+        // times the still-open panel's own title row happened to get repainted, which a
+        // cell-diffing renderer makes an unreliable count (confirmed live: this used to assert
+        // `sawLineTimes(2)` off two bare Escapes with no second `/setup`, and passed or failed
+        // depending only on incidental repaint counts, not on anything actually reopening).
         writeFileSync(configPath, JSON.stringify({ OPENROUTER_API_KEY: "sk-or-value" }));
-        child.stdin?.write("\x1b");
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        await wait100ms();
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
         await sawLineTimes("/setup — provider API keys", 2);
 
         // The actual negative control this test rests on (this comment block's own top note): both
