@@ -1,10 +1,9 @@
-// The one `CliRenderer` instance spanning welcome-splash -> guided-setup -> main-TUI (Decision 1,
-// docs/specs/025-tui-opentui-migration/spec.md), replacing Ink's per-mount `render`/
-// `instance.rerender`/`instance.unmount`/`instance.waitUntilExit` calls. `getTuiRenderer` is
-// idempotent (below), so `routes/setup/welcomeSplash.ts` — the first of the three callers,
-// cli.ts's own `run()` — is what actually creates it; `routes/setup/guidedSetup.ts` and `runTui`
-// (cli.ts) reuse the same instance and `root.render` different content into it rather than each
-// owning a separate mount.
+// The one `CliRenderer` instance spanning welcome-splash -> guided-setup -> main-TUI, replacing
+// Ink's per-mount `render`/`instance.rerender`/`instance.unmount`/`instance.waitUntilExit` calls.
+// `getTuiRenderer` is idempotent (below), so `routes/setup/welcomeSplash.ts` — the first of the
+// three callers, cli.ts's own `run()` — is what actually creates it; `routes/setup/guidedSetup.ts`
+// and `runTui` (cli.ts) reuse the same instance and `root.render` different content into it rather
+// than each owning a separate mount.
 import { type CliRenderer, createCliRenderer } from "@opentui/core";
 import { createRoot, type Root } from "@opentui/react";
 import { deliverSignal, onSignalCleanupLast } from "../../signals";
@@ -12,25 +11,51 @@ import { MAIN_TUI_RENDERER_CONFIG } from "./renderOptions";
 
 let instance: { renderer: CliRenderer; root: Root } | undefined;
 
+// `@opentui/react`'s own `createRoot(renderer).render(node)` creates a BRAND NEW reconciler
+// container on every call rather than reconciling into the previous one (confirmed by reading its
+// compiled source) — so calling `.render()` again for the next phase does not run any of the
+// previous tree's own effect cleanups; that tree's `useKeyboard`/`usePaste` listeners stay attached
+// to the renderer's shared `keyInput` forever, alongside the new tree's own. Measured live over a
+// real pty: past the welcome-splash -> main-TUI transition, a single physical PageDown fired
+// app.tsx's own scroll handler twice — once from the live tree, once from the splash phase's own
+// stale, disconnected `<App>` instance. The second firing dispatches into that stale instance's own
+// abandoned `useReducer` state, whose render output no longer reaches the terminal (its host nodes
+// were already removed when the live tree mounted), so this specific handler has no visible
+// symptom today — but Ctrl-C's own handler (`renderer.keyInput.on("keypress", ...)` below) reaches
+// OUTSIDE any one component's state into `signals.ts`'s module-level cancel slot, where a second,
+// invisible-tree firing very much has a real, user-facing consequence (this is exactly the bug that
+// registration used to have, before it moved off `<App>`'s own `useKeyboard` and down to here).
+// `unmountBeforeRender` (below) closes the underlying duplicate-registration defect itself, for
+// every handler a mounted tree happens to register, not just the one that currently has a visible
+// symptom — so a future `useKeyboard`/`usePaste` addition that DOES reach outside its own
+// component's state does not silently reacquire the same failure mode Ctrl-C already had.
+export function unmountBeforeRender(rawRoot: Root): Root {
+  return {
+    render: (node) => {
+      // A safe no-op on the very first call (nothing mounted yet to tear down) — `Root`'s own
+      // `unmount` is exactly the synchronous, real React unmount (running every effect's cleanup)
+      // that a plain `root.render()` never triggers for whatever it is about to replace.
+      rawRoot.unmount();
+      rawRoot.render(node);
+    },
+    unmount: () => rawRoot.unmount(),
+  };
+}
+
 // Idempotent: three call sites share this instance today (see this file's own header comment),
 // so this stays safe to call more than once (returns the same instance) rather than assuming a
 // single caller.
 export async function getTuiRenderer(): Promise<{ renderer: CliRenderer; root: Root }> {
   if (instance !== undefined) return instance;
   const renderer = await createCliRenderer(MAIN_TUI_RENDERER_CONFIG);
-  const root = createRoot(renderer);
+  const root = unmountBeforeRender(createRoot(renderer));
   instance = { renderer, root };
-  // Registered once here, directly on the renderer's own key input, rather than via `<App>`'s own
-  // `useKeyboard` (every call site used to pass an identical `onCancel: () => deliverSignal("SIGINT")`
-  // prop for exactly this). Measured: each of `root.render`'s three splash/setup/main-TUI calls
-  // (welcomeSplash.ts, guidedSetup.ts, cli.ts) mounts a fresh `<App>` at the same root, and its
-  // Ctrl-C `useKeyboard` listener from an earlier phase does not always get cleaned up before the
-  // next one mounts — by the time the main TUI phase is interactive, more than one of these listeners
-  // can be attached at once, so a single physical Ctrl-C calls `deliverSignal` more than once: the
-  // first call spends signals.ts's one cancel slot as intended, but the second call in the same tick
-  // finds the slot already empty and falls through to the fatal path, destroying this renderer
-  // instead of just cancelling the turn. A single registration tied to the renderer's own lifetime,
-  // not to any particular React mount, cannot double-fire this way.
+  // Ctrl-C is registered once here, directly on the renderer's own key input, rather than via
+  // `<App>`'s own `useKeyboard` (every call site used to pass an identical `onCancel: () =>
+  // deliverSignal("SIGINT")` prop for exactly this) — `root`'s own unmount-before-render above
+  // already closes the underlying multi-registration bug for every handler, but Ctrl-C stays its
+  // own direct registration too: it must keep working even while a fatal path is already
+  // unwinding this renderer, a moment `<App>`'s own tree may no longer be mounted to react to it.
   renderer.keyInput.on("keypress", (key) => {
     if (key.ctrl && key.name === "c") deliverSignal("SIGINT");
   });
