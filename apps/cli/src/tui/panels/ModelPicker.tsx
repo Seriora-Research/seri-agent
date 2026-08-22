@@ -129,10 +129,11 @@ export function ModelPicker({
   // the one thing this row must never lose regardless of how little space is left.
   const columns = stdout.columns || DEFAULT_COLUMNS;
   const rowWidth = Math.max(0, columns - 2 - 1);
-  const promptText =
-    filterQuery.length === 0 ? "> " : truncateEnd(`> ${filterQuery}`, rowWidth);
+  const promptText = filterQuery.length === 0 ? "> " : truncateEnd(`> ${filterQuery}`, rowWidth);
   const placeholder =
-    filterQuery.length === 0 ? truncateEnd(FILTER_PLACEHOLDER, rowWidth - 2) || undefined : undefined;
+    filterQuery.length === 0
+      ? truncateEnd(FILTER_PLACEHOLDER, rowWidth - 2) || undefined
+      : undefined;
 
   return (
     <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
