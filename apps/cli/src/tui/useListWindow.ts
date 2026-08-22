@@ -1,7 +1,8 @@
-// Ink-coupled compatibility copy, kept only so ConfigPanel.tsx/PermissionsPanel.tsx/SetupPanel.tsx
-// (still built on ink) keep resolving and the compiled binary keeps building — hooks/useListWindow.ts
-// is the real, OpenTUI-based implementation every ported caller (ModelPicker.tsx included) uses.
-// Delete this file once those three panels are ported and switched to the new import path.
+// Ink-coupled compatibility copy, kept only so ConfigPanel.tsx/PermissionsPanel.tsx (still built
+// on ink) keep resolving and the compiled binary keeps building — hooks/useListWindow.ts is the
+// real, OpenTUI-based implementation every ported caller (ModelPicker.tsx, routes/setup/
+// SetupPanel.tsx included) uses. Delete this file once those two panels are ported and switched to
+// the new import path.
 //
 // Shared list-window state for every panel that renders a scrollable row list (ModelPicker,
 // ConfigPanel, PermissionsPanel, SetupPanel) — owns the row array, the selection index, and the

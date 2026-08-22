@@ -94,7 +94,6 @@ import { withSubagents } from "./subagents/dispatch";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import { App } from "./tui/App";
-import { enterAltScreen, exitAltScreen } from "./tui/runtime/legacyAltScreen";
 import {
   type CommandDirs,
   checkpointTarget,
@@ -111,7 +110,6 @@ import {
   decideSetupOpen,
   decideUndo,
 } from "./tui/commands";
-import { runGuidedSetup } from "./tui/guidedSetup";
 import {
   createAuthHandlers,
   createConfigHandlers,
@@ -119,8 +117,9 @@ import {
   createSetupHandlers,
 } from "./tui/handlers";
 import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/reducer";
+import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
+import { runWelcomeSplash } from "./tui/routes/setup/welcomeSplash";
 import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";
-import { runWelcomeSplash } from "./tui/welcomeSplash";
 import { withVerification } from "./verify/wrapTools";
 
 export type CliDeps = {
@@ -1099,9 +1098,10 @@ type PreparedRun = {
   memory: LoadedMemory;
   // Startup notices (session-created, permission warnings, pre-approved tools, the cross-project
   // checkpoint mismatch) that prepareSession would otherwise print directly. On the TUI path they
-  // are queued here instead: prepareSession runs after enterAltScreen() but before runTui's own
-  // Ink render(), so a direct console write in that gap lands on the alt-screen buffer and is gone
-  // the instant the TUI's first frame paints over it. runTui flushes this into the transcript at
+  // are queued here instead: prepareSession runs after runWelcomeSplash has already created the
+  // shared renderer (getTuiRenderer, runtime/renderer.ts) but before runTui's own `root.render`
+  // call, so a direct console write in that gap lands on the alt-screen buffer and is gone the
+  // instant the TUI's first frame paints over it. runTui flushes this into the transcript at
   // mount. Empty on the non-TTY path, which still writes these directly (no alt screen there). Each
   // entry keeps the stream it was headed for — see PreMountMessage's own comment.
   preMountMessages: PreMountMessage[];
@@ -1148,18 +1148,20 @@ function gatewayNotice(route: ResolvedRoute, requestedProvider: ModelProvider | 
 }
 
 // The one place a TTY-path failure becomes an exit code, used by every catch between
-// `enterAltScreen()` and `runTui`'s own mount (this function's own catches, and `run()`'s two
-// try/catches around the steps on either side of `prepareSession`): exits the alt screen before
-// printing anything (undiscarded messages need the primary screen restored first — the same
-// reasoning `checkZeroKeysConfigured`'s own catch used to state on its own), then flushes any
-// `preMountMessages` queued so far ahead of the fatal message itself, rather than dropping them —
-// a queued "Session X created." or fallback-catalog warning would otherwise vanish with no trace
-// once the run is already ending here instead of ever reaching runTui's own flush site
-// (connectDispatch). Safe to call with `err` from ANY throw in this window, caught or uncaught:
-// this is also what closes the "stack trace printed into the discarded alt-screen buffer" failure
-// mode for a genuinely uncaught exception, since `run()`'s own top-level catches route here too.
+// `runWelcomeSplash`'s own renderer creation and `runTui`'s own mount (this function's own
+// catches, and `run()`'s two try/catches around the steps on either side of `prepareSession`):
+// destroys the renderer before printing anything (undiscarded messages need the primary screen
+// restored first — the same reasoning `checkZeroKeysConfigured`'s own catch used to state on its
+// own), then flushes any `preMountMessages` queued so far ahead of the fatal message itself,
+// rather than dropping them — a queued "Session X created." or fallback-catalog warning would
+// otherwise vanish with no trace once the run is already ending here instead of ever reaching
+// runTui's own flush site (connectDispatch). Safe to call with `err` from ANY throw in this
+// window, caught or uncaught, including one before `getTuiRenderer` was ever called
+// (`destroyTuiRenderer`'s own no-op guard): this is also what closes the "stack trace printed
+// into the discarded alt-screen buffer" failure mode for a genuinely uncaught exception, since
+// `run()`'s own top-level catches route here too.
 function fatalDuringTui(err: unknown, preMountMessages: readonly PreMountMessage[] = []): number {
-  exitAltScreen();
+  destroyTuiRenderer();
   for (const queued of preMountMessages) {
     (queued.stream === "stdout" ? console.log : console.error)(queued.text);
   }
@@ -2861,7 +2863,8 @@ async function runTui(
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
         // See PreparedRun.preMountMessages' own comment: prepareSession queued these instead of
-        // printing them directly, since it runs after enterAltScreen() but before this mount.
+        // printing them directly, since it runs after the shared renderer already exists but
+        // before this mount.
         // `.stream` is ignored deliberately (PreMountMessage's own comment): every queued line
         // lands in the transcript either way, regardless of which console stream it would have
         // gone to on a non-TTY run.
@@ -3003,17 +3006,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // had a top-level `.catch` (its only caller, `import.meta.main`, does
     // `run(...).then((code) => process.exit(code))`), and neither Bun nor this file installs an
     // `uncaughtException`/`unhandledRejection` handler — a real throw here would print its own
-    // stack trace INTO the still-active alt-screen buffer, which `process.on("exit",
-    // exitAltScreen)` then silently discards on the way out, leaving the user with a dead process
-    // and zero visible diagnostics. `fatalDuringTui` (prepareSession's own bailout, shared here) is
-    // what every other terminal-for-the-run failure in this window already routes through.
-    //
-    // `enterAltScreen()` itself is INSIDE this try, not just the calls after it: its own
-    // `entered = true` runs before its write, so a thrown write still leaves `exitAltScreen`
-    // (called by `fatalDuringTui` below) able to attempt — and safely no-op-on-failure — a real
-    // restore, rather than the throw escaping before any of this machinery is even reachable.
+    // stack trace INTO the still-active alt-screen buffer, which `getTuiRenderer`'s own renderer
+    // (created by `runWelcomeSplash`, below) would otherwise leave undestroyed on the way out,
+    // leaving the user with a dead process and zero visible diagnostics. `fatalDuringTui`
+    // (prepareSession's own bailout, shared here) is what every other terminal-for-the-run failure
+    // in this window already routes through — it destroys the renderer before printing, which is
+    // safe to call even for a throw before the renderer was ever created (`destroyTuiRenderer`'s
+    // own no-op guard).
     try {
-      enterAltScreen();
       await runWelcomeSplash(ctx.configDir, deps);
       const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
       if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
@@ -3024,14 +3024,15 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       // the resolved catalog once it actually needs it, by which point a real user has almost always
       // already typed a key and closed the panel.
       //
-      // This IS a fetch running in parallel with a live Ink render — the exact hazard Decision 5
+      // This IS a fetch running in parallel with a live render — the exact hazard Decision 5
       // (byok-guided-setup-default-model bugfix report) originally avoided by construction, loading
-      // the catalog fully BEFORE `runGuidedSetup` ever mounted. It is safe here only because Ink
-      // 7.1.1's `render()` defaults `patchConsole: true` (ink/build/render.js) — `getModelCatalog`'s
-      // own `printWarning` (a `console.error` call, provider/catalog.ts) gets routed above the live
-      // frame instead of corrupting it, on every offline first run. A future Ink upgrade or an
-      // explicit `patchConsole: false` on this `render()` call (there is none today — `runGuidedSetup`
-      // only passes `exitOnCtrlC`/`interactive`) would silently reintroduce that hazard.
+      // the catalog fully BEFORE `runGuidedSetup` ever mounted. It is safe here because
+      // `@opentui/core`'s `CliRenderer` defaults `consoleMode` to `"console-overlay"` for the whole
+      // renderer's lifetime, not just one mount — `getModelCatalog`'s own `printWarning` (a
+      // `console.error` call, provider/catalog.ts) is captured rather than written to the live
+      // alt-screen frame, on every offline first run. An explicit `consoleMode: "disabled"` on
+      // `MAIN_TUI_RENDERER_CONFIG` (there is none today, runtime/renderOptions.ts) would reintroduce
+      // that hazard.
       if (zeroKeysConfigured) {
         await runGuidedSetup(ctx.configDir, getModelCatalog());
       }
@@ -3056,12 +3057,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   let runResult: DriveLoopResult;
   if (isTTY) {
     // Same reasoning as the try/catch above this function's own welcome-splash/guided-setup block:
-    // a throw out of runTui (a reducer bug, a rendering error, anything Ink itself doesn't already
-    // catch) would otherwise reach `import.meta.main`'s bare `.then`, print its stack into the
-    // still-active alt screen, and lose it the instant `process.on("exit")` restores the primary
-    // one. `prepared.preMountMessages` is flushed here too, for the same reason `prepareSession`'s
-    // own catches flush it: this IS the only other path that can end the run before runTui's own
-    // `connectDispatch` ever gets a chance to.
+    // a throw out of runTui (a reducer bug, a rendering error, anything the renderer itself
+    // doesn't already catch) would otherwise reach `import.meta.main`'s bare `.then`, print its
+    // stack into the still-active alt-screen buffer, and lose it once the process exits with the
+    // renderer never destroyed. `prepared.preMountMessages` is flushed here too, for the same
+    // reason `prepareSession`'s own catches flush it: this IS the only other path that can end the
+    // run before runTui's own `connectDispatch` ever gets a chance to.
     try {
       runResult = await runTui(prepared, ctx, deps, maxTurns, skipPermissions);
     } catch (err) {
@@ -3083,7 +3084,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning, archivist, ranAnyTurn } =
     runResult;
 
-  exitAltScreen();
+  // Already destroyed by runTui's own quit() (its `finishQuit`, the only place `runResult` can
+  // resolve from on the TTY path) or never created at all on the non-TTY path — this call is a
+  // no-op in both of today's cases. Kept as an explicit backstop, not deleted: `destroyTuiRenderer`
+  // is idempotent, and the alternative is trusting every future TTY-path resolution to keep
+  // routing through quit() with no second reminder here if that ever stops being true.
+  destroyTuiRenderer();
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are

@@ -1,19 +1,25 @@
 // Extracted from cli.ts (code-review finding, PR #91 round 2: cli.ts is 2900+ lines and this
 // function alone — the liveState/dispatch mirror, every guided-setup-only handler closure, and the
 // two-then-three module-level UI string constants — was ~200 of them). Self-contained: the only
-// thing it needs is `createSetupHandlers`, imported directly from its own module (./handlers) —
-// a sibling of this file, shared byte-identical with `runTui` (cli.ts), with no dependency back on
-// cli.ts itself.
+// thing it needs is `createSetupHandlers`, imported directly from its own module (../../state/handlers)
+// — shared byte-identical with `runTui` (cli.ts), with no dependency back on cli.ts itself.
 import { randomUUID } from "node:crypto";
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
-import { messageOf } from "../errors";
-import { catalogWithFallback } from "../provider/catalog";
-import { persistDefaultModel } from "../provider/defaults";
-import { configuredProviders } from "../provider/keys";
-import { deliverSignal, onSignalCleanup } from "../signals";
-import { decideAuthOffer, decideGuidedModelPickerOpen, decideSetupOpen } from "./commands";
-import { createSetupHandlers } from "./handlers";
-import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./reducer";
+import { createElement } from "react";
+import { messageOf } from "../../../errors";
+import { catalogWithFallback } from "../../../provider/catalog";
+import { persistDefaultModel } from "../../../provider/defaults";
+import { configuredProviders } from "../../../provider/keys";
+import { deliverSignal } from "../../../signals";
+import { App } from "../../App";
+import { getTuiRenderer } from "../../runtime/renderer";
+import {
+  decideAuthOffer,
+  decideGuidedModelPickerOpen,
+  decideSetupOpen,
+} from "../../state/commands";
+import { createSetupHandlers } from "../../state/handlers";
+import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "../../state/reducer";
 
 // `runGuidedSetup`'s own mandatory-picker copy (Decision 1/2, byok-guided-setup-default-model
 // bugfix report) — named constants rather than inlined literals, so tuiPty.test.ts's own pty
@@ -28,9 +34,9 @@ const GUIDED_MODEL_LOADING = "Loading available models…";
 // step (SetupEnterKey's own Ctrl-D goes straight to onSetupClose, not through onSetupBack).
 const GUIDED_MODEL_STILL_LOADING = "Still loading available models — one moment.";
 
-// Mounted only when the pre-`prepareSession` gate in `run()` finds a real TTY and zero API keys
+// Rendered only when the pre-`prepareSession` gate in `run()` finds a real TTY and zero API keys
 // configured anywhere (env or config.json) — the "genuinely blank first run" case that would
-// otherwise hard-exit before the TUI ever mounts (BYOK-KEY-STORAGE-AND-SETUP.md, Open 2). Mounts
+// otherwise hard-exit before the TUI ever mounts (BYOK-KEY-STORAGE-AND-SETUP.md, Open 2). Renders
 // `App` seeded directly into the `/setup` panel via a `connectDispatch`-fired `setup-requested`
 // action, reusing `createSetupHandlers` so this shares byte-identical /setup logic with `runTui`.
 // The session passed to `App` is a throwaway: `id`/`cwd` only need to satisfy `AppProps.session`'s
@@ -51,9 +57,7 @@ export async function runGuidedSetup(
   configDir: string,
   catalogPromise: Promise<ModelCatalog>,
 ): Promise<void> {
-  const { render } = await import("ink");
-  const { createElement } = await import("react");
-  const { App } = await import("./App");
+  const { root } = await getTuiRenderer();
 
   // Same synchronous-mirror pattern as runTui's own `liveState`/`dispatch` (that function's own
   // "Findings 2/3/4/6" comment) — kept here, not shared, because runTui's copy is read from ~20
@@ -103,7 +107,7 @@ export async function runGuidedSetup(
   }
 
   // Decision 4: persists synchronously, on selection — not the `messages-updated` path
-  // (`runTurn`'s own `onEvent`), which never fires in this mount (no turn ever runs here). The
+  // (`runTurn`'s own `onEvent`), which never fires in this phase (no turn ever runs here). The
   // write is synchronous (`persistDefaultModel` -> one `setConfigValues` call), so by the time
   // `await closed` (below) returns, config.json already carries the pair and `prepareSession`'s
   // own `resolveDefaultModel` reads it instead of falling back to groq's default. The try/catch
@@ -139,7 +143,7 @@ export async function runGuidedSetup(
   // body — that half needed its own try/catch, added in round 3 (below).
   let closing = false;
 
-  // The shared degrade for every path that must resolve this mount WITHOUT ever opening the
+  // The shared degrade for every path that must resolve this phase WITHOUT ever opening the
   // mandatory picker (code-review finding, PR #91: this exact three-line body used to be repeated
   // at three, now four, call sites below).
   function closeWithoutPicker(): void {
@@ -223,7 +227,7 @@ export async function runGuidedSetup(
             return;
           }
           // At least one key is configured and has a runnable model: a default model pick is now
-          // mandatory (Decision 1) before this mount can resolve. `model-picker-requested`
+          // mandatory (Decision 1) before this phase can resolve. `model-picker-requested`
           // dispatched BEFORE `setup-resolved` is deliberate — App.tsx's own render ternary checks
           // `pendingModelPicker` before `pendingSetup`, so no intermediate frame can render a bare
           // `InputBox` even without React batching.
@@ -235,8 +239,9 @@ export async function runGuidedSetup(
           // `configuredProviders` read above, a future change to `decideGuidedModelPickerOpen` or
           // `dispatch`) — `.then`'s second argument only catches `catalogPromise` REJECTING, not a
           // throw from inside this first argument, so an uncaught one here would become an
-          // unhandled rejection that can kill the process before `instance.unmount()` ever restores
-          // the terminal. Degrade the same clean way every other failure path in this function does.
+          // unhandled rejection that can kill the process before this window's own renderer is
+          // ever destroyed. Degrade the same clean way every other failure path in this function
+          // does.
           closeWithoutPicker();
         }
       },
@@ -245,25 +250,25 @@ export async function runGuidedSetup(
         // resolves to the fallback manifest instead) and decideGuidedModelPickerOpen is a pure
         // filter over already-loaded data with no throw path — this handler exists only so a
         // violation of either contract degrades the same clean way the branches above do, instead
-        // of becoming an unhandled rejection that kills the process before `instance.unmount()`
-        // ever runs, leaving the terminal in raw mode.
+        // of becoming an unhandled rejection that kills the process before this window's own
+        // renderer is ever destroyed, leaving the terminal in raw mode.
         closing = false;
         closeWithoutPicker();
       },
     );
   }
 
-  const instance = render(
+  root.render(
     createElement(App, {
       session: liveState.session,
-      // No PreparedRun exists yet at this point in startup (that's the whole reason this mount
+      // No PreparedRun exists yet at this point in startup (that's the whole reason this phase
       // exists — run()'s pre-prepareSession gate found zero configured keys), so there is no
       // ResolvedRoute to pass. AppProps.route's own comment covers why this is `| undefined`
       // rather than a fabricated value.
       route: undefined,
       done: false,
       onCancel: () => deliverSignal("SIGINT"), // same idle-Ctrl-C fatal path runTui's own onCancel uses
-      onQuit: onSetupClose, // dead in this mount (InputBox/ApprovalBox never show) but wired for safety
+      onQuit: onSetupClose, // dead in this phase (InputBox/ApprovalBox never show) but wired for safety
       onModelSelected: onGuidedModelSelected,
       onModelPickerCancel: onGuidedModelPickerCancel,
       onSetupSelect,
@@ -284,7 +289,7 @@ export async function runGuidedSetup(
         // everywhere else, reached here without a second, differently-worded error message.
         try {
           dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
-          // Stage C: the passive AuthBanner only — this mount's own `pendingAuth` is unreachable
+          // Stage C: the passive AuthBanner only — this phase's own `pendingAuth` is unreachable
           // regardless (no createAuthHandlers here, by design; see this function's own header
           // comment), but the banner is independent of that (TuiState.authOffer's own comment).
           dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
@@ -293,16 +298,12 @@ export async function runGuidedSetup(
         }
       },
     }),
-    { exitOnCtrlC: false, interactive: true },
   );
 
   // M-2 (runTui's own comment, mirrored here — code-review finding): a fatal Ctrl-C/SIGTERM while
   // this panel is up has no turn in flight to cancel, so deliverSignal's onCancel wiring above
   // takes the fatal branch and kills the process by signal without ever reaching `await closed`
-  // below — this is the only thing that puts the terminal's raw-mode/stdin state back before that
-  // happens.
-  onSignalCleanup(() => instance.unmount());
-
+  // below. `getTuiRenderer`'s own registration (runtime/renderer.ts) is what puts the terminal's
+  // raw-mode/stdin state back before that happens — no separate registration needed here.
   await closed;
-  instance.unmount();
 }
