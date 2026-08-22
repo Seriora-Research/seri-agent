@@ -2661,6 +2661,222 @@ describe("run (/mode)", () => {
   });
 });
 
+describe("run (/clear)", () => {
+  let sessionsDir: string;
+
+  beforeEach(() => {
+    sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-clear-sessions-"));
+  });
+
+  afterEach(() => {
+    rmSync(sessionsDir, { recursive: true, force: true });
+  });
+
+  test("is registered with an exact, empty accepts and mutatesRunState", () => {
+    const clear = SLASH_COMMANDS.get("/clear");
+    if (clear === undefined) throw new Error("/clear is not registered");
+    expect(clear.accepts([])).toBe(true);
+    expect(clear.accepts(["the", "screen", "please"])).toBe(false);
+    expect(clear.accepts(["3"])).toBe(false);
+    expect(clear.mutatesRunState).toBe(true);
+  });
+
+  // Mirrors "`/mode is broken, fix it` stays a task", above: /clear's own accepts() form is the
+  // same exact-and-empty shape as /mode's, so a trailing word (or a bare step count, which /rewind
+  // would have accepted) must fall through to the model rather than being hijacked.
+  test("`/clear the screen please` stays a task, sent to the model, and does not touch the existing session", async () => {
+    const originalKey = process.env.GROQ_API_KEY;
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const existing: SessionState = {
+      id: "clear-hijack-1",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [],
+    };
+    saveSession(existing, sessionsDir);
+
+    const { fake, capture } = fakeRunLoop();
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["/clear", "the", "screen", "please"], {
+        sessionsDir,
+        runLoop: fake,
+        loadAgentsFile: () => "",
+      });
+    } finally {
+      console.log = originalLog;
+      if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+      else process.env.GROQ_API_KEY = originalKey;
+    }
+
+    expect(capture()?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "/clear the screen please",
+    });
+    // No --resume was given, so a task starts its own fresh session — the hijack guard being
+    // tested here is that "clear-hijack-1" itself was never touched by /clear's own decision.
+    expect(loadSession("clear-hijack-1", sessionsDir)).toEqual(existing);
+  });
+
+  test("`/clear 3` stays a task, sent to the model, and does not touch the existing session", async () => {
+    const originalKey = process.env.GROQ_API_KEY;
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const existing: SessionState = {
+      id: "clear-hijack-2",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [],
+    };
+    saveSession(existing, sessionsDir);
+
+    const { fake, capture } = fakeRunLoop();
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["/clear", "3"], {
+        sessionsDir,
+        runLoop: fake,
+        loadAgentsFile: () => "",
+      });
+    } finally {
+      console.log = originalLog;
+      if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+      else process.env.GROQ_API_KEY = originalKey;
+    }
+
+    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "/clear 3" });
+    expect(loadSession("clear-hijack-2", sessionsDir)).toEqual(existing);
+  });
+
+  // Exercises clearCommand directly through SLASH_COMMANDS, with a fake presenter that records
+  // call order — the ordering clearCommand's own comment claims is load-bearing (persist before
+  // wiping, wipe before the confirmation message).
+  test("calls the presenter in order: sessionUpdated -> transcriptCleared -> message", async () => {
+    const existing: SessionState<ModelMessage> = {
+      id: "order-1",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ role: "user", content: "hi" }],
+    };
+    saveSession(existing, sessionsDir);
+
+    const calls: string[] = [];
+    const fakePresenter = {
+      message: () => {
+        calls.push("message");
+      },
+      onPlan: () => {},
+      restore: () => {},
+      sessionUpdated: async () => {
+        calls.push("sessionUpdated");
+      },
+      transcriptCleared: () => {
+        calls.push("transcriptCleared");
+      },
+    };
+
+    const clear = SLASH_COMMANDS.get("/clear");
+    if (clear === undefined) throw new Error("/clear is not registered");
+    if (clear.needsSession === false) throw new Error("/clear unexpectedly needs no session");
+    await clear.run(
+      existing,
+      [],
+      { sessionsDir, checkpointsDir: sessionsDir, configDir: sessionsDir },
+      fakePresenter,
+    );
+
+    expect(calls).toEqual(["sessionUpdated", "transcriptCleared", "message"]);
+  });
+
+  test("`--resume <id> /clear` starts a new session, leaving the old one byte-identical", async () => {
+    const existing: SessionState = {
+      id: "old-session",
+      cwd: ".",
+      systemPrompt: "a distinctive system prompt",
+      permissionMode: "auto",
+      model: "llama-3.3-70b-versatile",
+      provider: "groq",
+      messages: [
+        { role: "user", content: "one" },
+        { role: "assistant", content: [{ type: "text", text: "two" }] },
+      ],
+    };
+    saveSession(existing, sessionsDir);
+    const before = readFileSync(join(sessionsDir, "old-session.jsonl"));
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["--resume", "old-session", "/clear"], { sessionsDir });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(code).toBe(0);
+    expect(readFileSync(join(sessionsDir, "old-session.jsonl"))).toEqual(before);
+
+    const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
+    expect(files).toHaveLength(2);
+    const newFile = files.find((f) => f !== "old-session.jsonl");
+    if (newFile === undefined) throw new Error("no new session file appeared");
+    const newId = newFile.slice(0, -".jsonl".length);
+
+    const loaded = loadSession(newId, sessionsDir);
+    expect(loaded.messages).toEqual([]);
+    expect(loaded.cwd).toBe(existing.cwd);
+    expect(loaded.systemPrompt).toBe(existing.systemPrompt);
+    expect(loaded.permissionMode).toBe(existing.permissionMode);
+    expect(loaded.model).toBe(existing.model);
+    expect(loaded.provider).toBe(existing.provider);
+
+    expect(logs.join("\n")).toContain(newId);
+    expect(logs.join("\n")).toContain("old-session");
+  });
+
+  test("bare `/clear` (no --resume) starts a new session from the most-recent one", async () => {
+    const existing: SessionState = {
+      id: "recent-session",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ role: "user", content: "hi" }],
+    };
+    saveSession(existing, sessionsDir);
+
+    const code = await run(["/clear"], { sessionsDir });
+
+    expect(code).toBe(0);
+    const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
+    expect(files).toHaveLength(2);
+    expect(loadSession("recent-session", sessionsDir).messages).toEqual([
+      { role: "user", content: "hi" },
+    ]);
+  });
+
+  test("errors when no session exists to clear", async () => {
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["/clear"], { sessionsDir });
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("No session to run /clear against.");
+  });
+});
+
 describe("run (/memory)", () => {
   let sessionsDir: string;
   let configDir: string;
@@ -3067,6 +3283,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
         new Promise<void>((resolve) => {
           resolveSessionUpdated = resolve;
         }),
+      transcriptCleared: () => {},
     };
 
     const rewind = SLASH_COMMANDS.get("/rewind");

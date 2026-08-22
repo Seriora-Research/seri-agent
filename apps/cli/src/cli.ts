@@ -96,6 +96,7 @@ import {
   type CommandDirs,
   checkpointTarget,
   decideAuthOffer,
+  decideClear,
   decideConfigOpen,
   decideMaxTurns,
   decideModeCycle,
@@ -202,6 +203,10 @@ type CommandPresenter = {
   onPlan: (plan: RestorePlan) => void;
   restore: (result: { plan: RestoreResult; message: string }) => void;
   sessionUpdated: (next: SessionState<ModelMessage>) => Promise<void>;
+  // /clear's own hook: wipes whatever is rendering the transcript. Only meaningful where something
+  // is actually rendered — the non-interactive path has no live transcript to wipe (consolePresenter's
+  // own no-op below).
+  transcriptCleared: () => void;
 };
 
 type SlashCommand = {
@@ -293,6 +298,10 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
     },
   ],
   ["/rewind", { accepts: isStepCount, run: rewindCommand, mutatesRunState: true }],
+  // Exact-and-empty, like /mode — NOT isStepCount (/rewind's own form): /clear takes no argument,
+  // so `seri "/clear the screen please"` must fall through to the model as task text rather than
+  // being hijacked as a mistyped invocation.
+  ["/clear", { accepts: (args) => args.length === 0, run: clearCommand, mutatesRunState: true }],
   // mutatesRunState: /memory approve|reject mutates the pending/ queue and the live memory files,
   // and must not race the archivist staging more writes mid-turn (C-7's own comment on why that
   // block runs before `finally` unregisters the cancel slot). Per-command, not per-subcommand
@@ -336,6 +345,9 @@ function consolePresenter(dirs: CommandDirs): CommandPresenter {
     // Trivially awaitable: saveSession is already synchronous, so this settles on the same tick
     // it is called — `async` only to satisfy CommandPresenter's own contract (its comment).
     sessionUpdated: async (next) => saveSession(next, dirs.sessionsDir),
+    // Explicit no-op, not an ANSI screen-clear: the user's own scrollback is not seri's to erase,
+    // and clearing it would corrupt piped/redirected output.
+    transcriptCleared: () => {},
   };
 }
 
@@ -412,6 +424,29 @@ async function rewindCommand(
   // does, is the more honest signal: the barrier itself did not land, and a later /rewind may not
   // be able to cross this point.
   recordBarrier();
+  presenter.message(message);
+}
+
+// /clear: starts a brand-new session in the running process. No try/catch of its own — this runs
+// inside the same try/catch every slash command's `run` already sits inside (onSubmit's,
+// handleSlashCommand's).
+//
+// Order is load-bearing. `sessionUpdated` first and awaited: it is what persists `next` (the new,
+// empty session) before anything else happens, the same "await before you rely on it having
+// landed" reasoning rewindCommand's own recordBarrier already depends on. `transcriptCleared`
+// comes AFTER `sessionUpdated`, not before, for the same durability reason, and because
+// echoUserInput (runTui's onSubmit) has already dispatched the `> /clear` echo into the transcript
+// by the time this function runs — wiping after it is what removes it. `message` comes last: it is
+// the confirmation the wipe must not also erase.
+async function clearCommand(
+  session: SessionState<ModelMessage>,
+  _args: string[],
+  dirs: CommandDirs,
+  presenter: CommandPresenter = consolePresenter(dirs),
+): Promise<void> {
+  const { next, message } = decideClear(session);
+  await presenter.sessionUpdated(next);
+  presenter.transcriptCleared();
   presenter.message(message);
 }
 
@@ -1681,6 +1716,7 @@ function tuiPresenter(dispatch: Dispatch, awaitPersist: () => Promise<void>): Co
       dispatch({ type: "session-updated", session: next });
       return persisted;
     },
+    transcriptCleared: () => dispatch({ type: "transcript-cleared" }),
   };
 }
 
