@@ -122,6 +122,19 @@ describe("createArchivistState", () => {
     expect(s.messages).toEqual(session.messages);
     expect(s.toolCallsSinceRun).toBe(0);
   });
+
+  // Pins the exact shape /clear's own rebuild (cli.ts) is checked against: a brand-new session has
+  // nothing to skip past, so the cursor starts at 0, not the previous session's count — and
+  // `messages` is the session's OWN array reference, not a copy, the same identity guarantee the
+  // populated-session test above already relies on (`toEqual`, not `toBe`, only because that test's
+  // own `session.messages` is what `s.messages` is compared against there too).
+  test("on an empty session: cursor and tool-call count are both 0, and messages is the session's own array", () => {
+    const session = emptySession();
+    const s = createArchivistState(session);
+    expect(s.messageCursor).toBe(0);
+    expect(s.toolCallsSinceRun).toBe(0);
+    expect(s.messages).toBe(session.messages);
+  });
 });
 
 describe("resetArchivistForRewind", () => {
