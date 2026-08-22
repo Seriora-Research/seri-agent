@@ -1462,10 +1462,12 @@ async function driveLoop(
   getPermissionMode: () => PermissionMode,
   persist: (session: SessionState<ModelMessage>) => void,
   approvalPrompt: ApprovalPrompt,
-  // Stage 6b: the tool-call counter/message cursor the archivist trigger reads and advances — one
-  // instance per run, created once (createArchivistState) by this function's two callers, not
-  // rebuilt here, so the counter accumulates across every turn of a TUI session rather than
-  // resetting on each driveLoop call.
+  // The tool-call counter/message cursor the archivist trigger reads and advances — one instance
+  // per SESSION, created by this function's two callers (createArchivistState), not rebuilt here,
+  // so the counter accumulates across every turn of that session rather than resetting on each
+  // driveLoop call. runTui's own copy is a `let`, not a `const`: /clear replaces it with a fresh
+  // `createArchivistState` the moment it mints a new session id — that caller's own comment on why
+  // this is a rebuild, not a reset, applies here too.
   archivistState: ArchivistState,
 ): Promise<DriveLoopResult> {
   const {
