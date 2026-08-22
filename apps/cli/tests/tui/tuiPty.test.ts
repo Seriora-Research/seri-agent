@@ -5443,7 +5443,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // they were before the refused /clear — a real rebind never touched anything.
         const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
         expect(files).toHaveLength(1);
-        const loaded = loadSession<ModelMessage>((files[0] ?? "").slice(0, -".jsonl".length), sessionsDir);
+        const loaded = loadSession<ModelMessage>(
+          (files[0] ?? "").slice(0, -".jsonl".length),
+          sessionsDir,
+        );
         expect(loaded.messages).toEqual([{ role: "user", content: "do a task" }]);
       } finally {
         child.kill("SIGKILL");
