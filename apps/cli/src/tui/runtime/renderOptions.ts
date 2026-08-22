@@ -3,8 +3,8 @@ import type { CliRendererConfig } from "@opentui/core";
 
 // `exitOnCtrlC: false` — OpenTUI's own default (`exitOnCtrlC: true`) destroys the renderer itself
 // on a bare Ctrl-C keypress, racing seri's own Ctrl-C route: signals.ts's single cancel slot,
-// which the TUI's own `onCancel` prop reaches via `deliverSignal("SIGINT")`. Same reasoning
-// Ink's `exitOnCtrlC: false` documented for the same reason.
+// which `runtime/renderer.ts`'s own keypress registration reaches via `deliverSignal("SIGINT")`.
+// Same reasoning Ink's `exitOnCtrlC: false` documented for the same reason.
 //
 // `exitSignals: []` — a DIFFERENT hazard than Ink ever had, found by reading
 // `@opentui/core`'s own renderer source (its constructor calls `addExitListeners()`

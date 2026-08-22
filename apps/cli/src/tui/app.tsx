@@ -69,15 +69,6 @@ export type AppProps = {
   // Submitted line from the input box — Phase 5 wires this to the task/slash-command dispatch;
   // Phase 4 has nowhere real to send it yet.
   onSubmit?: (value: string) => void;
-  // Called on a raw Ctrl-C keypress — the TUI's own route into signals.ts's cancel slot, mirroring
-  // cli.ts's readline path (`rl.on("SIGINT", () => deliverSignal("SIGINT"))`). Needed because raw
-  // mode (which both OpenTUI and readline use) never lets the terminal driver turn 0x03 into a real
-  // process SIGINT — the byte arrives as ordinary input instead, so whatever is reading input has
-  // to recognise it explicitly. `runtime/renderOptions.ts`'s `exitOnCtrlC: false` turns off
-  // OpenTUI's own default Ctrl-C-destroys-the-renderer behavior specifically so this is the only
-  // thing a Ctrl-C here does — leaving that default on would give the renderer its own competing
-  // exit path that races the one driveLoop's AbortController expects.
-  onCancel?: () => void;
   // Called whenever the reducer's own `state.session` changes — a mode cycle, a rewind, or the
   // loop-event reducer's own messages-updated merge. This is now the single source of truth for
   // persistence on the TUI path (a real bug this fixes: driveLoop used to persist a session it had
@@ -128,8 +119,9 @@ export type AppProps = {
   // Bug fix (coordinator follow-up on Stage C; extended round 4): AuthPanel's own "result" step
   // (a device-flow failure — a denied/expired code, a network error, degraded by
   // createAuthHandlers' (tui/handlers.ts) own catch block) had no way back to InputBox at all
-  // before this — not even Ctrl-C, which is wired to onCancel, not to clearing pendingAuth. Called
-  // from AuthPanel's own Escape handler on every step, plus Enter on "result" — a successful login
+  // before this — not even Ctrl-C, which cancels the in-flight turn (runtime/renderer.ts), not
+  // pendingAuth. Called from AuthPanel's own Escape handler on every step, plus Enter on "result" —
+  // a successful login
   // never reaches here: createAuthHandlers.onLogin (tui/handlers.ts) dispatches auth-resolved
   // itself, right after its own `await loginFn(...)` returns, with no user keypress involved.
   onAuthResolved?: () => void;
@@ -176,7 +168,6 @@ export function App({
   route,
   connectDispatch,
   onSubmit,
-  onCancel,
   onSessionChange,
   onQuit,
   onApprovalAnswer,
@@ -310,9 +301,9 @@ export function App({
 
   // A second, independent useKeyboard from InputBox's own — OpenTUI delivers the same keypress to
   // every registered handler, so this fires regardless of what InputBox does with the same press
-  // (today, nothing: InputBox's own handler skips any key.ctrl input).
+  // (today, nothing: InputBox's own handler skips any key.ctrl input). Ctrl-C itself is NOT handled
+  // here — `runtime/renderer.ts`'s own registration owns that, see its comment for why.
   useKeyboard((key) => {
-    if (key.ctrl && key.name === "c") onCancel?.();
     if (!noPanelOpen) return;
     if (key.name === "pageup") dispatch({ type: "transcript-scroll", delta: pageSize });
     if (key.name === "pagedown") dispatch({ type: "transcript-scroll", delta: -pageSize });

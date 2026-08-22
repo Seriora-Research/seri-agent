@@ -2374,7 +2374,7 @@ async function runTui(
   }
 
   // HIGH-1: the ONLY way this function's outer promise ever resolves (as opposed to rejecting, or
-  // the process dying by signal on the fatal Ctrl-C path — see onCancel below). Before this
+  // the process dying by signal on the fatal Ctrl-C path — see runtime/renderer.ts). Before this
   // existed, runTui's promise only ever rejected, so run()'s printUsage/raiseSignal/exit-code
   // logic was unreachable dead code for the entire TUI path, even after a turn completed
   // normally.
@@ -2810,22 +2810,10 @@ async function runTui(
       session: prepared.session,
       route: prepared.route,
       // H-3: multi-turn — the TUI never sets `done` itself here at mount. Exiting is /exit,
-      // Ctrl-D (quit(), above) or Ctrl-C's job (onCancel below and signals.ts), not an implicit
-      // "the last turn finished" one.
+      // Ctrl-D (quit(), above) or Ctrl-C's job (runtime/renderer.ts and signals.ts), not an
+      // implicit "the last turn finished" one.
       done: false,
       onSubmit,
-      // A raw Ctrl-C press is routed into the same cancel slot the readline approval prompt
-      // uses (deliverSignal, cli.ts's own SIGINT-routing comment near makeApprovalPrompt).
-      // While a turn is in flight, the first press aborts it via driveLoop's own
-      // AbortController and returns control here — the promise above resolves, `turnInFlight`
-      // clears, and the TUI is back to awaiting input, exactly per H-3. A second press within
-      // that same turn — or any press while nothing is running at all, since nothing has the
-      // cancel slot registered between turns (an idle first Ctrl-C is immediately fatal) —
-      // finds the slot empty and falls straight through to signals.ts's own fatal path
-      // (raiseSignal), matching non-TUI behavior for the same two situations rather than
-      // inventing new exit semantics for either. The renderer's own competing `exitOnCtrlC`
-      // default is turned off (runtime/renderOptions.ts), so this is the only handler.
-      onCancel: () => deliverSignal("SIGINT"),
       onSessionChange,
       onQuit: quit,
       onApprovalAnswer,

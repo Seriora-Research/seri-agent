@@ -10,7 +10,6 @@ import { messageOf } from "../../../errors";
 import { catalogWithFallback } from "../../../provider/catalog";
 import { persistDefaultModel } from "../../../provider/defaults";
 import { configuredProviders } from "../../../provider/keys";
-import { deliverSignal } from "../../../signals";
 import { App } from "../../app";
 import { getTuiRenderer } from "../../runtime/renderer";
 import {
@@ -101,7 +100,8 @@ export async function runGuidedSetup(
   // with its own local filter/selection intact — the user gets a visible reason instead of the
   // panel silently doing nothing. `command-error`, not `transcript-append`: it is a single-slot
   // field rendered above the picker, so holding Escape replaces one line instead of flooding the
-  // transcript. Ctrl-C is still the way out and needs no code here — see `onCancel`, below.
+  // transcript. Ctrl-C is still the way out and needs no code here — `runtime/renderer.ts`'s own
+  // registration handles it, this phase included.
   function onGuidedModelPickerCancel(): void {
     dispatch({ type: "command-error", message: GUIDED_MODEL_REQUIRED });
   }
@@ -267,7 +267,6 @@ export async function runGuidedSetup(
       // rather than a fabricated value.
       route: undefined,
       done: false,
-      onCancel: () => deliverSignal("SIGINT"), // same idle-Ctrl-C fatal path runTui's own onCancel uses
       onQuit: onSetupClose, // dead in this phase (InputBox/ApprovalBox never show) but wired for safety
       onModelSelected: onGuidedModelSelected,
       onModelPickerCancel: onGuidedModelPickerCancel,
@@ -301,8 +300,8 @@ export async function runGuidedSetup(
   );
 
   // M-2 (runTui's own comment, mirrored here — code-review finding): a fatal Ctrl-C/SIGTERM while
-  // this panel is up has no turn in flight to cancel, so deliverSignal's onCancel wiring above
-  // takes the fatal branch and kills the process by signal without ever reaching `await closed`
+  // this panel is up has no turn in flight to cancel, so `runtime/renderer.ts`'s own `deliverSignal`
+  // call takes the fatal branch and kills the process by signal without ever reaching `await closed`
   // below. `getTuiRenderer`'s own registration (runtime/renderer.ts) is what puts the terminal's
   // raw-mode/stdin state back before that happens — no separate registration needed here.
   await closed;

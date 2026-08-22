@@ -13,8 +13,8 @@ import { WarningBox } from "../ui/WarningBox";
 // answer directly, Enter defaults to "no" (the bracketed capital in "[N]o"), and — matching the
 // non-interactive path's own "anything unrecognised is 'no'" rule, applied per-keystroke here
 // instead of per-line — so does everything else, except Ctrl-D (quits, see onQuit below) and a
-// bare Ctrl/Meta chord otherwise (Ctrl-C included, which App's own useKeyboard already routes to
-// onCancel/signals.ts; answering "no" here too would just be a redundant second resolution of the
+// bare Ctrl/Meta chord otherwise (Ctrl-C included, which runtime/renderer.ts already routes to
+// signals.ts; answering "no" here too would just be a redundant second resolution of the
 // same promise, not incorrect, but not this component's concern either).
 export function ApprovalBox({
   pendingApproval,

@@ -33,7 +33,7 @@ export function AuthBanner({ show }: { show: boolean }) {
 // makes Escape work here — unlike `ConfirmPrompt` (ui/ConfirmPrompt.tsx), which never inspects
 // Escape and treats a bare Escape as an inert stray keypress, not a cancel.
 //
-// Escape (or Ctrl-C, wired to onCancel) is the only way out of a mistyped /login or a WorkOS
+// Escape (or Ctrl-C, cancelled via runtime/renderer.ts) is the only way out of a mistyped /login or a WorkOS
 // device flow sitting there for however long the code stays valid — without an explicit Escape
 // handler here, a raw Ctrl-C during "starting"/"device" would fall through to a hard process
 // kill, since no turn is in flight to arm the cancel slot. Dismissing here also cancels the

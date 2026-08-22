@@ -1877,9 +1877,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   // The TUI counterpart of approvalPromptPty.test.ts's "a real Ctrl-C at the prompt cancels the
   // turn" test — same fact (a single press cancels the in-flight turn rather than being silently
   // dropped), different route to signals.ts: there is no readline Interface in the TUI path, so
-  // this exercises App.tsx's own onCancel handler and runTui's exitOnCtrlC: false instead (Ink's
-  // default exitOnCtrlC would otherwise unmount the app on the same press, competing with the
-  // cancel this asserts on).
+  // this exercises `runtime/renderer.ts`'s own Ctrl-C registration and `renderOptions.ts`'s
+  // exitOnCtrlC: false instead (OpenTUI's own default exitOnCtrlC would otherwise destroy the
+  // renderer on the same press, competing with the cancel this asserts on).
   //
   // Asserted on stdout, not on the process exiting: H-3's multi-turn wiring means a cancelled turn
   // returns the TUI to "awaiting input" rather than ending the process (only a fatal Ctrl-C does
@@ -2695,12 +2695,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   // H-4 (the fatal path M-2's terminal-state fix guards): a second Ctrl-C, once the first has
   // already spent signals.ts's one cancel slot, is fatal rather than a second cancel — the same
   // "one slot, second press finds it empty" mechanism as everywhere else in this repo (see
-  // signals.ts's own deliverSignal comment), reached here via App.tsx's onCancel instead of a
-  // readline Interface. Asserted the same way tests/signals.test.ts's own "a second press skips
-  // the unwind and still exits by signal" test is: the process actually terminates rather than
-  // hanging, which is what M-2's onSignalCleanup(() => instance.unmount()) exists to make happen
-  // cleanly (restoring raw mode) rather than leaving the terminal in whatever state a bare
-  // process.kill mid-render left it in — not independently checkable from outside the dying
+  // signals.ts's own deliverSignal comment), reached here via `runtime/renderer.ts`'s own Ctrl-C
+  // registration instead of a readline Interface. Asserted the same way tests/signals.test.ts's own
+  // "a second press skips the unwind and still exits by signal" test is: the process actually
+  // terminates rather than hanging, which is what M-2's onSignalCleanup(() => instance.unmount())
+  // exists to make happen cleanly (restoring raw mode) rather than leaving the terminal in whatever
+  // state a bare process.kill mid-render left it in — not independently checkable from outside the
+  // dying
   // process on this pty harness, so this is the process-terminates half of that fix; the
   // terminal's own visual state is Phase 7's to confirm on a real terminal.
   test("a second Ctrl-C after the first is spent terminates the process instead of hanging", async () => {

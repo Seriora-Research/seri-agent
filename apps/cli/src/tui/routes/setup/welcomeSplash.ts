@@ -9,7 +9,6 @@
 import { randomUUID } from "node:crypto";
 import { createElement } from "react";
 import type { CliDeps } from "../../../cli";
-import { deliverSignal } from "../../../signals";
 import { App } from "../../app";
 import { getTuiRenderer } from "../../runtime/renderer";
 import { decideAuthOffer } from "../../state/commands";
@@ -85,7 +84,6 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
       session: liveState.session,
       route: undefined,
       done: false,
-      onCancel: () => deliverSignal("SIGINT"),
       onSplashLogin,
       onSplashSignup,
       onSplashContinue,
