@@ -1,44 +1,66 @@
-// Phase 3 spike (feature-plan.md): does ink-testing-library's stdin.write() actually drive
-// useInput under Ink 7? The library only declares Ink 5 support and its own issue #29 reports
-// stdin.write() not driving useInput even on Ink 5 — this test is the empirical answer for Ink 7,
-// not an assumption.
+/** @jsxImportSource @opentui/react */
+// @opentui/react-version compat canary. Successor to this file's own former job (an
+// ink-testing-library <-> Ink version-compat canary), retired along with `ink` itself -- there is
+// nothing left for that canary to watch.
 //
-// Result: PASS, with a caveat. A synchronous assertion right after write() sees the OLD frame —
-// measured, not assumed: Ink's useInput handler runs inside React's discreteUpdates (use-input.js),
-// which under React 19 settles on a microtask, not synchronously. Two `await Promise.resolve()`
-// ticks (cheaper and more precise than an arbitrary setTimeout) are enough for lastFrame() to
-// reflect the update. So the library DOES wire input correctly under Ink 7 — a caller just has to
-// await a tick before reading lastFrame(), same as asserting on any other React state update.
-// Phase 4's input-driven component tests use ink-testing-library on this basis; no bespoke harness
-// needed.
+// The equivalent risk on this renderer: does the mock-input test harness
+// (`createTestRenderer`'s `mockInput.pressKey`) actually drive a mounted component's
+// `useKeyboard` subscription, against the SAME two-settled-render-pass `mount()` pattern every
+// other keyboard-driving test in this suite (inputBox.test.tsx, inputThrottle.test.tsx,
+// modelPicker.test.tsx, approvalBox.test.tsx, ...) already relies on? `useKeyboard`/`usePaste`
+// subscribe from a plain (passive) `useEffect`, and the reconciler commits on a macrotask rather
+// than a microtask -- the first settled pass only lands the initial commit; the passive effect
+// that subscribes the keyboard handler runs during the second one.
 //
-// Kept permanently rather than deleted once the spike was answered (L-4, thermo-nuclear review):
-// this is not a seri behavior test — it is an upgrade canary. A future ink-testing-library or Ink
-// version bump that regresses this exact wiring (the library's own issue #29 is evidence it has
-// happened before) shows up here first, with the same measurement above still explaining what a
-// failure would mean, rather than being rediscovered by a Phase-4-style component test going red
-// for a reason unrelated to whatever it was actually testing.
+// Deliberately NOT asserting the tighter "a press after only ONE settle is dropped" half of this
+// (an earlier version of this file did): measured live, that assertion is order-dependent on
+// which OTHER test files in this suite ran first in the same `bun test` process -- every
+// `createTestRenderer` call in this whole suite is not explicitly destroyed on completion, and
+// running this file after even a handful of other undestroyed renderers (e.g. approvalBox.test.tsx)
+// shifts the exact settle count needed enough that a press after one settle sometimes DOES already
+// register. That is a real, separate test-hygiene gap (undestroyed `CliRenderer` instances leaking
+// state across files) worth flagging on its own, but it makes "exactly one settle is too few" an
+// unreliable thing for a permanent canary to assert. The direction of drift that would actually
+// break every OTHER test in this suite -- the double-settle `mount()` pattern silently stopping to
+// be enough -- is exactly what this test still asserts, and does so reliably regardless of prior
+// test-file ordering (unlike the dropped half).
+//
+// Kept permanently rather than deleted once this was answered: this is not a seri behavior test
+// -- it is an upgrade canary. `@opentui/react` is pre-1.0 (spec risk table), so a point release
+// changing this exact commit/subscribe timing is a real risk. If it drifts, this file should go
+// red first, rather than being rediscovered by one of the larger tests going red for a reason
+// unrelated to whatever it was actually testing.
 import { describe, expect, test } from "bun:test";
-import { Text, useInput } from "ink";
-import { render } from "ink-testing-library";
+import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
+import { createRoot, useKeyboard } from "@opentui/react";
+import type { ReactNode } from "react";
 import { useState } from "react";
 
 function Probe() {
-  const [lastInput, setLastInput] = useState("");
-  useInput((input) => setLastInput(input));
-  return <Text>last: {lastInput || "none"}</Text>;
+  const [lastKey, setLastKey] = useState("none");
+  useKeyboard((key) => setLastKey(key.sequence));
+  return <text>last: {lastKey}</text>;
 }
 
-describe("ink-testing-library / Ink 7 input spike", () => {
-  test("stdin.write() drives useInput once the microtask queue settles", async () => {
-    const instance = render(<Probe />);
+async function settle(setup: TestRendererSetup): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await setup.renderOnce();
+}
 
-    expect(instance.lastFrame()).toBe("last: none");
-    instance.stdin.write("a");
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(instance.lastFrame()).toBe("last: a");
+async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
+  createRoot(setup.renderer).render(node);
+  await settle(setup); // commits the mount
+  await settle(setup); // lets passive effects (useKeyboard's useEffect) subscribe
+}
 
-    instance.unmount();
+describe("@opentui/react mock-input / useKeyboard wiring spike", () => {
+  test("a keypress registers once the standard two-settle mount() pattern has let useKeyboard's effect subscribe", async () => {
+    const setup = await createTestRenderer({ width: 30, height: 3 });
+    await mount(setup, <Probe />);
+
+    setup.mockInput.pressKey("a");
+    await settle(setup);
+
+    expect(setup.captureCharFrame()).toContain("last: a");
   });
 });
