@@ -314,6 +314,47 @@ describe("saveSession (JSONL append-only persistence)", () => {
     writeSpy.mockRestore();
     appendSpy.mockRestore();
   });
+
+  // Pins the path-keyed bookkeeping (persistedCounts/persistedHeaders/persistedSizes, all keyed by
+  // the full `<sessionsDir>/<id>.jsonl` path) against a second id sharing the same sessionsDir — the
+  // scenario `/clear` introduces: a fresh session saved into the same dir the old one still lives in.
+  test("saving a second id in the same sessionsDir leaves the first session's file byte-identical", () => {
+    const first: SessionState = {
+      id: "session-a",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ n: 1 }, { n: 2 }, { n: 3 }],
+    };
+    saveSession(first, sessionsDir);
+    const snapshot = fs.readFileSync(join(sessionsDir, "session-a.jsonl"));
+
+    const second: SessionState = {
+      id: "session-b",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [],
+    };
+    saveSession(second, sessionsDir);
+
+    expect(fs.readFileSync(join(sessionsDir, "session-a.jsonl"))).toEqual(snapshot);
+    const bContent = fs.readFileSync(join(sessionsDir, "session-b.jsonl"), "utf8");
+    expect(bContent.split("\n").filter(Boolean)).toHaveLength(1);
+
+    // Saving under A again still appends correctly — B's save did not corrupt A's bookkeeping.
+    const grownFirst = { ...first, messages: [...first.messages, { n: 4 }] };
+    const writeSpy = spyOn(fs, "writeFileSync");
+    const appendSpy = spyOn(fs, "appendFileSync");
+    saveSession(grownFirst, sessionsDir);
+
+    expect(appendSpy).toHaveBeenCalledTimes(1);
+    expect(writeSpy).toHaveBeenCalledTimes(0);
+    expect(loadSession("session-a", sessionsDir)).toEqual(grownFirst);
+
+    writeSpy.mockRestore();
+    appendSpy.mockRestore();
+  });
 });
 
 describe("findMostRecentSession", () => {
