@@ -89,6 +89,12 @@ async function connect(
       }}
     />,
   );
+  // `mount`'s own `flush` is a fixed 2 passes — `connectDispatch` fires from a `useEffect`, whose
+  // own commit can land later than that under CPU contention (confirmed live: intermittent CI
+  // failures with "connectDispatch never fired" on otherwise-unmodified runs). `waitFor` retries
+  // against the renderer's own scheduler state instead of a blind pass count, and is a no-op if
+  // `dispatch` is already set by the time it's called.
+  await setup.waitFor(() => dispatch !== undefined);
   if (dispatch === undefined) throw new Error("connectDispatch never fired");
   return { setup, dispatch };
 }
