@@ -24,12 +24,21 @@ import { TextAttributes } from "@opentui/core";
 // untruncated sibling and truncating only `label` avoids the bug entirely and is the one thing
 // this row must never lose regardless of how little space is left, mirroring the cursor-reservation
 // pattern `components/ModelPicker.tsx`'s own filter row uses.
+//
+// `flexShrink={0}` on the marker and `wrapMode="none"` on the label are both required for
+// `truncate` to actually clip instead of soft-wrap — verified live: without `wrapMode="none"`,
+// `truncate` has nothing to do because the row's default word-wrap already "fits" the label by
+// spilling it onto a second line, so a long label wraps across two rows instead of clipping to
+// one; without `flexShrink={0}`, the row's flex layout shrinks the marker along with the label
+// once both no longer fit, dropping the marker's own trailing space.
 export function ListRow({ selected, label }: { selected: boolean; label: string }) {
   const attributes = selected ? TextAttributes.INVERSE : TextAttributes.NONE;
   return (
     <box flexDirection="row">
-      <text attributes={attributes}>{selected ? "> " : "  "}</text>
-      <text attributes={attributes} truncate>
+      <text attributes={attributes} flexShrink={0}>
+        {selected ? "> " : "  "}
+      </text>
+      <text attributes={attributes} truncate wrapMode="none">
         {label}
       </text>
     </box>

@@ -727,7 +727,11 @@ describe("App", () => {
     // ListRow always applies `truncate`: before this, WelcomeSplash's own row carried no wrap prop
     // at all, so a label wider than the terminal soft-wrapped onto a second row instead of
     // truncating — this pins both halves, the marker at a normal width and the truncation at a
-    // narrow one.
+    // narrow one. OpenTUI's native `truncate` clips with a middle ellipsis (verified: "Continue
+    // without logging in" becomes "Continue...ogging in" at width 24, not an end-truncated
+    // "Continue without…"), so the narrow-width half checks that the middle of the label — not
+    // just any substring of it — is the part that's gone, rather than asserting exact ellipsis
+    // placement.
     test("rows carry the ListRow marker, and truncate rather than wrap at a narrow width", async () => {
       const { setup, dispatch } = await connect();
 
@@ -740,18 +744,17 @@ describe("App", () => {
       await resize(setup, 24, DEFAULT_HEIGHT);
 
       const narrowFrame = setup.captureCharFrame();
-      expect(narrowFrame).toContain("Continue without");
+      expect(narrowFrame).toContain("Continue");
+      expect(narrowFrame).not.toContain("without");
     });
 
-    // DISCOVERED REGRESSION, not a test-harness bug (confirmed against a direct mount at width 24
-    // with no resize involved at all, so this isn't a resize-settling gap like `resize()`'s own
-    // comment above): `ui/ListRow.tsx`'s own `<text truncate>` on the row label does not actually
-    // suppress wrapping once the row's own `<box flexDirection="row">` (marker + label) has no
-    // `flexShrink`/fixed-width constraint of its own — "Continue without logging in" wraps across
-    // two rows instead of truncating to one line with an ellipsis, reproducing the exact symptom
-    // the ORIGINAL Ink-era fix (this describe block's own header comment) closed. `test.failing`:
-    // this should turn red (prompting promotion to a real test) the moment a production fix lands.
-    test.failing("regression: WelcomeSplashPanel's long row truncates to one line rather than wrapping at a narrow width", async () => {
+    // Pins the fix for a real regression: `ui/ListRow.tsx`'s own `<text truncate>` on the row
+    // label did not actually suppress wrapping without also pinning `wrapMode="none"` on the label
+    // and `flexShrink={0}` on the marker (see that file's own comment) — "Continue without logging
+    // in" used to wrap across two rows instead of truncating to one line with an ellipsis,
+    // reproducing the exact symptom the ORIGINAL Ink-era fix (this describe block's own header
+    // comment) closed.
+    test("WelcomeSplashPanel's long row truncates to one line rather than wrapping at a narrow width", async () => {
       const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-offer", show: true });
@@ -812,18 +815,17 @@ describe("App", () => {
       expect(setup.captureCharFrame()).not.toContain('Type to filter — try "free" or "paid"…');
     });
 
-    // DISCOVERED REGRESSION, not a test-harness bug (confirmed against a direct mount at width 42
-    // with no resize involved at all — and against `modelPicker.test.tsx`'s own re-test loop, which
-    // never reproduces this because it always types a filter first, so `showPlaceholder` is never
-    // true there): with an EMPTY filter query specifically, the row renders `promptText` ("> "),
-    // the reverse-video cursor (a lone space), and the placeholder as three siblings — at width 42
-    // the cursor's own space is dropped ("> Type to filter…", one space) rather than kept ("> "
-    // + cursor + placeholder, two spaces), reproducing the exact symptom the ORIGINAL Ink-era Yoga
-    // flexShrink arbitration bug had (this describe block's own header comment says it "does not
-    // reproduce here" — true for the non-empty-filter case `modelPicker.test.tsx` covers, not for
-    // this one). `test.failing`: this should turn red (prompting promotion to a real test) the
-    // moment a production fix lands.
-    test.failing("regression: keeps the cursor's own column visible at a narrow width with an empty filter", async () => {
+    // Pins the fix for a real regression, not a test-harness bug (confirmed against a direct mount
+    // at width 42 with no resize involved at all — and against `modelPicker.test.tsx`'s own re-test
+    // loop, which never exercised this because it always types a filter first, so
+    // `showPlaceholder` is never true there): with an EMPTY filter query specifically, the row
+    // renders `promptText` ("> "), the reverse-video cursor (a lone space), and the placeholder as
+    // three siblings — `promptText`'s own trailing space used to be dropped ("> Type to filter…",
+    // one space) rather than kept ("> " + cursor + placeholder, two spaces) once the row ran out of
+    // width, reproducing the exact symptom the ORIGINAL Ink-era Yoga flexShrink arbitration bug had
+    // (`components/ModelPicker.tsx`'s own comment explains the fix: `flexShrink={0}` on `promptText`
+    // and the cursor).
+    test("keeps the cursor's own column visible at a narrow width with an empty filter", async () => {
       const { setup, dispatch } = await connect();
 
       dispatch({ type: "model-picker-requested", entries: [row()] });
