@@ -192,14 +192,32 @@ function modeIndicator(mode: PermissionMode): string {
 // What "an empty transcript" means, as a single value rather than five fields independently kept
 // in sync at two call sites (initialTuiState below, and the `transcript-cleared` case's own
 // comment on why every one of them must move together): a future field added to this set only
-// needs updating here once.
-const EMPTY_TRANSCRIPT = {
-  transcript: [] as TranscriptEntry[],
+// needs updating here once. `Readonly<Pick<TuiState, ...>>` (rather than a cast) means a field
+// removed from TuiState is a compile error here too, not just a silent orphan. Both the object and
+// its `transcript` array are frozen: every TuiState this is spread into shares the SAME array
+// instance, so an in-place mutation of one state's `transcript` (nothing does this today, but
+// nothing stops it either) would otherwise corrupt every other state — including a concurrent test
+// — that spread from this same constant.
+const EMPTY_TRANSCRIPT: Readonly<
+  Pick<
+    TuiState,
+    | "transcript"
+    | "transcriptScrollOffset"
+    | "transcriptScrollStreamingRows"
+    | "totalVisualRows"
+    | "streaming"
+  >
+> = Object.freeze({
+  // `as TranscriptEntry[]`: TuiState.transcript is declared mutable (App.tsx replaces it wholesale
+  // rather than pushing in place), and TS's array variance treats `readonly T[]` and `T[]` as
+  // genuinely different types — frozen at runtime regardless of this cast, which only restores the
+  // static type this field is spread into everywhere else.
+  transcript: Object.freeze([] as TranscriptEntry[]) as TranscriptEntry[],
   transcriptScrollOffset: 0,
   transcriptScrollStreamingRows: 0,
   totalVisualRows: 0,
   streaming: "",
-};
+});
 
 export function initialTuiState(
   session: SessionState<ModelMessage>,
