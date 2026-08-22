@@ -1,10 +1,18 @@
-// One continuous alt-screen session spanning all three sequential Ink mounts (welcome splash,
-// guided setup, the main TUI) rather than Ink's own per-render() `alternateScreen` option, which
-// has a per-mount lifetime and would swap the buffer once per mount instead of once per launch.
-// `entered` makes "exactly once" true by construction: every exit path (normal exit, `process.on
-// ("exit")`, `onSignalCleanupLast`) calls `exitAltScreen`, and only the first of those actually
-// writes anything.
-import { onSignalCleanupLast } from "../signals";
+// PROVISIONAL — not the real Decision 1 consolidation (docs/specs/025-tui-opentui-migration/
+// spec.md), a narrower stopgap for this dispatch's own boundary: `welcomeSplash.ts` and
+// `guidedSetup.ts` still mount their own separate `ink` `render()` calls (a later migration
+// dispatch's job to port) and never owned their own alt-screen entry -- they always relied on
+// `cli.ts` wrapping the whole welcome-splash -> guided-setup -> main-TUI sequence in one
+// continuous alt-screen session from outside. `runTui`'s own mount now owns ITS OWN alt-screen
+// entry/exit via `runtime/renderer.ts`'s `screenMode: "alternate-screen"` config, so this module's
+// job shrinks to just the two ink mounts that precede it: entered once before
+// `runWelcomeSplash`, exited once after `runTui` resolves (or on a fatal bailout before it ever
+// mounts) — exactly `altScreen.ts`'s old job, minus the third (`runTui`) mount it used to also
+// cover. Real terminals treat a repeated `\x1b[?1049h`/`\x1b[?1049l` as a no-op, so this and
+// `runtime/renderer.ts`'s own alt-screen entry briefly overlapping during `runTui`'s mount is
+// harmless. Delete this file once a later dispatch ports `welcomeSplash.ts`/`guidedSetup.ts` onto
+// the same shared renderer and Decision 1's single continuous instance is real.
+import { onSignalCleanupLast } from "../../signals";
 
 let entered = false;
 
