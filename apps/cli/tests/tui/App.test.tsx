@@ -146,6 +146,25 @@ describe("App", () => {
     expect(frame).toContain("boom");
   });
 
+  // Re-test of ui/ErrorLine.tsx's own truncate-with-multiple-children fix (see that file's
+  // comment, mirroring ui/ListRow.tsx's own): a message wider than the row must clip to one row,
+  // not soft-wrap across several — every caller (app.tsx's own APP_CHROME_ROWS, each panel's own
+  // budget) reserves exactly one row for this line, so a wrap here would push whatever sits below
+  // it (here, InputBox) past its own expected row.
+  test("a long command-error message stays on one row instead of wrapping across several", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({
+      type: "command-error",
+      message: "x".repeat(DEFAULT_WIDTH + 5),
+    });
+    await flush(setup);
+
+    const frame = setup.captureCharFrame();
+    const overflowRows = frame.split("\n").filter((line) => line.includes("xxxxx"));
+    expect(overflowRows).toHaveLength(1);
+  });
+
   test("a transcript-append dispatch grows the transcript viewport", async () => {
     const { setup, dispatch } = await connect();
 

@@ -11,12 +11,22 @@ import { singleLine } from "../util/format";
 // embedded break first, then `truncate` guards what's left from overflowing on a narrow terminal.
 // Either alone would leave the other case free to push an open panel's own bottom row past the
 // alt-screen viewport.
+//
+// `ERROR_MARK` and the message are two SIBLING `<text>` nodes, not one `<text>` with two children,
+// mirroring `ui/ListRow.tsx`'s own fix (see that file's comment for the full live-verified bug this
+// avoids). `wrapMode="none"` on the message is required alongside `truncate` for the same reason
+// documented there: without it, a message wider than the row's available width soft-wraps across
+// multiple rows instead of clipping to one, overflowing the one-row budget every caller assumes.
 export function ErrorLine({ message }: { message: string | undefined }) {
   if (message === undefined) return null;
   return (
-    <text fg={theme.error} attributes={TextAttributes.BOLD} truncate>
-      {ERROR_MARK}
-      {singleLine(message)}
-    </text>
+    <box flexDirection="row">
+      <text fg={theme.error} attributes={TextAttributes.BOLD} flexShrink={0}>
+        {ERROR_MARK}
+      </text>
+      <text fg={theme.error} attributes={TextAttributes.BOLD} truncate wrapMode="none">
+        {singleLine(message)}
+      </text>
+    </box>
   );
 }
