@@ -11,7 +11,7 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ReactNode } from "react";
-import type { ModelPickerEntry } from "../../src/tui/commands";
+import type { ModelPickerEntry } from "../../src/tui/state/commands";
 import { ModelPicker } from "../../src/tui/components/ModelPicker";
 
 async function settle(setup: TestRendererSetup): Promise<void> {

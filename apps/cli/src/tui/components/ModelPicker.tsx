@@ -5,7 +5,7 @@ import { decodePasteBytes, TextAttributes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import { useState } from "react";
-import type { ModelPickerEntry } from "../commands";
+import type { ModelPickerEntry } from "../state/commands";
 import { useListWindow } from "../hooks/useListWindow";
 import { theme } from "../theme/theme";
 import { ListRow } from "../ui/ListRow";

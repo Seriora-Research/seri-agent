@@ -109,14 +109,14 @@ import {
   decideRewind,
   decideSetupOpen,
   decideUndo,
-} from "./tui/commands";
+} from "./tui/state/commands";
 import {
   createAuthHandlers,
   createConfigHandlers,
   createPermissionsHandlers,
   createSetupHandlers,
-} from "./tui/handlers";
-import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/reducer";
+} from "./tui/state/handlers";
+import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/state/reducer";
 import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
 import { runWelcomeSplash } from "./tui/routes/setup/welcomeSplash";
 import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";

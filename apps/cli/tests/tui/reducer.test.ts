@@ -8,9 +8,9 @@ import type {
   ModelPickerEntry,
   PermissionRow,
   SetupProviderRow,
-} from "../../src/tui/commands";
-import { visibleTranscript, wrapPendingRows } from "../../src/tui/format";
-import { initialTuiState, tuiReducer, type TuiState } from "../../src/tui/reducer";
+} from "../../src/tui/state/commands";
+import { initialTuiState, tuiReducer, type TuiState } from "../../src/tui/state/reducer";
+import { visibleTranscript, wrapPendingRows } from "../../src/tui/util/format";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
