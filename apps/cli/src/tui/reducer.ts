@@ -189,6 +189,18 @@ function modeIndicator(mode: PermissionMode): string {
   return `[${mode}]`;
 }
 
+// What "an empty transcript" means, as a single value rather than five fields independently kept
+// in sync at two call sites (initialTuiState below, and the `transcript-cleared` case's own
+// comment on why every one of them must move together): a future field added to this set only
+// needs updating here once.
+const EMPTY_TRANSCRIPT = {
+  transcript: [] as TranscriptEntry[],
+  transcriptScrollOffset: 0,
+  transcriptScrollStreamingRows: 0,
+  totalVisualRows: 0,
+  streaming: "",
+};
+
 export function initialTuiState(
   session: SessionState<ModelMessage>,
   opts?: { showSplash?: boolean; route?: ResolvedRoute },
@@ -196,15 +208,11 @@ export function initialTuiState(
   return {
     session,
     route: opts?.route,
-    transcript: [],
-    transcriptScrollOffset: 0,
-    transcriptScrollStreamingRows: 0,
+    ...EMPTY_TRANSCRIPT,
     columns: DEFAULT_COLUMNS,
     // Not a real chrome-height estimate, same spirit as App.tsx's own FALLBACK_CHROME_ROWS
     // placeholder — corrected by the first `viewport-resized` dispatch before it can matter.
     viewportRows: 1,
-    totalVisualRows: 0,
-    streaming: "",
     status: "",
     modeIndicator: modeIndicator(session.permissionMode),
     pendingTool: undefined,
@@ -342,11 +350,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "transcript-cleared":
       return {
         ...state,
-        transcript: [],
-        transcriptScrollOffset: 0,
-        transcriptScrollStreamingRows: 0,
-        totalVisualRows: 0,
-        streaming: "",
+        ...EMPTY_TRANSCRIPT,
       };
     case "transcript-scroll": {
       const streamingRows = streamingVisualRows(state.streaming, state.columns);
