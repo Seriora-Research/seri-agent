@@ -35,6 +35,7 @@ import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
 import {
   DEFAULT_COLUMNS,
+  DEFAULT_ROWS,
   FALLBACK_CHROME_ROWS,
   formatModeLabel,
   transcriptRowsProps,
@@ -143,6 +144,13 @@ function resolveWidth(columns: number): number {
   return columns || DEFAULT_COLUMNS;
 }
 
+// Same fallback, same reason, for the other half of a pty's first-render dimensions report —
+// `height={rows}` (below) with a genuine but unusable `0` rows would give the root box zero
+// height instead of a blank first frame.
+function resolveHeight(rows: number): number {
+  return rows || DEFAULT_ROWS;
+}
+
 export function App({
   session,
   route,
@@ -172,8 +180,9 @@ export function App({
   onSplashContinue,
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session, { route }));
-  const { width: rawWidth, height: rows } = useTerminalDimensions();
+  const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
+  const rows = resolveHeight(rawRows);
   const modeLabel = formatModeLabel(state.modeIndicator, state.route, width);
 
   // The transcript viewport's own height comes from flexbox's leftover space (flexGrow, below),

@@ -12,7 +12,7 @@ import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
 import { ErrorLine } from "../../ui/ErrorLine";
 import { ListRow } from "../../ui/ListRow";
 import { formatSetupRow } from "../../util/format";
-import { isEnter, isPrintableKey } from "../../util/keys";
+import { isDismiss, isEnter, isPrintableKey } from "../../util/keys";
 
 // /setup's own live state (tui/state/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-
 // exclusion role, dispatching to one of two step-specific sub-components below for the steps that
@@ -87,7 +87,7 @@ function SetupList({
   );
 
   useKeyboard((key) => {
-    if (key.name === "escape" || (key.ctrl && key.name === "d")) {
+    if (isDismiss(key)) {
       onSetupClose?.();
       return;
     }

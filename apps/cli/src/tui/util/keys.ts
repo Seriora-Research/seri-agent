@@ -33,6 +33,14 @@ export function isPrintableKey(key: KeyEvent): boolean {
   );
 }
 
+// Escape or Ctrl-D, the shared "dismiss this panel entirely" chord every list-step panel
+// (ModelPicker, SetupList, ConfigList, PermissionsList) treats identically — unlike the panels'
+// OWN enter-key/value-entry steps, which split Escape (go back one step) and Ctrl-D (close
+// outright) into two different actions, and so do not use this.
+export function isDismiss(key: KeyEvent): boolean {
+  return key.name === "escape" || (key.ctrl && key.name === "d");
+}
+
 // Splits pasted text at its first line terminator, treating a `\r\n` pair as ONE terminator (a
 // Windows-clipboard paste is the common source of one) rather than two — stripping only the `\r`
 // leaves a stray leading `\n` in `after`, requiring an extra, confusing Enter to clear what looked

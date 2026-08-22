@@ -7,7 +7,7 @@
 // doesn't cover, to avoid asserting the same behavior twice: that a normally-paced keystroke is
 // never throttled at all (no timer scheduled), and that a keystroke typed right after a submit
 // gets its own immediate flush rather than inheriting a stale `lastFlushRef` from before Enter.
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ReactNode } from "react";
@@ -15,6 +15,18 @@ import type { ReactNode } from "react";
 import { InputBox } from "../../src/tui/components/InputBox";
 
 const THROTTLE_MS = 50;
+
+// Every `createTestRenderer` call registers its own listener on the process-wide
+// `TerminalConsoleCache` singleton (App.test.tsx's own comment on this, verbatim) — undestroyed
+// across this file's own tests, the same real cross-file flakiness inkInputSpike.test.tsx's own
+// comment documents.
+const mountedRenderers: TestRendererSetup[] = [];
+
+afterEach(() => {
+  for (const setup of mountedRenderers.splice(0)) {
+    setup.renderer.destroy();
+  }
+});
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -41,6 +53,7 @@ describe("InputBox throttled repaints", () => {
   // around a single keypress isolates exactly what that one keystroke scheduled.
   test("keystrokes spaced beyond the throttle window each flush immediately, without ever scheduling a pending timer", async () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
+    mountedRenderers.push(setup);
     await mount(setup, <InputBox />);
 
     const gapMs = THROTTLE_MS + 50; // slower than THROTTLE_MS: a deliberate typing pace, never coalesced
@@ -62,6 +75,7 @@ describe("InputBox throttled repaints", () => {
   test("a keystroke right after submit gets its own immediate flush, not a throttle delay left over from before Enter", async () => {
     const submitted: string[] = [];
     const setup = await createTestRenderer({ width: 40, height: 5 });
+    mountedRenderers.push(setup);
     await mount(setup, <InputBox onSubmit={(v) => submitted.push(v)} />);
 
     // All four land in the same synchronous burst -- no real time elapses between the leading-edge

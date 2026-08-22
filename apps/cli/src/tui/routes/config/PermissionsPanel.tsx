@@ -8,7 +8,7 @@ import type { PermissionsPanelState } from "../../state/reducer";
 import { theme } from "../../theme/theme";
 import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
 import { ListRow } from "../../ui/ListRow";
-import { isPrintableKey } from "../../util/keys";
+import { isDismiss, isPrintableKey } from "../../util/keys";
 
 // /permissions' own live state (state/reducer.ts's pendingPermissions) — mirrors SetupPanel's
 // step-dispatcher shape with one fewer step; the confirm-remove step delegates to the shared
@@ -59,7 +59,7 @@ function PermissionsList({
   );
 
   useKeyboard((key) => {
-    if (key.name === "escape" || (key.ctrl && key.name === "d")) {
+    if (isDismiss(key)) {
       onPermissionsClose?.();
       return;
     }

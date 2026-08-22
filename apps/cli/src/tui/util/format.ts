@@ -274,6 +274,11 @@ export const MODE_LABEL_COMPACT_COLS = 52;
 // width (App.test.tsx's own `DEFAULT_WIDTH`, 100) is what does that, not this fallback.
 export const DEFAULT_COLUMNS = 80;
 
+// `resolveHeight`'s own fallback (App.tsx) — the same first-render `0` a pty can genuinely report
+// for `columns` above, on the same ioctl-not-landed-yet timing, applies to row count too. The
+// classic 80x24 pairing, not an arbitrary round number.
+export const DEFAULT_ROWS = 24;
+
 // Truncates with a trailing ellipsis (never mid-multi-byte-safe beyond what .slice already is —
 // every field this feeds is plain ASCII: a model id/displayName/provider name) or pads with
 // trailing spaces, so every row's later columns start at the same screen column regardless of an

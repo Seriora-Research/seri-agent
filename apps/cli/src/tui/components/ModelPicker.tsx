@@ -10,7 +10,7 @@ import type { ModelPickerEntry } from "../state/commands";
 import { theme } from "../theme/theme";
 import { ListRow } from "../ui/ListRow";
 import { formatModelRow, MODEL_PICKER_HEADER, matchesFilter } from "../util/format";
-import { isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
+import { isDismiss, isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
 
 const FILTER_PLACEHOLDER = 'Type to filter — try "free" or "paid"…';
 
@@ -63,7 +63,7 @@ export function ModelPicker({
   useKeyboard((key) => {
     // Escape OR Ctrl-D — deliberately NOT ApprovalBox's Ctrl-D (which triggers app quit): this is
     // "never mind, back to typing", not a graceful-quit sequence.
-    if (key.name === "escape" || (key.ctrl && key.name === "d")) {
+    if (isDismiss(key)) {
       onModelPickerCancel?.();
       return;
     }

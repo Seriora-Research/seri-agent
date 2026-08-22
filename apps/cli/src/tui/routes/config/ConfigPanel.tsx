@@ -13,7 +13,7 @@ import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
 import { ErrorLine } from "../../ui/ErrorLine";
 import { ListRow } from "../../ui/ListRow";
 import { singleLine } from "../../util/format";
-import { isEnter, isPrintableKey } from "../../util/keys";
+import { isDismiss, isEnter, isPrintableKey } from "../../util/keys";
 
 // /config's own live state (state/reducer.ts's pendingConfig) — mirrors SetupPanel's
 // step-dispatcher shape: one branch per step that still owns input handling and local state;
@@ -83,7 +83,7 @@ function ConfigList({
   );
 
   useKeyboard((key) => {
-    if (key.name === "escape" || (key.ctrl && key.name === "d")) {
+    if (isDismiss(key)) {
       onConfigClose?.();
       return;
     }
