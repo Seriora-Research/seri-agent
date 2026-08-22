@@ -16,11 +16,22 @@ import { TextAttributes } from "@opentui/core";
 // as invisible on many dark terminal themes, and `inverse` was the second prop needed to fix it.
 // OpenTUI's own INVERSE attribute already does the full swap in one step, so `theme.selected` is
 // not read here at all.
+// The marker ("> "/"  ") and `label` are two SIBLING `<text>` nodes, not one `<text>` with two
+// children — verified live (apps/cli/tests/tui/): a single `<text truncate>` whose content spans
+// more than one child (two adjacent string expressions, as `{marker}{label}` used to produce)
+// renders as a BLANK line the instant that content overflows the available width, on every
+// terminal width tested, both selected and unselected. Splitting the marker into its own
+// untruncated sibling and truncating only `label` avoids the bug entirely and is the one thing
+// this row must never lose regardless of how little space is left, mirroring the cursor-reservation
+// pattern `components/ModelPicker.tsx`'s own filter row uses.
 export function ListRow({ selected, label }: { selected: boolean; label: string }) {
+  const attributes = selected ? TextAttributes.INVERSE : TextAttributes.NONE;
   return (
-    <text attributes={selected ? TextAttributes.INVERSE : TextAttributes.NONE} truncate>
-      {selected ? "> " : "  "}
-      {label}
-    </text>
+    <box flexDirection="row">
+      <text attributes={attributes}>{selected ? "> " : "  "}</text>
+      <text attributes={attributes} truncate>
+        {label}
+      </text>
+    </box>
   );
 }
