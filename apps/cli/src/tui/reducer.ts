@@ -189,6 +189,36 @@ function modeIndicator(mode: PermissionMode): string {
   return `[${mode}]`;
 }
 
+// What "an empty transcript" means, as a single value rather than five fields independently kept
+// in sync at two call sites (initialTuiState below, and the `transcript-cleared` case's own
+// comment on why every one of them must move together): a future field added to this set only
+// needs updating here once. `Readonly<Pick<TuiState, ...>>` (rather than a cast) means a field
+// removed from TuiState is a compile error here too, not just a silent orphan. Both the object and
+// its `transcript` array are frozen: every TuiState this is spread into shares the SAME array
+// instance, so an in-place mutation of one state's `transcript` (nothing does this today, but
+// nothing stops it either) would otherwise corrupt every other state — including a concurrent test
+// — that spread from this same constant.
+const EMPTY_TRANSCRIPT: Readonly<
+  Pick<
+    TuiState,
+    | "transcript"
+    | "transcriptScrollOffset"
+    | "transcriptScrollStreamingRows"
+    | "totalVisualRows"
+    | "streaming"
+  >
+> = Object.freeze({
+  // `as TranscriptEntry[]`: TuiState.transcript is declared mutable (App.tsx replaces it wholesale
+  // rather than pushing in place), and TS's array variance treats `readonly T[]` and `T[]` as
+  // genuinely different types — frozen at runtime regardless of this cast, which only restores the
+  // static type this field is spread into everywhere else.
+  transcript: Object.freeze([] as TranscriptEntry[]) as TranscriptEntry[],
+  transcriptScrollOffset: 0,
+  transcriptScrollStreamingRows: 0,
+  totalVisualRows: 0,
+  streaming: "",
+});
+
 export function initialTuiState(
   session: SessionState<ModelMessage>,
   opts?: { showSplash?: boolean; route?: ResolvedRoute },
@@ -196,15 +226,11 @@ export function initialTuiState(
   return {
     session,
     route: opts?.route,
-    transcript: [],
-    transcriptScrollOffset: 0,
-    transcriptScrollStreamingRows: 0,
+    ...EMPTY_TRANSCRIPT,
     columns: DEFAULT_COLUMNS,
     // Not a real chrome-height estimate, same spirit as App.tsx's own FALLBACK_CHROME_ROWS
     // placeholder — corrected by the first `viewport-resized` dispatch before it can matter.
     viewportRows: 1,
-    totalVisualRows: 0,
-    streaming: "",
     status: "",
     modeIndicator: modeIndicator(session.permissionMode),
     pendingTool: undefined,
@@ -227,6 +253,11 @@ export type TuiAction =
   // echo that must not fragment an in-progress streamed answer into two transcript entries (see
   // pushLine's own comment).
   | { type: "transcript-append"; line: string; role?: TranscriptRole; flush?: boolean }
+  // /clear's own action. The only action that ever SHRINKS the transcript, rather than adding to
+  // it — every derived counter (`transcriptScrollOffset`, `transcriptScrollStreamingRows`,
+  // `totalVisualRows`, `streaming`) must be reset alongside `transcript` itself, or a stale one
+  // would keep describing an array that no longer exists.
+  | { type: "transcript-cleared" }
   // Scrolls the transcript viewport. Positive `delta` moves toward older rows, clamped to
   // `[0, transcriptVisualRows(transcript, columns) - viewportRows]` — the offset at which
   // visibleTranscript shows a full `viewportRows`-tall page of the oldest content, not just the
@@ -334,6 +365,11 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     // typed mid-stream reordered the transcript against the model's own still-in-progress answer.
     case "transcript-append":
       return pushLine(state, action.line, action.role ?? "system", action.flush ?? true);
+    case "transcript-cleared":
+      return {
+        ...state,
+        ...EMPTY_TRANSCRIPT,
+      };
     case "transcript-scroll": {
       const streamingRows = streamingVisualRows(state.streaming, state.columns);
       const max = maxScrollOffset(state.totalVisualRows, streamingRows, state.viewportRows);

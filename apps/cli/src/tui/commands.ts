@@ -1,4 +1,4 @@
-// The decision half of the decision/presentation split (research-spec) for the four slash
+// The decision half of the decision/presentation split (research-spec) for the five slash
 // commands: each function here decides what happened and returns it, and prints nothing itself —
 // no saveSession, no console.log/print*. That is what lets the same decision serve both the
 // existing non-interactive path (console.log the message) and the TUI path (dispatch it into the
@@ -7,6 +7,7 @@
 // checkpointTarget is exported and reused by cli.ts's prepareSession — the one copy this module
 // and cli.ts both call through to, rather than cli.ts keeping its own duplicate (it did, briefly,
 // between Phase 2 and the fix that consolidated it here).
+import { randomUUID } from "node:crypto";
 import {
   filterCatalogEntries,
   groupRoutes,
@@ -15,6 +16,8 @@ import {
   type ModelProvider,
 } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
+import { loadAgentsFile } from "../agents/loadAgentsFile";
+import { buildSystemPrompt } from "../agents/systemPrompt";
 import { loadAuthSession } from "../auth/authStore";
 import {
   appendBarrier,
@@ -505,4 +508,41 @@ export function decideRewind(
     message: `Session ${next.id}: dropped ${dropped} message(s), ${kept} remain. No file was touched.`,
     recordBarrier,
   };
+}
+
+// /clear's own decision: mints a brand-new session id and an empty transcript, carrying
+// cwd/permissionMode/model/provider over verbatim rather than re-resolving them — re-resolving
+// those would mean re-running loadOrCreateSession's new-session logic (hard-coding
+// permissionMode: "approve-each" and re-running model resolution), discarding a /mode or model
+// change the user made this session. `systemPrompt` is the one field NOT carried over: like
+// loadOrCreateSession's own new-session and resume paths, it is rebuilt from the session's `cwd` on
+// every /clear so an AGENTS.md edited since is picked up, rather than replaying a prompt from
+// before the edit for the rest of the process. Not pure in the sense of "no I/O" — it's a
+// filesystem read whose result depends on external state, same as loadOrCreateSession's own
+// rebuild — but still side-effect-free: no checkpointTarget call, no persistence, the caller
+// decides what to do with `next`, same contract as decideModeCycle above.
+//
+// `loadAgents` defaults to the real `loadAgentsFile`, matching `newId`'s own default-with-override
+// shape on this exact signature — unlike `loadOrCreateSession`'s `loadAgentsFileFn` (threaded from
+// `deps.loadAgentsFile` through `run()`), this override is reachable only by a caller of
+// `decideClear` directly (this file's own tests), not through `run()`'s own dependency injection:
+// `clearCommand`'s signature is fixed by `SlashCommand.run`, shared with every other command, so
+// widening it (or `CommandDirs`) for this one caller was judged not worth it here.
+export function decideClear(
+  session: SessionState<ModelMessage>,
+  newId: string = randomUUID(),
+  loadAgents: typeof loadAgentsFile = loadAgentsFile,
+): { next: SessionState<ModelMessage>; message: string } {
+  const next = {
+    ...session,
+    id: newId,
+    messages: [],
+    systemPrompt: buildSystemPrompt(loadAgents(session.cwd)),
+  };
+  // "saved", not "intact": the checkpoint store retains only a fixed number of recent session refs
+  // (checkpoint.ts's own pruneSessions), so repeated /clear in one long-lived process can prune an
+  // earlier /clear'd-away session's checkpoint log before its .jsonl transcript ages out — the
+  // transcript is the guarantee this message can actually make.
+  const message = `Started a new session ${next.id}. The previous session is saved — resume it with: seri --resume ${session.id}`;
+  return { next, message };
 }

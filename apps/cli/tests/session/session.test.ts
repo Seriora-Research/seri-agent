@@ -3,8 +3,10 @@ import * as fs from "node:fs";
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { foldsCase } from "../../src/caseFold";
 import {
   findMostRecentSession,
+  findMostRecentSessionForCwd,
   loadSession,
   type SessionState,
   saveSession,
@@ -314,6 +316,47 @@ describe("saveSession (JSONL append-only persistence)", () => {
     writeSpy.mockRestore();
     appendSpy.mockRestore();
   });
+
+  // Pins the path-keyed bookkeeping (persistedCounts/persistedHeaders/persistedSizes, all keyed by
+  // the full `<sessionsDir>/<id>.jsonl` path) against a second id sharing the same sessionsDir — the
+  // scenario `/clear` introduces: a fresh session saved into the same dir the old one still lives in.
+  test("saving a second id in the same sessionsDir leaves the first session's file byte-identical", () => {
+    const first: SessionState = {
+      id: "session-a",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ n: 1 }, { n: 2 }, { n: 3 }],
+    };
+    saveSession(first, sessionsDir);
+    const snapshot = fs.readFileSync(join(sessionsDir, "session-a.jsonl"));
+
+    const second: SessionState = {
+      id: "session-b",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [],
+    };
+    saveSession(second, sessionsDir);
+
+    expect(fs.readFileSync(join(sessionsDir, "session-a.jsonl"))).toEqual(snapshot);
+    const bContent = fs.readFileSync(join(sessionsDir, "session-b.jsonl"), "utf8");
+    expect(bContent.split("\n").filter(Boolean)).toHaveLength(1);
+
+    // Saving under A again still appends correctly — B's save did not corrupt A's bookkeeping.
+    const grownFirst = { ...first, messages: [...first.messages, { n: 4 }] };
+    const writeSpy = spyOn(fs, "writeFileSync");
+    const appendSpy = spyOn(fs, "appendFileSync");
+    saveSession(grownFirst, sessionsDir);
+
+    expect(appendSpy).toHaveBeenCalledTimes(1);
+    expect(writeSpy).toHaveBeenCalledTimes(0);
+    expect(loadSession("session-a", sessionsDir)).toEqual(grownFirst);
+
+    writeSpy.mockRestore();
+    appendSpy.mockRestore();
+  });
 });
 
 describe("findMostRecentSession", () => {
@@ -356,4 +399,96 @@ describe("findMostRecentSession", () => {
   test("returns undefined for a non-existent directory", () => {
     expect(findMostRecentSession(join(sessionsDir, "does-not-exist"))).toBeUndefined();
   });
+});
+
+describe("findMostRecentSessionForCwd", () => {
+  test("returns the most recently modified session recorded from that cwd, ignoring a more-recently-touched one from elsewhere", () => {
+    saveSession(
+      { id: "here-1", cwd: "/project/a", systemPrompt: "", permissionMode: "auto", messages: [] },
+      sessionsDir,
+    );
+    saveSession(
+      {
+        id: "elsewhere",
+        cwd: "/project/b",
+        systemPrompt: "",
+        permissionMode: "auto",
+        messages: [],
+      },
+      sessionsDir,
+    );
+    saveSession(
+      { id: "here-2", cwd: "/project/a", systemPrompt: "", permissionMode: "auto", messages: [] },
+      sessionsDir,
+    );
+
+    const base = new Date("2026-01-01T00:00:00Z");
+    utimesSync(join(sessionsDir, "here-1.jsonl"), base, base);
+    utimesSync(
+      join(sessionsDir, "here-2.jsonl"),
+      new Date(base.getTime() + 30_000),
+      new Date(base.getTime() + 30_000),
+    );
+    // Newest overall, but from a different cwd — must not win.
+    utimesSync(
+      join(sessionsDir, "elsewhere.jsonl"),
+      new Date(base.getTime() + 60_000),
+      new Date(base.getTime() + 60_000),
+    );
+
+    expect(findMostRecentSessionForCwd(sessionsDir, "/project/a")).toBe("here-2");
+  });
+
+  test("returns undefined when no session matches the given cwd", () => {
+    saveSession(
+      { id: "only", cwd: "/project/a", systemPrompt: "", permissionMode: "auto", messages: [] },
+      sessionsDir,
+    );
+
+    expect(findMostRecentSessionForCwd(sessionsDir, "/project/b")).toBeUndefined();
+  });
+
+  test("returns undefined for an empty directory", () => {
+    expect(findMostRecentSessionForCwd(sessionsDir, "/project/a")).toBeUndefined();
+  });
+
+  test("returns undefined for a non-existent directory", () => {
+    expect(
+      findMostRecentSessionForCwd(join(sessionsDir, "does-not-exist"), "/project/a"),
+    ).toBeUndefined();
+  });
+
+  // A candidate whose header line can't be parsed (corrupted, or not a session file at all) is
+  // skipped rather than thrown on — the same "don't let one bad file break a directory-wide scan"
+  // posture findMostRecentSession's own plain stat-only scan already has by construction.
+  test("skips a session whose header line is not valid JSON instead of throwing", () => {
+    saveSession(
+      { id: "good", cwd: "/project/a", systemPrompt: "", permissionMode: "auto", messages: [] },
+      sessionsDir,
+    );
+    writeFileSync(join(sessionsDir, "corrupt.jsonl"), "not json at all\n");
+
+    expect(findMostRecentSessionForCwd(sessionsDir, "/project/a")).toBe("good");
+  });
+
+  // foldsCase()'s own doc comment: NTFS/APFS are case-insensitive, so a cwd recorded under one
+  // casing must still match a query in another's — only true on the platforms where the
+  // filesystem itself would treat the two paths as the same directory.
+  (foldsCase() ? test : test.skip)(
+    "matches cwd case-insensitively on a case-folding filesystem",
+    () => {
+      saveSession(
+        {
+          id: "cased",
+          cwd: "/Project/Cased",
+          systemPrompt: "",
+          permissionMode: "auto",
+          messages: [],
+        },
+        sessionsDir,
+      );
+
+      expect(findMostRecentSessionForCwd(sessionsDir, "/project/cased")).toBe("cased");
+    },
+  );
 });

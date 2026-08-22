@@ -44,7 +44,7 @@ import {
   usageError,
 } from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
-import { loadVerifyConfig } from "./config/config";
+import { loadVerifyConfig, type VerifyConfig } from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
 import { messageOf } from "./errors";
 import type { PermissionMode } from "./gate/gate";
@@ -83,6 +83,7 @@ import { toolDefinitions } from "./provider/tools";
 import { awaitsReply } from "./session/awaitsReply";
 import {
   findMostRecentSession,
+  findMostRecentSessionForCwd,
   loadSession,
   type SessionState,
   saveSession,
@@ -96,6 +97,7 @@ import {
   type CommandDirs,
   checkpointTarget,
   decideAuthOffer,
+  decideClear,
   decideConfigOpen,
   decideMaxTurns,
   decideModeCycle,
@@ -202,6 +204,10 @@ type CommandPresenter = {
   onPlan: (plan: RestorePlan) => void;
   restore: (result: { plan: RestoreResult; message: string }) => void;
   sessionUpdated: (next: SessionState<ModelMessage>) => Promise<void>;
+  // /clear's own hook: wipes whatever is rendering the transcript. Only meaningful where something
+  // is actually rendered — the non-interactive path has no live transcript to wipe (consolePresenter's
+  // own no-op below).
+  transcriptCleared: () => void;
 };
 
 type SlashCommand = {
@@ -226,6 +232,16 @@ type SlashCommand = {
   // place") — a future command that mutates run state can't get silently left ungated by being
   // added here and nowhere else.
   mutatesRunState?: true;
+  // Whether the bare (no `--resume`) form must resolve within the CURRENT process's cwd rather
+  // than the plain most-recent-mtime pick across every project sharing `sessionsDir` — set only on
+  // /clear, which mints a brand-new session carrying the resolved one's `cwd` forward verbatim
+  // (decideClear's own comment). /undo, /rewind and /restore deliberately keep the plain lookup:
+  // they act on the resolved session's OWN recorded cwd regardless of where the terminal currently
+  // sits (handleSlashCommand's own comment on that), so a cross-project pick there is not the same
+  // hazard it is for /clear. A field on this same table, not a name check in handleSlashCommand —
+  // this table's own comment above on why a second, table-external check is what lets a future
+  // command with the same need go unhandled by construction rather than by remembering to add it.
+  scopeTargetToCwd?: true;
 } & (
   | {
       // Every command but /memory: `run` operates on a resumed session, so handleSlashCommand
@@ -293,6 +309,18 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
     },
   ],
   ["/rewind", { accepts: isStepCount, run: rewindCommand, mutatesRunState: true }],
+  // Exact-and-empty, like /mode — NOT isStepCount (/rewind's own form): /clear takes no argument,
+  // so `seri "/clear the screen please"` must fall through to the model as task text rather than
+  // being hijacked as a mistyped invocation.
+  [
+    "/clear",
+    {
+      accepts: (args) => args.length === 0,
+      run: clearCommand,
+      mutatesRunState: true,
+      scopeTargetToCwd: true,
+    },
+  ],
   // mutatesRunState: /memory approve|reject mutates the pending/ queue and the live memory files,
   // and must not race the archivist staging more writes mid-turn (C-7's own comment on why that
   // block runs before `finally` unregisters the cancel slot). Per-command, not per-subcommand
@@ -336,6 +364,9 @@ function consolePresenter(dirs: CommandDirs): CommandPresenter {
     // Trivially awaitable: saveSession is already synchronous, so this settles on the same tick
     // it is called — `async` only to satisfy CommandPresenter's own contract (its comment).
     sessionUpdated: async (next) => saveSession(next, dirs.sessionsDir),
+    // Explicit no-op, not an ANSI screen-clear: the user's own scrollback is not seri's to erase,
+    // and clearing it would corrupt piped/redirected output.
+    transcriptCleared: () => {},
   };
 }
 
@@ -412,6 +443,29 @@ async function rewindCommand(
   // does, is the more honest signal: the barrier itself did not land, and a later /rewind may not
   // be able to cross this point.
   recordBarrier();
+  presenter.message(message);
+}
+
+// /clear: starts a brand-new session in the running process. No try/catch of its own — this runs
+// inside the same try/catch every slash command's `run` already sits inside (onSubmit's,
+// handleSlashCommand's).
+//
+// Order is load-bearing. `sessionUpdated` first and awaited: it is what persists `next` (the new,
+// empty session) before anything else happens, the same "await before you rely on it having
+// landed" reasoning rewindCommand's own recordBarrier already depends on. `transcriptCleared`
+// comes AFTER `sessionUpdated`, not before, for the same durability reason, and because
+// echoUserInput (runTui's onSubmit) has already dispatched the `> /clear` echo into the transcript
+// by the time this function runs — wiping after it is what removes it. `message` comes last: it is
+// the confirmation the wipe must not also erase.
+async function clearCommand(
+  session: SessionState<ModelMessage>,
+  _args: string[],
+  dirs: CommandDirs,
+  presenter: CommandPresenter = consolePresenter(dirs),
+): Promise<void> {
+  const { next, message } = decideClear(session);
+  await presenter.sessionUpdated(next);
+  presenter.transcriptCleared();
   presenter.message(message);
 }
 
@@ -900,7 +954,16 @@ function runStart(ctx: RunContext): RunStart {
 // recent session — and never creates a session just to act on it, so this is called before
 // prepareSession and a bare `/undo` (no --resume) does not fall into the new-session path. `/undo`
 // and `/rewind` are keyed on the session's own `cwd`, not the current one, so running them from a
-// different directory still finds the store the edits were recorded in.
+// different directory still finds the store the edits were recorded in — the plain, cross-project
+// most-recent-mtime pick is what they want, deliberately.
+//
+// `command.scopeTargetToCwd` (only /clear sets it — that field's own comment on SlashCommand) is
+// the one exception: a bare `/clear`, with no resumed session to inherit a directory from, must not
+// silently mint a new session pointed at whatever OTHER project's session was touched last on this
+// machine (`sessionsDir` is shared across every project). Scoped to `process.cwd()` instead,
+// matching what a bare `seri "task"` with no /clear would have started fresh in. An explicit
+// `--resume <id> /clear` is unaffected — that id is honoured regardless of cwd, the same as every
+// other slash command.
 async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> {
   const [name = "", ...commandArgs] = ctx.taskText.split(/\s+/).filter(Boolean);
   const command = SLASH_COMMANDS.get(name);
@@ -919,7 +982,11 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
     }
   }
 
-  const id = ctx.resumeId ?? findMostRecentSession(ctx.sessionsDir);
+  const id =
+    ctx.resumeId ??
+    (command.scopeTargetToCwd === true
+      ? findMostRecentSessionForCwd(ctx.sessionsDir, process.cwd())
+      : findMostRecentSession(ctx.sessionsDir));
   if (!id) {
     console.error(`No session to run ${name} against.`);
     return 1;
@@ -1015,9 +1082,18 @@ type PreparedRun = {
   // `invalidate()`'s call site) can reach `.invalidate()` on the SAME live instance, not a second
   // one it would have no way to build.
   checkpointer: Checkpointer;
+  // Resolved once here and passed into every buildCheckpointedTools call, including /clear's own
+  // rebind (bindSession, below) — not re-read from disk there. `/config set` documents a verify
+  // setting as taking effect "next run," not immediately (config/commands.ts's own comment); a
+  // rebind that called loadVerifyConfig() fresh would silently contradict that for anyone who
+  // toggled it mid-session and then ran /clear.
+  verifyConfig: VerifyConfig;
   // Loaded once here, alongside everything else this object resolves once per run — "frozen per
   // session" (renderMemoryTier's own doc comment) means loaded HERE and nowhere else; a write made
-  // mid-session takes effect next session, not this one.
+  // mid-session takes effect next session, not this one. /clear is the one exception: it mints a
+  // conceptually new session in the same process, so bindSession (below) reloads this alongside
+  // the session-keyed checkpointer/tools/archivistState, rather than carrying the old session's
+  // memory forward.
   memory: LoadedMemory;
   // Startup notices (session-created, permission warnings, pre-approved tools, the cross-project
   // checkpoint mismatch) that prepareSession would otherwise print directly. On the TUI path they
@@ -1087,6 +1163,53 @@ function fatalDuringTui(err: unknown, preMountMessages: readonly PreMountMessage
   }
   console.error(messageOf(err));
   return 1;
+}
+
+// Lifts the `createCheckpointer` + `withVerification(withCheckpoints(...))` pairing out of
+// `prepareSession` so that `/clear`'s post-rebind construction (bindSession, below) and this
+// function's own startup construction cannot drift into two differently-wrapped tool sets.
+// `verifyConfig` is passed in, not re-read via `loadVerifyConfig()` here — PreparedRun's own
+// comment on its `verifyConfig` field explains why a rebind must reuse the run-start value.
+function buildCheckpointedTools(opts: {
+  storeDir: string;
+  worktree: string;
+  sessionId: string;
+  verifyConfig: VerifyConfig;
+  onWarning: (message: string) => void;
+}): { checkpointer: Checkpointer; tools: ToolSet } {
+  const checkpointer = createCheckpointer(opts);
+  const tools = withVerification(
+    withCheckpoints(toolDefinitions, checkpointer, checkpointer.onAfterMutation),
+    opts.verifyConfig,
+  );
+  return { checkpointer, tools };
+}
+
+// Everything scoped to a session id, rebound in one place — the checkpointer/tools pair,
+// PreparedRun.session, PreparedRun.memory, and the archivist's own counter/cursor, none of which
+// stay valid once `session` is a conceptually different conversation (/clear's own case). Adding a
+// session-scoped field to PreparedRun means updating this function, not hunting for the assignment
+// site in runTui. Returns the new ArchivistState rather than assigning it directly: `archivistState`
+// is a bare `let` in runTui, not a PreparedRun field, so the caller still does that one assignment
+// itself.
+function bindSession(
+  prepared: PreparedRun,
+  session: RunSession,
+  configDir: string,
+  onWarning: (message: string) => void,
+): ArchivistState {
+  const { checkpointer, tools } = buildCheckpointedTools({
+    storeDir: prepared.storeDir,
+    worktree: prepared.worktree,
+    sessionId: session.id,
+    verifyConfig: prepared.verifyConfig,
+    onWarning,
+  });
+  prepared.checkpointer = checkpointer;
+  prepared.tools = tools;
+  prepared.memory = loadMemory({ configDir, worktree: prepared.worktree });
+  prepared.session = session;
+  return createArchivistState(session);
 }
 
 async function prepareSession(
@@ -1257,16 +1380,16 @@ async function prepareSession(
     // puts each on the correct side. The AbortSignal the check is run with is the one runLoop hands
     // `execute` (loop.ts:331), which is driveLoop's controller — the same Ctrl-C that stops a bash
     // command stops a check.
-    const checkpointer = createCheckpointer({
+    // Resolved once, here — PreparedRun's own comment on `verifyConfig` explains why a later
+    // /clear rebind (bindSession) must reuse this value rather than calling loadVerifyConfig again.
+    const verifyConfig = loadVerifyConfig(configDir);
+    const { checkpointer, tools } = buildCheckpointedTools({
       storeDir,
       worktree,
       sessionId: session.id,
+      verifyConfig,
       onWarning: printWarning,
     });
-    const tools = withVerification(
-      withCheckpoints(toolDefinitions, checkpointer, checkpointer.onAfterMutation),
-      loadVerifyConfig(),
-    );
 
     // Loaded once, here, alongside everything else this function resolves once per run — this is
     // what "frozen per session" means (memory/store.ts's own renderMemoryTier doc comment).
@@ -1285,6 +1408,7 @@ async function prepareSession(
       route,
       plan,
       checkpointer,
+      verifyConfig,
       memory,
       preMountMessages,
     };
@@ -1414,10 +1538,12 @@ async function driveLoop(
   getPermissionMode: () => PermissionMode,
   persist: (session: SessionState<ModelMessage>) => void,
   approvalPrompt: ApprovalPrompt,
-  // Stage 6b: the tool-call counter/message cursor the archivist trigger reads and advances — one
-  // instance per run, created once (createArchivistState) by this function's two callers, not
-  // rebuilt here, so the counter accumulates across every turn of a TUI session rather than
-  // resetting on each driveLoop call.
+  // The tool-call counter/message cursor the archivist trigger reads and advances — one instance
+  // per SESSION, created by this function's two callers (createArchivistState), not rebuilt here,
+  // so the counter accumulates across every turn of that session rather than resetting on each
+  // driveLoop call. runTui's own copy is a `let`, not a `const`: /clear replaces it with a fresh
+  // `createArchivistState` the moment it mints a new session id — that caller's own comment on why
+  // this is a rebuild, not a reset, applies here too.
   archivistState: ArchivistState,
 ): Promise<DriveLoopResult> {
   const {
@@ -1668,6 +1794,7 @@ function tuiPresenter(dispatch: Dispatch, awaitPersist: () => Promise<void>): Co
       dispatch({ type: "session-updated", session: next });
       return persisted;
     },
+    transcriptCleared: () => dispatch({ type: "transcript-cleared" }),
   };
 }
 
@@ -1844,9 +1971,13 @@ async function runTui(
   // reassigns it live — runTurn's own driveLoop call reads THIS, not the parameter, so an override
   // takes effect on the next turn with no restart.
   let liveMaxTurns = maxTurns;
-  // Created ONCE per run, outside the per-turn loop, so the tool-call counter accumulates across
-  // every turn of this TUI session rather than resetting each time runTurn calls driveLoop.
-  const archivistState = createArchivistState(prepared.session);
+  // Created ONCE per SESSION, outside the per-turn loop, so the tool-call counter accumulates
+  // across every turn of that session rather than resetting each time runTurn calls driveLoop.
+  // `let`, not `const`: /clear (onSubmit, below) replaces this with a fresh
+  // `createArchivistState(liveState.session)` the moment it mints a new session id — a rebuild, not
+  // a reset, since the new session genuinely has nothing to skip past (unlike resetArchivistForRewind's
+  // own truncation-in-place, which deliberately leaves toolCallsSinceRun alone).
+  let archivistState = createArchivistState(prepared.session);
 
   // Resolvers waiting on onSessionChange's OWN NEXT actual persist, not merely the next dispatch
   // — tuiPresenter's own sessionUpdated (round 7 code review's finding-9 fix) pushes one every
@@ -2585,6 +2716,13 @@ async function runTui(
       });
       return;
     }
+    // Captured before the try: the only thing that distinguishes "/clear ran" from "/mode or
+    // /rewind ran" for the rebind below is that /clear mints a brand-new session id (decideClear's
+    // own comment) while every other command's dispatch (this closure's own `dispatch`, synchronous
+    // — the /rewind branch below already relies on this) preserves it. Keying the rebind on that
+    // actual identity change, not on `name === "/clear"`, means a future command that also mints a
+    // new session id is covered by construction instead of needing its own added branch here.
+    const sessionIdBeforeCommand = liveState.session.id;
     try {
       if (command.needsSession === false) {
         await command.run(args, dirs(ctx), tuiPresenter(dispatch, awaitNextPersist));
@@ -2610,6 +2748,54 @@ async function runTui(
         message: messageOf(err),
       });
     } finally {
+      // Without this, `prepared.checkpointer`/`prepared.tools` — built once at session start,
+      // closing over the OLD session's id — silently keep appending checkpoints to the OLD
+      // session's git ref and log file (checkpoint.ts's own sessionRef/logPath, both keyed on
+      // sessionId) for every tool call made after /clear: no error, no warning, just checkpoints
+      // landing under a session nothing resumes anymore. In `finally`, keyed on the id actually
+      // having changed rather than on `command.run` having resolved: `tuiPresenter`'s own
+      // `sessionUpdated` (this file's own `CommandPresenter` comment) dispatches `session-updated`
+      // synchronously, before its returned promise settles, so a persistence failure that later
+      // rejects that promise still leaves `liveState.session` pointing at the new id — living in the
+      // try block above (as this used to) meant that rejection skipped the rebind entirely, stranding
+      // the checkpointer/tools on the abandoned session with no error surfaced for it.
+      // `storeDir`/`worktree` are unchanged by /clear (decideClear carries `cwd` over verbatim, so
+      // checkpointTarget would resolve to the identical pair) — reused directly from `prepared`
+      // rather than recomputed. `createArchivistState`, not `resetArchivistForRewind`: the latter
+      // deliberately leaves `toolCallsSinceRun` alone (correct for a truncation of the SAME
+      // conversation), which would carry a stale tool-call count into a conversation that has none.
+      // `prepared.session`/`prepared.memory` are reassigned alongside checkpointer/tools/
+      // archivistState (bindSession, above) — every one of those fields is documented on
+      // `PreparedRun` as resolved once per run, and this is the one place any of them would
+      // otherwise keep pointing at the pre-/clear session for the rest of the process.
+      //
+      // `liveState.session as RunSession`: the same invariant runTurn's own destructuring already
+      // relies on (its own comment) — decideClear only ever spreads an existing RunSession and
+      // touches `id`/`messages`/`systemPrompt`, so the result still carries `model`/`provider`.
+      //
+      // In its own try/catch, not left to the outer one: `bindSession` calls
+      // `buildCheckpointedTools`, which can throw the same way `prepareSession`'s identical call
+      // does (a corrupted config.json read by `loadVerifyConfig`, on the startup path — reused
+      // here via `prepared.verifyConfig`, not re-read, but `createCheckpointer` itself still spawns
+      // git). Uncaught here, in `finally`, would leave the TUI as an unhandled rejection instead of
+      // the command-error every other failure in this function already surfaces as — the same
+      // reasoning the /undo-/restore `invalidate()` block just below this one already applies to
+      // its own git call.
+      if (liveState.session.id !== sessionIdBeforeCommand) {
+        try {
+          archivistState = bindSession(
+            prepared,
+            liveState.session as RunSession,
+            configDir,
+            printWarning,
+          );
+        } catch (err) {
+          dispatch({
+            type: "command-error",
+            message: `session switched to ${liveState.session.id} but checkpointing could not be rebound; restart seri before making further edits: ${messageOf(err)}`,
+          });
+        }
+      }
       // /undo and /restore just forced the worktree to a state this closure's live `checkpointer`
       // never saw happen — it is the SAME instance every ongoing tool call in this TUI session
       // checkpoints through, and its own `previousTree`/`previousCommit` are now stale: the next

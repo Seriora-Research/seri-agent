@@ -1,14 +1,18 @@
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   statSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { ModelProvider } from "@seri/model-catalog";
 import { atomicWriteFile } from "../atomicWriteFile";
+import { foldsCase } from "../caseFold";
 import type { PermissionMode } from "../gate/gate";
 
 export type SessionState<TMessage = unknown> = {
@@ -171,18 +175,72 @@ export function loadSession<TMessage = unknown>(
   return { ...header, messages };
 }
 
-export function findMostRecentSession(sessionsDir: string): string | undefined {
-  if (!existsSync(sessionsDir)) return undefined;
+// Shared by findMostRecentSession and findMostRecentSessionForCwd: every `.jsonl` in `sessionsDir`,
+// newest first. Only `statSync`s here — no file content is read, so a caller that only needs the
+// single newest one (findMostRecentSession) never pays for more, and a caller filtering on a header
+// field (findMostRecentSessionForCwd) can stop at the first match via `.find()` instead of scanning
+// every candidate up front.
+function sessionsByMtimeDesc(sessionsDir: string): { id: string; path: string }[] {
+  if (!existsSync(sessionsDir)) return [];
+  return readdirSync(sessionsDir)
+    .filter((file) => file.endsWith(".jsonl"))
+    .map((file) => {
+      const path = join(sessionsDir, file);
+      return { id: file.slice(0, -".jsonl".length), path, mtime: statSync(path).mtimeMs };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+}
 
-  let mostRecentId: string | undefined;
-  let mostRecentMtime = -Infinity;
-  for (const file of readdirSync(sessionsDir)) {
-    if (!file.endsWith(".jsonl")) continue;
-    const mtime = statSync(join(sessionsDir, file)).mtimeMs;
-    if (mtime > mostRecentMtime) {
-      mostRecentMtime = mtime;
-      mostRecentId = file.slice(0, -".jsonl".length);
+// Reads only up to the first newline — the JSON header line every session file starts with
+// (saveSession's own append-only format) — rather than `loadSession`'s full parse, since callers
+// here only need one header field. Bounded to a few 4KB reads regardless of how large the rest of
+// the transcript is: a `readFileSync` of the whole file (the prior version of this function) scales
+// with total conversation size, which is exactly what a directory-wide scan must not do.
+function readFirstLine(path: string): string {
+  const fd = openSync(path, "r");
+  try {
+    const chunk = Buffer.alloc(4096);
+    let line = "";
+    for (;;) {
+      const bytesRead = readSync(fd, chunk, 0, chunk.length, null);
+      if (bytesRead === 0) return line;
+      const text = chunk.toString("utf8", 0, bytesRead);
+      const newline = text.indexOf("\n");
+      if (newline !== -1) return line + text.slice(0, newline);
+      line += text;
     }
+  } finally {
+    closeSync(fd);
   }
-  return mostRecentId;
+}
+
+// foldsCase()'s own established use (checkpoint.ts's checkpointStoreDir, permissions/store.ts's
+// projectKey): NTFS/APFS are case-insensitive, so a `cwd` recorded from one shell's casing must
+// still match a comparison from another's, on the platforms where the filesystem itself would
+// treat them as the same directory.
+function normalizedCwd(cwd: string): string {
+  const resolved = resolve(cwd);
+  return foldsCase() ? resolved.toLowerCase() : resolved;
+}
+
+export function findMostRecentSession(sessionsDir: string): string | undefined {
+  return sessionsByMtimeDesc(sessionsDir)[0]?.id;
+}
+
+// Like findMostRecentSession, but scoped to sessions recorded from `cwd` — for a caller (/clear's
+// bare, no-`--resume` form) that mints a new session carrying the resolved one's `cwd` forward
+// verbatim: `sessionsDir` holds every session for every project on the machine, and the plain
+// most-recent-mtime pick can land on whatever project was touched last elsewhere, silently
+// pointing the new session at a directory the user isn't even standing in.
+export function findMostRecentSessionForCwd(sessionsDir: string, cwd: string): string | undefined {
+  const target = normalizedCwd(cwd);
+  return sessionsByMtimeDesc(sessionsDir).find((candidate) => {
+    let header: { cwd?: string };
+    try {
+      header = JSON.parse(readFirstLine(candidate.path)) as { cwd?: string };
+    } catch {
+      return false;
+    }
+    return header.cwd !== undefined && normalizedCwd(header.cwd) === target;
+  })?.id;
 }

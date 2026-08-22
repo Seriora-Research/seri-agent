@@ -9,6 +9,8 @@ import {
   type ModelProvider,
 } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
+import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
+import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { saveAuthSession } from "../../src/auth/authStore";
 import {
   type CheckpointRecord,
@@ -25,6 +27,7 @@ import type { SessionState } from "../../src/session/session";
 import {
   configKeyInfo,
   decideAuthOffer,
+  decideClear,
   decideConfigOpen,
   decideGuidedModelPickerOpen,
   decideMaxTurns,
@@ -609,6 +612,91 @@ describe.skipIf(!isGitAvailable())("decideRewind", () => {
     recordBarrier();
     expect(readLog(storeDir, SESSION).some((r) => r.kind === "rewind-barrier")).toBe(true);
   }, 30_000);
+});
+
+// Unlike decideRewind, decideClear touches no checkpoint store — no git repo needed, so this is
+// not skipIf(!isGitAvailable()).
+describe("decideClear", () => {
+  test("mints a new id and empties messages", () => {
+    const before = session({ messages: [{ role: "user", content: "hi" }] });
+
+    const { next } = decideClear(before, "new-id");
+    expect(next.id).toBe("new-id");
+    expect(next.messages).toEqual([]);
+
+    // No second arg: still mints a fresh, distinct id.
+    const { next: auto } = decideClear(before);
+    expect(auto.id).not.toBe(before.id);
+    expect(typeof auto.id).toBe("string");
+    expect(auto.id.length).toBeGreaterThan(0);
+  });
+
+  test("carries every other header field over verbatim", () => {
+    const before = session({
+      cwd: "/some/distinctive/path",
+      permissionMode: "auto",
+      model: "gpt-5",
+      provider: "openai",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    const { next } = decideClear(before, "new-id");
+
+    expect(next.cwd).toBe(before.cwd);
+    expect(next.permissionMode).toBe(before.permissionMode);
+    expect(next.model).toBe(before.model);
+    expect(next.provider).toBe(before.provider);
+  });
+
+  // Unlike every other header field above, systemPrompt is NOT carried over — decideClear's own
+  // comment explains why (loadOrCreateSession's new-session and resume paths never replay a stored
+  // one either, so an AGENTS.md edited since the session started must be picked up here too).
+  test("rebuilds systemPrompt from cwd's AGENTS.md instead of carrying the old one over", () => {
+    writeFileSync(join(workTree, "AGENTS.md"), "distinctive project instructions");
+    const before = session({ systemPrompt: "stale prompt from before the edit" });
+
+    const { next } = decideClear(before, "new-id");
+
+    expect(next.systemPrompt).toBe(buildSystemPrompt(loadAgentsFile(workTree)));
+    expect(next.systemPrompt).not.toBe(before.systemPrompt);
+  });
+
+  test("honours an injected loadAgents override instead of always reading the real filesystem", () => {
+    const before = session({ systemPrompt: "stale" });
+    const stub = (cwd: string) => `stubbed content for ${cwd}`;
+
+    const { next } = decideClear(before, "new-id", stub);
+
+    expect(next.systemPrompt).toBe(buildSystemPrompt(stub(workTree)));
+  });
+
+  test("does not mutate the session it was given", () => {
+    const before = session({ messages: [{ role: "user", content: "hi" }] });
+
+    decideClear(before, "new-id");
+
+    expect(before.messages).toHaveLength(1);
+    expect(before.id).toBe(SESSION);
+  });
+
+  test("the message names both ids and points at seri --resume", () => {
+    const before = session({ messages: [] });
+
+    const { message } = decideClear(before, "new-id");
+
+    expect(message).toContain("new-id");
+    expect(message).toContain(SESSION);
+    expect(message).toContain("--resume");
+  });
+
+  test("does not persist or print", () => {
+    const sessionsDir = join(root, "sessions");
+    const before = session({ messages: [{ role: "user", content: "hi" }] });
+
+    decideClear(before, "new-id");
+
+    expect(existsSync(sessionsDir)).toBe(false);
+  });
 });
 
 // Stage A scaffolding (cli-commands-to-tui feature-plan.md): these five decide* functions have no
