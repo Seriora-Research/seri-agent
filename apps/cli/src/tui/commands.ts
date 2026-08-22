@@ -1,4 +1,4 @@
-// The decision half of the decision/presentation split (research-spec) for the four slash
+// The decision half of the decision/presentation split (research-spec) for the five slash
 // commands: each function here decides what happened and returns it, and prints nothing itself —
 // no saveSession, no console.log/print*. That is what lets the same decision serve both the
 // existing non-interactive path (console.log the message) and the TUI path (dispatch it into the
@@ -7,6 +7,7 @@
 // checkpointTarget is exported and reused by cli.ts's prepareSession — the one copy this module
 // and cli.ts both call through to, rather than cli.ts keeping its own duplicate (it did, briefly,
 // between Phase 2 and the fix that consolidated it here).
+import { randomUUID } from "node:crypto";
 import {
   filterCatalogEntries,
   groupRoutes,
@@ -505,4 +506,20 @@ export function decideRewind(
     message: `Session ${next.id}: dropped ${dropped} message(s), ${kept} remain. No file was touched.`,
     recordBarrier,
   };
+}
+
+// /clear's own decision: mints a brand-new session id and an empty transcript, carrying every
+// other header field (cwd, systemPrompt, permissionMode, model, provider) over verbatim rather
+// than re-resolving them. Re-resolving would mean re-running loadOrCreateSession's new-session
+// logic — re-reading process.cwd(), rebuilding systemPrompt, hard-coding
+// permissionMode: "approve-each", and re-running model resolution — discarding a /mode or model
+// change the user made this session. Pure and side-effect-free, same contract as decideModeCycle
+// above: no checkpointTarget call, no persistence — the caller decides what to do with `next`.
+export function decideClear(
+  session: SessionState<ModelMessage>,
+  newId: string = randomUUID(),
+): { next: SessionState<ModelMessage>; message: string } {
+  const next = { ...session, id: newId, messages: [] };
+  const message = `Started a new session ${next.id}. The previous session is intact — resume it with: seri --resume ${session.id}`;
+  return { next, message };
 }

@@ -25,6 +25,7 @@ import type { SessionState } from "../../src/session/session";
 import {
   configKeyInfo,
   decideAuthOffer,
+  decideClear,
   decideConfigOpen,
   decideGuidedModelPickerOpen,
   decideMaxTurns,
@@ -609,6 +610,71 @@ describe.skipIf(!isGitAvailable())("decideRewind", () => {
     recordBarrier();
     expect(readLog(storeDir, SESSION).some((r) => r.kind === "rewind-barrier")).toBe(true);
   }, 30_000);
+});
+
+// Unlike decideRewind, decideClear touches no checkpoint store — no git repo needed, so this is
+// not skipIf(!isGitAvailable()).
+describe("decideClear", () => {
+  test("mints a new id and empties messages", () => {
+    const before = session({ messages: [{ role: "user", content: "hi" }] });
+
+    const { next } = decideClear(before, "new-id");
+    expect(next.id).toBe("new-id");
+    expect(next.messages).toEqual([]);
+
+    // No second arg: still mints a fresh, distinct id.
+    const { next: auto } = decideClear(before);
+    expect(auto.id).not.toBe(before.id);
+    expect(typeof auto.id).toBe("string");
+    expect(auto.id.length).toBeGreaterThan(0);
+  });
+
+  test("carries every other header field over verbatim", () => {
+    const before = session({
+      cwd: "/some/distinctive/path",
+      systemPrompt: "a distinctive system prompt",
+      permissionMode: "auto",
+      model: "gpt-5",
+      provider: "openai",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    const { next } = decideClear(before, "new-id");
+
+    expect(next.cwd).toBe(before.cwd);
+    expect(next.systemPrompt).toBe(before.systemPrompt);
+    expect(next.permissionMode).toBe(before.permissionMode);
+    expect(next.model).toBe(before.model);
+    expect(next.provider).toBe(before.provider);
+  });
+
+  test("does not mutate the session it was given", () => {
+    const before = session({ messages: [{ role: "user", content: "hi" }] });
+
+    decideClear(before, "new-id");
+
+    expect(before.messages).toHaveLength(1);
+    expect(before.id).toBe(SESSION);
+  });
+
+  test("the message names both ids and points at seri --resume", () => {
+    const before = session({ messages: [] });
+
+    const { message } = decideClear(before, "new-id");
+
+    expect(message).toContain("new-id");
+    expect(message).toContain(SESSION);
+    expect(message).toContain("--resume");
+  });
+
+  test("does not persist or print", () => {
+    const sessionsDir = join(root, "sessions");
+    const before = session({ messages: [{ role: "user", content: "hi" }] });
+
+    decideClear(before, "new-id");
+
+    expect(existsSync(sessionsDir)).toBe(false);
+  });
 });
 
 // Stage A scaffolding (cli-commands-to-tui feature-plan.md): these five decide* functions have no
