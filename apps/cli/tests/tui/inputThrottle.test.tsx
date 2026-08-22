@@ -45,6 +45,13 @@ async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
   createRoot(setup.renderer).render(node);
   await settle(setup); // commits the mount
   await settle(setup); // lets passive effects (useKeyboard/usePaste's useEffect) subscribe
+  // A third pass, unlike inputBox.test.tsx's/modelPicker.test.tsx's own identical two-pass
+  // `mount()`: this file's own `afterEach` now destroys the PREVIOUS test's renderer right before
+  // the next `createTestRenderer()` call (this file's own comment on that), and under CPU
+  // contention the second test's own keyboard subscription sometimes still hadn't landed after
+  // just two passes (confirmed live: CI-only, all four burst-fired keypresses silently dropped).
+  // A harmless no-op once already settled.
+  await settle(setup);
 }
 
 describe("InputBox throttled repaints", () => {
