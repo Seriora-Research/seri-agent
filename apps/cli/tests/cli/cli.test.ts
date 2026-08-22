@@ -15,6 +15,7 @@ import { createInterface, type Interface } from "node:readline";
 import { PassThrough } from "node:stream";
 import { resetCatalogCache } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
+import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { saveAuthSession } from "../../src/auth/authStore";
 import { getConfigDir } from "../../src/config/paths";
@@ -2795,9 +2796,12 @@ describe("run (/clear)", () => {
   });
 
   test("`--resume <id> /clear` starts a new session, leaving the old one byte-identical", async () => {
+    // Its own isolated cwd, not ".": decideClear rebuilds systemPrompt from cwd's AGENTS.md (see
+    // that test below), and "." would resolve against wherever the test process actually runs.
+    const cwd = mkdtempSync(join(tmpdir(), "seri-cli-test-clear-cwd-"));
     const existing: SessionState = {
       id: "old-session",
-      cwd: ".",
+      cwd,
       systemPrompt: "a distinctive system prompt",
       permissionMode: "auto",
       model: "llama-3.3-70b-versatile",
@@ -2818,6 +2822,7 @@ describe("run (/clear)", () => {
       code = await run(["--resume", "old-session", "/clear"], { sessionsDir });
     } finally {
       console.log = originalLog;
+      rmSync(cwd, { recursive: true, force: true });
     }
 
     expect(code).toBe(0);
@@ -2832,7 +2837,10 @@ describe("run (/clear)", () => {
     const loaded = loadSession(newId, sessionsDir);
     expect(loaded.messages).toEqual([]);
     expect(loaded.cwd).toBe(existing.cwd);
-    expect(loaded.systemPrompt).toBe(existing.systemPrompt);
+    // NOT existing.systemPrompt: decideClear's own comment explains why it is the one field
+    // rebuilt rather than carried over.
+    expect(loaded.systemPrompt).toBe(buildSystemPrompt(loadAgentsFile(cwd)));
+    expect(loaded.systemPrompt).not.toBe(existing.systemPrompt);
     expect(loaded.permissionMode).toBe(existing.permissionMode);
     expect(loaded.model).toBe(existing.model);
     expect(loaded.provider).toBe(existing.provider);
@@ -2841,10 +2849,10 @@ describe("run (/clear)", () => {
     expect(logs.join("\n")).toContain("old-session");
   });
 
-  test("bare `/clear` (no --resume) starts a new session from the most-recent one", async () => {
+  test("bare `/clear` (no --resume) starts a new session from the most-recent one in this cwd", async () => {
     const existing: SessionState = {
       id: "recent-session",
-      cwd: ".",
+      cwd: process.cwd(),
       systemPrompt: "",
       permissionMode: "auto",
       messages: [{ role: "user", content: "hi" }],
@@ -2858,6 +2866,56 @@ describe("run (/clear)", () => {
     expect(files).toHaveLength(2);
     expect(loadSession("recent-session", sessionsDir).messages).toEqual([
       { role: "user", content: "hi" },
+    ]);
+  });
+
+  // Negative control for the cwd scoping above: without it, this test's "other-project" session
+  // (touched more recently, but from a directory nothing here is standing in) is exactly what
+  // `findMostRecentSession`'s plain mtime pick would return instead — a bare `/clear` would then
+  // mint a new session carrying THAT project's `cwd` forward, per decideClear's own comment.
+  test("bare `/clear` ignores a more-recent session from a different project's cwd", async () => {
+    const otherProjectCwd = mkdtempSync(join(tmpdir(), "seri-cli-test-clear-other-cwd-"));
+    const here: SessionState = {
+      id: "here-session",
+      cwd: process.cwd(),
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ role: "user", content: "here" }],
+    };
+    const elsewhere: SessionState = {
+      id: "elsewhere-session",
+      cwd: otherProjectCwd,
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ role: "user", content: "elsewhere" }],
+    };
+    saveSession(here, sessionsDir);
+    saveSession(elsewhere, sessionsDir);
+    const base = new Date("2026-01-01T00:00:00Z");
+    utimesSync(join(sessionsDir, "here-session.jsonl"), base, base);
+    utimesSync(
+      join(sessionsDir, "elsewhere-session.jsonl"),
+      new Date(base.getTime() + 60_000),
+      new Date(base.getTime() + 60_000),
+    );
+
+    try {
+      const code = await run(["/clear"], { sessionsDir });
+      expect(code).toBe(0);
+    } finally {
+      rmSync(otherProjectCwd, { recursive: true, force: true });
+    }
+
+    // "here-session" got the new session minted against it, not the more-recently-touched
+    // "elsewhere-session": both remain untouched (2 files each, 4 total) and "here-session"'s own
+    // messages are unchanged (/clear never mutates the resolved session, only creates a new one).
+    const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
+    expect(files).toHaveLength(3);
+    expect(loadSession("here-session", sessionsDir).messages).toEqual([
+      { role: "user", content: "here" },
+    ]);
+    expect(loadSession("elsewhere-session", sessionsDir).messages).toEqual([
+      { role: "user", content: "elsewhere" },
     ]);
   });
 

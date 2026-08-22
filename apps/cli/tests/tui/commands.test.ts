@@ -9,6 +9,8 @@ import {
   type ModelProvider,
 } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
+import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
+import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { saveAuthSession } from "../../src/auth/authStore";
 import {
   type CheckpointRecord,
@@ -632,7 +634,6 @@ describe("decideClear", () => {
   test("carries every other header field over verbatim", () => {
     const before = session({
       cwd: "/some/distinctive/path",
-      systemPrompt: "a distinctive system prompt",
       permissionMode: "auto",
       model: "gpt-5",
       provider: "openai",
@@ -642,10 +643,22 @@ describe("decideClear", () => {
     const { next } = decideClear(before, "new-id");
 
     expect(next.cwd).toBe(before.cwd);
-    expect(next.systemPrompt).toBe(before.systemPrompt);
     expect(next.permissionMode).toBe(before.permissionMode);
     expect(next.model).toBe(before.model);
     expect(next.provider).toBe(before.provider);
+  });
+
+  // Unlike every other header field above, systemPrompt is NOT carried over — decideClear's own
+  // comment explains why (loadOrCreateSession's new-session and resume paths never replay a stored
+  // one either, so an AGENTS.md edited since the session started must be picked up here too).
+  test("rebuilds systemPrompt from cwd's AGENTS.md instead of carrying the old one over", () => {
+    writeFileSync(join(workTree, "AGENTS.md"), "distinctive project instructions");
+    const before = session({ systemPrompt: "stale prompt from before the edit" });
+
+    const { next } = decideClear(before, "new-id");
+
+    expect(next.systemPrompt).toBe(buildSystemPrompt(loadAgentsFile(workTree)));
+    expect(next.systemPrompt).not.toBe(before.systemPrompt);
   });
 
   test("does not mutate the session it was given", () => {
