@@ -39,6 +39,36 @@ function childScriptQuitAndExit(dir: string): string {
   ].join("\n");
 }
 
+// Regression fixture for runtime/renderer.ts's own uncaughtException/unhandledRejection handler:
+// `@opentui/core`'s `CliRenderer` constructor installs its own pair of these unconditionally, and
+// that handler only logs — it never exits — so a bug with nothing to do with the renderer itself
+// (a background timer here, standing in for the class of bug this guards) would otherwise be
+// silently swallowed for as long as the renderer stays alive instead of crashing the process the
+// way it would with no handler installed at all. The throw is scheduled OUTSIDE any promise chain
+// `cli.run` itself awaits (a bare `setTimeout`), so it becomes a genuine process-level
+// `uncaughtException`, unrelated to any of seri's own try/catch paths.
+function childScriptUncaughtException(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `console.log("\\nCHILD_PID " + process.pid);`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `}).then((code) => process.exit(code));`,
+    `setTimeout(() => { throw new Error("INJECTED_UNCAUGHT_TEST_ERROR"); }, 1000);`,
+  ].join("\n");
+}
+
 type Exit = { code: number | null; signal: NodeJS.Signals | null };
 
 // Lean variant of tuiPty.test.ts's own startChild (same python3-pty technique, same reason a pty
@@ -183,6 +213,75 @@ describe.skipIf(process.platform === "win32")(
         // Belt-and-suspenders, same reasoning tuiPtyWindows.test.ts's own killOrphansByScriptPath
         // documents: if the assertion above already found a live orphan, don't also leave it
         // running past this test.
+        if (childPid !== undefined && isProcessAlive(childPid)) {
+          try {
+            process.kill(childPid, "SIGKILL");
+          } catch {}
+        }
+      }
+    }, 30_000);
+  },
+);
+
+describe.skipIf(process.platform === "win32")(
+  "an uncaught exception during an interactive session still crashes the process",
+  () => {
+    let dir: string;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "seri-tui-uncaught-"));
+    });
+
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    test("a background throw unrelated to the renderer exits the process instead of being silently swallowed", async () => {
+      const scriptPath = join(dir, "child-uncaught.mjs");
+      writeFileSync(scriptPath, childScriptUncaughtException(dir));
+
+      const { child, exited, sawLine, stdoutSoFar } = await startChild(scriptPath, dir);
+      let childPid: number | undefined;
+      try {
+        await sawLine("CHILD_PID ");
+        const match = stdoutSoFar().match(/CHILD_PID (\d+)/);
+        if (!match) throw new Error(`could not find CHILD_PID in ${JSON.stringify(stdoutSoFar())}`);
+        childPid = Number.parseInt(match[1], 10);
+
+        await sawLine("no-tool-call)");
+
+        // No keypress here — the injected throw (scheduled 1s after mount, above) is what ends this
+        // run, not a user action. `exited` (the python3 pty wrapper's own exit) is a timing gate
+        // only, not a source of the REAL process's exit code — `pty.spawn`'s child execs into the
+        // real bun process, but python3 never propagates ITS exit status back to its own, so
+        // `isProcessAlive(childPid)` below (the same pattern the Ctrl-D test above uses) is what
+        // actually confirms the target process is gone, not `exited`'s own `code`/`signal`.
+        const exitResult = await Promise.race([
+          exited,
+          new Promise<"the process never exited">((r) =>
+            setTimeout(() => r("the process never exited"), 20_000),
+          ),
+        ]);
+        if (exitResult === "the process never exited") {
+          throw new Error(
+            `child never exited after its own injected uncaughtException -- ` +
+              `@opentui/core's own handler (which only logs) swallowed it instead of ` +
+              `runtime/renderer.ts's own handler taking over; got ${JSON.stringify(stdoutSoFar())}`,
+          );
+        }
+
+        await new Promise((r) => setTimeout(r, 500));
+        if (isProcessAlive(childPid)) {
+          throw new Error(
+            `pid ${childPid} is still running after its own injected uncaughtException -- ` +
+              `@opentui/core's own handler (which only logs) swallowed it instead of ` +
+              `runtime/renderer.ts's own handler taking over`,
+          );
+        }
+      } finally {
+        try {
+          child.kill();
+        } catch {}
         if (childPid !== undefined && isProcessAlive(childPid)) {
           try {
             process.kill(childPid, "SIGKILL");

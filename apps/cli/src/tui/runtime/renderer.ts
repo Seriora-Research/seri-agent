@@ -6,6 +6,7 @@
 // than each owning a separate mount.
 import { type CliRenderer, createCliRenderer } from "@opentui/core";
 import { createRoot, type Root } from "@opentui/react";
+import { messageOf } from "../../errors";
 import { deliverSignal, onSignalCleanupLast } from "../../signals";
 import { MAIN_TUI_RENDERER_CONFIG } from "./renderOptions";
 
@@ -58,6 +59,26 @@ export async function getTuiRenderer(): Promise<{ renderer: CliRenderer; root: R
   // unwinding this renderer, a moment `<App>`'s own tree may no longer be mounted to react to it.
   renderer.keyInput.on("keypress", (key) => {
     if (key.ctrl && key.name === "c") deliverSignal("SIGINT");
+  });
+  // `createCliRenderer` above installs its OWN `process.on("uncaughtException"/"unhandledRejection",
+  // ...)` pair unconditionally (confirmed by reading `@opentui/core`'s compiled source) — no config
+  // option skips it, unlike `renderOptions.ts`'s own `exitSignals: []` for the equivalent OS-signal
+  // hazard. That handler only logs (optionally opening a hidden debug-console overlay) and never
+  // exits, so a bug completely unrelated to this renderer (a background fetch, a stray timer) would
+  // otherwise be silently swallowed for as long as this renderer is alive, instead of crashing the
+  // process the way it would have with no handler installed at all. Registered AFTER
+  // `createCliRenderer`'s own pair, not before: `uncaughtException`/`unhandledRejection` call every
+  // registered listener, in registration order, so this one still runs and still gets the final say
+  // on whether the process actually exits.
+  process.on("uncaughtException", (err) => {
+    destroyTuiRenderer();
+    console.error(messageOf(err));
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (err) => {
+    destroyTuiRenderer();
+    console.error(messageOf(err));
+    process.exit(1);
   });
   // Registered once, at creation, so a fatal signal that arrives at any point across the whole
   // splash -> setup -> main-TUI window still restores the terminal (raw mode, alt-screen, cursor

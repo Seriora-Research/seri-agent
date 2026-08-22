@@ -72,7 +72,7 @@ import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anth
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
-import { getGatewayModel as getGatewayModelReal } from "./provider/gateway";
+import type { getGatewayModel as getGatewayModelReal } from "./provider/gateway";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { configuredProviders, PROVIDER_DISPLAY_NAMES, tuiMissingKeyMessage } from "./provider/keys";
@@ -94,6 +94,9 @@ import { withSubagents } from "./subagents/dispatch";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import { App } from "./tui/app";
+import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
+import { runWelcomeSplash } from "./tui/routes/setup/welcomeSplash";
+import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";
 import {
   type CommandDirs,
   checkpointTarget,
@@ -117,9 +120,6 @@ import {
   createSetupHandlers,
 } from "./tui/state/handlers";
 import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/state/reducer";
-import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
-import { runWelcomeSplash } from "./tui/routes/setup/welcomeSplash";
-import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";
 import { withVerification } from "./verify/wrapTools";
 
 export type CliDeps = {
@@ -2990,17 +2990,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // than a branch inside the block below, so a corrected zeroKeysConfigured/runGuidedSetup diff
   // never also has to account for this mount.
   if (isTTY) {
-    // Wrapped, unlike the rest of this function's own `return N` early exits: `run()` has never
-    // had a top-level `.catch` (its only caller, `import.meta.main`, does
-    // `run(...).then((code) => process.exit(code))`), and neither Bun nor this file installs an
-    // `uncaughtException`/`unhandledRejection` handler — a real throw here would print its own
+    // Wrapped, unlike the rest of this function's own `return N` early exits: `run()` has never had
+    // a top-level `.catch` (its only caller, `import.meta.main`, does
+    // `run(...).then((code) => process.exit(code))`), so an unwrapped throw here would print its own
     // stack trace INTO the still-active alt-screen buffer, which `getTuiRenderer`'s own renderer
     // (created by `runWelcomeSplash`, below) would otherwise leave undestroyed on the way out,
     // leaving the user with a dead process and zero visible diagnostics. `fatalDuringTui`
     // (prepareSession's own bailout, shared here) is what every other terminal-for-the-run failure
     // in this window already routes through — it destroys the renderer before printing, which is
     // safe to call even for a throw before the renderer was ever created (`destroyTuiRenderer`'s
-    // own no-op guard).
+    // own no-op guard). This try/catch is still what handles a throw/rejection reachable from THIS
+    // block specifically — `runtime/renderer.ts`'s own `process.on("uncaughtException"/
+    // "unhandledRejection", ...)` pair (registered once `getTuiRenderer` first creates the renderer)
+    // is the backstop for one that isn't, not a replacement for this wrapper.
     try {
       await runWelcomeSplash(ctx.configDir, deps);
       const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
