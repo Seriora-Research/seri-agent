@@ -12,6 +12,7 @@ import {
 } from "@seri/model-catalog";
 import type { Plan } from "@seri/plans";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
+import { createElement } from "react";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
@@ -88,11 +89,12 @@ import {
   type SessionState,
   saveSession,
 } from "./session/session";
-import { deliverSignal, onSignalCancel, onSignalCleanup, raiseSignal } from "./signals";
+import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { withSubagents } from "./subagents/dispatch";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
-import { enterAltScreen, exitAltScreen } from "./tui/altScreen";
+import { App } from "./tui/App";
+import { enterAltScreen, exitAltScreen } from "./tui/runtime/legacyAltScreen";
 import {
   type CommandDirs,
   checkpointTarget,
@@ -117,7 +119,7 @@ import {
   createSetupHandlers,
 } from "./tui/handlers";
 import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/reducer";
-import { MAIN_TUI_RENDER_OPTIONS } from "./tui/renderOptions";
+import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";
 import { runWelcomeSplash } from "./tui/welcomeSplash";
 import { withVerification } from "./verify/wrapTools";
 
@@ -1826,14 +1828,15 @@ function checkZeroKeysConfigured(configDir: string): boolean | number {
 // functions (cycleModeCommand etc.) the non-interactive path uses, via tuiPresenter instead of
 // consolePresenter — one decision function, two presentations, per the research spec.
 //
-// `ink` (and everything that transitively pulls it in, tui/App.tsx included) is imported lazily,
-// here, rather than at this file's top level: reconciler.js has a module-load-time check —
-// `if (process.env['DEV'] === 'true') { …; await import('./devtools.js'); }`, unconditional, not
-// gated behind an actual render() call — so a top-level `import … from "ink"` ran that check (and
-// attempted a react-devtools-core connection under DEV=true) on every invocation of this binary,
-// `seri --version` and every piped/non-interactive command included, regardless of whether this
-// function is ever reached. Confirmed both ways: DEV=true seri --version attempting a devtools
-// connection before this fix, and not attempting one after it.
+// `ink`/`react` used to be imported lazily here rather than at this file's top level: Ink's own
+// reconciler.js had a module-load-time check — `if (process.env['DEV'] === 'true') { …; await
+// import('./devtools.js'); }`, unconditional, not gated behind an actual render() call — so a
+// top-level `import … from "ink"` ran that check (and attempted a react-devtools-core connection
+// under DEV=true) on every invocation of this binary, `seri --version` and every piped/
+// non-interactive command included, regardless of whether this function is ever reached.
+// `@opentui/react` has no equivalent module-load-time check (checked its compiled source
+// directly — no `process.env` read anywhere in it), so that reason no longer applies; `App`,
+// `createElement`, and `@opentui/react`'s own root/hooks are plain top-level imports now.
 async function runTui(
   prepared: PreparedRun,
   ctx: RunContext,
@@ -1841,9 +1844,13 @@ async function runTui(
   maxTurns: number | undefined,
   skipPermissions: boolean,
 ): Promise<DriveLoopResult> {
-  const { render } = await import("ink");
-  const { createElement } = await import("react");
-  const { App } = await import("./tui/App");
+  // LOW-3's own reasoning (below) now starts here instead of at a synchronous `render()` call:
+  // `createCliRenderer` is async (`@opentui/core`'s own API, unlike Ink's synchronous `render`), so
+  // `renderer`/`root` are obtained and awaited before anything else in this closure runs, not just
+  // before the promise executor — every closure below (`quit`, `runTurn`'s catch) can only ever
+  // execute from a keypress or reducer effect, neither of which can fire before this `await`
+  // resolves and the tree is actually mounted.
+  const { root } = await getTuiRenderer();
 
   // Matches prepareSession's own resolution (D7, feature-plan.md) — routing-priority's per-turn
   // re-resolution (runTurn, below) and /setup's own reads/writes (a later commit in this loop)
@@ -1943,8 +1950,8 @@ async function runTui(
   // which is only ever set by an assignment to this variable first.
   let currentTurn: Promise<void> = Promise.resolve();
   // LOW-G: without this, a second /exit or Ctrl-D while quit() is already unwinding a cancelled
-  // turn would re-enter instance.rerender()/waitUntilExit() on an instance already mid-teardown —
-  // Ink's own render() has no guard against that itself.
+  // turn would re-enter finishQuit() on a renderer already mid-teardown — `destroyTuiRenderer()`
+  // has no guard against a second call itself beyond its own no-op-if-already-torn-down check.
   let quitting = false;
 
   // HIGH-1: accumulated across every turn this TUI session runs (addTokens, the same summing
@@ -2045,13 +2052,11 @@ async function runTui(
     return skipPermissions ? "auto" : liveState.session.permissionMode;
   }
 
-  // LOW-3: render() now runs before the promise executor (below), not inside it, so `instance` is
-  // a plain `const` fully assigned before any code that reads it (runTurn's catch, quit()) can
-  // possibly run — those are only ever reached from an Ink effect, which cannot fire until this
-  // synchronous render() call has already returned. Previously `instance` was a `let` assigned
-  // inside the executor, safe only because render() happened to complete synchronously before any
-  // microtask could drain — true, but an accident of execution order rather than something the
-  // structure itself guaranteed.
+  // LOW-3: `root` (this function's own top, above) is awaited before the promise executor (below),
+  // not inside it, so it is fully available before any code that reads it (runTurn's catch,
+  // quit()) can possibly run — those are only ever reached from a keypress or reducer effect,
+  // neither of which can fire before this function's own top-level `await` has resolved and the
+  // tree is actually mounted.
   let resolveRunTui!: (result: DriveLoopResult) => void;
   let rejectRunTui!: (err: Error) => void;
   const settled = new Promise<DriveLoopResult>((resolve, reject) => {
@@ -2355,11 +2360,11 @@ async function runTui(
       // (HIGH-B) ends the *session* by choice, not by a signal the shell needs to see re-raised.
     } catch (err) {
       // H-2: driveLoop rejecting (not just resolving with an aborted/errored `done`) used to
-      // leave this promise — and run()'s own `await runTui(...)` — hanging forever. Unmount
-      // first so raw mode is restored (M-2's own mechanism, mirrored here rather than relying
-      // solely on the fatal-signal cleanup below, since a rejection is not a signal), then
+      // leave this promise — and run()'s own `await runTui(...)` — hanging forever. Destroy the
+      // renderer first so raw mode is restored (M-2's own mechanism, mirrored here rather than
+      // relying solely on the fatal-signal cleanup below, since a rejection is not a signal), then
       // reject, so run() actually settles instead of hanging.
-      instance.unmount();
+      destroyTuiRenderer();
       rejectRunTui(err instanceof Error ? err : new Error(String(err)));
     } finally {
       turnInFlight = false;
@@ -2404,53 +2409,23 @@ async function runTui(
     // afterward (a denied approval is not a finished turn), so the turnInFlight branch below
     // still runs exactly as it would for any other in-flight-turn quit.
     if (liveState.pendingApproval !== undefined) onApprovalAnswer("no");
+    // No final re-render before this, unlike the Ink original: that rerender's only purpose was
+    // flipping `done` to true so App's own effect called `useApp().exit()` — app.tsx no longer has
+    // that effect at all (this function now owns the renderer's lifecycle directly, per Decision 1,
+    // docs/specs/025-tui-opentui-migration/spec.md), so there is nothing left for a final render to
+    // trigger. `destroyTuiRenderer()` is synchronous (`CliRenderer.destroy(): void`, unlike Ink's
+    // async `waitUntilExit()`), so `resolveRunTui` follows it directly, no `.then`/`.catch` needed.
     const finishQuit = (): void => {
-      instance.rerender(
-        createElement(App, {
-          // LOW-J: inert after mount — App only reads `session` once, via useReducer's lazy
-          // initializer, so this rerender's value is never actually read. Passed anyway because
-          // the prop is required and `liveState.session` is the accurate value if that ever
-          // changes.
-          session: liveState.session,
-          route: prepared.route,
-          done: true,
-          onSubmit,
-          onCancel: () => deliverSignal("SIGINT"),
-          onSessionChange,
-          onQuit: quit,
-          onApprovalAnswer,
-          onModelSelected,
-          onModelPickerCancel,
-          onSetupSelect,
-          onSetupKeyEntered,
-          onSetupRemove,
-          onSetupBack,
-          onSetupClose,
-          connectDispatch: undefined,
-        }),
-      );
-      // `.catch(rejectRunTui)`: Ink's own `unmount(error)` rejects
-      // `waitUntilExit()`'s promise when the argument is an Error (a render crash, for instance) —
-      // without this, that rejection had nowhere to go (a `void`ed promise with no rejection
-      // handler), so `settled` above never settled at all: `await runTui(...)` at this function's
-      // own call site hung forever, with the alt screen still up, instead of hitting the catch that
-      // is supposed to cover exactly this case.
-      void instance
-        .waitUntilExit()
-        .then(() => {
-          resolveRunTui({
-            doneReason,
-            cancelledBy: undefined,
-            usage,
-            cost,
-            refusedWithoutRunning,
-            archivist,
-            ranAnyTurn,
-          });
-        })
-        .catch((err: unknown) => {
-          rejectRunTui(err instanceof Error ? err : new Error(String(err)));
-        });
+      destroyTuiRenderer();
+      resolveRunTui({
+        doneReason,
+        cancelledBy: undefined,
+        usage,
+        cost,
+        refusedWithoutRunning,
+        archivist,
+        ranAnyTurn,
+      });
     };
     if (turnInFlight) {
       // MEDIUM-5: without this, cancelling a still-running turn on the way out (this whole
@@ -2828,7 +2803,7 @@ async function runTui(
     }
   }
 
-  const instance = render(
+  root.render(
     createElement(App, {
       session: prepared.session,
       route: prepared.route,
@@ -2846,8 +2821,8 @@ async function runTui(
       // cancel slot registered between turns (an idle first Ctrl-C is immediately fatal) —
       // finds the slot empty and falls straight through to signals.ts's own fatal path
       // (raiseSignal), matching non-TUI behavior for the same two situations rather than
-      // inventing new exit semantics for either. Ink's own competing `exitOnCtrlC` default is
-      // turned off below, so this is the only handler.
+      // inventing new exit semantics for either. The renderer's own competing `exitOnCtrlC`
+      // default is turned off (runtime/renderOptions.ts), so this is the only handler.
       onCancel: () => deliverSignal("SIGINT"),
       onSessionChange,
       onQuit: quit,
@@ -2911,18 +2886,16 @@ async function runTui(
         if (shouldRunTurn) currentTurn = runTurn(prepared.session);
       },
     }),
-    // See renderOptions.ts's own comment on `interactive` for why it's set the way it is.
-    MAIN_TUI_RENDER_OPTIONS,
   );
 
   // M-2: process.kill(pid, SIGINT) with no listeners left (raiseSignal, signals.ts's fatal
   // path) terminates before any more JS runs, which would otherwise leave the terminal in raw
   // mode — mirrors how the readline approval prompt already avoids this (closing the Interface
   // puts the tty back out of raw mode before a second press re-raises for real,
-  // makeApprovalPrompt's own onAbort wiring). instance.unmount() is Ink's equivalent, and this
-  // runs on every fatal signal death this process can have, not just the ones a turn happens to
-  // be in flight for.
-  onSignalCleanup(() => instance.unmount());
+  // makeApprovalPrompt's own onAbort wiring). No `onSignalCleanup` registration needed here
+  // anymore: `getTuiRenderer()` (this function's own top) already registers exactly this via
+  // `onSignalCleanupLast` the moment the renderer is created, so it runs on every fatal signal
+  // death this process can have, not just the ones a turn happens to be in flight for.
 
   return settled;
 }

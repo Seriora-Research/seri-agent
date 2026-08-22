@@ -7,10 +7,12 @@
 // spy-on-setTimeout technique (that file's own comment explains why: frame/render count alone
 // can't isolate this component's own throttle from React 18's automatic batching of synchronous
 // state updates).
+
+import { describe, expect, spyOn, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
-import { describe, expect, spyOn, test } from "bun:test";
 import type { ReactNode } from "react";
+
 import { InputBox } from "../../src/tui/components/InputBox";
 
 const THROTTLE_MS = 50;
