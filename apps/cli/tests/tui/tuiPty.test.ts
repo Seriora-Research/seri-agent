@@ -5403,8 +5403,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // `dir` is the session's own `cwd` (startChild's own `cwd` param, below, is what sets the
       // child process's real process.cwd() — the same value loadOrCreateSession's fresh-session
       // branch records as `session.cwd`) — not inside a real git repo, so `projectRoot` falls back
-      // to `dir` itself, matching checkpointTarget's own resolution exactly.
-      const storeDir = checkpointStoreDir(join(dir, "checkpoints"), dir);
+      // to `dir` itself, matching checkpointTarget's own resolution exactly. `realpathSync`, not the
+      // raw `dir`: the "/permissions" describe block's own comment on this (above) explains why —
+      // os.tmpdir() on macOS resolves under a symlink, so the CHILD's own `process.cwd()` (spawned
+      // with `cwd: dir`) comes back already resolved, and a store key computed here from the
+      // unresolved `dir` would point at a directory the child never wrote to.
+      const storeDir = checkpointStoreDir(join(dir, "checkpoints"), realpathSync(dir));
       const gitDir = join(storeDir, "git");
 
       const { child, sawLine } = await startChild(scriptPath, dir);
@@ -5472,7 +5476,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       writeFileSync(scriptPath, childScriptClear(dir));
 
       const sessionsDir = join(dir, "sessions");
-      const storeDir = checkpointStoreDir(join(dir, "checkpoints"), dir);
+      // realpathSync — see the sibling test's own comment just above for why this is scoped to
+      // `worktree` here, not applied to the shared `dir` itself.
+      const storeDir = checkpointStoreDir(join(dir, "checkpoints"), realpathSync(dir));
       const gitDir = join(storeDir, "git");
 
       const { child, sawLine } = await startChild(scriptPath, dir);
