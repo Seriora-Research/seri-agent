@@ -1,20 +1,21 @@
 /** @jsxImportSource @opentui/react */
-// Root TUI component, rendered inside the one `CliRenderer` `cli.ts`'s `runTui` owns
-// (`runtime/renderer.ts`, `screenMode: "alternate-screen"`). The transcript is a measured,
-// tail-anchored, scrollable viewport (visibleTranscript, util/format.ts) rather than an
-// append-only region — a terminal-width- and -height-bounded slice of `state.transcript` PLUS the
-// in-progress `state.streaming` answer as its own newest entry, following the newest row by
-// default and scrollable with PageUp/PageDown/Home/End. Everything below it is a live region:
-// status/spinner, a pending-write placeholder, the mode indicator, and a basic input box, all
-// re-rendered in place.
+// Root TUI component, rendered inside the one `CliRenderer` shared by `routes/setup/
+// welcomeSplash.ts`, `routes/setup/guidedSetup.ts`, and `cli.ts`'s `runTui` (`runtime/renderer.ts`,
+// `screenMode: "alternate-screen"`) — each phase `root.render`s different props into the same
+// instance rather than mounting its own. The transcript is a measured, tail-anchored, scrollable
+// viewport (visibleTranscript, util/format.ts) rather than an append-only region — a
+// terminal-width- and -height-bounded slice of `state.transcript` PLUS the in-progress
+// `state.streaming` answer as its own newest entry, following the newest row by default and
+// scrollable with PageUp/PageDown/Home/End. Everything below it is a live region: status/spinner, a
+// pending-write placeholder, the mode indicator, and a basic input box, all re-rendered in place.
 //
 // Renderer lifecycle (mount, unmount, alt-screen entry/exit) is NOT this component's concern —
-// unlike Ink, where `App` itself called `useApp().exit()` on `done`, OpenTUI has no such hook:
-// `cli.ts`'s `runTui` owns the `CliRenderer` directly and destroys it itself once a quit is ready
-// to complete. `done` stays in `AppProps` anyway, unused by this component's own logic, purely so
-// the two still-ink-based callers that still pass it (`welcomeSplash.ts`, `guidedSetup.ts` — a
-// later migration dispatch's job) don't also need an edit just to keep excess-property-checking
-// against this type.
+// unlike Ink, where `App` itself called `useApp().exit()` on `done`, OpenTUI has no such hook: the
+// three callers above own the `CliRenderer` directly and destroy it themselves once a quit is
+// ready to complete (`getTuiRenderer`/`destroyTuiRenderer`, runtime/renderer.ts). `done` stays in
+// `AppProps` anyway, unused by this component's own logic, purely so `welcomeSplash.ts`/
+// `guidedSetup.ts` (which still pass it, `done: false`, for parity with `runTui`'s own call)
+// don't need their own excess-property-checking exception against this type.
 import type { BoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
@@ -30,8 +31,8 @@ import { ModelPicker } from "./components/ModelPicker";
 import { AuthBanner, AuthPanel } from "./panels/AuthPanel";
 import { ConfigPanel } from "./panels/ConfigPanel";
 import { PermissionsPanel } from "./panels/PermissionsPanel";
-import { SetupPanel } from "./panels/SetupPanel";
-import { WelcomeSplash } from "./panels/WelcomeSplash";
+import { SetupPanel } from "./routes/setup/SetupPanel";
+import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
@@ -416,8 +417,8 @@ export function App({
       checked in this same order (approval, /model, /setup, /login /signup, /config, /permissions,
       then InputBox). The last three are unreachable today — nothing dispatches
       auth-requested/config-requested/permissions-requested yet (Stages C-D wire that).
-      ApprovalBox and ModelPicker are ported to OpenTUI; SetupPanel/AuthPanel/ConfigPanel/
-      PermissionsPanel/WelcomeSplash are still built on ink (a later migration dispatch's job to
+      ApprovalBox, ModelPicker, SetupPanel and WelcomeSplashPanel are ported to OpenTUI; AuthPanel/
+      ConfigPanel/PermissionsPanel are still built on ink (a later migration dispatch's job to
       port) — each of those remaining branches is runtime-broken under this OpenTUI-based app.tsx
       until that dispatch lands; typecheck stays green because their own prop signatures are
       unchanged. */}
@@ -461,7 +462,7 @@ export function App({
           onPermissionsClose={onPermissionsClose}
         />
       ) : state.pendingSplash ? (
-        <WelcomeSplash
+        <WelcomeSplashPanel
           authenticated={!state.authOffer}
           onLogin={onSplashLogin}
           onSignup={onSplashSignup}
