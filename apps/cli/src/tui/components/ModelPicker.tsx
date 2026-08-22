@@ -127,15 +127,19 @@ export function ModelPicker({
         {/* Cursor sits immediately after the prompt/query, matching where a real caret belongs;
         the placeholder (empty filter only) renders after it instead of between them. `promptText`,
         the cursor, and the placeholder are three separate `<text>` siblings, the same shape
-        ui/ListRow.tsx's own fix needed (see that file's comment): re-tested directly against
-        OpenTUI's own layout engine, a bare cursor `<text>` sibling reliably keeps its own space at
-        every terminal width tried, unlike Ink where pinning `flexShrink={0}` on it wasn't enough —
-        so the original Ink-side arbitration bug does not reproduce here, and the manual JS
-        truncation workaround it needed is not carried over. */}
-        <text truncate>{promptText}</text>
-        <text attributes={TextAttributes.INVERSE}> </text>
+        ui/ListRow.tsx's own fix needed (see that file's comment). `flexShrink={0}` on `promptText`
+        and the cursor is required, the same as ListRow's own marker — without it, the row's flex
+        layout shrinks `promptText` (dropping its own trailing space) once the placeholder no
+        longer fits at a narrow width, even with an EMPTY filter query where the cursor itself was
+        never the thing squeezed. Only the placeholder (the one sibling that should lose width)
+        keeps `truncate`; `wrapMode="none"` on it is required too, the same as ListRow's own label,
+        for `truncate` to clip instead of soft-wrap the placeholder across two lines. */}
+        <text flexShrink={0}>{promptText}</text>
+        <text attributes={TextAttributes.INVERSE} flexShrink={0}>
+          {" "}
+        </text>
         {showPlaceholder && (
-          <text truncate fg={theme.muted}>
+          <text truncate wrapMode="none" fg={theme.muted}>
             {FILTER_PLACEHOLDER}
           </text>
         )}
