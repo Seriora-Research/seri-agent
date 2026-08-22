@@ -661,6 +661,15 @@ describe("decideClear", () => {
     expect(next.systemPrompt).not.toBe(before.systemPrompt);
   });
 
+  test("honours an injected loadAgents override instead of always reading the real filesystem", () => {
+    const before = session({ systemPrompt: "stale" });
+    const stub = (cwd: string) => `stubbed content for ${cwd}`;
+
+    const { next } = decideClear(before, "new-id", stub);
+
+    expect(next.systemPrompt).toBe(buildSystemPrompt(stub(workTree)));
+  });
+
   test("does not mutate the session it was given", () => {
     const before = session({ messages: [{ role: "user", content: "hi" }] });
 

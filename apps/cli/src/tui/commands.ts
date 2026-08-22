@@ -515,21 +515,29 @@ export function decideRewind(
 // those would mean re-running loadOrCreateSession's new-session logic (hard-coding
 // permissionMode: "approve-each" and re-running model resolution), discarding a /mode or model
 // change the user made this session. `systemPrompt` is the one field NOT carried over: like
-// loadOrCreateSession's own new-session and resume paths (this file's own header comment on why
-// reads are fine here, no persistence), it is rebuilt from the session's `cwd` on every /clear so
-// an AGENTS.md edited since is picked up, rather than replaying a prompt from before the edit for
-// the rest of the process. Still pure and side-effect-free (a read, not a write) — same contract
-// as decideModeCycle above: no checkpointTarget call, no persistence — the caller decides what to
-// do with `next`.
+// loadOrCreateSession's own new-session and resume paths, it is rebuilt from the session's `cwd` on
+// every /clear so an AGENTS.md edited since is picked up, rather than replaying a prompt from
+// before the edit for the rest of the process. Not pure in the sense of "no I/O" — it's a
+// filesystem read whose result depends on external state, same as loadOrCreateSession's own
+// rebuild — but still side-effect-free: no checkpointTarget call, no persistence, the caller
+// decides what to do with `next`, same contract as decideModeCycle above.
+//
+// `loadAgents` defaults to the real `loadAgentsFile`, matching `newId`'s own default-with-override
+// shape on this exact signature — unlike `loadOrCreateSession`'s `loadAgentsFileFn` (threaded from
+// `deps.loadAgentsFile` through `run()`), this override is reachable only by a caller of
+// `decideClear` directly (this file's own tests), not through `run()`'s own dependency injection:
+// `clearCommand`'s signature is fixed by `SlashCommand.run`, shared with every other command, so
+// widening it (or `CommandDirs`) for this one caller was judged not worth it here.
 export function decideClear(
   session: SessionState<ModelMessage>,
   newId: string = randomUUID(),
+  loadAgents: typeof loadAgentsFile = loadAgentsFile,
 ): { next: SessionState<ModelMessage>; message: string } {
   const next = {
     ...session,
     id: newId,
     messages: [],
-    systemPrompt: buildSystemPrompt(loadAgentsFile(session.cwd)),
+    systemPrompt: buildSystemPrompt(loadAgents(session.cwd)),
   };
   // "saved", not "intact": the checkpoint store retains only a fixed number of recent session refs
   // (checkpoint.ts's own pruneSessions), so repeated /clear in one long-lived process can prune an
