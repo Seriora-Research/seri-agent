@@ -16,6 +16,8 @@ import {
   type ModelProvider,
 } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
+import { loadAgentsFile } from "../agents/loadAgentsFile";
+import { buildSystemPrompt } from "../agents/systemPrompt";
 import { loadAuthSession } from "../auth/authStore";
 import {
   appendBarrier,
@@ -508,18 +510,31 @@ export function decideRewind(
   };
 }
 
-// /clear's own decision: mints a brand-new session id and an empty transcript, carrying every
-// other header field (cwd, systemPrompt, permissionMode, model, provider) over verbatim rather
-// than re-resolving them. Re-resolving would mean re-running loadOrCreateSession's new-session
-// logic — re-reading process.cwd(), rebuilding systemPrompt, hard-coding
-// permissionMode: "approve-each", and re-running model resolution — discarding a /mode or model
-// change the user made this session. Pure and side-effect-free, same contract as decideModeCycle
-// above: no checkpointTarget call, no persistence — the caller decides what to do with `next`.
+// /clear's own decision: mints a brand-new session id and an empty transcript, carrying
+// cwd/permissionMode/model/provider over verbatim rather than re-resolving them — re-resolving
+// those would mean re-running loadOrCreateSession's new-session logic (hard-coding
+// permissionMode: "approve-each" and re-running model resolution), discarding a /mode or model
+// change the user made this session. `systemPrompt` is the one field NOT carried over: like
+// loadOrCreateSession's own new-session and resume paths (this file's own header comment on why
+// reads are fine here, no persistence), it is rebuilt from the session's `cwd` on every /clear so
+// an AGENTS.md edited since is picked up, rather than replaying a prompt from before the edit for
+// the rest of the process. Still pure and side-effect-free (a read, not a write) — same contract
+// as decideModeCycle above: no checkpointTarget call, no persistence — the caller decides what to
+// do with `next`.
 export function decideClear(
   session: SessionState<ModelMessage>,
   newId: string = randomUUID(),
 ): { next: SessionState<ModelMessage>; message: string } {
-  const next = { ...session, id: newId, messages: [] };
-  const message = `Started a new session ${next.id}. The previous session is intact — resume it with: seri --resume ${session.id}`;
+  const next = {
+    ...session,
+    id: newId,
+    messages: [],
+    systemPrompt: buildSystemPrompt(loadAgentsFile(session.cwd)),
+  };
+  // "saved", not "intact": the checkpoint store retains only a fixed number of recent session refs
+  // (checkpoint.ts's own pruneSessions), so repeated /clear in one long-lived process can prune an
+  // earlier /clear'd-away session's checkpoint log before its .jsonl transcript ages out — the
+  // transcript is the guarantee this message can actually make.
+  const message = `Started a new session ${next.id}. The previous session is saved — resume it with: seri --resume ${session.id}`;
   return { next, message };
 }
