@@ -1,12 +1,10 @@
 /** @jsxImportSource @opentui/react */
-// AuthBanner/AuthPanel have no dispatcher wired to them yet — nothing dispatches auth-offer or
-// auth-requested/auth-step/auth-resolved.
-
 import { useKeyboard } from "@opentui/react";
 import type { AuthPanelState } from "../../state/reducer";
 import { theme } from "../../theme/theme";
 import { ErrorLine } from "../../ui/ErrorLine";
 import { singleLine } from "../../util/format";
+import { isEnter } from "../../util/keys";
 
 // The non-blocking login/signup offer — a single bordered row, the same visual weight as
 // ApprovalBox's own bordered box, rendered ABOVE app.tsx's render ternary rather than as one of
@@ -47,11 +45,7 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
       onDismiss?.();
       return;
     }
-    if (
-      state.step === "result" &&
-      (key.name === "return" || key.name === "kpenter" || key.name === "linefeed")
-    )
-      onDismiss?.();
+    if (state.step === "result" && isEnter(key)) onDismiss?.();
   });
 
   if (state.step === "starting") {

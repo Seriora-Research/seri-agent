@@ -13,6 +13,7 @@ import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
 import { ErrorLine } from "../../ui/ErrorLine";
 import { ListRow } from "../../ui/ListRow";
 import { singleLine } from "../../util/format";
+import { isEnter, isPrintableKey } from "../../util/keys";
 
 // /config's own live state (state/reducer.ts's pendingConfig) — mirrors SetupPanel's
 // step-dispatcher shape: one branch per step that still owns input handling and local state;
@@ -88,11 +89,10 @@ function ConfigList({
     }
     if (handleArrowKey(key)) return;
     const row = rows[selected];
-    // "return"/"delete" are checked before the printable-key guard below: `key.name`'s own length
-    // is what the guard uses to tell a named key ("return", "delete", "escape"...) apart from a
-    // literal character, so checking these two named keys AFTER the guard would let it silently
-    // return before their own branch ever ran.
-    if (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") {
+    // "return"/"delete" are checked before the printable-key guard below: `isPrintableKey` excludes
+    // named keys like these, so checking them AFTER the guard would let it silently return before
+    // their own branch ever ran.
+    if (isEnter(key)) {
       if (row !== undefined) onConfigSelect?.(row.key);
       return;
     }
@@ -100,8 +100,7 @@ function ConfigList({
       if (row?.removable) onConfigUnset?.(row.key);
       return;
     }
-    if (key.ctrl || key.meta) return;
-    if (key.sequence.length === 0 || (key.name.length !== 1 && key.name !== "space")) return;
+    if (!isPrintableKey(key)) return;
     if (row === undefined) return;
     const typed = key.sequence.toLowerCase();
     if (typed === "a") {
@@ -183,7 +182,7 @@ function ConfigEnterValue({
       onConfigBack?.();
       return;
     }
-    if (inputKey.name === "return" || inputKey.name === "kpenter" || inputKey.name === "linefeed") {
+    if (isEnter(inputKey)) {
       onConfigValueEntered?.(key, value);
       return;
     }
@@ -191,10 +190,8 @@ function ConfigEnterValue({
       setValue((current) => current.slice(0, -1));
       return;
     }
-    if (inputKey.ctrl || inputKey.meta) return;
-    if (inputKey.sequence.length === 0 || (inputKey.name.length !== 1 && inputKey.name !== "space"))
-      return;
-    setValue((current) => current + inputKey.sequence.replace(/[\r\n]/g, ""));
+    if (!isPrintableKey(inputKey)) return;
+    setValue((current) => current + inputKey.sequence);
   });
 
   // OpenTUI delivers a terminal paste as its own event, never through `useKeyboard` — see

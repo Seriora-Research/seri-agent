@@ -3,6 +3,7 @@ import { decodePasteBytes, TextAttributes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import { useEffect, useRef, useState } from "react";
 import { theme } from "../theme/theme";
+import { isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
 
 // Ceiling on how often a keystroke can trigger InputBox's own repaint (a `setValue` call).
 // OS key-repeat while holding Backspace fires faster than this (~33ms apart, measured under Ink),
@@ -75,7 +76,7 @@ export function InputBox({
   }
 
   useKeyboard((key) => {
-    if (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") {
+    if (isEnter(key)) {
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
@@ -91,8 +92,8 @@ export function InputBox({
       lastFlushRef.current = 0;
       return;
     }
-    // Ctrl-D, the normal Unix "end input" convention — HIGH-1's other trigger for the same quit
-    // path /exit uses (app.tsx's own onQuit prop, wired by runTui).
+    // Ctrl-D, the normal Unix "end input" convention — the same graceful-quit path app.tsx's own
+    // onQuit prop (wired by runTui) triggers.
     if (key.ctrl && key.name === "d") {
       onQuit?.();
       return;
@@ -101,55 +102,33 @@ export function InputBox({
       scheduleUpdate(pendingValueRef.current.slice(0, -1));
       return;
     }
-    // A plain, printable keypress — the OpenTUI equivalent of Ink's `useInput` handing ordinary
-    // typed text through `input` (Ink pre-filters its `input` string to exclude named/navigation
-    // keys; OpenTUI's `KeyEvent` carries no such pre-filtered field, so this reconstructs the same
-    // distinction). Every OpenTUI-parsed printable key's own `name` IS the literal character typed
-    // (`parse.keypress.js` sets `key.name = char`), with exactly one renamed exception — the space
-    // bar reports `name: "space"` even though it is printable — so `key.name.length === 1` (plus
-    // that one exception) is what a named/navigation key (`"up"`, `"pageup"`, `"escape"`, `"tab"`,
-    // every one of them multi-character) never satisfies. `key.sequence`, not `key.name`, is what
-    // actually gets appended: it holds the real typed bytes/character (correct for non-ASCII
-    // input), where `name` can be a normalised stand-in (the space-bar case above).
-    if (
-      !key.ctrl &&
-      !key.meta &&
-      key.sequence.length > 0 &&
-      (key.name.length === 1 || key.name === "space")
-    ) {
-      // MEDIUM-E: paste is never delivered through this handler under OpenTUI (bracketed paste is
-      // its own event, `usePaste` below) — unlike Ink, which handed a paste to `useInput` as one
-      // oversized `input` chunk indistinguishable from typed keys. A single keypress's own
-      // `sequence` is never more than one grapheme, so the terminator-splitting logic that used to
-      // live in this branch (MEDIUM-E, MEDIUM-4) moved to `usePaste`'s handler below, where a
-      // multi-character chunk can actually occur.
+    // A plain, printable keypress (util/keys.ts's own comment explains the OpenTUI-vs-Ink
+    // distinction `isPrintableKey` reconstructs). Paste is never delivered through this handler
+    // under OpenTUI (bracketed paste is its own event, `usePaste` below) — unlike Ink, which
+    // handed a paste to `useInput` as one oversized `input` chunk indistinguishable from typed
+    // keys. A single keypress's own `sequence` is never more than one grapheme, so the
+    // terminator-splitting logic that used to live in this branch moved to `usePaste`'s handler
+    // below, where a multi-character chunk can actually occur.
+    if (isPrintableKey(key)) {
       scheduleUpdate(pendingValueRef.current + key.sequence);
     }
   });
 
   // OpenTUI delivers a terminal paste as its OWN event (bracketed paste), never through
   // `useKeyboard` — unlike Ink, which handed a paste to `useInput` as one oversized `input` chunk
-  // indistinguishable from typed keys (this function's own MEDIUM-E comment, above). The
-  // terminator-split logic that used to live in the keyboard handler moves here, unchanged in
+  // indistinguishable from typed keys. `splitAtTerminator` (util/keys.ts) applies unchanged in
   // substance: everything before the first `\r`/`\n` submits now, same as pressing Enter right
   // there; everything after becomes the new input value, awaiting its own Enter rather than being
   // silently swallowed or further auto-split.
   usePaste((event) => {
     const text = decodePasteBytes(event.bytes);
-    const terminatorIndex = text.search(/[\r\n]/);
-    if (terminatorIndex === -1) {
+    const split = splitAtTerminator(text);
+    if (split === null) {
       scheduleUpdate(pendingValueRef.current + text);
       return;
     }
-    const before = text.slice(0, terminatorIndex);
-    // MEDIUM-4: a `\r\n` pair (a Windows-clipboard paste is the common source) is ONE
-    // terminator, not two — stripping only the `\r` left a stray leading `\n` in `after`,
-    // requiring an extra, confusing Enter to clear what looked like a blank line, and
-    // embedding a raw `\r\n` into whatever slash-command parsing ran on it next.
-    const terminatorLength = text.startsWith("\r\n", terminatorIndex) ? 2 : 1;
-    const after = text.slice(terminatorIndex + terminatorLength);
-    onSubmit?.(pendingValueRef.current + before);
-    scheduleUpdate(after);
+    onSubmit?.(pendingValueRef.current + split.before);
+    scheduleUpdate(split.after);
   });
 
   return (

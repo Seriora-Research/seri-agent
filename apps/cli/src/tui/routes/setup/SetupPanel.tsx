@@ -12,6 +12,7 @@ import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
 import { ErrorLine } from "../../ui/ErrorLine";
 import { ListRow } from "../../ui/ListRow";
 import { formatSetupRow } from "../../util/format";
+import { isEnter, isPrintableKey } from "../../util/keys";
 
 // /setup's own live state (tui/state/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-
 // exclusion role, dispatching to one of two step-specific sub-components below for the steps that
@@ -92,18 +93,17 @@ function SetupList({
     }
     if (handleArrowKey(key)) return;
     const row = rows[selected];
-    if (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") {
+    if (isEnter(key)) {
       if (row !== undefined) onSetupSelect?.(row.provider);
       return;
     }
     if (key.name === "delete") {
-      if (row !== undefined && row.removable) onSetupRemove?.(row.provider);
+      if (row?.removable) onSetupRemove?.(row.provider);
       return;
     }
-    if (key.ctrl || key.meta) return;
-    if (key.name.length !== 1) return;
+    if (!isPrintableKey(key)) return;
     if (row === undefined) return;
-    const typed = key.name.toLowerCase();
+    const typed = key.sequence.toLowerCase();
     if (typed === "a") {
       onSetupSelect?.(row.provider);
       return;
@@ -154,7 +154,7 @@ function SetupEnterKey({
       onSetupBack?.();
       return;
     }
-    if (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") {
+    if (isEnter(key)) {
       onSetupKeyEntered?.(provider, value);
       return;
     }
@@ -162,9 +162,7 @@ function SetupEnterKey({
       setValue((current) => current.slice(0, -1));
       return;
     }
-    if (key.ctrl || key.meta) return;
-    if (key.sequence.length === 0) return;
-    if (key.name.length !== 1 && key.name !== "space") return;
+    if (!isPrintableKey(key)) return;
     setValue((current) => current + key.sequence);
   });
 

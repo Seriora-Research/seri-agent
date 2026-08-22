@@ -5,6 +5,7 @@ import { useKeyboard } from "@opentui/react";
 import { approvalPromptText } from "../../cli/output";
 import type { ApprovalAnswer } from "../../loop/loop";
 import { WarningBox } from "../ui/WarningBox";
+import { isEnter, isPrintableKey } from "../util/keys";
 
 // approvalPromptText (cli/output.ts), not a hand-copied template: same escaping, same
 // PERSISTABLE_TOOLS-gated "always" option, same [N]o-is-the-default framing as the non-interactive
@@ -37,16 +38,14 @@ export function ApprovalBox({
       return;
     }
     if (key.ctrl || key.meta) return;
-    if (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") {
+    if (isEnter(key)) {
       onAnswer?.("no");
       return;
     }
-    // An arrow key, Backspace, Tab, Escape, or any other non-printable key OpenTUI recognises by
-    // name (not by a single-character `sequence`) must not fall into the "anything unrecognised is
-    // 'no'" catch-all below, meant for actual mistyped TEXT — a stray navigation keypress would
-    // otherwise silently deny the approval. Matches InputBox.tsx's own `key.name.length === 1 ||
-    // key.name === "space"` printable-key test.
-    if (key.sequence.length === 0 || (key.name.length !== 1 && key.name !== "space")) return;
+    // An arrow key, Backspace, Tab, Escape, or any other non-printable key must not fall into the
+    // "anything unrecognised is 'no'" catch-all below, meant for actual mistyped TEXT — a stray
+    // navigation keypress would otherwise silently deny the approval.
+    if (!isPrintableKey(key)) return;
     const typed = key.sequence.toLowerCase();
     if (typed === "y") {
       onAnswer?.("once");

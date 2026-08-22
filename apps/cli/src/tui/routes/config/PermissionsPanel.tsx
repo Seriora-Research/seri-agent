@@ -1,7 +1,5 @@
 /** @jsxImportSource @opentui/react */
-// No dispatcher wired to this yet — nothing dispatches permissions-requested/permissions-step/
-// permissions-resolved. Only two steps, no value-entry step: there is nothing to type here, only
-// tools to revoke.
+// Only two steps, no value-entry step: there is nothing to type here, only tools to revoke.
 
 import { useKeyboard } from "@opentui/react";
 import { useListWindow } from "../../hooks/useListWindow";
@@ -10,6 +8,7 @@ import type { PermissionsPanelState } from "../../state/reducer";
 import { theme } from "../../theme/theme";
 import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
 import { ListRow } from "../../ui/ListRow";
+import { isPrintableKey } from "../../util/keys";
 
 // /permissions' own live state (state/reducer.ts's pendingPermissions) — mirrors SetupPanel's
 // step-dispatcher shape with one fewer step; the confirm-remove step delegates to the shared
@@ -70,8 +69,7 @@ function PermissionsList({
       if (row?.removable) onPermissionsRemove?.(row.tool);
       return;
     }
-    if (key.ctrl || key.meta) return;
-    if (key.sequence.length === 0 || (key.name.length !== 1 && key.name !== "space")) return;
+    if (!isPrintableKey(key)) return;
     if (row === undefined) return;
     if (key.sequence.toLowerCase() === "r" && row.removable) {
       onPermissionsRemove?.(row.tool);

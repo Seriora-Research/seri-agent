@@ -5,11 +5,12 @@ import { decodePasteBytes, TextAttributes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import { useState } from "react";
-import type { ModelPickerEntry } from "../state/commands";
 import { useListWindow } from "../hooks/useListWindow";
+import type { ModelPickerEntry } from "../state/commands";
 import { theme } from "../theme/theme";
 import { ListRow } from "../ui/ListRow";
 import { formatModelRow, MODEL_PICKER_HEADER, matchesFilter } from "../util/format";
+import { isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
 
 const FILTER_PLACEHOLDER = 'Type to filter — try "free" or "paid"…';
 
@@ -67,7 +68,7 @@ export function ModelPicker({
       return;
     }
     if (handleArrowKey(key)) return;
-    if (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") {
+    if (isEnter(key)) {
       selectRow(filtered[selectedIndex]);
       return;
     }
@@ -77,45 +78,35 @@ export function ModelPicker({
       resetScroll();
       return;
     }
-    // A plain, printable keypress — see InputBox.tsx's own comment on `key.name.length === 1 ||
-    // key.name === "space"` for why this is the OpenTUI equivalent of Ink's pre-filtered `input`
-    // string. Each keypress is its own discrete event under OpenTUI's byte-level parser, unlike
-    // Ink's `useInput`, which could hand a combined multi-character pty chunk (typed filter text
-    // immediately followed by Enter) to one `input` call — the terminator-splitting this used to
-    // need for that case moved to `usePaste` below, the only path a multi-character chunk can
-    // still arrive through.
-    if (
-      !key.ctrl &&
-      !key.meta &&
-      key.sequence.length > 0 &&
-      (key.name.length === 1 || key.name === "space")
-    ) {
+    // A plain, printable keypress (util/keys.ts's own comment explains the OpenTUI-vs-Ink
+    // distinction `isPrintableKey` reconstructs). Each keypress is its own discrete event under
+    // OpenTUI's byte-level parser, unlike Ink's `useInput`, which could hand a combined
+    // multi-character pty chunk (typed filter text immediately followed by Enter) to one `input`
+    // call — the terminator-splitting this used to need for that case moved to `usePaste` below,
+    // the only path a multi-character chunk can still arrive through.
+    if (isPrintableKey(key)) {
       setFilterQuery((query) => query + key.sequence);
       resetScroll();
     }
   });
 
   // OpenTUI delivers a terminal paste as its own event (bracketed paste), never through
-  // `useKeyboard` — see InputBox.tsx's own comment. Mirrors its terminator-split logic: everything
-  // before the first `\r`/`\n` narrows the filter and selects the top match now, same as pressing
-  // Enter right there; everything after is handed to `onModelSelected` so it can prefill the very
-  // next InputBox mount.
+  // `useKeyboard` — see InputBox.tsx's own comment. `splitAtTerminator` (util/keys.ts) applies the
+  // same way: everything before the first `\r`/`\n` narrows the filter and selects the top match
+  // now, same as pressing Enter right there; everything after is handed to `onModelSelected` so it
+  // can prefill the very next InputBox mount.
   usePaste((event) => {
     const text = decodePasteBytes(event.bytes);
-    const terminatorIndex = text.search(/[\r\n]/);
-    if (terminatorIndex === -1) {
+    const split = splitAtTerminator(text);
+    if (split === null) {
       setFilterQuery((query) => query + text);
       resetScroll();
       return;
     }
-    const before = text.slice(0, terminatorIndex);
-    // A `\r\n` pair (a Windows-clipboard paste is the common source) is ONE terminator, not two.
-    const terminatorLength = text.startsWith("\r\n", terminatorIndex) ? 2 : 1;
-    const after = text.slice(terminatorIndex + terminatorLength);
-    const nextQuery = filterQuery + before;
+    const nextQuery = filterQuery + split.before;
     const nextFiltered =
       nextQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, nextQuery));
-    selectRow(nextFiltered[0], after || undefined);
+    selectRow(nextFiltered[0], split.after || undefined);
   });
 
   const promptText = filterQuery.length === 0 ? "> " : `> ${filterQuery}`;
