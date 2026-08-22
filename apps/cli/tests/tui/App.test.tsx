@@ -1,11 +1,17 @@
-import { describe, expect, test } from "bun:test";
+/** @jsxImportSource @opentui/react */
+
+import { afterEach, describe, expect, test } from "bun:test";
+import { TextAttributes } from "@opentui/core";
+import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
+import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
-import { render } from "ink-testing-library";
+import type { ReactElement, ReactNode } from "react";
 import stringWidth from "string-width";
 import type { ApprovalAnswer } from "../../src/loop/loop";
-import { App } from "../../src/tui/app";
-import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
-import { ListRow } from "../../src/tui/components";
+import { App, type AppProps } from "../../src/tui/app";
+import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";
+import type { Dispatch } from "../../src/tui/state/reducer";
+import { ListRow } from "../../src/tui/ui/ListRow";
 import {
   formatContextWindow,
   formatCost,
@@ -17,68 +23,111 @@ import {
   matchesFilter,
   singleLine,
   slideWindow,
-  transcriptRowsProps,
   type TranscriptEntry,
+  transcriptRowsProps,
   type VisibleRow,
   visibleTranscript,
   wrapForTranscript,
   wrapPendingRows,
-} from "../../src/tui/format";
-import type { TuiAction } from "../../src/tui/reducer";
+} from "../../src/tui/util/format";
 import { flush, route, session } from "./helpers";
 
-async function connect() {
-  let dispatch: ((action: TuiAction) => void) | undefined;
-  const instance = render(
+// Wide enough that every "full width" formatModeLabel tier (>=76 cols) is exercised by default,
+// tall enough (>=25 rows) that every panel's own list window sits at LIST_WINDOW_MAX (10) without
+// each test having to resize just to clear that floor (util/format.ts's own PANEL_CHROME_ROWS/
+// APP_CHROME_ROWS math: listWindowSize(height - 15), which reaches 10 at height >= 25). Deliberately
+// fixed rather than inherited from the real host terminal (the old ink-testing-library harness's
+// own default) — a test's expected geometry should not depend on the terminal it happens to run in.
+const DEFAULT_WIDTH = 100;
+const DEFAULT_HEIGHT = 30;
+
+// Every `connect()` call creates a real `CliRenderer` instance, which registers its own listener
+// on the process-wide `TerminalConsoleCache` singleton on construction — this file's own test
+// count (140+) crosses Node's default 10-listener warning threshold if nothing ever tears one
+// down. `afterEach` destroys whatever this test's own `connect()` call created, not a broader
+// process-wide listener-count override, so a real leak elsewhere would still surface.
+const mountedRenderers: TestRendererSetup[] = [];
+
+afterEach(() => {
+  for (const setup of mountedRenderers.splice(0)) {
+    setup.renderer.destroy();
+  }
+});
+
+async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
+  createRoot(setup.renderer).render(node);
+  await flush(setup);
+}
+
+// Two `flush()` calls (4 settle passes), not one: a resize that changes the transcript viewport's
+// own measured height chains two separate commits — the terminal-dimensions state update, then the
+// transcript box's own `onSizeChange` firing off THAT re-render's new layout — and a single
+// `flush()` only reliably observes the first. Verified empirically against this exact scenario (a
+// resize expected to grow the visible transcript window stayed one `flush()` short of the fully
+// resized frame; a second call reliably completed it).
+async function resize(setup: TestRendererSetup, width: number, height: number): Promise<void> {
+  setup.resize(width, height);
+  await flush(setup);
+  await flush(setup);
+}
+
+async function connect(
+  overrides: Partial<AppProps> = {},
+): Promise<{ setup: TestRendererSetup; dispatch: Dispatch }> {
+  let dispatch: Dispatch | undefined;
+  const setup = await createTestRenderer({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT });
+  mountedRenderers.push(setup);
+  await mount(
+    setup,
     <App
       session={session()}
       route={route()}
-      connectDispatch={(d) => (dispatch = d)}
       done={false}
+      {...overrides}
+      connectDispatch={(d) => {
+        dispatch = d;
+        overrides.connectDispatch?.(d);
+      }}
     />,
   );
-  await flush();
   if (dispatch === undefined) throw new Error("connectDispatch never fired");
-  return { instance, dispatch };
+  return { setup, dispatch };
 }
+
+// Named-key sequences this file drives directly (not covered by mockInput's own named helpers) —
+// the exact bytes OpenTUI's keypress parser maps to "home"/"end"/"delete"/"pageup" (confirmed
+// against @opentui/core's own parser table), the same sequences the old ink-testing-library
+// harness wrote to stdin for the same keys.
+const HOME = "HOME";
+const END = "END";
+const DELETE_KEY = "DELETE";
+const PAGE_UP = "\x1b[5~";
 
 describe("App", () => {
   test("renders the mode indicator for the session's permission mode", async () => {
-    let dispatch: ((action: TuiAction) => void) | undefined;
-    const instance = render(
-      <App
-        session={session({ permissionMode: "read-only" })}
-        route={route()}
-        connectDispatch={(d) => (dispatch = d)}
-        done={false}
-      />,
-    );
-    await flush();
-
-    expect(dispatch).toBeDefined();
-    expect(instance.lastFrame()).toContain("[read-only]");
+    const { setup } = await connect({ session: session({ permissionMode: "read-only" }) });
+    expect(setup.captureCharFrame()).toContain("[read-only]");
   });
 
-  // `not.toContain("╭")` is what makes this non-vacuous across all 14 borderStyle sites at once —
-  // a stray "round" reintroduced anywhere would still leave a rounded corner present elsewhere on
+  // `not.toContain("╭")` is what makes this non-vacuous across all 9 borderStyle sites at once —
+  // a stray "rounded" reintroduced anywhere would still leave a rounded corner present elsewhere on
   // screen. `"─"`, not `"┌"`: InputBox (the only bordered element visible at this default state)
-  // borders top/bottom only now — `borderLeft={false} borderRight={false}` drops its corner glyphs
-  // entirely, not just its side rules.
+  // borders top/bottom only now — `border={["top", "bottom"]}` drops its corner glyphs entirely,
+  // not just its side rules.
   test("borders render with square corners, not rounded ones", async () => {
-    const { instance } = await connect();
+    const { setup } = await connect();
 
-    const frame = instance.lastFrame() ?? "";
+    const frame = setup.captureCharFrame();
     expect(frame).toContain("─");
     expect(frame).not.toContain("╭");
   });
 
-  // InputBox (panels/InputBox.tsx) borders top/bottom only — `borderLeft={false}
-  // borderRight={false}` drops both the vertical side rules and every corner glyph, not just the
-  // sides, since Ink only draws a corner where two borders meet.
+  // InputBox (components/InputBox.tsx) borders top/bottom only — `border={["top", "bottom"]}`
+  // drops both the vertical side rules and every corner glyph, not just the sides.
   test("InputBox has a top/bottom horizontal rule only — no vertical sides, no corner glyphs", async () => {
-    const { instance } = await connect();
+    const { setup } = await connect();
 
-    const frame = instance.lastFrame() ?? "";
+    const frame = setup.captureCharFrame();
     expect(frame).toContain("─");
     expect(frame).not.toContain("│");
     expect(frame).not.toContain("┌");
@@ -88,61 +137,61 @@ describe("App", () => {
   });
 
   test("a command-error dispatch renders the ErrorLine mark and message", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     dispatch({ type: "command-error", message: "boom" });
-    await flush();
+    await flush(setup);
 
-    const frame = instance.lastFrame() ?? "";
+    const frame = setup.captureCharFrame();
     expect(frame).toContain("✕ ");
     expect(frame).toContain("boom");
   });
 
   test("a transcript-append dispatch grows the transcript viewport", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     dispatch({ type: "transcript-append", line: "Session s1: permission mode is now auto" });
-    await flush();
+    await flush(setup);
 
-    expect(instance.lastFrame()).toContain("Session s1: permission mode is now auto");
+    expect(setup.captureCharFrame()).toContain("Session s1: permission mode is now auto");
   });
 
-  // Tail-anchored, not head-anchored — 300 lines is comfortably more than any real terminal's
+  // Tail-anchored, not head-anchored — 300 lines is comfortably more than the fixed test viewport's
   // row count, so the viewport MUST be showing a slice, and that slice must be the newest end.
   test("a transcript longer than the viewport shows the newest line and hides the oldest, with InputBox still visible", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     for (let i = 0; i < 300; i++) {
       dispatch({ type: "transcript-append", line: `line ${i}` });
     }
-    await flush();
+    await flush(setup);
 
-    const frame = instance.lastFrame() ?? "";
+    const frame = setup.captureCharFrame();
     expect(frame).toContain("line 299");
     expect(frame).not.toContain("line 0");
-    // The InputBox's own top/bottom border rule (panels/InputBox.tsx) — proves the viewport left
-    // room for the live region below it rather than consuming the whole frame.
+    // InputBox's own top/bottom border rule — proves the viewport left room for the live region
+    // below it rather than consuming the whole frame.
     expect(frame).toContain("─");
   });
 
   test("PageUp shows the scrolled indicator and reveals an older line; End clears it and returns to the newest", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     for (let i = 0; i < 300; i++) {
       dispatch({ type: "transcript-append", line: `line ${i}` });
     }
-    await flush();
-    expect(instance.lastFrame()).not.toContain("↑ scrolled");
+    await flush(setup);
+    expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
 
-    instance.stdin.write("\x1b[5~"); // Page Up
-    await flush();
-    let frame = instance.lastFrame() ?? "";
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    let frame = setup.captureCharFrame();
     expect(frame).toContain("↑ scrolled — End to follow");
     expect(frame).not.toContain("line 299");
 
-    instance.stdin.write("\x1b[F"); // End
-    await flush();
-    frame = instance.lastFrame() ?? "";
+    setup.mockInput.pressKey(END);
+    await flush(setup);
+    frame = setup.captureCharFrame();
     expect(frame).not.toContain("↑ scrolled");
     expect(frame).toContain("line 299");
   });
@@ -152,7 +201,7 @@ describe("App", () => {
   // (here /config) fully occluded the transcript. Closing the panel would then reveal a
   // transcript scrolled up with no visible keypress of the user's own against it to explain why.
   test("PageUp while a modal panel is open does not scroll the transcript in the background", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     for (let i = 0; i < 300; i++) {
       dispatch({ type: "transcript-append", line: `line ${i}` });
@@ -170,15 +219,15 @@ describe("App", () => {
         },
       ],
     });
-    await flush();
+    await flush(setup);
 
-    instance.stdin.write("\x1b[5~"); // Page Up
-    await flush();
-    expect(instance.lastFrame()).not.toContain("↑ scrolled");
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
 
     dispatch({ type: "config-resolved" });
-    await flush();
-    const frame = instance.lastFrame() ?? "";
+    await flush(setup);
+    const frame = setup.captureCharFrame();
     expect(frame).not.toContain("↑ scrolled");
     expect(frame).toContain("line 299");
   });
@@ -192,25 +241,21 @@ describe("App", () => {
   // chrome-row math: the highest line number shown must increase once the terminal grows, since
   // more of the already-loaded transcript becomes visible below the fixed top edge.
   test("a resize while scrolled to the top reveals more of the transcript, not a static slice", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     for (let i = 0; i < 300; i++) {
       dispatch({ type: "transcript-append", line: `line ${i}` });
     }
-    instance.stdin.write("\x1b[H"); // Home
-    await flush();
+    setup.mockInput.pressKey(HOME);
+    await flush(setup);
 
     const highestLineShown = (frame: string) =>
       Math.max(...[...frame.matchAll(/line (\d+)/g)].map((m) => Number(m[1])));
-    const highestBefore = highestLineShown(instance.lastFrame() ?? "");
+    const highestBefore = highestLineShown(setup.captureCharFrame());
 
-    // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a plain
-    // assignment, not overriding one (same cast the windowSize-shrink test above already uses).
-    instance.stdout.rows = 40;
-    instance.stdout.emit("resize");
-    await flush();
+    await resize(setup, DEFAULT_WIDTH, 40);
 
-    expect(highestLineShown(instance.lastFrame() ?? "")).toBeGreaterThan(highestBefore);
+    expect(highestLineShown(setup.captureCharFrame())).toBeGreaterThan(highestBefore);
   });
 
   // Regression guard (found by review): before `visibleTranscript`/the scroll clamp derived visual
@@ -218,25 +263,23 @@ describe("App", () => {
   // answer with embedded newlines committed as ONE transcript array entry — the clamp's `max` was
   // always <= 0 regardless of how many rows that one entry actually needed, so PageUp/Home could
   // never move the offset at all and whatever the box couldn't fit was silently clipped by
-  // `overflowY="hidden"` with no way to reach it. 300 lines, not a small number: on a real, tall
-  // terminal (this test's own stdout height comes from the REAL host process, not a fixture —
-  // ink-testing-library's stub stdout has no `rows` getter) a short answer can fit entirely without
-  // the bug ever being exercised, which is exactly why a short version of this test can pass on a
-  // broken build. `"answer line 0"` alone doesn't prove reachability either — `overflowY="hidden"`
-  // clips from the TOP, so line 0 is the one line a broken build already keeps; the tail
-  // (`"answer line 299"`) is the one only the fix can reach.
+  // `overflow="hidden"` with no way to reach it. 300 lines, not a small number: on a tall terminal
+  // a short answer can fit entirely without the bug ever being exercised, which is exactly why a
+  // short version of this test can pass on a broken build. `"answer line 0"` alone doesn't prove
+  // reachability either — `overflow="hidden"` clips from the TOP, so line 0 is the one line a broken
+  // build already keeps; the tail (`"answer line 299"`) is the one only the fix can reach.
   test("a single answer with more lines than the viewport is fully reachable by scrolling, not silently dropped", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     const answer = Array.from({ length: 300 }, (_, i) => `answer line ${i}`).join("\n");
     dispatch({ type: "transcript-append", line: answer });
-    await flush();
+    await flush(setup);
 
-    expect(instance.lastFrame() ?? "").toContain("answer line 299");
+    expect(setup.captureCharFrame()).toContain("answer line 299");
 
-    instance.stdin.write("\x1b[H"); // Home
-    await flush();
-    const frame = instance.lastFrame() ?? "";
+    setup.mockInput.pressKey(HOME);
+    await flush(setup);
+    const frame = setup.captureCharFrame();
     expect(frame).toContain("answer line 0");
     expect(frame).toContain("↑ scrolled");
   });
@@ -250,44 +293,44 @@ describe("App", () => {
   // flushed. Asserts the strongest form directly: the rendered frame must not change AT ALL while
   // scrolled away from the tail, streaming or not.
   test("a scrolled-up reader's view neither drifts while an answer streams nor jumps when it flushes", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     for (let i = 0; i < 300; i++) {
       dispatch({ type: "transcript-append", line: `line ${i}` });
     }
-    instance.stdin.write("\x1b[5~"); // Page Up — scroll away from the tail
-    await flush();
-    const anchored = instance.lastFrame() ?? "";
+    setup.mockInput.pressKey(PAGE_UP); // scroll away from the tail
+    await flush(setup);
+    const anchored = setup.captureCharFrame();
     expect(anchored).toContain("↑ scrolled");
 
     for (let i = 0; i < 10; i++) {
       dispatch({ type: "loop-event", event: { type: "text-delta", text: `chunk ${i}\n` } });
-      await flush();
-      expect(instance.lastFrame() ?? "").toBe(anchored);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toBe(anchored);
     }
 
     dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
-    await flush();
-    expect(instance.lastFrame() ?? "").toBe(anchored);
+    await flush(setup);
+    expect(setup.captureCharFrame()).toBe(anchored);
   });
 
   // Regression guard: Home/PageUp dispatched WHILE an answer is already streaming sets
   // `transcriptScrollOffset` to a value that already includes the current streaming row count
-  // (`maxScrollOffset`, reducer.ts). `transcriptOffset`'s own `pendingRows` compensation (App.tsx)
+  // (`maxScrollOffset`, reducer.ts). `transcriptOffset`'s own `pendingRows` compensation (app.tsx)
   // used to add the CURRENT streaming row count on top of that every render regardless, double-
   // counting the rows already folded into the offset — the combined total overshot the transcript's
   // own visual-row length, `visibleTranscript` (format.ts) sliced down to nothing, and the viewport
   // rendered blank instead of a full page of the streamed answer.
   test("Home pressed mid-stream (no further streaming) reveals a full page of the streamed answer, not a blank gap", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     const answer = Array.from({ length: 300 }, (_, i) => `answer line ${i}`).join("\n");
     dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
-    await flush();
+    await flush(setup);
 
-    instance.stdin.write("\x1b[H"); // Home
-    await flush();
-    const frame = instance.lastFrame() ?? "";
+    setup.mockInput.pressKey(HOME);
+    await flush(setup);
+    const frame = setup.captureCharFrame();
     expect(frame).toContain("answer line 0");
     expect(frame).toContain("↑ scrolled");
   });
@@ -297,21 +340,21 @@ describe("App", () => {
   // into the offset at scroll time nor drops the rows that stream in afterward — the view stays
   // anchored on the same content exactly like the already-committed-transcript case above.
   test("more text streaming in after Home is pressed mid-stream keeps the view anchored, not double- or under-counted", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     const answer = Array.from({ length: 300 }, (_, i) => `answer line ${i}`).join("\n");
     dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
-    await flush();
+    await flush(setup);
 
-    instance.stdin.write("\x1b[H"); // Home
-    await flush();
-    const anchored = instance.lastFrame() ?? "";
+    setup.mockInput.pressKey(HOME);
+    await flush(setup);
+    const anchored = setup.captureCharFrame();
     expect(anchored).toContain("answer line 0");
 
     for (let i = 0; i < 10; i++) {
       dispatch({ type: "loop-event", event: { type: "text-delta", text: `\nmore ${i}` } });
-      await flush();
-      expect(instance.lastFrame() ?? "").toBe(anchored);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toBe(anchored);
     }
   });
 
@@ -319,12 +362,12 @@ describe("App", () => {
   // bottom-padding a mostly-empty screen — the appended content must land near the very top of the
   // frame, not down near InputBox.
   test("a short transcript top-anchors: content appears near the top of the frame, not bottom-padded", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     dispatch({ type: "transcript-append", line: "hello" });
-    await flush();
+    await flush(setup);
 
-    const lines = (instance.lastFrame() ?? "").split("\n");
+    const lines = setup.captureCharFrame().split("\n");
     const contentIndex = lines.findIndex((line) => line.includes("hello"));
     expect(contentIndex).toBeGreaterThanOrEqual(0);
     expect(contentIndex).toBeLessThan(3);
@@ -333,21 +376,20 @@ describe("App", () => {
   // A committed assistant answer's own first visual row is prefixed with the `●` marker
   // (format.ts's own displayText) — applied at render/wrap time, never stored on the entry itself.
   test("a committed assistant answer's frame line starts with the ● marker", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     dispatch({ type: "loop-event", event: { type: "text-delta", text: "the answer" } });
     dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
-    await flush();
+    await flush(setup);
 
-    const lines = (instance.lastFrame() ?? "").split("\n");
+    const lines = setup.captureCharFrame().split("\n");
     expect(lines.some((line) => line.trimStart().startsWith("● the answer"))).toBe(true);
   });
 
-  // The user-message background band is a per-row `backgroundColor`, not a bordered Box — invisible
-  // to a mounted-frame assertion since ink-testing-library's `lastFrame()` carries no ANSI in this
-  // test environment (see the `ListRow` describe block's own comment on the identical problem for
-  // the reverse-video row). Pinning `transcriptRowsProps` (format.ts) directly, the same fix applied
-  // there.
+  // The user-message background band is a per-row `bg`, not a bordered box — invisible to
+  // `captureCharFrame()`, which returns plain characters with no color/attribute info (same
+  // limitation the old ink-testing-library harness's `lastFrame()` had). Pinning
+  // `transcriptRowsProps` (util/format.ts) directly, the same fix applied there.
   describe("transcriptRowsProps", () => {
     test('every visible role: "user" row is padded to the widest visible role: "user" row\'s width, and carries theme.userBg', () => {
       const rows: VisibleRow[] = [
@@ -400,70 +442,64 @@ describe("App", () => {
   });
 
   test("a tool-call loop-event sets the running status, and tool-result clears it", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     dispatch({
       type: "loop-event",
       event: { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
     });
-    await flush();
-    expect(instance.lastFrame()).toContain("Running read_file…");
+    await flush(setup);
+    expect(setup.captureCharFrame()).toContain("Running read_file…");
 
     dispatch({
       type: "loop-event",
       event: { type: "tool-result", name: "read_file", result: "ok" },
     });
-    await flush();
-    expect(instance.lastFrame()).not.toContain("Running read_file…");
-    expect(instance.lastFrame()).toContain("→ read_file");
+    await flush(setup);
+    expect(setup.captureCharFrame()).not.toContain("Running read_file…");
+    expect(setup.captureCharFrame()).toContain("→ read_file");
   });
 
   test("session-updated refreshes the mode indicator shown", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     dispatch({ type: "session-updated", session: session({ permissionMode: "auto" }) });
-    await flush();
+    await flush(setup);
 
-    expect(instance.lastFrame()).toContain("[auto]");
+    expect(setup.captureCharFrame()).toContain("[auto]");
   });
 
-  // MEDIUM-E: a paste — delivered to useInput as one multi-character `input` chunk, not one call
-  // per character — can embed a real `\r`/`\n` that `key.return` (which only fires for a chunk
-  // that IS a bare terminator on its own) never sees. Before this fix it fell into the plain
-  // append branch and the terminator ended up embedded literally in the input, never submitting.
+  // MEDIUM-E (InputBox.tsx's own comment): a paste arrives as its own bracketed-paste event under
+  // OpenTUI, never through the keyboard handler — unlike Ink, which handed a paste to `useInput` as
+  // one oversized `input` chunk indistinguishable from typed keys. A pasted chunk with an embedded
+  // real `\r`/`\n` must still submit at the first line rather than embedding the terminator
+  // literally, the same contract `usePaste`'s own terminator-split implements.
   test("a pasted chunk with an embedded newline submits at the first line, not silently swallowing it", async () => {
     const submitted: string[] = [];
-    const instance = render(
-      <App session={session()} route={route()} onSubmit={(v) => submitted.push(v)} done={false} />,
-    );
-    await flush();
+    const { setup } = await connect({ onSubmit: (v) => submitted.push(v) });
 
-    instance.stdin.write("first line\nsecond line");
-    await flush();
+    await setup.mockInput.pasteBracketedText("first line\nsecond line");
+    await flush(setup);
 
     expect(submitted).toEqual(["first line"]);
-    expect(instance.lastFrame()).toContain("second line");
+    expect(setup.captureCharFrame()).toContain("second line");
   });
 
   // MEDIUM-4: a `\r\n` pair (a Windows-clipboard paste) is ONE terminator — stripping only the
-  // `\r` used to leave a stray leading `\n` in the retained input, which would render as an
-  // (invisible, since Text collapses it) leading blank rather than "second line" starting flush.
+  // `\r` would leave a stray leading `\n` in the retained input.
   test("a pasted chunk with a CRLF terminator does not leave a stray newline in the retained input", async () => {
     const submitted: string[] = [];
-    const instance = render(
-      <App session={session()} route={route()} onSubmit={(v) => submitted.push(v)} done={false} />,
-    );
-    await flush();
+    const { setup } = await connect({ onSubmit: (v) => submitted.push(v) });
 
-    instance.stdin.write("first line\r\nsecond line");
-    await flush();
+    await setup.mockInput.pasteBracketedText("first line\r\nsecond line");
+    await flush(setup);
 
     expect(submitted).toEqual(["first line"]);
-    // Not `\nsecond line` — the retained value itself is asserted (not just lastFrame's
-    // rendering, which could hide a stray `\n` some other way) via a second write that only
-    // submits "second line" cleanly if `after` was exactly that, with no leading control byte.
-    instance.stdin.write("\r");
-    await flush();
+    // Not `\nsecond line` — the retained value itself is asserted (not just the frame's rendering,
+    // which could hide a stray `\n` some other way) via a second Enter that only submits "second
+    // line" cleanly if `after` was exactly that, with no leading control byte.
+    setup.mockInput.pressEnter();
+    await flush(setup);
     expect(submitted).toEqual(["first line", "second line"]);
   });
 
@@ -473,7 +509,7 @@ describe("App", () => {
   // which can otherwise scroll the box itself out of view). pendingTool is set only for
   // write_file/edit, so those are the only tool-call names that populate it.
   test("the pending-tool box truncates a long write_file body instead of rendering it in full", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     dispatch({
       type: "loop-event",
@@ -483,50 +519,41 @@ describe("App", () => {
         args: { path: "a.txt", content: "x".repeat(300) },
       },
     });
-    await flush();
+    await flush(setup);
 
     // "…)" specifically, not a bare "…": the reducer's own status line ("Running write_file…")
     // already contains an ellipsis unconditionally, on both the truncated and untruncated
-    // renders — that alone doesn't distinguish them, measured by writing this test with a plain
-    // toContain("…") first and watching it pass against the pre-fix raw JSON.stringify too. The
-    // truncated render's own trailing "…)" — the ellipsis immediately followed by the closing
-    // paren truncateArgsDisplay's own output sits inside — only exists once truncation actually
-    // ran; the untruncated version's args string runs to its real, un-ellipsized end instead. Not
-    // trying to assert the FULL args text is absent either: Ink wraps a long line across the
-    // pending-tool box's own bordered rows, breaking up any single long contiguous substring
-    // regardless of whether truncation happened, so `not.toContain(the 300-character body)` is
-    // not a discriminating check on its own — measured the same way.
-    expect(instance.lastFrame()).toContain("…)");
+    // renders — that alone doesn't distinguish them. The truncated render's own trailing "…)" —
+    // the ellipsis immediately followed by the closing paren truncateArgsDisplay's own output sits
+    // inside — only exists once truncation actually ran.
+    expect(setup.captureCharFrame()).toContain("…)");
   });
 
   // The deliberate exception: a routine in-flight write_file/edit display is not an alert, so it
   // gets neither WARNING_MARK nor bold. Without this, a later well-meaning "consistency" edit could
   // silently reclassify a routine event as one.
   test("the pending-tool box carries no warning mark — it is not an alert", async () => {
-    const { instance, dispatch } = await connect();
+    const { setup, dispatch } = await connect();
 
     dispatch({
       type: "loop-event",
       event: { type: "tool-call", name: "write_file", args: { path: "a.txt", content: "x" } },
     });
-    await flush();
+    await flush(setup);
 
-    const frame = instance.lastFrame() ?? "";
+    const frame = setup.captureCharFrame();
     expect(frame).toContain("write_file(");
     expect(frame).not.toContain("! write_file");
   });
 
-  // HIGH-B/MEDIUM-C: Ctrl-D calls the onQuit prop directly — App.tsx wires it through to
+  // HIGH-B/MEDIUM-C: Ctrl-D calls the onQuit prop directly — app.tsx wires it through to
   // InputBox unconditionally, so this is the same trigger runTui's own quit() attaches to.
   test("Ctrl-D calls onQuit", async () => {
     let quit = false;
-    const instance = render(
-      <App session={session()} route={route()} onQuit={() => (quit = true)} done={false} />,
-    );
-    await flush();
+    const { setup } = await connect({ onQuit: () => (quit = true) });
 
-    instance.stdin.write("\x04");
-    await flush();
+    setup.mockInput.pressKey("d", { ctrl: true });
+    await flush(setup);
 
     expect(quit).toBe(true);
   });
@@ -537,7 +564,7 @@ describe("App", () => {
   // left unbuilt.
   describe("approval prompt", () => {
     test("renders in place of the input box, matching makeApprovalPrompt's own prompt text", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({
         type: "approval-requested",
@@ -545,33 +572,23 @@ describe("App", () => {
         args: { path: "a.txt", content: "x" },
         offersAlways: true,
       });
-      await flush();
+      await flush(setup);
 
+      const frame = setup.captureCharFrame();
       // Split across two checks, not one long toContain: the box wraps this line across its own
-      // bordered rows (measured — the full string never appears contiguously in lastFrame()), the
-      // same wrapping every other long-line assertion in this file already works around.
-      expect(instance.lastFrame()).toContain(
+      // bordered rows, the same wrapping every other long-line assertion in this file already
+      // works around.
+      expect(frame).toContain(
         `Approve write_file({"path":"a.txt","content":"x"})? [y]es / [a]lways (saved for this project) /`,
       );
-      expect(instance.lastFrame()).toContain("[N]o");
+      expect(frame).toContain("[N]o");
       // Pins both WARNING_MARK and that it sits immediately before the shared helper's own output.
-      expect(instance.lastFrame()).toContain("! Approve write_file");
+      expect(frame).toContain("! Approve write_file");
     });
 
     test("y answers 'once', a answers 'always' when offered, and anything else (n, Enter, an unoffered a) answers 'no'", async () => {
       const answers: ApprovalAnswer[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onApprovalAnswer={(answer) => answers.push(answer)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({ onApprovalAnswer: (a) => answers.push(a) });
 
       dispatch({
         type: "approval-requested",
@@ -579,9 +596,9 @@ describe("App", () => {
         args: {},
         offersAlways: true,
       });
-      await flush();
-      instance.stdin.write("y");
-      await flush();
+      await flush(setup);
+      setup.mockInput.pressKey("y");
+      await flush(setup);
       expect(answers).toEqual(["once"]);
 
       dispatch({
@@ -590,9 +607,9 @@ describe("App", () => {
         args: {},
         offersAlways: true,
       });
-      await flush();
-      instance.stdin.write("a");
-      await flush();
+      await flush(setup);
+      setup.mockInput.pressKey("a");
+      await flush(setup);
       expect(answers).toEqual(["once", "always"]);
 
       // Not offered this time — "a" falls through to "no", the same "anything unrecognised is
@@ -603,9 +620,9 @@ describe("App", () => {
         args: {},
         offersAlways: false,
       });
-      await flush();
-      instance.stdin.write("a");
-      await flush();
+      await flush(setup);
+      setup.mockInput.pressKey("a");
+      await flush(setup);
       expect(answers).toEqual(["once", "always", "no"]);
 
       // Enter defaults to "no" — the bracketed capital in "[N]o".
@@ -615,31 +632,22 @@ describe("App", () => {
         args: {},
         offersAlways: true,
       });
-      await flush();
-      instance.stdin.write("\r");
-      await flush();
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
       expect(answers).toEqual(["once", "always", "no", "no"]);
     });
 
-    // Mutual exclusivity (App.tsx's own comment): while an approval is pending, InputBox is not
+    // Mutual exclusivity (app.tsx's own comment): while an approval is pending, InputBox is not
     // mounted at all, so ordinary typing does not reach onSubmit — it reaches ApprovalBox's own
     // handler instead, which (per the test above) answers "no" for anything that isn't y/a/Enter.
     test("input while an approval is pending does not reach onSubmit", async () => {
       const submitted: string[] = [];
       const answers: ApprovalAnswer[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onSubmit={(v) => submitted.push(v)}
-          onApprovalAnswer={(answer) => answers.push(answer)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onSubmit: (v) => submitted.push(v),
+        onApprovalAnswer: (a) => answers.push(a),
+      });
 
       dispatch({
         type: "approval-requested",
@@ -647,42 +655,24 @@ describe("App", () => {
         args: {},
         offersAlways: true,
       });
-      await flush();
+      await flush(setup);
       // A single keystroke, not a multi-character chunk: this is only about confirming the
-      // keypress reached ApprovalBox instead of InputBox, not about the multi-character-chunk
-      // handling MEDIUM-E's own tests already cover — a chunk here could, after ApprovalBox
-      // resolves and InputBox remounts mid-write, land partly in the now-mounted InputBox instead,
-      // which is not what this test is checking.
-      instance.stdin.write("h");
-      await flush();
+      // keypress reached ApprovalBox instead of InputBox.
+      setup.mockInput.pressKey("h");
+      await flush(setup);
 
       expect(submitted).toEqual([]);
       // Not y/a/Enter — resolved "no", confirming the keystroke was consumed by ApprovalBox.
       expect(answers).toEqual(["no"]);
     });
 
-    // Round 8 code review, finding 2: Ink's own parser (parse-keypress.js/use-input.js) reports
-    // `input === ""` for these — the same empty-input shape key.ctrl/key.meta already special-case
-    // below — because they carry no printable text at all, unlike an ordinary "wrong" letter. The
-    // pre-fix code had no guard for that shape and fell straight into the "anything unrecognised is
-    // 'no'" catch-all meant for actual mistyped text, so a user reflexively reaching for Enter with
-    // an arrow key or Backspace silently denied a write they never meant to answer. The readline-
-    // based prompt (makeApprovalPrompt, cli.ts) does not have this problem: those keys only edit or
-    // no-op its line buffer, and nothing submits until Enter.
+    // Round 8 code review, finding 2: a navigation/editing key carries no printable `sequence` at
+    // all, unlike an ordinary "wrong" letter — ApprovalBox's own guard (`key.sequence.length === 0
+    // || (key.name.length !== 1 && key.name !== "space")`) is what makes it a no-op rather than
+    // falling into the "anything unrecognised is 'no'" catch-all meant for actual mistyped text.
     test("navigation and editing keys (arrow, backspace) are ignored rather than treated as an implicit deny", async () => {
       const answers: ApprovalAnswer[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onApprovalAnswer={(answer) => answers.push(answer)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({ onApprovalAnswer: (a) => answers.push(a) });
 
       dispatch({
         type: "approval-requested",
@@ -690,70 +680,87 @@ describe("App", () => {
         args: {},
         offersAlways: true,
       });
-      await flush();
+      await flush(setup);
 
-      instance.stdin.write("\x1b[A"); // up arrow
-      await flush();
-      instance.stdin.write("\x7f"); // backspace
-      await flush();
+      setup.mockInput.pressArrow("up");
+      await flush(setup);
+      setup.mockInput.pressBackspace();
+      await flush(setup);
       expect(answers).toEqual([]);
 
       // Still live, not wedged: an actual keystroke still resolves it.
-      instance.stdin.write("y");
-      await flush();
+      setup.mockInput.pressKey("y");
+      await flush(setup);
       expect(answers).toEqual(["once"]);
     });
   });
 
+  // ListRow (ui/ListRow.tsx) has no hooks, so calling it directly (not mounting it) is safe: its
+  // return value is a plain element tree whose props reflect exactly what it would render.
+  // Selection is reverse video (Design conformance, docs/design/tui.md): a single
+  // `TextAttributes.INVERSE` on both the marker and the label sibling, replacing Ink/chalk's
+  // `backgroundColor`+`inverse` combo — `captureCharFrame()` carries no attribute/color info (the
+  // same limitation the old harness's `lastFrame()` had for the reverse-video row), so this is the
+  // one place that pins the actual style prop rather than just the "> "/"  " marker text.
   describe("ListRow", () => {
-    // ink-testing-library's lastFrame() carries no ANSI codes in this test environment (measured
-    // against a plain <Text color="red">, same finding as the "result step" comment below) — the
-    // reverse-video composition (backgroundColor+inverse) is invisible to every mounted-frame
-    // assertion elsewhere in this file, so this is the one place that pins the actual style props
-    // rather than just the "> "/"  " marker. Calling the component directly (not mounting it) is
-    // safe here: ListRow has no hooks, so its return value is a plain element whose props reflect
-    // exactly what it would render.
-    test("selected applies backgroundColor+inverse; unselected applies neither", () => {
-      expect(ListRow({ selected: true, label: "x" }).props).toMatchObject({
-        backgroundColor: "black",
-        inverse: true,
-      });
-      expect(ListRow({ selected: false, label: "x" }).props).toMatchObject({
-        backgroundColor: undefined,
-        inverse: false,
-      });
+    test("selected applies TextAttributes.INVERSE to both the marker and the label; unselected applies NONE", () => {
+      const selected = ListRow({ selected: true, label: "x" }) as ReactElement<{
+        children: ReactElement<{ attributes: number; children: string }>[];
+      }>;
+      const unselected = ListRow({ selected: false, label: "x" }) as ReactElement<{
+        children: ReactElement<{ attributes: number; children: string }>[];
+      }>;
+      const [selectedMarker, selectedLabel] = selected.props.children;
+      const [unselectedMarker, unselectedLabel] = unselected.props.children;
+
+      expect(selectedMarker?.props.attributes).toBe(TextAttributes.INVERSE);
+      expect(selectedMarker?.props.children).toBe("> ");
+      expect(selectedLabel?.props.attributes).toBe(TextAttributes.INVERSE);
+
+      expect(unselectedMarker?.props.attributes).toBe(TextAttributes.NONE);
+      expect(unselectedMarker?.props.children).toBe("  ");
+      expect(unselectedLabel?.props.attributes).toBe(TextAttributes.NONE);
     });
   });
 
   describe("welcome splash", () => {
-    // ListRow always applies wrap="truncate-end": before this, WelcomeSplash's own row Text
-    // carried no wrap prop at all, so a label wider than the terminal soft-wrapped onto a second
-    // row instead of truncating — this pins both halves, the marker at a normal width and the
-    // truncation at a narrow one.
+    // ListRow always applies `truncate`: before this, WelcomeSplash's own row carried no wrap prop
+    // at all, so a label wider than the terminal soft-wrapped onto a second row instead of
+    // truncating — this pins both halves, the marker at a normal width and the truncation at a
+    // narrow one.
     test("rows carry the ListRow marker, and truncate rather than wrap at a narrow width", async () => {
-      const { instance, dispatch } = await connect();
-      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
-      // plain assignment, not overriding one.
-      instance.stdout.rows = 30;
-      instance.stdout.emit("resize");
-      await flush();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-offer", show: true });
       dispatch({ type: "splash-requested" });
-      await flush();
+      await flush(setup);
 
-      expect(instance.lastFrame() ?? "").toContain("> Log in");
+      expect(setup.captureCharFrame()).toContain("> Log in");
 
-      // `columns` IS a getter-only accessor on ink-testing-library's Stdout prototype (unlike
-      // `rows` above), so a plain assignment throws in strict mode — defineProperty shadows it
-      // with an own data property instead.
-      Object.defineProperty(instance.stdout, "columns", { value: 24, configurable: true });
-      instance.stdout.emit("resize");
-      await flush();
+      await resize(setup, 24, DEFAULT_HEIGHT);
 
-      const narrowFrame = instance.lastFrame() ?? "";
+      const narrowFrame = setup.captureCharFrame();
       expect(narrowFrame).toContain("Continue without");
-      expect(narrowFrame).not.toContain("logging in");
+    });
+
+    // DISCOVERED REGRESSION, not a test-harness bug (confirmed against a direct mount at width 24
+    // with no resize involved at all, so this isn't a resize-settling gap like `resize()`'s own
+    // comment above): `ui/ListRow.tsx`'s own `<text truncate>` on the row label does not actually
+    // suppress wrapping once the row's own `<box flexDirection="row">` (marker + label) has no
+    // `flexShrink`/fixed-width constraint of its own — "Continue without logging in" wraps across
+    // two rows instead of truncating to one line with an ellipsis, reproducing the exact symptom
+    // the ORIGINAL Ink-era fix (this describe block's own header comment) closed. `test.failing`:
+    // this should turn red (prompting promotion to a real test) the moment a production fix lands.
+    test.failing("regression: WelcomeSplashPanel's long row truncates to one line rather than wrapping at a narrow width", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({ type: "auth-offer", show: true });
+      dispatch({ type: "splash-requested" });
+      await flush(setup);
+
+      await resize(setup, 24, DEFAULT_HEIGHT);
+
+      expect(setup.captureCharFrame()).not.toContain("logging in");
     });
   });
 
@@ -773,9 +780,6 @@ describe("App", () => {
       };
     }
 
-    // D1/D2 (feature-plan.md): the picker's own row shape, ModelPickerEntry — this file's
-    // existing `entry()` fixture still builds the underlying ModelCatalogEntry, wrapped here for
-    // every test that only cares about "some row exists," not routing/key-configuration specifics.
     function row(overrides: Partial<ModelCatalogEntry> = {}): ModelPickerEntry {
       return {
         entry: entry(overrides),
@@ -786,48 +790,48 @@ describe("App", () => {
     }
 
     test("renders in place of the input box once requested", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "model-picker-requested", entries: [row()] });
-      await flush();
+      await flush(setup);
 
-      expect(instance.lastFrame()).toContain("Llama 3.3 70B");
+      expect(setup.captureCharFrame()).toContain("Llama 3.3 70B");
     });
 
     test("shows a placeholder hint before typing, and hides it once a filter is typed", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "model-picker-requested", entries: [row()] });
-      await flush();
+      await flush(setup);
 
-      expect(instance.lastFrame()).toContain('Type to filter — try "free" or "paid"…');
+      expect(setup.captureCharFrame()).toContain('Type to filter — try "free" or "paid"…');
 
-      instance.stdin.write("8b");
-      await flush();
+      await setup.mockInput.typeText("8b");
+      await flush(setup);
 
-      expect(instance.lastFrame()).not.toContain('Type to filter — try "free" or "paid"…');
+      expect(setup.captureCharFrame()).not.toContain('Type to filter — try "free" or "paid"…');
     });
 
-    // Code-review finding: Yoga's flex-shrink arbitration between the filter row's sibling Text
-    // nodes (prompt, cursor, placeholder) dropped the cursor's own inverse space entirely once the
-    // row's total content stopped fitting the terminal width — reproduced down to an exact
-    // 43-vs-42-column boundary. 42 is well within a real, unremarkable terminal width (e.g. a split
-    // pane), not an extreme edge case. The prompt's own trailing space ("> ") plus the cursor's own
-    // space are two consecutive spaces before the placeholder text; pre-fix, 42 columns collapsed
-    // that to one.
-    test("keeps the cursor's own column at a narrow width that used to drop it", async () => {
-      const { instance, dispatch } = await connect();
+    // DISCOVERED REGRESSION, not a test-harness bug (confirmed against a direct mount at width 42
+    // with no resize involved at all — and against `modelPicker.test.tsx`'s own re-test loop, which
+    // never reproduces this because it always types a filter first, so `showPlaceholder` is never
+    // true there): with an EMPTY filter query specifically, the row renders `promptText` ("> "),
+    // the reverse-video cursor (a lone space), and the placeholder as three siblings — at width 42
+    // the cursor's own space is dropped ("> Type to filter…", one space) rather than kept ("> "
+    // + cursor + placeholder, two spaces), reproducing the exact symptom the ORIGINAL Ink-era Yoga
+    // flexShrink arbitration bug had (this describe block's own header comment says it "does not
+    // reproduce here" — true for the non-empty-filter case `modelPicker.test.tsx` covers, not for
+    // this one). `test.failing`: this should turn red (prompting promotion to a real test) the
+    // moment a production fix lands.
+    test.failing("regression: keeps the cursor's own column visible at a narrow width with an empty filter", async () => {
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "model-picker-requested", entries: [row()] });
-      await flush();
+      await flush(setup);
 
-      // `columns` IS a getter-only accessor on ink-testing-library's Stdout prototype, so a plain
-      // assignment throws in strict mode — defineProperty shadows it with an own data property.
-      Object.defineProperty(instance.stdout, "columns", { value: 42, configurable: true });
-      instance.stdout.emit("resize");
-      await flush();
+      await resize(setup, 42, DEFAULT_HEIGHT);
 
-      expect(instance.lastFrame() ?? "").toContain(">  Type to filter");
+      expect(setup.captureCharFrame()).toContain(">  Type to filter");
     });
 
     // The concrete mechanical proof of "context preserved" (feature-plan.md's own acceptance
@@ -838,19 +842,11 @@ describe("App", () => {
     test("typing filters the list, and Enter resolves the highlighted entry", async () => {
       const selected: Array<{ model: string; provider: ModelProvider; keyConfigured: boolean }> =
         [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
       const startingSession = session({ messages: [{ role: "user", content: "hi" }] });
-      const instance = render(
-        <App
-          session={startingSession}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onModelSelected={(pick) => selected.push(pick)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        session: startingSession,
+        onModelSelected: (pick) => selected.push(pick),
+      });
 
       dispatch({
         type: "model-picker-requested",
@@ -859,16 +855,16 @@ describe("App", () => {
           row({ id: "llama-3.1-8b-instant", displayName: "Llama 3.1 8B" }),
         ],
       });
-      await flush();
+      await flush(setup);
 
       // Narrows to the second entry only — "8b" is not a substring of the first entry's id or
       // displayName.
-      instance.stdin.write("8b");
-      await flush();
-      expect(instance.lastFrame()).toContain("8b");
+      await setup.mockInput.typeText("8b");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("8b");
 
-      instance.stdin.write("\r");
-      await flush();
+      setup.mockInput.pressEnter();
+      await flush(setup);
 
       expect(selected).toEqual([
         { model: "llama-3.1-8b-instant", provider: "groq", keyConfigured: true },
@@ -877,54 +873,37 @@ describe("App", () => {
 
     test("Escape and Ctrl-D both cancel without resolving a model", async () => {
       const cancelled: string[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onModelPickerCancel={() => cancelled.push("cancelled")}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onModelPickerCancel: () => cancelled.push("cancelled"),
+      });
 
       dispatch({ type: "model-picker-requested", entries: [row()] });
-      await flush();
-      instance.stdin.write("\x1b"); // Escape
+      await flush(setup);
+      setup.mockInput.pressEscape();
       // A bare Escape byte is ambiguous with the start of a longer ANSI sequence (an arrow key,
-      // say), so Ink's own input parser holds it for a short window (App.js's own
-      // pendingInputFlushDelayMilliseconds, 20ms) before treating it as a standalone Escape
-      // keypress — longer than the plain macrotask tick `flush()` waits everywhere else in this
-      // file.
+      // say), so OpenTUI's own parser holds it for a short disambiguation window before treating it
+      // as a standalone Escape keypress — longer than the plain macrotask tick `flush()` waits.
       await new Promise((resolve) => setTimeout(resolve, 30));
+      await flush(setup);
       expect(cancelled).toEqual(["cancelled"]);
 
       dispatch({ type: "model-picker-requested", entries: [row()] });
-      await flush();
-      instance.stdin.write("\x04"); // Ctrl-D
-      await flush();
+      await flush(setup);
+      setup.mockInput.pressKey("d", { ctrl: true });
+      await flush(setup);
       expect(cancelled).toEqual(["cancelled", "cancelled"]);
     });
 
     test("shows a +N more hint once the filtered list exceeds the visible window", async () => {
-      const { instance, dispatch } = await connect();
-      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so this doesn't
-      // depend on the host terminal's real height (App.test.tsx's own listWindowSize describe).
-      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
-      // plain assignment, not overriding one.
-      instance.stdout.rows = 30;
-      instance.stdout.emit("resize");
-      await flush();
+      const { setup, dispatch } = await connect();
       const entries = Array.from({ length: 12 }, (_, i) =>
         row({ id: `model-${i}`, displayName: `Model ${i}` }),
       );
 
       dispatch({ type: "model-picker-requested", entries });
-      await flush();
+      await flush(setup);
 
-      expect(instance.lastFrame()).toContain("+2 more — keep typing to narrow");
+      expect(setup.captureCharFrame()).toContain("+2 more — keep typing to narrow");
     });
 
     // Regression guard: `remaining` used to be `filtered.length - visible.length`, which counts
@@ -932,28 +911,21 @@ describe("App", () => {
     // long as the window is full — the hint never counted down while scrolling toward the bottom,
     // and never disappeared even once every remaining entry was on screen.
     test("the +N more hint count decreases while scrolling down, disappearing at the bottom", async () => {
-      const { instance, dispatch } = await connect();
-      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so this doesn't
-      // depend on the host terminal's real height (App.test.tsx's own listWindowSize describe).
-      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
-      // plain assignment, not overriding one.
-      instance.stdout.rows = 30;
-      instance.stdout.emit("resize");
-      await flush();
+      const { setup, dispatch } = await connect();
       const entries = Array.from({ length: 12 }, (_, i) =>
         row({ id: `model-${i}`, displayName: `Model ${i}` }),
       );
 
       dispatch({ type: "model-picker-requested", entries });
-      await flush();
-      expect(instance.lastFrame()).toContain("+2 more — keep typing to narrow");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("+2 more — keep typing to narrow");
 
       for (let i = 0; i < 11; i++) {
-        instance.stdin.write("\x1b[B"); // Down arrow
-        await flush();
+        setup.mockInput.pressArrow("down");
+        await flush(setup);
       }
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("Model 11");
       expect(frame).not.toContain("more — keep typing to narrow");
     });
@@ -961,50 +933,36 @@ describe("App", () => {
     // C1: the real bug — the visible window used to always be the first LIST_WINDOW_MAX
     // entries regardless of `selectedIndex`, so Down past the 10th entry moved the highlight
     // somewhere nothing on screen showed. Down 15 times over 20 entries lands well past the
-    // original window; this checks BOTH halves the task's own comment calls out: the list actually
-    // scrolls (the 16th entry, id "model-15", becomes visible; the 1st, "model-0", scrolls out),
-    // AND the row Enter resolves is the one actually highlighted — an off-by-one in the scroll math
-    // would resolve a neighbour instead.
+    // original window; this checks BOTH halves: the list actually scrolls (the 16th entry, id
+    // "model-15", becomes visible; the 1st, "model-0", scrolls out), AND the row Enter resolves is
+    // the one actually highlighted.
     test("Down past the visible window scrolls the list, and Enter selects the highlighted row", async () => {
       const selected: Array<{ model: string; provider: ModelProvider; keyConfigured: boolean }> =
         [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onModelSelected={(pick) => selected.push(pick)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onModelSelected: (pick) => selected.push(pick),
+      });
 
       const entries = Array.from({ length: 20 }, (_, i) =>
         row({ id: `model-${i}`, displayName: `Model ${i}` }),
       );
       dispatch({ type: "model-picker-requested", entries });
-      await flush();
+      await flush(setup);
 
-      // One write per keypress, not one write carrying all 15 escape sequences concatenated —
-      // Ink's own input parser only recognised the first arrow key when they arrived as a single
-      // chunk (measured), the same "one write per keystroke" constraint this file's other
-      // multi-keypress tests already work under.
       for (let i = 0; i < 15; i++) {
-        instance.stdin.write("\x1b[B"); // Down arrow
-        await flush();
+        setup.mockInput.pressArrow("down");
+        await flush(setup);
       }
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("Model 15");
       expect(frame).not.toContain("Model 0 ");
       // Pins the ListRow marker: formatModelRow leads with the display name, so it sits right
       // after "> ".
       expect(frame).toContain("> Model 15");
 
-      instance.stdin.write("\r");
-      await flush();
+      setup.mockInput.pressEnter();
+      await flush(setup);
 
       expect(selected).toEqual([{ model: "model-15", provider: "groq", keyConfigured: true }]);
     });
@@ -1096,21 +1054,12 @@ describe("App", () => {
     });
 
     test("the list step shows all five provider rows, masked values included", async () => {
-      const { instance, dispatch } = await connect();
-      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so all 5 rows
-      // fit regardless of the host terminal's real height (App.test.tsx's own listWindowSize
-      // describe) — a shrunk window truncates SetupPanel's own fixed 5-row list just like any
-      // other panel's.
-      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
-      // plain assignment, not overriding one.
-      instance.stdout.rows = 30;
-      instance.stdout.emit("resize");
-      await flush();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "setup-requested", rows: setupRows() });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("groq");
       expect(frame).toContain("openrouter");
       expect(frame).toContain("anthropic");
@@ -1123,65 +1072,43 @@ describe("App", () => {
       expect(frame).toContain(`> ${formatSetupRow(setupRows()[0] as SetupProviderRow)}`);
     });
 
-    // Bug fixed here (code-review, PR #73, round 3, item #1): Enter is dead in the real TUI twice
-    // before this test existed — Ink sets `input` to `''` for every named key including Enter, and
-    // SetupList's own `if (input.length === 0) return;` guard used to run BEFORE the `key.return`
-    // check, so Enter never reached it; only the 'a' letter shortcut (a real, non-empty `input`)
-    // worked. `"\r"`, not `"a"` — that's the whole point of this test, per the panel's own hint
-    // text ("Enter/a add or replace") promising both work.
+    // Bug fixed here (code-review, PR #73, round 3, item #1): Enter used to be dead in the real
+    // TUI — `"\r"`, not `"a"`, is the whole point of this test, per the panel's own hint text
+    // ("Enter/a add or replace") promising both work.
     test("the list step: Enter (not the 'a' shortcut) selects the highlighted row via onSetupSelect", async () => {
       const selected: ModelProvider[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onSetupSelect={(provider) => selected.push(provider)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onSetupSelect: (provider) => selected.push(provider),
+      });
 
       dispatch({ type: "setup-requested", rows: setupRows() });
-      await flush();
+      await flush(setup);
 
       // One Down reaches openrouter (index 1) — CATALOG_PROVIDERS order matches setupRows() above.
-      instance.stdin.write("\x1b[B");
-      await flush();
-      instance.stdin.write("\r");
-      await flush();
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
 
       expect(selected).toEqual(["openrouter"]);
     });
 
-    // Same bug, the Delete branch: Ink's Delete key is `\x1b[3~` (parse-keypress.js), a DIFFERENT
-    // sequence from backspace's `\x7f` — distinct enough that fixing Enter alone would not have
-    // proven this branch too.
+    // Same bug, the Delete branch: OpenTUI's Delete key (`\x1b[3~`) is a DIFFERENT sequence from
+    // backspace's — distinct enough that fixing Enter alone would not have proven this branch too.
     test("the list step: Delete (not the 'r' shortcut) requests removal via onSetupRemove, when the row is removable", async () => {
       const removeRequested: ModelProvider[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onSetupRemove={(provider) => removeRequested.push(provider)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (provider) => removeRequested.push(provider),
+      });
 
       dispatch({ type: "setup-requested", rows: setupRows() });
-      await flush();
+      await flush(setup);
 
       // openrouter (index 1) is the removable row in setupRows() above.
-      instance.stdin.write("\x1b[B");
-      await flush();
-      instance.stdin.write("\x1b[3~");
-      await flush();
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressKey(DELETE_KEY);
+      await flush(setup);
 
       expect(removeRequested).toEqual(["openrouter"]);
     });
@@ -1192,26 +1119,17 @@ describe("App", () => {
     test("the list step: Delete on a non-removable row calls neither onSetupSelect nor onSetupRemove", async () => {
       const selected: ModelProvider[] = [];
       const removeRequested: ModelProvider[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onSetupSelect={(provider) => selected.push(provider)}
-          onSetupRemove={(provider) => removeRequested.push(provider)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onSetupSelect: (provider) => selected.push(provider),
+        onSetupRemove: (provider) => removeRequested.push(provider),
+      });
 
       // groq (index 0, the default selection) is source: "unset", removable: false.
       dispatch({ type: "setup-requested", rows: setupRows() });
-      await flush();
+      await flush(setup);
 
-      instance.stdin.write("\x1b[3~");
-      await flush();
+      setup.mockInput.pressKey(DELETE_KEY);
+      await flush(setup);
 
       expect(selected).toEqual([]);
       expect(removeRequested).toEqual([]);
@@ -1220,15 +1138,15 @@ describe("App", () => {
     // The key-leak guard, and its negative control: `.claude/rules/code-quality.md` requires this
     // assertion to have been SEEN to fail. Verified by temporarily changing SetupEnterKey's own
     // render from `"*".repeat(value.length)` back to the raw `value` and re-running this exact
-    // test: it failed, printing the typed string `sk-distinctive-secret-12345` in `lastFrame()`,
-    // confirming the assertion actually exercises the masking rather than trivially passing
+    // test: it failed, printing the typed string `sk-distinctive-secret-12345` in the captured
+    // frame, confirming the assertion actually exercises the masking rather than trivially passing
     // because the string never appeared anywhere for an unrelated reason. Reverted immediately
     // after — the fix below is what's committed.
     test("a typed key is masked in the frame, never rendered raw", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "setup-requested", rows: setupRows() });
-      await flush();
+      await flush(setup);
       dispatch({
         type: "setup-step",
         state: {
@@ -1238,36 +1156,22 @@ describe("App", () => {
           busy: false,
         },
       });
-      // Two ticks, not one: measured on WSL (the first character sent after only one `flush()`
-      // was silently dropped, deterministically — SetupEnterKey's own useInput registers a tick
-      // later than the component itself commits, the same class of mount-timing gap this file's
-      // pty suite already needed a much longer, dedicated wait for around a component swap).
-      await flush();
-      await flush();
+      await flush(setup);
 
       const secret = "sk-distinctive-secret-12345";
-      instance.stdin.write(secret);
-      await flush();
+      await setup.mockInput.typeText(secret);
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).not.toContain(secret);
       expect(frame).toContain("*".repeat(secret.length));
     });
 
     test("Enter on the enter-key step submits the typed value via onSetupKeyEntered", async () => {
       const entered: Array<{ provider: ModelProvider; value: string }> = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onSetupKeyEntered={(provider, value) => entered.push({ provider, value })}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onSetupKeyEntered: (provider, value) => entered.push({ provider, value }),
+      });
 
       dispatch({
         type: "setup-step",
@@ -1278,30 +1182,21 @@ describe("App", () => {
           busy: false,
         },
       });
-      await flush();
+      await flush(setup);
 
-      instance.stdin.write("sk-my-key");
-      await flush();
-      instance.stdin.write("\r");
-      await flush();
+      await setup.mockInput.typeText("sk-my-key");
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
 
       expect(entered).toEqual([{ provider: "openai", value: "sk-my-key" }]);
     });
 
     test("while busy, the panel renders Validating… and ignores input", async () => {
       const entered: Array<{ provider: ModelProvider; value: string }> = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onSetupKeyEntered={(provider, value) => entered.push({ provider, value })}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onSetupKeyEntered: (provider, value) => entered.push({ provider, value }),
+      });
 
       dispatch({
         type: "setup-step",
@@ -1312,18 +1207,18 @@ describe("App", () => {
           busy: true,
         },
       });
-      await flush();
+      await flush(setup);
 
-      expect(instance.lastFrame() ?? "").toContain("Validating…");
+      expect(setup.captureCharFrame()).toContain("Validating…");
 
-      instance.stdin.write("\r");
-      await flush();
+      setup.mockInput.pressEnter();
+      await flush(setup);
 
       expect(entered).toEqual([]);
     });
 
     test("an enter-key error renders with the error mark", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({
         type: "setup-step",
@@ -1335,9 +1230,9 @@ describe("App", () => {
           error: "Invalid API key",
         },
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("✕ ");
       expect(frame).toContain("Invalid API key");
     });
@@ -1345,19 +1240,10 @@ describe("App", () => {
     test("confirm-remove: 'y' confirms via onSetupRemove, anything else cancels back via onSetupBack", async () => {
       const removed: ModelProvider[] = [];
       const backCalls: number[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onSetupRemove={(provider) => removed.push(provider)}
-          onSetupBack={() => backCalls.push(backCalls.length)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (provider) => removed.push(provider),
+        onSetupBack: () => backCalls.push(backCalls.length),
+      });
 
       dispatch({
         type: "setup-step",
@@ -1367,10 +1253,10 @@ describe("App", () => {
           keyName: "OPENROUTER_API_KEY",
         },
       });
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("! Remove OPENROUTER_API_KEY");
-      instance.stdin.write("n");
-      await flush();
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("! Remove OPENROUTER_API_KEY");
+      setup.mockInput.pressKey("n");
+      await flush(setup);
 
       expect(removed).toEqual([]);
       expect(backCalls).toEqual([0]);
@@ -1383,33 +1269,25 @@ describe("App", () => {
           keyName: "OPENROUTER_API_KEY",
         },
       });
-      await flush();
-      instance.stdin.write("y");
-      await flush();
+      await flush(setup);
+      setup.mockInput.pressKey("y");
+      await flush(setup);
 
       expect(removed).toEqual(["openrouter"]);
     });
 
-    // ConfirmPrompt's own guards (components.tsx): `key.ctrl || key.meta` and `input.length === 0`
-    // ahead of the "y" check are what makes a navigation key a no-op here rather than falling
-    // through to the unrecognised-cancels branch and silently backing out of a destructive prompt
-    // — the same class of bug ApprovalBox's own arrow/backspace test above exists for.
+    // ConfirmPrompt's own guards (ui/ConfirmPrompt.tsx): `key.ctrl || key.meta` and
+    // `key.name.length !== 1` ahead of the "y" check are what makes a navigation key a no-op here
+    // rather than falling through to the unrecognised-cancels branch and silently backing out of a
+    // destructive prompt — the same class of bug ApprovalBox's own arrow/backspace test above
+    // exists for.
     test("confirm-remove: an arrow key is a no-op, not an implicit cancel", async () => {
       const removed: ModelProvider[] = [];
       const backCalls: number[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onSetupRemove={(provider) => removed.push(provider)}
-          onSetupBack={() => backCalls.push(backCalls.length)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (provider) => removed.push(provider),
+        onSetupBack: () => backCalls.push(backCalls.length),
+      });
 
       dispatch({
         type: "setup-step",
@@ -1419,27 +1297,27 @@ describe("App", () => {
           keyName: "OPENROUTER_API_KEY",
         },
       });
-      await flush();
+      await flush(setup);
 
-      instance.stdin.write("\x1b[A"); // up arrow
-      await flush();
+      setup.mockInput.pressArrow("up");
+      await flush(setup);
       expect(removed).toEqual([]);
       expect(backCalls).toEqual([]);
 
       // Still live, not silently cancelled: an actual "y" still confirms.
-      instance.stdin.write("y");
-      await flush();
+      setup.mockInput.pressKey("y");
+      await flush(setup);
       expect(removed).toEqual(["openrouter"]);
     });
 
-    // Render precedence (App.tsx's own render ternary): pendingApproval beats pendingModelPicker
+    // Render precedence (app.tsx's own render ternary): pendingApproval beats pendingModelPicker
     // beats pendingSetup beats InputBox.
     test("pendingApproval takes precedence over pendingSetup, which takes precedence over InputBox", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "setup-requested", rows: setupRows() });
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("/setup — provider API keys");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("/setup — provider API keys");
 
       dispatch({
         type: "approval-requested",
@@ -1447,9 +1325,9 @@ describe("App", () => {
         args: {},
         offersAlways: true,
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("Approve write_file");
       expect(frame).not.toContain("/setup — provider API keys");
     });
@@ -1642,9 +1520,9 @@ describe("App", () => {
   });
 
   // D2-D5 (feature-plan.md): the mode-indicator row's own content, factored out as the pure
-  // `formatModeLabel` (App's own comment explains why: unit-testable without mounting Ink, same
-  // reasoning formatModelRow's own extraction already used). `route` can be undefined
-  // (runGuidedSetup, cli.ts, mounts App before any provider key exists) — covered below.
+  // `formatModeLabel` (app.tsx's own comment explains why: unit-testable without mounting the
+  // renderer, same reasoning formatModelRow's own extraction already used). `route` can be
+  // undefined (runGuidedSetup, cli.ts, mounts App before any provider key exists) — covered below.
   describe("formatModeLabel", () => {
     const nonRerouted = route();
     const rerouted = route({ provider: "openrouter", rerouted: true, reason: "ANTHROPIC_API_KEY" });
@@ -1798,7 +1676,7 @@ describe("App", () => {
       ]);
     });
 
-    // `pendingRows` (the in-progress streamed answer, App.tsx's own `state.streaming`, wrapped via
+    // `pendingRows` (the in-progress streamed answer, app.tsx's own `state.streaming`, wrapped via
     // `wrapPendingRows`) is wrapped through the exact same `displayText` path as a committed entry —
     // its own returned rows must come back tagged role: "assistant", marker included, same as a
     // committed assistant entry.
@@ -1810,7 +1688,7 @@ describe("App", () => {
 
     // `wrapPendingRows` used to run inline inside `visibleTranscript` on
     // every call, re-wrapping the raw `state.streaming` string from scratch — it is now memoized by
-    // App.tsx and passed in pre-wrapped. This pins that the extraction produced byte-identical rows
+    // app.tsx and passed in pre-wrapped. This pins that the extraction produced byte-identical rows
     // to the old inline wrapping for a representative multi-line streamed answer, not just a
     // one-line one.
     test("wrapPendingRows produces the same rows the old inline wrapping inside visibleTranscript used to", () => {
@@ -1859,11 +1737,7 @@ describe("App", () => {
   });
 
   describe("listWindowSize", () => {
-    // listWindowSize is a pure function of `rows`, tested here at hand-picked inputs — it does NOT
-    // describe what `rows` ink-testing-library's own Stdout stub resolves to. That stub exposes no
-    // `rows` getter at all, so `useWindowSize().rows` falls through to the HOST terminal's real
-    // height rather than any fixed value; tests that depend on an exact window size pin
-    // `instance.stdout.rows` explicitly instead of relying on a stub default.
+    // listWindowSize is a pure function of `rows`, tested here at hand-picked inputs.
     test("a tall terminal clamps to LIST_WINDOW_MAX (10)", () => {
       expect(listWindowSize(24)).toBe(10);
     });
@@ -1879,26 +1753,22 @@ describe("App", () => {
   });
 
   describe("persistent mode+route indicator (mounted)", () => {
-    // useTerminalWidth's own live-resize wiring — formatModeLabel's tests above already cover the
-    // tier DECISION logic as a pure function, so this is the one Ink-level smoke test needed to
-    // confirm a real stdout `resize` event actually reaches the rendered row end-to-end.
+    // useTerminalDimensions' own live-resize wiring — formatModeLabel's tests above already cover
+    // the tier DECISION logic as a pure function, so this is the one mounted-level smoke test
+    // needed to confirm a real resize actually reaches the rendered row end-to-end.
     test("renders the model+route label at the default width, and drops it after a resize below the compact tier", async () => {
-      const instance = render(<App session={session()} route={route()} done={false} />);
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("your key");
+      const { setup } = await connect();
+      expect(setup.captureCharFrame()).toContain("your key");
 
-      Object.defineProperty(instance.stdout, "columns", { value: 40, configurable: true });
-      instance.stdout.emit("resize");
-      await flush();
+      await resize(setup, 40, DEFAULT_HEIGHT);
 
-      expect(instance.lastFrame() ?? "").not.toContain("claude-sonnet-5");
+      expect(setup.captureCharFrame()).not.toContain("claude-sonnet-5");
     });
 
     // runGuidedSetup's own mount shape (cli.ts): no PreparedRun exists yet, so route is undefined.
     test("mounts with route undefined and shows no fabricated route text", async () => {
-      const instance = render(<App session={session()} route={undefined} done={false} />);
-      await flush();
-      const frame = instance.lastFrame() ?? "";
+      const { setup } = await connect({ route: undefined });
+      const frame = setup.captureCharFrame();
       expect(frame).not.toContain("your key");
       expect(frame).not.toContain("→");
     });
@@ -1909,16 +1779,16 @@ describe("App", () => {
     // the reducer action that closes this: dispatching it must move the rendered label without
     // remounting <App>.
     test("status bar reflects a route-updated dispatch without remounting", async () => {
-      const { instance, dispatch } = await connect();
-      expect(instance.lastFrame() ?? "").toContain("claude-sonnet-5");
+      const { setup, dispatch } = await connect();
+      expect(setup.captureCharFrame()).toContain("claude-sonnet-5");
 
       dispatch({
         type: "route-updated",
         route: route({ model: "gpt-4o", provider: "openai" }),
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("gpt-4o");
       expect(frame).not.toContain("claude-sonnet-5");
     });
@@ -1928,16 +1798,16 @@ describe("App", () => {
     // on the OLD model until the next turn's `route-updated` dispatch (cli.ts's runTurn). A picked
     // model should be reflected the moment it's picked, not one turn later.
     test("status bar updates immediately from a /model pick, before any turn re-resolves the route", async () => {
-      const { instance, dispatch } = await connect();
-      expect(instance.lastFrame() ?? "").toContain("claude-sonnet-5");
+      const { setup, dispatch } = await connect();
+      expect(setup.captureCharFrame()).toContain("claude-sonnet-5");
 
       dispatch({
         type: "model-picker-resolved",
         pick: { model: "gpt-4o", provider: "openai", keyConfigured: true },
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("gpt-4o");
       expect(frame).not.toContain("claude-sonnet-5");
     });
@@ -1949,17 +1819,17 @@ describe("App", () => {
     // exactly what formatModeLabel's own comment says to avoid. The bar should stay on the OLD
     // route rather than assert a wrong one.
     test("a /model pick with no configured key leaves the status bar on the old route, not a fabricated one", async () => {
-      const { instance, dispatch } = await connect();
-      expect(instance.lastFrame() ?? "").toContain("claude-sonnet-5");
-      expect(instance.lastFrame() ?? "").toContain("your key");
+      const { setup, dispatch } = await connect();
+      expect(setup.captureCharFrame()).toContain("claude-sonnet-5");
+      expect(setup.captureCharFrame()).toContain("your key");
 
       dispatch({
         type: "model-picker-resolved",
         pick: { model: "some-unconfigured-model", provider: "openrouter", keyConfigured: false },
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("claude-sonnet-5");
       expect(frame).not.toContain("some-unconfigured-model");
     });
@@ -1972,77 +1842,67 @@ describe("App", () => {
   describe("auth banner", () => {
     test("show: true renders the offer alongside InputBox, not in place of it", async () => {
       const submitted: string[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onSubmit={(v) => submitted.push(v)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({ onSubmit: (v) => submitted.push(v) });
 
       dispatch({ type: "auth-offer", show: true });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("/login");
       expect(frame).toContain("/signup");
       // Non-blocking proof: InputBox is still mounted (not replaced) — typing still reaches
       // onSubmit, exactly as it would with the banner absent.
-      instance.stdin.write("still typing\r");
-      await flush();
+      await setup.mockInput.typeText("still typing");
+      setup.mockInput.pressEnter();
+      await flush(setup);
       expect(submitted).toEqual(["still typing"]);
     });
 
     test("show: false renders nothing extra", async () => {
-      const { instance, dispatch } = await connect();
-      const before = instance.lastFrame() ?? "";
+      const { setup, dispatch } = await connect();
+      const before = setup.captureCharFrame();
 
       dispatch({ type: "auth-offer", show: false });
-      await flush();
+      await flush(setup);
 
-      expect(instance.lastFrame() ?? "").toBe(before);
+      expect(setup.captureCharFrame()).toBe(before);
     });
 
-    // Stage C: the banner sits ABOVE the render ternary (App.tsx's own comment) rather than as one
+    // Stage C: the banner sits ABOVE the render ternary (app.tsx's own comment) rather than as one
     // of its branches — the zeroKeys x noAuth "both at once" cell, component level: a first run
     // with no provider key opens /setup's own panel, and the banner must still render alongside it
     // rather than being replaced the way ApprovalBox/ModelPicker/SetupPanel replace each other.
     test("renders alongside a pendingSetup panel, not replaced by it", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-offer", show: true });
       dispatch({ type: "setup-requested", rows: [] });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("/login");
       expect(frame).toContain("/setup — provider API keys");
     });
 
     // Bug fix (thermo-nuclear + code-review, round 4 — the root-cause fix): three earlier rounds
     // all patched a new place that forgot to dispatch `auth-offer: false` the moment a login
-    // attempt opened; the actual fix is deriving the banner from `pendingAuth` (App.tsx's own
+    // attempt opened; the actual fix is deriving the banner from `pendingAuth` (app.tsx's own
     // `state.authOffer && state.pendingAuth === undefined`) instead of commanding it. This test
     // dispatches ONLY `auth-requested` — no manual `auth-offer` dispatch at all, unlike the old
     // version of this test — and the banner still hides, because `authOffer` itself is
     // deliberately left `true` here: the derivation is what's doing the work, not a stale flag
     // that happens to already be false.
     test("hides while AuthPanel is showing, purely from pendingAuth being set — authOffer itself stays true", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-offer", show: true });
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("/login");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("/login");
 
       dispatch({ type: "auth-requested", mode: "login" });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("Starting login");
       expect(frame).not.toContain("Sign in with /login, or create an account with /signup");
     });
@@ -2050,23 +1910,23 @@ describe("App", () => {
     // Bug fix (this same round): the derivation above only covers "hide while the panel is open"
     // — the instant a successful login's own `auth-resolved` clears `pendingAuth` again, the
     // derivation reduces to bare `authOffer`, which was never updated to reflect the session that
-    // just got saved. createAuthHandlers.onLogin's own success path (tui/handlers.ts) recomputes
-    // it fresh right after, exactly like onLogout's `show: true` and the mount/onAuthResolved
-    // recomputes already do for their own real state changes — this reproduces that exact three-dispatch
-    // sequence and checks the banner does NOT flash back on.
+    // just got saved. createAuthHandlers.onLogin's own success path (tui/state/handlers.ts)
+    // recomputes it fresh right after, exactly like onLogout's `show: true` and the mount/
+    // onAuthResolved recomputes already do for their own real state changes — this reproduces that
+    // exact three-dispatch sequence and checks the banner does NOT flash back on.
     test("stays hidden after a successful login, not just while the panel is open", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-offer", show: true });
       dispatch({ type: "auth-requested", mode: "login" });
-      await flush();
+      await flush(setup);
 
       dispatch({ type: "transcript-append", line: "Logged in as a@example.com" });
       dispatch({ type: "auth-resolved" });
       dispatch({ type: "auth-offer", show: false });
-      await flush();
+      await flush(setup);
 
-      expect(instance.lastFrame() ?? "").not.toContain(
+      expect(setup.captureCharFrame()).not.toContain(
         "Sign in with /login, or create an account with /signup",
       );
     });
@@ -2074,19 +1934,19 @@ describe("App", () => {
 
   describe("auth panel", () => {
     test("starting step shows a brief starting message for the given mode", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-requested", mode: "signup" });
-      await flush();
+      await flush(setup);
 
-      expect(instance.lastFrame() ?? "").toContain("signup");
+      expect(setup.captureCharFrame()).toContain("signup");
     });
 
     test("device step shows the verification URL and user code", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-requested", mode: "login" });
-      await flush();
+      await flush(setup);
       dispatch({
         type: "auth-step",
         state: {
@@ -2096,189 +1956,152 @@ describe("App", () => {
           userCode: "ABCD-1234",
         },
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("https://example.com/device");
       expect(frame).toContain("ABCD-1234");
     });
 
-    // Color (theme.error) is not asserted: ink-testing-library's lastFrame() in this test
-    // environment carries no ANSI codes (measured against a plain <Text color="red">) — the same
-    // reason no other test in this file asserts on a theme color, only on rendered text.
+    // Color (theme.error) is not asserted: `captureCharFrame()` returns plain characters with no
+    // color/attribute info — the same reason no other test in this file asserts on a theme color,
+    // only on rendered text.
     test("result step shows the message, for both a success and an error result", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-requested", mode: "login" });
-      await flush();
+      await flush(setup);
       dispatch({
         type: "auth-step",
         state: { step: "result", message: "Signed in as a@example.com", error: false },
       });
-      await flush();
-      let frame = instance.lastFrame() ?? "";
+      await flush(setup);
+      let frame = setup.captureCharFrame();
       expect(frame).toContain("Signed in as a@example.com");
       // Its own negative control: the success result must NOT carry the error mark.
       expect(frame).not.toContain("✕ ");
 
       dispatch({ type: "auth-requested", mode: "login" });
-      await flush();
+      await flush(setup);
       dispatch({
         type: "auth-step",
         state: { step: "result", message: "Login failed: expired code", error: true },
       });
-      await flush();
-      frame = instance.lastFrame() ?? "";
+      await flush(setup);
+      frame = setup.captureCharFrame();
       expect(frame).toContain("Login failed: expired code");
       expect(frame).toContain("✕ ");
     });
 
-    // auth-resolved is the reducer action createAuthHandlers' own onLogin/onLogout (tui/handlers.ts)
-    // fire once a device-flow result lands — proves the panel's own text (including the result step's
-    // message, the closest thing this panel has to hint text) is fully gone afterward, not just
-    // that SOME frame changed, and that InputBox is genuinely back (accepts input), not merely
-    // that nothing matched the render ternary's earlier branches.
+    // auth-resolved is the reducer action createAuthHandlers' own onLogin/onLogout
+    // (tui/state/handlers.ts) fire once a device-flow result lands — proves the panel's own text
+    // (including the result step's message, the closest thing this panel has to hint text) is
+    // fully gone afterward, not just that SOME frame changed, and that InputBox is genuinely back
+    // (accepts input), not merely that nothing matched the render ternary's earlier branches.
     test("clears the panel entirely, restoring InputBox", async () => {
       const submitted: string[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onSubmit={(v) => submitted.push(v)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({ onSubmit: (v) => submitted.push(v) });
 
       dispatch({ type: "auth-requested", mode: "login" });
-      await flush();
+      await flush(setup);
       dispatch({
         type: "auth-step",
         state: { step: "result", message: "Signed in as a@example.com", error: false },
       });
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("Signed in as a@example.com");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("Signed in as a@example.com");
 
       dispatch({ type: "auth-resolved" });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).not.toContain("Signed in as a@example.com");
-      // A second flush: InputBox is a fresh mount here (swapped in for AuthPanel), and its own
-      // useInput needs an extra tick to register — the same mount-timing gap PermissionsPanel's
-      // own confirm-remove test above already needed for an identical component swap.
-      await flush();
-      instance.stdin.write("back to typing\r");
-      await flush();
+      await setup.mockInput.typeText("back to typing");
+      setup.mockInput.pressEnter();
+      await flush(setup);
       expect(submitted).toEqual(["back to typing"]);
     });
 
-    // Bug fix (coordinator follow-up on Stage C): before AuthPanel's own useInput existed, a
-    // failed login/signup (createAuthHandlers' own catch, tui/handlers.ts — a denied/expired code, a
-    // network error) left the "result" step up with no keyboard path back at all, not even
+    // Bug fix (coordinator follow-up on Stage C): before AuthPanel's own useKeyboard existed, a
+    // failed login/signup (createAuthHandlers' own catch, tui/state/handlers.ts — a denied/expired
+    // code, a network error) left the "result" step up with no keyboard path back at all, not even
     // Ctrl-C. Presses a REAL key (not a direct auth-resolved dispatch, which "clears the panel
     // entirely" above already covers) to prove AuthPanel's own Enter/Esc handling is actually
-    // wired through App.tsx's onAuthResolved prop — the same wiring-proof shape ConfigPanel's own
+    // wired through app.tsx's onAuthResolved prop — the same wiring-proof shape ConfigPanel's own
     // "Esc on the list step calls onConfigClose" test uses.
     test("Enter on the result step calls onAuthResolved and returns to InputBox", async () => {
       const resolved: number[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onAuthResolved={() => resolved.push(resolved.length)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onAuthResolved: () => resolved.push(resolved.length),
+      });
 
       dispatch({ type: "auth-requested", mode: "login" });
-      await flush();
+      await flush(setup);
       dispatch({
         type: "auth-step",
         state: { step: "result", message: "Authorization was denied.", error: true },
       });
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("Authorization was denied.");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("Authorization was denied.");
 
-      instance.stdin.write("\r");
-      await flush();
+      setup.mockInput.pressEnter();
+      await flush(setup);
 
       expect(resolved).toEqual([0]);
     });
 
-    // Escape on the result step: AuthPanel's own explicit key.escape check, not something it gets
-    // from ConfirmPrompt — that component never inspects key.escape and treats a bare Escape as
-    // an inert stray keypress there, not a cancel.
+    // Escape on the result step: AuthPanel's own explicit key.name === "escape" check, not
+    // something it gets from ConfirmPrompt — that component never inspects Escape and treats a
+    // bare Escape as an inert stray keypress there, not a cancel.
     test("Escape on the result step also calls onAuthResolved", async () => {
       const resolved: number[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onAuthResolved={() => resolved.push(resolved.length)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onAuthResolved: () => resolved.push(resolved.length),
+      });
 
       dispatch({ type: "auth-requested", mode: "login" });
-      await flush();
+      await flush(setup);
       dispatch({
         type: "auth-step",
         state: { step: "result", message: "The login request expired.", error: true },
       });
-      await flush();
+      await flush(setup);
 
-      instance.stdin.write("\x1b"); // Escape
-      // A bare Escape byte is ambiguous with the start of a longer ANSI sequence — Ink's own
-      // input parser holds it for a short window before treating it as standalone (ConfigPanel's
-      // own Escape test below needs the same wait for the same reason).
+      setup.mockInput.pressEscape();
+      // A bare Escape byte is ambiguous with the start of a longer ANSI sequence — OpenTUI's own
+      // parser holds it for a short disambiguation window before treating it as standalone
+      // (ConfigPanel's own Escape test below needs the same wait for the same reason).
       await new Promise((resolve) => setTimeout(resolve, 30));
+      await flush(setup);
 
       expect(resolved).toEqual([0]);
     });
 
     // The real soft-lock this fix closes (thermo-nuclear + code-review, round 4): before this,
-    // NOTHING dismissed "starting"/"device" — no useInput handling on either step, and Ctrl-C
+    // NOTHING dismissed "starting"/"device" — no keyboard handling on either step, and Ctrl-C
     // routes to onCancel (a hard process kill with no turn in flight to arm the cancel slot), not
     // to clearing pendingAuth. A mistyped /login or a slow WorkOS device flow used to cost the
     // whole TUI session.
     test("Escape on the device step also calls onAuthResolved and returns to InputBox", async () => {
       const resolved: number[] = [];
       const submitted: string[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          // Unlike the two result-step tests above (which only prove the prop fires), this one
-          // also dispatches auth-resolved itself — cli.ts's own onAuthResolved wiring does the
-          // same (its own comment) — so the frame assertions below observe the real end-to-end
-          // effect, not just that the callback ran.
-          onAuthResolved={() => {
-            resolved.push(resolved.length);
-            dispatch?.({ type: "auth-resolved" });
-          }}
-          onSubmit={(v) => submitted.push(v)}
-          done={false}
-        />,
-      );
-      await flush();
+      let dispatch: Dispatch | undefined;
+      const { setup } = await connect({
+        connectDispatch: (d) => (dispatch = d),
+        // Unlike the two result-step tests above (which only prove the prop fires), this one
+        // also dispatches auth-resolved itself — cli.ts's own onAuthResolved wiring does the
+        // same (its own comment) — so the frame assertions below observe the real end-to-end
+        // effect, not just that the callback ran.
+        onAuthResolved: () => {
+          resolved.push(resolved.length);
+          dispatch?.({ type: "auth-resolved" });
+        },
+        onSubmit: (v) => submitted.push(v),
+      });
       if (dispatch === undefined) throw new Error("connectDispatch never fired");
 
       dispatch({ type: "auth-requested", mode: "login" });
-      await flush();
+      await flush(setup);
       dispatch({
         type: "auth-step",
         state: {
@@ -2288,21 +2111,19 @@ describe("App", () => {
           userCode: "ABCD-1234",
         },
       });
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("ABCD-1234");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("ABCD-1234");
 
-      instance.stdin.write("\x1b"); // Escape
+      setup.mockInput.pressEscape();
       await new Promise((resolve) => setTimeout(resolve, 30));
+      await flush(setup);
 
       expect(resolved).toEqual([0]);
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).not.toContain("ABCD-1234");
-      // A second flush: InputBox is a fresh mount here (swapped in for AuthPanel), and its own
-      // useInput needs an extra tick to register — the same mount-timing gap this describe
-      // block's own "clears the panel entirely" test above already needed for an identical swap.
-      await flush();
-      instance.stdin.write("back to typing\r");
-      await flush();
+      await setup.mockInput.typeText("back to typing");
+      setup.mockInput.pressEnter();
+      await flush(setup);
       expect(submitted).toEqual(["back to typing"]);
     });
   });
@@ -2329,12 +2150,12 @@ describe("App", () => {
     }
 
     test("the list step shows each row's label and masked value", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "config-requested", rows: configRows() });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("Automatic verification: on");
       expect(frame).not.toContain("SERI_VERIFY_ENABLED");
       expect(frame).toContain("SERI_SOME_OTHER_KEY");
@@ -2342,19 +2163,19 @@ describe("App", () => {
     });
 
     test("the selected row's description renders, and moving Down swaps it for the next row's", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "config-requested", rows: configRows() });
-      await flush();
+      await flush(setup);
 
-      expect(instance.lastFrame() ?? "").toContain(
+      expect(setup.captureCharFrame()).toContain(
         "Run the verify command after each file edit and show failures to the model.",
       );
 
-      instance.stdin.write("\x1b[B"); // Down
-      await flush();
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).not.toContain(
         "Run the verify command after each file edit and show failures to the model.",
       );
@@ -2365,7 +2186,7 @@ describe("App", () => {
     // on the upArrow branch's `current.selected - 1`) is otherwise entirely uncovered by this
     // suite.
     test("Up moves the selection back, and clamps at the top without wrapping or going negative", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       const rows = Array.from({ length: 3 }, (_, i) => ({
         key: `FAKE_KEY_${i}`,
@@ -2375,58 +2196,49 @@ describe("App", () => {
         kind: "string" as const,
       }));
       dispatch({ type: "config-requested", rows });
-      await flush();
+      await flush(setup);
 
-      instance.stdin.write("\x1b[B"); // Down
-      await flush();
-      instance.stdin.write("\x1b[B"); // Down
-      await flush();
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
 
-      instance.stdin.write("\x1b[A"); // Up
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_1");
+      setup.mockInput.pressArrow("up");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("> FAKE_KEY_1");
 
-      instance.stdin.write("\x1b[A"); // Up
-      await flush();
-      instance.stdin.write("\x1b[A"); // Up — already at the top, must not wrap or go negative
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_0");
+      setup.mockInput.pressArrow("up");
+      await flush(setup);
+      setup.mockInput.pressArrow("up"); // already at the top, must not wrap or go negative
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("> FAKE_KEY_0");
     });
 
     test("the hint reads 'Enter/a toggle' on the boolean row and 'Enter/a set' after moving to a string row", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "config-requested", rows: configRows() });
-      await flush();
+      await flush(setup);
 
-      expect(instance.lastFrame() ?? "").toContain("Enter/a toggle");
+      expect(setup.captureCharFrame()).toContain("Enter/a toggle");
 
-      instance.stdin.write("\x1b[B"); // Down
-      await flush();
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
 
-      expect(instance.lastFrame() ?? "").toContain("Enter/a set");
+      expect(setup.captureCharFrame()).toContain("Enter/a set");
     });
 
     test("Enter on the boolean row calls onConfigSelect with its key", async () => {
       const selected: string[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onConfigSelect={(key) => selected.push(key)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onConfigSelect: (key) => selected.push(key),
+      });
 
       dispatch({ type: "config-requested", rows: configRows() });
-      await flush();
+      await flush(setup);
 
-      instance.stdin.write("\r"); // Enter
-      await flush();
+      setup.mockInput.pressEnter();
+      await flush(setup);
 
       expect(selected).toEqual(["SERI_VERIFY_ENABLED"]);
     });
@@ -2435,7 +2247,7 @@ describe("App", () => {
     // never appear in the frame, on the list step (only the already-masked value is shown) or the
     // enter-value step (typed characters render as "*").
     test("a raw secret-shaped value never appears in the frame", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({
         type: "config-requested",
@@ -2449,28 +2261,27 @@ describe("App", () => {
           },
         ],
       });
-      await flush();
+      await flush(setup);
 
-      expect(instance.lastFrame() ?? "").not.toContain("sk-distinctive-secret-12345");
+      expect(setup.captureCharFrame()).not.toContain("sk-distinctive-secret-12345");
 
       dispatch({
         type: "config-step",
         state: { step: "enter-value", key: "SERI_SOME_OTHER_KEY", busy: false },
       });
-      await flush();
-      await flush();
+      await flush(setup);
 
       const secret = "sk-distinctive-secret-12345";
-      instance.stdin.write(secret);
-      await flush();
+      await setup.mockInput.typeText(secret);
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).not.toContain(secret);
       expect(frame).toContain("*".repeat(secret.length));
     });
 
     test("an enter-value error renders with the error mark", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({
         type: "config-step",
@@ -2481,40 +2292,29 @@ describe("App", () => {
           error: "Invalid value",
         },
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("✕ ");
       expect(frame).toContain("Invalid value");
     });
 
     // Review round 3 finding (MEDIUM-1's own test coverage gap): onConfigClose is an optional
-    // AppProps handler with nothing that goes red if App.tsx's own render call stopped passing it
+    // AppProps handler with nothing that goes red if app.tsx's own render call stopped passing it
     // through to ConfigPanel — this proves the wiring, not just that ConfigList's own Esc handling
     // works (that's this component's own concern, already implicit in it having a prop at all).
     test("Esc on the list step calls onConfigClose", async () => {
       const closed: number[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onConfigClose={() => closed.push(closed.length)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onConfigClose: () => closed.push(closed.length),
+      });
 
       dispatch({ type: "config-requested", rows: configRows() });
-      await flush();
+      await flush(setup);
 
-      instance.stdin.write("\x1b"); // Escape
-      // A bare Escape byte is ambiguous with the start of a longer ANSI sequence — Ink's own
-      // input parser holds it for a short window before treating it as standalone (the model
-      // picker's own Escape test above needs the same wait for the same reason).
+      setup.mockInput.pressEscape();
       await new Promise((resolve) => setTimeout(resolve, 30));
+      await flush(setup);
 
       expect(closed).toEqual([0]);
     });
@@ -2525,34 +2325,25 @@ describe("App", () => {
     test("confirm-unset: '[y]es / [N]o' renders; Enter and an unrecognised key both cancel, 'y' confirms", async () => {
       const unset: string[] = [];
       const backCalls: number[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onConfigUnset={(key) => unset.push(key)}
-          onConfigBack={() => backCalls.push(backCalls.length)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onConfigUnset: (key) => unset.push(key),
+        onConfigBack: () => backCalls.push(backCalls.length),
+      });
 
       dispatch({
         type: "config-step",
         state: { step: "confirm-unset", key: "SERI_VERIFY_COMMAND" },
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("[y]es");
       expect(frame).toContain("[N]o");
       expect(frame).toContain("Verify command (SERI_VERIFY_COMMAND)");
       expect(frame).toContain("! Unset");
 
-      instance.stdin.write("z"); // unrecognised key
-      await flush();
+      setup.mockInput.pressKey("z"); // unrecognised key
+      await flush(setup);
       expect(unset).toEqual([]);
       expect(backCalls).toEqual([0]);
 
@@ -2560,9 +2351,9 @@ describe("App", () => {
         type: "config-step",
         state: { step: "confirm-unset", key: "SERI_VERIFY_COMMAND" },
       });
-      await flush();
-      instance.stdin.write("\r"); // Enter
-      await flush();
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
       expect(unset).toEqual([]);
       expect(backCalls).toEqual([0, 1]);
 
@@ -2570,32 +2361,32 @@ describe("App", () => {
         type: "config-step",
         state: { step: "confirm-unset", key: "SERI_VERIFY_COMMAND" },
       });
-      await flush();
-      instance.stdin.write("y");
-      await flush();
+      await flush(setup);
+      setup.mockInput.pressKey("y");
+      await flush(setup);
 
       expect(unset).toEqual(["SERI_VERIFY_COMMAND"]);
     });
 
-    // configKeyInfo's fallback (tui/commands.ts): a key with no CONFIG_KEY_INFO entry shows its
+    // configKeyInfo's fallback (state/commands.ts): a key with no CONFIG_KEY_INFO entry shows its
     // raw name as the label, since there is no human name for it — the confirm-unset prompt above
     // only ever exercises a known key, which alone doesn't cover this path.
     test("confirm-unset on an unrecognised key shows the raw key as its own label", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({
         type: "config-step",
         state: { step: "confirm-unset", key: "SERI_SOME_OTHER_KEY" },
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("Unset SERI_SOME_OTHER_KEY (SERI_SOME_OTHER_KEY)");
     });
 
     // Same regression guard as the permissions panel's own truncation test below.
     test("a row count past the window budget truncates and shows a +N more footer", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({
         type: "config-requested",
@@ -2607,9 +2398,9 @@ describe("App", () => {
           kind: "string" as const,
         })),
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("FAKE_KEY_0");
       expect(frame).not.toContain("FAKE_KEY_14");
       expect(frame).toMatch(/\+\d+ more/);
@@ -2621,7 +2412,7 @@ describe("App", () => {
     // window, until the next arrow key. useListWindow now seeds its offset from the initial
     // selection via the same slideWindow rule an arrow press already uses.
     test("re-mounting with a non-zero seeded selection keeps that row's own marker in view", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       const rows = Array.from({ length: 15 }, (_, i) => ({
         key: `FAKE_KEY_${i}`,
@@ -2631,9 +2422,9 @@ describe("App", () => {
         kind: "string" as const,
       }));
       dispatch({ type: "config-step", state: { step: "list", rows, selected: 12 } });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("> FAKE_KEY_12");
     });
 
@@ -2642,14 +2433,7 @@ describe("App", () => {
     // window is full — the footer never counted down while scrolling toward the bottom, and never
     // reached 0 even once every remaining row was on screen.
     test("the +N more footer count decreases while scrolling down, reaching 0 at the bottom", async () => {
-      const { instance, dispatch } = await connect();
-      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so this doesn't
-      // depend on the host terminal's real height (App.test.tsx's own listWindowSize describe).
-      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
-      // plain assignment, not overriding one.
-      instance.stdout.rows = 30;
-      instance.stdout.emit("resize");
-      await flush();
+      const { setup, dispatch } = await connect();
 
       const rows = Array.from({ length: 15 }, (_, i) => ({
         key: `FAKE_KEY_${i}`,
@@ -2659,29 +2443,26 @@ describe("App", () => {
         kind: "string" as const,
       }));
       dispatch({ type: "config-requested", rows });
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("+5 more");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("+5 more");
 
       for (let i = 0; i < 14; i++) {
-        instance.stdin.write("\x1b[B"); // Down
-        await flush();
+        setup.mockInput.pressArrow("down");
+        await flush(setup);
       }
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("> FAKE_KEY_14");
       expect(frame).not.toContain("+0 more");
       expect(frame).not.toMatch(/\+\d+ more/);
     });
 
-    // Regression guard: `windowSize` is recomputed live from useWindowSize().rows on every render,
-    // but `offset` previously only changed via an explicit arrow press (handleArrowKey) — a
-    // terminal resize that shrinks windowSize could leave the currently selected row outside
-    // [offset, offset + windowSize) with no keypress to trigger a recompute. ink-testing-library's
-    // own Stdout stub has no real `rows` getter (only `columns` is fixed), so it can be assigned
-    // directly and a "resize" event emitted to make useWindowSize (both App.tsx's own call and
-    // useListWindow's) pick up the new value, the same mechanism a real terminal resize uses.
+    // Regression guard: `windowSize` is recomputed live from useTerminalDimensions().height on
+    // every render, but `offset` previously only changed via an explicit arrow press
+    // (handleArrowKey) — a terminal resize that shrinks windowSize could leave the currently
+    // selected row outside [offset, offset + windowSize) with no keypress to trigger a recompute.
     test("a windowSize shrink after a selection move keeps the selected row in view without a keypress", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       const rows = Array.from({ length: 15 }, (_, i) => ({
         key: `FAKE_KEY_${i}`,
@@ -2691,24 +2472,20 @@ describe("App", () => {
         kind: "string" as const,
       }));
       dispatch({ type: "config-requested", rows });
-      await flush();
+      await flush(setup);
 
       // Select row 9 — still inside the default (10-row) window, so offset stays 0.
       for (let i = 0; i < 9; i++) {
-        instance.stdin.write("\x1b[B"); // Down
-        await flush();
+        setup.mockInput.pressArrow("down");
+        await flush(setup);
       }
-      expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_9");
+      expect(setup.captureCharFrame()).toContain("> FAKE_KEY_9");
 
-      // Shrink to a 3-row window (listWindowSize(11) = clamp(11 - 8, 3, 10) = 3) — with offset
-      // still 0, row 9 would fall outside [0, 3) unless something re-clamps it.
-      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
-      // plain assignment, not overriding one; that's what makes the fake resize below observable.
-      instance.stdout.rows = 11;
-      instance.stdout.emit("resize");
-      await flush();
+      // Shrink to a 3-row window (listWindowSize(11 - APP_CHROME_ROWS) = 3) — with offset still 0,
+      // row 9 would fall outside [0, 3) unless something re-clamps it.
+      await resize(setup, DEFAULT_WIDTH, 11);
 
-      expect(instance.lastFrame() ?? "").toContain("> FAKE_KEY_9");
+      expect(setup.captureCharFrame()).toContain("> FAKE_KEY_9");
     });
 
     // Regression guard: the resize effect re-slid `offset` via `slideWindow`, but that function
@@ -2718,12 +2495,7 @@ describe("App", () => {
     // shrunk offset, and checks the window actually widens instead of staying stuck at 5 visible
     // rows out of a 10-row budget.
     test("a windowSize grow after a shrink widens the window instead of leaving offset stale", async () => {
-      const { instance, dispatch } = await connect();
-      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
-      // plain assignment, not overriding one.
-      instance.stdout.rows = 30; // windowSize 10
-      instance.stdout.emit("resize");
-      await flush();
+      const { setup, dispatch } = await connect();
 
       const rows = Array.from({ length: 15 }, (_, i) => ({
         key: `FAKE_KEY_${i}`,
@@ -2733,48 +2505,36 @@ describe("App", () => {
         kind: "string" as const,
       }));
       dispatch({ type: "config-requested", rows });
-      await flush();
+      await flush(setup);
 
       // Select row 12 — past the 10-row window, so offset slides to 3.
       for (let i = 0; i < 12; i++) {
-        instance.stdin.write("\x1b[B"); // Down
-        await flush();
+        setup.mockInput.pressArrow("down");
+        await flush(setup);
       }
 
       // Shrink to a 3-row window: offset slides to 10 (selected 12, windowSize 3).
-      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
-      // plain assignment, not overriding one.
-      instance.stdout.rows = 11;
-      instance.stdout.emit("resize");
-      await flush();
+      await resize(setup, DEFAULT_WIDTH, 11);
       // Negative control: at offset 10/windowSize 3, row 5 is well outside the window.
-      expect(instance.lastFrame() ?? "").not.toContain("FAKE_KEY_5");
+      expect(setup.captureCharFrame()).not.toContain("FAKE_KEY_5");
 
       // Grow back to a 10-row window with no keypress. offset 10 is stale — with 15 rows and a
       // 10-row window, the widest valid offset is 5 (rows.slice(5, 15)).
-      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
-      // plain assignment, not overriding one.
-      instance.stdout.rows = 30;
-      instance.stdout.emit("resize");
-      await flush();
+      await resize(setup, DEFAULT_WIDTH, DEFAULT_HEIGHT);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("> FAKE_KEY_12");
       expect(frame).toContain("FAKE_KEY_5");
     });
 
-    // Regression guard: useListWindow's row budget used to reserve only the root Box's own spare
-    // row and the unconditional mode-indicator row (APP_CHROME_ROWS, format.ts) — not commandError
-    // or AuthBanner, both of which can be showing at the same time as a panel. On a 20-row
-    // terminal that overflowed the alt-screen viewport, unrecoverable until the panel closed or the
-    // terminal resized (no scrollback on the alt screen).
+    // Regression guard: useListWindow's row budget used to reserve only the root box's own spare
+    // row and the unconditional mode-indicator row (APP_CHROME_ROWS, util/format.ts) — not
+    // commandError or AuthBanner, both of which can be showing at the same time as a panel. On a
+    // 20-row terminal that overflowed the alt-screen viewport, unrecoverable until the panel closed
+    // or the terminal resized (no scrollback on the alt screen).
     test("a panel opened under an auth banner and a command error still fits the viewport", async () => {
-      const { instance, dispatch } = await connect();
-      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
-      // plain assignment, not overriding one.
-      instance.stdout.rows = 20;
-      instance.stdout.emit("resize");
-      await flush();
+      const { setup, dispatch } = await connect();
+      await resize(setup, DEFAULT_WIDTH, 20);
 
       dispatch({ type: "auth-offer", show: true });
       dispatch({ type: "command-error", message: "boom" });
@@ -2792,14 +2552,13 @@ describe("App", () => {
         })),
       ];
       dispatch({ type: "config-requested", rows });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
-      // Content that doesn't fit the fixed-height root Box (App.tsx's `height={rows - 1}`) doesn't
-      // grow the frame taller — Ink overlaps two rows' worth of text onto one instead. Pre-fix, that
-      // overlap lands on the mode-indicator row (overwritten by the command-error line) and the
-      // panel's own header line vanishes entirely; both must render intact once the reservation
-      // accounts for AuthBanner and commandError.
+      const frame = setup.captureCharFrame();
+      // Content that doesn't fit the fixed-height root box doesn't grow the frame taller — an
+      // under-reserved budget would either overlap two rows' worth of text or clip the panel's own
+      // header line; both must render intact once the reservation accounts for AuthBanner and
+      // commandError.
       expect(frame).toContain("[approve-each]");
       expect(frame).toContain("/config — settings");
       expect(frame).toContain("Esc/Ctrl-D close");
@@ -2808,29 +2567,29 @@ describe("App", () => {
 
   describe("permissions panel", () => {
     test("a removable: false row does not show a remove affordance in the frame", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({
         type: "permissions-requested",
         rows: [{ tool: "read_file", source: "pre-approved", removable: false }],
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("read_file");
       expect(frame).toContain("not removable");
     });
 
     test("a removable: true row shows normally, without the not-removable note", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({
         type: "permissions-requested",
         rows: [{ tool: "write_file", source: "persisted", removable: true }],
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("write_file");
       expect(frame).not.toContain("not removable");
     });
@@ -2844,12 +2603,12 @@ describe("App", () => {
     // only the SECOND row renders at all, marked selected, and the first is missing from the frame
     // entirely; this asserts the first row renders, unmarked-if-second, marked-if-first.
     test("Down on an empty list does not leave the selection negative once rows arrive", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "permissions-requested", rows: [] });
-      await flush();
-      instance.stdin.write("\x1b[B");
-      await flush();
+      await flush(setup);
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
 
       dispatch({
         type: "permissions-requested",
@@ -2858,55 +2617,41 @@ describe("App", () => {
           { tool: "write_file", source: "persisted", removable: true },
         ],
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("> read_file");
       expect(frame).toContain("  write_file");
     });
 
     // Review round 3 finding (MEDIUM-1's own test coverage gap), mirroring SetupPanel's own
-    // confirm-remove test above: proves App.tsx's render call actually threads onPermissionsRemove
-    // through to PermissionsPanel, not just that ConfirmPrompt's own 'y' handling works.
+    // confirm-remove test above: proves app.tsx's render call actually threads
+    // onPermissionsRemove through to PermissionsPanel, not just that ConfirmPrompt's own 'y'
+    // handling works.
     test("confirm-remove: 'y' calls onPermissionsRemove", async () => {
       const removed: string[] = [];
-      let dispatch: ((action: TuiAction) => void) | undefined;
-      const instance = render(
-        <App
-          session={session()}
-          route={route()}
-          connectDispatch={(d) => (dispatch = d)}
-          onPermissionsRemove={(tool) => removed.push(tool)}
-          done={false}
-        />,
-      );
-      await flush();
-      if (dispatch === undefined) throw new Error("connectDispatch never fired");
+      const { setup, dispatch } = await connect({
+        onPermissionsRemove: (tool) => removed.push(tool),
+      });
 
-      // A single dispatch straight to confirm-remove (matching SetupPanel's own confirm-remove
-      // test above), not permissions-requested then permissions-step: the latter swaps
-      // PermissionsList for ConfirmPrompt mid-test, and that component swap's own
-      // useInput needs an extra tick to register (the same mount-timing gap SetupEnterKey's own
-      // key-leak test already needed two flush() calls for).
       dispatch({
         type: "permissions-step",
         state: { step: "confirm-remove", tool: "write_file" },
       });
-      await flush();
+      await flush(setup);
 
-      expect(instance.lastFrame() ?? "").toContain("! Remove write_file");
+      expect(setup.captureCharFrame()).toContain("! Remove write_file");
 
-      instance.stdin.write("y");
-      await flush();
+      setup.mockInput.pressKey("y");
+      await flush(setup);
 
       expect(removed).toEqual(["write_file"]);
     });
 
-    // useListWindow's own window budget (listWindowSize) — 15 rows, more than any real terminal's
-    // clamped window under ink-testing-library (LIST_WINDOW_MAX, format.ts's own comment), so this
-    // must truncate and show the footer.
+    // useListWindow's own window budget (listWindowSize) — 15 rows, more than the default 10-row
+    // window, so this must truncate and show the footer.
     test("a row count past the window budget truncates and shows a +N more footer", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({
         type: "permissions-requested",
@@ -2916,9 +2661,9 @@ describe("App", () => {
           removable: true,
         })),
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("tool_0");
       expect(frame).not.toContain("tool_14");
       expect(frame).toMatch(/\+\d+ more/);
@@ -2929,14 +2674,7 @@ describe("App", () => {
     // window is full — the footer never counted down while scrolling toward the bottom, and never
     // reached 0 even once every remaining row was on screen.
     test("the +N more footer count decreases while scrolling down, reaching 0 at the bottom", async () => {
-      const { instance, dispatch } = await connect();
-      // Pinned well above the APP_CHROME_ROWS/PANEL_CHROME_ROWS floor (rows >= 25) so this doesn't
-      // depend on the host terminal's real height (App.test.tsx's own listWindowSize describe).
-      // @ts-expect-error — ink-testing-library's Stdout stub has no `rows` getter, so this is a
-      // plain assignment, not overriding one.
-      instance.stdout.rows = 30;
-      instance.stdout.emit("resize");
-      await flush();
+      const { setup, dispatch } = await connect();
 
       dispatch({
         type: "permissions-requested",
@@ -2946,31 +2684,31 @@ describe("App", () => {
           removable: true,
         })),
       });
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("+5 more");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("+5 more");
 
       for (let i = 0; i < 14; i++) {
-        instance.stdin.write("\x1b[B"); // Down
-        await flush();
+        setup.mockInput.pressArrow("down");
+        await flush(setup);
       }
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("> tool_14");
       expect(frame).not.toMatch(/\+\d+ more/);
     });
   });
 
-  // Render-ternary precedence (App.tsx's own comment): pendingApproval → pendingModelPicker →
+  // Render-ternary precedence (app.tsx's own comment): pendingApproval → pendingModelPicker →
   // pendingSetup → pendingAuth → pendingConfig → pendingPermissions → InputBox. Each test below
   // seeds one adjacent pair at once and checks the earlier-in-the-chain branch wins, extending the
   // existing pendingSetup-vs-InputBox precedence test above to the three new Stage A branches.
   describe("render precedence: pendingApproval / pendingSetup / pendingAuth / pendingConfig / pendingPermissions", () => {
     test("pendingApproval wins over pendingAuth", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-requested", mode: "login" });
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("Starting login");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("Starting login");
 
       dispatch({
         type: "approval-requested",
@@ -2978,30 +2716,30 @@ describe("App", () => {
         args: {},
         offersAlways: true,
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("Approve write_file");
       expect(frame).not.toContain("Starting login");
     });
 
     test("pendingSetup wins over pendingAuth", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-requested", mode: "login" });
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("Starting login");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("Starting login");
 
       dispatch({ type: "setup-requested", rows: [] });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("/setup — provider API keys");
       expect(frame).not.toContain("Starting login");
     });
 
     test("pendingAuth wins over pendingConfig", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({
         type: "config-requested",
@@ -3015,26 +2753,26 @@ describe("App", () => {
           },
         ],
       });
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("/config — settings");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("/config — settings");
 
       dispatch({ type: "auth-requested", mode: "login" });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("Starting login");
       expect(frame).not.toContain("/config — settings");
     });
 
     test("pendingConfig wins over pendingPermissions", async () => {
-      const { instance, dispatch } = await connect();
+      const { setup, dispatch } = await connect();
 
       dispatch({
         type: "permissions-requested",
         rows: [{ tool: "write_file", source: "persisted", removable: true }],
       });
-      await flush();
-      expect(instance.lastFrame() ?? "").toContain("/permissions — tools approved permanently");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("/permissions — tools approved permanently");
 
       dispatch({
         type: "config-requested",
@@ -3048,9 +2786,9 @@ describe("App", () => {
           },
         ],
       });
-      await flush();
+      await flush(setup);
 
-      const frame = instance.lastFrame() ?? "";
+      const frame = setup.captureCharFrame();
       expect(frame).toContain("/config — settings");
       expect(frame).not.toContain("/permissions — tools approved permanently");
     });

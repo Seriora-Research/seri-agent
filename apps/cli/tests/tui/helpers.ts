@@ -2,7 +2,7 @@
 // inputRenderCost.test.tsx needed near-identical `session`/`route`/`flush`, so a third file
 // (inputThrottle.test.tsx) reusing `flush` doesn't have to re-derive it a third time either.
 
-import { EventEmitter } from "node:events";
+import type { TestRendererSetup } from "@opentui/core/testing";
 import type { ModelMessage } from "ai";
 import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
@@ -32,67 +32,19 @@ export function route(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
   };
 }
 
-// A render/dispatch is not reflected in lastFrame() synchronously — same finding
-// inkInputSpike.test.tsx documents for useInput, just needing a macrotask tick here rather than a
-// microtask (Ink's own frame write is throttled independently of React's own update scheduling).
-export function flush(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-// FakeTty's own fixed column width — matches App.test.tsx's assumption that width doesn't vary
-// across these tests. Named and exported rather than inlined into `FakeTty` below so a caller's
-// own assertions (inputRenderCost.test.tsx's marginal-bytes threshold) can derive from the same
-// value instead of hardcoding a number that would silently drift out of sync with it.
-export const TEST_COLUMNS = 100;
-
-// A fake TTY stdout: fixed `TEST_COLUMNS` columns, a configurable row count, and counters for
-// every byte/call written to it — the thing a real terminal emulator has to parse and repaint.
-// `raw` accumulates the actual written text (not just its length) so a test can assert on the
-// bytes' own content, not only their count.
-export class FakeTty extends EventEmitter {
-  isTTY = true as const;
-  columns = TEST_COLUMNS;
-  rows: number;
-  bytes = 0;
-  writes = 0;
-  raw = "";
-
-  constructor(rows: number) {
-    super();
-    this.rows = rows;
+// @opentui/react's reconciler commits on a macrotask, not a microtask (Phase 1's own empirical
+// finding, verified independently against this exact harness) — a plain render/dispatch needs a
+// real timer tick before `renderOnce()`/`captureCharFrame()` reliably observes the committed
+// result, and a component that just (re)mounted (a panel swap, or the initial mount) needs a
+// SECOND settled pass before its own passive effects (`useKeyboard`/`usePaste`'s `useEffect`)
+// actually subscribe — a single pass left a fresh mount's own keyboard handler unregistered.
+// `flush` runs both passes on every call rather than track "did anything actually (re)mount this
+// tick" per call site: the second pass is a no-op cost (nothing new to subscribe) when nothing did,
+// and every call site in this suite dispatches into a tree that may or may not have just swapped a
+// panel, so a caller can't cheaply know in advance which case it is.
+export async function flush(setup: TestRendererSetup): Promise<void> {
+  for (let i = 0; i < 2; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await setup.renderOnce();
   }
-
-  write = (chunk: string): boolean => {
-    this.bytes += chunk.length;
-    this.writes += 1;
-    this.raw += chunk;
-    return true;
-  };
-}
-
-// Copied from ink-testing-library's own Stdin (build/index.js) — the no-op raw-mode plumbing Ink
-// expects from a real stdin, plus a synchronous write() that fires 'data' the way a real tty's
-// keystrokes arrive.
-export class FakeStdin extends EventEmitter {
-  isTTY = true;
-  data: string | null = null;
-
-  write = (data: string): void => {
-    this.data = data;
-    this.emit("readable");
-    this.emit("data", data);
-  };
-
-  setEncoding(): void {}
-  setRawMode(): void {}
-  resume(): void {}
-  pause(): void {}
-  ref(): void {}
-  unref(): void {}
-
-  read = (): string | null => {
-    const { data } = this;
-    this.data = null;
-    return data;
-  };
 }
