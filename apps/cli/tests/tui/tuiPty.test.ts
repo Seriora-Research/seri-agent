@@ -1463,11 +1463,23 @@ function childScriptClear(dir: string): string {
 // (observeArchivistEvent's own per-event increment, archivist.ts) — one short of the interval, so
 // the archivist stays silent — and turn 2 emits exactly 1 more. A correctly-reset counter reads 1
 // after that (well under 10, still silent); a counter that survived /clear unreset would read 10
-// and trigger — and, dispatched against `getGroqModel: () => ({})` (the same placeholder every
-// other script in this file already uses as a model runLoopFake itself never calls), that dispatch
-// fails and archivist.ts's own runArchivist catch prints "archivist run failed" via `onWarning`, an
-// observable difference `sawLine` can wait on. `read_file`, not `write_file`: this test is about
-// the counter alone, so no checkpointer/real mutation is needed here at all.
+// and trigger. `getGroqModel: () => ({})` (the same placeholder every other script in this file
+// already uses as a model runLoopFake itself never calls) does NOT make the dispatch throw:
+// loop.ts's own runLoop catches the provider call's failure and yields a `{ type: "error" }` event
+// instead of throwing (loop.ts's own comment on that catch), so runSubagent returns normally and
+// runArchivist returns a real ArchivistReport rather than hitting its own catch/onWarning path.
+// cli.ts then dispatches that report via `archivistLine` (cli/output.ts), which is what actually
+// puts `"(archivist: ..."` in the transcript — the observable difference this test waits on.
+// `read_file`, not `write_file`: this test is about the counter alone, so no checkpointer/real
+// mutation is needed here at all.
+//
+// `authConfigDir` (not left to its own `getConfigDir()` default) is what the archivist's own
+// enabled/disabled toggle reads (`loadMemoryConfig(ctx.configDir)`, memory/archivist.ts, fed from
+// `RunContext.configDir` which `run()` sets to `deps.authConfigDir ?? getConfigDir()`) — without
+// it, this test would read the DEVELOPER'S real `~/.seri/config.json`, and a machine with
+// `SERI_ARCHIVIST_ENABLED=false` (or a persisted `/memory archivist off`) would make the "no
+// archivist line" assertion pass for having never checked the trigger at all, not for the counter
+// having actually reset.
 function childScriptClearArchivist(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -1493,6 +1505,7 @@ function childScriptClearArchivist(dir: string): string {
     `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
     `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
     `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `  authConfigDir: ${JSON.stringify(join(dir, "authconfig"))},`,
     `});`,
   ].join("\n");
 }
