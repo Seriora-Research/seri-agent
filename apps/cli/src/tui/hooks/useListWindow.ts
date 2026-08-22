@@ -1,8 +1,3 @@
-// Ink-coupled compatibility copy, kept only so ConfigPanel.tsx/PermissionsPanel.tsx/SetupPanel.tsx
-// (still built on ink) keep resolving and the compiled binary keeps building — hooks/useListWindow.ts
-// is the real, OpenTUI-based implementation every ported caller (ModelPicker.tsx included) uses.
-// Delete this file once those three panels are ported and switched to the new import path.
-//
 // Shared list-window state for every panel that renders a scrollable row list (ModelPicker,
 // ConfigPanel, PermissionsPanel, SetupPanel) — owns the row array, the selection index, and the
 // window offset slid by `slideWindow`'s own clamp-don't-re-center rule as the selection moves.
@@ -10,9 +5,10 @@
 // transcript's scroll offset) no external event stream mutates them — the same distinction
 // reducer.ts's own TuiState.transcriptScrollOffset comment draws.
 
-import { type Key, useWindowSize } from "ink";
+import type { KeyEvent } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/react";
 import { useEffect, useState } from "react";
-import { APP_CHROME_ROWS, listWindowSize, remaining, slideWindow } from "./format";
+import { APP_CHROME_ROWS, listWindowSize, remaining, slideWindow } from "../util/format";
 
 export function useListWindow<T>(
   rows: readonly T[],
@@ -23,15 +19,15 @@ export function useListWindow<T>(
   // offset or do their own `offset + localIndex` arithmetic to find out.
   visible: { row: T; isSelected: boolean }[];
   remainingCount: number;
-  // Returns true when the key was an arrow it handled, so the caller's own useInput can
+  // Returns true when the key was an arrow it handled, so the caller's own useKeyboard can
   // `if (handleArrowKey(key)) return;` in the same position its inline arrow blocks used to sit.
-  handleArrowKey: (key: Key) => boolean;
+  handleArrowKey: (key: KeyEvent) => boolean;
   // Called whenever the caller's own list is replaced or re-filtered out from under the current
   // selection and window (ModelPicker's own filter typing) — snaps both back to the top rather
   // than leaving the selection/window offset pointing past the end of a shorter list.
   reset: () => void;
 } {
-  const { rows: terminalRows } = useWindowSize();
+  const { height: terminalRows } = useTerminalDimensions();
   // `terminalRows - APP_CHROME_ROWS`, not raw `terminalRows`: a panel replaces InputBox in
   // App.tsx's own render ternary, but everything else App.tsx can render alongside a panel — the
   // root Box's own spare row, the unconditional mode-indicator row, a `commandError` line,
@@ -81,13 +77,14 @@ export function useListWindow<T>(
     })),
     remainingCount: remaining(rows.length, win.offset, windowSize),
     handleArrowKey: (key) => {
-      if (!key.upArrow && !key.downArrow) return false;
+      if (key.name !== "up" && key.name !== "down") return false;
       setWin((current) => {
-        const next = key.upArrow
-          ? current.selected - 1
-          : Math.min(rows.length - 1, current.selected + 1);
-        // Math.max(0, ...) on the RESULT, not just the upArrow branch: rows.length === 0 makes
-        // the downArrow clamp above evaluate to Math.min(-1, n) = -1, so an empty list's own
+        const next =
+          key.name === "up"
+            ? current.selected - 1
+            : Math.min(rows.length - 1, current.selected + 1);
+        // Math.max(0, ...) on the RESULT, not just the "up" branch: rows.length === 0 makes
+        // the "down" clamp above evaluate to Math.min(-1, n) = -1, so an empty list's own
         // selection would otherwise go negative on a single Down press.
         const selected = Math.max(0, next);
         return { selected, offset: slideWindow(current.offset, selected, windowSize) };
