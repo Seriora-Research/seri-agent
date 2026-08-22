@@ -1089,6 +1089,23 @@ function fatalDuringTui(err: unknown, preMountMessages: readonly PreMountMessage
   return 1;
 }
 
+// Lifts the `createCheckpointer` + `withVerification(withCheckpoints(...))` pairing out of
+// `prepareSession` so that `/clear`'s post-rebind construction (onSubmit's own `/clear` handling)
+// and this function's own startup construction cannot drift into two differently-wrapped tool sets.
+function buildCheckpointedTools(opts: {
+  storeDir: string;
+  worktree: string;
+  sessionId: string;
+  onWarning: (message: string) => void;
+}): { checkpointer: Checkpointer; tools: ToolSet } {
+  const checkpointer = createCheckpointer(opts);
+  const tools = withVerification(
+    withCheckpoints(toolDefinitions, checkpointer, checkpointer.onAfterMutation),
+    loadVerifyConfig(),
+  );
+  return { checkpointer, tools };
+}
+
 async function prepareSession(
   ctx: RunContext,
   deps: CliDeps,
@@ -1257,16 +1274,12 @@ async function prepareSession(
     // puts each on the correct side. The AbortSignal the check is run with is the one runLoop hands
     // `execute` (loop.ts:331), which is driveLoop's controller — the same Ctrl-C that stops a bash
     // command stops a check.
-    const checkpointer = createCheckpointer({
+    const { checkpointer, tools } = buildCheckpointedTools({
       storeDir,
       worktree,
       sessionId: session.id,
       onWarning: printWarning,
     });
-    const tools = withVerification(
-      withCheckpoints(toolDefinitions, checkpointer, checkpointer.onAfterMutation),
-      loadVerifyConfig(),
-    );
 
     // Loaded once, here, alongside everything else this function resolves once per run — this is
     // what "frozen per session" means (memory/store.ts's own renderMemoryTier doc comment).
