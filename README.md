@@ -140,7 +140,10 @@ conversation mid-session: compaction is transparent and partial (it summarizes o
 the turn can keep going), while `/clear` is explicit and full — every message is gone from the new
 session's view, only recoverable by resuming the old one. Each `/clear` leaves the previous
 session's file on disk with no retention or cleanup policy; that's accepted, not a bug — the same
-way a plain `seri <task>` already leaves one file per session behind.
+way a plain `seri <task>` already leaves one file per session behind. The checkpoint store is a
+separate matter: it keeps only the most recently touched 20 sessions per project, so `/clear`ing
+repeatedly in one long-lived process can eventually prune an earlier session's checkpoint history
+(what `/undo`/`/rewind` act on) even though its conversation file never goes away.
 
 ## Checking your code after a write
 
