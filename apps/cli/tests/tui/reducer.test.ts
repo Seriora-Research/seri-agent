@@ -118,6 +118,60 @@ describe("tuiReducer: transcript-append", () => {
   });
 });
 
+describe("tuiReducer: transcript-cleared", () => {
+  // Builds a state where `streaming`, `totalVisualRows`, and `transcriptScrollStreamingRows` are
+  // all genuinely non-zero before the clear — otherwise the reset assertions would pass vacuously.
+  function stateBeforeClear(): TuiState {
+    let state: TuiState = { ...initialTuiState(session()), viewportRows: 1 };
+    for (const line of ["a", "b", "c"]) {
+      state = tuiReducer(state, { type: "transcript-append", line });
+    }
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "an in-progress answer" },
+    });
+    // transcript-scroll (with streaming active) is what populates transcriptScrollStreamingRows.
+    state = tuiReducer(state, { type: "transcript-scroll", delta: 1 });
+    return state;
+  }
+
+  test("resets transcript, scroll offset, streaming-rows cache, total-rows cache, and streaming", () => {
+    const before = stateBeforeClear();
+    expect(before.streaming.length).toBeGreaterThan(0);
+    expect(before.totalVisualRows).toBeGreaterThan(0);
+    expect(before.transcriptScrollStreamingRows).toBeGreaterThan(0);
+    expect(before.transcriptScrollOffset).toBeGreaterThan(0);
+
+    const next = tuiReducer(before, { type: "transcript-cleared" });
+
+    expect(next.transcript).toEqual([]);
+    expect(next.transcriptScrollOffset).toBe(0);
+    expect(next.transcriptScrollStreamingRows).toBe(0);
+    expect(next.totalVisualRows).toBe(0);
+    expect(next.streaming).toBe("");
+  });
+
+  test("leaves session, modeIndicator, columns, and viewportRows untouched", () => {
+    const before = stateBeforeClear();
+    const next = tuiReducer(before, { type: "transcript-cleared" });
+
+    expect(next.session).toBe(before.session);
+    expect(next.modeIndicator).toBe(before.modeIndicator);
+    expect(next.columns).toBe(before.columns);
+    expect(next.viewportRows).toBe(before.viewportRows);
+  });
+
+  // Proves the CACHE was reset, not just the array: if totalVisualRows/transcriptScrollStreamingRows
+  // survived the clear, a scroll dispatched right after could still compute a positive max offset
+  // from stale row counts even though the transcript is now empty.
+  test("a scroll dispatched right after cannot move the offset off 0", () => {
+    const cleared = tuiReducer(stateBeforeClear(), { type: "transcript-cleared" });
+    const next = tuiReducer(cleared, { type: "transcript-scroll", delta: 5 });
+
+    expect(next.transcriptScrollOffset).toBe(0);
+  });
+});
+
 describe("tuiReducer: transcript role tagging", () => {
   test('a role: "user" append after existing content gets a leading blank system separator', () => {
     let state = tuiReducer(initialTuiState(session()), {

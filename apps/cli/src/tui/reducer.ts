@@ -227,6 +227,11 @@ export type TuiAction =
   // echo that must not fragment an in-progress streamed answer into two transcript entries (see
   // pushLine's own comment).
   | { type: "transcript-append"; line: string; role?: TranscriptRole; flush?: boolean }
+  // /clear's own action. The only action that ever SHRINKS the transcript, rather than adding to
+  // it — every derived counter (`transcriptScrollOffset`, `transcriptScrollStreamingRows`,
+  // `totalVisualRows`, `streaming`) must be reset alongside `transcript` itself, or a stale one
+  // would keep describing an array that no longer exists.
+  | { type: "transcript-cleared" }
   // Scrolls the transcript viewport. Positive `delta` moves toward older rows, clamped to
   // `[0, transcriptVisualRows(transcript, columns) - viewportRows]` — the offset at which
   // visibleTranscript shows a full `viewportRows`-tall page of the oldest content, not just the
@@ -334,6 +339,15 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     // typed mid-stream reordered the transcript against the model's own still-in-progress answer.
     case "transcript-append":
       return pushLine(state, action.line, action.role ?? "system", action.flush ?? true);
+    case "transcript-cleared":
+      return {
+        ...state,
+        transcript: [],
+        transcriptScrollOffset: 0,
+        transcriptScrollStreamingRows: 0,
+        totalVisualRows: 0,
+        streaming: "",
+      };
     case "transcript-scroll": {
       const streamingRows = streamingVisualRows(state.streaming, state.columns);
       const max = maxScrollOffset(state.totalVisualRows, streamingRows, state.viewportRows);
