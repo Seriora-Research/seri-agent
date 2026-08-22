@@ -1,18 +1,19 @@
-// Stage A scaffolding (cli-commands-to-tui feature-plan.md): no dispatcher wired to this yet —
-// Stage D wires /permissions to fire `permissions-requested`/`permissions-step`/
-// `permissions-resolved`. New code, not a move. Only two steps, no value-entry step: there is
-// nothing to type here, only tools to revoke.
+/** @jsxImportSource @opentui/react */
+// No dispatcher wired to this yet — nothing dispatches permissions-requested/permissions-step/
+// permissions-resolved. Only two steps, no value-entry step: there is nothing to type here, only
+// tools to revoke.
 
-import { Box, Text, useInput } from "ink";
-import type { PermissionRow } from "../commands";
-import { ConfirmPrompt, ListRow } from "../components";
-import type { PermissionsPanelState } from "../reducer";
-import { theme } from "../theme";
-import { useListWindow } from "../useListWindow";
+import { useKeyboard } from "@opentui/react";
+import { useListWindow } from "../../hooks/useListWindow";
+import type { PermissionRow } from "../../state/commands";
+import type { PermissionsPanelState } from "../../state/reducer";
+import { theme } from "../../theme/theme";
+import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
+import { ListRow } from "../../ui/ListRow";
 
-// /permissions' own live state (tui/reducer.ts's pendingPermissions) — mirrors SetupPanel's
+// /permissions' own live state (state/reducer.ts's pendingPermissions) — mirrors SetupPanel's
 // step-dispatcher shape with one fewer step; the confirm-remove step delegates to the shared
-// ConfirmPrompt (components.tsx) instead of a step-specific sub-component.
+// ConfirmPrompt (ui/ConfirmPrompt.tsx) instead of a step-specific sub-component.
 export function PermissionsPanel({
   pendingPermissions,
   onPermissionsRemove,
@@ -58,34 +59,34 @@ function PermissionsList({
     pendingPermissions.selected,
   );
 
-  useInput((input, key) => {
-    if (key.escape || (key.ctrl && input === "d")) {
+  useKeyboard((key) => {
+    if (key.name === "escape" || (key.ctrl && key.name === "d")) {
       onPermissionsClose?.();
       return;
     }
     if (handleArrowKey(key)) return;
     const row = rows[selected];
-    if (key.delete) {
+    if (key.name === "delete") {
       if (row?.removable) onPermissionsRemove?.(row.tool);
       return;
     }
     if (key.ctrl || key.meta) return;
-    if (input.length === 0) return;
+    if (key.sequence.length === 0 || (key.name.length !== 1 && key.name !== "space")) return;
     if (row === undefined) return;
-    if (input.toLowerCase() === "r" && row.removable) {
+    if (key.sequence.toLowerCase() === "r" && row.removable) {
       onPermissionsRemove?.(row.tool);
     }
   });
 
   return (
-    <Box borderStyle="single" borderColor={theme.muted} flexDirection="column">
-      <Text color={theme.muted}>/permissions — tools approved permanently</Text>
+    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+      <text fg={theme.muted}>/permissions — tools approved permanently</text>
       {visible.map(({ row, isSelected }) => (
         <ListRow key={row.tool} selected={isSelected} label={formatPermissionRow(row)} />
       ))}
-      {remainingCount > 0 && <Text color={theme.muted}>+{remainingCount} more</Text>}
-      <Text color={theme.muted}>↑/↓ move · r/Delete remove · Esc/Ctrl-D close</Text>
-    </Box>
+      {remainingCount > 0 && <text fg={theme.muted}>+{remainingCount} more</text>}
+      <text fg={theme.muted}>↑/↓ move · r/Delete remove · Esc/Ctrl-D close</text>
+    </box>
   );
 }
 
