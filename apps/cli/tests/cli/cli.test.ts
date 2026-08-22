@@ -2673,13 +2673,21 @@ describe("run (/clear)", () => {
     rmSync(sessionsDir, { recursive: true, force: true });
   });
 
-  test("is registered with an exact, empty accepts and mutatesRunState", () => {
+  test("is registered with an exact, empty accepts, mutatesRunState, and scopeTargetToCwd", () => {
     const clear = SLASH_COMMANDS.get("/clear");
     if (clear === undefined) throw new Error("/clear is not registered");
     expect(clear.accepts([])).toBe(true);
     expect(clear.accepts(["the", "screen", "please"])).toBe(false);
     expect(clear.accepts(["3"])).toBe(false);
     expect(clear.mutatesRunState).toBe(true);
+    // handleSlashCommand's bare-invocation resolution reads this field, not a `name === "/clear"`
+    // check (SlashCommand's own comment on why) — /undo, /rewind and /restore must NOT set it.
+    expect(clear.scopeTargetToCwd).toBe(true);
+    for (const name of ["/undo", "/rewind", "/restore", "/mode", "/memory"]) {
+      const command = SLASH_COMMANDS.get(name);
+      if (command === undefined) throw new Error(`${name} is not registered`);
+      expect(command.scopeTargetToCwd).toBeUndefined();
+    }
   });
 
   // Mirrors "`/mode is broken, fix it` stays a task", above: /clear's own accepts() form is the
@@ -2907,7 +2915,7 @@ describe("run (/clear)", () => {
     }
 
     // "here-session" got the new session minted against it, not the more-recently-touched
-    // "elsewhere-session": both remain untouched (2 files each, 4 total) and "here-session"'s own
+    // "elsewhere-session": both remain untouched (2 originals + 1 new = 3) and "here-session"'s own
     // messages are unchanged (/clear never mutates the resolved session, only creates a new one).
     const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
     expect(files).toHaveLength(3);

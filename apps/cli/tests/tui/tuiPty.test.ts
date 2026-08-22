@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -5210,6 +5210,20 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   // `opts.tools.write_file.execute` on every turn (not a synthetic tool-call/tool-result pair),
   // reading `opts.tools` fresh each call — the only way a real checkpoint through the real
   // checkpointer can land under whichever session id `prepared.tools` is CURRENTLY bound to.
+  // Every `refs/seri/sessions/*` ref currently in the store — read-only enumeration, no
+  // SHADOW_CONFIG (shadowGit.ts's own config, needed for commits) required for a plain listing.
+  function listSessionRefs(gitDir: string): string[] {
+    const result = spawnSync(
+      "git",
+      ["--git-dir", gitDir, "for-each-ref", "--format=%(refname)", "refs/seri/sessions/"],
+      { encoding: "utf8" },
+    );
+    return result.stdout
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0);
+  }
+
   describe.skipIf(!isGitAvailable())("/clear rebinds checkpointing", () => {
     test("a tool call after /clear checkpoints under the new session; the old session's file and ref are untouched", async () => {
       const scriptPath = join(dir, "child-clear.mjs");
@@ -5274,11 +5288,82 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
+    // The rebind's own atomicity fix: `clearCommand`'s `await presenter.sessionUpdated(next)`
+    // throws when the persist promise rejects, but `dispatch({ type: "session-updated", ... })`
+    // (tuiPresenter's own sessionUpdated) already ran synchronously before that rejection — so
+    // `liveState.session.id` has already changed by the time onSubmit's `finally` runs, regardless
+    // of whether `clearCommand` itself ever reached its own `presenter.message(message)`. Sabotages
+    // `sessionsDir` (chmod, same mechanism as "a persistently failing persist is attempted once per
+    // turn," above) so the NEW session's `saveSession` call fails, and confirms the checkpointer
+    // still moved off the old session's ref despite that failure — this is what would go red if the
+    // rebind were still living in the `try` block it used to (onSubmit's own comment explains why).
+    test("checkpointing still rebinds off the old session even when /clear's own persist fails", async () => {
+      const scriptPath = join(dir, "child-clear-persist-failure.mjs");
+      writeFileSync(scriptPath, childScriptClear(dir));
+
+      const sessionsDir = join(dir, "sessions");
+      const storeDir = checkpointStoreDir(join(dir, "checkpoints"), dir);
+      const gitDir = join(storeDir, "git");
+
+      const { child, sawLine } = await startChild(scriptPath, dir);
+      try {
+        await sawLine("RUNLOOP_READY 1");
+        await sawLine("WROTE 1");
+        await sawLine("(done: no-tool-call)");
+
+        const files1 = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
+        expect(files1).toHaveLength(1);
+        const oldId = (files1[0] ?? "").slice(0, -".jsonl".length);
+        const oldRef = `refs/seri/sessions/${oldId}`;
+        const oldCommitBeforeClear = resolveRef(gitDir, oldRef);
+        expect(oldCommitBeforeClear).toBeDefined();
+        const refsBeforeClear = listSessionRefs(gitDir);
+
+        // Read+execute only: saveSession's atomic write (a temp file plus a rename into this
+        // directory) can no longer create the new session's .jsonl.
+        chmodSync(sessionsDir, 0o500);
+
+        child.stdin?.write("/clear");
+        await sawLine("/clear");
+        child.stdin?.write("\r");
+        // NOT "Started a new session": clearCommand's own ordering (its comment) never reaches
+        // `presenter.message(message)` once `sessionUpdated` has thrown. `onSessionChange`'s own
+        // printWarning call and onSubmit's outer `catch` both surface the same underlying message.
+        await sawLine("could not save the session");
+
+        // Restored before driving the next turn: this test is about whether checkpointing rebound,
+        // not about the session file ever landing on disk (it doesn't, and never will for this id).
+        chmodSync(sessionsDir, 0o700);
+
+        child.stdin?.write("do another task");
+        await sawLine("do another task");
+        child.stdin?.write("\r");
+
+        await sawLine("RUNLOOP_READY 2");
+        await sawLine("WROTE 2");
+        await sawLine("(done: no-tool-call)");
+
+        // The old session's ref did not receive a second commit — the post-/clear tool call did
+        // not land there, even though /clear's own persist never succeeded.
+        expect(resolveRef(gitDir, oldRef)).toBe(oldCommitBeforeClear);
+
+        // A single new ref appeared, and it has a real commit — the checkpointer moved onto the
+        // new (unpersisted) session id, which only happens if bindSession ran from the `finally`
+        // block despite clearCommand's own throw.
+        const newRefs = listSessionRefs(gitDir).filter((ref) => !refsBeforeClear.includes(ref));
+        expect(newRefs).toHaveLength(1);
+        expect(resolveRef(gitDir, newRefs[0] ?? "")).toBeDefined();
+      } finally {
+        chmodSync(sessionsDir, 0o700);
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
     test("/clear rebuilds archivist state — a stale tool-call count does not survive it", async () => {
       const scriptPath = join(dir, "child-clear-archivist.mjs");
       writeFileSync(scriptPath, childScriptClearArchivist(dir));
 
-      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, sawLineTimes, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY 1");
         await sawLine("EMITTED 1 9");
@@ -5295,7 +5380,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("RUNLOOP_READY 2");
         await sawLine("EMITTED 2 1");
-        await sawLine("(done: no-tool-call)");
+        // sawLineTimes, not sawLine: turn 1 already printed this identical line, so a bare
+        // `sawLine` here would resolve immediately against that earlier occurrence instead of
+        // waiting for turn 2's own — this file's own sawLineTimes doc comment describes exactly
+        // this pitfall.
+        await sawLineTimes("(done: no-tool-call)", 2);
         // `archivistLine`'s own "(archivist: ..." stats line (cli/output.ts) is dispatched into
         // the transcript only when maybeRunArchivist actually returns a report — i.e. only once
         // shouldRunArchivist's own trigger fired. A bounded margin, not `sawLine`, since this half
