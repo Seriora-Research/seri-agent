@@ -11,7 +11,7 @@ import { createRequire } from "node:module";
 import { render } from "ink";
 import { createElement } from "react";
 import stringWidth from "string-width";
-import { App } from "../../src/tui/App";
+import { App } from "../../src/tui/app";
 import type { TranscriptRole } from "../../src/tui/format";
 import type { TuiAction } from "../../src/tui/reducer";
 import { MAIN_TUI_RENDER_OPTIONS } from "../../src/tui/renderOptions";

@@ -93,7 +93,7 @@ import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { withSubagents } from "./subagents/dispatch";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
-import { App } from "./tui/App";
+import { App } from "./tui/app";
 import {
   type CommandDirs,
   checkpointTarget,

@@ -3,7 +3,7 @@ import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import { render } from "ink-testing-library";
 import stringWidth from "string-width";
 import type { ApprovalAnswer } from "../../src/loop/loop";
-import { App } from "../../src/tui/App";
+import { App } from "../../src/tui/app";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/commands";
 import { ListRow } from "../../src/tui/components";
 import {

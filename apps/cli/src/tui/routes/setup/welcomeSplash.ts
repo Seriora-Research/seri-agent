@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { createElement } from "react";
 import type { CliDeps } from "../../../cli";
 import { deliverSignal } from "../../../signals";
-import { App } from "../../App";
+import { App } from "../../app";
 import { getTuiRenderer } from "../../runtime/renderer";
 import { decideAuthOffer } from "../../state/commands";
 import { createAuthHandlers } from "../../state/handlers";

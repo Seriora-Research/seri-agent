@@ -11,7 +11,7 @@ import { catalogWithFallback } from "../../../provider/catalog";
 import { persistDefaultModel } from "../../../provider/defaults";
 import { configuredProviders } from "../../../provider/keys";
 import { deliverSignal } from "../../../signals";
-import { App } from "../../App";
+import { App } from "../../app";
 import { getTuiRenderer } from "../../runtime/renderer";
 import {
   decideAuthOffer,
