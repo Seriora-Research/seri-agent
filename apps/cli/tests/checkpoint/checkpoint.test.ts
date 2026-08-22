@@ -1036,11 +1036,16 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
   );
 
   // resolveRef itself throwing (git failing to even spawn, per shadowGit.ts's spawnGit) is a
-  // narrower trigger than a non-zero exit — PATH cleared so `spawnSync("git", ...)` cannot find the
-  // binary at all, the one case shadowGit.ts's own run() throws rather than returning a failed
-  // GitResult. Proves snapshottedThisProcess is reset before that throw, not after: a stale `true`
-  // there would make the next non-destructive, non-write_file call skip writeTree and reuse
-  // previousTree — already cleared to undefined by this point — corrupting that checkpoint's tree.
+  // narrower trigger than a non-zero exit — PATH pointed at a directory with no `git` in it so
+  // `spawnSync("git", ...)` cannot find the binary at all, the one case shadowGit.ts's own run()
+  // throws rather than returning a failed GitResult. Proves snapshottedThisProcess is reset before
+  // that throw, not after: a stale `true` there would make the next non-destructive, non-write_file
+  // call skip writeTree and reuse previousTree — already cleared to undefined by this point —
+  // corrupting that checkpoint's tree. NOT an emptied `PATH` (`PATH = ""`): confirmed live on Bun
+  // 1.4.0/Linux and macOS, `spawnSync` still resolves and runs `git` successfully with an emptied
+  // `PATH` in the child's own `env` — a real Bun/POSIX executable-resolution quirk, not something
+  // this test can rely on. A `PATH` pointed at a real, git-less directory fails to resolve on every
+  // platform.
   test(
     "invalidate() still forces a fresh snapshot on the next call when resolveRef itself throws",
     () => {
@@ -1048,7 +1053,8 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
       snapshot(mutation({ toolCallId: "c1" }));
 
       const originalPath = process.env.PATH;
-      process.env.PATH = "";
+      const noGitPath = mkdtempSync(join(tmpdir(), "seri-no-git-"));
+      process.env.PATH = noGitPath;
       let threw: unknown;
       try {
         snapshot.invalidate();
@@ -1056,6 +1062,7 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
         threw = err;
       } finally {
         process.env.PATH = originalPath;
+        rmSync(noGitPath, { recursive: true, force: true });
       }
       expect(threw).toBeDefined();
 

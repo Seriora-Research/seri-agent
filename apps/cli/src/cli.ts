@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
+import { flushSync } from "@opentui/react";
 import {
   findCatalogEntry,
   type ModelCatalog,
@@ -1853,7 +1854,7 @@ async function runTui(
   // before the promise executor — every closure below (`quit`, `runTurn`'s catch) can only ever
   // execute from a keypress or reducer effect, neither of which can fire before this `await`
   // resolves and the tree is actually mounted.
-  const { root } = await getTuiRenderer();
+  const { renderer, root } = await getTuiRenderer();
 
   // Matches prepareSession's own resolution (D7, feature-plan.md) — routing-priority's per-turn
   // re-resolution (runTurn, below) and /setup's own reads/writes (a later commit in this loop)
@@ -2036,7 +2037,11 @@ async function runTui(
       saveSession(toPersist, ctx.sessionsDir);
     } catch (err) {
       const message = `could not save the session: ${messageOf(err)}`;
-      printWarning(message);
+      // Not `printWarning(message)`: its default sink is `console.error`, a raw write that bypasses
+      // the mounted tree entirely — found live, it corrupted whatever row the cursor was last left
+      // at instead of ever reaching the transcript. `dispatch` is the only sink every other in-TUI
+      // error uses.
+      dispatch({ type: "command-error", message });
       for (const { reject } of resolvers) reject(new Error(message));
       return;
     }
@@ -2401,7 +2406,7 @@ async function runTui(
   // through to signals.ts's own fatal path instead — no unwind, no summary, the process dies by
   // signal, the same as a second bare Ctrl-C press (AGENTS.md's own paragraph on the TUI covers
   // this).
-  function quit(): void {
+  async function quit(): Promise<void> {
     if (reactDispatch === undefined || quitting) return;
     quitting = true;
     // Without this, Ctrl-D would be silently swallowed while ApprovalBox is mounted instead of
@@ -2435,8 +2440,17 @@ async function runTui(
       // branch's own comment above) left the TUI looking frozen for however long the turn took
       // to unwind, with no indication anything had happened or that Ctrl-C was still available
       // to force it — dispatched before deliverSignal so it is visible even if the unwind never
-      // completes (a stuck tool ignoring its own abort signal).
-      pushTranscriptLine(dispatch, "quitting — cancelling the in-flight turn, Ctrl-C to force");
+      // completes (a stuck tool ignoring its own abort signal). `flushSync` + `renderer.idle()`
+      // are both required, not just one: the abort→turn-settles→finishQuit chain below runs
+      // entirely on microtasks (the fake runLoop test's own abort listener resolves synchronously
+      // once SIGINT is delivered), while `@opentui/react`'s reconciler otherwise commits on a
+      // macrotask — without forcing the commit and waiting for the actual paint, `finishQuit`'s
+      // `destroyTuiRenderer()` tore down the alt-screen before this line was ever painted (found
+      // live: it never once appeared in a captured pty session).
+      flushSync(() =>
+        pushTranscriptLine(dispatch, "quitting — cancelling the in-flight turn, Ctrl-C to force"),
+      );
+      await renderer.idle();
       deliverSignal("SIGINT");
       void currentTurn.then(finishQuit);
     } else {
@@ -2476,7 +2490,7 @@ async function runTui(
         dispatch({ type: "command-error", message: "/exit: invalid arguments." });
         return;
       }
-      quit();
+      await quit();
       return;
     }
     // /model, like /exit just above, is intercepted here rather than added to SLASH_COMMANDS: it

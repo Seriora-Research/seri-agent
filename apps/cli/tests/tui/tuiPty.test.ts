@@ -5049,8 +5049,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // "Log in" is the default-selected (first) item — a bare Enter, no navigation, selects it.
         await sawLine("> Log in");
         child.stdin?.write("\r");
-        await wait100ms();
-
+        // Deliberately no `wait100ms()` between the keypress and these two checks (unlike its
+        // sibling tests, above): `loginFake`'s own ~50ms auto-resolve (this file's own comment,
+        // below) already races the device-code panel's own on-screen lifetime — a fixed 100ms
+        // sleep here reliably lost that race, letting login succeed and the main TUI mount and
+        // redraw this exact row (`> do a task`) before either check ever ran. `sawLine`'s own poll
+        // loop already waits for the render with no help needed from a fixed delay.
         await sawLine("https://example.com/device");
         await sawLine("ABCD-1234");
 
