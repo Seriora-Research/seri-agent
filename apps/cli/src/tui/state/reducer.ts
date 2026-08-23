@@ -607,16 +607,16 @@ function pushLine(
 // `addedRows`, with no subtraction, so a scrolled-up view stays anchored on the same content as new
 // rows arrive, rather than sliding out from under the reader mid-read.
 //
-// No subtraction for `TurnStatus`'s own reserved row, unlike a prior version of this function: that
-// row does NOT convert into committed content the way the old (pre-buffer-then-reveal) streamed-text
-// rows this function used to subtract did — a mid-turn flush (`pushLine`, from a tool-call/
-// tool-result/permission-denied/tool-allowed/retry/compacted event) commits real new rows while
-// `state.turn` stays defined, so `TurnStatus`'s reserved row is UNCHANGED by this call, still sitting
-// exactly where it was. Subtracting anything here (verified live: reverting to a
-// `resolvedStreamingRows`-style subtraction and re-running this file's own flush-anchoring test)
-// drifted a scrolled-up reader's view by 1 row on every mid-turn flush instead of leaving it
-// anchored. Only `"turn-ended"` (above) changes the reserved row, and it re-clamps the offset
-// directly rather than through this function, since ending a turn commits no new lines at all.
+// No subtraction for `TurnStatus`'s own reserved row: that row does NOT convert into committed
+// content the way the old (pre-buffer-then-reveal) streamed-text rows this function used to
+// subtract did — a mid-turn flush (`pushLine`, from a tool-call/tool-result/permission-denied/
+// tool-allowed/retry/compacted event) commits real new rows while `state.turn` stays defined, so
+// `TurnStatus`'s reserved row is UNCHANGED by this call, still sitting exactly where it was.
+// Subtracting anything here (verified live: reverting this function's offset advance to subtract
+// the reserved row, then re-running this file's own flush-anchoring test) drifted a scrolled-up
+// reader's view by 1 row on every mid-turn flush instead of leaving it anchored. Only
+// `"turn-ended"` (above) changes the reserved row, and it re-clamps the offset directly rather
+// than through this function, since ending a turn commits no new lines at all.
 function appendLines(state: TuiState, rawLines: TranscriptEntry[]): TuiState {
   const addedRows = transcriptVisualRows(rawLines, state.columns);
   return {

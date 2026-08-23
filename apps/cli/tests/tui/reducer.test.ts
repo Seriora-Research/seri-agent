@@ -392,7 +392,10 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
     let state: TuiState = { ...transcriptOf(lines), viewportRows: 5 };
     state = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
     const streamed = Array.from({ length: 20 }, (_, i) => `streamed line ${i}`).join("\n");
-    state = tuiReducer(state, { type: "loop-event", event: { type: "text-delta", text: streamed } });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: streamed },
+    });
 
     const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
     // 20 committed rows + 1 reserved row - 5 viewportRows = 16 — unaffected by the streamed
@@ -426,15 +429,15 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
     expect(next.turn).not.toBeUndefined();
   });
 
-  // The regression test the finding above calls for: not just the raw offset number, but the
-  // ACTUAL visible window, via a real mid-turn flush event (applyLoopEvent's "tool-call" case, not
-  // a bare transcript-append). 100 committed rows and an interior scroll position (not Home) so the
-  // window is a FULL page on both sides of the flush — a shallow scroll near the top would pin
-  // `visibleTranscript`'s own `start` at its 0 floor regardless of the bug, silently absorbing the
-  // 1-row drift and passing on both buggy and fixed code alike. Before the fix (`appendLines`
-  // subtracting the reserved row from a flush that doesn't remove it, since `state.turn` stays
-  // defined), the top visible row shifted from "line 50" to "line 51" here even though nothing
-  // scrolled; this asserts it does not.
+  // Asserts the invariant directly against the ACTUAL visible window, not just the raw offset
+  // number above: a scrolled-up reader's window must not move relative to committed content across
+  // a mid-turn flush (applyLoopEvent's "tool-call" case here, not a bare transcript-append). 100
+  // committed rows and an interior scroll position (not Home) so the window is a FULL page on both
+  // sides of the flush — a shallow scroll near the top would pin `visibleTranscript`'s own `start`
+  // at its 0 floor regardless of whether the offset advance is correct, silently absorbing a 1-row
+  // drift instead of surfacing it. Verified: reverting `appendLines`' full-`addedRows` advance
+  // (reducer.ts) to a subtraction of the reserved row shifts the top visible row from "line 50" to
+  // "line 51" here even though nothing scrolled.
   test("a scrolled-up reader's top visible row does not drift across a mid-turn tool-call flush", () => {
     const lines = Array.from({ length: 100 }, (_, i) => `line ${i}`);
     let state: TuiState = { ...transcriptOf(lines), viewportRows: 10 };
@@ -442,7 +445,12 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
     state = tuiReducer(state, { type: "transcript-scroll", delta: 40 });
     expect(state.transcriptScrollOffset).toBe(40);
 
-    const before = visibleTranscript(state.transcript, 10, state.transcriptScrollOffset, state.columns);
+    const before = visibleTranscript(
+      state.transcript,
+      10,
+      state.transcriptScrollOffset,
+      state.columns,
+    );
     expect(before[0]).toEqual({ role: "system", text: "line 50" });
 
     const next = tuiReducer(state, {
