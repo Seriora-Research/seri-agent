@@ -2097,6 +2097,32 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-rejects.mjs");
     writeFileSync(scriptPath, childScriptRejects(dir));
 
+    const { exited, sawLine } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+
+      const settled = await Promise.race([
+        exited,
+        new Promise<"the run never settled">((r) =>
+          setTimeout(() => r("the run never settled"), 15_000),
+        ),
+      ]);
+
+      expect(settled).not.toBe("the run never settled");
+    } finally {
+      // Already exited in the success case; harmless if the process is already gone.
+    }
+  }, 60_000);
+
+  // The boxed-sentinel fix: runTurn used to record a caught rejection in a bare `let turnError:
+  // unknown`, then check `turnError !== undefined` to decide whether to destroy the renderer and
+  // reject run()'s own promise — indistinguishable from "no error happened" when the rejection's
+  // own reason is `undefined`, reopening exactly the hang the sibling test above already covers for
+  // a real Error.
+  test("driveLoop rejecting with a bare `undefined` reason also settles run() instead of hanging", async () => {
+    const scriptPath = join(dir, "child-rejects-undefined.mjs");
+    writeFileSync(scriptPath, childScriptRejectsUndefined(dir));
+
     const { child, exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
@@ -2116,32 +2142,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // instant.
       child.kill("SIGKILL");
       await exited;
-    }
-  }, 60_000);
-
-  // The boxed-sentinel fix: runTurn used to record a caught rejection in a bare `let turnError:
-  // unknown`, then check `turnError !== undefined` to decide whether to destroy the renderer and
-  // reject run()'s own promise — indistinguishable from "no error happened" when the rejection's
-  // own reason is `undefined`, reopening exactly the hang the sibling test above already covers for
-  // a real Error.
-  test("driveLoop rejecting with a bare `undefined` reason also settles run() instead of hanging", async () => {
-    const scriptPath = join(dir, "child-rejects-undefined.mjs");
-    writeFileSync(scriptPath, childScriptRejectsUndefined(dir));
-
-    const { exited, sawLine } = await startChild(scriptPath, dir);
-    try {
-      await sawLine("RUNLOOP_READY");
-
-      const settled = await Promise.race([
-        exited,
-        new Promise<"the run never settled">((r) =>
-          setTimeout(() => r("the run never settled"), 15_000),
-        ),
-      ]);
-
-      expect(settled).not.toBe("the run never settled");
-    } finally {
-      // Already exited in the success case; harmless if the process is already gone.
     }
   }, 60_000);
 
