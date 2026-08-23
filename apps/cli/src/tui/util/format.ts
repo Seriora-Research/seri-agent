@@ -102,10 +102,13 @@ export function transcriptVisualRows(entries: TranscriptEntry[], columns: number
   return total;
 }
 
-// Wraps the in-progress streamed answer (App.tsx's own `state.streaming`) the same way a committed
-// assistant entry wraps, via `displayText` — factored out of `visibleTranscript` so App.tsx can
-// memoize the result across renders (`useMemo`, keyed on `[state.streaming, state.columns]`)
-// instead of re-wrapping the full, ever-growing streamed string from scratch on every token.
+// Wraps a streamed-answer string the same way a committed assistant entry wraps, via
+// `displayText`. No production call site passes anything through this today — app.tsx never
+// renders `state.streaming` live (its own file-header comment explains why: the TUI buffers a
+// turn's whole answer and reveals it atomically on commit instead of streaming it incrementally).
+// Kept, along with `visibleTranscript`'s own `pendingRows` parameter below, because this file's own
+// pure-function tests still exercise both directly — not because anything today wires them
+// together at render time.
 export function wrapPendingRows(pending: string, columns: number): VisibleRow[] {
   const pendingEntry: TranscriptEntry = { role: "assistant", text: pending };
   return wrapForTranscript(displayText(pendingEntry), columns).map((text) => ({
@@ -135,15 +138,14 @@ export function wrapPendingRows(pending: string, columns: number): VisibleRow[] 
 // the bottom, but the exact case a reader scrolled deep into a long session (or a fast streamed
 // answer on a tall terminal) would actually hit every render.
 //
-// `pendingRows` (App.tsx's `state.streaming`, already wrapped via `wrapPendingRows` above) is
-// seeded into the accumulation FIRST, ahead of the backward walk over `entries` — not spread into a
-// `[...entries, pending]` array at the call site (a prior version of this function did exactly
-// that, tried and reverted): that allocated a full copy of the committed transcript on every call,
-// i.e. every streamed token, for a function whose entire point is staying proportional to scroll
-// depth instead of session length. `wrapPendingRows` used to run inline here, re-wrapping the whole
-// streamed string from scratch on every call; App.tsx now memoizes it once per `[state.streaming,
-// state.columns]` change and passes the already-wrapped rows in, so this function itself no longer
-// pays for the wrap at all.
+// `pendingRows` has no production caller today — app.tsx always passes `[]` (see this file's own
+// `wrapPendingRows` comment for why). When seeded (by this file's own pure-function tests, via
+// `wrapPendingRows` above), it goes in FIRST, ahead of the backward walk over `entries` — not
+// spread into a `[...entries, pending]` array at the call site (a prior version of this function
+// did exactly that, tried and reverted): that allocated a full copy of the committed transcript on
+// every call, for a function whose entire point is staying proportional to scroll depth instead of
+// session length. Neither the parameter nor `wrapPendingRows` is deleted despite the dead call
+// site — both stay valid, independently useful utilities their own tests still cover directly.
 export function visibleTranscript(
   entries: TranscriptEntry[],
   rows: number,
