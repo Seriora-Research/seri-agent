@@ -2251,7 +2251,7 @@ async function runTui(
     // Starts TurnStatus's elapsed clock/token count — dispatched here, alongside `route-updated`,
     // rather than earlier: this is the first point in runTurn a turn is actually committed to
     // running (resolveRoute/dispatchModel have already succeeded above), not just requested.
-    dispatch({ type: "turn-started" });
+    dispatch({ type: "turn-started", startedAt: Date.now() });
     // A rerouted OR gateway-served pair is never silent on the TUI path either — see
     // prepareSession's own identical notice for the piped/non-interactive path, above.
     if (route.rerouted) {

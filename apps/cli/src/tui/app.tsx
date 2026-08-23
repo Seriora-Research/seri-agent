@@ -385,14 +385,20 @@ export function App({
             <text fg={theme.muted}>↑ scrolled — End to follow</text>
           )}
           {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
-          {/* Keyed on `turnStartedAt` so React mounts a fresh TurnStatus instance per turn instead
-          of reusing one across a `turnStartedAt` prop transition — see that component's own
-          comment on why a fresh mount is what its `now` state relies on. */}
-          {state.turnStartedAt !== undefined && (
+          {/* Keyed on `state.turn.startedAt`: React 18 automatically batches a `turn-ended`
+          dispatch and the very next `turn-started` (back-to-back turns landing in the same commit)
+          into one update, so the intermediate "no turn in flight" render — where TurnStatus would
+          otherwise unmount — never actually commits, and TurnStatus would be REUSED across the pair
+          rather than unmounted-then-remounted. Without the key, that reused instance's own
+          `useState(() => Date.now())` initializer (TurnStatus's own comment) would not re-run, and
+          the second turn would start ticking from the first turn's stale `now`. The key forces a
+          fresh element identity — and so a fresh mount — on every transition regardless of
+          batching. */}
+          {state.turn !== undefined && (
             <TurnStatus
-              key={state.turnStartedAt}
-              startedAt={state.turnStartedAt}
-              tokenProgress={state.tokenProgress}
+              key={state.turn.startedAt}
+              startedAt={state.turn.startedAt}
+              tokenProgress={state.turn.tokens}
             />
           )}
         </box>

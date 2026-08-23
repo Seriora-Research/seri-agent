@@ -8,6 +8,14 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import { createRoot } from "@opentui/react";
 import type { ReactNode } from "react";
 import { TurnStatus } from "../../src/tui/components/TurnStatus";
+import type { TokenProgress } from "../../src/tui/util/format";
+
+const ZERO_TOKEN_PROGRESS: TokenProgress = {
+  reconciledInputTokens: 0,
+  reconciledOutputTokens: 0,
+  liveOutputEstimate: 0,
+  exact: false,
+};
 
 const mountedRenderers: TestRendererSetup[] = [];
 
@@ -37,7 +45,7 @@ describe("TurnStatus", () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
     mountedRenderers.push(setup);
 
-    await mount(setup, <TurnStatus startedAt={Date.now()} tokenProgress={undefined} />);
+    await mount(setup, <TurnStatus startedAt={Date.now()} tokenProgress={ZERO_TOKEN_PROGRESS} />);
     await sleep(1100);
     await settle(setup); // flushes the 1Hz tick's own setState into a render
 
@@ -69,7 +77,7 @@ describe("TurnStatus", () => {
     mountedRenderers.push(setup);
     const root = createRoot(setup.renderer);
 
-    root.render(<TurnStatus startedAt={Date.now()} tokenProgress={undefined} />);
+    root.render(<TurnStatus startedAt={Date.now()} tokenProgress={ZERO_TOKEN_PROGRESS} />);
     await settle(setup);
     await settle(setup);
 

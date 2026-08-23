@@ -211,9 +211,9 @@ function childScriptRejectsUndefined(dir: string): string {
 
 // Mirrors loop.ts's own "yield error, then return" exits (loop.ts:343/381/420): a turn can end
 // with no following `done` LoopEvent at all. The reducer's own "error" case deliberately leaves
-// `turnStartedAt`/`tokenProgress` untouched (a single mid-turn error is often recoverable), so
-// runTurn's own `finally` block dispatching `{ type: "turn-ended" }` is the only thing that clears
-// TurnStatus's elapsed clock on this path.
+// `state.turn` untouched (a single mid-turn error is often recoverable), so runTurn's own `finally`
+// block dispatching `{ type: "turn-ended" }` is the only thing that clears TurnStatus's elapsed
+// clock on this path.
 function childScriptErrorWithoutDone(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -2157,7 +2157,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_READY");
       await sawLine("boom");
 
-      // `turnStartedAt` is set before driveLoop is even invoked, so a clock stuck by a missing
+      // `state.turn` is set before driveLoop is even invoked, so a clock stuck by a missing
       // turn-ended dispatch would already read a nonzero value well within this window.
       await new Promise((resolve) => setTimeout(resolve, 1500));
       expect(lastFrame()).not.toMatch(/\b\d+s\b/);
