@@ -8,11 +8,12 @@
 // default and scrollable with PageUp/PageDown/Home/End. No mid-generation text is ever rendered in
 // that slice: `state.streaming` accumulates every `text-delta` for `pushLine`'s next flush
 // (state/reducer.ts), but is never itself displayed live, character by character — while a turn is
-// active, `TurnStatus` (below) occupies the transcript box's own last row instead. Each finished
-// segment of the answer (the run of `text-delta`s up to whatever the model does next — a tool call,
-// a tool result, or the turn's own end) replaces `TurnStatus` atomically the moment `pushLine`
-// commits it as a normal transcript entry, and `TurnStatus` reappears below that newly-committed
-// line for whatever the turn does next. Everything below the transcript box is a live region:
+// active, `TurnStatus` (below) stays pinned at the transcript box's own last row for the whole
+// turn — it never unmounts mid-turn. Each finished segment of the answer (the run of `text-delta`s
+// up to whatever the model does next — a tool call, a tool result, or the turn's own end) commits
+// atomically as a normal transcript entry the moment `pushLine` flushes it, landing in the row
+// directly above `TurnStatus` and pushing whatever was oldest in view off the top. Everything below
+// the transcript box is a live region:
 // status/spinner, a pending-write placeholder, the mode indicator, and a basic input box, all
 // re-rendered in place.
 //
@@ -215,19 +216,22 @@ export function App({
   // ...)` then computes `start === end`, an empty slice: the transcript renders as nothing, not as
   // "not enough room," with no visible sign anything is wrong until the layout recovers.
   const viewportRows = Math.max(1, hasMeasured ? measuredRows : rows - FALLBACK_CHROME_ROWS);
+  // The one reserved row `TurnStatus` occupies at the bottom of the transcript box while a turn is
+  // active (below) — computed once and reused everywhere below that needs it, rather than
+  // re-derived at each call site.
+  const reserved = reservedTranscriptRows(state.turn);
   // One line of overlap between pages, same convention a terminal pager's own PageUp/PageDown use.
   // Derived from the same reserved-row-aware expression as the actual content window
   // (`visibleTranscript`'s own `rows` argument below), not bare `viewportRows` — otherwise a
   // PageUp/PageDown press during an active turn would overshoot by exactly the one row `TurnStatus`
   // occupies, since the content window itself is one row shorter than `viewportRows` then.
-  const pageSize = Math.max(1, viewportRows - reservedTranscriptRows(state.turn) - 1);
+  const pageSize = Math.max(1, viewportRows - reserved - 1);
 
   // A transcript shorter than the viewport top-anchors instead of tail-anchors: bottom-pinning a
   // half-empty screen (the default below, `flex-end`) reads as a mostly-blank terminal until the
   // session grows past `viewportRows`, rather than starting at the top the way a real terminal's
-  // own scrollback does. `reservedTranscriptRows` accounts for the one reserved row `TurnStatus`
-  // occupies at the bottom of the transcript box while a turn is active (below).
-  const contentRows = state.totalVisualRows + reservedTranscriptRows(state.turn);
+  // own scrollback does.
+  const contentRows = state.totalVisualRows + reserved;
   const isShort = contentRows < viewportRows;
 
   // `columns`/`viewportRows` live on TuiState itself (reducer.ts's own comment on those fields) —
@@ -285,7 +289,7 @@ export function App({
 
   const visibleRows = visibleTranscript(
     state.transcript,
-    viewportRows - reservedTranscriptRows(state.turn),
+    viewportRows - reserved,
     state.transcriptScrollOffset,
     state.columns,
   );
@@ -341,8 +345,11 @@ export function App({
           </text>
         ))}
         {/* Rendered as this box's own last row (`justifyContent="flex-end"` above), directly under
-        whatever committed row is currently newest — with no partial assistant text rendering
-        anymore, that's the user's own message. Keyed on `state.turn.startedAt`, defensively:
+        whatever `rowProps` currently ends with — the newest committed row when the reader is
+        following the tail (`transcriptScrollOffset === 0`), but any older row once they've
+        scrolled up: `visibleRows` (above) is already sliced to the current scroll position before
+        this ever renders, and `TurnStatus` itself carries no scroll awareness of its own. Keyed on
+        `state.turn.startedAt`, defensively:
         `runTurn` (cli.ts) has a single `turn-started` dispatch site, reached from two call paths —
         an interactive submission and a mount-time task/resume start — both input-driven, always
         separated from the prior turn's `turn-ended` by a user keystroke, so React never has the

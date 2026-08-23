@@ -1596,12 +1596,12 @@ describe("tuiReducer: error does not end a turn — only turn-ended does", () =>
   });
 });
 
-// Ending a turn drops TurnStatus's own reserved row, so `maxScrollOffset` shrinks by 1 — a reader
-// parked exactly at the old ceiling must be re-clamped to the new one, same as a narrowing resize
-// (viewport-resized) already re-clamps its own ceiling-drop. Without this, a reader at Home when
-// the turn ends would sit one row past the new ceiling until their next scroll action.
-describe("tuiReducer: turn-ended re-clamps the scroll ceiling", () => {
-  test("a reader parked at the old (turn-active) ceiling is pulled back to the new (turn-ended) one", () => {
+// Ending a turn releases TurnStatus's own reserved row — a scrolled-up reader's offset must drop
+// by 1 to compensate, the mirror image of turn-started's own +1 nudge, regardless of where in the
+// scroll range the reader was (not just at the old ceiling): without this, the visible window
+// silently gains an extra row at the top with no scroll action of the reader's own.
+describe("tuiReducer: turn-ended releases the reserved row", () => {
+  test("a reader parked at the old (turn-active) ceiling drops by 1 to the new (turn-ended) one", () => {
     let state: TuiState = initialTuiState(session());
     for (let i = 0; i < 20; i++) {
       state = tuiReducer(state, { type: "transcript-append", line: `line ${i}` });
@@ -1616,7 +1616,10 @@ describe("tuiReducer: turn-ended re-clamps the scroll ceiling", () => {
     expect(next.transcriptScrollOffset).toBe(15); // 20 committed + 0 reserved - 5 viewportRows
   });
 
-  test("a reader already below the new ceiling is left untouched", () => {
+  // Regression: an interior scroll position (not the ceiling) previously left the offset
+  // unchanged — `Math.min(max, offset)` is a no-op whenever `offset` sits well below `max`, so the
+  // turn-started nudge stuck around forever, one row of drift a reader would never see corrected.
+  test("a reader at an interior scroll position also drops by 1, not just one parked at the ceiling", () => {
     let state: TuiState = initialTuiState(session());
     for (let i = 0; i < 20; i++) {
       state = tuiReducer(state, { type: "transcript-append", line: `line ${i}` });
@@ -1628,6 +1631,16 @@ describe("tuiReducer: turn-ended re-clamps the scroll ceiling", () => {
 
     const next = tuiReducer(state, { type: "turn-ended" });
 
-    expect(next.transcriptScrollOffset).toBe(5);
+    expect(next.transcriptScrollOffset).toBe(4);
+  });
+
+  test("a reader following the tail (offset 0) stays at 0, never goes negative", () => {
+    let state: TuiState = initialTuiState(session());
+    state = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
+    expect(state.transcriptScrollOffset).toBe(0);
+
+    const next = tuiReducer(state, { type: "turn-ended" });
+
+    expect(next.transcriptScrollOffset).toBe(0);
   });
 });

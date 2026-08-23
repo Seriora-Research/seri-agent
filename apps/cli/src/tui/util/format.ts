@@ -122,7 +122,6 @@ export function transcriptVisualRows(entries: TranscriptEntry[], columns: number
 // tail length) per call, making the accumulation up to O(scroll-depth²): cheap while scrolled near
 // the bottom, but the exact case a reader scrolled deep into a long session (or a fast streamed
 // answer on a tall terminal) would actually hit every render.
-//
 export function visibleTranscript(
   entries: TranscriptEntry[],
   rows: number,

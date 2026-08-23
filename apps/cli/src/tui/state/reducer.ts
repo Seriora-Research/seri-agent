@@ -97,8 +97,9 @@ export type TuiState = {
   // recomputes it from scratch, and only when `columns` actually changed — the one time the cached
   // value can no longer be trusted, since every existing entry re-wraps to a different row count.
   totalVisualRows: number;
-  // The model's in-progress answer, not yet committed to the transcript — the live region's
-  // content, flushed into `transcript` the moment a non-text event needs to report.
+  // The model's in-progress answer, not yet committed to the transcript and never itself rendered
+  // (app.tsx's own header comment) — flushed into `transcript` the moment a non-text event needs
+  // to report.
   streaming: string;
   // The live region's spinner/status line, cleared once whatever it was reporting on finishes.
   status: string;
@@ -527,12 +528,17 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     // `TurnStatus`'s own row, shrinking the content window by 1 the same way a real appended line
     // would (`appendLines`'s own comment) — without this, a reader parked above the latest content
     // would see their top visible row silently shift down by one, with no scroll action of their
-    // own to explain it.
+    // own to explain it. Guarded on `state.turn === undefined`, matching this reducer's own posture
+    // elsewhere on out-of-order events (`text-delta`/`usage`'s own comments): a `turn-started` while
+    // a turn is already active would otherwise double-nudge the offset for a reservation that never
+    // actually changed.
     case "turn-started":
       return {
         ...state,
         transcriptScrollOffset:
-          state.transcriptScrollOffset > 0 ? state.transcriptScrollOffset + 1 : 0,
+          state.turn === undefined && state.transcriptScrollOffset > 0
+            ? state.transcriptScrollOffset + 1
+            : state.transcriptScrollOffset,
         turn: {
           startedAt: action.startedAt,
           tokens: {
@@ -546,25 +552,18 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           },
         },
       };
-    // Re-clamps `transcriptScrollOffset`, not just a bare `turn: undefined`: ending a turn drops
-    // `TurnStatus`'s own reserved row, so `maxScrollOffset` shrinks by 1 — a reader parked exactly
-    // at the OLD ceiling (Home, e.g.) would otherwise sit one row past the new one until their next
-    // scroll action, and `visibleTranscript` (format.ts) would render a blank row at the top instead
-    // of a full page. Same re-clamp `transcript-scroll`/`transcript-scroll-to`/`viewport-resized`
-    // already do on their own ceiling-narrowing paths, applied here for the one ceiling change none
-    // of those three actions themselves ever dispatch for.
-    case "turn-ended": {
-      const max = maxScrollOffset(
-        state.totalVisualRows,
-        reservedTranscriptRows(undefined),
-        state.viewportRows,
-      );
+    // Releases `TurnStatus`'s own reserved row by subtracting it back out, the mirror image of
+    // `turn-started`'s own `+1` nudge above — without this, a scrolled-up reader's offset stays
+    // inflated by the row the turn reserved, and the visible window silently gains an extra row at
+    // the top with no scroll action of the reader's own. `Math.max(0, ...)`, not a ceiling re-clamp:
+    // `offset <= oldMax` already holds (every other case maintains it), and `newMax === oldMax - 1`,
+    // so `offset - 1 <= newMax` always — a `maxScrollOffset` re-clamp here would be provably dead.
+    case "turn-ended":
       return {
         ...state,
         turn: undefined,
-        transcriptScrollOffset: Math.min(max, state.transcriptScrollOffset),
+        transcriptScrollOffset: Math.max(0, state.transcriptScrollOffset - 1),
       };
-    }
   }
 }
 
