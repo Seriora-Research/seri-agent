@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
+import { flushSync } from "@opentui/react";
 import {
   findCatalogEntry,
   type ModelCatalog,
@@ -12,6 +13,7 @@ import {
 } from "@seri/model-catalog";
 import type { Plan } from "@seri/plans";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
+import { createElement } from "react";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
 import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
@@ -71,7 +73,7 @@ import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anth
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
-import { getGatewayModel as getGatewayModelReal } from "./provider/gateway";
+import type { getGatewayModel as getGatewayModelReal } from "./provider/gateway";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { configuredProviders, PROVIDER_DISPLAY_NAMES, tuiMissingKeyMessage } from "./provider/keys";
@@ -88,11 +90,14 @@ import {
   type SessionState,
   saveSession,
 } from "./session/session";
-import { deliverSignal, onSignalCancel, onSignalCleanup, raiseSignal } from "./signals";
+import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { withSubagents } from "./subagents/dispatch";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
-import { enterAltScreen, exitAltScreen } from "./tui/altScreen";
+import { App } from "./tui/app";
+import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
+import { runWelcomeSplash } from "./tui/routes/setup/welcomeSplash";
+import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";
 import {
   type CommandDirs,
   checkpointTarget,
@@ -108,17 +113,14 @@ import {
   decideRewind,
   decideSetupOpen,
   decideUndo,
-} from "./tui/commands";
-import { runGuidedSetup } from "./tui/guidedSetup";
+} from "./tui/state/commands";
 import {
   createAuthHandlers,
   createConfigHandlers,
   createPermissionsHandlers,
   createSetupHandlers,
-} from "./tui/handlers";
-import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/reducer";
-import { MAIN_TUI_RENDER_OPTIONS } from "./tui/renderOptions";
-import { runWelcomeSplash } from "./tui/welcomeSplash";
+} from "./tui/state/handlers";
+import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/state/reducer";
 import { withVerification } from "./verify/wrapTools";
 
 export type CliDeps = {
@@ -1097,9 +1099,10 @@ type PreparedRun = {
   memory: LoadedMemory;
   // Startup notices (session-created, permission warnings, pre-approved tools, the cross-project
   // checkpoint mismatch) that prepareSession would otherwise print directly. On the TUI path they
-  // are queued here instead: prepareSession runs after enterAltScreen() but before runTui's own
-  // Ink render(), so a direct console write in that gap lands on the alt-screen buffer and is gone
-  // the instant the TUI's first frame paints over it. runTui flushes this into the transcript at
+  // are queued here instead: prepareSession runs after runWelcomeSplash has already created the
+  // shared renderer (getTuiRenderer, runtime/renderer.ts) but before runTui's own `root.render`
+  // call, so a direct console write in that gap lands on the alt-screen buffer and is gone the
+  // instant the TUI's first frame paints over it. runTui flushes this into the transcript at
   // mount. Empty on the non-TTY path, which still writes these directly (no alt screen there). Each
   // entry keeps the stream it was headed for — see PreMountMessage's own comment.
   preMountMessages: PreMountMessage[];
@@ -1146,18 +1149,20 @@ function gatewayNotice(route: ResolvedRoute, requestedProvider: ModelProvider | 
 }
 
 // The one place a TTY-path failure becomes an exit code, used by every catch between
-// `enterAltScreen()` and `runTui`'s own mount (this function's own catches, and `run()`'s two
-// try/catches around the steps on either side of `prepareSession`): exits the alt screen before
-// printing anything (undiscarded messages need the primary screen restored first — the same
-// reasoning `checkZeroKeysConfigured`'s own catch used to state on its own), then flushes any
-// `preMountMessages` queued so far ahead of the fatal message itself, rather than dropping them —
-// a queued "Session X created." or fallback-catalog warning would otherwise vanish with no trace
-// once the run is already ending here instead of ever reaching runTui's own flush site
-// (connectDispatch). Safe to call with `err` from ANY throw in this window, caught or uncaught:
-// this is also what closes the "stack trace printed into the discarded alt-screen buffer" failure
-// mode for a genuinely uncaught exception, since `run()`'s own top-level catches route here too.
+// `runWelcomeSplash`'s own renderer creation and `runTui`'s own mount (this function's own
+// catches, and `run()`'s two try/catches around the steps on either side of `prepareSession`):
+// destroys the renderer before printing anything (undiscarded messages need the primary screen
+// restored first — the same reasoning `checkZeroKeysConfigured`'s own catch used to state on its
+// own), then flushes any `preMountMessages` queued so far ahead of the fatal message itself,
+// rather than dropping them — a queued "Session X created." or fallback-catalog warning would
+// otherwise vanish with no trace once the run is already ending here instead of ever reaching
+// runTui's own flush site (connectDispatch). Safe to call with `err` from ANY throw in this
+// window, caught or uncaught, including one before `getTuiRenderer` was ever called
+// (`destroyTuiRenderer`'s own no-op guard): this is also what closes the "stack trace printed
+// into the discarded alt-screen buffer" failure mode for a genuinely uncaught exception, since
+// `run()`'s own top-level catches route here too.
 function fatalDuringTui(err: unknown, preMountMessages: readonly PreMountMessage[] = []): number {
-  exitAltScreen();
+  destroyTuiRenderer();
   for (const queued of preMountMessages) {
     (queued.stream === "stdout" ? console.log : console.error)(queued.text);
   }
@@ -1826,14 +1831,15 @@ function checkZeroKeysConfigured(configDir: string): boolean | number {
 // functions (cycleModeCommand etc.) the non-interactive path uses, via tuiPresenter instead of
 // consolePresenter — one decision function, two presentations, per the research spec.
 //
-// `ink` (and everything that transitively pulls it in, tui/App.tsx included) is imported lazily,
-// here, rather than at this file's top level: reconciler.js has a module-load-time check —
-// `if (process.env['DEV'] === 'true') { …; await import('./devtools.js'); }`, unconditional, not
-// gated behind an actual render() call — so a top-level `import … from "ink"` ran that check (and
-// attempted a react-devtools-core connection under DEV=true) on every invocation of this binary,
-// `seri --version` and every piped/non-interactive command included, regardless of whether this
-// function is ever reached. Confirmed both ways: DEV=true seri --version attempting a devtools
-// connection before this fix, and not attempting one after it.
+// `ink`/`react` used to be imported lazily here rather than at this file's top level: Ink's own
+// reconciler.js had a module-load-time check — `if (process.env['DEV'] === 'true') { …; await
+// import('./devtools.js'); }`, unconditional, not gated behind an actual render() call — so a
+// top-level `import … from "ink"` ran that check (and attempted a react-devtools-core connection
+// under DEV=true) on every invocation of this binary, `seri --version` and every piped/
+// non-interactive command included, regardless of whether this function is ever reached.
+// `@opentui/react` has no equivalent module-load-time check (checked its compiled source
+// directly — no `process.env` read anywhere in it), so that reason no longer applies; `App`,
+// `createElement`, and `@opentui/react`'s own root/hooks are plain top-level imports now.
 async function runTui(
   prepared: PreparedRun,
   ctx: RunContext,
@@ -1841,9 +1847,14 @@ async function runTui(
   maxTurns: number | undefined,
   skipPermissions: boolean,
 ): Promise<DriveLoopResult> {
-  const { render } = await import("ink");
-  const { createElement } = await import("react");
-  const { App } = await import("./tui/App");
+  // `root` is awaited here, at the top of this function, instead of at a synchronous `render()`
+  // call: `createCliRenderer` is async (`@opentui/core`'s own API, unlike Ink's synchronous
+  // `render`), so
+  // `renderer`/`root` are obtained and awaited before anything else in this closure runs, not just
+  // before the promise executor — every closure below (`quit`, `runTurn`'s catch) can only ever
+  // execute from a keypress or reducer effect, neither of which can fire before this `await`
+  // resolves and the tree is actually mounted.
+  const { renderer, root } = await getTuiRenderer();
 
   // Matches prepareSession's own resolution (D7, feature-plan.md) — routing-priority's per-turn
   // re-resolution (runTurn, below) and /setup's own reads/writes (a later commit in this loop)
@@ -1943,8 +1954,8 @@ async function runTui(
   // which is only ever set by an assignment to this variable first.
   let currentTurn: Promise<void> = Promise.resolve();
   // LOW-G: without this, a second /exit or Ctrl-D while quit() is already unwinding a cancelled
-  // turn would re-enter instance.rerender()/waitUntilExit() on an instance already mid-teardown —
-  // Ink's own render() has no guard against that itself.
+  // turn would re-enter finishQuit() on a renderer already mid-teardown — `destroyTuiRenderer()`
+  // has no guard against a second call itself beyond its own no-op-if-already-torn-down check.
   let quitting = false;
 
   // HIGH-1: accumulated across every turn this TUI session runs (addTokens, the same summing
@@ -2026,7 +2037,11 @@ async function runTui(
       saveSession(toPersist, ctx.sessionsDir);
     } catch (err) {
       const message = `could not save the session: ${messageOf(err)}`;
-      printWarning(message);
+      // Not `printWarning(message)`: its default sink is `console.error`, a raw write that bypasses
+      // the mounted tree entirely — found live, it corrupted whatever row the cursor was last left
+      // at instead of ever reaching the transcript. `dispatch` is the only sink every other in-TUI
+      // error uses.
+      dispatch({ type: "command-error", message });
       for (const { reject } of resolvers) reject(new Error(message));
       return;
     }
@@ -2045,13 +2060,11 @@ async function runTui(
     return skipPermissions ? "auto" : liveState.session.permissionMode;
   }
 
-  // LOW-3: render() now runs before the promise executor (below), not inside it, so `instance` is
-  // a plain `const` fully assigned before any code that reads it (runTurn's catch, quit()) can
-  // possibly run — those are only ever reached from an Ink effect, which cannot fire until this
-  // synchronous render() call has already returned. Previously `instance` was a `let` assigned
-  // inside the executor, safe only because render() happened to complete synchronously before any
-  // microtask could drain — true, but an accident of execution order rather than something the
-  // structure itself guaranteed.
+  // `root` (this function's own top, above) is awaited before the promise executor (below),
+  // not inside it, so it is fully available before any code that reads it (runTurn's catch,
+  // quit()) can possibly run — those are only ever reached from a keypress or reducer effect,
+  // neither of which can fire before this function's own top-level `await` has resolved and the
+  // tree is actually mounted.
   let resolveRunTui!: (result: DriveLoopResult) => void;
   let rejectRunTui!: (err: Error) => void;
   const settled = new Promise<DriveLoopResult>((resolve, reject) => {
@@ -2355,11 +2368,11 @@ async function runTui(
       // (HIGH-B) ends the *session* by choice, not by a signal the shell needs to see re-raised.
     } catch (err) {
       // H-2: driveLoop rejecting (not just resolving with an aborted/errored `done`) used to
-      // leave this promise — and run()'s own `await runTui(...)` — hanging forever. Unmount
-      // first so raw mode is restored (M-2's own mechanism, mirrored here rather than relying
-      // solely on the fatal-signal cleanup below, since a rejection is not a signal), then
+      // leave this promise — and run()'s own `await runTui(...)` — hanging forever. Destroy the
+      // renderer first so raw mode is restored (M-2's own mechanism, mirrored here rather than
+      // relying solely on the fatal-signal cleanup below, since a rejection is not a signal), then
       // reject, so run() actually settles instead of hanging.
-      instance.unmount();
+      destroyTuiRenderer();
       rejectRunTui(err instanceof Error ? err : new Error(String(err)));
     } finally {
       turnInFlight = false;
@@ -2367,7 +2380,7 @@ async function runTui(
   }
 
   // HIGH-1: the ONLY way this function's outer promise ever resolves (as opposed to rejecting, or
-  // the process dying by signal on the fatal Ctrl-C path — see onCancel below). Before this
+  // the process dying by signal on the fatal Ctrl-C path — see runtime/renderer.ts). Before this
   // existed, runTui's promise only ever rejected, so run()'s printUsage/raiseSignal/exit-code
   // logic was unreachable dead code for the entire TUI path, even after a turn completed
   // normally.
@@ -2393,72 +2406,51 @@ async function runTui(
   // through to signals.ts's own fatal path instead — no unwind, no summary, the process dies by
   // signal, the same as a second bare Ctrl-C press (AGENTS.md's own paragraph on the TUI covers
   // this).
-  function quit(): void {
+  async function quit(): Promise<void> {
     if (reactDispatch === undefined || quitting) return;
     quitting = true;
-    // Finding 2 (round 7 code review): Ctrl-D used to be silently swallowed while ApprovalBox was
-    // mounted instead of InputBox. Denying the pending approval is folded into the SAME graceful
+    // Without this, Ctrl-D would be silently swallowed while ApprovalBox is mounted instead of
+    // InputBox. Denying the pending approval is folded into the SAME graceful
     // quit sequence — not a separate "deny just this one prompt" path the way the old
     // readline-based prompt's own Ctrl-D-at-empty-line handling worked — so Ctrl-D keeps one
     // consistent meaning everywhere in the TUI. The turn this unblocks is still in flight
     // afterward (a denied approval is not a finished turn), so the turnInFlight branch below
     // still runs exactly as it would for any other in-flight-turn quit.
     if (liveState.pendingApproval !== undefined) onApprovalAnswer("no");
+    // No final re-render before this, unlike the Ink original: that rerender's only purpose was
+    // flipping a `done` prop to true so App's own effect called `useApp().exit()` — app.tsx has no
+    // such effect at all (this function owns the renderer's lifecycle directly), so there is
+    // nothing left for a final render to trigger. `destroyTuiRenderer()` is synchronous
+    // (`CliRenderer.destroy(): void`, unlike Ink's
+    // async `waitUntilExit()`), so `resolveRunTui` follows it directly, no `.then`/`.catch` needed.
     const finishQuit = (): void => {
-      instance.rerender(
-        createElement(App, {
-          // LOW-J: inert after mount — App only reads `session` once, via useReducer's lazy
-          // initializer, so this rerender's value is never actually read. Passed anyway because
-          // the prop is required and `liveState.session` is the accurate value if that ever
-          // changes.
-          session: liveState.session,
-          route: prepared.route,
-          done: true,
-          onSubmit,
-          onCancel: () => deliverSignal("SIGINT"),
-          onSessionChange,
-          onQuit: quit,
-          onApprovalAnswer,
-          onModelSelected,
-          onModelPickerCancel,
-          onSetupSelect,
-          onSetupKeyEntered,
-          onSetupRemove,
-          onSetupBack,
-          onSetupClose,
-          connectDispatch: undefined,
-        }),
-      );
-      // `.catch(rejectRunTui)`: Ink's own `unmount(error)` rejects
-      // `waitUntilExit()`'s promise when the argument is an Error (a render crash, for instance) —
-      // without this, that rejection had nowhere to go (a `void`ed promise with no rejection
-      // handler), so `settled` above never settled at all: `await runTui(...)` at this function's
-      // own call site hung forever, with the alt screen still up, instead of hitting the catch that
-      // is supposed to cover exactly this case.
-      void instance
-        .waitUntilExit()
-        .then(() => {
-          resolveRunTui({
-            doneReason,
-            cancelledBy: undefined,
-            usage,
-            cost,
-            refusedWithoutRunning,
-            archivist,
-            ranAnyTurn,
-          });
-        })
-        .catch((err: unknown) => {
-          rejectRunTui(err instanceof Error ? err : new Error(String(err)));
-        });
+      destroyTuiRenderer();
+      resolveRunTui({
+        doneReason,
+        cancelledBy: undefined,
+        usage,
+        cost,
+        refusedWithoutRunning,
+        archivist,
+        ranAnyTurn,
+      });
     };
     if (turnInFlight) {
       // MEDIUM-5: without this, cancelling a still-running turn on the way out (this whole
       // branch's own comment above) left the TUI looking frozen for however long the turn took
       // to unwind, with no indication anything had happened or that Ctrl-C was still available
       // to force it — dispatched before deliverSignal so it is visible even if the unwind never
-      // completes (a stuck tool ignoring its own abort signal).
-      pushTranscriptLine(dispatch, "quitting — cancelling the in-flight turn, Ctrl-C to force");
+      // completes (a stuck tool ignoring its own abort signal). `flushSync` + `renderer.idle()`
+      // are both required, not just one: the abort→turn-settles→finishQuit chain below runs
+      // entirely on microtasks (the fake runLoop test's own abort listener resolves synchronously
+      // once SIGINT is delivered), while `@opentui/react`'s reconciler otherwise commits on a
+      // macrotask — without forcing the commit and waiting for the actual paint, `finishQuit`'s
+      // `destroyTuiRenderer()` tore down the alt-screen before this line was ever painted (found
+      // live: it never once appeared in a captured pty session).
+      flushSync(() =>
+        pushTranscriptLine(dispatch, "quitting — cancelling the in-flight turn, Ctrl-C to force"),
+      );
+      await renderer.idle();
       deliverSignal("SIGINT");
       void currentTurn.then(finishQuit);
     } else {
@@ -2498,7 +2490,7 @@ async function runTui(
         dispatch({ type: "command-error", message: "/exit: invalid arguments." });
         return;
       }
-      quit();
+      await quit();
       return;
     }
     // /model, like /exit just above, is intercepted here rather than added to SLASH_COMMANDS: it
@@ -2828,27 +2820,11 @@ async function runTui(
     }
   }
 
-  const instance = render(
+  root.render(
     createElement(App, {
       session: prepared.session,
       route: prepared.route,
-      // H-3: multi-turn — the TUI never sets `done` itself here at mount. Exiting is /exit,
-      // Ctrl-D (quit(), above) or Ctrl-C's job (onCancel below and signals.ts), not an implicit
-      // "the last turn finished" one.
-      done: false,
       onSubmit,
-      // A raw Ctrl-C press is routed into the same cancel slot the readline approval prompt
-      // uses (deliverSignal, cli.ts's own SIGINT-routing comment near makeApprovalPrompt).
-      // While a turn is in flight, the first press aborts it via driveLoop's own
-      // AbortController and returns control here — the promise above resolves, `turnInFlight`
-      // clears, and the TUI is back to awaiting input, exactly per H-3. A second press within
-      // that same turn — or any press while nothing is running at all, since nothing has the
-      // cancel slot registered between turns (an idle first Ctrl-C is immediately fatal) —
-      // finds the slot empty and falls straight through to signals.ts's own fatal path
-      // (raiseSignal), matching non-TUI behavior for the same two situations rather than
-      // inventing new exit semantics for either. Ink's own competing `exitOnCtrlC` default is
-      // turned off below, so this is the only handler.
-      onCancel: () => deliverSignal("SIGINT"),
       onSessionChange,
       onQuit: quit,
       onApprovalAnswer,
@@ -2859,10 +2835,10 @@ async function runTui(
       onSetupRemove,
       onSetupBack,
       onSetupClose,
-      // Stage D: /config and /permissions' own handlers — wired here, runTui's own mount, only
-      // (not runGuidedSetup's, same reasoning as onLogin/onLogout/onAuthResolved's own comment on
-      // this file's Stage C row: that mount always has `pendingSetup` set, so these panels are
-      // structurally unreachable there).
+      // /config and /permissions' own handlers — wired here, runTui's own mount, only (not
+      // runGuidedSetup's, same reasoning as onLogin/onLogout/onAuthResolved's own comment below:
+      // that mount always has `pendingSetup` set, so these panels are structurally unreachable
+      // there).
       onConfigSelect,
       onConfigValueEntered,
       onConfigUnset,
@@ -2871,8 +2847,8 @@ async function runTui(
       onPermissionsRemove,
       onPermissionsBack,
       onPermissionsClose,
-      // No auth-offer recompute here (thermo-nuclear, round 5 — proven redundant): every path
-      // that reaches this (Escape on "starting"/"device", Enter/Esc on a login-failure result, or
+      // No auth-offer recompute here — redundant: every path that reaches this (Escape on
+      // "starting"/"device", Enter/Esc on a login-failure result, or
       // a logout-failure result) never changed the auth-session file between when it was last
       // read and this firing — a login failure means saveAuthSession never ran, and a logout
       // failure's own result panel already got a truthful recompute from onLogout's own single
@@ -2886,14 +2862,15 @@ async function runTui(
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
         // See PreparedRun.preMountMessages' own comment: prepareSession queued these instead of
-        // printing them directly, since it runs after enterAltScreen() but before this mount.
+        // printing them directly, since it runs after the shared renderer already exists but
+        // before this mount.
         // `.stream` is ignored deliberately (PreMountMessage's own comment): every queued line
         // lands in the transcript either way, regardless of which console stream it would have
         // gone to on a non-TTY run.
         for (const { text } of prepared.preMountMessages) {
           dispatch({ type: "transcript-append", line: text });
         }
-        // Stage C: the non-blocking login/signup offer (AuthBanner) — true iff no auth session is
+        // The non-blocking login/signup offer (AuthBanner) — true iff no auth session is
         // saved yet, computed fresh at mount the same way decideSetupOpen/decideModelPickerOpen are
         // computed fresh on their own open, not cached from prepareSession.
         dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
@@ -2911,18 +2888,16 @@ async function runTui(
         if (shouldRunTurn) currentTurn = runTurn(prepared.session);
       },
     }),
-    // See renderOptions.ts's own comment on `interactive` for why it's set the way it is.
-    MAIN_TUI_RENDER_OPTIONS,
   );
 
   // M-2: process.kill(pid, SIGINT) with no listeners left (raiseSignal, signals.ts's fatal
   // path) terminates before any more JS runs, which would otherwise leave the terminal in raw
   // mode — mirrors how the readline approval prompt already avoids this (closing the Interface
   // puts the tty back out of raw mode before a second press re-raises for real,
-  // makeApprovalPrompt's own onAbort wiring). instance.unmount() is Ink's equivalent, and this
-  // runs on every fatal signal death this process can have, not just the ones a turn happens to
-  // be in flight for.
-  onSignalCleanup(() => instance.unmount());
+  // makeApprovalPrompt's own onAbort wiring). No `onSignalCleanup` registration needed here
+  // anymore: `getTuiRenderer()` (this function's own top) already registers exactly this via
+  // `onSignalCleanupLast` the moment the renderer is created, so it runs on every fatal signal
+  // death this process can have, not just the ones a turn happens to be in flight for.
 
   return settled;
 }
@@ -3026,39 +3001,39 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // than a branch inside the block below, so a corrected zeroKeysConfigured/runGuidedSetup diff
   // never also has to account for this mount.
   if (isTTY) {
-    // Wrapped, unlike the rest of this function's own `return N` early exits: `run()` has never
-    // had a top-level `.catch` (its only caller, `import.meta.main`, does
-    // `run(...).then((code) => process.exit(code))`), and neither Bun nor this file installs an
-    // `uncaughtException`/`unhandledRejection` handler — a real throw here would print its own
-    // stack trace INTO the still-active alt-screen buffer, which `process.on("exit",
-    // exitAltScreen)` then silently discards on the way out, leaving the user with a dead process
-    // and zero visible diagnostics. `fatalDuringTui` (prepareSession's own bailout, shared here) is
-    // what every other terminal-for-the-run failure in this window already routes through.
-    //
-    // `enterAltScreen()` itself is INSIDE this try, not just the calls after it: its own
-    // `entered = true` runs before its write, so a thrown write still leaves `exitAltScreen`
-    // (called by `fatalDuringTui` below) able to attempt — and safely no-op-on-failure — a real
-    // restore, rather than the throw escaping before any of this machinery is even reachable.
+    // Wrapped, unlike the rest of this function's own `return N` early exits: `run()` has never had
+    // a top-level `.catch` (its only caller, `import.meta.main`, does
+    // `run(...).then((code) => process.exit(code))`), so an unwrapped throw here would print its own
+    // stack trace INTO the still-active alt-screen buffer, which `getTuiRenderer`'s own renderer
+    // (created by `runWelcomeSplash`, below) would otherwise leave undestroyed on the way out,
+    // leaving the user with a dead process and zero visible diagnostics. `fatalDuringTui`
+    // (prepareSession's own bailout, shared here) is what every other terminal-for-the-run failure
+    // in this window already routes through — it destroys the renderer before printing, which is
+    // safe to call even for a throw before the renderer was ever created (`destroyTuiRenderer`'s
+    // own no-op guard). This try/catch is still what handles a throw/rejection reachable from THIS
+    // block specifically — `runtime/renderer.ts`'s own `process.on("uncaughtException"/
+    // "unhandledRejection", ...)` pair (registered once `getTuiRenderer` first creates the renderer)
+    // is the backstop for one that isn't, not a replacement for this wrapper.
     try {
-      enterAltScreen();
       await runWelcomeSplash(ctx.configDir, deps);
       const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
       if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
-      // getModelCatalog() deliberately NOT awaited here (code-review finding, PR #91): awaiting it
-      // before runGuidedSetup blocked /setup from ever painting until the models.dev fetch settled
-      // (up to FETCH_TIMEOUT_MS) — a blank terminal on exactly the flow this feature exists to make
+      // getModelCatalog() deliberately NOT awaited here: awaiting it before runGuidedSetup would
+      // block /setup from ever painting until the models.dev fetch settled (up to
+      // FETCH_TIMEOUT_MS) — a blank terminal on exactly the flow this feature exists to make
       // instant. The fetch still starts immediately; runGuidedSetup's own onSetupClose only consumes
       // the resolved catalog once it actually needs it, by which point a real user has almost always
       // already typed a key and closed the panel.
       //
-      // This IS a fetch running in parallel with a live Ink render — the exact hazard Decision 5
-      // (byok-guided-setup-default-model bugfix report) originally avoided by construction, loading
-      // the catalog fully BEFORE `runGuidedSetup` ever mounted. It is safe here only because Ink
-      // 7.1.1's `render()` defaults `patchConsole: true` (ink/build/render.js) — `getModelCatalog`'s
-      // own `printWarning` (a `console.error` call, provider/catalog.ts) gets routed above the live
-      // frame instead of corrupting it, on every offline first run. A future Ink upgrade or an
-      // explicit `patchConsole: false` on this `render()` call (there is none today — `runGuidedSetup`
-      // only passes `exitOnCtrlC`/`interactive`) would silently reintroduce that hazard.
+      // This IS a fetch running in parallel with a live render — a hazard that loading the catalog
+      // fully BEFORE `runGuidedSetup` ever mounted would avoid by construction instead. It is safe
+      // here because
+      // `@opentui/core`'s `CliRenderer` defaults `consoleMode` to `"console-overlay"` for the whole
+      // renderer's lifetime, not just one mount — `getModelCatalog`'s own `printWarning` (a
+      // `console.error` call, provider/catalog.ts) is captured rather than written to the live
+      // alt-screen frame, on every offline first run. An explicit `consoleMode: "disabled"` on
+      // `MAIN_TUI_RENDERER_CONFIG` (there is none today, runtime/renderOptions.ts) would reintroduce
+      // that hazard.
       if (zeroKeysConfigured) {
         await runGuidedSetup(ctx.configDir, getModelCatalog());
       }
@@ -3083,12 +3058,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   let runResult: DriveLoopResult;
   if (isTTY) {
     // Same reasoning as the try/catch above this function's own welcome-splash/guided-setup block:
-    // a throw out of runTui (a reducer bug, a rendering error, anything Ink itself doesn't already
-    // catch) would otherwise reach `import.meta.main`'s bare `.then`, print its stack into the
-    // still-active alt screen, and lose it the instant `process.on("exit")` restores the primary
-    // one. `prepared.preMountMessages` is flushed here too, for the same reason `prepareSession`'s
-    // own catches flush it: this IS the only other path that can end the run before runTui's own
-    // `connectDispatch` ever gets a chance to.
+    // a throw out of runTui (a reducer bug, a rendering error, anything the renderer itself
+    // doesn't already catch) would otherwise reach `import.meta.main`'s bare `.then`, print its
+    // stack into the still-active alt-screen buffer, and lose it once the process exits with the
+    // renderer never destroyed. `prepared.preMountMessages` is flushed here too, for the same
+    // reason `prepareSession`'s own catches flush it: this IS the only other path that can end the
+    // run before runTui's own `connectDispatch` ever gets a chance to.
     try {
       runResult = await runTui(prepared, ctx, deps, maxTurns, skipPermissions);
     } catch (err) {
@@ -3110,7 +3085,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning, archivist, ranAnyTurn } =
     runResult;
 
-  exitAltScreen();
+  // Already destroyed by runTui's own quit() (its `finishQuit`, the only place `runResult` can
+  // resolve from on the TTY path) or never created at all on the non-TTY path — this call is a
+  // no-op in both of today's cases. Kept as an explicit backstop, not deleted: `destroyTuiRenderer`
+  // is idempotent, and the alternative is trusting every future TTY-path resolution to keep
+  // routing through quit() with no second reminder here if that ever stops being true.
+  destroyTuiRenderer();
 
   // Before raiseSignal, and outside the exit-code branch below, because every way out of driveLoop
   // spent the same tokens: a turn the user cancelled and a turn the provider failed mid-way are

@@ -1,0 +1,32 @@
+/** @jsxImportSource @opentui/react */
+import { TextAttributes } from "@opentui/core";
+import { ERROR_MARK, theme } from "../theme/theme";
+import { singleLine } from "../util/format";
+
+// Each caller reserves exactly one row for an alert line like this (app.tsx's own APP_CHROME_ROWS
+// for `commandError`, each panel's own budget for SetupEnterKey/ConfigEnterValue/AuthPanel's error
+// line), but `message` can be an Error#message — unbounded length AND free to carry a literal `\n`
+// (a multi-line validation error, a JSON-parse error citing surrounding context). OpenTUI renders
+// an embedded newline as a real line break the same way Ink did — `singleLine` collapses any
+// embedded break first, then `truncate` guards what's left from overflowing on a narrow terminal.
+// Either alone would leave the other case free to push an open panel's own bottom row past the
+// alt-screen viewport.
+//
+// `ERROR_MARK` and the message are two SIBLING `<text>` nodes, not one `<text>` with two children,
+// mirroring `ui/ListRow.tsx`'s own fix (see that file's comment for the full live-verified bug this
+// avoids). `wrapMode="none"` on the message is required alongside `truncate` for the same reason
+// documented there: without it, a message wider than the row's available width soft-wraps across
+// multiple rows instead of clipping to one, overflowing the one-row budget every caller assumes.
+export function ErrorLine({ message }: { message: string | undefined }) {
+  if (message === undefined) return null;
+  return (
+    <box flexDirection="row">
+      <text fg={theme.error} attributes={TextAttributes.BOLD} flexShrink={0}>
+        {ERROR_MARK}
+      </text>
+      <text fg={theme.error} attributes={TextAttributes.BOLD} truncate wrapMode="none">
+        {singleLine(message)}
+      </text>
+    </box>
+  );
+}

@@ -1,81 +1,67 @@
-// Root TUI component, rendered full-screen in the alternate screen buffer (altScreen.ts's own
-// enter/exit calls, cli.ts). The transcript is a measured, tail-anchored, scrollable viewport
-// (visibleTranscript, format.ts) rather than an append-only <Static> region — a terminal-width- and
-// -height-bounded slice of `state.transcript` PLUS the in-progress `state.streaming` answer as its
-// own newest entry, following the newest row by default and scrollable with PageUp/PageDown/Home/
-// End. Everything below it is a live region: status/spinner, a pending-write placeholder, the mode
-// indicator, and a basic input box, all re-rendered in place.
-
+/** @jsxImportSource @opentui/react */
+// Root TUI component, rendered inside the one `CliRenderer` shared by `routes/setup/
+// welcomeSplash.ts`, `routes/setup/guidedSetup.ts`, and `cli.ts`'s `runTui` (`runtime/renderer.ts`,
+// `screenMode: "alternate-screen"`) — each phase `root.render`s different props into the same
+// instance rather than mounting its own. The transcript is a measured, tail-anchored, scrollable
+// viewport (visibleTranscript, util/format.ts) rather than an append-only region — a
+// terminal-width- and -height-bounded slice of `state.transcript` PLUS the in-progress
+// `state.streaming` answer as its own newest entry, following the newest row by default and
+// scrollable with PageUp/PageDown/Home/End. Everything below it is a live region: status/spinner, a
+// pending-write placeholder, the mode indicator, and a basic input box, all re-rendered in place.
+//
+// Renderer lifecycle (mount, unmount, alt-screen entry/exit) is NOT this component's concern —
+// unlike Ink, where `App` itself called `useApp().exit()` on a `done` prop, OpenTUI has no such
+// hook: the three callers above own the `CliRenderer` directly and destroy it themselves once a
+// quit is ready to complete (`getTuiRenderer`/`destroyTuiRenderer`, runtime/renderer.ts).
+import type { BoxRenderable } from "@opentui/core";
+import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import {
-  Box,
-  type DOMElement,
-  Text,
-  useApp,
-  useBoxMetrics,
-  useInput,
-  useStdout,
-  useWindowSize,
-} from "ink";
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
-import { ErrorLine } from "./components";
+import { ApprovalBox } from "./components/ApprovalBox";
+import { InputBox } from "./components/InputBox";
+import { ModelPicker } from "./components/ModelPicker";
+import { AuthBanner, AuthPanel } from "./routes/config/AuthPanel";
+import { ConfigPanel } from "./routes/config/ConfigPanel";
+import { PermissionsPanel } from "./routes/config/PermissionsPanel";
+import { SetupPanel } from "./routes/setup/SetupPanel";
+import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
+import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
+import { theme } from "./theme/theme";
+import { ErrorLine } from "./ui/ErrorLine";
 import {
   DEFAULT_COLUMNS,
+  DEFAULT_ROWS,
   FALLBACK_CHROME_ROWS,
   formatModeLabel,
   transcriptRowsProps,
   visibleTranscript,
   wrapPendingRows,
-} from "./format";
-import { ApprovalBox } from "./panels/ApprovalBox";
-import { AuthBanner, AuthPanel } from "./panels/AuthPanel";
-import { ConfigPanel } from "./panels/ConfigPanel";
-import { InputBox } from "./panels/InputBox";
-import { ModelPicker } from "./panels/ModelPicker";
-import { PermissionsPanel } from "./panels/PermissionsPanel";
-import { SetupPanel } from "./panels/SetupPanel";
-import { WelcomeSplash } from "./panels/WelcomeSplash";
-import { type Dispatch, initialTuiState, tuiReducer } from "./reducer";
-import { theme } from "./theme";
+} from "./util/format";
 
 export type AppProps = {
   session: SessionState<ModelMessage>;
   // Seeds the reducer's own `state.route` at mount (`initialTuiState(session, { route })`, below)
   // — the persistent mode-indicator's model+route label reads `state.route`, not this prop
   // directly, so a later /model switch reaches the label by dispatching `route-updated` into the
-  // reducer instead of this prop ever changing. The key itself is required, not optional: making
-  // it optional would let a future call site silently omit it instead of failing to compile
-  // (code-review finding: this is exactly what let the OTHER `createElement(App, ...)` call site,
-  // cli.ts's `finishQuit` re-render, go unnoticed). The VALUE is `| undefined` because a third call
-  // site (runGuidedSetup, cli.ts) mounts App before any provider key exists at all — genuinely no
-  // PreparedRun/route to pass (found 2026-08-13: PR #86 made this required assuming only 2 call
-  // sites existed, both post-PreparedRun; PR #87 had already added this third one on a branch that
-  // predated #86's route requirement, so neither PR could see the conflict at review time).
+  // reducer instead of this prop ever changing. The key itself is required, not optional: making it
+  // optional would let a future `createElement(App, ...)` call site silently omit it instead of
+  // failing to compile. The VALUE is `| undefined` because one call site (runGuidedSetup, cli.ts)
+  // mounts App before any provider key exists at all — genuinely no PreparedRun/route to pass.
   // formatModeLabel drops the model+route suffix entirely when `state.route` is undefined, rather
   // than showing a fabricated route ("your key" during a flow where there is provably no key yet
   // would be actively wrong, not just a placeholder).
   route: ResolvedRoute | undefined;
-  // The seam Phase 5 wires driveLoop's dispatch through: called once on mount with the reducer's
-  // own dispatch function, the same shape `useReducer` returns. Optional because Phase 4's tests
-  // exercise the reducer via `connectDispatch` directly, with no live loop behind it yet.
+  // The seam driveLoop's dispatch is wired through: called once on mount with the reducer's own
+  // dispatch function, the same shape `useReducer` returns. Optional because some tests exercise
+  // the reducer via `connectDispatch` directly, with no live loop behind it.
   connectDispatch?: (dispatch: Dispatch) => void;
-  // Submitted line from the input box — Phase 5 wires this to the task/slash-command dispatch;
-  // Phase 4 has nowhere real to send it yet.
+  // Submitted line from the input box, wired to the task/slash-command dispatch.
   onSubmit?: (value: string) => void;
-  // Called on a raw Ctrl-C keypress — the TUI's own route into signals.ts's cancel slot, mirroring
-  // cli.ts's readline path (`rl.on("SIGINT", () => deliverSignal("SIGINT"))`). Needed because raw
-  // mode (which both Ink and readline use) never lets the terminal driver turn 0x03 into a real
-  // process SIGINT — the byte arrives as ordinary input instead, so whatever is reading input has
-  // to recognise it explicitly. The caller (runTui's render() call) turns off Ink's own default
-  // `exitOnCtrlC` behavior specifically so this is the only thing a Ctrl-C here does — leaving
-  // Ink's default on would give Ink its own competing exit path that races the one driveLoop's
-  // AbortController expects.
-  onCancel?: () => void;
   // Called whenever the reducer's own `state.session` changes — a mode cycle, a rewind, or the
   // loop-event reducer's own messages-updated merge. This is now the single source of truth for
   // persistence on the TUI path (a real bug this fixes: driveLoop used to persist a session it had
@@ -84,24 +70,15 @@ export type AppProps = {
   // the initial mount call — prepareSession already saved that exact session to disk, so the first
   // call here is a harmless, idempotent rewrite of the same content, not a bug worth guarding.
   onSessionChange?: (session: SessionState<ModelMessage>) => void;
-  // HIGH-1: the TUI's own graceful-quit trigger, called on /exit (onSubmit intercepts it before
-  // the ordinary command dispatch — see runTui's own comment) and on Ctrl-D at the input box (the
-  // normal Unix "end input" convention). runTui's implementation re-renders with done: true (the
-  // hook below) and resolves its own outer promise once Ink has actually unmounted, which is what
-  // lets run() reach printUsage/the exit-code logic at all on the TUI path — before this existed
-  // there was no way to reach it.
+  // The TUI's own graceful-quit trigger, called on /exit (onSubmit intercepts it before the
+  // ordinary command dispatch — see runTui's own comment) and on Ctrl-D at the input box (the
+  // normal Unix "end input" convention). `cli.ts`'s `quit()` is what actually ends the renderer now
+  // (this component no longer calls any exit hook itself — see this file's own header comment).
   onQuit?: () => void;
-  // True once runTui's own quit() has fired. Ink does not auto-exit on its own — Phase 1's own
-  // hello-world smoke test hung until an explicit unmount()/exit() call was added — so this effect
-  // is what ends the process, rather than relying on implicit auto-exit-on-unmount (also the
-  // documented workaround for a macOS-only Bun/Ink cosmetic issue: cursor invisible after exit).
-  done: boolean;
-  // Findings 1+5 (thermo-nuclear structural review, round 6): answers the TUI-native approval
-  // prompt (runTui's own tuiApprovalPrompt, cli.ts) — the ORIGINAL research-spec design ("a TUI
-  // supplies a different function of the identical signature... with zero change to
-  // loop.ts/gate.ts") that every earlier round of this branch left unbuilt, leaving the TUI path
-  // calling makeApprovalPrompt's readline-based prompt instead: a SECOND stdin consumer and a
-  // SECOND SIGINT route racing Ink's own raw-mode ownership and signals.ts's single cancel slot.
+  // Answers the TUI-native approval prompt (runTui's own tuiApprovalPrompt, cli.ts) — a real prompt
+  // rendered inside this same tree, not readline's own stdin-based prompt: a second stdin consumer
+  // and a second SIGINT route would otherwise race the renderer's own raw-mode ownership and
+  // signals.ts's single cancel slot.
   onApprovalAnswer?: (answer: ApprovalAnswer) => void;
   // /model's own two resolutions, mirroring onApprovalAnswer's shape: called from ModelPicker's own
   // keypress handler, wired by runTui to dispatch model-picker-resolved (with or without a pick)
@@ -116,8 +93,8 @@ export type AppProps = {
     leftoverInput?: string,
   ) => void;
   onModelPickerCancel?: () => void;
-  // /setup's own five resolutions (D5-D8, feature-plan.md) — mirroring onModelSelected's shape:
-  // each does nothing but call into cli.ts's own handlers, which recompute the whole next
+  // /setup's own five resolutions, mirroring onModelSelected's shape: each does nothing but call
+  // into cli.ts's own handlers, which recompute the whole next
   // SetupState (rows included) and dispatch it, the same "presentation calls a prop, cli.ts owns
   // the decision" split every other interactive command in this file already has.
   onSetupSelect?: (provider: ModelProvider) => void;
@@ -125,23 +102,19 @@ export type AppProps = {
   onSetupRemove?: (provider: ModelProvider) => void;
   onSetupBack?: () => void;
   onSetupClose?: (leftoverInput?: string) => void;
-  // Bug fix (coordinator follow-up on Stage C; extended round 4): AuthPanel's own "result" step
-  // (a device-flow failure — a denied/expired code, a network error, degraded by
-  // createAuthHandlers' (tui/handlers.ts) own catch block) had no way back to InputBox at all
-  // before this — not even Ctrl-C, which is wired to onCancel, not to clearing pendingAuth. Called
-  // from AuthPanel's own Escape handler on every step, plus Enter on "result" — a successful login
-  // never reaches here: createAuthHandlers.onLogin (tui/handlers.ts) dispatches auth-resolved
-  // itself, right after its own `await loginFn(...)` returns, with no user keypress involved.
+  // AuthPanel's own "result" step (a device-flow failure — a denied/expired code, a network error,
+  // degraded by createAuthHandlers' (tui/handlers.ts) own catch block) has no way back to InputBox
+  // otherwise — not even Ctrl-C, which cancels the in-flight turn (runtime/renderer.ts), not
+  // pendingAuth. Called from AuthPanel's own Escape handler on every step, plus Enter on "result" —
+  // a successful login never reaches here: createAuthHandlers.onLogin (tui/handlers.ts) dispatches
+  // auth-resolved itself, right after its own `await loginFn(...)` returns, with no user keypress
+  // involved.
   onAuthResolved?: () => void;
-  // Stage A scaffolding (cli-commands-to-tui feature-plan.md): /config's own resolutions, mirroring
-  // onSetupSelect's own five-prop shape — ConfigPanel.tsx's own step-dispatcher needs a real prop to
-  // route Esc/Ctrl-D/Enter to once Stage D wires config-requested, rather than a panel silently
-  // stranding the user with no way back to InputBox. Optional, matching every other handler prop on
-  // this type (onSetupSelect included) — cli.ts's two mount sites and guidedSetup.ts's mount site
-  // each already supply only the subset of handlers their own mount actually uses, so making these
-  // two required would force edits to all three, outside this stage's own stated file boundary
-  // (cli.ts/guidedSetup.ts are explicitly not touched in Stage A). Unreachable today: nothing
-  // dispatches config-requested/permissions-requested yet.
+  // /config's own resolutions, mirroring onSetupSelect's own five-prop shape — ConfigPanel.tsx's
+  // own step-dispatcher routes Esc/Ctrl-D/Enter to these rather than silently stranding the user
+  // with no way back to InputBox. Optional, matching every other handler prop on this type
+  // (onSetupSelect included) — cli.ts's two mount sites and guidedSetup.ts's mount site each supply
+  // only the subset of handlers their own mount actually uses.
   onConfigSelect?: (key: string) => void;
   onConfigValueEntered?: (key: string, value: string) => void;
   onConfigUnset?: (key: string) => void;
@@ -160,35 +133,22 @@ export type AppProps = {
   onSplashContinue?: () => void;
 };
 
-// A pty can genuinely report `stdout.columns` as a real but unusable `0` for the first render or
+// A pty can genuinely report a terminal width as a real but unusable `0` for the first render or
 // two, before its window-size ioctl has actually landed (reproduced live over a real pty in WSL):
 // `state.columns` reaching `wrapForTranscript` as 0 clamps to 1 there — not a crash, but a
 // transcript wrapped to ONE CHARACTER PER ROW, which is worse than the silent corruption that
 // clamp was written to prevent. `|| DEFAULT_COLUMNS`, not `??`: `||` treats `0`
 // the same as `undefined`/`null`, which is exactly the substitution a column count of zero needs —
 // there is no real terminal width `0` is ever the correct value for.
-function resolveWidth(columns: number | undefined): number {
+function resolveWidth(columns: number): number {
   return columns || DEFAULT_COLUMNS;
 }
 
-// D5 (byok-open3-route-indicator feature-plan.md): no such hook existed in this file before — the
-// persistent mode-indicator (App, below) needs to know the terminal's current column width, live,
-// to pick its 3-tier layout. See DEFAULT_COLUMNS's own comment for what the fallback actually
-// guards (a genuine non-TTY production stdout, or the real pty startup race above), and what it
-// does not.
-function useTerminalWidth(): number {
-  const { stdout } = useStdout();
-  const [width, setWidth] = useState(resolveWidth(stdout.columns));
-
-  useEffect(() => {
-    const onResize = () => setWidth(resolveWidth(stdout.columns));
-    stdout.on("resize", onResize);
-    return () => {
-      stdout.off("resize", onResize);
-    };
-  }, [stdout]);
-
-  return width;
+// Same fallback, same reason, for the other half of a pty's first-render dimensions report —
+// `height={rows}` (below) with a genuine but unusable `0` rows would give the root box zero
+// height instead of a blank first frame.
+function resolveHeight(rows: number): number {
+  return rows || DEFAULT_ROWS;
 }
 
 export function App({
@@ -196,10 +156,8 @@ export function App({
   route,
   connectDispatch,
   onSubmit,
-  onCancel,
   onSessionChange,
   onQuit,
-  done,
   onApprovalAnswer,
   onModelSelected,
   onModelPickerCancel,
@@ -222,22 +180,26 @@ export function App({
   onSplashContinue,
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session, { route }));
-  const { exit } = useApp();
-  const width = useTerminalWidth();
-  const { rows } = useWindowSize();
+  const { width: rawWidth, height: rawRows } = useTerminalDimensions();
+  const width = resolveWidth(rawWidth);
+  const rows = resolveHeight(rawRows);
   const modeLabel = formatModeLabel(state.modeIndicator, state.route, width);
 
   // The transcript viewport's own height comes from flexbox's leftover space (flexGrow, below),
-  // not from how many lines it renders — so measuring it back with useBoxMetrics cannot create a
-  // feedback loop where changing the slice changes the measurement. `hasMeasured` is false only for
-  // the one frame before Ink's first layout pass; FALLBACK_CHROME_ROWS is a placeholder for that
-  // frame alone, not a real chrome-height estimate.
-  const viewportRef = useRef<DOMElement | null>(null);
-  const { height: measuredRows, hasMeasured } = useBoxMetrics(viewportRef);
+  // not from how many lines it renders — so measuring it back cannot create a feedback loop where
+  // changing the slice changes the measurement. `hasMeasured` is false only for the frames before
+  // OpenTUI's own layout pass has fired `onSizeChange` at least once; FALLBACK_CHROME_ROWS is a
+  // placeholder for those frames alone, not a real chrome-height estimate. OpenTUI's own
+  // `<scrollbox>` needs no measured-height read for a transcript fed its FULL content, but this
+  // component instead keeps the reducer's existing windowed-slice contract (`transcriptScrollOffset`
+  // et al, state/reducer.ts, unchanged) and uses `onSizeChange` (an event-driven per-renderable
+  // option, not a polling hook) as the direct replacement for Ink's `useBoxMetrics` read.
+  const [measuredRows, setMeasuredRows] = useState(0);
+  const [hasMeasured, setHasMeasured] = useState(false);
   // `Math.max(1, ...)` on BOTH branches: the measured one had no floor. The
-  // transcript Box has `minHeight={0}`, so on a short enough terminal — or one where the sibling
+  // transcript box has `minHeight={0}`, so on a short enough terminal — or one where the sibling
   // rows above/below it (mode indicator, an open commandError line) already consume the whole
-  // `rows - 1` budget — Yoga can genuinely measure it down to 0. `visibleTranscript(transcript, 0,
+  // budget — Yoga can genuinely measure it down to 0. `visibleTranscript(transcript, 0,
   // ...)` then computes `start === end`, an empty slice: an in-progress streamed answer renders as
   // nothing, not as "not enough room," with no visible sign anything is wrong until the layout
   // recovers.
@@ -306,15 +268,11 @@ export function App({
   }, [connectDispatch]);
 
   useEffect(() => {
-    if (done) exit();
-  }, [done, exit]);
-
-  useEffect(() => {
     onSessionChange?.(state.session);
   }, [state.session, onSessionChange]);
 
   // True exactly when InputBox is the render ternary's own active branch, below — every other
-  // branch is a modal panel that owns the keyboard. The transcript Box above (flexGrow/minHeight={0})
+  // branch is a modal panel that owns the keyboard. The transcript box above (flexGrow/minHeight={0})
   // still renders unconditionally regardless of which branch is active, so on a terminal taller
   // than the open panel's own content it stays partially visible above it, not fully occluded — but
   // PageUp/PageDown/Home/End must still not scroll it in the background while a panel is open: the
@@ -329,16 +287,16 @@ export function App({
     state.pendingPermissions === undefined &&
     !state.pendingSplash;
 
-  // A second, independent useInput from InputBox's own — Ink delivers the same keypress to every
-  // registered handler, so this fires regardless of what InputBox does with the same press (today,
-  // nothing: InputBox's own handler skips any key.ctrl input).
-  useInput((input, key) => {
-    if (key.ctrl && input === "c") onCancel?.();
+  // A second, independent useKeyboard from InputBox's own — OpenTUI delivers the same keypress to
+  // every registered handler, so this fires regardless of what InputBox does with the same press
+  // (today, nothing: InputBox's own handler skips any key.ctrl input). Ctrl-C itself is NOT handled
+  // here — `runtime/renderer.ts`'s own registration owns that, see its comment for why.
+  useKeyboard((key) => {
     if (!noPanelOpen) return;
-    if (key.pageUp) dispatch({ type: "transcript-scroll", delta: pageSize });
-    if (key.pageDown) dispatch({ type: "transcript-scroll", delta: -pageSize });
-    if (key.home) dispatch({ type: "transcript-scroll-to", to: "top" });
-    if (key.end) dispatch({ type: "transcript-scroll-to", to: "bottom" });
+    if (key.name === "pageup") dispatch({ type: "transcript-scroll", delta: pageSize });
+    if (key.name === "pagedown") dispatch({ type: "transcript-scroll", delta: -pageSize });
+    if (key.name === "home") dispatch({ type: "transcript-scroll-to", to: "top" });
+    if (key.name === "end") dispatch({ type: "transcript-scroll-to", to: "bottom" });
   });
 
   const visibleRows = visibleTranscript(
@@ -351,93 +309,92 @@ export function App({
   const rowProps = transcriptRowsProps(visibleRows);
 
   return (
-    // `rows - 1`, not `rows`, on every platform, not just a Windows-only gate: Windows' own
-    // `isWindowsConsole && (wasFullscreen || isFullscreen)` full-redraw path
-    // (Ink's own resolveOutput) is real and Windows-specific, but it is not the only reason this
-    // needs to stay one row short. At a FULL `rows`, `isFullscreen` becomes true on every platform
-    // (Ink's own `outputHeight >= viewportRows`), and mid-run `console.*` output (patchConsole,
-    // e.g. a checkpoint/archivist warning) then erases and rewrites `rows` lines for a write that
-    // adds its own lines on top — the terminal scrolls, but nothing off Windows re-triggers the
-    // full-clear path to notice, so log-update's own line-count bookkeeping goes stale and every
-    // later frame paints at the wrong offset for the REST OF THE SESSION. `rows - 1` leaves exactly
-    // the one spare row that absorbs a single console write without ever scrolling the viewport.
-    <Box flexDirection="column" height={rows - 1}>
+    // No `height - 1` spare-row workaround: that existed only for Ink's own console-patching
+    // full-redraw path (`resolveOutput`'s `isFullscreen` check racing `log-update`'s line-count
+    // bookkeeping on a mid-run `console.*` write) — OpenTUI is a native terminal renderer with its
+    // own buffer/diffing, not a diff-and-reprint-over-stdout library, so there is no equivalent
+    // "console write scrolls the viewport out from under the redraw bookkeeping" failure mode to
+    // guard against. Full terminal height is used directly.
+    <box flexDirection="column" height={rows}>
       {/* Rendered ABOVE the render ternary below, not as one of its branches — unlike
       ApprovalBox/ModelPicker/SetupPanel this never replaces InputBox, it sits alongside it.
-      `state.pendingAuth === undefined` (not just `state.authOffer`) is the derived half of the
-      fix (thermo-nuclear + code-review, round 4): `authOffer` alone used to need a matching
-      `auth-offer: false` dispatch at every point the auth panel opened, and round 2's whole bug
-      class was a call site that forgot one. The reducer already owns `pendingAuth` — "is the
-      panel currently open" is exactly what should gate "hide the redundant banner," derived here
-      instead of commanded from cli.ts. `!state.pendingSplash`: the splash mount's own login/signup
-      menu already offers the same thing, so the banner would otherwise render underneath it. */}
+      `state.pendingAuth === undefined` (not just `state.authOffer`) avoids needing a matching
+      `auth-offer: false` dispatch at every point the auth panel opens — a call site that forgets
+      one is a real bug class this closes by construction. The reducer already owns `pendingAuth` —
+      "is the panel currently open" is exactly what should gate "hide the redundant banner," derived
+      here instead of commanded from cli.ts. `!state.pendingSplash`: the splash mount's own
+      login/signup menu already offers the same thing, so the banner would otherwise render
+      underneath it. */}
       <AuthBanner
         show={state.authOffer && state.pendingAuth === undefined && !state.pendingSplash}
       />
       {/* flexGrow/flexShrink/minHeight={0} give this box whatever height is left over after
-      every sibling below has laid out — `viewportRows` (above) reads that back via useBoxMetrics,
+      every sibling below has laid out — `viewportRows` (above) reads that back via `onSizeChange`,
       not the other way around, so there is no feedback loop from the slice into the measurement.
-      `visibleTranscript` (format.ts) already wraps every entry to `state.columns` and caps the
-      VISUAL row count at `viewportRows`, so `overflowY`/`justifyContent="flex-end"` are a pure
-      backstop now, not load-bearing truncation — anchoring to the end means a genuine one-frame
-      overshoot falls off the top (oldest), not the bottom (newest).
+      `visibleTranscript` (util/format.ts) already wraps every entry to `state.columns` and caps the
+      VISUAL row count at `viewportRows`, so `overflow="hidden"`/`justifyContent="flex-end"` are a
+      pure backstop now, not load-bearing truncation — anchoring to the end means a genuine
+      one-frame overshoot falls off the top (oldest), not the bottom (newest).
       The in-progress answer (`state.streaming`, wrapped via `memoizedPending` above) is passed as
       `visibleTranscript`'s own `pendingRows` parameter rather than rendered as its own unbounded
-      `<Text>` below the box (the original shape) or spread into a `[...state.transcript,
-      state.streaming]` array (tried and reverted: that allocated a full copy of the transcript on
-      every streamed token, exactly what `visibleTranscript`'s own tail-walk exists to avoid paying).
-      `effectiveOffset` below is what keeps a scrolled-up reader's view from drifting toward newer
-      content as the answer grows and then snapping back the instant it flushes: `appendLines`
-      (reducer.ts) already advances `transcriptScrollOffset` by a flush's own row count for exactly
-      this reason, and pending rows need the identical treatment applied live, since they are not
-      yet a dispatched action `appendLines` could react to. */}
-      <Box
-        ref={viewportRef}
+      `<text>` below the box (the original Ink shape) or spread into a `[...state.transcript,
+      state.streaming]` array (tried and reverted there: that allocated a full copy of the
+      transcript on every streamed token, exactly what `visibleTranscript`'s own tail-walk exists
+      to avoid paying). `effectiveOffset` below is what keeps a scrolled-up reader's view from
+      drifting toward newer content as the answer grows and then snapping back the instant it
+      flushes: `appendLines` (state/reducer.ts) already advances `transcriptScrollOffset` by a
+      flush's own row count for exactly this reason, and pending rows need the identical treatment
+      applied live, since they are not yet a dispatched action `appendLines` could react to. */}
+      <box
         flexDirection="column"
         flexGrow={1}
         flexShrink={1}
         minHeight={0}
-        overflowY="hidden"
+        overflow="hidden"
         justifyContent={isShort ? "flex-start" : "flex-end"}
+        onSizeChange={function onSizeChange(this: BoxRenderable) {
+          setMeasuredRows(this.height);
+          setHasMeasured(true);
+        }}
       >
         {rowProps.map(({ text, backgroundColor }, index) => (
-          <Text key={index} backgroundColor={backgroundColor}>
+          <text key={index} bg={backgroundColor}>
             {text}
-          </Text>
+          </text>
         ))}
-      </Box>
+      </box>
       {state.pendingTool !== undefined && (
-        <Box borderStyle="single" borderColor={theme.warning}>
+        <box borderStyle="single" borderColor={theme.warning}>
           {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: pendingTool is set
           ONLY for write_file/edit (reducer.ts), the two tools whose args carry a whole file body —
           exactly the case the helper exists for, uncapped here otherwise. */}
-          <Text color={theme.warning}>
+          <text fg={theme.warning}>
             {`${state.pendingTool.name}(${truncateArgsDisplay(state.pendingTool.args)})`}
-          </Text>
-        </Box>
+          </text>
+        </box>
       )}
-      <Box flexDirection="row" justifyContent="space-between">
-        <Text>{modeLabel}</Text>
-        <Box flexDirection="row" gap={1}>
+      <box flexDirection="row" justifyContent="space-between">
+        <text>{modeLabel}</text>
+        <box flexDirection="row" gap={1}>
           {/* `noPanelOpen` too, not just the offset: while a panel is open, End
           is swallowed by the exact same gate `noPanelOpen` already puts on the transcript-scroll
           keys above — the banner would otherwise keep telling the user to press a key that does
           nothing until they close the panel first. */}
           {state.transcriptScrollOffset > 0 && noPanelOpen && (
-            <Text color={theme.muted}>↑ scrolled — End to follow</Text>
+            <text fg={theme.muted}>↑ scrolled — End to follow</text>
           )}
-          {state.status.length > 0 && <Text color={theme.muted}>{state.status}</Text>}
-        </Box>
-      </Box>
+          {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
+        </box>
+      </box>
       <ErrorLine message={state.commandError} />
-      {/* Findings 1+5: mutually exclusive with InputBox — a pending approval question is the only
-      thing this run is waiting on, and answering it (not typing a task or slash command) is the
-      only input that means anything until it clears. Extended to a third state for /model, a
-      fourth for /setup, and now (Stage A scaffolding) three more for /login /signup, /config and
-      /permissions: each is the same kind of "only this input means anything right now" question,
-      checked in this same order (approval, /model, /setup, /login /signup, /config, /permissions,
-      then InputBox). The last three are unreachable today — nothing dispatches
-      auth-requested/config-requested/permissions-requested yet (Stages C-D wire that). */}
+      {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
+      is waiting on, and answering it (not typing a task or slash command) is the only input that
+      means anything until it clears. Extended to a third state for /model, a fourth for /setup,
+      and three more for /login /signup, /config and /permissions: each is the same kind of "only
+      this input means anything right now" question, checked in this same order (approval, /model,
+      /setup, /login /signup, /config, /permissions, then InputBox). Every branch here — including
+      AuthPanel/ConfigPanel/PermissionsPanel — is a real, wired OpenTUI component; state/handlers.ts
+      and cli.ts dispatch auth-requested/config-requested/permissions-requested. */}
       {state.pendingApproval !== undefined ? (
         <ApprovalBox
           pendingApproval={state.pendingApproval}
@@ -478,7 +435,7 @@ export function App({
           onPermissionsClose={onPermissionsClose}
         />
       ) : state.pendingSplash ? (
-        <WelcomeSplash
+        <WelcomeSplashPanel
           authenticated={!state.authOffer}
           onLogin={onSplashLogin}
           onSignup={onSplashSignup}
@@ -492,6 +449,6 @@ export function App({
           onPrefillConsumed={() => dispatch({ type: "input-prefill-consumed" })}
         />
       )}
-    </Box>
+    </box>
   );
 }

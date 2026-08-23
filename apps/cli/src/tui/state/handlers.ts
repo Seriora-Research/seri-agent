@@ -6,14 +6,18 @@
 // I/O and side effects. Extracted from cli.ts (originally ~670 of its lines) to live next to the
 // functions it mirrors rather than across the module boundary from them.
 import type { ModelProvider } from "@seri/model-catalog";
-import { login as loginReal, logout as logoutReal } from "../auth/commands";
-import { getWorkosClientId } from "../auth/deviceFlow";
-import type { CliDeps } from "../cli";
-import { configBoolean, loadConfig, setConfigValue, unsetConfigValue } from "../config/config";
-import { messageOf } from "../errors";
-import { forgetGrant, loadGrants } from "../permissions/store";
-import { PROVIDER_API_KEY_NAMES, type ProviderKeyState, providerKeyState } from "../provider/keys";
-import { validateProviderKey } from "../provider/validate";
+import { login as loginReal, logout as logoutReal } from "../../auth/commands";
+import { getWorkosClientId } from "../../auth/deviceFlow";
+import type { CliDeps } from "../../cli";
+import { configBoolean, loadConfig, setConfigValue, unsetConfigValue } from "../../config/config";
+import { messageOf } from "../../errors";
+import { forgetGrant, loadGrants } from "../../permissions/store";
+import {
+  PROVIDER_API_KEY_NAMES,
+  type ProviderKeyState,
+  providerKeyState,
+} from "../../provider/keys";
+import { validateProviderKey } from "../../provider/validate";
 import {
   configKeyInfo,
   decideAuthOffer,
@@ -87,10 +91,10 @@ export function createSetupHandlers(opts: {
     }
   }
 
-  // No config.json read here at all (code-review finding, PR #73, round 2): a row's `keyName` is a
-  // pure function of `provider` (PROVIDER_API_KEY_NAMES), so the old `decideSetupOpen(configDir).
-  // find(...)` — the full 5-provider scan, just to pull one static field back out of it — was both
-  // slower and a needless crash surface for a value that never needed I/O to produce.
+  // No config.json read here at all: a row's `keyName` is a pure function of `provider`
+  // (PROVIDER_API_KEY_NAMES), so `decideSetupOpen(configDir).find(...)` — the full 5-provider
+  // scan, just to pull one static field back out of it — would be both slower and a needless
+  // crash surface for a value that never needs I/O to produce.
   function onSetupSelect(provider: ModelProvider): void {
     dispatch({
       type: "setup-step",
@@ -103,15 +107,15 @@ export function createSetupHandlers(opts: {
     });
   }
 
-  // D5's own probe, then D6's own write — `validateProviderKey` never throws (its own contract:
-  // every failure mode resolves to a result, not a rejection), so only the config write itself
-  // needs a try/catch, matching the persist path's degrade-to-a-message posture (onSessionChange's
-  // own comment, cli.ts) rather than converting a validated key into a lost one over an unrelated
+  // A probe, then a write — `validateProviderKey` never throws (its own contract: every failure
+  // mode resolves to a result, not a rejection), so only the config write itself needs a
+  // try/catch, matching the persist path's degrade-to-a-message posture (onSessionChange's own
+  // comment, cli.ts) rather than converting a validated key into a lost one over an unrelated
   // write failure.
   //
-  // `keyName` is PROVIDER_API_KEY_NAMES[provider] directly, not a decideSetupOpen scan (code-review
-  // finding, PR #73, round 2 — same fix as onSetupSelect just above): no config.json read here at
-  // all, which is also what makes the rest of this function need no crash guard of its own.
+  // `keyName` is PROVIDER_API_KEY_NAMES[provider] directly, not a decideSetupOpen scan (same
+  // reasoning as onSetupSelect just above): no config.json read here at all, which is also what
+  // makes the rest of this function need no crash guard of its own.
   async function onSetupKeyEntered(provider: ModelProvider, value: string): Promise<void> {
     const keyName = PROVIDER_API_KEY_NAMES[provider];
     dispatch({
@@ -129,13 +133,12 @@ export function createSetupHandlers(opts: {
     try {
       setConfigValue(keyName, value, configDir);
     } catch (err) {
-      // Bug fixed here (code-review, PR #73): this used to dispatch a bare command-error and
-      // return, leaving `pendingSetup` stuck at `busy: true` — SetupEnterKey's own useInput
-      // checks `if (busy) return;` BEFORE its Escape/Ctrl-D handling, so a write failure here
-      // (EACCES, disk full, the config dir removed mid-session) permanently locked the /setup
-      // panel with no way out short of a fatal Ctrl-C that kills the whole process. Re-rendering
-      // `enter-key` with `busy: false` and an error, the same shape a validation failure already
-      // uses above, is what actually returns control to the user.
+      // A bare command-error dispatch here would leave `pendingSetup` stuck at `busy: true` —
+      // SetupEnterKey's own useInput checks `if (busy) return;` BEFORE its Escape/Ctrl-D handling,
+      // so a write failure here (EACCES, disk full, the config dir removed mid-session) would
+      // permanently lock the /setup panel with no way out short of a fatal Ctrl-C that kills the
+      // whole process. Re-rendering `enter-key` with `busy: false` and an error, the same shape a
+      // validation failure already uses above, is what actually returns control to the user.
       dispatch({
         type: "setup-step",
         state: {
@@ -200,9 +203,9 @@ export function createSetupHandlers(opts: {
       return;
     }
     // `providerKeyState` for the one provider under the cursor, not a decideSetupOpen scan of all
-    // five (code-review finding, PR #73, round 2) — still real I/O (config.json), so still needs
-    // its own guard: a malformed file here used to throw straight out of this `useInput` callback,
-    // the same class of bug round 1 fixed for the /setup-OPEN interceptor but missed here.
+    // five — still real I/O (config.json), so still needs its own guard: without it, a malformed
+    // file here would throw straight out of this `useInput` callback, the same class of bug the
+    // /setup-OPEN interceptor already guards against.
     let state: ProviderKeyState;
     try {
       state = providerKeyState(provider, configDir);
@@ -230,8 +233,8 @@ export function createSetupHandlers(opts: {
   return { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack };
 }
 
-// Stage C (cli-commands-to-tui feature-plan.md): /login, /signup and /logout's own two handlers,
-// mirroring createSetupHandlers's exact shape (dispatch/deps/configDir in). `deps.login ?? loginReal`
+// /login, /signup and /logout's own two handlers, mirroring createSetupHandlers's exact shape
+// (dispatch/deps/configDir in). `deps.login ?? loginReal`
 // / `deps.logout ?? logoutReal` is the SAME injection seam handleAuthCommand already uses for the
 // non-interactive `seri login`/`seri logout` — so a pty test can fake the device flow here exactly
 // the way argv.test.ts already fakes it there. Every recompute-and-dispatch is wrapped so a failure
@@ -255,11 +258,11 @@ export function createAuthHandlers(opts: {
   const { dispatch, deps, configDir } = opts;
   const loginFn = deps.login ?? loginReal;
   const logoutFn = deps.logout ?? logoutReal;
-  // Bug fix (thermo-nuclear, round 5): `attemptCounter` alone (round 4) only muted a dismissed
-  // attempt's own DISPATCHES — the underlying login() kept polling in the background regardless
-  // (a device code stays valid for minutes) and could still call saveAuthSession later, with zero
-  // UI trace since the dispatches were suppressed; worse, past even an explicit /logout, since
-  // nothing else stopped it either. `currentController` is real cancellation: `onAbandon` aborts
+  // `attemptCounter` alone only mutes a dismissed attempt's own DISPATCHES — the underlying
+  // login() would keep polling in the background regardless (a device code stays valid for
+  // minutes) and could still call saveAuthSession later, with zero UI trace since the dispatches
+  // are suppressed; worse, past even an explicit /logout, since nothing else would stop it either.
+  // `currentController` is real cancellation: `onAbandon` aborts
   // it, `pollForToken` (deviceFlow.ts) actually stops polling and returns `{status:"aborted"}`
   // instead of eventually succeeding unseen. `attemptCounter` stays too — it still correctly
   // guards the (much narrower, now purely UI-timing) dispatch race even with real cancellation
@@ -360,8 +363,8 @@ function verifyConfigTakesEffectNote(key: string): string {
   return configKeyInfo(key).takesEffectNextRun ? " (takes effect on the next run)" : "";
 }
 
-// Stage D (cli-commands-to-tui feature-plan.md): /config's own two handlers, mirroring
-// createSetupHandlers's exact shape (dispatch/getPendingConfig/configDir in). Calls the DATA
+// /config's own two handlers, mirroring createSetupHandlers's exact shape
+// (dispatch/getPendingConfig/configDir in). Calls the DATA
 // functions directly — loadConfig/setConfigValue/unsetConfigValue (config/config.ts) — never
 // configCommand (config/commands.ts), which is console/exit-code shaped for the non-interactive
 // path. Every recompute-and-dispatch is wrapped in try/catch degrading to command-error: config.json
@@ -468,10 +471,8 @@ export function createConfigHandlers(opts: {
       type: "transcript-append",
       line: `Saved ${key}.${verifyConfigTakesEffectNote(key)}`,
     });
-    // NOT dispatchConfigList (thermo-nuclear, round 3 — the stale version of this comment claimed
-    // dispatchConfigList's catch leaves `pendingConfig` untouched, which stopped being true once
-    // its catch started dispatching config-resolved): kept inline anyway, because closing the
-    // panel here would be the wrong recovery — the user is mid-edit on a config.json write that
+    // NOT dispatchConfigList: dispatchConfigList's own catch dispatches config-resolved, closing
+    // the panel — the wrong recovery here, since the user is mid-edit on a config.json write that
     // just wrote fine and only the REFRESH after it failed, so resetting `busy: false` and
     // showing the error on this same key lets them retry or Esc out, instead of losing the step
     // they were on for a failure in the read that happened after their write already succeeded.
@@ -499,8 +500,8 @@ export function createConfigHandlers(opts: {
     const pending = getPendingConfig();
     if (pending?.step === "confirm-unset") {
       const { key: confirmedKey } = pending;
-      // Reviewer finding (round 1, LOW-4): unsetConfigValue's boolean return is checked, not
-      // discarded — a concurrent write (another `seri` process, a hand edit) between the confirm
+      // unsetConfigValue's boolean return is checked, not discarded — a concurrent write (another
+      // `seri` process, a hand edit) between the confirm
       // prompt opening and 'y' can already have removed this key, and this is what stops that race
       // from claiming "Removed" falsely.
       let removed: boolean;
@@ -548,8 +549,8 @@ export function createConfigHandlers(opts: {
   return { onConfigSelect, onConfigValueEntered, onConfigUnset, onConfigBack };
 }
 
-// Stage D (cli-commands-to-tui feature-plan.md): /permissions' own two handlers, mirroring
-// createConfigHandlers just above (itself mirroring createSetupHandlers). `permissionsDir`, not
+// /permissions' own two handlers, mirroring createConfigHandlers just above (itself mirroring
+// createSetupHandlers). `permissionsDir`, not
 // `configDir`: permissions.yaml lives in `ctx.permissionsDir` (RunContext's own field, `deps.
 // permissionsDir ?? getConfigDir()` — independently overridable from config.json's own dir), the
 // same directory runTurn's own approval-grant read/write (loadGrants/rememberGrant, cli.ts) already
@@ -569,11 +570,10 @@ export function createPermissionsHandlers(opts: {
 } {
   const { dispatch, getPendingPermissions, permissionsDir, getWorktree } = opts;
 
-  // /code-review, round 3: loadGrants never THROWS on a malformed permissions.yaml — it degrades
-  // to an empty result and reports through this callback instead, which every call site in this
-  // file was previously dropping (unlike decideConfigOpen's loadConfig, which does throw, so
-  // /config's try/catch guards actually catch something). Without this, a malformed store
-  // rendered as a silently-empty "nothing approved" panel instead of a visible error.
+  // loadGrants never THROWS on a malformed permissions.yaml — it degrades to an empty result and
+  // reports through this callback instead (unlike decideConfigOpen's loadConfig, which does
+  // throw, so /config's try/catch guards actually catch something). Without this, a malformed
+  // store would render as a silently-empty "nothing approved" panel instead of a visible error.
   const warnOnMalformedStore = (message: string) => dispatch({ type: "command-error", message });
 
   function permissionsListState(selectedTool?: string): PermissionsPanelState {
@@ -610,23 +610,21 @@ export function createPermissionsHandlers(opts: {
     const pending = getPendingPermissions();
     if (pending?.step === "confirm-remove") {
       const { tool: confirmedTool } = pending;
-      // Reviewer finding (round 1, MEDIUM-2): loadGrants/forgetGrant do NOT throw on a malformed
-      // permissions.yaml — they degrade to an empty/no-op result and an optional `onWarning`
-      // callback instead (permissions/store.ts's own comment: the file is hand-editable, so a
-      // caller must not risk overwriting content it could not make sense of). The non-interactive
-      // removeCommand (permissions/commands.ts:68-91) already treats that as a real failure, not a
-      // silent no-op — `warned` and the branch on `result` below mirror it, instead of
-      // unconditionally claiming "Removed" the way this used to.
+      // loadGrants/forgetGrant do NOT throw on a malformed permissions.yaml — they degrade to an
+      // empty/no-op result and an optional `onWarning` callback instead (permissions/store.ts's own
+      // comment: the file is hand-editable, so a caller must not risk overwriting content it could
+      // not make sense of). The non-interactive removeCommand (permissions/commands.ts) already
+      // treats that as a real failure, not a silent no-op — `warned` and the branch on `result`
+      // below mirror it, instead of unconditionally claiming "Removed".
       //
-      // scope: "project" (fixed here, /code-review + thermo-nuclear on this PR): a tool granted in
-      // BOTH tiers still renders as a single "persisted"/removable row (decidePermissionsOpen,
-      // tui/commands.ts) — the global grant is never shown, and `removable` just above only ever
-      // checked the project tier. Passing "both" here used to strip the invisible global
-      // pre-approval too, silently, on a panel whose own comment says only the project tier is
-      // removable from here.
-      // Hoisted, not called again below (thermo-nuclear, round 3): getWorktree() spawns a
-      // synchronous `git rev-parse` — calling it three times in one keypress handler was three
-      // subprocess spawns for a value that cannot change mid-handler.
+      // scope: "project": a tool granted in BOTH tiers still renders as a single
+      // "persisted"/removable row (decidePermissionsOpen, tui/commands.ts) — the global grant is
+      // never shown, and `removable` just above only ever checks the project tier. Passing "both"
+      // here would strip the invisible global pre-approval too, silently, on a panel whose own
+      // comment says only the project tier is removable from here.
+      // Hoisted, not called again below: getWorktree() spawns a synchronous `git rev-parse` —
+      // calling it three times in one keypress handler would be three subprocess spawns for a
+      // value that cannot change mid-handler.
       const worktree = getWorktree();
       let warned: string | undefined;
       let result: { global: boolean; project: boolean };
@@ -642,22 +640,22 @@ export function createPermissionsHandlers(opts: {
         return;
       }
       if (warned !== undefined) {
-        // Same "close the panel too" fix as dispatchPermissionsList's own comment (/code-review,
-        // round 3): command-error alone never touches `pendingPermissions`, so a malformed
-        // permissions.yaml discovered here (forgetGrant degrades to a warning rather than a throw)
-        // used to leave the confirm-remove prompt stuck showing a tool that can no longer be
-        // resolved from this state.
+        // Same "close the panel too" reasoning as dispatchPermissionsList's own comment:
+        // command-error alone never touches `pendingPermissions`, so a malformed permissions.yaml
+        // discovered here (forgetGrant degrades to a warning rather than a throw) would otherwise
+        // leave the confirm-remove prompt stuck showing a tool that can no longer be resolved from
+        // this state.
         dispatch({ type: "command-error", message: warned });
         dispatch({ type: "permissions-resolved" });
         return;
       }
-      // Read unconditionally, not gated on `result.project` (thermo-nuclear, round 3): a
-      // concurrent write between the `removable` re-check above and this 'y' press can already
-      // have cleared the project entry by the time forgetGrant runs, independently of whether the
-      // tool is still globally granted — gating this check on result.project made that race
-      // report "was not permanently approved" even while the tool stayed auto-approved globally,
-      // the exact false claim removeCommand's own comment (permissions/commands.ts:78-80) refuses
-      // to make for the non-interactive path. Not try/catch-guarded, on purpose: loadGrants cannot
+      // Read unconditionally, not gated on `result.project`: a concurrent write between the
+      // `removable` re-check above and this 'y' press can already have cleared the project entry
+      // by the time forgetGrant runs, independently of whether the tool is still globally granted
+      // — gating this check on result.project would report "was not permanently approved" even
+      // while the tool stayed auto-approved globally, the exact false claim removeCommand's own
+      // comment (permissions/commands.ts) refuses to make for the non-interactive path. Not
+      // try/catch-guarded, on purpose: loadGrants cannot
       // throw (store.ts's own readStore degrades every failure mode to a status instead), and this
       // file already carries guards on that call that can't fire — not adding another rather than
       // resolving the standing one.

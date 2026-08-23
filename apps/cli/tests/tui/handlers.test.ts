@@ -6,8 +6,8 @@ import {
   createConfigHandlers,
   createPermissionsHandlers,
   createSetupHandlers,
-} from "../../src/tui/handlers";
-import type { TuiAction } from "../../src/tui/reducer";
+} from "../../src/tui/state/handlers";
+import type { TuiAction } from "../../src/tui/state/reducer";
 
 function actionsCollector(): { actions: TuiAction[]; dispatch: (action: TuiAction) => void } {
   const actions: TuiAction[] = [];

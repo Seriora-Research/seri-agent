@@ -1,14 +1,13 @@
 // Pure formatting helpers for the TUI — zero Ink/React import, the same "testable without a
-// terminal" property reducer.ts already has. Extracted out of App.tsx (Stage A,
-// cli-commands-to-tui feature-plan.md) verbatim: a pure move, no behavior change.
+// terminal" property reducer.ts already has.
 
 import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@seri/model-catalog";
 import stringWidth from "string-width";
 import wrapAnsi from "wrap-ansi";
-import { escapeControlChars } from "../cli/output";
-import type { ResolvedRoute } from "../provider/routing";
-import type { ModelPickerEntry, SetupProviderRow } from "./commands";
-import { theme } from "./theme";
+import { escapeControlChars } from "../../cli/output";
+import type { ResolvedRoute } from "../../provider/routing";
+import type { ModelPickerEntry, SetupProviderRow } from "../state/commands";
+import { theme } from "../theme/theme";
 
 // Shared by every list panel (ModelPicker, ConfigPanel, PermissionsPanel, SetupPanel) via
 // useListWindow.ts — the most any of their windows ever shows at once, regardless of how many
@@ -31,29 +30,28 @@ export const MIN_LIST_WINDOW = 3;
 export const PANEL_CHROME_ROWS = 9;
 
 // Every row a panel's own budget has to share with the rest of App.tsx's render, reserved
-// unconditionally rather than threaded through as props: the root Box's own spare row (App.tsx,
-// `height={rows - 1}`), the unconditional mode-indicator row, a `commandError` line (one row,
-// shown above the panel), and AuthBanner's three-row bordered Box (shown above everything when
-// signed out) — 1 + 1 + 1 + 3 = 6. Unconditional because `commandError`/`authOffer` live on
-// reducer state inside App, out of scope for the four panel components that call
-// `useListWindow(rows, selected)` with nothing else in scope — threading both flags into every
-// one of them (plus App itself) costs far more than the alternative: over-reserving these six
-// rows when neither is actually showing costs at most one list row on a 24-row terminal and
-// nothing at all on a 25+ row one, while under-reserving pushes a panel row off the alt screen
-// with no scrollback to recover it.
+// unconditionally rather than threaded through as props: the unconditional mode-indicator row, a
+// `commandError` line (one row, shown above the panel), and AuthBanner's three-row bordered Box
+// (shown above everything when signed out) — 1 + 1 + 3 = 5. Unconditional because
+// `commandError`/`authOffer` live on reducer state inside App, out of scope for the four panel
+// components that call `useListWindow(rows, selected)` with nothing else in scope — threading both
+// flags into every one of them (plus App itself) costs far more than the alternative:
+// over-reserving these five rows when neither is actually showing costs at most one list row on a
+// 24-row terminal and nothing at all on a 25+ row one, while under-reserving pushes a panel row off
+// the alt screen with no scrollback to recover it.
 //
 // Does NOT also reserve for `pendingTool`'s own three-row bordered Box, even though a panel can
 // genuinely be open while a write_file/edit call is in flight (/model, /setup, /config, and
-// /permissions are all handled before the turnInFlight guard) — tried once (bumping this to 9) and
+// /permissions are all handled before the turnInFlight guard) — tried once (bumping this to 8) and
 // reverted: on a real 24-row terminal, that shrank the /model picker's default window from 9 rows
 // to 6, pushing the bundled fallback manifest's own default model (one of only 6 groq entries in a
 // 350-entry catalog) out of the picker's default unfiltered view — a real, more commonly hit
 // regression than the pendingTool overflow it was meant to close. Left as a known gap rather than
 // re-fixed here; a real fix needs either a shorter LIST_WINDOW_MAX floor or measuring pendingTool's
 // own height live instead of reserving for it unconditionally.
-export const APP_CHROME_ROWS = 6;
+export const APP_CHROME_ROWS = 5;
 
-// The transcript viewport's placeholder height for the one frame before useBoxMetrics has ever
+// The transcript viewport's placeholder height for the one frame before `onSizeChange` has ever
 // measured the live region below it (App.tsx) — not the real budget, just enough that the first
 // frame renders a plausible slice of the transcript instead of an empty one.
 export const FALLBACK_CHROME_ROWS = 6;
@@ -175,9 +173,8 @@ export function visibleTranscript(
 }
 
 // Every visible row's own render props for App.tsx's transcript viewport — factored out as a pure
-// function, same reason `displayText` above is: ink-testing-library's `lastFrame()` carries no ANSI
-// in this test environment, so a per-row `backgroundColor` is otherwise invisible to a mounted-frame
-// assertion, and a test can pin the actual prop this returns instead.
+// function, same reason `displayText` above is: a per-row `backgroundColor` is otherwise only
+// checkable by rendering the whole tree, so a test can pin the actual prop this returns instead.
 //
 // The user-message band's own width is the widest currently visible role:"user" row (`stringWidth`,
 // not `padEnd`: a CJK/wide-char row is fewer UTF-16 units than terminal cells, so `padEnd` would
@@ -256,16 +253,16 @@ export const CONTEXT_WIDTH = 7;
 // reroute arrow) — 13 leaves one column of breathing room, matching this file's other columns'
 // own generosity over their own widest realistic value.
 export const ROUTE_WIDTH = 13;
-// Cost was the table's last column before Route (D1/D2, feature-plan.md) became the new trailing
-// one — formatCost's own output is genuinely variable-width ("—" vs "$150.00/$600.00"), which was
+// Cost was the table's last column before Route became the new trailing one — formatCost's own
+// output is genuinely variable-width ("—" vs "$150.00/$600.00"), which was
 // fine when nothing followed it, but Route now does, so this pads it too, or Route would drift
 // out of its own column depending on how expensive a given row's model is. 18 covers the widest
 // real pair in the bundled manifest (measured: $150.00/$600.00, 15 characters) with a little room
 // to spare, not the exact minimum.
 export const COST_WIDTH = 18;
 
-// D5 (byok-open3-route-indicator feature-plan.md): Hermes Agent's own 3-tier width breakpoints for
-// the persistent mode-indicator row — reused as-is, per the plan's own D5, not a new scheme.
+// Hermes Agent's own 3-tier width breakpoints for the persistent mode-indicator row — reused as-is,
+// not a new scheme.
 export const MODE_LABEL_FULL_COLS = 76;
 export const MODE_LABEL_COMPACT_COLS = 52;
 
@@ -273,10 +270,14 @@ export const MODE_LABEL_COMPACT_COLS = 52;
 // and a real pty can separately report a genuine but unusable `columns === 0` for its first render
 // or two — both are what `resolveWidth`'s `stdout.columns || DEFAULT_COLUMNS` (App.tsx) guards
 // against; `||`, not `??`, is what makes the zero case fall back too. It is NOT what makes
-// App.test.tsx's own Ink component tests land in the full tier:
-// ink-testing-library's stub stdout returns a real `columns: 100`, so those tests are already in
-// the full tier on the actual value, not this fallback.
+// App.test.tsx's own component tests land in the full tier: `createTestRenderer`'s own default
+// width (App.test.tsx's own `DEFAULT_WIDTH`, 100) is what does that, not this fallback.
 export const DEFAULT_COLUMNS = 80;
+
+// `resolveHeight`'s own fallback (App.tsx) — the same first-render `0` a pty can genuinely report
+// for `columns` above, on the same ioctl-not-landed-yet timing, applies to row count too. The
+// classic 80x24 pairing, not an arbitrary round number.
+export const DEFAULT_ROWS = 24;
 
 // Truncates with a trailing ellipsis (never mid-multi-byte-safe beyond what .slice already is —
 // every field this feeds is plain ASCII: a model id/displayName/provider name) or pads with
@@ -311,7 +312,7 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
 // Ink at all — this file had no pure formatting function of its own before the picker's columns
 // needed one.
 //
-// D1/D2 (feature-plan.md): the trailing Route column names whether THIS row's own provider has a
+// The trailing Route column names whether THIS row's own provider has a
 // key ("your key" — the same fact routing-priority resolution would act on). A row with no key of
 // its own names the specific sibling provider it would actually reroute to ("→ openrouter"),
 // rather than a bare "no key" plus an alternatives count that used to overstate reachability: the
@@ -442,13 +443,13 @@ export function envShadowReason(keyName: string): string {
   return `set by $${keyName} in your environment — unset it in your shell`;
 }
 
-// One /setup list row's own text — masked value + source for a config/unset row, D8's own
-// disabled-remove reason for an env row with nothing removable underneath it (which is more
+// One /setup list row's own text — masked value + source for a config/unset row, envShadowReason's
+// own disabled-remove reason for an env row with nothing removable underneath it (which is more
 // useful there than a masked value nobody can act on: the fix is in the shell, not in this
 // panel).
 //
-// Bug fixed here (code-review, PR #73, round 3, item #5): an env row is not always the
-// non-removable case — `row.removable` (providerKeyState's own `hasConfigEntry`) is true when a
+// An env row is not always the non-removable case — `row.removable` (providerKeyState's own
+// `hasConfigEntry`) is true when a
 // config.json entry sits underneath the env var that's shadowing it, and pressing 'r'/Delete on
 // that row genuinely removes it. `envShadowReason`'s "unset it in your shell" text used to render
 // unconditionally for EVERY env row, telling a user with a real, removable entry that removal was

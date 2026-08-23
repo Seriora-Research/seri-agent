@@ -3,20 +3,20 @@
 // import — a plain, standalone reducer, testable without a terminal.
 import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import { toolAllowedLine, toolResultLine } from "../cli/output";
-import type { PermissionMode } from "../gate/gate";
-import type { LoopEvent } from "../loop/loop";
-import type { ResolvedRoute } from "../provider/routing";
-import type { SessionState } from "../session/session";
-import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
+import { toolAllowedLine, toolResultLine } from "../../cli/output";
+import type { PermissionMode } from "../../gate/gate";
+import type { LoopEvent } from "../../loop/loop";
+import type { ResolvedRoute } from "../../provider/routing";
+import type { SessionState } from "../../session/session";
 import {
   DEFAULT_COLUMNS,
   type TranscriptEntry,
   type TranscriptRole,
   transcriptVisualRows,
-} from "./format";
+} from "../util/format";
+import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
 
-// /setup's own live state (D5-D8, feature-plan.md) — a three-step flow, mirrored on the reducer
+// /setup's own live state — a three-step flow, mirrored on the reducer
 // the same way /model's picker is: "list" shows all five providers, "enter-key" is the masked
 // text-entry step (add or replace), "confirm-remove" is a single-keypress y/n. "list" carries its
 // own freshly-recomputed `rows` (SetupList, App.tsx, renders and navigates them) rather than
@@ -37,29 +37,24 @@ export type SetupState =
     }
   | { step: "confirm-remove"; provider: ModelProvider; keyName: string };
 
-// Stage A (cli-commands-to-tui feature-plan.md): scaffolding only — this state has no dispatcher
-// wired to it yet (no `auth-requested`/`config-requested`/`permissions-requested` caller exists
-// until Stages B-D). Shaped now, alongside SetupState above, so those stages land as additive
-// wiring rather than a reducer-state redesign.
-//
-// /login and /signup's own live state — the device-flow OAuth panel (Stage C). "starting" is the
-// brief moment before the provider returns a verification URL/code; "device" shows that URL+code
-// for the user to open in a browser; "result" is the terminal state (success or failure).
+// /login and /signup's own live state — the device-flow OAuth panel. "starting" is the brief
+// moment before the provider returns a verification URL/code; "device" shows that URL+code for the
+// user to open in a browser; "result" is the terminal state (success or failure).
 export type AuthPanelState =
   | { step: "starting"; mode: "login" | "signup" }
   | { step: "device"; mode: "login" | "signup"; verificationUri: string; userCode: string }
   | { step: "result"; message: string; error: boolean };
 
-// /config's own live state (Stage D) — structurally identical to SetupState above (list ->
-// enter-value -> list, list -> confirm-unset -> list), since /config edits arbitrary config.json
-// keys the same way /setup edits provider API keys.
+// /config's own live state — structurally identical to SetupState above (list -> enter-value ->
+// list, list -> confirm-unset -> list), since /config edits arbitrary config.json keys the same way
+// /setup edits provider API keys.
 export type ConfigPanelState =
   | { step: "list"; rows: ConfigRow[]; selected: number }
   | { step: "enter-value"; key: string; error?: string; busy: boolean }
   | { step: "confirm-unset"; key: string };
 
-// /permissions' own live state (Stage D) — a flat list with only a remove step, no value-entry
-// step: there is nothing to type, only tools to revoke.
+// /permissions' own live state — a flat list with only a remove step, no value-entry step: there
+// is nothing to type, only tools to revoke.
 export type PermissionsPanelState =
   | { step: "list"; rows: PermissionRow[]; selected: number }
   | { step: "confirm-remove"; tool: string };
@@ -108,7 +103,7 @@ export type TuiState = {
   // value can no longer be trusted, since every existing entry re-wraps to a different row count.
   totalVisualRows: number;
   // The model's in-progress answer, not yet committed to the transcript — the live region's
-  // content in Phase 4, flushed into `transcript` the moment a non-text event needs to report.
+  // content, flushed into `transcript` the moment a non-text event needs to report.
   streaming: string;
   // The live region's spinner/status line, cleared once whatever it was reporting on finishes.
   status: string;
@@ -124,8 +119,8 @@ export type TuiState = {
   // `command-error-cleared`, dispatched alongside every submission's own echo (echoUserInput,
   // cli.ts) — so it clears on the very next submission, success or failure of that submission.
   commandError: string | undefined;
-  // Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native ApprovalPrompt's own
-  // live state — set when runTui's tuiApprovalPrompt is called (a write-tool call reached the
+  // The TUI-native ApprovalPrompt's own live state — set when runTui's tuiApprovalPrompt is
+  // called (a write-tool call reached the
   // gate), cleared once the user answers. `offersAlways` mirrors makeApprovalPrompt's own
   // PERSISTABLE_TOOLS check, computed once at request time rather than re-derived at render time.
   // App.tsx renders its own ApprovalBox instead of InputBox whenever this is set — mutually
@@ -145,10 +140,10 @@ export type TuiState = {
   // for the screen at once. Whether that is the right UX for a mid-turn /model is not decided by
   // this comment; it is only what the current render order actually does.
   pendingModelPicker: { entries: ModelPickerEntry[] } | undefined;
-  // Code-review finding: a single pty chunk carrying filter text, a terminator, AND further
-  // characters (measured as real on a real terminal, the same class InputBox's own MEDIUM-E fix
-  // addressed) used to just discard everything after the terminator when it closed the picker —
-  // dropped keystrokes with the picker gone and no trace of what was typed. Set by
+  // A single pty chunk carrying filter text, a terminator, AND further characters (measured as
+  // real on a real terminal, the same class InputBox's own paste-terminator handling addresses)
+  // used to just discard everything after the terminator when it closed the picker — dropped
+  // keystrokes with the picker gone and no trace of what was typed. Set by
   // `model-picker-resolved`'s `leftoverInput`, consumed once by InputBox as its own starting
   // value on the very next mount, then cleared — never re-applied to a later, unrelated mount.
   pendingInputPrefill: string | undefined;
@@ -157,17 +152,16 @@ export type TuiState = {
   // `pendingApproval`/`pendingModelPicker` the same way those two already can with each other,
   // for the identical reason: cli.ts's onSubmit handles /setup before the turnInFlight guard.
   pendingSetup: SetupState | undefined;
-  // Stage A scaffolding (cli-commands-to-tui feature-plan.md): the non-blocking login/signup
-  // offer (AuthBanner, App.tsx) — independent of `pendingAuth` below, not a fourth mutually
-  // exclusive render-ternary state. Nothing sets this to `true` yet (Stage C wires the offer).
+  // The non-blocking login/signup offer (AuthBanner, App.tsx) — independent of `pendingAuth`
+  // below, not a fourth mutually exclusive render-ternary state. Set by the `auth-offer` action
+  // (decideAuthOffer, dispatched from cli.ts/handlers.ts at every point the auth panel closes).
   authOffer: boolean;
-  // /login and /signup's own blocking panel (Stage C). Mirrors `pendingSetup`'s mutual-exclusion
-  // role in the render ternary once wired; unreachable until then.
+  // /login and /signup's own blocking panel. Mirrors `pendingSetup`'s mutual-exclusion role in the
+  // render ternary.
   pendingAuth: AuthPanelState | undefined;
-  // /config's own blocking panel (Stage D). Mirrors `pendingSetup`'s role; unreachable until wired.
+  // /config's own blocking panel. Mirrors `pendingSetup`'s role.
   pendingConfig: ConfigPanelState | undefined;
-  // /permissions' own blocking panel (Stage D). Mirrors `pendingSetup`'s role; unreachable until
-  // wired.
+  // /permissions' own blocking panel. Mirrors `pendingSetup`'s role.
   pendingPermissions: PermissionsPanelState | undefined;
   // The welcome-splash mount's own blocking panel. `initialTuiState`'s own `showSplash` opt (below)
   // only seeds the value App.tsx's OWN internal `useReducer(tuiReducer, initialTuiState(session))`
@@ -320,10 +314,9 @@ export type TuiAction =
   // Mirrors `model-picker-resolved`'s own `leftoverInput` handling exactly — /setup's panel can
   // also close mid-chunk on a real pty.
   | { type: "setup-resolved"; leftoverInput?: string }
-  // Stage A scaffolding: no dispatcher fires any of these ten yet (Stages B-D wire them). Shaped
-  // now so `pendingAuth`/`pendingConfig`/`pendingPermissions`'s own step transitions have a
-  // reducer contract to land on. `auth-offer` toggles the independent, non-blocking banner —
-  // deliberately NOT `pendingAuth`, which is the blocking panel (see TuiState's own comment).
+  // `pendingAuth`/`pendingConfig`/`pendingPermissions`'s own step transitions land on these ten.
+  // `auth-offer` toggles the independent, non-blocking banner — deliberately NOT `pendingAuth`,
+  // which is the blocking panel (see TuiState's own comment).
   | { type: "auth-offer"; show: boolean }
   | { type: "auth-requested"; mode: "login" | "signup" }
   | { type: "auth-step"; state: AuthPanelState }
@@ -634,10 +627,10 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
             ? { name: event.name, args: event.args }
             : state.pendingTool,
       };
-    // Finding 7: toolResultLine/toolAllowedLine (cli/output.ts), not a hand-copied line shape —
-    // this had drifted from printEvent's own rendering (missing the edit-specific message and the
-    // verification suffix here, missing escapeControlChars on tool-allowed's name) before sharing
-    // the same two functions closed that gap for good.
+    // toolResultLine/toolAllowedLine (cli/output.ts), not a hand-copied line shape — a hand-copied
+    // one would drift from printEvent's own rendering (missing the edit-specific message and the
+    // verification suffix here, missing escapeControlChars on tool-allowed's name); sharing the
+    // same two functions closes that gap for good.
     case "tool-result":
       return { ...pushLine(state, toolResultLine(event)), status: "", pendingTool: undefined };
     case "permission-denied":

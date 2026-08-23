@@ -1,20 +1,22 @@
-// Mirrors guidedSetup.ts's own mount structure (throwaway session, liveState/dispatch synchronous
-// mirror, render()/instance.unmount(), onSignalCleanup) for a single, separate, earlier Ink mount:
-// the welcome splash that shows ahead of both the zero-key guided-setup gate and the normal TUI on
-// every interactive launch (run()'s own call site). Unlike guidedSetup.ts, this file does reuse
-// createAuthHandlers (./handlers) — the same device-flow auth wiring runTui reuses, rather than a
-// second implementation of it.
+// Renders first inside the one consolidated `CliRenderer` (`runtime/renderer.ts`'s
+// `getTuiRenderer`, shared with `guidedSetup.ts` and `runTui`, cli.ts) — the welcome splash that
+// shows ahead of both the zero-key guided-setup gate and the normal TUI on every interactive
+// launch (`run()`'s own call site). `getTuiRenderer` is idempotent, so this is the call that
+// actually creates the renderer for the whole splash -> setup -> main-TUI sequence; `guidedSetup.ts`
+// and `runTui` reuse the same instance and simply `root.render` different content, rather than each
+// owning a separate mount. Reuses `createAuthHandlers` (./handlers) — the same device-flow auth
+// wiring `runTui` reuses, rather than a second implementation of it.
 import { randomUUID } from "node:crypto";
-import type { CliDeps } from "../cli";
-import { deliverSignal, onSignalCleanup } from "../signals";
-import { decideAuthOffer } from "./commands";
-import { createAuthHandlers } from "./handlers";
-import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./reducer";
+import { createElement } from "react";
+import type { CliDeps } from "../../../cli";
+import { App } from "../../app";
+import { getTuiRenderer } from "../../runtime/renderer";
+import { decideAuthOffer } from "../../state/commands";
+import { createAuthHandlers } from "../../state/handlers";
+import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "../../state/reducer";
 
 export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promise<void> {
-  const { render } = await import("ink");
-  const { createElement } = await import("react");
-  const { App } = await import("./App");
+  const { root } = await getTuiRenderer();
 
   // Same synchronous-mirror pattern as guidedSetup.ts's own liveState/dispatch — see that file's
   // own comment for why a caller reading state right after a dispatch needs this rather than
@@ -47,7 +49,7 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
   // read fresh right after) is what tells a genuine success apart from a failure still on screen: a
   // SUCCESSFUL login dispatches "auth-resolved" itself (createAuthHandlers' own catch-free path)
   // with no further keypress ever coming, which — unlike runTui's mount, where that same dispatch
-  // just reveals the InputBox already wired to a live session — would otherwise leave this mount's
+  // just reveals the InputBox already wired to a live session — would otherwise leave this phase's
   // own `closed` promise permanently unresolved, since only onSplashContinue/onAuthResolved
   // (dismissing a still-open panel) call `resolveClosed` here. A failure leaves `pendingAuth` set
   // (the "result" step), so it stays on screen for the user to read and dismiss via onAuthResolved,
@@ -69,7 +71,7 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
     resolveClosed();
   }
 
-  // Unlike runTui's own onAuthResolved, dismissing the auth panel here always ends this mount —
+  // Unlike runTui's own onAuthResolved, dismissing the auth panel here always ends this phase —
   // there is no InputBox to return to in a throwaway pre-session screen.
   function onAuthResolved(): void {
     onAbandon();
@@ -77,12 +79,10 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
     resolveClosed();
   }
 
-  const instance = render(
+  root.render(
     createElement(App, {
       session: liveState.session,
       route: undefined,
-      done: false,
-      onCancel: () => deliverSignal("SIGINT"),
       onSplashLogin,
       onSplashSignup,
       onSplashContinue,
@@ -90,18 +90,18 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
         // App's own internal `useReducer(tuiReducer, initialTuiState(session))` call never sees
-        // this mount's `showSplash` opt (that only seeds `liveState`, above) — `splash-requested`
+        // this phase's `showSplash` opt (that only seeds `liveState`, above) — `splash-requested`
         // is what actually flips App's OWN rendered `pendingSplash` to true, the same "requested"
         // dispatch every other pending panel already fires from its own connectDispatch.
         dispatch({ type: "splash-requested" });
         dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
       },
     }),
-    { exitOnCtrlC: false, interactive: true },
   );
 
-  onSignalCleanup(() => instance.unmount());
-
+  // No `onSignalCleanup`/unmount registration here: `getTuiRenderer` already registers the
+  // renderer's own destroy as the process's lastCleanup (runtime/renderer.ts), once, for the whole
+  // splash -> setup -> main-TUI window this call created — a fatal signal at any point in that
+  // window is already covered without a second, per-phase registration.
   await closed;
-  instance.unmount();
 }

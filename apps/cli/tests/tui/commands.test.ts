@@ -40,7 +40,7 @@ import {
   decideSetupOpen,
   decideUndo,
   KNOWN_CONFIG_KEYS,
-} from "../../src/tui/commands";
+} from "../../src/tui/state/commands";
 
 let root: string;
 let storeDir: string;

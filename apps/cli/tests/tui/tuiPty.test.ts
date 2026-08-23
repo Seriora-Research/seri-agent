@@ -1516,6 +1516,127 @@ function childScriptClearArchivist(dir: string): string {
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null; stdout: string };
 
+// Reconstructs the CURRENT content of every terminal row OpenTUI has ever absolute-positioned a
+// cell in, resilient to its incremental cell-diff redraw: a cell that's already correct on screen
+// is skipped rather than re-emitted on a later repaint, so two adjacent on-screen characters of
+// what looks like one logical string (e.g. a throttled InputBox flush: `/` lands in one write,
+// `model` in a later one once the leading-edge character's own flush has already drawn it) can
+// arrive as two separate, non-contiguous runs in the raw stream, with ANSI cursor-repositioning
+// bytes in between — breaking a plain `.includes()` over the raw bytes even though the two runs
+// are contiguous on the actual screen. Same reason `lastFrame()` (below) needs this too, not just
+// `sawLine`: it used to read only the LAST synchronized-update block, which misses content that
+// hasn't needed re-emitting since an earlier block — confirmed live, `frameOccurrences("┌")` came
+// back 0 for a border that was genuinely still on screen, drawn in an earlier block untouched by
+// the redraw `lastFrame()` happened to land on.
+//
+// Only text immediately addressed by a CUP escape sequence (`ESC [ row ; col H`, what every
+// OpenTUI redraw uses) is written into the grid — a bare `\r`/`\n` (what un-patched `console.log`
+// output, `OTUI_USE_CONSOLE=false` below, uses instead, having no cursor-addressing of its own)
+// switches OFF grid-writing until the next CUP re-arms it, rather than continuing to place text at
+// wherever the cursor happens to be. This is deliberate, not an oversight: a real, un-intercepted
+// `console.error` call CAN legitimately land mid-row, wherever OpenTUI's own last CUP left the
+// cursor, with no CUP of its own — confirmed live (`printWarning`'s own EACCES message, cli.ts) —
+// and including that in the grid at all means it can leave stale trailing characters behind once a
+// LATER, real CUP-addressed redraw reuses that same row with shorter content (OpenTUI's own diff
+// has no idea a cell was mutated out-of-band, so it never re-clears it). Excluding non-CUP text
+// entirely avoids that corruption for both consumers below; `sawLine`'s cheap raw-substring check
+// (its own comment) already handles console-style one-shot output correctly on its own, so nothing
+// is lost by not also tracking it here.
+//
+// Deliberately does NOT model real terminal scroll (a grid cell, once written, stays exactly
+// where its CUP put it) — this only needs to answer "what does OpenTUI's own last write to this
+// cell say," which is stable across repaints since OpenTUI always re-addresses a row absolutely.
+function reconstructRows(raw: string): string[] {
+  const rows: string[][] = [];
+  function ensureCell(r: number, c: number): void {
+    while (rows.length <= r) rows.push([]);
+    while (rows[r].length <= c) rows[r].push(" ");
+  }
+  let row = 0;
+  let col = 0;
+  let armed = false;
+  let i = 0;
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (ch === "\x1b") {
+      const marker = raw[i + 1];
+      if (marker === "[") {
+        let j = i + 2;
+        while (j < raw.length && !/[\x40-\x7e]/.test(raw[j])) j++;
+        const final = raw[j];
+        if (final === "H" || final === "f") {
+          const [r, c] = raw
+            .slice(i + 2, j)
+            .split(";")
+            .map((n) => (n ? Number.parseInt(n, 10) : 1));
+          row = Math.max(0, (r || 1) - 1);
+          col = Math.max(0, (c || 1) - 1);
+          armed = true;
+        }
+        i = j + 1;
+        continue;
+      }
+      if (marker === "]" || marker === "P" || marker === "_" || marker === "^" || marker === "X") {
+        let j = i + 2;
+        while (j < raw.length && raw[j] !== "\x07" && !(raw[j] === "\x1b" && raw[j + 1] === "\\"))
+          j++;
+        i = raw[j] === "\x07" ? j + 1 : j + 2;
+        continue;
+      }
+      i += 2; // a bare two-byte escape (ESC c, ESC =, ESC >, ...)
+      continue;
+    }
+    if (ch === "\r" || ch === "\n") {
+      armed = false;
+      i++;
+      continue;
+    }
+    if (armed) {
+      ensureCell(row, col);
+      rows[row][col] = ch;
+      col++;
+    }
+    i++;
+  }
+  return rows.map((r) => r.join(""));
+}
+
+// A raw-substring count (`rawOccurrences`, `startChild`'s own comment on it) undercounts for the
+// same reason `sawLine` needed `reconstructRows`: one of N logically-distinct renders of `line` can
+// itself be split across writes, so it never exists as one contiguous run in the raw bytes at all —
+// confirmed live, a throttled InputBox echo split `/mode` into a `/` write and a `mode` write with
+// no overlap, undercounting `rawOccurrences("/mode")` even though the row genuinely read "/mode" by
+// the time the second write landed. `reconstructRows` alone can't fix this either: it only reflects
+// the CURRENT value of a cell, not how many times a row held a matching value over the test's
+// lifetime — reused for a different render later, only the latest value survives. This instead
+// snapshots the reconstructed rows at each OpenTUI synchronized-update boundary (`ESC[?2026l`, its
+// own natural "one redraw settled" marker) and counts each row's own false→true transition into
+// "now contains `line`" — a row holding a match across several consecutive frames (unchanged,
+// nothing to redraw) counts once, and a row that later stops matching and later matches again
+// (reused for a different render) counts again.
+function countLogicalOccurrences(raw: string, line: string): number {
+  const esu = "\x1b[?2026l";
+  const frameEnds: number[] = [];
+  for (let i = raw.indexOf(esu); i !== -1; i = raw.indexOf(esu, i + esu.length)) {
+    frameEnds.push(i + esu.length);
+  }
+  frameEnds.push(raw.length);
+  let count = 0;
+  let wasMatching = new Set<number>();
+  for (const end of frameEnds) {
+    const rows = reconstructRows(raw.slice(0, end));
+    const nowMatching = new Set<number>();
+    rows.forEach((row, i) => {
+      if (row.includes(line)) nowMatching.add(i);
+    });
+    for (const i of nowMatching) {
+      if (!wasMatching.has(i)) count++;
+    }
+    wasMatching = nowMatching;
+  }
+  return count;
+}
+
 // Identical shape to tests/cli/approvalPromptPty.test.ts's own startChild — duplicated rather than
 // imported, matching this repo's convention of self-contained pty test files. See that file's own
 // comment for why a pty (not a pipe) is load-bearing here: raw mode's interpretation of input —
@@ -1534,9 +1655,12 @@ async function startChild(
   exited: Promise<Exit>;
   sawLine: (line: string) => Promise<void>;
   // For a still-live child (an InputBox's own typed-text echo, a panel's live row content, console
-  // output), `sawLine`/`sawLineTimes` below are already exact: neither `<Static>` nor its viewport
+  // output), `sawLine`/`sawLineTimes` below don't overcount: neither `<Static>` nor its viewport
   // replacement (App.tsx) ever owned that content, so a repaint cannot re-emit it a second time
-  // beyond what actually changed. `sawLineTimes` is for the one case that still needs a COUNT rather
+  // beyond what actually changed. `sawLine` also falls back to `reconstructRows` (above) for the
+  // opposite failure mode — undercounting a run that OpenTUI's own cell-diff split across two
+  // writes, a plain substring check over the raw bytes alone is not exact for. `sawLineTimes` is
+  // for the one case that still needs a COUNT rather
   // than a bare substring check: the transcript prints the identical "(done: no-tool-call)" line for
   // every turn in a multi-turn session, so `sawLine` is already true for turn 2's own occurrence the
   // instant turn 1's happens — this counts occurrences instead, so a caller can wait for the SECOND
@@ -1573,7 +1697,17 @@ async function startChild(
   sawInFrameTimes: (line: string, count: number) => Promise<void>;
 }> {
   const args = ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, scriptPath];
-  const child = spawn("python3", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
+  // `OTUI_USE_CONSOLE=false`: OpenTUI's `TerminalConsoleCache` intercepts `console.log`/`console.error`
+  // into a hidden debug overlay by default (`@opentui/core`'s own `registerEnvVar` for this — a
+  // documented escape hatch, not an internal hack) — every `childScript*` fixture below relies on a
+  // `console.log(...)` sync marker reaching THIS pty's real stdout, which the overlay swallows
+  // instead. Disabling it restores the un-patched `console`, matching how these markers behaved
+  // under the old Ink-based renderer (which never intercepted `console.log` at all).
+  const child = spawn("python3", args, {
+    cwd,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, OTUI_USE_CONSOLE: "false" },
+  });
 
   let stdout = "";
   child.stdout?.setEncoding("utf8");
@@ -1596,37 +1730,48 @@ async function startChild(
 
   const rawOccurrences = (line: string): number => stdout.split(line).length - 1;
 
-  const lastFrame = (): string => {
-    const bsu = "\x1b[?2026h";
-    const esu = "\x1b[?2026l";
-    const start = stdout.lastIndexOf(bsu);
-    if (start === -1) return "";
-    const end = stdout.indexOf(esu, start + bsu.length);
-    if (end === -1) return "";
-    return stdout.slice(start + bsu.length, end).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
-  };
+  // `reconstructRows` (above), not "just the last synchronized-update block": that used to be a
+  // complete frame under Ink (which always re-wrote the whole screen on any change), but under
+  // OpenTUI's cell-diff redraw the last block can be a partial one — content unchanged since an
+  // EARLIER block (a border, e.g.) is still genuinely on screen without needing to appear in it.
+  const lastFrame = (): string => reconstructRows(stdout).join("\n");
 
   const frameOccurrences = (line: string): number => lastFrame().split(line).length - 1;
 
+  // The cheap raw-substring check first (true for the common case: console output, and any TUI
+  // content OpenTUI happened to write as one contiguous run) — `reconstructRows` only runs once
+  // that fails, since it re-walks the full capture from scratch on every call.
+  const seenLine = (line: string): boolean =>
+    stdout.includes(line) || reconstructRows(stdout).some((row) => row.includes(line));
+
   const sawLine = async (line: string): Promise<void> => {
     const deadline = Date.now() + 20_000;
-    while (!stdout.includes(line) && spawnError === undefined && Date.now() < deadline)
+    while (!seenLine(line) && spawnError === undefined && Date.now() < deadline)
       await new Promise((r) => setTimeout(r, 20));
     if (spawnError !== undefined)
       throw new Error(`could not spawn python3 (pty allocator): ${spawnError.message}`);
-    if (!stdout.includes(line))
+    if (!seenLine(line))
       throw new Error(`child never printed ${JSON.stringify(line)}; got ${JSON.stringify(stdout)}`);
   };
 
+  // `Math.max`, not a replacement: `rawOccurrences` stays correct for content that was never split
+  // (the common case), and `countLogicalOccurrences` alone can undercount too, for the inverse
+  // reason — it only credits a row once per frame-boundary transition, so content re-flushed
+  // mid-frame (no synchronized-update boundary between two occurrences) still relies on the raw
+  // count. Taking the larger of the two is safe either way: neither method can OVERcount a real
+  // absence (`.toBe(0)` calls), since both require the exact text to actually appear somewhere.
+  const occurrences = (line: string): number =>
+    Math.max(rawOccurrences(line), countLogicalOccurrences(stdout, line));
+
   const sawLineTimes = async (line: string, count: number): Promise<void> => {
     const deadline = Date.now() + 20_000;
-    while (rawOccurrences(line) < count && spawnError === undefined && Date.now() < deadline)
+    while (occurrences(line) < count && spawnError === undefined && Date.now() < deadline)
       await new Promise((r) => setTimeout(r, 20));
     if (spawnError !== undefined)
       throw new Error(`could not spawn python3 (pty allocator): ${spawnError.message}`);
-    if (rawOccurrences(line) < count)
+    if (occurrences(line) < count)
       throw new Error(
-        `child printed ${JSON.stringify(line)} ${rawOccurrences(line)} time(s), wanted ${count}; got ${JSON.stringify(stdout)}`,
+        `child printed ${JSON.stringify(line)} ${occurrences(line)} time(s), wanted ${count}; got ${JSON.stringify(stdout)}`,
       );
   };
 
@@ -1732,9 +1877,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   // The TUI counterpart of approvalPromptPty.test.ts's "a real Ctrl-C at the prompt cancels the
   // turn" test — same fact (a single press cancels the in-flight turn rather than being silently
   // dropped), different route to signals.ts: there is no readline Interface in the TUI path, so
-  // this exercises App.tsx's own onCancel handler and runTui's exitOnCtrlC: false instead (Ink's
-  // default exitOnCtrlC would otherwise unmount the app on the same press, competing with the
-  // cancel this asserts on).
+  // this exercises `runtime/renderer.ts`'s own Ctrl-C registration and `renderOptions.ts`'s
+  // exitOnCtrlC: false instead (OpenTUI's own default exitOnCtrlC would otherwise destroy the
+  // renderer on the same press, competing with the cancel this asserts on).
   //
   // Asserted on stdout, not on the process exiting: H-3's multi-turn wiring means a cancelled turn
   // returns the TUI to "awaiting input" rather than ending the process (only a fatal Ctrl-C does
@@ -2550,12 +2695,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   // H-4 (the fatal path M-2's terminal-state fix guards): a second Ctrl-C, once the first has
   // already spent signals.ts's one cancel slot, is fatal rather than a second cancel — the same
   // "one slot, second press finds it empty" mechanism as everywhere else in this repo (see
-  // signals.ts's own deliverSignal comment), reached here via App.tsx's onCancel instead of a
-  // readline Interface. Asserted the same way tests/signals.test.ts's own "a second press skips
-  // the unwind and still exits by signal" test is: the process actually terminates rather than
-  // hanging, which is what M-2's onSignalCleanup(() => instance.unmount()) exists to make happen
-  // cleanly (restoring raw mode) rather than leaving the terminal in whatever state a bare
-  // process.kill mid-render left it in — not independently checkable from outside the dying
+  // signals.ts's own deliverSignal comment), reached here via `runtime/renderer.ts`'s own Ctrl-C
+  // registration instead of a readline Interface. Asserted the same way tests/signals.test.ts's own
+  // "a second press skips the unwind and still exits by signal" test is: the process actually
+  // terminates rather than hanging, which is what M-2's onSignalCleanup(() => instance.unmount())
+  // exists to make happen cleanly (restoring raw mode) rather than leaving the terminal in whatever
+  // state a bare process.kill mid-render left it in — not independently checkable from outside the
+  // dying
   // process on this pty harness, so this is the process-terminates half of that fix; the
   // terminal's own visual state is Phase 7's to confirm on a real terminal.
   test("a second Ctrl-C after the first is spent terminates the process instead of hanging", async () => {
@@ -3369,7 +3515,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await wait100ms();
         await sawLine("/setup — provider API keys");
-        await sawLine("set by $OPENAI_API_KEY in your environment");
+        // Not the full "...in your environment — unset it in your shell" text: ListRow.tsx's own
+        // `truncate` (its own comment) genuinely clips this row's label at this terminal width,
+        // same as every other `formatSetupRow`-fed row — a prefix is the stable sync point, not the
+        // full untruncated phrase.
+        await sawLine("set by $OPENAI_API_KEY in");
 
         // Down to openrouter, anthropic, openai — three Downs (groq=0, openrouter=1,
         // anthropic=2, openai=3).
@@ -3507,12 +3657,19 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await new Promise((resolve) => setTimeout(resolve, 30));
         await sawLineTimes("JSON Parse error", 2);
 
-        // Restoring valid JSON and retrying proves the TUI actually recovered, not just that it
-        // survived one bad read.
+        // dispatchSetupList's own catch (the throw just above went through it, unlike onSetupRemove's
+        // own inline one) dispatches setup-resolved alongside the command-error — the panel is
+        // already closed by this point, not sitting on the list step waiting for a retry. A second
+        // bare Escape here has no panel left to act on. Restoring valid JSON and retrying proves the
+        // TUI actually recovered — /setup opens again cleanly — rather than counting on however many
+        // times the still-open panel's own title row happened to get repainted, which a
+        // cell-diffing renderer makes an unreliable count (confirmed live: this used to assert
+        // `sawLineTimes(2)` off two bare Escapes with no second `/setup`, and passed or failed
+        // depending only on incidental repaint counts, not on anything actually reopening).
         writeFileSync(configPath, JSON.stringify({ OPENROUTER_API_KEY: "sk-or-value" }));
-        child.stdin?.write("\x1b");
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        await wait100ms();
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
         await sawLineTimes("/setup — provider API keys", 2);
 
         // The actual negative control this test rests on (this comment block's own top note): both
@@ -4467,11 +4624,17 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         // The row itself still shows the env-sourced value after the list refreshes — the
         // transcript sentence above already contains "Automatic verification: off" as a substring
-        // (it's the prefix of "off in config, ..."), so three total occurrences (the first render,
-        // the message, the refreshed render) is what proves the row never independently rendered
-        // "on". `rawOccurrences`, not `frameOccurrences`: this is an absence check (`.toBe(0)`),
-        // safe under the raw cumulative count regardless of source.
-        await sawLineTimes("Automatic verification: off", 3);
+        // (it's the prefix of "off in config, ..."), so two total occurrences (the first render,
+        // the message) is what proves the row rendered "off" at least once independently of the
+        // confirmation sentence. NOT three (a third for "the refreshed render" too): OpenTUI's own
+        // cell-diff redraw does not re-emit a row whose value hasn't actually changed, so a refresh
+        // that leaves this row showing the same "off" text it already had can legitimately produce
+        // zero new bytes for it — unlike Ink, which always re-wrote the whole frame on any change
+        // elsewhere. The absence check right below is what actually proves the row never
+        // independently rendered "on", not the occurrence count. `rawOccurrences`, not
+        // `frameOccurrences`: this is an absence check (`.toBe(0)`), safe under the raw cumulative
+        // count regardless of source.
+        await sawLineTimes("Automatic verification: off", 2);
         expect(rawOccurrences("Automatic verification: on")).toBe(0);
       } finally {
         child.kill("SIGKILL");
@@ -4893,8 +5056,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // "Log in" is the default-selected (first) item — a bare Enter, no navigation, selects it.
         await sawLine("> Log in");
         child.stdin?.write("\r");
-        await wait100ms();
-
+        // Deliberately no `wait100ms()` between the keypress and these two checks (unlike its
+        // sibling tests, above): `loginFake`'s own ~50ms auto-resolve (this file's own comment,
+        // below) already races the device-code panel's own on-screen lifetime — a fixed 100ms
+        // sleep here reliably lost that race, letting login succeed and the main TUI mount and
+        // redraw this exact row (`> do a task`) before either check ever ran. `sawLine`'s own poll
+        // loop already waits for the render with no help needed from a fixed delay.
         await sawLine("https://example.com/device");
         await sawLine("ABCD-1234");
 
@@ -5141,8 +5308,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         const frame = lastFrame();
         expect(frame).toContain("line-299.txt");
         expect(frame).not.toContain("line-0.txt");
-        expect(frame).toContain("┌"); // InputBox's own border
-        expect(frame).not.toContain("╭");
+        // Not "┌": InputBox.tsx's own `border={["top", "bottom"]}` never renders corners at all
+        // (confirmed true under the old Ink InputBox too — `borderLeft={false} borderRight={false}`)
+        // — its own top/bottom rule is what proves it's still visible below the transcript.
+        expect(frame).toContain("─".repeat(10));
+        expect(frame).not.toContain("╭"); // square corners, not rounded (Design conformance)
       } finally {
         child.kill("SIGKILL");
       }
@@ -5233,8 +5403,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // `dir` is the session's own `cwd` (startChild's own `cwd` param, below, is what sets the
       // child process's real process.cwd() — the same value loadOrCreateSession's fresh-session
       // branch records as `session.cwd`) — not inside a real git repo, so `projectRoot` falls back
-      // to `dir` itself, matching checkpointTarget's own resolution exactly.
-      const storeDir = checkpointStoreDir(join(dir, "checkpoints"), dir);
+      // to `dir` itself, matching checkpointTarget's own resolution exactly. `realpathSync`, not the
+      // raw `dir`: the "/permissions" describe block's own comment on this (above) explains why —
+      // os.tmpdir() on macOS resolves under a symlink, so the CHILD's own `process.cwd()` (spawned
+      // with `cwd: dir`) comes back already resolved, and a store key computed here from the
+      // unresolved `dir` would point at a directory the child never wrote to.
+      const storeDir = checkpointStoreDir(join(dir, "checkpoints"), realpathSync(dir));
       const gitDir = join(storeDir, "git");
 
       const { child, sawLine } = await startChild(scriptPath, dir);
@@ -5302,7 +5476,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       writeFileSync(scriptPath, childScriptClear(dir));
 
       const sessionsDir = join(dir, "sessions");
-      const storeDir = checkpointStoreDir(join(dir, "checkpoints"), dir);
+      // realpathSync — see the sibling test's own comment just above for why this is scoped to
+      // `worktree` here, not applied to the shared `dir` itself.
+      const storeDir = checkpointStoreDir(join(dir, "checkpoints"), realpathSync(dir));
       const gitDir = join(storeDir, "git");
 
       const { child, sawLine } = await startChild(scriptPath, dir);
@@ -5443,7 +5619,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // they were before the refused /clear — a real rebind never touched anything.
         const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
         expect(files).toHaveLength(1);
-        const loaded = loadSession<ModelMessage>((files[0] ?? "").slice(0, -".jsonl".length), sessionsDir);
+        const loaded = loadSession<ModelMessage>(
+          (files[0] ?? "").slice(0, -".jsonl".length),
+          sessionsDir,
+        );
         expect(loaded.messages).toEqual([{ role: "user", content: "do a task" }]);
       } finally {
         child.kill("SIGKILL");
