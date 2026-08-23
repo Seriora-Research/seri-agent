@@ -385,10 +385,12 @@ export function App({
             <text fg={theme.muted}>↑ scrolled — End to follow</text>
           )}
           {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
-          {/* Keyed on `state.turn.startedAt`, defensively: today's two `turn-started` dispatch
-          sites (cli.ts) are both input-driven, always separated from the prior turn's `turn-ended`
-          by a user keystroke, so React never has the chance to batch the pair into one commit. But
-          IF it ever did — a `turn-ended` and the next `turn-started` landing in the same update —
+          {/* Keyed on `state.turn.startedAt`, defensively: `runTurn` (cli.ts) has a single
+          `turn-started` dispatch site, reached from two call paths — an interactive submission and
+          a mount-time task/resume start — both input-driven, always separated from the prior turn's
+          `turn-ended` by a user keystroke, so React never has the chance to batch two `turn-started`
+          dispatches into one commit. But IF it ever did — a `turn-ended` and the next `turn-started`
+          landing in the same update —
           the intermediate "no turn in flight" render (where TurnStatus would otherwise unmount)
           would never actually commit, and TurnStatus would be REUSED rather than remounted, so its
           `useState(() => Date.now())` initializer (TurnStatus's own comment) would not re-run and
