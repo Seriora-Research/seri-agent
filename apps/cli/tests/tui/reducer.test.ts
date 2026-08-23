@@ -124,37 +124,31 @@ describe("tuiReducer: transcript-append", () => {
 });
 
 describe("tuiReducer: transcript-cleared", () => {
-  // Builds a state where `streaming`, `totalVisualRows`, and `transcriptScrollStreamingRows` are
-  // all genuinely non-zero before the clear — otherwise the reset assertions would pass vacuously.
-  // `transcriptScrollStreamingRows` is populated (1) only while a turn is active, so `turn-started`
-  // is dispatched before the streamed text — see that field's own comment (reducer.ts).
+  // Builds a state where `streaming`, `totalVisualRows`, and `transcriptScrollOffset` are all
+  // genuinely non-zero before the clear — otherwise the reset assertions would pass vacuously.
   function stateBeforeClear(): TuiState {
     let state: TuiState = { ...initialTuiState(session()), viewportRows: 1 };
     for (const line of ["a", "b", "c"]) {
       state = tuiReducer(state, { type: "transcript-append", line });
     }
-    state = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
     state = tuiReducer(state, {
       type: "loop-event",
       event: { type: "text-delta", text: "an in-progress answer" },
     });
-    // transcript-scroll (with a turn active) is what populates transcriptScrollStreamingRows.
     state = tuiReducer(state, { type: "transcript-scroll", delta: 1 });
     return state;
   }
 
-  test("resets transcript, scroll offset, streaming-rows cache, total-rows cache, and streaming", () => {
+  test("resets transcript, scroll offset, total-rows cache, and streaming", () => {
     const before = stateBeforeClear();
     expect(before.streaming.length).toBeGreaterThan(0);
     expect(before.totalVisualRows).toBeGreaterThan(0);
-    expect(before.transcriptScrollStreamingRows).toBeGreaterThan(0);
     expect(before.transcriptScrollOffset).toBeGreaterThan(0);
 
     const next = tuiReducer(before, { type: "transcript-cleared" });
 
     expect(next.transcript).toEqual([]);
     expect(next.transcriptScrollOffset).toBe(0);
-    expect(next.transcriptScrollStreamingRows).toBe(0);
     expect(next.totalVisualRows).toBe(0);
     expect(next.streaming).toBe("");
   });
@@ -169,9 +163,9 @@ describe("tuiReducer: transcript-cleared", () => {
     expect(next.viewportRows).toBe(before.viewportRows);
   });
 
-  // Proves the CACHE was reset, not just the array: if totalVisualRows/transcriptScrollStreamingRows
-  // survived the clear, a scroll dispatched right after could still compute a positive max offset
-  // from stale row counts even though the transcript is now empty.
+  // Proves the CACHE was reset, not just the array: if totalVisualRows survived the clear, a
+  // scroll dispatched right after could still compute a positive max offset from a stale row count
+  // even though the transcript is now empty.
   test("a scroll dispatched right after cannot move the offset off 0", () => {
     const cleared = tuiReducer(stateBeforeClear(), { type: "transcript-cleared" });
     const next = tuiReducer(cleared, { type: "transcript-scroll", delta: 5 });
@@ -406,75 +400,58 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
     expect(next.transcriptScrollOffset).toBe(16);
   });
 
-  // `transcriptScrollStreamingRows` snapshots TurnStatus's own reserved row (0 or 1) already
-  // folded into `transcriptScrollOffset` by `maxScrollOffset` above — `appendLines`' own flush-time
-  // subtraction (pushLine) reads this back so a flush doesn't double-count it. It is always 1 while
-  // a turn is active, never the streamed text's own wrapped row count.
-  test("transcript-scroll-to top snapshots TurnStatus's reserved row (1), not the streamed text's wrapped length", () => {
-    const lines = Array.from({ length: 20 }, (_, i) => `line ${i}`);
-    let state: TuiState = { ...transcriptOf(lines), viewportRows: 5 };
-    state = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
-    const streamed = Array.from({ length: 20 }, (_, i) => `streamed line ${i}`).join("\n");
-    state = tuiReducer(state, { type: "loop-event", event: { type: "text-delta", text: streamed } });
-
-    const next = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
-    expect(next.transcriptScrollOffset).toBe(16);
-    expect(next.transcriptScrollStreamingRows).toBe(1);
-  });
-
-  // Regression guard, updated for the constant reservation: `appendLines` must still subtract only
-  // the ALREADY-BAKED-IN reserved row (1) from a flush's own real added-row count, not the flush's
-  // full length — more streaming after the scroll snapshot (still un-flushed, so the offset doesn't
-  // move again) followed by a flush must advance the offset by the real committed growth minus that
-  // one row, never by the full flushed length.
-  test("a flush after more streaming happened since a scroll snapshot advances the offset by the real committed growth minus the 1 already-reserved row", () => {
+  // Regression guard, corrected: a flush that happens WHILE a turn is still active (a tool-call/
+  // tool-result/done/etc mid-turn, none of which dispatch "turn-ended") does not remove TurnStatus's
+  // own reserved row — the ceiling's reservation is unchanged by this flush, so the offset must
+  // advance by the FULL real added-row count. Subtracting anything here (a prior version of this
+  // test asserted 19, from a since-removed `addedRows - 1` subtraction) re-introduces exactly the
+  // 1-row-per-flush drift the dedicated regression test below catches directly against the visible
+  // window.
+  test("a mid-turn flush (turn still active) advances the offset by the full committed row growth", () => {
     const lines = Array.from({ length: 20 }, (_, i) => `line ${i}`);
     let state: TuiState = { ...transcriptOf(lines), viewportRows: 5 };
     state = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
     state = tuiReducer(state, {
       type: "loop-event",
-      event: { type: "text-delta", text: "streamed line 0" },
+      event: { type: "text-delta", text: "streamed line 0\nstreamed line 1\nstreamed line 2" },
     });
     state = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
     expect(state.transcriptScrollOffset).toBe(16); // 20 committed + 1 reserved - 5 viewportRows
-    expect(state.transcriptScrollStreamingRows).toBe(1);
 
-    // Still un-flushed — the offset doesn't move again on its own.
-    state = tuiReducer(state, {
-      type: "loop-event",
-      event: { type: "text-delta", text: "\nstreamed line 1\nstreamed line 2" },
-    });
-    expect(state.transcriptScrollOffset).toBe(16);
-
-    // Flushes the 3-line answer plus the "(done...)" line — 4 real rows added.
+    // Flushes the 3-line answer plus the "(done...)" line — 4 real rows added — while the turn is
+    // still active (no "turn-ended" dispatched).
     const next = tuiReducer(state, { type: "transcript-append", line: "(done: no-tool-call)" });
 
-    expect(next.transcriptScrollOffset).toBe(19); // 16 + (4 addedRows - 1 already-reserved row)
+    expect(next.transcriptScrollOffset).toBe(20); // 16 + 4 addedRows, no subtraction
+    expect(next.turn).not.toBeUndefined();
   });
 
-  // `flush: false` (echoUserInput echoing a submission a mid-turn gate rejected — see
-  // transcript-append's own case comment) never resolves `state.streaming`: nothing moves out of
-  // it into `rawLines`, so the still-active turn's own reserved-row snapshot must stay exactly as
-  // the last real scroll action left it, not get reset as if this append had flushed it.
-  test("flush: false leaves transcriptScrollStreamingRows untouched — the turn it snapshot is still active", () => {
-    const streamingLines = Array.from({ length: 20 }, (_, i) => `streamed line ${i}`);
-    let state: TuiState = { ...initialTuiState(session()), viewportRows: 5 };
+  // The regression test the finding above calls for: not just the raw offset number, but the
+  // ACTUAL visible window, via a real mid-turn flush event (applyLoopEvent's "tool-call" case, not
+  // a bare transcript-append). 100 committed rows and an interior scroll position (not Home) so the
+  // window is a FULL page on both sides of the flush — a shallow scroll near the top would pin
+  // `visibleTranscript`'s own `start` at its 0 floor regardless of the bug, silently absorbing the
+  // 1-row drift and passing on both buggy and fixed code alike. Before the fix (`appendLines`
+  // subtracting the reserved row from a flush that doesn't remove it, since `state.turn` stays
+  // defined), the top visible row shifted from "line 50" to "line 51" here even though nothing
+  // scrolled; this asserts it does not.
+  test("a scrolled-up reader's top visible row does not drift across a mid-turn tool-call flush", () => {
+    const lines = Array.from({ length: 100 }, (_, i) => `line ${i}`);
+    let state: TuiState = { ...transcriptOf(lines), viewportRows: 10 };
     state = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
-    state = tuiReducer(state, {
-      type: "loop-event",
-      event: { type: "text-delta", text: streamingLines.join("\n") },
-    });
-    state = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
-    expect(state.transcriptScrollStreamingRows).toBe(1);
+    state = tuiReducer(state, { type: "transcript-scroll", delta: 40 });
+    expect(state.transcriptScrollOffset).toBe(40);
+
+    const before = visibleTranscript(state.transcript, 10, state.transcriptScrollOffset, state.columns);
+    expect(before[0]).toEqual({ role: "system", text: "line 50" });
 
     const next = tuiReducer(state, {
-      type: "transcript-append",
-      line: "> /rewind 1",
-      flush: false,
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
     });
 
-    expect(next.transcriptScrollStreamingRows).toBe(1);
-    expect(next.streaming).toBe(streamingLines.join("\n"));
+    const after = visibleTranscript(next.transcript, 10, next.transcriptScrollOffset, next.columns);
+    expect(after[0]).toEqual({ role: "system", text: "line 50" });
   });
 
   // Regression guard: `transcript` stores LOGICAL lines, never pre-wrapped output — a multi-line
@@ -1572,5 +1549,41 @@ describe("tuiReducer: error does not end a turn — only turn-ended does", () =>
     state = tuiReducer(state, { type: "turn-ended" });
 
     expect(state.turn).toBeUndefined();
+  });
+});
+
+// Ending a turn drops TurnStatus's own reserved row, so `maxScrollOffset` shrinks by 1 — a reader
+// parked exactly at the old ceiling must be re-clamped to the new one, same as a narrowing resize
+// (viewport-resized) already re-clamps its own ceiling-drop. Without this, a reader at Home when
+// the turn ends would sit one row past the new ceiling until their next scroll action.
+describe("tuiReducer: turn-ended re-clamps the scroll ceiling", () => {
+  test("a reader parked at the old (turn-active) ceiling is pulled back to the new (turn-ended) one", () => {
+    let state: TuiState = initialTuiState(session());
+    for (let i = 0; i < 20; i++) {
+      state = tuiReducer(state, { type: "transcript-append", line: `line ${i}` });
+    }
+    state = { ...state, viewportRows: 5 };
+    state = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
+    state = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(state.transcriptScrollOffset).toBe(16); // 20 committed + 1 reserved - 5 viewportRows
+
+    const next = tuiReducer(state, { type: "turn-ended" });
+
+    expect(next.transcriptScrollOffset).toBe(15); // 20 committed + 0 reserved - 5 viewportRows
+  });
+
+  test("a reader already below the new ceiling is left untouched", () => {
+    let state: TuiState = initialTuiState(session());
+    for (let i = 0; i < 20; i++) {
+      state = tuiReducer(state, { type: "transcript-append", line: `line ${i}` });
+    }
+    state = { ...state, viewportRows: 5 };
+    state = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
+    state = tuiReducer(state, { type: "transcript-scroll", delta: 5 });
+    expect(state.transcriptScrollOffset).toBe(5);
+
+    const next = tuiReducer(state, { type: "turn-ended" });
+
+    expect(next.transcriptScrollOffset).toBe(5);
   });
 });
