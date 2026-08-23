@@ -23,10 +23,10 @@ describe("formatElapsed", () => {
 describe("estimateTokens", () => {
   // fx's own test strategy: a chunk-boundary-dependent estimate would flicker as a real stream's
   // SSE framing happens to land differently between two otherwise-identical runs. Splitting a
-  // fixed string at every possible index (including mid-word, mid-multi-byte-character) and
-  // asserting the two halves' estimates always sum to the whole's estimate is what proves that
-  // can't happen — this fails immediately against a per-chunk-`Math.ceil`ing implementation (see
-  // estimateTokens's own comment on why it defers rounding to display time instead).
+  // fixed string at every possible index (including mid-word) and asserting the two halves'
+  // estimates always sum to the whole's estimate is what proves that can't happen — this fails
+  // immediately against a per-chunk-`Math.ceil`ing implementation (see estimateTokens's own
+  // comment on why it defers rounding to display time instead).
   const fixed = "The quick brown fox jumps over the lazy dog. Résumé naïve café — emdash, "; // includes multi-byte chars
 
   test("splitting the string at every index sums to the same total as estimating it whole", () => {
