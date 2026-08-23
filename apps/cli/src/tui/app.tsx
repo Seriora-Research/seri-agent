@@ -25,6 +25,7 @@ import type { SessionState } from "../session/session";
 import { ApprovalBox } from "./components/ApprovalBox";
 import { InputBox } from "./components/InputBox";
 import { ModelPicker } from "./components/ModelPicker";
+import { TurnStatus } from "./components/TurnStatus";
 import { AuthBanner, AuthPanel } from "./routes/config/AuthPanel";
 import { ConfigPanel } from "./routes/config/ConfigPanel";
 import { PermissionsPanel } from "./routes/config/PermissionsPanel";
@@ -384,6 +385,7 @@ export function App({
             <text fg={theme.muted}>↑ scrolled — End to follow</text>
           )}
           {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
+          <TurnStatus turnStartedAt={state.turnStartedAt} tokenProgress={state.tokenProgress} />
         </box>
       </box>
       <ErrorLine message={state.commandError} />
