@@ -110,7 +110,9 @@ export type TuiState = {
   // The live region's spinner/status line, cleared once whatever it was reporting on finishes.
   status: string;
   // Both set together by `turn-started` (dispatched once per turn, before the model is invoked)
-  // and cleared together by `done`/`error` — `undefined` means no turn is in flight, which is what
+  // and cleared together by `turn-ended` (dispatched once the turn has genuinely settled — `error`
+  // deliberately does not clear them, since several `error` events are recoverable mid-turn) —
+  // `undefined` means no turn is in flight, which is what
   // TurnStatus (app.tsx) reads to decide whether to render at all. Kept as a wall-clock timestamp,
   // not a running counter: TurnStatus recomputes `now - turnStartedAt` on every tick instead of
   // incrementing a number, so a slow/delayed tick can't drift the displayed elapsed time.
