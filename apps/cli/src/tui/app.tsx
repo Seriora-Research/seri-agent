@@ -209,7 +209,11 @@ export function App({
   // recovers.
   const viewportRows = Math.max(1, hasMeasured ? measuredRows : rows - FALLBACK_CHROME_ROWS);
   // One line of overlap between pages, same convention a terminal pager's own PageUp/PageDown use.
-  const pageSize = Math.max(1, viewportRows - 1);
+  // Derived from the same reserved-row-aware expression as the actual content window
+  // (`visibleTranscript`'s own `rows` argument below), not bare `viewportRows` — otherwise a
+  // PageUp/PageDown press during an active turn would overshoot by exactly the one row `TurnStatus`
+  // occupies, since the content window itself is one row shorter than `viewportRows` then.
+  const pageSize = Math.max(1, viewportRows - (state.turn !== undefined ? 1 : 0) - 1);
 
   // A transcript shorter than the viewport top-anchors instead of tail-anchors: bottom-pinning a
   // half-empty screen (the default below, `flex-end`) reads as a mostly-blank terminal until the
