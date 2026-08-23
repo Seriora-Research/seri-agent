@@ -2371,6 +2371,11 @@ async function runTui(
       // and it always passes `undefined`, since even a turn quit() itself cancelled first
       // (HIGH-B) ends the *session* by choice, not by a signal the shell needs to see re-raised.
     } catch (err) {
+      // Dispatched before destroyTuiRenderer() below, not left solely to the finally block: a
+      // dispatch against an already-torn-down renderer has no host left to schedule a React
+      // update on. See `turn-ended`'s own comment (reducer.ts) for why this, not a bare `"error"`
+      // `LoopEvent`, is what clears TurnStatus's state.
+      dispatch({ type: "turn-ended" });
       // H-2: driveLoop rejecting (not just resolving with an aborted/errored `done`) used to
       // leave this promise — and run()'s own `await runTui(...)` — hanging forever. Destroy the
       // renderer first so raw mode is restored (M-2's own mechanism, mirrored here rather than
@@ -2382,8 +2387,9 @@ async function runTui(
       turnInFlight = false;
       // The one place `driveLoop`'s own call is known to have genuinely settled, success or
       // failure — mirrors `turn-started`'s own dispatch above, at the one place a turn is known to
-      // have genuinely begun. See `turn-ended`'s own comment (reducer.ts) for why this, not a bare
-      // `"error"` `LoopEvent`, is what clears TurnStatus's state.
+      // have genuinely begun. Also dispatched from the catch block above (before
+      // destroyTuiRenderer()) on the rejection path; the reducer's `turn-ended` case is a plain
+      // reset to `undefined`, so a harmless no-op here when that already ran.
       dispatch({ type: "turn-ended" });
     }
   }
