@@ -385,7 +385,16 @@ export function App({
             <text fg={theme.muted}>↑ scrolled — End to follow</text>
           )}
           {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
-          <TurnStatus turnStartedAt={state.turnStartedAt} tokenProgress={state.tokenProgress} />
+          {/* Keyed on `turnStartedAt` so React mounts a fresh TurnStatus instance per turn instead
+          of reusing one across a `turnStartedAt` prop transition — see that component's own
+          comment on why a fresh mount is what its `now` state relies on. */}
+          {state.turnStartedAt !== undefined && (
+            <TurnStatus
+              key={state.turnStartedAt}
+              startedAt={state.turnStartedAt}
+              tokenProgress={state.tokenProgress}
+            />
+          )}
         </box>
       </box>
       <ErrorLine message={state.commandError} />
