@@ -10,6 +10,8 @@ import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
 import {
   DEFAULT_COLUMNS,
+  estimateTokens,
+  type TokenProgress,
   type TranscriptEntry,
   type TranscriptRole,
   transcriptVisualRows,
@@ -107,6 +109,13 @@ export type TuiState = {
   streaming: string;
   // The live region's spinner/status line, cleared once whatever it was reporting on finishes.
   status: string;
+  // Both set together by `turn-started` (dispatched once per turn, before the model is invoked)
+  // and cleared together by `done`/`error` — `undefined` means no turn is in flight, which is what
+  // TurnStatus (app.tsx) reads to decide whether to render at all. Kept as a wall-clock timestamp,
+  // not a running counter: TurnStatus recomputes `now - turnStartedAt` on every tick instead of
+  // incrementing a number, so a slow/delayed tick can't drift the displayed elapsed time.
+  turnStartedAt: number | undefined;
+  tokenProgress: TokenProgress | undefined;
   modeIndicator: string;
   // The in-flight write_file/edit call, if any — set on that tool's own tool-call event, cleared
   // on its tool-result/permission-denied. A dedicated field rather than App.tsx string-matching
@@ -226,6 +235,8 @@ export function initialTuiState(
     // placeholder — corrected by the first `viewport-resized` dispatch before it can matter.
     viewportRows: 1,
     status: "",
+    turnStartedAt: undefined,
+    tokenProgress: undefined,
     modeIndicator: modeIndicator(session.permissionMode),
     pendingTool: undefined,
     commandError: undefined,
@@ -333,7 +344,12 @@ export type TuiAction =
   // the fix for issue #132: the status bar's label used to be frozen at mount (App.tsx's own
   // `route` prop, never re-read after the initial render), so a /model switch's own freshly
   // resolved route never reached it. `state.route` is what the label now reads.
-  | { type: "route-updated"; route: ResolvedRoute };
+  | { type: "route-updated"; route: ResolvedRoute }
+  // Dispatched by runTurn (cli.ts) right alongside `route-updated`, before driveLoop starts —
+  // the one place in runTurn that already fires once per turn, before the model is invoked. Starts
+  // TurnStatus's elapsed clock and resets `tokenProgress` fresh, so a second turn never inherits
+  // the first turn's token count for even one frame.
+  | { type: "turn-started" };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -517,6 +533,12 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return { ...state, pendingSplash: false };
     case "route-updated":
       return { ...state, route: action.route };
+    case "turn-started":
+      return {
+        ...state,
+        turnStartedAt: Date.now(),
+        tokenProgress: { inputTokens: 0, outputTokens: 0, inputExact: false, outputExact: false },
+      };
   }
 }
 
@@ -616,8 +638,21 @@ function appendLines(
 
 function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
   switch (event.type) {
+    // `state.tokenProgress` is left untouched (not seeded here) when it's `undefined` — a
+    // `text-delta` arriving without a preceding `turn-started` would only happen out of order,
+    // which nothing in this file crashes on; see this switch's other cases for the same posture.
     case "text-delta":
-      return { ...state, streaming: state.streaming + event.text };
+      return {
+        ...state,
+        streaming: state.streaming + event.text,
+        tokenProgress:
+          state.tokenProgress === undefined
+            ? state.tokenProgress
+            : {
+                ...state.tokenProgress,
+                outputTokens: state.tokenProgress.outputTokens + estimateTokens(event.text),
+              },
+      };
     case "tool-call":
       return {
         ...pushLine(state, `→ ${event.name}(${JSON.stringify(event.args)})`),
@@ -644,10 +679,24 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
       return pushLine(state, `⚙ compacted ${event.evictedCount} messages`);
     case "retry":
       return pushLine(state, `↻ rate-limited or unavailable; retrying (attempt ${event.attempt})`);
-    // Deliberately a no-op here, same as printEvent (cli/output.ts): the loop emits one `usage`
-    // per completed model call, which would put a token count between every turn.
+    // Reconciles `tokenProgress` to the real, exact counts — safe to do unconditionally (no
+    // per-turn identity check) because the loop only ever yields a standalone `usage` event for
+    // the visible turn's own completed model call, never for `compacted`'s internal summarizer
+    // round-trip (that carries its own `usage` field on the `compacted` event itself, loop.ts).
+    // Left as a no-op when `tokenProgress` is `undefined` — same out-of-order posture as
+    // `text-delta` above.
     case "usage":
-      return state;
+      return state.tokenProgress === undefined
+        ? state
+        : {
+            ...state,
+            tokenProgress: {
+              inputTokens: event.usage.inputTokens ?? 0,
+              outputTokens: event.usage.outputTokens ?? 0,
+              inputExact: true,
+              outputExact: true,
+            },
+          };
     // The one case that DOES belong to the screen after all, corrected from the no-op this used
     // to be: driveLoop no longer computes the merge itself from a session var it closed over once
     // at the start of a turn (a real bug — a mid-run /mode dispatched a fresh `session-updated`
@@ -659,9 +708,21 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     case "messages-updated":
       return { ...state, session: { ...state.session, messages: event.messages } };
     case "done":
-      return { ...pushLine(state, `(done: ${event.reason})`), status: "", pendingTool: undefined };
+      return {
+        ...pushLine(state, `(done: ${event.reason})`),
+        status: "",
+        pendingTool: undefined,
+        turnStartedAt: undefined,
+        tokenProgress: undefined,
+      };
     case "error":
-      return { ...pushLine(state, event.error), status: "", pendingTool: undefined };
+      return {
+        ...pushLine(state, event.error),
+        status: "",
+        pendingTool: undefined,
+        turnStartedAt: undefined,
+        tokenProgress: undefined,
+      };
     default: {
       const _unhandled: never = event;
       return state;

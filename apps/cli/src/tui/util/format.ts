@@ -305,6 +305,57 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
   return `$${pricing.inputPerMTok.toFixed(2)}/$${pricing.outputPerMTok.toFixed(2)}`;
 }
 
+// The live status region's token count, kept exact-vs-estimated per field rather than inferred
+// from which value is populated — so a future edit can't silently start treating an estimate as
+// exact. `inputTokens` only ever moves from the reducer's `turn-started` reset (0) straight to the
+// real `usage` count: nothing in a turn's event stream reports a live input estimate the way
+// `text-delta` does for output, so it stays 0, visibly `~0 in`, until the real number lands.
+export type TokenProgress = {
+  inputTokens: number;
+  outputTokens: number;
+  inputExact: boolean;
+  outputExact: boolean;
+};
+
+// TurnStatus's own elapsed-time display, matching formatContextWindow's plain-arithmetic style
+// (no library). Never shows seconds once the elapsed time reaches an hour, matching this file's
+// other coarsening choices (formatContextWindow drops sub-K precision past 1024) — a turn running
+// that long doesn't need second-level precision.
+export function formatElapsed(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m ${totalSeconds % 60}s`;
+  return `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`;
+}
+
+// A streaming token-count estimate (vercel-labs/fx's heuristic): ~4 bytes per token, counted over
+// non-whitespace content only. Deliberately returns a raw (un-rounded) number rather than
+// `Math.ceil`-ing here — reducer.ts calls this once per streamed `text-delta` CHUNK and sums the
+// results, and ceiling per chunk is not chunk-boundary-invariant: a word split across two chunks
+// (e.g. "wor" + "ld") would round each fragment up separately and overcount versus the same word
+// arriving whole. Summing un-rounded byte-based fractions first and rounding once, only at display
+// time (formatTokenProgress, below), is what keeps the running total identical regardless of how
+// the underlying stream happens to chunk its output — verified by this file's own
+// chunk-boundary-invariance test.
+export function estimateTokens(text: string): number {
+  const spans = text.split(/\s+/).filter((span) => span.length > 0);
+  const totalBytes = spans.reduce((sum, span) => sum + Buffer.byteLength(span, "utf8"), 0);
+  return totalBytes / 4;
+}
+
+// `printUsage`'s exact "N in, M out" wording (cli/output.ts) for a reconciled count, `printCost`'s
+// `~`-prefixed estimated convention (cli/output.ts) whenever either half of `progress` is still an
+// estimate — a single combined decision, not per-field, since a mixed "N in, ~M out" would imply a
+// precision the reconciliation doesn't actually reach a field at a time.
+export function formatTokenProgress(progress: TokenProgress): string {
+  const inTokens = Math.round(progress.inputTokens);
+  const outTokens = Math.round(progress.outputTokens);
+  return progress.inputExact && progress.outputExact
+    ? `${inTokens} in, ${outTokens} out`
+    : `~${inTokens} in, ~${outTokens} out`;
+}
+
 // One row's worth of columns (name, provider, context, cost, route), space-joined — the picker's
 // own selection marker ("> "/"  ") is prepended at the call site, not here, matching how the
 // un-columned version already separated "which row is highlighted" from "what the row says".
