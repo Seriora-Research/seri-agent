@@ -552,6 +552,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
             reconciledOutputTokens: 0,
             liveOutputEstimate: 0,
             exact: false,
+            hasGap: false,
           },
         },
       };
@@ -657,26 +658,31 @@ function appendLines(
 // Folds one completed model call's real usage onto `progress`'s running totals — shared by the
 // standalone `"usage"` event and `"compacted"`'s own bundled summarizer usage (loop.ts), both of
 // which are genuinely billed calls this turn's displayed total must include. ADDS onto
-// `reconciled*Tokens` rather than replacing them, and drops `liveOutputEstimate` back to 0: a
-// tool-using turn makes several completed model calls (loop.ts's own per-iteration loop), and the
-// running total TurnStatus shows must be the SUM of every one of them, not just the latest — see
-// `TokenProgress`'s own comment. Left as a no-op (not just zero-filled) unless BOTH `inputTokens`
-// and `outputTokens` are real numbers — measured against a real stream that fails mid-response
-// (loop.ts's own comment on its failed-mid-stream `usage` yield), where both come back `undefined`
-// together: that call was never actually measured, so reconciling it to a bare "0 in, 0 out" would
-// discard the live estimate (the only real information available) and falsely claim certainty about
-// a call that was never completed. The guard checks EITHER field rather than both, even though
-// `loop.ts`'s own usage-yielding sites never actually produce a PARTIAL object (one field real, one
-// `undefined`) — a `LanguageModelUsage` describes one atomic call outcome, not independently observed
-// fields — because folding only the defined half while marking the whole thing `exact: true` would
-// be wrong if a partial object ever did reach here, at zero cost today.
+// `reconciled*Tokens` rather than replacing them: a tool-using turn makes several completed model
+// calls (loop.ts's own per-iteration loop), and the running total TurnStatus shows must be the SUM
+// of every one of them, not just the latest — see `TokenProgress`'s own comment.
+//
+// Some providers/gateways return a `LanguageModelUsage` with only ONE of `inputTokens`/
+// `outputTokens` defined (confirmed against real upstream `vercel/ai` reports, not just a
+// type-level possibility) — each defined field is folded in on its own, so a real, known number is
+// never discarded just because its sibling is missing. `liveOutputEstimate` only resets to 0 when
+// `outputTokens` itself is real (now folded into `reconciledOutputTokens`); when it's missing, the
+// live estimate is the only information this call's output ever gets, so it is kept rather than
+// zeroed. A call missing either field also sets `hasGap` (see `TokenProgress`'s own comment): that
+// field's true value for THIS call is gone forever, since no later call's own `usage` describes it.
+// Left as a total no-op only when BOTH fields are undefined (loop.ts's own comment on its
+// failed-mid-stream `usage` yield) — nothing at all was learned about that call, so there is nothing
+// to fold in.
 function reconcileUsage(progress: TokenProgress, usage: LanguageModelUsage): TokenProgress {
-  if (usage.inputTokens === undefined || usage.outputTokens === undefined) return progress;
+  const { inputTokens, outputTokens } = usage;
+  if (inputTokens === undefined && outputTokens === undefined) return progress;
+  const complete = inputTokens !== undefined && outputTokens !== undefined;
   return {
-    reconciledInputTokens: progress.reconciledInputTokens + usage.inputTokens,
-    reconciledOutputTokens: progress.reconciledOutputTokens + usage.outputTokens,
-    liveOutputEstimate: 0,
-    exact: true,
+    reconciledInputTokens: progress.reconciledInputTokens + (inputTokens ?? 0),
+    reconciledOutputTokens: progress.reconciledOutputTokens + (outputTokens ?? 0),
+    liveOutputEstimate: outputTokens === undefined ? progress.liveOutputEstimate : 0,
+    exact: complete,
+    hasGap: progress.hasGap || !complete,
   };
 }
 

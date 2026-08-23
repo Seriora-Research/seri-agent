@@ -51,11 +51,12 @@ describe("formatTokenProgress", () => {
       reconciledOutputTokens: 20,
       liveOutputEstimate: 0,
       exact: true,
+      hasGap: false,
       ...overrides,
     };
   }
 
-  test("omits ~ when exact", () => {
+  test("omits ~ when exact and no gap", () => {
     expect(formatTokenProgress(progress())).toBe("10 in, 20 out");
   });
 
@@ -67,5 +68,11 @@ describe("formatTokenProgress", () => {
     expect(formatTokenProgress(progress({ exact: false, liveOutputEstimate: 5 }))).toBe(
       "~10 in, ~25 out",
     );
+  });
+
+  // A sticky gap earlier in the turn must keep showing `~` even once the most recent
+  // reconciliation was itself complete (`exact: true`) — see `TokenProgress`'s own comment.
+  test("prefixes both with ~ when hasGap is set, even though exact is true", () => {
+    expect(formatTokenProgress(progress({ exact: true, hasGap: true }))).toBe("~10 in, ~20 out");
   });
 });

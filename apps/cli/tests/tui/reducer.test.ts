@@ -10,7 +10,13 @@ import type {
   SetupProviderRow,
 } from "../../src/tui/state/commands";
 import { initialTuiState, tuiReducer, type TuiState } from "../../src/tui/state/reducer";
-import { estimateTokens, visibleTranscript, wrapPendingRows } from "../../src/tui/util/format";
+import {
+  estimateTokens,
+  formatTokenProgress,
+  type TokenProgress,
+  visibleTranscript,
+  wrapPendingRows,
+} from "../../src/tui/util/format";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
@@ -1135,18 +1141,26 @@ describe("tuiReducer: turn-started", () => {
       reconciledOutputTokens: 0,
       liveOutputEstimate: 0,
       exact: false,
+      hasGap: false,
     });
   });
 
   // A second turn must not inherit the first turn's token count, even for one frame — turn-started
-  // always resets `turn.tokens` from scratch rather than only seeding it when undefined.
-  test("a second turn-started resets turn.tokens even if the previous turn left it non-zero", () => {
+  // always resets `turn.tokens` from scratch rather than only seeding it when undefined. Also
+  // covers `hasGap`: the previous turn's sticky gap (from a partial usage event) must not survive
+  // into the fresh turn either — only "turn-started" ever resets it.
+  test("a second turn-started resets turn.tokens, including a sticky hasGap, even if the previous turn left it non-zero", () => {
     let state = tuiReducer(initialTuiState(session()), { type: "turn-started", startedAt: 1 });
     state = tuiReducer(state, {
       type: "loop-event",
       event: { type: "text-delta", text: "some streamed text" },
     });
     expect(state.turn?.tokens.liveOutputEstimate).toBeGreaterThan(0);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "usage", usage: { ...usageOf(0, 0), inputTokens: 10, outputTokens: undefined } },
+    });
+    expect(state.turn?.tokens.hasGap).toBe(true);
 
     state = tuiReducer(state, { type: "turn-started", startedAt: 2 });
 
@@ -1156,6 +1170,7 @@ describe("tuiReducer: turn-started", () => {
       reconciledOutputTokens: 0,
       liveOutputEstimate: 0,
       exact: false,
+      hasGap: false,
     });
   });
 });
@@ -1174,6 +1189,7 @@ describe("applyLoopEvent: text-delta with turn.tokens", () => {
       reconciledOutputTokens: 0,
       liveOutputEstimate: estimateTokens("hello world"),
       exact: false,
+      hasGap: false,
     });
   });
 
@@ -1208,6 +1224,7 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       reconciledOutputTokens: 42,
       liveOutputEstimate: 0,
       exact: true,
+      hasGap: false,
     });
   });
 
@@ -1236,28 +1253,46 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       reconciledOutputTokens: 0,
       liveOutputEstimate: liveEstimate,
       exact: false,
+      hasGap: false,
     });
   });
 
-  // reconcileUsage's own guard checks EITHER field being undefined, not both — a partial usage
-  // object (one field real, one undefined) reconciles to nothing, the same as a fully-undefined one,
-  // rather than folding just the defined half and falsely marking the result exact.
-  test("a usage event with only one token field undefined also preserves the live estimate", () => {
+  // reconcileUsage folds in whichever field IS defined rather than discarding it, and sets the
+  // sticky `hasGap` since that call's missing field can never be recovered — see reconcileUsage's
+  // own comment (reducer.ts). A second, later call reconciling completely must still ADD its real
+  // numbers onto the total (not replace it) and must NOT clear `hasGap`.
+  test("a usage event with only one token field undefined still folds in the defined field and sets hasGap", () => {
     let state = tuiReducer(initialTuiState(session()), { type: "turn-started", startedAt: 1 });
     state = apply(state, { type: "text-delta", text: "streamed before the partial usage" });
     const liveEstimate = estimateTokens("streamed before the partial usage");
 
+    // Call 1: partial usage (10 real input tokens, output never measured).
     state = apply(state, {
       type: "usage",
-      usage: { ...usageOf(0, 0), inputTokens: 100, outputTokens: undefined },
+      usage: { ...usageOf(0, 0), inputTokens: 10, outputTokens: undefined },
     });
 
     expect(state.turn?.tokens).toEqual({
-      reconciledInputTokens: 0,
+      reconciledInputTokens: 10,
       reconciledOutputTokens: 0,
       liveOutputEstimate: liveEstimate,
       exact: false,
+      hasGap: true,
     });
+
+    // Call 2: a later, fully-known usage event. Its real numbers must be SUMMED onto call 1's
+    // partial total (15 in, not 5 in) — and the turn must never claim full exactness again, since
+    // call 1's output was permanently lost.
+    state = apply(state, { type: "usage", usage: usageOf(5, 7) });
+
+    expect(state.turn?.tokens).toEqual({
+      reconciledInputTokens: 15,
+      reconciledOutputTokens: 7,
+      liveOutputEstimate: 0,
+      exact: true,
+      hasGap: true,
+    });
+    expect(formatTokenProgress(state.turn?.tokens as TokenProgress)).toBe("~15 in, ~7 out");
   });
 
   // reconcileUsage's own comment (reducer.ts) explains why this adds onto the running totals
@@ -1273,6 +1308,7 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       reconciledOutputTokens: 42,
       liveOutputEstimate: 0,
       exact: true,
+      hasGap: false,
     });
 
     // Call 2 (the tool loop continuing) starts streaming its own new text — this must NOT include
@@ -1291,6 +1327,7 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       reconciledOutputTokens: 72,
       liveOutputEstimate: 0,
       exact: true,
+      hasGap: false,
     });
   });
 });
@@ -1318,6 +1355,7 @@ describe("applyLoopEvent: compacted folds its own usage into turn.tokens", () =>
       reconciledOutputTokens: 15,
       liveOutputEstimate: 0,
       exact: true,
+      hasGap: false,
     });
   });
 

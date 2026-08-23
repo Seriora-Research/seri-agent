@@ -308,19 +308,25 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
 // The live status region's token count for the WHOLE turn so far, not just the currently-streaming
 // model call — `reconcileUsage` (reducer.ts) is what sums a turn's several completed model calls
 // onto this rather than replacing on each one; see its own comment for why. `reconciled*Tokens` is
-// the exact sum of every completed call's real usage this turn; `liveOutputEstimate` is ONLY the
-// currently-streaming call's own running estimate (reset to 0 the instant that call's `"usage"`
-// folds it into `reconciledOutputTokens`, so it is never double-counted once exact) — the displayed
-// output total is always `reconciledOutputTokens + liveOutputEstimate`. `exact` covers both totals
-// at once rather than one flag per field: nothing yields a live INPUT estimate the way `text-delta`
-// does for output, so the two can never actually disagree — `exact` flips true on a reconciling
-// `"usage"`/`"compacted"` event and back false the moment the next `text-delta` starts a fresh live
-// estimate for whatever call runs next.
+// the sum of every completed call's real, known usage this turn, folded in field-by-field: a call
+// whose `usage` reports only one of `inputTokens`/`outputTokens` still contributes the one it does
+// report, rather than being discarded whole. `liveOutputEstimate` is ONLY the currently-streaming
+// call's own running estimate (reset to 0 the instant that call's own `outputTokens` is folded into
+// `reconciledOutputTokens`) — the displayed output total is always `reconciledOutputTokens +
+// liveOutputEstimate`. `exact` says whether the MOST RECENT reconciliation was itself complete (both
+// fields real) — it flips false the moment the next `text-delta` starts a fresh live estimate for
+// whatever call runs next. `hasGap` is separate and STICKY for the whole turn: once any one call
+// reconciles with only one of its two fields real, that field's true value for THAT call is gone
+// forever (no later call's own `usage` describes it), so the turn's aggregate must never claim full
+// exactness again even after a later call reconciles completely — only `"turn-started"` resets it,
+// for a genuinely fresh turn. The exactness `formatTokenProgress` actually displays is
+// `exact && !hasGap`.
 export type TokenProgress = {
   reconciledInputTokens: number;
   reconciledOutputTokens: number;
   liveOutputEstimate: number;
   exact: boolean;
+  hasGap: boolean;
 };
 
 // TurnStatus's own elapsed-time display, matching formatContextWindow's plain-arithmetic style
@@ -351,14 +357,16 @@ export function estimateTokens(text: string): number {
 }
 
 // `printUsage`'s exact "N in, M out" wording (cli/output.ts) for a reconciled count, `printCost`'s
-// `~`-prefixed estimated convention (cli/output.ts) whenever `progress.exact` is still false. The
-// displayed output total is the reconciled sum plus whatever the current call's own live estimate
-// still has on top of it — see `TokenProgress`'s own comment for why those are kept separate rather
-// than merged eagerly.
+// `~`-prefixed estimated convention (cli/output.ts) whenever `progress.exact` is false or
+// `progress.hasGap` is set — see `TokenProgress`'s own comment for why both must hold before this
+// ever drops the `~`. The displayed output total is the reconciled sum plus whatever the current
+// call's own live estimate still has on top of it — see `TokenProgress`'s own comment for why those
+// are kept separate rather than merged eagerly.
 export function formatTokenProgress(progress: TokenProgress): string {
   const inTokens = Math.round(progress.reconciledInputTokens);
   const outTokens = Math.round(progress.reconciledOutputTokens + progress.liveOutputEstimate);
-  return progress.exact ? `${inTokens} in, ${outTokens} out` : `~${inTokens} in, ~${outTokens} out`;
+  const exact = progress.exact && !progress.hasGap;
+  return exact ? `${inTokens} in, ${outTokens} out` : `~${inTokens} in, ~${outTokens} out`;
 }
 
 // One row's worth of columns (name, provider, context, cost, route), space-joined — the picker's

@@ -16,6 +16,7 @@ const ZERO_TOKEN_PROGRESS: TokenProgress = {
   reconciledOutputTokens: 0,
   liveOutputEstimate: 0,
   exact: false,
+  hasGap: false,
 };
 
 const mountedRenderers: TestRendererSetup[] = [];
@@ -66,6 +67,7 @@ describe("TurnStatus", () => {
           reconciledOutputTokens: 5,
           liveOutputEstimate: 0,
           exact: false,
+          hasGap: false,
         }}
       />,
     );
