@@ -51,7 +51,10 @@ describe("TurnStatus", () => {
     await sleep(1100);
     await settle(setup); // flushes the 1Hz tick's own setState into a render
 
-    expect(setup.captureCharFrame()).toContain("1s");
+    // Any positive elapsed-seconds value, not exactly "1s": a CI scheduler delaying the interval
+    // callback or render by more than a second is a real, harmless possibility this assertion must
+    // tolerate — the only thing under test is that elapsed time advances past "0s" at all.
+    expect(setup.captureCharFrame()).toMatch(/\b[1-9]\d*s\b/);
   });
 
   test("renders a token count alongside the elapsed time when tokenProgress is present", async () => {
