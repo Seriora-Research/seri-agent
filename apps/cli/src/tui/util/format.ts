@@ -306,19 +306,16 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
 }
 
 // The live status region's token count for the WHOLE turn so far, not just the currently-streaming
-// model call: a tool-using turn makes several completed model calls in a row (loop.ts's own
-// per-iteration loop), each of which yields its own `"usage"` event — reconciling by REPLACING
-// `tokenProgress` on each one (an earlier version of this type did exactly that) made the on-screen
-// count visibly jump backward the moment a second call's `"usage"` landed, since it discarded every
-// prior call's already-reconciled total. `reconciled*Tokens` is the exact sum of every completed
-// call's real usage this turn; `liveOutputEstimate` is ONLY the currently-streaming call's own
-// running estimate (reset to 0 the instant that call's `"usage"` folds it into `reconciledOutputTokens`,
-// so it is never double-counted once exact) — the displayed output total is always
-// `reconciledOutputTokens + liveOutputEstimate`. `exact` covers both totals at once rather than one
-// flag per field: nothing yields a live INPUT estimate the way `text-delta` does for output, so the
-// two can never actually disagree — `exact` flips true on a reconciling `"usage"`/`"compacted"`
-// event and back false the moment the next `text-delta` starts a fresh live estimate for whatever
-// call runs next.
+// model call — `reconcileUsage` (reducer.ts) is what sums a turn's several completed model calls
+// onto this rather than replacing on each one; see its own comment for why. `reconciled*Tokens` is
+// the exact sum of every completed call's real usage this turn; `liveOutputEstimate` is ONLY the
+// currently-streaming call's own running estimate (reset to 0 the instant that call's `"usage"`
+// folds it into `reconciledOutputTokens`, so it is never double-counted once exact) — the displayed
+// output total is always `reconciledOutputTokens + liveOutputEstimate`. `exact` covers both totals
+// at once rather than one flag per field: nothing yields a live INPUT estimate the way `text-delta`
+// does for output, so the two can never actually disagree — `exact` flips true on a reconciling
+// `"usage"`/`"compacted"` event and back false the moment the next `text-delta` starts a fresh live
+// estimate for whatever call runs next.
 export type TokenProgress = {
   reconciledInputTokens: number;
   reconciledOutputTokens: number;

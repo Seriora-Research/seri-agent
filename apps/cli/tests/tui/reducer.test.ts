@@ -1260,10 +1260,8 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
     });
   });
 
-  // A tool-using turn makes several completed model calls (loop.ts's own per-iteration loop), each
-  // yielding its own "usage" event — REPLACING `turn.tokens` on each one (rather than adding onto
-  // it) would let the second call's usage discard the first call's already-reconciled total and
-  // make the on-screen count visibly jump backward.
+  // reconcileUsage's own comment (reducer.ts) explains why this adds onto the running totals
+  // rather than replacing them; this is that behavior exercised across a real 2-call turn.
   test("a 2-model-call turn accumulates usage across calls without double-counting or losing the first call's total", () => {
     let state = tuiReducer(initialTuiState(session()), { type: "turn-started", startedAt: 1 });
 
@@ -1347,10 +1345,8 @@ describe("tuiReducer: done does not clear turn state — only turn-ended does", 
   });
 });
 
-// loop.ts yields "error" from several non-terminal sites (a failed compaction, an unknown tool
-// call, a tool that threw) that all keep the turn running afterward — clearing `state.turn` on
-// every "error" made one recoverable hiccup mid-turn look like the run had silently died. Only
-// "turn-ended" may end the turn.
+// "turn-ended"'s own comment (TuiAction, reducer.ts) explains why a bare "error" LoopEvent must
+// not end a turn.
 describe("tuiReducer: error does not end a turn — only turn-ended does", () => {
   function apply(state: TuiState, event: LoopEvent) {
     return tuiReducer(state, { type: "loop-event", event });
