@@ -2288,6 +2288,7 @@ async function runTui(
     // untouched: this only caps attempts to at most one per turn, it does not suppress the next
     // turn's own attempt.
     let persistAttemptedThisTurn = false;
+    let turnError: unknown;
     try {
       const result = await driveLoop(
         turnPrepared,
@@ -2371,26 +2372,26 @@ async function runTui(
       // and it always passes `undefined`, since even a turn quit() itself cancelled first
       // (HIGH-B) ends the *session* by choice, not by a signal the shell needs to see re-raised.
     } catch (err) {
-      // Dispatched before destroyTuiRenderer() below, not left solely to the finally block: a
-      // dispatch against an already-torn-down renderer has no host left to schedule a React
-      // update on. See `turn-ended`'s own comment (reducer.ts) for why this, not a bare `"error"`
-      // `LoopEvent`, is what clears TurnStatus's state.
+      turnError = err;
+    } finally {
+      turnInFlight = false;
+      // The one place `driveLoop`'s own call is known to have genuinely settled, success or
+      // failure — mirrors `turn-started`'s own dispatch above, at the one place a turn is known to
+      // have genuinely begun. This `finally` always runs before the `destroyTuiRenderer()` call
+      // below (a `finally` block executes before any code following the `try` statement), so a
+      // failed turn's dispatch still reaches a renderer that is genuinely still mounted — a
+      // dispatch issued only after `destroyTuiRenderer()` would have no host left to schedule a
+      // React update on.
       dispatch({ type: "turn-ended" });
+    }
+    if (turnError !== undefined) {
       // H-2: driveLoop rejecting (not just resolving with an aborted/errored `done`) used to
       // leave this promise — and run()'s own `await runTui(...)` — hanging forever. Destroy the
       // renderer first so raw mode is restored (M-2's own mechanism, mirrored here rather than
       // relying solely on the fatal-signal cleanup below, since a rejection is not a signal), then
       // reject, so run() actually settles instead of hanging.
       destroyTuiRenderer();
-      rejectRunTui(err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      turnInFlight = false;
-      // The one place `driveLoop`'s own call is known to have genuinely settled, success or
-      // failure — mirrors `turn-started`'s own dispatch above, at the one place a turn is known to
-      // have genuinely begun. Also dispatched from the catch block above (before
-      // destroyTuiRenderer()) on the rejection path; the reducer's `turn-ended` case is a plain
-      // reset to `undefined`, so a harmless no-op here when that already ran.
-      dispatch({ type: "turn-ended" });
+      rejectRunTui(turnError instanceof Error ? turnError : new Error(String(turnError)));
     }
   }
 
