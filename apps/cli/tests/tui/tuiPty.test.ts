@@ -184,6 +184,31 @@ function childScriptRejects(dir: string): string {
   ].join("\n");
 }
 
+// Mirrors loop.ts's own "yield error, then return" exits (loop.ts:343/381/420): a turn can end
+// with no following `done` LoopEvent at all. The reducer's own "error" case deliberately leaves
+// `turnStartedAt`/`tokenProgress` untouched (a single mid-turn error is often recoverable), so
+// runTurn's own `finally` block dispatching `{ type: "turn-ended" }` is the only thing that clears
+// TurnStatus's elapsed clock on this path.
+function childScriptErrorWithoutDone(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "error", error: "boom" };`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Publishes its own pid: the harness's `child` is the python3 pty allocator, not this bun
 // grandchild, so a test that needs to send SIGTERM to the process actually running the TUI has to
 // read the pid from here rather than signalling `child` itself. Otherwise identical to
@@ -2061,6 +2086,37 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       expect(settled).not.toBe("the run never settled");
     } finally {
       // Already exited in the success case; harmless if the process is already gone.
+    }
+  }, 60_000);
+
+  // Regression guard: without runTurn's own `dispatch({ type: "turn-ended" })` in its `finally`
+  // block, this exact scenario — a turn that ends via loop.ts's "yield error, then return" exits,
+  // never followed by a `done` event — would leave TurnStatus's elapsed clock ticking on screen
+  // for the rest of the session, since the reducer's "error" case deliberately does not clear it.
+  // Confirmed by temporarily removing that dispatch line and re-running this test: the captured
+  // frame showed a ticking "Ns" past the wait window below on every run, where it shows nothing
+  // with the dispatch in place. The TUI still accepting `/mode` afterward also rules out the
+  // process having simply died, unlike the sibling "driveLoop rejecting" test above.
+  test("a turn that ends via error-without-done clears the elapsed-time indicator", async () => {
+    const scriptPath = join(dir, "child-error-no-done.mjs");
+    writeFileSync(scriptPath, childScriptErrorWithoutDone(dir));
+
+    const { child, sawLine, lastFrame } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+      await sawLine("boom");
+
+      // `turnStartedAt` is set before driveLoop is even invoked, so a clock stuck by a missing
+      // turn-ended dispatch would already read a nonzero value well within this window.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      expect(lastFrame()).not.toMatch(/\b\d+s\b/);
+
+      child.stdin?.write("/mode");
+      await sawLine("/mode");
+      child.stdin?.write("\r");
+      await sawLine("permission mode is now auto");
+    } finally {
+      child.kill("SIGKILL");
     }
   }, 60_000);
 
