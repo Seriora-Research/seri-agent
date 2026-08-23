@@ -2,7 +2,7 @@
 // commands dispatch into this one reducer rather than each holding a separate copy. Zero Ink/React
 // import — a plain, standalone reducer, testable without a terminal.
 import type { ModelProvider } from "@seri/model-catalog";
-import type { ModelMessage } from "ai";
+import type { LanguageModelUsage, ModelMessage } from "ai";
 import { toolAllowedLine, toolResultLine } from "../../cli/output";
 import type { PermissionMode } from "../../gate/gate";
 import type { LoopEvent } from "../../loop/loop";
@@ -10,6 +10,8 @@ import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
 import {
   DEFAULT_COLUMNS,
+  estimateTokens,
+  type TokenProgress,
   type TranscriptEntry,
   type TranscriptRole,
   transcriptVisualRows,
@@ -107,6 +109,12 @@ export type TuiState = {
   streaming: string;
   // The live region's spinner/status line, cleared once whatever it was reporting on finishes.
   status: string;
+  // Set by `turn-started` (dispatched once per turn, before the model is invoked) and cleared by
+  // `turn-ended` — see that action's own comment for why it, not a bare `"error"` event, is what
+  // ends a turn. `undefined` means no turn is in flight, which is what TurnStatus (app.tsx) reads to
+  // decide whether to render at all. `startedAt` is a wall-clock timestamp, not a running counter —
+  // see TurnStatus's own comment for why.
+  turn: { startedAt: number; tokens: TokenProgress } | undefined;
   modeIndicator: string;
   // The in-flight write_file/edit call, if any — set on that tool's own tool-call event, cleared
   // on its tool-result/permission-denied. A dedicated field rather than App.tsx string-matching
@@ -226,6 +234,7 @@ export function initialTuiState(
     // placeholder — corrected by the first `viewport-resized` dispatch before it can matter.
     viewportRows: 1,
     status: "",
+    turn: undefined,
     modeIndicator: modeIndicator(session.permissionMode),
     pendingTool: undefined,
     commandError: undefined,
@@ -333,7 +342,26 @@ export type TuiAction =
   // the fix for issue #132: the status bar's label used to be frozen at mount (App.tsx's own
   // `route` prop, never re-read after the initial render), so a /model switch's own freshly
   // resolved route never reached it. `state.route` is what the label now reads.
-  | { type: "route-updated"; route: ResolvedRoute };
+  | { type: "route-updated"; route: ResolvedRoute }
+  // Dispatched by runTurn (cli.ts) right alongside `route-updated`, before driveLoop starts —
+  // the one place in runTurn that already fires once per turn, before the model is invoked. Starts
+  // TurnStatus's elapsed clock and resets the turn's token progress fresh, so a second turn never
+  // inherits the first turn's token count for even one frame. Carries its own `startedAt` (cli.ts's
+  // own `Date.now()`, read at dispatch time) rather than the reducer calling `Date.now()` itself —
+  // this file's own header comment advertises a pure, terminal-independent reducer, and generating
+  // a timestamp internally would be the one place that broke it. `inputEstimate` (cli.ts's own
+  // `estimateTokens` call on the current turn's newly-submitted user text, or 0 when there is none —
+  // a slash-command-triggered/resumed turn with no new typed text) seeds `tokens.liveInputEstimate`
+  // for the same reason: the reducer stays pure, never re-deriving the estimate itself.
+  | { type: "turn-started"; startedAt: number; inputEstimate: number }
+  // Dispatched by runTurn (cli.ts) once its own `driveLoop` call has actually settled — success or
+  // failure — the one place that reliably knows the turn is truly over, and the SOLE action that
+  // clears `state.turn` (TuiState's own comment on that field). NOT dispatched from a bare
+  // `"error"` `LoopEvent`: loop.ts yields `"error"` from several non-terminal sites (a failed
+  // compaction, an unknown tool call, a tool that threw) that all keep the turn running afterward,
+  // and clearing TurnStatus's own state on any of those made a turn that was still very much in
+  // progress look like it had silently died.
+  | { type: "turn-ended" };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -517,6 +545,24 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return { ...state, pendingSplash: false };
     case "route-updated":
       return { ...state, route: action.route };
+    case "turn-started":
+      return {
+        ...state,
+        turn: {
+          startedAt: action.startedAt,
+          tokens: {
+            reconciledInputTokens: 0,
+            reconciledOutputTokens: 0,
+            liveInputEstimate: action.inputEstimate,
+            carriedOutputEstimate: 0,
+            liveOutputEstimate: 0,
+            exact: false,
+            hasGap: false,
+          },
+        },
+      };
+    case "turn-ended":
+      return { ...state, turn: undefined };
   }
 }
 
@@ -614,10 +660,64 @@ function appendLines(
   };
 }
 
+// Folds one completed model call's real usage onto `progress`'s running totals — shared by the
+// standalone `"usage"` event and `"compacted"`'s own bundled summarizer usage (loop.ts), both of
+// which are genuinely billed calls this turn's displayed total must include. ADDS onto
+// `reconciled*Tokens` rather than replacing them: a tool-using turn makes several completed model
+// calls (loop.ts's own per-iteration loop), and the running total TurnStatus shows must be the SUM
+// of every one of them, not just the latest — see `TokenProgress`'s own comment.
+//
+// Some providers/gateways return a `LanguageModelUsage` with only ONE of `inputTokens`/
+// `outputTokens` defined, or even neither (confirmed against real upstream `vercel/ai` reports, and
+// loop.ts's own comment on its failed-mid-stream `usage` yield) — each defined field is folded in on
+// its own, so a real, known number is never discarded just because its sibling is missing.
+// `liveInputEstimate` only resets to 0 when `inputTokens` itself is real; when it's missing, the live
+// estimate is the only information that side of this call ever gets, so it is kept rather than
+// zeroed. `liveOutputEstimate` is reset to 0 by EVERY reconciliation, whether or not `outputTokens`
+// was real: when it was, it's already folded into `reconciledOutputTokens`; when it wasn't, it is
+// moved onto `carriedOutputEstimate` instead — leaving it sitting in `liveOutputEstimate` would let
+// the NEXT call's own `"text-delta"` accumulation add its growing estimate on top of this stranded
+// one, indistinguishable from it, and a later reconciliation could then discard the blend instead of
+// just this call's own share of it. A call missing either field also sets `hasGap` (see
+// `TokenProgress`'s own comment): that field's true value for THIS call is gone forever, since no
+// later call's own `usage` describes it — including a call missing BOTH fields, which used to be a
+// total no-op (leaving `hasGap` unset even though nothing was ever learned about that call).
+function reconcileUsage(progress: TokenProgress, usage: LanguageModelUsage): TokenProgress {
+  const { inputTokens, outputTokens } = usage;
+  const complete = inputTokens !== undefined && outputTokens !== undefined;
+  return {
+    reconciledInputTokens: progress.reconciledInputTokens + (inputTokens ?? 0),
+    reconciledOutputTokens: progress.reconciledOutputTokens + (outputTokens ?? 0),
+    liveInputEstimate: inputTokens === undefined ? progress.liveInputEstimate : 0,
+    carriedOutputEstimate:
+      progress.carriedOutputEstimate +
+      (outputTokens === undefined ? progress.liveOutputEstimate : 0),
+    liveOutputEstimate: 0,
+    exact: complete,
+    hasGap: progress.hasGap || !complete,
+  };
+}
+
 function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
   switch (event.type) {
+    // `state.turn` is left untouched (not seeded here) when it's `undefined` — a `text-delta`
+    // arriving without a preceding `turn-started` would only happen out of order, which nothing in
+    // this file crashes on; see this switch's other cases for the same posture.
     case "text-delta":
-      return { ...state, streaming: state.streaming + event.text };
+      return {
+        ...state,
+        streaming: state.streaming + event.text,
+        turn: state.turn && {
+          ...state.turn,
+          tokens: {
+            ...state.turn.tokens,
+            liveOutputEstimate: state.turn.tokens.liveOutputEstimate + estimateTokens(event.text),
+            // A fresh live estimate has started for whichever call is now streaming — even
+            // right after a `"usage"` event reconciled the PREVIOUS call and set this `true`.
+            exact: false,
+          },
+        },
+      };
     case "tool-call":
       return {
         ...pushLine(state, `→ ${event.name}(${JSON.stringify(event.args)})`),
@@ -640,14 +740,28 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         ...pushLine(state, toolAllowedLine(event.name)),
         status: "",
       };
+    // `event.usage` is the summarizer's own round-trip cost — genuinely billed, and folded into
+    // `state.turn`'s tokens the same way the standalone `"usage"` event below is, so a turn that
+    // triggers mid-conversation compaction doesn't silently under-report its real spend.
     case "compacted":
-      return pushLine(state, `⚙ compacted ${event.evictedCount} messages`);
+      return {
+        ...pushLine(state, `⚙ compacted ${event.evictedCount} messages`),
+        turn: state.turn && {
+          ...state.turn,
+          tokens: reconcileUsage(state.turn.tokens, event.usage),
+        },
+      };
     case "retry":
       return pushLine(state, `↻ rate-limited or unavailable; retrying (attempt ${event.attempt})`);
-    // Deliberately a no-op here, same as printEvent (cli/output.ts): the loop emits one `usage`
-    // per completed model call, which would put a token count between every turn.
+    // Left as a no-op when `state.turn` is `undefined` — same out-of-order posture as `text-delta`
+    // above.
     case "usage":
-      return state;
+      return state.turn === undefined
+        ? state
+        : {
+            ...state,
+            turn: { ...state.turn, tokens: reconcileUsage(state.turn.tokens, event.usage) },
+          };
     // The one case that DOES belong to the screen after all, corrected from the no-op this used
     // to be: driveLoop no longer computes the merge itself from a session var it closed over once
     // at the start of a turn (a real bug — a mid-run /mode dispatched a fresh `session-updated`
@@ -660,8 +774,14 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
       return { ...state, session: { ...state.session, messages: event.messages } };
     case "done":
       return { ...pushLine(state, `(done: ${event.reason})`), status: "", pendingTool: undefined };
+    // `state.turn` is deliberately left untouched here — see `"turn-ended"`'s own comment
+    // (TuiAction) for why only that action, not this event, ends a turn.
     case "error":
-      return { ...pushLine(state, event.error), status: "", pendingTool: undefined };
+      return {
+        ...pushLine(state, event.error),
+        status: "",
+        pendingTool: undefined,
+      };
     default: {
       const _unhandled: never = event;
       return state;

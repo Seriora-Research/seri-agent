@@ -121,6 +121,7 @@ import {
   createSetupHandlers,
 } from "./tui/state/handlers";
 import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/state/reducer";
+import { estimateTokens } from "./tui/util/format";
 import { withVerification } from "./verify/wrapTools";
 
 export type CliDeps = {
@@ -2186,7 +2187,12 @@ async function runTui(
   // while a turn is still running must not start a competing driveLoop call, which would fight
   // the first over signals.ts's single cancel slot. MEDIUM-1: the TUI path passes a no-op
   // `persist` — the reducer (via onSessionChange above) is the only writer now.
-  async function runTurn(session: SessionState<ModelMessage>): Promise<void> {
+  // `inputText`, when given, is the current turn's OWN newly-submitted user message — not the full
+  // prompt/system/history — used only to seed `turn-started`'s live input-token estimate (its own
+  // comment, reducer.ts). `undefined` for a turn with no new typed text this call (the mount-time
+  // "resume" path, runTui's own `connectDispatch`, continues a conversation already ending on an
+  // unanswered user turn already in `session.messages` — not new this run).
+  async function runTurn(session: SessionState<ModelMessage>, inputText?: string): Promise<void> {
     if (reactDispatch === undefined || turnInFlight) return;
     turnInFlight = true;
     ranAnyTurn = true;
@@ -2248,6 +2254,17 @@ async function runTui(
     // dispatching the freshly resolved route here, every turn, is what makes a /model switch (or
     // any other mid-session reroute) show up without waiting for the session to quit and remount.
     dispatch({ type: "route-updated", route });
+    // Starts TurnStatus's elapsed clock/token count — dispatched here, alongside `route-updated`,
+    // rather than earlier: this is the first point in runTurn a turn is actually committed to
+    // running (resolveRoute/dispatchModel have already succeeded above), not just requested.
+    // `inputEstimate` is 0 when `inputText` is undefined (this function's own comment) — the "no
+    // live signal available" convention this feature already uses for a partial usage record
+    // applies here too, rather than guessing or double-counting old messages.
+    dispatch({
+      type: "turn-started",
+      startedAt: Date.now(),
+      inputEstimate: inputText === undefined ? 0 : estimateTokens(inputText),
+    });
     // A rerouted OR gateway-served pair is never silent on the TUI path either — see
     // prepareSession's own identical notice for the piped/non-interactive path, above.
     if (route.rerouted) {
@@ -2284,6 +2301,10 @@ async function runTui(
     // untouched: this only caps attempts to at most one per turn, it does not suppress the next
     // turn's own attempt.
     let persistAttemptedThisTurn = false;
+    // Boxed rather than a bare `unknown`: a rejection whose value is itself `undefined` (e.g. a
+    // bare `Promise.reject()`) must still be distinguishable from "no error happened" below, or
+    // the `!== undefined` check silently treats it as success and leaves H-2's own hang reopened.
+    let failure: { err: unknown } | undefined;
     try {
       const result = await driveLoop(
         turnPrepared,
@@ -2367,15 +2388,26 @@ async function runTui(
       // and it always passes `undefined`, since even a turn quit() itself cancelled first
       // (HIGH-B) ends the *session* by choice, not by a signal the shell needs to see re-raised.
     } catch (err) {
+      failure = { err };
+    } finally {
+      turnInFlight = false;
+      // The one place `driveLoop`'s own call is known to have genuinely settled, success or
+      // failure — mirrors `turn-started`'s own dispatch above, at the one place a turn is known to
+      // have genuinely begun. This `finally` always runs before the `destroyTuiRenderer()` call
+      // below (a `finally` block executes before any code following the `try` statement), so a
+      // failed turn's dispatch still reaches a renderer that is genuinely still mounted — a
+      // dispatch issued only after `destroyTuiRenderer()` would have no host left to schedule a
+      // React update on.
+      dispatch({ type: "turn-ended" });
+    }
+    if (failure !== undefined) {
       // H-2: driveLoop rejecting (not just resolving with an aborted/errored `done`) used to
       // leave this promise — and run()'s own `await runTui(...)` — hanging forever. Destroy the
       // renderer first so raw mode is restored (M-2's own mechanism, mirrored here rather than
       // relying solely on the fatal-signal cleanup below, since a rejection is not a signal), then
       // reject, so run() actually settles instead of hanging.
       destroyTuiRenderer();
-      rejectRunTui(err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      turnInFlight = false;
+      rejectRunTui(failure.err instanceof Error ? failure.err : new Error(String(failure.err)));
     }
   }
 
@@ -2689,10 +2721,13 @@ async function runTui(
         });
         return;
       }
-      currentTurn = runTurn({
-        ...liveState.session,
-        messages: [...liveState.session.messages, { role: "user", content: trimmed }],
-      });
+      currentTurn = runTurn(
+        {
+          ...liveState.session,
+          messages: [...liveState.session.messages, { role: "user", content: trimmed }],
+        },
+        trimmed,
+      );
       return;
     }
     if (!command.accepts(args)) {
@@ -2885,7 +2920,11 @@ async function runTui(
         if (start === "task") echoUserInput(ctx.taskText);
         const shouldRunTurn =
           start === "task" || (start === "resume" && awaitsReply(prepared.session.messages));
-        if (shouldRunTurn) currentTurn = runTurn(prepared.session);
+        // "resume" has no new user-typed text this run — its last message is already-existing
+        // content the earlier session left unanswered, not something submitted just now.
+        if (shouldRunTurn) {
+          currentTurn = runTurn(prepared.session, start === "task" ? ctx.taskText : undefined);
+        }
       },
     }),
   );

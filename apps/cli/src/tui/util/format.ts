@@ -305,6 +305,87 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
   return `$${pricing.inputPerMTok.toFixed(2)}/$${pricing.outputPerMTok.toFixed(2)}`;
 }
 
+// The live status region's token count for the WHOLE turn so far, not just the currently-streaming
+// model call — `reconcileUsage` (reducer.ts) is what sums a turn's several completed model calls
+// onto this rather than replacing on each one; see its own comment for why. `reconciled*Tokens` is
+// the sum of every completed call's real, known usage this turn, folded in field-by-field: a call
+// whose `usage` reports only one of `inputTokens`/`outputTokens` still contributes the one it does
+// report, rather than being discarded whole. `liveOutputEstimate` is ONLY the currently-streaming
+// call's own running estimate, reset to 0 by EVERY reconciliation (whether this call's own
+// `outputTokens` was real — folded into `reconciledOutputTokens` — or missing — moved onto
+// `carriedOutputEstimate` instead of being left in place to collide with the NEXT call's own
+// streaming estimate). `carriedOutputEstimate` is the running sum of every PAST call's own stranded
+// output estimate — a call whose `outputTokens` never arrived leaves the only information ever
+// obtained about its output sitting in `liveOutputEstimate` at the moment it reconciles; without
+// moving it here first, the next call's `"text-delta"` accumulation would add its own growing
+// estimate on top of that stranded one, and the following reconciliation would then reset the
+// combined blob to 0 (or fold only the LATEST call's real `outputTokens` in), silently discarding
+// the earlier call's estimate for good. The displayed output total is always
+// `reconciledOutputTokens + carriedOutputEstimate + liveOutputEstimate`. `liveInputEstimate` is set
+// ONCE per turn (`"turn-started"`, estimated from the current turn's own newly-submitted user text,
+// not the full prompt/system/history) rather than accumulated incrementally — unlike output, the
+// outgoing message is fully known upfront instead of streaming in — and resets to 0 the moment a
+// real `usage.inputTokens` reconciles, mirroring `liveOutputEstimate`'s own reset; the displayed
+// input total is always `reconciledInputTokens + liveInputEstimate`. `exact` says whether the MOST
+// RECENT reconciliation was itself complete (both fields real) — it flips false the moment the next
+// `text-delta` starts a fresh live estimate for whatever call runs next. `hasGap` is separate and
+// STICKY for the whole turn: once any one call reconciles with only one (or neither) of its two
+// fields real, that field's true value for THAT call is gone forever (no later call's own `usage`
+// describes it), so the turn's aggregate must never claim full exactness again even after a later
+// call reconciles completely — only `"turn-started"` resets it, for a genuinely fresh turn. The
+// exactness `formatTokenProgress` actually displays is `exact && !hasGap`.
+export type TokenProgress = {
+  reconciledInputTokens: number;
+  reconciledOutputTokens: number;
+  liveInputEstimate: number;
+  carriedOutputEstimate: number;
+  liveOutputEstimate: number;
+  exact: boolean;
+  hasGap: boolean;
+};
+
+// TurnStatus's own elapsed-time display, matching formatContextWindow's plain-arithmetic style
+// (no library). Never shows seconds once the elapsed time reaches an hour, matching this file's
+// other coarsening choices (formatContextWindow drops sub-K precision past 1024) — a turn running
+// that long doesn't need second-level precision.
+export function formatElapsed(ms: number): string {
+  // Clamped, not passed through: a negative `ms` (the system clock moving backward mid-session, or
+  // any other unexpected negative delta) would otherwise render "-1s" or worse — every caller gets
+  // "0s" instead of propagating a clock anomaly onto the screen.
+  const totalSeconds = Math.floor(Math.max(0, ms) / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m ${totalSeconds % 60}s`;
+  return `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`;
+}
+
+// A streaming token-count estimate (vercel-labs/fx's heuristic): ~4 bytes per token, counted over
+// non-whitespace content only. The byte length of the whitespace-stripped string equals the summed
+// byte length of its whitespace-delimited spans (no multi-byte sequence straddles a stripped
+// whitespace boundary), which is what makes this chunk-boundary-invariant — reducer.ts calls this
+// once per streamed `text-delta` CHUNK and sums the results, and a word split across two chunks
+// (e.g. "wor" + "ld") must total the same as the same word arriving whole. Deliberately returns a
+// raw (un-rounded) number, rounded once only at display time (formatTokenProgress, below) —
+// verified by this file's own chunk-boundary-invariance test.
+export function estimateTokens(text: string): number {
+  return Buffer.byteLength(text.replace(/\s+/g, ""), "utf8") / 4;
+}
+
+// `printUsage`'s exact "N in, M out" wording (cli/output.ts) for a reconciled count, `printCost`'s
+// `~`-prefixed estimated convention (cli/output.ts) whenever `progress.exact` is false or
+// `progress.hasGap` is set — see `TokenProgress`'s own comment for why both must hold before this
+// ever drops the `~`. The output total sums three parts — reconciled, carried-over from a past
+// call's own stranded estimate, and the currently-streaming call's own live estimate — see
+// `TokenProgress`'s own comment for why those are kept separate rather than merged eagerly.
+export function formatTokenProgress(progress: TokenProgress): string {
+  const inTokens = Math.round(progress.reconciledInputTokens + progress.liveInputEstimate);
+  const outTokens = Math.round(
+    progress.reconciledOutputTokens + progress.carriedOutputEstimate + progress.liveOutputEstimate,
+  );
+  const exact = progress.exact && !progress.hasGap;
+  return exact ? `${inTokens} in, ${outTokens} out` : `~${inTokens} in, ~${outTokens} out`;
+}
+
 // One row's worth of columns (name, provider, context, cost, route), space-joined — the picker's
 // own selection marker ("> "/"  ") is prepended at the call site, not here, matching how the
 // un-columned version already separated "which row is highlighted" from "what the row says".
