@@ -40,7 +40,14 @@ describe("estimateTokens", () => {
 
 describe("formatTokenProgress", () => {
   function progress(overrides: Partial<TokenProgress> = {}): TokenProgress {
-    return { inputTokens: 10, outputTokens: 20, inputExact: true, outputExact: true, ...overrides };
+    return {
+      reconciledInputTokens: 10,
+      reconciledOutputTokens: 20,
+      liveOutputEstimate: 0,
+      inputExact: true,
+      outputExact: true,
+      ...overrides,
+    };
   }
 
   test("omits ~ when both input and output are exact", () => {
@@ -53,5 +60,11 @@ describe("formatTokenProgress", () => {
 
   test("prefixes both with ~ when output is still an estimate", () => {
     expect(formatTokenProgress(progress({ outputExact: false }))).toBe("~10 in, ~20 out");
+  });
+
+  test("adds the live output estimate on top of the reconciled total", () => {
+    expect(formatTokenProgress(progress({ outputExact: false, liveOutputEstimate: 5 }))).toBe(
+      "~10 in, ~25 out",
+    );
   });
 });

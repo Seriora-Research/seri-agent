@@ -349,7 +349,15 @@ export type TuiAction =
   // the one place in runTurn that already fires once per turn, before the model is invoked. Starts
   // TurnStatus's elapsed clock and resets `tokenProgress` fresh, so a second turn never inherits
   // the first turn's token count for even one frame.
-  | { type: "turn-started" };
+  | { type: "turn-started" }
+  // Dispatched by runTurn (cli.ts) once its own `driveLoop` call has actually settled — success or
+  // failure — the one place that reliably knows the turn is truly over. NOT dispatched from a bare
+  // `"error"` `LoopEvent`: loop.ts yields `"error"` from several non-terminal sites (a failed
+  // compaction, an unknown tool call, a tool that threw) that all keep the turn running afterward,
+  // and clearing TurnStatus's own state on any of those made a turn that was still very much in
+  // progress look like it had silently died. Only a `"done"` event or `driveLoop`'s own promise
+  // settling are actual turn-ending signals.
+  | { type: "turn-ended" };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -537,8 +545,16 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return {
         ...state,
         turnStartedAt: Date.now(),
-        tokenProgress: { inputTokens: 0, outputTokens: 0, inputExact: false, outputExact: false },
+        tokenProgress: {
+          reconciledInputTokens: 0,
+          reconciledOutputTokens: 0,
+          liveOutputEstimate: 0,
+          inputExact: false,
+          outputExact: false,
+        },
       };
+    case "turn-ended":
+      return { ...state, turnStartedAt: undefined, tokenProgress: undefined };
   }
 }
 
@@ -650,7 +666,11 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
             ? state.tokenProgress
             : {
                 ...state.tokenProgress,
-                outputTokens: state.tokenProgress.outputTokens + estimateTokens(event.text),
+                liveOutputEstimate:
+                  state.tokenProgress.liveOutputEstimate + estimateTokens(event.text),
+                // A fresh live estimate has started for whichever call is now streaming — even
+                // right after a `"usage"` event reconciled the PREVIOUS call and set this `true`.
+                outputExact: false,
               },
       };
     case "tool-call":
@@ -679,20 +699,27 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
       return pushLine(state, `⚙ compacted ${event.evictedCount} messages`);
     case "retry":
       return pushLine(state, `↻ rate-limited or unavailable; retrying (attempt ${event.attempt})`);
-    // Reconciles `tokenProgress` to the real, exact counts — safe to do unconditionally (no
-    // per-turn identity check) because the loop only ever yields a standalone `usage` event for
-    // the visible turn's own completed model call, never for `compacted`'s internal summarizer
-    // round-trip (that carries its own `usage` field on the `compacted` event itself, loop.ts).
-    // Left as a no-op when `tokenProgress` is `undefined` — same out-of-order posture as
-    // `text-delta` above.
+    // Reconciles `tokenProgress` for the model call that just completed — safe to do
+    // unconditionally (no per-turn identity check) because the loop only ever yields a standalone
+    // `usage` event for the visible turn's own completed model call, never for `compacted`'s
+    // internal summarizer round-trip (that carries its own `usage` field on the `compacted` event
+    // itself, loop.ts). ADDS onto `reconciled*Tokens` rather than replacing them, and drops
+    // `liveOutputEstimate` back to 0: a tool-using turn makes several completed model calls
+    // (loop.ts's own per-iteration loop), each with its own `usage` event, and the running total
+    // this turn's TurnStatus shows must be the SUM of every one of them, not just the latest —
+    // see `TokenProgress`'s own comment. Left as a no-op when `tokenProgress` is `undefined` —
+    // same out-of-order posture as `text-delta` above.
     case "usage":
       return state.tokenProgress === undefined
         ? state
         : {
             ...state,
             tokenProgress: {
-              inputTokens: event.usage.inputTokens ?? 0,
-              outputTokens: event.usage.outputTokens ?? 0,
+              reconciledInputTokens:
+                state.tokenProgress.reconciledInputTokens + (event.usage.inputTokens ?? 0),
+              reconciledOutputTokens:
+                state.tokenProgress.reconciledOutputTokens + (event.usage.outputTokens ?? 0),
+              liveOutputEstimate: 0,
               inputExact: true,
               outputExact: true,
             },
@@ -715,13 +742,17 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         turnStartedAt: undefined,
         tokenProgress: undefined,
       };
+    // `turnStartedAt`/`tokenProgress` are deliberately NOT cleared here, unlike `"done"` above:
+    // loop.ts yields `"error"` from several sites (a failed compaction, an unknown tool call, a
+    // tool that threw) that all keep the turn running afterward — clearing on every one made a
+    // single recoverable hiccup mid-turn make TurnStatus's elapsed clock and token count vanish for
+    // the rest of a turn that was still in progress. The turn's own genuine end is `"turn-ended"`
+    // (its own comment explains why that is dispatched from cli.ts, not inferred from this event).
     case "error":
       return {
         ...pushLine(state, event.error),
         status: "",
         pendingTool: undefined,
-        turnStartedAt: undefined,
-        tokenProgress: undefined,
       };
     default: {
       const _unhandled: never = event;

@@ -9,7 +9,7 @@ import type {
   PermissionRow,
   SetupProviderRow,
 } from "../../src/tui/state/commands";
-import { initialTuiState, type TuiState, tuiReducer } from "../../src/tui/state/reducer";
+import { initialTuiState, tuiReducer, type TuiState } from "../../src/tui/state/reducer";
 import { estimateTokens, visibleTranscript, wrapPendingRows } from "../../src/tui/util/format";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -1105,6 +1105,23 @@ describe("tuiReducer: splash-requested / splash-resolved", () => {
   });
 });
 
+// A LanguageModelUsage fixture with the two fields this reducer actually reads (inputTokens/
+// outputTokens) and every other field the type requires — factored out once the multi-call test
+// below needs it twice.
+function usageOf(inputTokens: number, outputTokens: number) {
+  return {
+    inputTokens,
+    inputTokenDetails: {
+      noCacheTokens: inputTokens,
+      cacheReadTokens: undefined,
+      cacheWriteTokens: undefined,
+    },
+    outputTokens,
+    outputTokenDetails: { textTokens: outputTokens, reasoningTokens: undefined },
+    totalTokens: inputTokens + outputTokens,
+  };
+}
+
 describe("tuiReducer: turn-started", () => {
   test("sets turnStartedAt to roughly now and resets tokenProgress to the all-zero/all-inexact shape", () => {
     const before = Date.now();
@@ -1114,8 +1131,9 @@ describe("tuiReducer: turn-started", () => {
     expect(state.turnStartedAt).toBeGreaterThanOrEqual(before);
     expect(state.turnStartedAt).toBeLessThanOrEqual(after);
     expect(state.tokenProgress).toEqual({
-      inputTokens: 0,
-      outputTokens: 0,
+      reconciledInputTokens: 0,
+      reconciledOutputTokens: 0,
+      liveOutputEstimate: 0,
       inputExact: false,
       outputExact: false,
     });
@@ -1129,13 +1147,14 @@ describe("tuiReducer: turn-started", () => {
       type: "loop-event",
       event: { type: "text-delta", text: "some streamed text" },
     });
-    expect(state.tokenProgress?.outputTokens).toBeGreaterThan(0);
+    expect(state.tokenProgress?.liveOutputEstimate).toBeGreaterThan(0);
 
     state = tuiReducer(state, { type: "turn-started" });
 
     expect(state.tokenProgress).toEqual({
-      inputTokens: 0,
-      outputTokens: 0,
+      reconciledInputTokens: 0,
+      reconciledOutputTokens: 0,
+      liveOutputEstimate: 0,
       inputExact: false,
       outputExact: false,
     });
@@ -1147,13 +1166,14 @@ describe("applyLoopEvent: text-delta with tokenProgress", () => {
     return tuiReducer(state, { type: "loop-event", event });
   }
 
-  test("accumulates outputTokens via estimateTokens, leaving inputTokens/*Exact untouched", () => {
+  test("accumulates liveOutputEstimate via estimateTokens, leaving reconciled totals/inputExact untouched", () => {
     let state = tuiReducer(initialTuiState(session()), { type: "turn-started" });
     state = apply(state, { type: "text-delta", text: "hello world" });
 
     expect(state.tokenProgress).toEqual({
-      inputTokens: 0,
-      outputTokens: estimateTokens("hello world"),
+      reconciledInputTokens: 0,
+      reconciledOutputTokens: 0,
+      liveOutputEstimate: estimateTokens("hello world"),
       inputExact: false,
       outputExact: false,
     });
@@ -1164,7 +1184,7 @@ describe("applyLoopEvent: text-delta with tokenProgress", () => {
     state = apply(state, { type: "text-delta", text: "hello " });
     state = apply(state, { type: "text-delta", text: "world" });
 
-    expect(state.tokenProgress?.outputTokens).toBe(estimateTokens("hello world"));
+    expect(state.tokenProgress?.liveOutputEstimate).toBe(estimateTokens("hello world"));
   });
 
   test("is a no-op on tokenProgress when no turn is in flight (tokenProgress undefined)", () => {
@@ -1179,54 +1199,68 @@ describe("applyLoopEvent: usage reconciles tokenProgress", () => {
     return tuiReducer(state, { type: "loop-event", event });
   }
 
-  test("replaces (not sums) the estimate with the exact counts and flips both *Exact flags", () => {
+  test("adds the exact counts onto the reconciled totals, resets liveOutputEstimate, and flips both *Exact flags", () => {
     let state = tuiReducer(initialTuiState(session()), { type: "turn-started" });
     state = apply(state, { type: "text-delta", text: "a whole lot of streamed text here" });
 
-    state = apply(state, {
-      type: "usage",
-      usage: {
-        inputTokens: 100,
-        inputTokenDetails: {
-          noCacheTokens: 100,
-          cacheReadTokens: undefined,
-          cacheWriteTokens: undefined,
-        },
-        outputTokens: 42,
-        outputTokenDetails: { textTokens: 42, reasoningTokens: undefined },
-        totalTokens: 142,
-      },
-    });
+    state = apply(state, { type: "usage", usage: usageOf(100, 42) });
 
     expect(state.tokenProgress).toEqual({
-      inputTokens: 100,
-      outputTokens: 42,
+      reconciledInputTokens: 100,
+      reconciledOutputTokens: 42,
+      liveOutputEstimate: 0,
       inputExact: true,
       outputExact: true,
     });
   });
 
   test("is a no-op when no turn is in flight (tokenProgress undefined)", () => {
-    const state = apply(initialTuiState(session()), {
-      type: "usage",
-      usage: {
-        inputTokens: 5,
-        inputTokenDetails: {
-          noCacheTokens: 5,
-          cacheReadTokens: undefined,
-          cacheWriteTokens: undefined,
-        },
-        outputTokens: 5,
-        outputTokenDetails: { textTokens: 5, reasoningTokens: undefined },
-        totalTokens: 10,
-      },
-    });
+    const state = apply(initialTuiState(session()), { type: "usage", usage: usageOf(5, 5) });
 
     expect(state.tokenProgress).toBeUndefined();
   });
+
+  // The HIGH-severity fix this loop was dispatched for: a tool-using turn makes several completed
+  // model calls (loop.ts's own per-iteration loop), each yielding its own "usage" event — an
+  // earlier reducer REPLACED tokenProgress on each one, so the second call's usage discarded the
+  // first call's already-reconciled total and the on-screen count visibly jumped backward.
+  test("a 2-model-call turn accumulates usage across calls without double-counting or losing the first call's total", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "turn-started" });
+
+    // Call 1 streams, then reconciles.
+    state = apply(state, { type: "text-delta", text: "call one's streamed text" });
+    state = apply(state, { type: "usage", usage: usageOf(100, 42) });
+    expect(state.tokenProgress).toEqual({
+      reconciledInputTokens: 100,
+      reconciledOutputTokens: 42,
+      liveOutputEstimate: 0,
+      inputExact: true,
+      outputExact: true,
+    });
+
+    // Call 2 (the tool loop continuing) starts streaming its own new text — this must NOT include
+    // call 1's already-reconciled amount a second time, and must revert the display to estimated.
+    state = apply(state, { type: "text-delta", text: "call two's own streamed text" });
+    expect(state.tokenProgress?.liveOutputEstimate).toBe(
+      estimateTokens("call two's own streamed text"),
+    );
+    expect(state.tokenProgress?.reconciledOutputTokens).toBe(42);
+    expect(state.tokenProgress?.outputExact).toBe(false);
+    expect(state.tokenProgress?.inputExact).toBe(true);
+
+    // Call 2 reconciles: ADDS onto call 1's total rather than replacing it.
+    state = apply(state, { type: "usage", usage: usageOf(80, 30) });
+    expect(state.tokenProgress).toEqual({
+      reconciledInputTokens: 180,
+      reconciledOutputTokens: 72,
+      liveOutputEstimate: 0,
+      inputExact: true,
+      outputExact: true,
+    });
+  });
 });
 
-describe("tuiReducer: done/error clear turn state", () => {
+describe("tuiReducer: done clears turn state", () => {
   function apply(state: TuiState, event: LoopEvent) {
     return tuiReducer(state, { type: "loop-event", event });
   }
@@ -1238,10 +1272,45 @@ describe("tuiReducer: done/error clear turn state", () => {
     expect(state.turnStartedAt).toBeUndefined();
     expect(state.tokenProgress).toBeUndefined();
   });
+});
 
-  test("error clears turnStartedAt and tokenProgress", () => {
+// MEDIUM-severity fix: loop.ts yields "error" from several non-terminal sites (a failed
+// compaction, an unknown tool call, a tool that threw) that all keep the turn running afterward —
+// clearing turnStartedAt/tokenProgress on every "error" made one recoverable hiccup mid-turn look
+// like the run had silently died. Only "turn-ended" (dispatched by cli.ts once driveLoop's own
+// call has genuinely settled) may end the turn now.
+describe("tuiReducer: error does not end a turn — only turn-ended does", () => {
+  function apply(state: TuiState, event: LoopEvent) {
+    return tuiReducer(state, { type: "loop-event", event });
+  }
+
+  test("an error mid-turn leaves turnStartedAt and tokenProgress defined and still accumulating", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "turn-started" });
+    state = apply(state, { type: "text-delta", text: "before the hiccup" });
+    const turnStartedAt = state.turnStartedAt;
+
+    state = apply(state, {
+      type: "error",
+      error: 'Unknown tool "frobnicate": no matching tool definition.',
+    });
+
+    expect(state.turnStartedAt).toBe(turnStartedAt);
+    expect(state.tokenProgress).toBeDefined();
+
+    state = apply(state, { type: "text-delta", text: " and after it" });
+
+    expect(state.turnStartedAt).toBe(turnStartedAt);
+    expect(state.tokenProgress?.liveOutputEstimate).toBe(
+      estimateTokens("before the hiccup") + estimateTokens(" and after it"),
+    );
+  });
+
+  test("turn-ended clears turnStartedAt and tokenProgress", () => {
     let state = tuiReducer(initialTuiState(session()), { type: "turn-started" });
     state = apply(state, { type: "error", error: "boom" });
+    expect(state.turnStartedAt).toBeDefined();
+
+    state = tuiReducer(state, { type: "turn-ended" });
 
     expect(state.turnStartedAt).toBeUndefined();
     expect(state.tokenProgress).toBeUndefined();

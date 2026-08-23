@@ -305,14 +305,26 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
   return `$${pricing.inputPerMTok.toFixed(2)}/$${pricing.outputPerMTok.toFixed(2)}`;
 }
 
-// The live status region's token count, kept exact-vs-estimated per field rather than inferred
-// from which value is populated — so a future edit can't silently start treating an estimate as
-// exact. `inputTokens` only ever moves from the reducer's `turn-started` reset (0) straight to the
-// real `usage` count: nothing in a turn's event stream reports a live input estimate the way
-// `text-delta` does for output, so it stays 0, visibly `~0 in`, until the real number lands.
+// The live status region's token count for the WHOLE turn so far, not just the currently-streaming
+// model call: a tool-using turn makes several completed model calls in a row (loop.ts's own
+// per-iteration loop), each of which yields its own `"usage"` event — reconciling by REPLACING
+// `tokenProgress` on each one (an earlier version of this type did exactly that) made the on-screen
+// count visibly jump backward the moment a second call's `"usage"` landed, since it discarded every
+// prior call's already-reconciled total. `reconciled*Tokens` is the exact sum of every completed
+// call's real usage this turn; `liveOutputEstimate` is ONLY the currently-streaming call's own
+// running estimate (reset to 0 the instant that call's `"usage"` folds it into `reconciledOutputTokens`,
+// so it is never double-counted once exact) — the displayed output total is always
+// `reconciledOutputTokens + liveOutputEstimate`. `inputExact`/`outputExact` are kept as their own
+// fields rather than inferred from which value is populated, so a future edit can't silently start
+// treating an estimate as exact: `inputExact` flips true on the FIRST `"usage"` event and stays true
+// for the rest of the turn (nothing yields a live input estimate the way `text-delta` does for
+// output, so there is never a later live value to distrust); `outputExact` flips true on every
+// `"usage"` event and flips back false the moment the NEXT `text-delta` starts a fresh live estimate
+// for whatever call the tool loop runs next.
 export type TokenProgress = {
-  inputTokens: number;
-  outputTokens: number;
+  reconciledInputTokens: number;
+  reconciledOutputTokens: number;
+  liveOutputEstimate: number;
   inputExact: boolean;
   outputExact: boolean;
 };
@@ -347,10 +359,12 @@ export function estimateTokens(text: string): number {
 // `printUsage`'s exact "N in, M out" wording (cli/output.ts) for a reconciled count, `printCost`'s
 // `~`-prefixed estimated convention (cli/output.ts) whenever either half of `progress` is still an
 // estimate — a single combined decision, not per-field, since a mixed "N in, ~M out" would imply a
-// precision the reconciliation doesn't actually reach a field at a time.
+// precision the reconciliation doesn't actually reach a field at a time. The displayed output total
+// is the reconciled sum plus whatever the current call's own live estimate still has on top of it —
+// see `TokenProgress`'s own comment for why those are kept separate rather than merged eagerly.
 export function formatTokenProgress(progress: TokenProgress): string {
-  const inTokens = Math.round(progress.inputTokens);
-  const outTokens = Math.round(progress.outputTokens);
+  const inTokens = Math.round(progress.reconciledInputTokens);
+  const outTokens = Math.round(progress.reconciledOutputTokens + progress.liveOutputEstimate);
   return progress.inputExact && progress.outputExact
     ? `${inTokens} in, ${outTokens} out`
     : `~${inTokens} in, ~${outTokens} out`;

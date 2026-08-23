@@ -61,7 +61,13 @@ describe("TurnStatus", () => {
       setup,
       <TurnStatus
         turnStartedAt={Date.now()}
-        tokenProgress={{ inputTokens: 0, outputTokens: 5, inputExact: false, outputExact: false }}
+        tokenProgress={{
+          reconciledInputTokens: 0,
+          reconciledOutputTokens: 5,
+          liveOutputEstimate: 0,
+          inputExact: false,
+          outputExact: false,
+        }}
       />,
     );
 

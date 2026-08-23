@@ -2380,6 +2380,11 @@ async function runTui(
       rejectRunTui(err instanceof Error ? err : new Error(String(err)));
     } finally {
       turnInFlight = false;
+      // The one place `driveLoop`'s own call is known to have genuinely settled, success or
+      // failure — mirrors `turn-started`'s own dispatch above, at the one place a turn is known to
+      // have genuinely begun. See `turn-ended`'s own comment (reducer.ts) for why this, not a bare
+      // `"error"` `LoopEvent`, is what clears TurnStatus's state.
+      dispatch({ type: "turn-ended" });
     }
   }
 
