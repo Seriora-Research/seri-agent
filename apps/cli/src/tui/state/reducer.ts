@@ -746,11 +746,7 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     case "messages-updated":
       return { ...state, session: { ...state.session, messages: event.messages } };
     case "done":
-      return {
-        ...pushLine(state, `(done: ${event.reason})`),
-        status: "",
-        pendingTool: undefined,
-      };
+      return { ...pushLine(state, `(done: ${event.reason})`), status: "", pendingTool: undefined };
     // `turnStartedAt`/`tokenProgress` are deliberately left untouched here — see `"turn-ended"`'s
     // own comment (TuiAction) for why only that action, not this event, ends a turn.
     case "error":
