@@ -2192,10 +2192,7 @@ async function runTui(
   // comment, reducer.ts). `undefined` for a turn with no new typed text this call (the mount-time
   // "resume" path, runTui's own `connectDispatch`, continues a conversation already ending on an
   // unanswered user turn already in `session.messages` — not new this run).
-  async function runTurn(
-    session: SessionState<ModelMessage>,
-    inputText?: string,
-  ): Promise<void> {
+  async function runTurn(session: SessionState<ModelMessage>, inputText?: string): Promise<void> {
     if (reactDispatch === undefined || turnInFlight) return;
     turnInFlight = true;
     ranAnyTurn = true;
