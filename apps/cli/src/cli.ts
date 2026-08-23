@@ -2288,7 +2288,10 @@ async function runTui(
     // untouched: this only caps attempts to at most one per turn, it does not suppress the next
     // turn's own attempt.
     let persistAttemptedThisTurn = false;
-    let turnError: unknown;
+    // Boxed rather than a bare `unknown`: a rejection whose value is itself `undefined` (e.g. a
+    // bare `Promise.reject()`) must still be distinguishable from "no error happened" below, or
+    // the `!== undefined` check silently treats it as success and leaves H-2's own hang reopened.
+    let failure: { err: unknown } | undefined;
     try {
       const result = await driveLoop(
         turnPrepared,
@@ -2372,7 +2375,7 @@ async function runTui(
       // and it always passes `undefined`, since even a turn quit() itself cancelled first
       // (HIGH-B) ends the *session* by choice, not by a signal the shell needs to see re-raised.
     } catch (err) {
-      turnError = err;
+      failure = { err };
     } finally {
       turnInFlight = false;
       // The one place `driveLoop`'s own call is known to have genuinely settled, success or
@@ -2384,14 +2387,14 @@ async function runTui(
       // React update on.
       dispatch({ type: "turn-ended" });
     }
-    if (turnError !== undefined) {
+    if (failure !== undefined) {
       // H-2: driveLoop rejecting (not just resolving with an aborted/errored `done`) used to
       // leave this promise — and run()'s own `await runTui(...)` — hanging forever. Destroy the
       // renderer first so raw mode is restored (M-2's own mechanism, mirrored here rather than
       // relying solely on the fatal-signal cleanup below, since a rejection is not a signal), then
       // reject, so run() actually settles instead of hanging.
       destroyTuiRenderer();
-      rejectRunTui(turnError instanceof Error ? turnError : new Error(String(turnError)));
+      rejectRunTui(failure.err instanceof Error ? failure.err : new Error(String(failure.err)));
     }
   }
 

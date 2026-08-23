@@ -184,6 +184,31 @@ function childScriptRejects(dir: string): string {
   ].join("\n");
 }
 
+// A rejection whose reason is itself `undefined` (a bare `throw undefined`/`Promise.reject()`) —
+// distinct from childScriptRejects above, which rejects with a real Error. runTurn's own bare
+// `unknown` sentinel used to compare this case against `undefined` to decide whether driveLoop had
+// failed at all, so this reason was indistinguishable from "no error happened" and the
+// destroy/reject path never ran.
+function childScriptRejectsUndefined(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  throw undefined;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Mirrors loop.ts's own "yield error, then return" exits (loop.ts:343/381/420): a turn can end
 // with no following `done` LoopEvent at all. The reducer's own "error" case deliberately leaves
 // `turnStartedAt`/`tokenProgress` untouched (a single mid-turn error is often recoverable), so
@@ -2071,6 +2096,32 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   test("driveLoop rejecting settles run() instead of hanging forever", async () => {
     const scriptPath = join(dir, "child-rejects.mjs");
     writeFileSync(scriptPath, childScriptRejects(dir));
+
+    const { exited, sawLine } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+
+      const settled = await Promise.race([
+        exited,
+        new Promise<"the run never settled">((r) =>
+          setTimeout(() => r("the run never settled"), 15_000),
+        ),
+      ]);
+
+      expect(settled).not.toBe("the run never settled");
+    } finally {
+      // Already exited in the success case; harmless if the process is already gone.
+    }
+  }, 60_000);
+
+  // The boxed-sentinel fix: runTurn used to record a caught rejection in a bare `let turnError:
+  // unknown`, then check `turnError !== undefined` to decide whether to destroy the renderer and
+  // reject run()'s own promise — indistinguishable from "no error happened" when the rejection's
+  // own reason is `undefined`, reopening exactly the hang the sibling test above already covers for
+  // a real Error.
+  test("driveLoop rejecting with a bare `undefined` reason also settles run() instead of hanging", async () => {
+    const scriptPath = join(dir, "child-rejects-undefined.mjs");
+    writeFileSync(scriptPath, childScriptRejectsUndefined(dir));
 
     const { exited, sawLine } = await startChild(scriptPath, dir);
     try {
