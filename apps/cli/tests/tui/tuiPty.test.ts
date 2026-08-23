@@ -2097,7 +2097,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-rejects.mjs");
     writeFileSync(scriptPath, childScriptRejects(dir));
 
-    const { exited, sawLine } = await startChild(scriptPath, dir);
+    const { child, exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
 
@@ -2110,7 +2110,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       expect(settled).not.toBe("the run never settled");
     } finally {
-      // Already exited in the success case; harmless if the process is already gone.
+      // Kills the child if the run genuinely hung (the bug this test exists to catch) rather than
+      // leaving a live pty process behind on a failed run — a no-op signal on the already-exited
+      // success path, and `exited` itself already resolved in that case so awaiting it again is
+      // instant.
+      child.kill("SIGKILL");
+      await exited;
     }
   }, 60_000);
 
