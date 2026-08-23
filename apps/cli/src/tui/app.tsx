@@ -4,10 +4,13 @@
 // `screenMode: "alternate-screen"`) — each phase `root.render`s different props into the same
 // instance rather than mounting its own. The transcript is a measured, tail-anchored, scrollable
 // viewport (visibleTranscript, util/format.ts) rather than an append-only region — a
-// terminal-width- and -height-bounded slice of `state.transcript` PLUS the in-progress
-// `state.streaming` answer as its own newest entry, following the newest row by default and
-// scrollable with PageUp/PageDown/Home/End. Everything below it is a live region: status/spinner, a
-// pending-write placeholder, the mode indicator, and a basic input box, all re-rendered in place.
+// terminal-width- and -height-bounded slice of `state.transcript`, following the newest row by
+// default and scrollable with PageUp/PageDown/Home/End. No in-progress answer is ever rendered in
+// that slice: `state.streaming` accumulates every `text-delta` for `pushLine`'s eventual flush
+// (state/reducer.ts), but is never itself displayed — the response appears once, atomically, only
+// once `pushLine` commits it as a normal transcript entry. Everything below the transcript box is a
+// live region: status/spinner, a pending-write placeholder, the mode indicator, and a basic input
+// box, all re-rendered in place.
 //
 // Renderer lifecycle (mount, unmount, alt-screen entry/exit) is NOT this component's concern —
 // unlike Ink, where `App` itself called `useApp().exit()` on a `done` prop, OpenTUI has no such
@@ -17,7 +20,7 @@ import type { BoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
@@ -41,7 +44,6 @@ import {
   formatModeLabel,
   transcriptRowsProps,
   visibleTranscript,
-  wrapPendingRows,
 } from "./util/format";
 
 export type AppProps = {
@@ -208,43 +210,12 @@ export function App({
   // One line of overlap between pages, same convention a terminal pager's own PageUp/PageDown use.
   const pageSize = Math.max(1, viewportRows - 1);
 
-  // Read the render-time `visibleTranscript` call's own comment for why this exists: a scrolled-up
-  // `transcriptScrollOffset` (reducer.ts) only ever advances when a flush actually happens
-  // (`appendLines`), so without this, a streamed answer's OWN growth (not yet flushed) would drift
-  // the visible window toward newer content one row at a time and then snap back at flush. `[]` when
-  // `state.streaming` is empty: `wrapPendingRows` always returns >= 1 row even for `""` (a blank
-  // committed line is meaningful; an ABSENT streaming answer is not), so this guards that case
-  // explicitly rather than let a spurious extra row of offset apply while nothing is streaming.
-  //
-  // Only the GROWTH since `transcriptScrollOffset` was last set is added, not the full current
-  // `pendingRows`: `transcriptScrollOffset` itself already includes whatever streaming row count
-  // existed at the moment a scroll action last set it (`maxScrollOffset`, reducer.ts, folds
-  // `state.streaming`'s own row count into the ceiling it clamps against). Adding the CURRENT total
-  // on top of that every render double-counts those already-baked-in rows — `transcriptOffset` then
-  // overshoots the combined committed+streaming stack `visibleTranscript` slices, and the viewport
-  // renders a gap instead of a full page. `transcriptScrollStreamingRows` is the reducer's own
-  // snapshot of what was already baked in, so only the delta needs compensating for here.
-  //
-  // `useMemo`, keyed on `[state.streaming, state.columns]`: without it, `wrapPendingRows` re-wrapped
-  // the entire, ever-growing streamed string from scratch on every render (this computation and the
-  // `visibleTranscript` call below both needed it), rather than only when the streamed text or the
-  // terminal width actually changed.
-  const memoizedPending = useMemo(
-    () => (state.streaming.length > 0 ? wrapPendingRows(state.streaming, state.columns) : []),
-    [state.streaming, state.columns],
-  );
-  const pendingRows = memoizedPending.length;
-  const transcriptOffset =
-    state.transcriptScrollOffset > 0
-      ? state.transcriptScrollOffset +
-        Math.max(0, pendingRows - state.transcriptScrollStreamingRows)
-      : 0;
-
   // A transcript shorter than the viewport top-anchors instead of tail-anchors: bottom-pinning a
   // half-empty screen (the default below, `flex-end`) reads as a mostly-blank terminal until the
   // session grows past `viewportRows`, rather than starting at the top the way a real terminal's
-  // own scrollback does.
-  const contentRows = state.totalVisualRows + pendingRows;
+  // own scrollback does. `state.turn !== undefined ? 1 : 0` accounts for the one reserved row the
+  // status indicator shown while a turn is active occupies at the bottom of the transcript box.
+  const contentRows = state.totalVisualRows + (state.turn !== undefined ? 1 : 0);
   const isShort = contentRows < viewportRows;
 
   // `columns`/`viewportRows` live on TuiState itself (reducer.ts's own comment on those fields) —
@@ -302,10 +273,10 @@ export function App({
 
   const visibleRows = visibleTranscript(
     state.transcript,
-    viewportRows,
-    transcriptOffset,
+    viewportRows - (state.turn !== undefined ? 1 : 0),
+    state.transcriptScrollOffset,
     state.columns,
-    memoizedPending,
+    [],
   );
   const rowProps = transcriptRowsProps(visibleRows);
 
@@ -336,16 +307,11 @@ export function App({
       VISUAL row count at `viewportRows`, so `overflow="hidden"`/`justifyContent="flex-end"` are a
       pure backstop now, not load-bearing truncation — anchoring to the end means a genuine
       one-frame overshoot falls off the top (oldest), not the bottom (newest).
-      The in-progress answer (`state.streaming`, wrapped via `memoizedPending` above) is passed as
-      `visibleTranscript`'s own `pendingRows` parameter rather than rendered as its own unbounded
-      `<text>` below the box (the original Ink shape) or spread into a `[...state.transcript,
-      state.streaming]` array (tried and reverted there: that allocated a full copy of the
-      transcript on every streamed token, exactly what `visibleTranscript`'s own tail-walk exists
-      to avoid paying). `effectiveOffset` below is what keeps a scrolled-up reader's view from
-      drifting toward newer content as the answer grows and then snapping back the instant it
-      flushes: `appendLines` (state/reducer.ts) already advances `transcriptScrollOffset` by a
-      flush's own row count for exactly this reason, and pending rows need the identical treatment
-      applied live, since they are not yet a dispatched action `appendLines` could react to. */}
+      No in-progress answer is ever rendered here: `state.streaming` still accumulates every
+      `text-delta` for `pushLine`'s eventual flush (state/reducer.ts), but `visibleTranscript`'s own
+      `pendingRows` parameter is always `[]` — the response appears once, atomically, only once
+      `pushLine` commits it as a normal transcript entry. `viewportRows - (state.turn !== undefined
+      ? 1 : 0)` reserves one row for the status indicator shown while a turn is active. */}
       <box
         flexDirection="column"
         flexGrow={1}
