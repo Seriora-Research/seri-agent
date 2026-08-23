@@ -109,9 +109,10 @@ export function transcriptVisualRows(entries: TranscriptEntry[], columns: number
 //
 // Walks `entries` from the newest entry backward, wrapping each one, stopping as soon as
 // `offset + rows` visual rows have accumulated (or the transcript runs out) — bounded by how deep
-// the reader has scrolled, not by total session length, so this stays cheap on every render of a
-// long-running session (called once per streamed token while a turn is in progress) instead of
-// re-wrapping the whole history every frame. NOTE: at the deepest possible scroll (Home, offset ===
+// the reader has scrolled, not by total session length, so this stays cheap on every call for a
+// long-running session (app.tsx's own `useMemo` around this call already skips re-invoking it for
+// every `text-delta` — see that call site's own comment) instead of re-wrapping the whole history
+// every frame. NOTE: at the deepest possible scroll (Home, offset ===
 // totalVisualRows - viewportRows) this bound degrades to the full transcript, same as the O(n)
 // clamp — unavoidable without caching wrapped output, which is the one thing this file's own
 // `wrapForTranscript` comment explains storing at write time can never safely do.
