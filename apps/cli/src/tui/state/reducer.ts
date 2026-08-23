@@ -110,9 +110,8 @@ export type TuiState = {
   // The live region's spinner/status line, cleared once whatever it was reporting on finishes.
   status: string;
   // Both set together by `turn-started` (dispatched once per turn, before the model is invoked)
-  // and cleared together by `turn-ended` (dispatched once the turn has genuinely settled — `error`
-  // deliberately does not clear them, since several `error` events are recoverable mid-turn) —
-  // `undefined` means no turn is in flight, which is what
+  // and cleared together by `turn-ended` — see that action's own comment for why it, not a bare
+  // `"error"` event, is what ends a turn. `undefined` means no turn is in flight, which is what
   // TurnStatus (app.tsx) reads to decide whether to render at all. Kept as a wall-clock timestamp,
   // not a running counter: TurnStatus recomputes `now - turnStartedAt` on every tick instead of
   // incrementing a number, so a slow/delayed tick can't drift the displayed elapsed time.
@@ -353,12 +352,12 @@ export type TuiAction =
   // the first turn's token count for even one frame.
   | { type: "turn-started" }
   // Dispatched by runTurn (cli.ts) once its own `driveLoop` call has actually settled — success or
-  // failure — the one place that reliably knows the turn is truly over. NOT dispatched from a bare
-  // `"error"` `LoopEvent`: loop.ts yields `"error"` from several non-terminal sites (a failed
-  // compaction, an unknown tool call, a tool that threw) that all keep the turn running afterward,
-  // and clearing TurnStatus's own state on any of those made a turn that was still very much in
-  // progress look like it had silently died. Only a `"done"` event or `driveLoop`'s own promise
-  // settling are actual turn-ending signals.
+  // failure — the one place that reliably knows the turn is truly over, and the SOLE action that
+  // clears `turnStartedAt`/`tokenProgress` (TuiState's own comment on those fields). NOT dispatched
+  // from a bare `"error"` `LoopEvent`: loop.ts yields `"error"` from several non-terminal sites (a
+  // failed compaction, an unknown tool call, a tool that threw) that all keep the turn running
+  // afterward, and clearing TurnStatus's own state on any of those made a turn that was still very
+  // much in progress look like it had silently died.
   | { type: "turn-ended" };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
@@ -741,15 +740,9 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         ...pushLine(state, `(done: ${event.reason})`),
         status: "",
         pendingTool: undefined,
-        turnStartedAt: undefined,
-        tokenProgress: undefined,
       };
-    // `turnStartedAt`/`tokenProgress` are deliberately NOT cleared here, unlike `"done"` above:
-    // loop.ts yields `"error"` from several sites (a failed compaction, an unknown tool call, a
-    // tool that threw) that all keep the turn running afterward — clearing on every one made a
-    // single recoverable hiccup mid-turn make TurnStatus's elapsed clock and token count vanish for
-    // the rest of a turn that was still in progress. The turn's own genuine end is `"turn-ended"`
-    // (its own comment explains why that is dispatched from cli.ts, not inferred from this event).
+    // `turnStartedAt`/`tokenProgress` are deliberately left untouched here — see `"turn-ended"`'s
+    // own comment (TuiAction) for why only that action, not this event, ends a turn.
     case "error":
       return {
         ...pushLine(state, event.error),
