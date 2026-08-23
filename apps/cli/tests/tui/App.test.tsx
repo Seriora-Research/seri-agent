@@ -308,46 +308,45 @@ describe("App", () => {
     expect(frame).toContain("↑ scrolled");
   });
 
-  // Regression guard (found by review): folding the in-progress answer into the same scrollable
-  // viewport as the committed transcript (so it stops being unbounded/unwrapped, the test above's
-  // own fix) came with a second bug the first fix's own tests never exercised — a scrolled-up
-  // reader's `transcriptScrollOffset` only advances at FLUSH (`appendLines`, reducer.ts), so nothing
-  // compensated for `state.streaming` growing WHILE still in progress: the visible window drifted
-  // toward newer content one row at a time as the answer streamed, then jumped back the instant it
-  // flushed. Asserts the strongest form directly: the rendered frame must not change AT ALL while
-  // scrolled away from the tail, streaming or not.
-  test("a scrolled-up reader's view neither drifts while an answer streams nor jumps when it flushes", async () => {
+  // No transcript row is ever produced from `state.streaming` while a turn is active — the reveal
+  // is buffer-then-commit, not incremental, so a scrolled-up reader can never catch a glimpse of
+  // partial text regardless of how many `text-delta` chunks arrive or where they scroll to.
+  test("no partial assistant text renders while a turn is active, scrolled up or following the tail", async () => {
     const { setup, dispatch } = await connect();
 
     for (let i = 0; i < 300; i++) {
       dispatch({ type: "transcript-append", line: `line ${i}` });
     }
+    dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+    await flush(setup);
+
     setup.mockInput.pressKey(PAGE_UP); // scroll away from the tail
     await flush(setup);
-    const anchored = setup.captureCharFrame();
-    expect(anchored).toContain("↑ scrolled");
-
-    for (let i = 0; i < 10; i++) {
+    expect(setup.captureCharFrame()).toContain("↑ scrolled");
+    for (let i = 0; i < 5; i++) {
       dispatch({ type: "loop-event", event: { type: "text-delta", text: `chunk ${i}\n` } });
       await flush(setup);
-      expect(setup.captureCharFrame()).toBe(anchored);
+      expect(setup.captureCharFrame()).not.toContain("chunk");
     }
 
-    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    setup.mockInput.pressKey(END); // back to following the tail
     await flush(setup);
-    expect(setup.captureCharFrame()).toBe(anchored);
+    for (let i = 5; i < 10; i++) {
+      dispatch({ type: "loop-event", event: { type: "text-delta", text: `chunk ${i}\n` } });
+      await flush(setup);
+      expect(setup.captureCharFrame()).not.toContain("chunk");
+    }
   });
 
-  // Regression guard: Home/PageUp dispatched WHILE an answer is already streaming sets
-  // `transcriptScrollOffset` to a value that already includes the current streaming row count
-  // (`maxScrollOffset`, reducer.ts). `transcriptOffset`'s own `pendingRows` compensation (app.tsx)
-  // used to add the CURRENT streaming row count on top of that every render regardless, double-
-  // counting the rows already folded into the offset — the combined total overshot the transcript's
-  // own visual-row length, `visibleTranscript` (format.ts) sliced down to nothing, and the viewport
-  // rendered blank instead of a full page of the streamed answer.
-  test("Home pressed mid-stream (no further streaming) reveals a full page of the streamed answer, not a blank gap", async () => {
+  // Home dispatched while a turn is active reaches the oldest COMMITTED row — there is no
+  // in-progress answer for it to reveal any part of, partial or otherwise.
+  test("Home pressed while a turn is active shows only committed rows and TurnStatus, never the in-progress answer", async () => {
     const { setup, dispatch } = await connect();
 
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
     const answer = Array.from({ length: 300 }, (_, i) => `answer line ${i}`).join("\n");
     dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
     await flush(setup);
@@ -355,31 +354,93 @@ describe("App", () => {
     setup.mockInput.pressKey(HOME);
     await flush(setup);
     const frame = setup.captureCharFrame();
-    expect(frame).toContain("answer line 0");
+    expect(frame).toContain("line 0");
     expect(frame).toContain("↑ scrolled");
+    expect(frame).not.toContain("answer line");
   });
 
-  // Same bug as above, but with genuine post-scroll growth: confirms the delta compensation
-  // (`pendingRows - transcriptScrollStreamingRows`) neither double-counts the rows already baked
-  // into the offset at scroll time nor drops the rows that stream in afterward — the view stays
-  // anchored on the same content exactly like the already-committed-transcript case above.
-  test("more text streaming in after Home is pressed mid-stream keeps the view anchored, not double- or under-counted", async () => {
+  // Same scenario, but with genuine growth after Home is pressed — confirms further streamed
+  // chunks never leak into the frame either, and the committed view stays anchored on "line 0".
+  test("more text streaming in after Home is pressed mid-turn still shows no partial answer", async () => {
     const { setup, dispatch } = await connect();
 
-    const answer = Array.from({ length: 300 }, (_, i) => `answer line ${i}`).join("\n");
-    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
     await flush(setup);
 
     setup.mockInput.pressKey(HOME);
     await flush(setup);
-    const anchored = setup.captureCharFrame();
-    expect(anchored).toContain("answer line 0");
+    expect(setup.captureCharFrame()).toContain("line 0");
 
     for (let i = 0; i < 10; i++) {
       dispatch({ type: "loop-event", event: { type: "text-delta", text: `\nmore ${i}` } });
       await flush(setup);
-      expect(setup.captureCharFrame()).toBe(anchored);
+      const frame = setup.captureCharFrame();
+      expect(frame).not.toContain("more ");
+      expect(frame).toContain("line 0");
     }
+  });
+
+  // The reveal contract's other half: nothing shows while streaming, but the full response commits
+  // in one frame the instant the turn's terminal event fires — no partial-then-complete transition
+  // visible across two frames.
+  test("the full response appears atomically in TurnStatus's place once the turn's done event fires", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+    const answer = Array.from({ length: 5 }, (_, i) => `answer line ${i}`).join("\n");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    await flush(setup);
+    expect(setup.captureCharFrame()).not.toContain("answer line 0");
+
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("answer line 0");
+    expect(frame).toContain("answer line 4");
+  });
+
+  // The reveal's lossless guarantee: the committed entry is the exact concatenation of every
+  // `text-delta` chunk dispatched during the turn, including a word split across a chunk boundary
+  // ("wor" + "ld") — reducer.ts's own `state.streaming + event.text` accumulation, proven at the
+  // rendered-frame level since nothing exposes `state` directly from this harness.
+  test("the flushed transcript entry is byte-identical to the full concatenation of every text-delta sent during the turn", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+    const chunks = ["Hello, wor", "ld! The quick brown fox jumps ", "over the lazy dog."];
+    for (const chunk of chunks) {
+      dispatch({ type: "loop-event", event: { type: "text-delta", text: chunk } });
+    }
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+
+    expect(setup.captureCharFrame()).toContain(chunks.join(""));
+  });
+
+  // Acceptance criterion: `TurnStatus` is mounted inside the transcript box (after the committed
+  // rows), not in the status-bar row alongside the mode indicator.
+  test("TurnStatus renders as the last line of the transcript box, not the status-bar row", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({ type: "transcript-append", line: "hello" });
+    dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 3 });
+    await flush(setup);
+
+    const lines = setup.captureCharFrame().split("\n");
+    const helloIndex = lines.findIndex((line) => line.includes("hello"));
+    const modeLabelIndex = lines.findIndex((line) => line.includes("[approve-each]"));
+    const turnStatusIndex = lines.findIndex(
+      (line) => line.includes(" in, ") && line.includes(" out)"),
+    );
+
+    expect(helloIndex).toBeGreaterThanOrEqual(0);
+    expect(modeLabelIndex).toBeGreaterThan(helloIndex);
+    expect(turnStatusIndex).toBeGreaterThan(helloIndex);
+    expect(turnStatusIndex).toBeLessThan(modeLabelIndex);
+    expect(lines[modeLabelIndex]).not.toContain(" in, ");
   });
 
   // A transcript shorter than the viewport top-anchors (`justifyContent: "flex-start"`) instead of
