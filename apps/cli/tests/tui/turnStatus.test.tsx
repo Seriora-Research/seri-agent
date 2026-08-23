@@ -5,7 +5,7 @@
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
-import { createRoot } from "@opentui/react";
+import { createRoot, flushSync } from "@opentui/react";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { TurnStatus } from "../../src/tui/components/TurnStatus";
@@ -122,8 +122,13 @@ describe("TurnStatus", () => {
 
   // Regression guard for the negative-elapsed-time fix (TurnStatus.tsx's own `Math.max(0, ...)`
   // clamp): TurnStatus stays mounted across turns, so a `turnStartedAt` prop transition (turn 2
-  // starting right after turn 1 ends) is a real, common case — reverting the clamp turns this red
-  // by rendering a `-Ns` elapsed time for one frame.
+  // starting right after turn 1 ends) is a real, common case. `settle()` alone is not enough to
+  // observe the bug this guards against: by the time its `await`s resolve, the passive effect's
+  // own corrective `setNow(Date.now())` has already flushed, so the transient negative frame is
+  // gone before the test ever captures it. `flushSync` forces the render reflecting the new
+  // `turnStartedAt` to commit immediately, before that effect gets a chance to run, so the frame
+  // captured right after it is the one the clamp actually has to fix — reverting the clamp turns
+  // this red by rendering `-1s` there.
   test("a turnStartedAt prop transition clears the old interval and starts a fresh, never-negative clock", async () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
     mountedRenderers.push(setup);
@@ -136,10 +141,14 @@ describe("TurnStatus", () => {
 
     const clearIntervalSpy = spyOn(globalThis, "clearInterval");
     // Simulates turn 2's own `turn-started` landing right after turn 1 ended.
-    controller.set?.(Date.now());
-    await settle(setup);
-    await settle(setup);
+    flushSync(() => controller.set?.(Date.now()));
+    await setup.renderOnce();
+    expect(setup.captureCharFrame()).not.toMatch(/-\d/);
 
+    // Confirms the clock also self-corrects to a sane positive value afterward, not just that the
+    // immediate frame above was clamped.
+    await settle(setup);
+    await settle(setup);
     expect(clearIntervalSpy).toHaveBeenCalled();
     expect(setup.captureCharFrame()).not.toMatch(/-\d/);
   });
