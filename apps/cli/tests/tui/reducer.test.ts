@@ -1141,6 +1141,7 @@ describe("tuiReducer: turn-started", () => {
       reconciledInputTokens: 0,
       reconciledOutputTokens: 0,
       liveInputEstimate: 7,
+      carriedOutputEstimate: 0,
       liveOutputEstimate: 0,
       exact: false,
       hasGap: false,
@@ -1180,6 +1181,7 @@ describe("tuiReducer: turn-started", () => {
       reconciledInputTokens: 0,
       reconciledOutputTokens: 0,
       liveInputEstimate: 3,
+      carriedOutputEstimate: 0,
       liveOutputEstimate: 0,
       exact: false,
       hasGap: false,
@@ -1204,6 +1206,7 @@ describe("applyLoopEvent: text-delta with turn.tokens", () => {
       reconciledInputTokens: 0,
       reconciledOutputTokens: 0,
       liveInputEstimate: 0,
+      carriedOutputEstimate: 0,
       liveOutputEstimate: estimateTokens("hello world"),
       exact: false,
       hasGap: false,
@@ -1248,6 +1251,7 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       reconciledInputTokens: 100,
       reconciledOutputTokens: 42,
       liveInputEstimate: 0,
+      carriedOutputEstimate: 0,
       liveOutputEstimate: 0,
       exact: true,
       hasGap: false,
@@ -1294,9 +1298,13 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
 
   // loop.ts's own comment on its failed-mid-stream `usage` yield: a stream that fails partway
   // through resolves `result.usage` with both `inputTokens`/`outputTokens` undefined — that call was
-  // never actually measured, so reconciling it would discard the live estimate (the only real
-  // information available) and falsely mark a never-completed call as exact.
-  test("a usage event with both token fields undefined preserves the live estimate and does not mark it exact", () => {
+  // never actually measured. Nothing about it can ever be recovered, so this must set the sticky
+  // `hasGap` (a bug fixed here: an earlier version of reconcileUsage returned early as a total no-op
+  // for this exact case, leaving `hasGap` unset even though a call's real numbers were now
+  // permanently unmeasurable) and move whatever live estimate had accumulated onto
+  // `carriedOutputEstimate` rather than leaving it in `liveOutputEstimate`, where the NEXT call's own
+  // streaming would blend into it indistinguishably.
+  test("a usage event with both token fields undefined carries the live estimate forward and sets hasGap", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "turn-started",
       startedAt: 1,
@@ -1314,10 +1322,36 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       reconciledInputTokens: 0,
       reconciledOutputTokens: 0,
       liveInputEstimate: 0,
-      liveOutputEstimate: liveEstimate,
+      carriedOutputEstimate: liveEstimate,
+      liveOutputEstimate: 0,
       exact: false,
-      hasGap: false,
+      hasGap: true,
     });
+  });
+
+  // Bug B regression: a call that fails with no usable usage data at all must not go unmarked just
+  // because a LATER call in the same turn reconciles completely — the failed call's real numbers are
+  // permanently unmeasurable, and `hasGap` (sticky) plus `formatTokenProgress`'s `~` marker are what
+  // keep the turn's aggregate from claiming a false exactness after that.
+  test("a both-undefined usage event followed by a later complete one still shows the ~ marker", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "turn-started",
+      startedAt: 1,
+      inputEstimate: 0,
+    });
+    state = apply(state, { type: "text-delta", text: "streamed before the failure" });
+
+    state = apply(state, {
+      type: "usage",
+      usage: { ...usageOf(0, 0), inputTokens: undefined, outputTokens: undefined },
+    });
+    expect(state.turn?.tokens.hasGap).toBe(true);
+
+    state = apply(state, { type: "usage", usage: usageOf(5, 7) });
+
+    expect(state.turn?.tokens.exact).toBe(true);
+    expect(state.turn?.tokens.hasGap).toBe(true);
+    expect(formatTokenProgress(state.turn?.tokens as TokenProgress)).toMatch(/^~/);
   });
 
   // reconcileUsage folds in whichever field IS defined rather than discarding it, and sets the
@@ -1343,25 +1377,72 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       reconciledInputTokens: 10,
       reconciledOutputTokens: 0,
       liveInputEstimate: 0,
-      liveOutputEstimate: liveEstimate,
+      carriedOutputEstimate: liveEstimate,
+      liveOutputEstimate: 0,
       exact: false,
       hasGap: true,
     });
 
     // Call 2: a later, fully-known usage event. Its real numbers must be SUMMED onto call 1's
-    // partial total (15 in, not 5 in) — and the turn must never claim full exactness again, since
-    // call 1's output was permanently lost.
+    // partial total (15 in, not 5 in) — and call 1's own stranded output estimate must survive
+    // (Bug A: an earlier version zeroed it here, discarding the only information ever obtained about
+    // call 1's output) — and the turn must never claim full exactness again, since call 1's output
+    // was permanently lost.
     state = apply(state, { type: "usage", usage: usageOf(5, 7) });
 
     expect(state.turn?.tokens).toEqual({
       reconciledInputTokens: 15,
       reconciledOutputTokens: 7,
       liveInputEstimate: 0,
+      carriedOutputEstimate: liveEstimate,
       liveOutputEstimate: 0,
       exact: true,
       hasGap: true,
     });
-    expect(formatTokenProgress(state.turn?.tokens as TokenProgress)).toBe("~15 in, ~7 out");
+    expect(formatTokenProgress(state.turn?.tokens as TokenProgress)).toBe(
+      `~15 in, ~${Math.round(7 + liveEstimate)} out`,
+    );
+  });
+
+  // Bug A regression: call 1's own stranded output estimate must not be silently absorbed into
+  // call 2's own growing live estimate (both live in `liveOutputEstimate` while call 2 streams) and
+  // then discarded the moment call 2's usage reconciles with a real `outputTokens` (an earlier
+  // version zeroed `liveOutputEstimate` unconditionally whenever the new call's own `outputTokens`
+  // was real, wiping out whatever call 1 had left behind). `carriedOutputEstimate` is what keeps the
+  // two calls' estimates separate.
+  test("a stranded estimate from an earlier partial call survives a later call's own streaming and reconciliation", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "turn-started",
+      startedAt: 1,
+      inputEstimate: 0,
+    });
+
+    // Call 1 streams, then reconciles with only inputTokens real.
+    state = apply(state, { type: "text-delta", text: "call one's streamed text" });
+    const call1Estimate = estimateTokens("call one's streamed text");
+    state = apply(state, {
+      type: "usage",
+      usage: { ...usageOf(0, 0), inputTokens: 20, outputTokens: undefined },
+    });
+    expect(state.turn?.tokens.carriedOutputEstimate).toBe(call1Estimate);
+    expect(state.turn?.tokens.liveOutputEstimate).toBe(0);
+
+    // Call 2 starts streaming its OWN new text — this must accumulate on top of the now-zeroed
+    // liveOutputEstimate, not on top of call 1's carried-over estimate.
+    state = apply(state, { type: "text-delta", text: "call two's own streamed text" });
+    const call2Estimate = estimateTokens("call two's own streamed text");
+    expect(state.turn?.tokens.liveOutputEstimate).toBe(call2Estimate);
+    expect(state.turn?.tokens.carriedOutputEstimate).toBe(call1Estimate);
+
+    // Call 2 reconciles completely — call 1's carried estimate must still be present in the total.
+    state = apply(state, { type: "usage", usage: usageOf(9, 30) });
+
+    expect(state.turn?.tokens.carriedOutputEstimate).toBe(call1Estimate);
+    expect(state.turn?.tokens.reconciledOutputTokens).toBe(30);
+    const displayedOutTotal = Math.round(30 + call1Estimate);
+    expect(formatTokenProgress(state.turn?.tokens as TokenProgress)).toBe(
+      `~29 in, ~${displayedOutTotal} out`,
+    );
   });
 
   // reconcileUsage's own comment (reducer.ts) explains why this adds onto the running totals
@@ -1380,6 +1461,7 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       reconciledInputTokens: 100,
       reconciledOutputTokens: 42,
       liveInputEstimate: 0,
+      carriedOutputEstimate: 0,
       liveOutputEstimate: 0,
       exact: true,
       hasGap: false,
@@ -1400,6 +1482,7 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       reconciledInputTokens: 180,
       reconciledOutputTokens: 72,
       liveInputEstimate: 0,
+      carriedOutputEstimate: 0,
       liveOutputEstimate: 0,
       exact: true,
       hasGap: false,
@@ -1433,6 +1516,7 @@ describe("applyLoopEvent: compacted folds its own usage into turn.tokens", () =>
       reconciledInputTokens: 60,
       reconciledOutputTokens: 15,
       liveInputEstimate: 0,
+      carriedOutputEstimate: 0,
       liveOutputEstimate: 0,
       exact: true,
       hasGap: false,

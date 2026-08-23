@@ -554,6 +554,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
             reconciledInputTokens: 0,
             reconciledOutputTokens: 0,
             liveInputEstimate: action.inputEstimate,
+            carriedOutputEstimate: 0,
             liveOutputEstimate: 0,
             exact: false,
             hasGap: false,
@@ -667,25 +668,31 @@ function appendLines(
 // of every one of them, not just the latest — see `TokenProgress`'s own comment.
 //
 // Some providers/gateways return a `LanguageModelUsage` with only ONE of `inputTokens`/
-// `outputTokens` defined (confirmed against real upstream `vercel/ai` reports, not just a
-// type-level possibility) — each defined field is folded in on its own, so a real, known number is
-// never discarded just because its sibling is missing. `liveOutputEstimate`/`liveInputEstimate` only
-// reset to 0 when their own real field arrives (now folded into the matching reconciled total);
-// when it's missing, the live estimate is the only information that side of this call ever gets, so
-// it is kept rather than zeroed. A call missing either field also sets `hasGap` (see
+// `outputTokens` defined, or even neither (confirmed against real upstream `vercel/ai` reports, and
+// loop.ts's own comment on its failed-mid-stream `usage` yield) — each defined field is folded in on
+// its own, so a real, known number is never discarded just because its sibling is missing.
+// `liveInputEstimate` only resets to 0 when `inputTokens` itself is real; when it's missing, the live
+// estimate is the only information that side of this call ever gets, so it is kept rather than
+// zeroed. `liveOutputEstimate` is reset to 0 by EVERY reconciliation, whether or not `outputTokens`
+// was real: when it was, it's already folded into `reconciledOutputTokens`; when it wasn't, it is
+// moved onto `carriedOutputEstimate` instead — leaving it sitting in `liveOutputEstimate` would let
+// the NEXT call's own `"text-delta"` accumulation add its growing estimate on top of this stranded
+// one, indistinguishable from it, and a later reconciliation could then discard the blend instead of
+// just this call's own share of it. A call missing either field also sets `hasGap` (see
 // `TokenProgress`'s own comment): that field's true value for THIS call is gone forever, since no
-// later call's own `usage` describes it. Left as a total no-op only when BOTH fields are undefined
-// (loop.ts's own comment on its failed-mid-stream `usage` yield) — nothing at all was learned about
-// that call, so there is nothing to fold in.
+// later call's own `usage` describes it — including a call missing BOTH fields, which used to be a
+// total no-op (leaving `hasGap` unset even though nothing was ever learned about that call).
 function reconcileUsage(progress: TokenProgress, usage: LanguageModelUsage): TokenProgress {
   const { inputTokens, outputTokens } = usage;
-  if (inputTokens === undefined && outputTokens === undefined) return progress;
   const complete = inputTokens !== undefined && outputTokens !== undefined;
   return {
     reconciledInputTokens: progress.reconciledInputTokens + (inputTokens ?? 0),
     reconciledOutputTokens: progress.reconciledOutputTokens + (outputTokens ?? 0),
     liveInputEstimate: inputTokens === undefined ? progress.liveInputEstimate : 0,
-    liveOutputEstimate: outputTokens === undefined ? progress.liveOutputEstimate : 0,
+    carriedOutputEstimate:
+      progress.carriedOutputEstimate +
+      (outputTokens === undefined ? progress.liveOutputEstimate : 0),
+    liveOutputEstimate: 0,
     exact: complete,
     hasGap: progress.hasGap || !complete,
   };

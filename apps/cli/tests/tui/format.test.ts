@@ -50,6 +50,7 @@ describe("formatTokenProgress", () => {
       reconciledInputTokens: 10,
       reconciledOutputTokens: 20,
       liveInputEstimate: 0,
+      carriedOutputEstimate: 0,
       liveOutputEstimate: 0,
       exact: true,
       hasGap: false,
@@ -69,6 +70,17 @@ describe("formatTokenProgress", () => {
     expect(formatTokenProgress(progress({ exact: false, liveOutputEstimate: 5 }))).toBe(
       "~10 in, ~25 out",
     );
+  });
+
+  // carriedOutputEstimate holds a PAST call's own stranded output estimate (reconcileUsage,
+  // reducer.ts) — it must sum into the output total alongside the reconciled amount and the
+  // currently-streaming call's own live estimate, not replace or be shadowed by either.
+  test("adds the carried output estimate on top of the reconciled total, alongside the live estimate", () => {
+    expect(
+      formatTokenProgress(
+        progress({ exact: false, carriedOutputEstimate: 8, liveOutputEstimate: 5 }),
+      ),
+    ).toBe("~10 in, ~33 out");
   });
 
   test("adds the live input estimate on top of the reconciled total", () => {
