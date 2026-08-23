@@ -5,13 +5,16 @@
 // instance rather than mounting its own. The transcript is a measured, tail-anchored, scrollable
 // viewport (visibleTranscript, util/format.ts) rather than an append-only region — a
 // terminal-width- and -height-bounded slice of `state.transcript`, following the newest row by
-// default and scrollable with PageUp/PageDown/Home/End. No in-progress answer is ever rendered in
-// that slice: `state.streaming` accumulates every `text-delta` for `pushLine`'s eventual flush
-// (state/reducer.ts), but is never itself displayed — while a turn is active, `TurnStatus` (below)
-// occupies the transcript box's own last row instead, and the full response replaces it atomically
-// once `pushLine` commits it as a normal transcript entry. Everything below the transcript box is a
-// live region: status/spinner, a pending-write placeholder, the mode indicator, and a basic input
-// box, all re-rendered in place.
+// default and scrollable with PageUp/PageDown/Home/End. No mid-generation text is ever rendered in
+// that slice: `state.streaming` accumulates every `text-delta` for `pushLine`'s next flush
+// (state/reducer.ts), but is never itself displayed live, character by character — while a turn is
+// active, `TurnStatus` (below) occupies the transcript box's own last row instead. Each finished
+// segment of the answer (the run of `text-delta`s up to whatever the model does next — a tool call,
+// a tool result, or the turn's own end) replaces `TurnStatus` atomically the moment `pushLine`
+// commits it as a normal transcript entry, and `TurnStatus` reappears below that newly-committed
+// line for whatever the turn does next. Everything below the transcript box is a live region:
+// status/spinner, a pending-write placeholder, the mode indicator, and a basic input box, all
+// re-rendered in place.
 //
 // Renderer lifecycle (mount, unmount, alt-screen entry/exit) is NOT this component's concern —
 // unlike Ink, where `App` itself called `useApp().exit()` on a `done` prop, OpenTUI has no such
@@ -35,7 +38,12 @@ import { ConfigPanel } from "./routes/config/ConfigPanel";
 import { PermissionsPanel } from "./routes/config/PermissionsPanel";
 import { SetupPanel } from "./routes/setup/SetupPanel";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
-import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
+import {
+  type Dispatch,
+  initialTuiState,
+  reservedTranscriptRows,
+  tuiReducer,
+} from "./state/reducer";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
 import {
@@ -204,23 +212,22 @@ export function App({
   // transcript box has `minHeight={0}`, so on a short enough terminal — or one where the sibling
   // rows above/below it (mode indicator, an open commandError line) already consume the whole
   // budget — Yoga can genuinely measure it down to 0. `visibleTranscript(transcript, 0,
-  // ...)` then computes `start === end`, an empty slice: an in-progress streamed answer renders as
-  // nothing, not as "not enough room," with no visible sign anything is wrong until the layout
-  // recovers.
+  // ...)` then computes `start === end`, an empty slice: the transcript renders as nothing, not as
+  // "not enough room," with no visible sign anything is wrong until the layout recovers.
   const viewportRows = Math.max(1, hasMeasured ? measuredRows : rows - FALLBACK_CHROME_ROWS);
   // One line of overlap between pages, same convention a terminal pager's own PageUp/PageDown use.
   // Derived from the same reserved-row-aware expression as the actual content window
   // (`visibleTranscript`'s own `rows` argument below), not bare `viewportRows` — otherwise a
   // PageUp/PageDown press during an active turn would overshoot by exactly the one row `TurnStatus`
   // occupies, since the content window itself is one row shorter than `viewportRows` then.
-  const pageSize = Math.max(1, viewportRows - (state.turn !== undefined ? 1 : 0) - 1);
+  const pageSize = Math.max(1, viewportRows - reservedTranscriptRows(state.turn) - 1);
 
   // A transcript shorter than the viewport top-anchors instead of tail-anchors: bottom-pinning a
   // half-empty screen (the default below, `flex-end`) reads as a mostly-blank terminal until the
   // session grows past `viewportRows`, rather than starting at the top the way a real terminal's
-  // own scrollback does. `state.turn !== undefined ? 1 : 0` accounts for the one reserved row
-  // `TurnStatus` occupies at the bottom of the transcript box while a turn is active (below).
-  const contentRows = state.totalVisualRows + (state.turn !== undefined ? 1 : 0);
+  // own scrollback does. `reservedTranscriptRows` accounts for the one reserved row `TurnStatus`
+  // occupies at the bottom of the transcript box while a turn is active (below).
+  const contentRows = state.totalVisualRows + reservedTranscriptRows(state.turn);
   const isShort = contentRows < viewportRows;
 
   // `columns`/`viewportRows` live on TuiState itself (reducer.ts's own comment on those fields) —
@@ -278,10 +285,9 @@ export function App({
 
   const visibleRows = visibleTranscript(
     state.transcript,
-    viewportRows - (state.turn !== undefined ? 1 : 0),
+    viewportRows - reservedTranscriptRows(state.turn),
     state.transcriptScrollOffset,
     state.columns,
-    [],
   );
   const rowProps = transcriptRowsProps(visibleRows);
 
@@ -312,11 +318,11 @@ export function App({
       VISUAL row count at `viewportRows`, so `overflow="hidden"`/`justifyContent="flex-end"` are a
       pure backstop now, not load-bearing truncation — anchoring to the end means a genuine
       one-frame overshoot falls off the top (oldest), not the bottom (newest).
-      No in-progress answer is ever rendered here: `state.streaming` still accumulates every
-      `text-delta` for `pushLine`'s eventual flush (state/reducer.ts), but `visibleTranscript`'s own
-      `pendingRows` parameter is always `[]` — the response appears once, atomically, only once
-      `pushLine` commits it as a normal transcript entry. `viewportRows - (state.turn !== undefined
-      ? 1 : 0)` reserves one row for `TurnStatus`'s own line (below) while a turn is active. */}
+      No mid-generation text is ever rendered here: `state.streaming` still accumulates every
+      `text-delta` for `pushLine`'s next flush (state/reducer.ts), but each finished segment of the
+      answer only appears once `pushLine` commits it as a normal transcript entry.
+      `viewportRows - reservedTranscriptRows(state.turn)` reserves one row for `TurnStatus`'s own
+      line (below) while a turn is active. */}
       <box
         flexDirection="column"
         flexGrow={1}

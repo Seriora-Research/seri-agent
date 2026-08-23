@@ -102,21 +102,6 @@ export function transcriptVisualRows(entries: TranscriptEntry[], columns: number
   return total;
 }
 
-// Wraps a streamed-answer string the same way a committed assistant entry wraps, via
-// `displayText`. No production call site passes anything through this today — app.tsx never
-// renders `state.streaming` live (its own file-header comment explains why: the TUI buffers a
-// turn's whole answer and reveals it atomically on commit instead of streaming it incrementally).
-// Kept, along with `visibleTranscript`'s own `pendingRows` parameter below, because this file's own
-// pure-function tests still exercise both directly — not because anything today wires them
-// together at render time.
-export function wrapPendingRows(pending: string, columns: number): VisibleRow[] {
-  const pendingEntry: TranscriptEntry = { role: "assistant", text: pending };
-  return wrapForTranscript(displayText(pendingEntry), columns).map((text) => ({
-    role: pendingEntry.role,
-    text,
-  }));
-}
-
 // The visible slice of a committed transcript for a viewport `rows` tall, `offset` VISUAL rows up
 // from the newest (0 = following the latest line). Tail-anchored, not head-anchored: a transcript
 // longer than the viewport keeps showing its NEWEST rows by default, the same thing the terminal
@@ -138,27 +123,14 @@ export function wrapPendingRows(pending: string, columns: number): VisibleRow[] 
 // the bottom, but the exact case a reader scrolled deep into a long session (or a fast streamed
 // answer on a tall terminal) would actually hit every render.
 //
-// `pendingRows` has no production caller today — app.tsx always passes `[]` (see this file's own
-// `wrapPendingRows` comment for why). When seeded (by this file's own pure-function tests, via
-// `wrapPendingRows` above), it goes in FIRST, ahead of the backward walk over `entries` — not
-// spread into a `[...entries, pending]` array at the call site (a prior version of this function
-// did exactly that, tried and reverted): that allocated a full copy of the committed transcript on
-// every call, for a function whose entire point is staying proportional to scroll depth instead of
-// session length. Neither the parameter nor `wrapPendingRows` is deleted despite the dead call
-// site — both stay valid, independently useful utilities their own tests still cover directly.
 export function visibleTranscript(
   entries: TranscriptEntry[],
   rows: number,
   offset: number,
   columns: number,
-  pendingRows: VisibleRow[] = [],
 ): VisibleRow[] {
   const collected: VisibleRow[][] = [];
   let collectedRows = 0;
-  if (pendingRows.length > 0) {
-    collected.push(pendingRows);
-    collectedRows += pendingRows.length;
-  }
   for (let i = entries.length - 1; i >= 0 && collectedRows < offset + rows; i--) {
     const entry = entries[i];
     const wrapped = wrapForTranscript(displayText(entry), columns).map((text) => ({

@@ -9,7 +9,12 @@ import type {
   PermissionRow,
   SetupProviderRow,
 } from "../../src/tui/state/commands";
-import { initialTuiState, tuiReducer, type TuiState } from "../../src/tui/state/reducer";
+import {
+  initialTuiState,
+  reservedTranscriptRows,
+  tuiReducer,
+  type TuiState,
+} from "../../src/tui/state/reducer";
 import {
   estimateTokens,
   formatTokenProgress,
@@ -460,6 +465,37 @@ describe("tuiReducer: transcript-scroll / transcript-scroll-to", () => {
 
     const after = visibleTranscript(next.transcript, 10, next.transcriptScrollOffset, next.columns);
     expect(after[0]).toEqual({ role: "system", text: "line 50" });
+  });
+
+  // Regression: starting a turn while already scrolled up reserves `TurnStatus`'s own row,
+  // shrinking the content window by 1 — without nudging the offset to match, a reader parked above
+  // the latest content would see their top visible row silently shift down by one, with no scroll
+  // action of their own to explain it. `viewportRows - reservedTranscriptRows(...)` mirrors the
+  // reserved-row-aware content window app.tsx's own `visibleTranscript` call passes at render time.
+  test("turn-started nudges a scrolled-up offset so the visible window's top row does not drift", () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i}`);
+    let state: TuiState = { ...transcriptOf(lines), viewportRows: 5 };
+    state = tuiReducer(state, { type: "transcript-scroll-to", to: "top" });
+    expect(state.transcriptScrollOffset).toBe(15); // 20 committed - 5 viewportRows, no turn yet
+
+    const before = visibleTranscript(
+      state.transcript,
+      5 - reservedTranscriptRows(state.turn),
+      state.transcriptScrollOffset,
+      state.columns,
+    );
+    expect(before[0]).toEqual({ role: "system", text: "line 0" });
+
+    const next = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
+    expect(next.transcriptScrollOffset).toBe(16); // nudged by 1 to offset the newly-reserved row
+
+    const after = visibleTranscript(
+      next.transcript,
+      5 - reservedTranscriptRows(next.turn),
+      next.transcriptScrollOffset,
+      next.columns,
+    );
+    expect(after[0]).toEqual({ role: "system", text: "line 0" });
   });
 
   // Regression guard: `transcript` stores LOGICAL lines, never pre-wrapped output — a multi-line

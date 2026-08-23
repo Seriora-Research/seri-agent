@@ -379,7 +379,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "transcript-scroll": {
       const max = maxScrollOffset(
         state.totalVisualRows,
-        state.turn !== undefined ? 1 : 0,
+        reservedTranscriptRows(state.turn),
         state.viewportRows,
       );
       const next = Math.min(max, Math.max(0, state.transcriptScrollOffset + action.delta));
@@ -392,7 +392,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           action.to === "top"
             ? maxScrollOffset(
                 state.totalVisualRows,
-                state.turn !== undefined ? 1 : 0,
+                reservedTranscriptRows(state.turn),
                 state.viewportRows,
               )
             : 0,
@@ -410,7 +410,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           : transcriptVisualRows(state.transcript, action.columns);
       const max = maxScrollOffset(
         totalVisualRows,
-        state.turn !== undefined ? 1 : 0,
+        reservedTranscriptRows(state.turn),
         action.viewportRows,
       );
       return {
@@ -523,9 +523,16 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return { ...state, pendingSplash: false };
     case "route-updated":
       return { ...state, route: action.route };
+    // Nudges `transcriptScrollOffset` by 1 when scrolled up: starting a turn reserves
+    // `TurnStatus`'s own row, shrinking the content window by 1 the same way a real appended line
+    // would (`appendLines`'s own comment) — without this, a reader parked above the latest content
+    // would see their top visible row silently shift down by one, with no scroll action of their
+    // own to explain it.
     case "turn-started":
       return {
         ...state,
+        transcriptScrollOffset:
+          state.transcriptScrollOffset > 0 ? state.transcriptScrollOffset + 1 : 0,
         turn: {
           startedAt: action.startedAt,
           tokens: {
@@ -547,7 +554,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     // already do on their own ceiling-narrowing paths, applied here for the one ceiling change none
     // of those three actions themselves ever dispatch for.
     case "turn-ended": {
-      const max = maxScrollOffset(state.totalVisualRows, 0, state.viewportRows);
+      const max = maxScrollOffset(state.totalVisualRows, reservedTranscriptRows(undefined), state.viewportRows);
       return {
         ...state,
         turn: undefined,
@@ -557,17 +564,22 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
   }
 }
 
+// `TurnStatus` occupies exactly one row of the transcript box for the whole turn (App.tsx's own
+// comment on its render location), not a count that grows with `state.streaming` — the single
+// definition every `maxScrollOffset`/window-height call site below shares, rather than each
+// re-deriving its own `turn !== undefined ? 1 : 0`.
+export function reservedTranscriptRows(turn: TuiState["turn"]): number {
+  return turn !== undefined ? 1 : 0;
+}
+
 // The furthest `transcriptScrollOffset` can go: every visual row that exists, committed plus
-// `TurnStatus`'s own reserved row, minus the ones already on screen. `streamingRows` is
-// `state.turn !== undefined ? 1 : 0` at every call site — `TurnStatus` occupies exactly one row of
-// the transcript box for the whole turn (App.tsx's own comment on its render location), not a
-// count that grows with `state.streaming`.
+// `TurnStatus`'s own reserved row, minus the ones already on screen.
 function maxScrollOffset(
   totalVisualRows: number,
-  streamingRows: number,
+  reservedRows: number,
   viewportRows: number,
 ): number {
-  return Math.max(0, totalVisualRows + streamingRows - viewportRows);
+  return Math.max(0, totalVisualRows + reservedRows - viewportRows);
 }
 
 // Commits any pending streamed text as its own transcript line before appending `line`, so a
