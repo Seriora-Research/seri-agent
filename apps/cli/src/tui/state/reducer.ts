@@ -673,8 +673,8 @@ function appendLines(
 function reconcileUsage(progress: TokenProgress, usage: LanguageModelUsage): TokenProgress {
   if (usage.inputTokens === undefined || usage.outputTokens === undefined) return progress;
   return {
-    reconciledInputTokens: progress.reconciledInputTokens + (usage.inputTokens ?? 0),
-    reconciledOutputTokens: progress.reconciledOutputTokens + (usage.outputTokens ?? 0),
+    reconciledInputTokens: progress.reconciledInputTokens + usage.inputTokens,
+    reconciledOutputTokens: progress.reconciledOutputTokens + usage.outputTokens,
     liveOutputEstimate: 0,
     exact: true,
   };

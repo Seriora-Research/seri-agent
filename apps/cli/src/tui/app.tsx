@@ -385,15 +385,15 @@ export function App({
             <text fg={theme.muted}>↑ scrolled — End to follow</text>
           )}
           {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
-          {/* Keyed on `state.turn.startedAt`: React 18 automatically batches a `turn-ended`
-          dispatch and the very next `turn-started` (back-to-back turns landing in the same commit)
-          into one update, so the intermediate "no turn in flight" render — where TurnStatus would
-          otherwise unmount — never actually commits, and TurnStatus would be REUSED across the pair
-          rather than unmounted-then-remounted. Without the key, that reused instance's own
-          `useState(() => Date.now())` initializer (TurnStatus's own comment) would not re-run, and
+          {/* Keyed on `state.turn.startedAt`, defensively: today's two `turn-started` dispatch
+          sites (cli.ts) are both input-driven, always separated from the prior turn's `turn-ended`
+          by a user keystroke, so React never has the chance to batch the pair into one commit. But
+          IF it ever did — a `turn-ended` and the next `turn-started` landing in the same update —
+          the intermediate "no turn in flight" render (where TurnStatus would otherwise unmount)
+          would never actually commit, and TurnStatus would be REUSED rather than remounted, so its
+          `useState(() => Date.now())` initializer (TurnStatus's own comment) would not re-run and
           the second turn would start ticking from the first turn's stale `now`. The key forces a
-          fresh element identity — and so a fresh mount — on every transition regardless of
-          batching. */}
+          fresh element identity — and so a fresh mount — regardless. */}
           {state.turn !== undefined && (
             <TurnStatus
               key={state.turn.startedAt}
