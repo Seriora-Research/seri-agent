@@ -14,6 +14,7 @@ import type { TokenProgress } from "../../src/tui/util/format";
 const ZERO_TOKEN_PROGRESS: TokenProgress = {
   reconciledInputTokens: 0,
   reconciledOutputTokens: 0,
+  liveInputEstimate: 0,
   liveOutputEstimate: 0,
   exact: false,
   hasGap: false,
@@ -68,6 +69,7 @@ describe("TurnStatus", () => {
         tokenProgress={{
           reconciledInputTokens: 0,
           reconciledOutputTokens: 5,
+          liveInputEstimate: 0,
           liveOutputEstimate: 0,
           exact: false,
           hasGap: false,
@@ -76,6 +78,32 @@ describe("TurnStatus", () => {
     );
 
     expect(setup.captureCharFrame()).toContain("~0 in, ~5 out");
+  });
+
+  // The live input estimate must be visible on the very FIRST rendered frame of a turn — before
+  // any tick, before any real usage event — since cli.ts computes it upfront from the turn's own
+  // newly-submitted text (turn-started's `inputEstimate`), unlike the output estimate, which only
+  // grows once text starts streaming.
+  test("renders the live input estimate on the very first frame, with no tick and no reconciliation", async () => {
+    const setup = await createTestRenderer({ width: 40, height: 5 });
+    mountedRenderers.push(setup);
+
+    await mount(
+      setup,
+      <TurnStatus
+        startedAt={Date.now()}
+        tokenProgress={{
+          reconciledInputTokens: 0,
+          reconciledOutputTokens: 0,
+          liveInputEstimate: 12,
+          liveOutputEstimate: 0,
+          exact: false,
+          hasGap: false,
+        }}
+      />,
+    );
+
+    expect(setup.captureCharFrame()).toContain("~12 in, ~0 out");
   });
 
   test("clears its own interval on unmount, leaving nothing running", async () => {

@@ -49,6 +49,7 @@ describe("formatTokenProgress", () => {
     return {
       reconciledInputTokens: 10,
       reconciledOutputTokens: 20,
+      liveInputEstimate: 0,
       liveOutputEstimate: 0,
       exact: true,
       hasGap: false,
@@ -67,6 +68,12 @@ describe("formatTokenProgress", () => {
   test("adds the live output estimate on top of the reconciled total", () => {
     expect(formatTokenProgress(progress({ exact: false, liveOutputEstimate: 5 }))).toBe(
       "~10 in, ~25 out",
+    );
+  });
+
+  test("adds the live input estimate on top of the reconciled total", () => {
+    expect(formatTokenProgress(progress({ exact: false, liveInputEstimate: 7 }))).toBe(
+      "~17 in, ~20 out",
     );
   });
 
