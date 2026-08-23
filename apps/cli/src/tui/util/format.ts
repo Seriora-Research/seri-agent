@@ -358,9 +358,7 @@ export function estimateTokens(text: string): number {
 export function formatTokenProgress(progress: TokenProgress): string {
   const inTokens = Math.round(progress.reconciledInputTokens);
   const outTokens = Math.round(progress.reconciledOutputTokens + progress.liveOutputEstimate);
-  return progress.exact
-    ? `${inTokens} in, ${outTokens} out`
-    : `~${inTokens} in, ~${outTokens} out`;
+  return progress.exact ? `${inTokens} in, ${outTokens} out` : `~${inTokens} in, ~${outTokens} out`;
 }
 
 // One row's worth of columns (name, provider, context, cost, route), space-joined — the picker's
