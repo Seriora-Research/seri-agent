@@ -313,17 +313,23 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
 // report, rather than being discarded whole. `liveOutputEstimate` is ONLY the currently-streaming
 // call's own running estimate (reset to 0 the instant that call's own `outputTokens` is folded into
 // `reconciledOutputTokens`) — the displayed output total is always `reconciledOutputTokens +
-// liveOutputEstimate`. `exact` says whether the MOST RECENT reconciliation was itself complete (both
-// fields real) — it flips false the moment the next `text-delta` starts a fresh live estimate for
-// whatever call runs next. `hasGap` is separate and STICKY for the whole turn: once any one call
-// reconciles with only one of its two fields real, that field's true value for THAT call is gone
-// forever (no later call's own `usage` describes it), so the turn's aggregate must never claim full
-// exactness again even after a later call reconciles completely — only `"turn-started"` resets it,
-// for a genuinely fresh turn. The exactness `formatTokenProgress` actually displays is
-// `exact && !hasGap`.
+// liveOutputEstimate`. `liveInputEstimate` is set ONCE per turn (`"turn-started"`, estimated from the
+// current turn's own newly-submitted user text, not the full prompt/system/history) rather than
+// accumulated incrementally — unlike output, the outgoing message is fully known upfront instead of
+// streaming in — and resets to 0 the moment a real `usage.inputTokens` reconciles, mirroring
+// `liveOutputEstimate`'s own reset exactly; the displayed input total is always
+// `reconciledInputTokens + liveInputEstimate`. `exact` says whether the MOST RECENT reconciliation
+// was itself complete (both fields real) — it flips false the moment the next `text-delta` starts a
+// fresh live estimate for whatever call runs next. `hasGap` is separate and STICKY for the whole
+// turn: once any one call reconciles with only one of its two fields real, that field's true value
+// for THAT call is gone forever (no later call's own `usage` describes it), so the turn's aggregate
+// must never claim full exactness again even after a later call reconciles completely — only
+// `"turn-started"` resets it, for a genuinely fresh turn. The exactness `formatTokenProgress`
+// actually displays is `exact && !hasGap`.
 export type TokenProgress = {
   reconciledInputTokens: number;
   reconciledOutputTokens: number;
+  liveInputEstimate: number;
   liveOutputEstimate: number;
   exact: boolean;
   hasGap: boolean;
@@ -359,11 +365,11 @@ export function estimateTokens(text: string): number {
 // `printUsage`'s exact "N in, M out" wording (cli/output.ts) for a reconciled count, `printCost`'s
 // `~`-prefixed estimated convention (cli/output.ts) whenever `progress.exact` is false or
 // `progress.hasGap` is set — see `TokenProgress`'s own comment for why both must hold before this
-// ever drops the `~`. The displayed output total is the reconciled sum plus whatever the current
-// call's own live estimate still has on top of it — see `TokenProgress`'s own comment for why those
-// are kept separate rather than merged eagerly.
+// ever drops the `~`. Both the input and output totals are the reconciled sum plus whatever live
+// estimate still has on top of it — see `TokenProgress`'s own comment for why those are kept
+// separate rather than merged eagerly.
 export function formatTokenProgress(progress: TokenProgress): string {
-  const inTokens = Math.round(progress.reconciledInputTokens);
+  const inTokens = Math.round(progress.reconciledInputTokens + progress.liveInputEstimate);
   const outTokens = Math.round(progress.reconciledOutputTokens + progress.liveOutputEstimate);
   const exact = progress.exact && !progress.hasGap;
   return exact ? `${inTokens} in, ${outTokens} out` : `~${inTokens} in, ~${outTokens} out`;

@@ -349,8 +349,11 @@ export type TuiAction =
   // inherits the first turn's token count for even one frame. Carries its own `startedAt` (cli.ts's
   // own `Date.now()`, read at dispatch time) rather than the reducer calling `Date.now()` itself —
   // this file's own header comment advertises a pure, terminal-independent reducer, and generating
-  // a timestamp internally would be the one place that broke it.
-  | { type: "turn-started"; startedAt: number }
+  // a timestamp internally would be the one place that broke it. `inputEstimate` (cli.ts's own
+  // `estimateTokens` call on the current turn's newly-submitted user text, or 0 when there is none —
+  // a slash-command-triggered/resumed turn with no new typed text) seeds `tokens.liveInputEstimate`
+  // for the same reason: the reducer stays pure, never re-deriving the estimate itself.
+  | { type: "turn-started"; startedAt: number; inputEstimate: number }
   // Dispatched by runTurn (cli.ts) once its own `driveLoop` call has actually settled — success or
   // failure — the one place that reliably knows the turn is truly over, and the SOLE action that
   // clears `state.turn` (TuiState's own comment on that field). NOT dispatched from a bare
@@ -550,6 +553,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           tokens: {
             reconciledInputTokens: 0,
             reconciledOutputTokens: 0,
+            liveInputEstimate: action.inputEstimate,
             liveOutputEstimate: 0,
             exact: false,
             hasGap: false,
@@ -665,14 +669,14 @@ function appendLines(
 // Some providers/gateways return a `LanguageModelUsage` with only ONE of `inputTokens`/
 // `outputTokens` defined (confirmed against real upstream `vercel/ai` reports, not just a
 // type-level possibility) — each defined field is folded in on its own, so a real, known number is
-// never discarded just because its sibling is missing. `liveOutputEstimate` only resets to 0 when
-// `outputTokens` itself is real (now folded into `reconciledOutputTokens`); when it's missing, the
-// live estimate is the only information this call's output ever gets, so it is kept rather than
-// zeroed. A call missing either field also sets `hasGap` (see `TokenProgress`'s own comment): that
-// field's true value for THIS call is gone forever, since no later call's own `usage` describes it.
-// Left as a total no-op only when BOTH fields are undefined (loop.ts's own comment on its
-// failed-mid-stream `usage` yield) — nothing at all was learned about that call, so there is nothing
-// to fold in.
+// never discarded just because its sibling is missing. `liveOutputEstimate`/`liveInputEstimate` only
+// reset to 0 when their own real field arrives (now folded into the matching reconciled total);
+// when it's missing, the live estimate is the only information that side of this call ever gets, so
+// it is kept rather than zeroed. A call missing either field also sets `hasGap` (see
+// `TokenProgress`'s own comment): that field's true value for THIS call is gone forever, since no
+// later call's own `usage` describes it. Left as a total no-op only when BOTH fields are undefined
+// (loop.ts's own comment on its failed-mid-stream `usage` yield) — nothing at all was learned about
+// that call, so there is nothing to fold in.
 function reconcileUsage(progress: TokenProgress, usage: LanguageModelUsage): TokenProgress {
   const { inputTokens, outputTokens } = usage;
   if (inputTokens === undefined && outputTokens === undefined) return progress;
@@ -680,6 +684,7 @@ function reconcileUsage(progress: TokenProgress, usage: LanguageModelUsage): Tok
   return {
     reconciledInputTokens: progress.reconciledInputTokens + (inputTokens ?? 0),
     reconciledOutputTokens: progress.reconciledOutputTokens + (outputTokens ?? 0),
+    liveInputEstimate: inputTokens === undefined ? progress.liveInputEstimate : 0,
     liveOutputEstimate: outputTokens === undefined ? progress.liveOutputEstimate : 0,
     exact: complete,
     hasGap: progress.hasGap || !complete,
