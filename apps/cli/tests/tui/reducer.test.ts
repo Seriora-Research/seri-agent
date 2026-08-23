@@ -12,8 +12,8 @@ import type {
 import {
   initialTuiState,
   reservedTranscriptRows,
-  tuiReducer,
   type TuiState,
+  tuiReducer,
 } from "../../src/tui/state/reducer";
 import {
   estimateTokens,

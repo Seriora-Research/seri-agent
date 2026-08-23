@@ -554,7 +554,11 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     // already do on their own ceiling-narrowing paths, applied here for the one ceiling change none
     // of those three actions themselves ever dispatch for.
     case "turn-ended": {
-      const max = maxScrollOffset(state.totalVisualRows, reservedTranscriptRows(undefined), state.viewportRows);
+      const max = maxScrollOffset(
+        state.totalVisualRows,
+        reservedTranscriptRows(undefined),
+        state.viewportRows,
+      );
       return {
         ...state,
         turn: undefined,
