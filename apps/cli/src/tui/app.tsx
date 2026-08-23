@@ -25,7 +25,7 @@ import type { BoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
@@ -287,13 +287,23 @@ export function App({
     if (key.name === "end") dispatch({ type: "transcript-scroll-to", to: "bottom" });
   });
 
-  const visibleRows = visibleTranscript(
-    state.transcript,
-    viewportRows - reserved,
-    state.transcriptScrollOffset,
-    state.columns,
+  // Memoized on its real inputs, not recomputed every render: `state.streaming`/`state.turn.tokens`
+  // change on every `text-delta` (reducer.ts), which re-renders this component without touching
+  // any of `visibleTranscript`'s own inputs — without this, a fast-streaming answer re-walks and
+  // re-wraps the scrolled-to tail slice once per token for the whole turn, for byte-identical output
+  // every time.
+  const rowProps = useMemo(
+    () =>
+      transcriptRowsProps(
+        visibleTranscript(
+          state.transcript,
+          viewportRows - reserved,
+          state.transcriptScrollOffset,
+          state.columns,
+        ),
+      ),
+    [state.transcript, viewportRows, reserved, state.transcriptScrollOffset, state.columns],
   );
-  const rowProps = transcriptRowsProps(visibleRows);
 
   return (
     // No `height - 1` spare-row workaround: that existed only for Ink's own console-patching
@@ -325,8 +335,8 @@ export function App({
       No mid-generation text is ever rendered here: `state.streaming` still accumulates every
       `text-delta` for `pushLine`'s next flush (state/reducer.ts), but each finished segment of the
       answer only appears once `pushLine` commits it as a normal transcript entry.
-      `viewportRows - reservedTranscriptRows(state.turn)` reserves one row for `TurnStatus`'s own
-      line (below) while a turn is active. */}
+      `viewportRows - reserved` (above) reserves one row for `TurnStatus`'s own line (below) while a
+      turn is active. */}
       <box
         flexDirection="column"
         flexGrow={1}
@@ -347,7 +357,7 @@ export function App({
         {/* Rendered as this box's own last row (`justifyContent="flex-end"` above), directly under
         whatever `rowProps` currently ends with — the newest committed row when the reader is
         following the tail (`transcriptScrollOffset === 0`), but any older row once they've
-        scrolled up: `visibleRows` (above) is already sliced to the current scroll position before
+        scrolled up: `rowProps` (above) is already sliced to the current scroll position before
         this ever renders, and `TurnStatus` itself carries no scroll awareness of its own. Keyed on
         `state.turn.startedAt`, defensively:
         `runTurn` (cli.ts) has a single `turn-started` dispatch site, reached from two call paths —
