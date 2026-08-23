@@ -328,7 +328,10 @@ export type TokenProgress = {
 // other coarsening choices (formatContextWindow drops sub-K precision past 1024) — a turn running
 // that long doesn't need second-level precision.
 export function formatElapsed(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
+  // Clamped, not passed through: a negative `ms` (the system clock moving backward mid-session, or
+  // any other unexpected negative delta) would otherwise render "-1s" or worse — every caller gets
+  // "0s" instead of propagating a clock anomaly onto the screen.
+  const totalSeconds = Math.floor(Math.max(0, ms) / 1000);
   if (totalSeconds < 60) return `${totalSeconds}s`;
   const totalMinutes = Math.floor(totalSeconds / 60);
   if (totalMinutes < 60) return `${totalMinutes}m ${totalSeconds % 60}s`;

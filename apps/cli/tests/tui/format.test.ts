@@ -18,6 +18,12 @@ describe("formatElapsed", () => {
   test("an hour or more renders as hours and minutes, dropping seconds", () => {
     expect(formatElapsed(3_700_000)).toBe("1h 1m");
   });
+
+  // A negative delta (the system clock moving backward mid-session) clamps to "0s" rather than
+  // rendering "-1s".
+  test("a negative elapsed clamps to 0s instead of going negative", () => {
+    expect(formatElapsed(-1000)).toBe("0s");
+  });
 });
 
 describe("estimateTokens", () => {
