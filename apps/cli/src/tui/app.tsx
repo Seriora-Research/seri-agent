@@ -7,7 +7,8 @@
 // terminal-width- and -height-bounded slice of `state.transcript`, following the newest row by
 // default and scrollable with PageUp/PageDown/Home/End. No in-progress answer is ever rendered in
 // that slice: `state.streaming` accumulates every `text-delta` for `pushLine`'s eventual flush
-// (state/reducer.ts), but is never itself displayed — the response appears once, atomically, only
+// (state/reducer.ts), but is never itself displayed — while a turn is active, `TurnStatus` (below)
+// occupies the transcript box's own last row instead, and the full response replaces it atomically
 // once `pushLine` commits it as a normal transcript entry. Everything below the transcript box is a
 // live region: status/spinner, a pending-write placeholder, the mode indicator, and a basic input
 // box, all re-rendered in place.
@@ -213,8 +214,8 @@ export function App({
   // A transcript shorter than the viewport top-anchors instead of tail-anchors: bottom-pinning a
   // half-empty screen (the default below, `flex-end`) reads as a mostly-blank terminal until the
   // session grows past `viewportRows`, rather than starting at the top the way a real terminal's
-  // own scrollback does. `state.turn !== undefined ? 1 : 0` accounts for the one reserved row the
-  // status indicator shown while a turn is active occupies at the bottom of the transcript box.
+  // own scrollback does. `state.turn !== undefined ? 1 : 0` accounts for the one reserved row
+  // `TurnStatus` occupies at the bottom of the transcript box while a turn is active (below).
   const contentRows = state.totalVisualRows + (state.turn !== undefined ? 1 : 0);
   const isShort = contentRows < viewportRows;
 
@@ -311,7 +312,7 @@ export function App({
       `text-delta` for `pushLine`'s eventual flush (state/reducer.ts), but `visibleTranscript`'s own
       `pendingRows` parameter is always `[]` — the response appears once, atomically, only once
       `pushLine` commits it as a normal transcript entry. `viewportRows - (state.turn !== undefined
-      ? 1 : 0)` reserves one row for the status indicator shown while a turn is active. */}
+      ? 1 : 0)` reserves one row for `TurnStatus`'s own line (below) while a turn is active. */}
       <box
         flexDirection="column"
         flexGrow={1}
@@ -329,6 +330,26 @@ export function App({
             {text}
           </text>
         ))}
+        {/* Rendered as this box's own last row (`justifyContent="flex-end"` above), directly under
+        whatever committed row is currently newest — with no partial assistant text rendering
+        anymore, that's the user's own message. Keyed on `state.turn.startedAt`, defensively:
+        `runTurn` (cli.ts) has a single `turn-started` dispatch site, reached from two call paths —
+        an interactive submission and a mount-time task/resume start — both input-driven, always
+        separated from the prior turn's `turn-ended` by a user keystroke, so React never has the
+        chance to batch two `turn-started` dispatches into one commit. But IF it ever did — a
+        `turn-ended` and the next `turn-started` landing in the same update — the intermediate "no
+        turn in flight" render (where TurnStatus would otherwise unmount) would never actually
+        commit, and TurnStatus would be REUSED rather than remounted, so its `useState(() =>
+        Date.now())` initializer (TurnStatus's own comment) would not re-run and the second turn
+        would start ticking from the first turn's stale `now`. The key forces a fresh element
+        identity — and so a fresh mount — regardless. */}
+        {state.turn !== undefined && (
+          <TurnStatus
+            key={state.turn.startedAt}
+            startedAt={state.turn.startedAt}
+            tokenProgress={state.turn.tokens}
+          />
+        )}
       </box>
       {state.pendingTool !== undefined && (
         <box borderStyle="single" borderColor={theme.warning}>
@@ -351,24 +372,6 @@ export function App({
             <text fg={theme.muted}>↑ scrolled — End to follow</text>
           )}
           {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
-          {/* Keyed on `state.turn.startedAt`, defensively: `runTurn` (cli.ts) has a single
-          `turn-started` dispatch site, reached from two call paths — an interactive submission and
-          a mount-time task/resume start — both input-driven, always separated from the prior turn's
-          `turn-ended` by a user keystroke, so React never has the chance to batch two `turn-started`
-          dispatches into one commit. But IF it ever did — a `turn-ended` and the next `turn-started`
-          landing in the same update —
-          the intermediate "no turn in flight" render (where TurnStatus would otherwise unmount)
-          would never actually commit, and TurnStatus would be REUSED rather than remounted, so its
-          `useState(() => Date.now())` initializer (TurnStatus's own comment) would not re-run and
-          the second turn would start ticking from the first turn's stale `now`. The key forces a
-          fresh element identity — and so a fresh mount — regardless. */}
-          {state.turn !== undefined && (
-            <TurnStatus
-              key={state.turn.startedAt}
-              startedAt={state.turn.startedAt}
-              tokenProgress={state.turn.tokens}
-            />
-          )}
         </box>
       </box>
       <ErrorLine message={state.commandError} />
