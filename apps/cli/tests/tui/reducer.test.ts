@@ -9,8 +9,8 @@ import type {
   PermissionRow,
   SetupProviderRow,
 } from "../../src/tui/state/commands";
-import { initialTuiState, tuiReducer, type TuiState } from "../../src/tui/state/reducer";
-import { visibleTranscript, wrapPendingRows } from "../../src/tui/util/format";
+import { initialTuiState, type TuiState, tuiReducer } from "../../src/tui/state/reducer";
+import { estimateTokens, visibleTranscript, wrapPendingRows } from "../../src/tui/util/format";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
@@ -1102,5 +1102,148 @@ describe("tuiReducer: splash-requested / splash-resolved", () => {
     });
 
     expect(state).toEqual(initialTuiState(session()));
+  });
+});
+
+describe("tuiReducer: turn-started", () => {
+  test("sets turnStartedAt to roughly now and resets tokenProgress to the all-zero/all-inexact shape", () => {
+    const before = Date.now();
+    const state = tuiReducer(initialTuiState(session()), { type: "turn-started" });
+    const after = Date.now();
+
+    expect(state.turnStartedAt).toBeGreaterThanOrEqual(before);
+    expect(state.turnStartedAt).toBeLessThanOrEqual(after);
+    expect(state.tokenProgress).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      inputExact: false,
+      outputExact: false,
+    });
+  });
+
+  // A second turn must not inherit the first turn's token count, even for one frame — turn-started
+  // always resets tokenProgress from scratch rather than only seeding it when undefined.
+  test("a second turn-started resets tokenProgress even if the previous turn left it non-zero", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "turn-started" });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "some streamed text" },
+    });
+    expect(state.tokenProgress?.outputTokens).toBeGreaterThan(0);
+
+    state = tuiReducer(state, { type: "turn-started" });
+
+    expect(state.tokenProgress).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      inputExact: false,
+      outputExact: false,
+    });
+  });
+});
+
+describe("applyLoopEvent: text-delta with tokenProgress", () => {
+  function apply(state: TuiState, event: LoopEvent) {
+    return tuiReducer(state, { type: "loop-event", event });
+  }
+
+  test("accumulates outputTokens via estimateTokens, leaving inputTokens/*Exact untouched", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "turn-started" });
+    state = apply(state, { type: "text-delta", text: "hello world" });
+
+    expect(state.tokenProgress).toEqual({
+      inputTokens: 0,
+      outputTokens: estimateTokens("hello world"),
+      inputExact: false,
+      outputExact: false,
+    });
+  });
+
+  test("accumulates across multiple text-delta events, chunked any way, to the same total", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "turn-started" });
+    state = apply(state, { type: "text-delta", text: "hello " });
+    state = apply(state, { type: "text-delta", text: "world" });
+
+    expect(state.tokenProgress?.outputTokens).toBe(estimateTokens("hello world"));
+  });
+
+  test("is a no-op on tokenProgress when no turn is in flight (tokenProgress undefined)", () => {
+    const state = apply(initialTuiState(session()), { type: "text-delta", text: "hello" });
+
+    expect(state.tokenProgress).toBeUndefined();
+  });
+});
+
+describe("applyLoopEvent: usage reconciles tokenProgress", () => {
+  function apply(state: TuiState, event: LoopEvent) {
+    return tuiReducer(state, { type: "loop-event", event });
+  }
+
+  test("replaces (not sums) the estimate with the exact counts and flips both *Exact flags", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "turn-started" });
+    state = apply(state, { type: "text-delta", text: "a whole lot of streamed text here" });
+
+    state = apply(state, {
+      type: "usage",
+      usage: {
+        inputTokens: 100,
+        inputTokenDetails: {
+          noCacheTokens: 100,
+          cacheReadTokens: undefined,
+          cacheWriteTokens: undefined,
+        },
+        outputTokens: 42,
+        outputTokenDetails: { textTokens: 42, reasoningTokens: undefined },
+        totalTokens: 142,
+      },
+    });
+
+    expect(state.tokenProgress).toEqual({
+      inputTokens: 100,
+      outputTokens: 42,
+      inputExact: true,
+      outputExact: true,
+    });
+  });
+
+  test("is a no-op when no turn is in flight (tokenProgress undefined)", () => {
+    const state = apply(initialTuiState(session()), {
+      type: "usage",
+      usage: {
+        inputTokens: 5,
+        inputTokenDetails: {
+          noCacheTokens: 5,
+          cacheReadTokens: undefined,
+          cacheWriteTokens: undefined,
+        },
+        outputTokens: 5,
+        outputTokenDetails: { textTokens: 5, reasoningTokens: undefined },
+        totalTokens: 10,
+      },
+    });
+
+    expect(state.tokenProgress).toBeUndefined();
+  });
+});
+
+describe("tuiReducer: done/error clear turn state", () => {
+  function apply(state: TuiState, event: LoopEvent) {
+    return tuiReducer(state, { type: "loop-event", event });
+  }
+
+  test("done clears turnStartedAt and tokenProgress", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "turn-started" });
+    state = apply(state, { type: "done", reason: "no-tool-call" });
+
+    expect(state.turnStartedAt).toBeUndefined();
+    expect(state.tokenProgress).toBeUndefined();
+  });
+
+  test("error clears turnStartedAt and tokenProgress", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "turn-started" });
+    state = apply(state, { type: "error", error: "boom" });
+
+    expect(state.turnStartedAt).toBeUndefined();
+    expect(state.tokenProgress).toBeUndefined();
   });
 });
