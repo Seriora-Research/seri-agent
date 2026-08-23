@@ -82,6 +82,35 @@ describe("TurnStatus", () => {
     expect(setup.captureCharFrame()).toContain("~0 in, ~5 out");
   });
 
+  // Regression: app.tsx's `reservedTranscriptRows` reserves exactly one row for this component in
+  // a fixed-height, `overflow="hidden"` box — the same one-row budget `truncate`/`wrapMode="none"`
+  // already protect in `ErrorLine.tsx`/`ListRow.tsx`. Without both, a long elapsed+token string on
+  // a narrow terminal soft-wraps onto a second row instead of clipping to the first.
+  test("truncates to one row instead of soft-wrapping onto a second row on a narrow terminal", async () => {
+    const setup = await createTestRenderer({ width: 10, height: 5 });
+    mountedRenderers.push(setup);
+
+    await mount(
+      setup,
+      <TurnStatus
+        startedAt={Date.now() - 3_600_000}
+        tokenProgress={{
+          reconciledInputTokens: 1234567,
+          reconciledOutputTokens: 1234567,
+          liveInputEstimate: 0,
+          carriedOutputEstimate: 0,
+          liveOutputEstimate: 0,
+          exact: true,
+          hasGap: false,
+        }}
+      />,
+    );
+
+    const lines = setup.captureCharFrame().split("\n");
+    expect(lines[0]).toContain("1h");
+    for (const line of lines.slice(1)) expect(line.trim()).toBe("");
+  });
+
   // The live input estimate must be visible on the very FIRST rendered frame of a turn — before
   // any tick, before any real usage event — since cli.ts computes it upfront from the turn's own
   // newly-submitted text (turn-started's `inputEstimate`), unlike the output estimate, which only

@@ -4,10 +4,18 @@
 // `screenMode: "alternate-screen"`) — each phase `root.render`s different props into the same
 // instance rather than mounting its own. The transcript is a measured, tail-anchored, scrollable
 // viewport (visibleTranscript, util/format.ts) rather than an append-only region — a
-// terminal-width- and -height-bounded slice of `state.transcript` PLUS the in-progress
-// `state.streaming` answer as its own newest entry, following the newest row by default and
-// scrollable with PageUp/PageDown/Home/End. Everything below it is a live region: status/spinner, a
-// pending-write placeholder, the mode indicator, and a basic input box, all re-rendered in place.
+// terminal-width- and -height-bounded slice of `state.transcript`, following the newest row by
+// default and scrollable with PageUp/PageDown/Home/End. No mid-generation text is ever rendered in
+// that slice: `state.streaming` accumulates every `text-delta` for `pushLine`'s next flush
+// (state/reducer.ts), but is never itself displayed live, character by character — while a turn is
+// active, `TurnStatus` (below) stays pinned at the transcript box's own last row for the whole
+// turn — it never unmounts mid-turn. Each finished segment of the answer (the run of `text-delta`s
+// up to whatever the model does next — a tool call, a tool result, or the turn's own end) commits
+// atomically as a normal transcript entry the moment `pushLine` flushes it, landing in the row
+// directly above `TurnStatus` and pushing whatever was oldest in view off the top. Everything below
+// the transcript box is a live region:
+// status/spinner, a pending-write placeholder, the mode indicator, and a basic input box, all
+// re-rendered in place.
 //
 // Renderer lifecycle (mount, unmount, alt-screen entry/exit) is NOT this component's concern —
 // unlike Ink, where `App` itself called `useApp().exit()` on a `done` prop, OpenTUI has no such
@@ -31,7 +39,12 @@ import { ConfigPanel } from "./routes/config/ConfigPanel";
 import { PermissionsPanel } from "./routes/config/PermissionsPanel";
 import { SetupPanel } from "./routes/setup/SetupPanel";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
-import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
+import {
+  type Dispatch,
+  initialTuiState,
+  reservedTranscriptRows,
+  tuiReducer,
+} from "./state/reducer";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
 import {
@@ -41,7 +54,6 @@ import {
   formatModeLabel,
   transcriptRowsProps,
   visibleTranscript,
-  wrapPendingRows,
 } from "./util/format";
 
 export type AppProps = {
@@ -201,50 +213,25 @@ export function App({
   // transcript box has `minHeight={0}`, so on a short enough terminal — or one where the sibling
   // rows above/below it (mode indicator, an open commandError line) already consume the whole
   // budget — Yoga can genuinely measure it down to 0. `visibleTranscript(transcript, 0,
-  // ...)` then computes `start === end`, an empty slice: an in-progress streamed answer renders as
-  // nothing, not as "not enough room," with no visible sign anything is wrong until the layout
-  // recovers.
+  // ...)` then computes `start === end`, an empty slice: the transcript renders as nothing, not as
+  // "not enough room," with no visible sign anything is wrong until the layout recovers.
   const viewportRows = Math.max(1, hasMeasured ? measuredRows : rows - FALLBACK_CHROME_ROWS);
+  // The one reserved row `TurnStatus` occupies at the bottom of the transcript box while a turn is
+  // active (below) — computed once and reused everywhere below that needs it, rather than
+  // re-derived at each call site.
+  const reserved = reservedTranscriptRows(state.turn);
   // One line of overlap between pages, same convention a terminal pager's own PageUp/PageDown use.
-  const pageSize = Math.max(1, viewportRows - 1);
-
-  // Read the render-time `visibleTranscript` call's own comment for why this exists: a scrolled-up
-  // `transcriptScrollOffset` (reducer.ts) only ever advances when a flush actually happens
-  // (`appendLines`), so without this, a streamed answer's OWN growth (not yet flushed) would drift
-  // the visible window toward newer content one row at a time and then snap back at flush. `[]` when
-  // `state.streaming` is empty: `wrapPendingRows` always returns >= 1 row even for `""` (a blank
-  // committed line is meaningful; an ABSENT streaming answer is not), so this guards that case
-  // explicitly rather than let a spurious extra row of offset apply while nothing is streaming.
-  //
-  // Only the GROWTH since `transcriptScrollOffset` was last set is added, not the full current
-  // `pendingRows`: `transcriptScrollOffset` itself already includes whatever streaming row count
-  // existed at the moment a scroll action last set it (`maxScrollOffset`, reducer.ts, folds
-  // `state.streaming`'s own row count into the ceiling it clamps against). Adding the CURRENT total
-  // on top of that every render double-counts those already-baked-in rows — `transcriptOffset` then
-  // overshoots the combined committed+streaming stack `visibleTranscript` slices, and the viewport
-  // renders a gap instead of a full page. `transcriptScrollStreamingRows` is the reducer's own
-  // snapshot of what was already baked in, so only the delta needs compensating for here.
-  //
-  // `useMemo`, keyed on `[state.streaming, state.columns]`: without it, `wrapPendingRows` re-wrapped
-  // the entire, ever-growing streamed string from scratch on every render (this computation and the
-  // `visibleTranscript` call below both needed it), rather than only when the streamed text or the
-  // terminal width actually changed.
-  const memoizedPending = useMemo(
-    () => (state.streaming.length > 0 ? wrapPendingRows(state.streaming, state.columns) : []),
-    [state.streaming, state.columns],
-  );
-  const pendingRows = memoizedPending.length;
-  const transcriptOffset =
-    state.transcriptScrollOffset > 0
-      ? state.transcriptScrollOffset +
-        Math.max(0, pendingRows - state.transcriptScrollStreamingRows)
-      : 0;
+  // Derived from the same reserved-row-aware expression as the actual content window
+  // (`visibleTranscript`'s own `rows` argument below), not bare `viewportRows` — otherwise a
+  // PageUp/PageDown press during an active turn would overshoot by exactly the one row `TurnStatus`
+  // occupies, since the content window itself is one row shorter than `viewportRows` then.
+  const pageSize = Math.max(1, viewportRows - reserved - 1);
 
   // A transcript shorter than the viewport top-anchors instead of tail-anchors: bottom-pinning a
   // half-empty screen (the default below, `flex-end`) reads as a mostly-blank terminal until the
   // session grows past `viewportRows`, rather than starting at the top the way a real terminal's
   // own scrollback does.
-  const contentRows = state.totalVisualRows + pendingRows;
+  const contentRows = state.totalVisualRows + reserved;
   const isShort = contentRows < viewportRows;
 
   // `columns`/`viewportRows` live on TuiState itself (reducer.ts's own comment on those fields) —
@@ -300,14 +287,23 @@ export function App({
     if (key.name === "end") dispatch({ type: "transcript-scroll-to", to: "bottom" });
   });
 
-  const visibleRows = visibleTranscript(
-    state.transcript,
-    viewportRows,
-    transcriptOffset,
-    state.columns,
-    memoizedPending,
+  // Memoized on its real inputs, not recomputed every render: `state.streaming`/`state.turn.tokens`
+  // change on every `text-delta` (reducer.ts), which re-renders this component without touching
+  // any of `visibleTranscript`'s own inputs — without this, a fast-streaming answer re-walks and
+  // re-wraps the scrolled-to tail slice once per token for the whole turn, for byte-identical output
+  // every time.
+  const rowProps = useMemo(
+    () =>
+      transcriptRowsProps(
+        visibleTranscript(
+          state.transcript,
+          viewportRows - reserved,
+          state.transcriptScrollOffset,
+          state.columns,
+        ),
+      ),
+    [state.transcript, viewportRows, reserved, state.transcriptScrollOffset, state.columns],
   );
-  const rowProps = transcriptRowsProps(visibleRows);
 
   return (
     // No `height - 1` spare-row workaround: that existed only for Ink's own console-patching
@@ -336,16 +332,11 @@ export function App({
       VISUAL row count at `viewportRows`, so `overflow="hidden"`/`justifyContent="flex-end"` are a
       pure backstop now, not load-bearing truncation — anchoring to the end means a genuine
       one-frame overshoot falls off the top (oldest), not the bottom (newest).
-      The in-progress answer (`state.streaming`, wrapped via `memoizedPending` above) is passed as
-      `visibleTranscript`'s own `pendingRows` parameter rather than rendered as its own unbounded
-      `<text>` below the box (the original Ink shape) or spread into a `[...state.transcript,
-      state.streaming]` array (tried and reverted there: that allocated a full copy of the
-      transcript on every streamed token, exactly what `visibleTranscript`'s own tail-walk exists
-      to avoid paying). `effectiveOffset` below is what keeps a scrolled-up reader's view from
-      drifting toward newer content as the answer grows and then snapping back the instant it
-      flushes: `appendLines` (state/reducer.ts) already advances `transcriptScrollOffset` by a
-      flush's own row count for exactly this reason, and pending rows need the identical treatment
-      applied live, since they are not yet a dispatched action `appendLines` could react to. */}
+      No mid-generation text is ever rendered here: `state.streaming` still accumulates every
+      `text-delta` for `pushLine`'s next flush (state/reducer.ts), but each finished segment of the
+      answer only appears once `pushLine` commits it as a normal transcript entry.
+      `viewportRows - reserved` (above) reserves one row for `TurnStatus`'s own line (below) while a
+      turn is active. */}
       <box
         flexDirection="column"
         flexGrow={1}
@@ -363,6 +354,29 @@ export function App({
             {text}
           </text>
         ))}
+        {/* Rendered as this box's own last row (`justifyContent="flex-end"` above), directly under
+        whatever `rowProps` currently ends with — the newest committed row when the reader is
+        following the tail (`transcriptScrollOffset === 0`), but any older row once they've
+        scrolled up: `rowProps` (above) is already sliced to the current scroll position before
+        this ever renders, and `TurnStatus` itself carries no scroll awareness of its own. Keyed on
+        `state.turn.startedAt`, defensively:
+        `runTurn` (cli.ts) has a single `turn-started` dispatch site, reached from two call paths —
+        an interactive submission and a mount-time task/resume start — both input-driven, always
+        separated from the prior turn's `turn-ended` by a user keystroke, so React never has the
+        chance to batch two `turn-started` dispatches into one commit. But IF it ever did — a
+        `turn-ended` and the next `turn-started` landing in the same update — the intermediate "no
+        turn in flight" render (where TurnStatus would otherwise unmount) would never actually
+        commit, and TurnStatus would be REUSED rather than remounted, so its `useState(() =>
+        Date.now())` initializer (TurnStatus's own comment) would not re-run and the second turn
+        would start ticking from the first turn's stale `now`. The key forces a fresh element
+        identity — and so a fresh mount — regardless. */}
+        {state.turn !== undefined && (
+          <TurnStatus
+            key={state.turn.startedAt}
+            startedAt={state.turn.startedAt}
+            tokenProgress={state.turn.tokens}
+          />
+        )}
       </box>
       {state.pendingTool !== undefined && (
         <box borderStyle="single" borderColor={theme.warning}>
@@ -385,24 +399,6 @@ export function App({
             <text fg={theme.muted}>↑ scrolled — End to follow</text>
           )}
           {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
-          {/* Keyed on `state.turn.startedAt`, defensively: `runTurn` (cli.ts) has a single
-          `turn-started` dispatch site, reached from two call paths — an interactive submission and
-          a mount-time task/resume start — both input-driven, always separated from the prior turn's
-          `turn-ended` by a user keystroke, so React never has the chance to batch two `turn-started`
-          dispatches into one commit. But IF it ever did — a `turn-ended` and the next `turn-started`
-          landing in the same update —
-          the intermediate "no turn in flight" render (where TurnStatus would otherwise unmount)
-          would never actually commit, and TurnStatus would be REUSED rather than remounted, so its
-          `useState(() => Date.now())` initializer (TurnStatus's own comment) would not re-run and
-          the second turn would start ticking from the first turn's stale `now`. The key forces a
-          fresh element identity — and so a fresh mount — regardless. */}
-          {state.turn !== undefined && (
-            <TurnStatus
-              key={state.turn.startedAt}
-              startedAt={state.turn.startedAt}
-              tokenProgress={state.turn.tokens}
-            />
-          )}
         </box>
       </box>
       <ErrorLine message={state.commandError} />
