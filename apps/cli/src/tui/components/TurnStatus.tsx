@@ -29,9 +29,15 @@ export function TurnStatus({
 
   if (turnStartedAt === undefined) return undefined;
   const tokens = tokenProgress ? ` (${formatTokenProgress(tokenProgress)})` : "";
+  // Clamped to 0: this component stays mounted across turns, and the render that reflects a NEW
+  // `turnStartedAt` (the second turn's own `turn-started` dispatch) can land before the passive
+  // effect above has flushed a fresh `setNow(Date.now())` — computing `now` (stale, from the
+  // previous turn's last tick) minus the new `turnStartedAt` would otherwise go negative for
+  // exactly that one frame.
+  const elapsedMs = Math.max(0, now - turnStartedAt);
   return (
     <text fg={theme.muted}>
-      {formatElapsed(now - turnStartedAt)}
+      {formatElapsed(elapsedMs)}
       {tokens}
     </text>
   );

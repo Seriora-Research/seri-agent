@@ -7,6 +7,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ReactNode } from "react";
+import { useState } from "react";
 import { TurnStatus } from "../../src/tui/components/TurnStatus";
 
 const mountedRenderers: TestRendererSetup[] = [];
@@ -30,6 +31,24 @@ async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
   createRoot(setup.renderer).render(node);
   await settle(setup); // commits the mount
   await settle(setup); // lets the passive useEffect above run and schedule its interval
+}
+
+// A minimal stateful host so a `turnStartedAt` PROP transition on an already-mounted TurnStatus
+// can actually be exercised: calling `createRoot(renderer).render(...)` a SECOND time builds a
+// brand-new reconciler container rather than updating props on the existing tree (this file's own
+// `unmount`-not-re-render comment below), so it can never re-use the same TurnStatus instance. This
+// wrapper's own instance persists across the `controller.set` calls below, so TurnStatus genuinely
+// receives a new `turnStartedAt` prop on its existing instance instead.
+function TurnStatusHost({
+  initial,
+  controller,
+}: {
+  initial: number | undefined;
+  controller: { set?: (value: number | undefined) => void };
+}) {
+  const [turnStartedAt, setTurnStartedAt] = useState(initial);
+  controller.set = setTurnStartedAt;
+  return <TurnStatus turnStartedAt={turnStartedAt} tokenProgress={undefined} />;
 }
 
 describe("TurnStatus", () => {
@@ -99,5 +118,46 @@ describe("TurnStatus", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(clearIntervalSpy).toHaveBeenCalled();
+  });
+
+  // Regression guard for the negative-elapsed-time fix (TurnStatus.tsx's own `Math.max(0, ...)`
+  // clamp): TurnStatus stays mounted across turns, so a `turnStartedAt` prop transition (turn 2
+  // starting right after turn 1 ends) is a real, common case — reverting the clamp turns this red
+  // by rendering a `-Ns` elapsed time for one frame.
+  test("a turnStartedAt prop transition clears the old interval and starts a fresh, never-negative clock", async () => {
+    const setup = await createTestRenderer({ width: 40, height: 5 });
+    mountedRenderers.push(setup);
+    const controller: { set?: (value: number | undefined) => void } = {};
+
+    await mount(setup, <TurnStatusHost initial={Date.now()} controller={controller} />);
+    await sleep(1100);
+    await settle(setup);
+    expect(setup.captureCharFrame()).toContain("1s");
+
+    const clearIntervalSpy = spyOn(globalThis, "clearInterval");
+    // Simulates turn 2's own `turn-started` landing right after turn 1 ended.
+    controller.set?.(Date.now());
+    await settle(setup);
+    await settle(setup);
+
+    expect(clearIntervalSpy).toHaveBeenCalled();
+    expect(setup.captureCharFrame()).not.toMatch(/-\d/);
+  });
+
+  test("a turnStartedAt prop transition to undefined clears the interval and renders nothing", async () => {
+    const setup = await createTestRenderer({ width: 40, height: 5 });
+    mountedRenderers.push(setup);
+    const controller: { set?: (value: number | undefined) => void } = {};
+
+    await mount(setup, <TurnStatusHost initial={Date.now()} controller={controller} />);
+    await settle(setup);
+
+    const clearIntervalSpy = spyOn(globalThis, "clearInterval");
+    controller.set?.(undefined);
+    await settle(setup);
+    await settle(setup);
+
+    expect(clearIntervalSpy).toHaveBeenCalled();
+    expect(setup.captureCharFrame().trim()).toBe("");
   });
 });
