@@ -558,11 +558,17 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     // the top with no scroll action of the reader's own. `Math.max(0, ...)`, not a ceiling re-clamp:
     // `offset <= oldMax` already holds (every other case maintains it), and `newMax === oldMax - 1`,
     // so `offset - 1 <= newMax` always — a `maxScrollOffset` re-clamp here would be provably dead.
+    // Guarded on `state.turn !== undefined`, matching `turn-started`'s own posture: a duplicate
+    // `turn-ended` with no turn to end reserved no row to release, and would otherwise decrement a
+    // valid offset for a reservation that was never there.
     case "turn-ended":
       return {
         ...state,
         turn: undefined,
-        transcriptScrollOffset: Math.max(0, state.transcriptScrollOffset - 1),
+        transcriptScrollOffset:
+          state.turn === undefined
+            ? state.transcriptScrollOffset
+            : Math.max(0, state.transcriptScrollOffset - 1),
       };
   }
 }

@@ -1643,4 +1643,19 @@ describe("tuiReducer: turn-ended releases the reserved row", () => {
 
     expect(next.transcriptScrollOffset).toBe(0);
   });
+
+  // Regression: a duplicate turn-ended (state.turn already undefined) reserved no row to release —
+  // decrementing anyway would corrupt a valid, unrelated committed-content offset.
+  test("a duplicate turn-ended with no active turn leaves a valid offset untouched", () => {
+    let state: TuiState = initialTuiState(session());
+    for (let i = 0; i < 20; i++) {
+      state = tuiReducer(state, { type: "transcript-append", line: `line ${i}` });
+    }
+    state = { ...state, viewportRows: 5, transcriptScrollOffset: 3 };
+    expect(state.turn).toBeUndefined();
+
+    const next = tuiReducer(state, { type: "turn-ended" });
+
+    expect(next.transcriptScrollOffset).toBe(3);
+  });
 });
