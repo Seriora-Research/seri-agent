@@ -314,19 +314,16 @@ export function formatCost(pricing: ModelCatalogEntry["pricing"]): string {
 // call's real usage this turn; `liveOutputEstimate` is ONLY the currently-streaming call's own
 // running estimate (reset to 0 the instant that call's `"usage"` folds it into `reconciledOutputTokens`,
 // so it is never double-counted once exact) — the displayed output total is always
-// `reconciledOutputTokens + liveOutputEstimate`. `inputExact`/`outputExact` are kept as their own
-// fields rather than inferred from which value is populated, so a future edit can't silently start
-// treating an estimate as exact: `inputExact` flips true on the FIRST `"usage"` event and stays true
-// for the rest of the turn (nothing yields a live input estimate the way `text-delta` does for
-// output, so there is never a later live value to distrust); `outputExact` flips true on every
-// `"usage"` event and flips back false the moment the NEXT `text-delta` starts a fresh live estimate
-// for whatever call the tool loop runs next.
+// `reconciledOutputTokens + liveOutputEstimate`. `exact` covers both totals at once rather than one
+// flag per field: nothing yields a live INPUT estimate the way `text-delta` does for output, so the
+// two can never actually disagree — `exact` flips true on a reconciling `"usage"`/`"compacted"`
+// event and back false the moment the next `text-delta` starts a fresh live estimate for whatever
+// call runs next.
 export type TokenProgress = {
   reconciledInputTokens: number;
   reconciledOutputTokens: number;
   liveOutputEstimate: number;
-  inputExact: boolean;
-  outputExact: boolean;
+  exact: boolean;
 };
 
 // TurnStatus's own elapsed-time display, matching formatContextWindow's plain-arithmetic style
@@ -342,30 +339,26 @@ export function formatElapsed(ms: number): string {
 }
 
 // A streaming token-count estimate (vercel-labs/fx's heuristic): ~4 bytes per token, counted over
-// non-whitespace content only. Deliberately returns a raw (un-rounded) number rather than
-// `Math.ceil`-ing here — reducer.ts calls this once per streamed `text-delta` CHUNK and sums the
-// results, and ceiling per chunk is not chunk-boundary-invariant: a word split across two chunks
-// (e.g. "wor" + "ld") would round each fragment up separately and overcount versus the same word
-// arriving whole. Summing un-rounded byte-based fractions first and rounding once, only at display
-// time (formatTokenProgress, below), is what keeps the running total identical regardless of how
-// the underlying stream happens to chunk its output — verified by this file's own
-// chunk-boundary-invariance test.
+// non-whitespace content only. The byte length of the whitespace-stripped string equals the summed
+// byte length of its whitespace-delimited spans (no multi-byte sequence straddles a stripped
+// whitespace boundary), which is what makes this chunk-boundary-invariant — reducer.ts calls this
+// once per streamed `text-delta` CHUNK and sums the results, and a word split across two chunks
+// (e.g. "wor" + "ld") must total the same as the same word arriving whole. Deliberately returns a
+// raw (un-rounded) number, rounded once only at display time (formatTokenProgress, below) —
+// verified by this file's own chunk-boundary-invariance test.
 export function estimateTokens(text: string): number {
-  const spans = text.split(/\s+/).filter((span) => span.length > 0);
-  const totalBytes = spans.reduce((sum, span) => sum + Buffer.byteLength(span, "utf8"), 0);
-  return totalBytes / 4;
+  return Buffer.byteLength(text.replace(/\s+/g, ""), "utf8") / 4;
 }
 
 // `printUsage`'s exact "N in, M out" wording (cli/output.ts) for a reconciled count, `printCost`'s
-// `~`-prefixed estimated convention (cli/output.ts) whenever either half of `progress` is still an
-// estimate — a single combined decision, not per-field, since a mixed "N in, ~M out" would imply a
-// precision the reconciliation doesn't actually reach a field at a time. The displayed output total
-// is the reconciled sum plus whatever the current call's own live estimate still has on top of it —
-// see `TokenProgress`'s own comment for why those are kept separate rather than merged eagerly.
+// `~`-prefixed estimated convention (cli/output.ts) whenever `progress.exact` is still false. The
+// displayed output total is the reconciled sum plus whatever the current call's own live estimate
+// still has on top of it — see `TokenProgress`'s own comment for why those are kept separate rather
+// than merged eagerly.
 export function formatTokenProgress(progress: TokenProgress): string {
   const inTokens = Math.round(progress.reconciledInputTokens);
   const outTokens = Math.round(progress.reconciledOutputTokens + progress.liveOutputEstimate);
-  return progress.inputExact && progress.outputExact
+  return progress.exact
     ? `${inTokens} in, ${outTokens} out`
     : `~${inTokens} in, ~${outTokens} out`;
 }

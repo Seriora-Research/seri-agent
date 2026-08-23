@@ -44,26 +44,21 @@ describe("formatTokenProgress", () => {
       reconciledInputTokens: 10,
       reconciledOutputTokens: 20,
       liveOutputEstimate: 0,
-      inputExact: true,
-      outputExact: true,
+      exact: true,
       ...overrides,
     };
   }
 
-  test("omits ~ when both input and output are exact", () => {
+  test("omits ~ when exact", () => {
     expect(formatTokenProgress(progress())).toBe("10 in, 20 out");
   });
 
-  test("prefixes both with ~ when input is still an estimate", () => {
-    expect(formatTokenProgress(progress({ inputExact: false }))).toBe("~10 in, ~20 out");
-  });
-
-  test("prefixes both with ~ when output is still an estimate", () => {
-    expect(formatTokenProgress(progress({ outputExact: false }))).toBe("~10 in, ~20 out");
+  test("prefixes both with ~ when still an estimate", () => {
+    expect(formatTokenProgress(progress({ exact: false }))).toBe("~10 in, ~20 out");
   });
 
   test("adds the live output estimate on top of the reconciled total", () => {
-    expect(formatTokenProgress(progress({ outputExact: false, liveOutputEstimate: 5 }))).toBe(
+    expect(formatTokenProgress(progress({ exact: false, liveOutputEstimate: 5 }))).toBe(
       "~10 in, ~25 out",
     );
   });

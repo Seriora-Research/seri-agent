@@ -2,7 +2,7 @@
 // commands dispatch into this one reducer rather than each holding a separate copy. Zero Ink/React
 // import — a plain, standalone reducer, testable without a terminal.
 import type { ModelProvider } from "@seri/model-catalog";
-import type { ModelMessage } from "ai";
+import type { LanguageModelUsage, ModelMessage } from "ai";
 import { toolAllowedLine, toolResultLine } from "../../cli/output";
 import type { PermissionMode } from "../../gate/gate";
 import type { LoopEvent } from "../../loop/loop";
@@ -550,8 +550,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           reconciledInputTokens: 0,
           reconciledOutputTokens: 0,
           liveOutputEstimate: 0,
-          inputExact: false,
-          outputExact: false,
+          exact: false,
         },
       };
     case "turn-ended":
@@ -653,6 +652,27 @@ function appendLines(
   };
 }
 
+// Folds one completed model call's real usage onto `progress`'s running totals — shared by the
+// standalone `"usage"` event and `"compacted"`'s own bundled summarizer usage (loop.ts), both of
+// which are genuinely billed calls this turn's displayed total must include. ADDS onto
+// `reconciled*Tokens` rather than replacing them, and drops `liveOutputEstimate` back to 0: a
+// tool-using turn makes several completed model calls (loop.ts's own per-iteration loop), and the
+// running total TurnStatus shows must be the SUM of every one of them, not just the latest — see
+// `TokenProgress`'s own comment. Left as a no-op (not just zero-filled) when BOTH `inputTokens` and
+// `outputTokens` are `undefined` — measured against a real stream that fails mid-response (loop.ts's
+// own comment on its failed-mid-stream `usage` yield): that call was never actually measured, so
+// reconciling it to a bare "0 in, 0 out" would discard the live estimate (the only real information
+// available) and falsely claim certainty about a call that was never completed.
+function reconcileUsage(progress: TokenProgress, usage: LanguageModelUsage): TokenProgress {
+  if (usage.inputTokens === undefined && usage.outputTokens === undefined) return progress;
+  return {
+    reconciledInputTokens: progress.reconciledInputTokens + (usage.inputTokens ?? 0),
+    reconciledOutputTokens: progress.reconciledOutputTokens + (usage.outputTokens ?? 0),
+    liveOutputEstimate: 0,
+    exact: true,
+  };
+}
+
 function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
   switch (event.type) {
     // `state.tokenProgress` is left untouched (not seeded here) when it's `undefined` — a
@@ -671,7 +691,7 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
                   state.tokenProgress.liveOutputEstimate + estimateTokens(event.text),
                 // A fresh live estimate has started for whichever call is now streaming — even
                 // right after a `"usage"` event reconciled the PREVIOUS call and set this `true`.
-                outputExact: false,
+                exact: false,
               },
       };
     case "tool-call":
@@ -696,35 +716,25 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         ...pushLine(state, toolAllowedLine(event.name)),
         status: "",
       };
+    // `event.usage` is the summarizer's own round-trip cost — genuinely billed, and folded into
+    // `tokenProgress` the same way the standalone `"usage"` event below is, so a turn that triggers
+    // mid-conversation compaction doesn't silently under-report its real spend.
     case "compacted":
-      return pushLine(state, `⚙ compacted ${event.evictedCount} messages`);
+      return {
+        ...pushLine(state, `⚙ compacted ${event.evictedCount} messages`),
+        tokenProgress:
+          state.tokenProgress === undefined
+            ? state.tokenProgress
+            : reconcileUsage(state.tokenProgress, event.usage),
+      };
     case "retry":
       return pushLine(state, `↻ rate-limited or unavailable; retrying (attempt ${event.attempt})`);
-    // Reconciles `tokenProgress` for the model call that just completed — safe to do
-    // unconditionally (no per-turn identity check) because the loop only ever yields a standalone
-    // `usage` event for the visible turn's own completed model call, never for `compacted`'s
-    // internal summarizer round-trip (that carries its own `usage` field on the `compacted` event
-    // itself, loop.ts). ADDS onto `reconciled*Tokens` rather than replacing them, and drops
-    // `liveOutputEstimate` back to 0: a tool-using turn makes several completed model calls
-    // (loop.ts's own per-iteration loop), each with its own `usage` event, and the running total
-    // this turn's TurnStatus shows must be the SUM of every one of them, not just the latest —
-    // see `TokenProgress`'s own comment. Left as a no-op when `tokenProgress` is `undefined` —
-    // same out-of-order posture as `text-delta` above.
+    // Left as a no-op when `tokenProgress` is `undefined` — same out-of-order posture as
+    // `text-delta` above.
     case "usage":
       return state.tokenProgress === undefined
         ? state
-        : {
-            ...state,
-            tokenProgress: {
-              reconciledInputTokens:
-                state.tokenProgress.reconciledInputTokens + (event.usage.inputTokens ?? 0),
-              reconciledOutputTokens:
-                state.tokenProgress.reconciledOutputTokens + (event.usage.outputTokens ?? 0),
-              liveOutputEstimate: 0,
-              inputExact: true,
-              outputExact: true,
-            },
-          };
+        : { ...state, tokenProgress: reconcileUsage(state.tokenProgress, event.usage) };
     // The one case that DOES belong to the screen after all, corrected from the no-op this used
     // to be: driveLoop no longer computes the merge itself from a session var it closed over once
     // at the start of a turn (a real bug — a mid-run /mode dispatched a fresh `session-updated`
