@@ -1400,7 +1400,6 @@ describe("App", () => {
 
       dispatch({ type: "setup-requested", rows: setupRows() });
       await flush(setup);
-      await flush(setup);
 
       const frame = setup.captureCharFrame();
       expect(frame).toContain("groq");
@@ -1572,7 +1571,6 @@ describe("App", () => {
           error: "Invalid API key",
         },
       });
-      await flush(setup);
       await flush(setup);
 
       const frame = setup.captureCharFrame();
@@ -2118,7 +2116,6 @@ describe("App", () => {
       dispatch({ type: "auth-offer", show: true });
       dispatch({ type: "setup-requested", rows: [] });
       await flush(setup);
-      await flush(setup);
 
       const frame = setup.captureCharFrame();
       expect(frame).toContain("/login");
@@ -2395,7 +2392,6 @@ describe("App", () => {
 
       dispatch({ type: "config-requested", rows: configRows() });
       await flush(setup);
-      await flush(setup);
 
       const frame = setup.captureCharFrame();
       expect(frame).toContain("Automatic verification: on");
@@ -2408,7 +2404,6 @@ describe("App", () => {
       const { setup, dispatch } = await connect();
 
       dispatch({ type: "config-requested", rows: configRows() });
-      await flush(setup);
       await flush(setup);
 
       expect(setup.captureCharFrame()).toContain(
@@ -2535,7 +2530,6 @@ describe("App", () => {
           error: "Invalid value",
         },
       });
-      await flush(setup);
       await flush(setup);
 
       const frame = setup.captureCharFrame();
@@ -2801,7 +2795,6 @@ describe("App", () => {
         })),
       ];
       dispatch({ type: "config-requested", rows });
-      await flush(setup);
       await flush(setup);
 
       const frame = setup.captureCharFrame();
