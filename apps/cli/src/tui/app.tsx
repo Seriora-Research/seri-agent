@@ -15,11 +15,20 @@
 // directly above `TurnStatus`. Everything below the transcript box is a live region: status/spinner,
 // a pending-write placeholder, the mode indicator, and a basic input box, all re-rendered in place.
 //
+// `<scrollbox>` itself is given a MEASURED, definite `height` (below), not `flexGrow`/a percentage:
+// verified live against this file's own test suite that a `<scrollbox>` sized only by `flexGrow`
+// (correct for a plain `<box>`, and what an early draft of this migration used) renders correctly on
+// its own but corrupts sibling rows below it — cells the mode-indicator/panel rows should own end up
+// carrying stray characters from elsewhere, only in the in-memory test renderer. Wrapping it in a
+// plain `<box flexGrow={1}>` and measuring THAT box's own settled height via `onSizeChange` (the
+// exact pattern this component used before the scrollbox migration) sidesteps whatever in
+// `ScrollBoxRenderable`'s own flex-based sizing this trips, by handing it a plain number instead.
+//
 // Renderer lifecycle (mount, unmount, alt-screen entry/exit) is NOT this component's concern —
 // unlike Ink, where `App` itself called `useApp().exit()` on a `done` prop, OpenTUI has no such
 // hook: the three callers above own the `CliRenderer` directly and destroy it themselves once a
 // quit is ready to complete (`getTuiRenderer`/`destroyTuiRenderer`, runtime/renderer.ts).
-import { getTreeSitterClient, type ScrollBoxRenderable } from "@opentui/core";
+import { type BoxRenderable, getTreeSitterClient, type ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
@@ -41,7 +50,13 @@ import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
 import { syntaxStyle } from "./theme/syntaxStyle";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
-import { DEFAULT_COLUMNS, DEFAULT_ROWS, formatModeLabel, type TranscriptEntry } from "./util/format";
+import {
+  DEFAULT_COLUMNS,
+  DEFAULT_ROWS,
+  FALLBACK_CHROME_ROWS,
+  formatModeLabel,
+  type TranscriptEntry,
+} from "./util/format";
 
 export type AppProps = {
   session: SessionState<ModelMessage>;
@@ -185,6 +200,18 @@ export function App({
   const modeLabel = formatModeLabel(state.modeIndicator, state.route, width);
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
+  // The scrollbox's own measured height (this file's own header comment explains why it needs a
+  // definite number, not `flexGrow`) — `hasMeasured` is false only for the frames before OpenTUI's
+  // own layout pass has fired `onSizeChange` at least once on the wrapping box below;
+  // `FALLBACK_CHROME_ROWS` is a placeholder for those frames alone, not a real chrome-height
+  // estimate. `Math.max(1, ...)`: the wrapping box has `minHeight={0}`, so on a short enough
+  // terminal — or one where the sibling rows above/below it already consume the whole budget —
+  // Yoga can genuinely measure it down to 0, which a `<scrollbox height={0}>` would render as
+  // nothing rather than "not enough room."
+  const [measuredRows, setMeasuredRows] = useState(0);
+  const [hasMeasured, setHasMeasured] = useState(false);
+  const transcriptHeight = Math.max(1, hasMeasured ? measuredRows : rows - FALLBACK_CHROME_ROWS);
+
   // Drives the "↑ scrolled — End to follow" banner. Scroll position itself lives on the scrollbox
   // renderable, not on `state` (App.tsx's own header comment) — this mirrors it into React state
   // only at the points it can actually change: an explicit PageUp/PageDown/Home/End keypress
@@ -266,41 +293,59 @@ export function App({
       <AuthBanner
         show={state.authOffer && state.pendingAuth === undefined && !state.pendingSplash}
       />
-      {/* flexGrow/flexShrink/minHeight={0} give the scrollbox whatever height is left over after
-      every sibling below has laid out. Fed the FULL `state.transcript` — no windowed slice — with
-      `stickyScroll`/`stickyStart="bottom"` doing what the old reducer-computed offset used to:
-      follow newly appended content while at the bottom, hold position when scrolled away from it.
-      No mid-generation text is ever rendered here: `state.streaming` still accumulates every
-      `text-delta` for `pushLine`'s next flush (state/reducer.ts), but each finished segment of the
-      answer only appears once `pushLine` commits it as a normal transcript entry. Not given
-      keyboard focus (no `focused` prop) — see the `useKeyboard` handler's own comment above for
-      why. */}
-      <scrollbox ref={transcriptRef} flexGrow={1} flexShrink={1} minHeight={0} stickyScroll stickyStart="bottom">
-        {state.transcript.map((entry, index) => (
-          <TranscriptRow key={index} entry={entry} />
-        ))}
-        {/* Rendered as the scrollbox's own last content child, directly under whatever the
-        transcript currently ends with — `stickyScroll` keeps it in view the same way it keeps
-        any newly appended row in view while following the tail. Keyed on `state.turn.startedAt`,
-        defensively:
-        `runTurn` (cli.ts) has a single `turn-started` dispatch site, reached from two call paths —
-        an interactive submission and a mount-time task/resume start — both input-driven, always
-        separated from the prior turn's `turn-ended` by a user keystroke, so React never has the
-        chance to batch two `turn-started` dispatches into one commit. But IF it ever did — a
-        `turn-ended` and the next `turn-started` landing in the same update — the intermediate "no
-        turn in flight" render (where TurnStatus would otherwise unmount) would never actually
-        commit, and TurnStatus would be REUSED rather than remounted, so its `useState(() =>
-        Date.now())` initializer (TurnStatus's own comment) would not re-run and the second turn
-        would start ticking from the first turn's stale `now`. The key forces a fresh element
-        identity — and so a fresh mount — regardless. */}
-        {state.turn !== undefined && (
-          <TurnStatus
-            key={state.turn.startedAt}
-            startedAt={state.turn.startedAt}
-            tokenProgress={state.turn.tokens}
-          />
-        )}
-      </scrollbox>
+      {/* flexGrow/flexShrink/minHeight={0} give this box whatever height is left over after every
+      sibling below has laid out — `transcriptHeight` (above) reads that back via `onSizeChange` and
+      hands it to the scrollbox as a definite number (this file's own header comment explains why).
+      Fed the FULL `state.transcript` — no windowed slice — with `stickyScroll`/`stickyStart="bottom"`
+      doing what the old reducer-computed offset used to: follow newly appended content while at the
+      bottom, hold position when scrolled away from it. No mid-generation text is ever rendered here:
+      `state.streaming` still accumulates every `text-delta` for `pushLine`'s next flush
+      (state/reducer.ts), but each finished segment of the answer only appears once `pushLine`
+      commits it as a normal transcript entry. The scrollbox itself is not given keyboard focus (no
+      `focused` prop) — see the `useKeyboard` handler's own comment above for why. */}
+      <box
+        flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        minHeight={0}
+        onSizeChange={function onSizeChange(this: BoxRenderable) {
+          setMeasuredRows(this.height);
+          setHasMeasured(true);
+        }}
+      >
+        <scrollbox
+          ref={transcriptRef}
+          height={transcriptHeight}
+          stickyScroll
+          stickyStart="bottom"
+          viewportCulling={false}
+        >
+          {state.transcript.map((entry, index) => (
+            <TranscriptRow key={index} entry={entry} />
+          ))}
+          {/* Rendered as the scrollbox's own last content child, directly under whatever the
+          transcript currently ends with — `stickyScroll` keeps it in view the same way it keeps
+          any newly appended row in view while following the tail. Keyed on `state.turn.startedAt`,
+          defensively:
+          `runTurn` (cli.ts) has a single `turn-started` dispatch site, reached from two call paths —
+          an interactive submission and a mount-time task/resume start — both input-driven, always
+          separated from the prior turn's `turn-ended` by a user keystroke, so React never has the
+          chance to batch two `turn-started` dispatches into one commit. But IF it ever did — a
+          `turn-ended` and the next `turn-started` landing in the same update — the intermediate "no
+          turn in flight" render (where TurnStatus would otherwise unmount) would never actually
+          commit, and TurnStatus would be REUSED rather than remounted, so its `useState(() =>
+          Date.now())` initializer (TurnStatus's own comment) would not re-run and the second turn
+          would start ticking from the first turn's stale `now`. The key forces a fresh element
+          identity — and so a fresh mount — regardless. */}
+          {state.turn !== undefined && (
+            <TurnStatus
+              key={state.turn.startedAt}
+              startedAt={state.turn.startedAt}
+              tokenProgress={state.turn.tokens}
+            />
+          )}
+        </scrollbox>
+      </box>
       {state.pendingTool !== undefined && (
         <box borderStyle="single" borderColor={theme.warning}>
           {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: pendingTool is set
