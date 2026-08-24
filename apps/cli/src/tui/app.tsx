@@ -2,30 +2,28 @@
 // Root TUI component, rendered inside the one `CliRenderer` shared by `routes/setup/
 // welcomeSplash.ts`, `routes/setup/guidedSetup.ts`, and `cli.ts`'s `runTui` (`runtime/renderer.ts`,
 // `screenMode: "alternate-screen"`) — each phase `root.render`s different props into the same
-// instance rather than mounting its own. The transcript is a measured, tail-anchored, scrollable
-// viewport (visibleTranscript, util/format.ts) rather than an append-only region — a
-// terminal-width- and -height-bounded slice of `state.transcript`, following the newest row by
-// default and scrollable with PageUp/PageDown/Home/End. No mid-generation text is ever rendered in
-// that slice: `state.streaming` accumulates every `text-delta` for `pushLine`'s next flush
-// (state/reducer.ts), but is never itself displayed live, character by character — while a turn is
-// active, `TurnStatus` (below) stays pinned at the transcript box's own last row for the whole
-// turn — it never unmounts mid-turn. Each finished segment of the answer (the run of `text-delta`s
-// up to whatever the model does next — a tool call, a tool result, or the turn's own end) commits
-// atomically as a normal transcript entry the moment `pushLine` flushes it, landing in the row
-// directly above `TurnStatus` and pushing whatever was oldest in view off the top. Everything below
-// the transcript box is a live region:
-// status/spinner, a pending-write placeholder, the mode indicator, and a basic input box, all
-// re-rendered in place.
+// instance rather than mounting its own. The transcript is a native `<scrollbox>` fed the FULL,
+// unwindowed `state.transcript` — `stickyScroll`/`stickyStart="bottom"` (below) follow newly
+// appended content while at the bottom, and hold position when scrolled away from it, natively
+// (OpenTUI's own Yoga layout + scroll-anchor logic, not a reducer-computed slice). No mid-generation
+// text is ever rendered in it: `state.streaming` accumulates every `text-delta` for `pushLine`'s
+// next flush (state/reducer.ts), but is never itself displayed live, character by character — while
+// a turn is active, `TurnStatus` (below) stays mounted as the scrollbox's own last content child for
+// the whole turn — it never unmounts mid-turn. Each finished segment of the answer (the run of
+// `text-delta`s up to whatever the model does next — a tool call, a tool result, or the turn's own
+// end) commits atomically as a normal transcript entry the moment `pushLine` flushes it, landing
+// directly above `TurnStatus`. Everything below the transcript box is a live region: status/spinner,
+// a pending-write placeholder, the mode indicator, and a basic input box, all re-rendered in place.
 //
 // Renderer lifecycle (mount, unmount, alt-screen entry/exit) is NOT this component's concern —
 // unlike Ink, where `App` itself called `useApp().exit()` on a `done` prop, OpenTUI has no such
 // hook: the three callers above own the `CliRenderer` directly and destroy it themselves once a
 // quit is ready to complete (`getTuiRenderer`/`destroyTuiRenderer`, runtime/renderer.ts).
-import type { BoxRenderable } from "@opentui/core";
+import { getTreeSitterClient, type ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
@@ -39,22 +37,11 @@ import { ConfigPanel } from "./routes/config/ConfigPanel";
 import { PermissionsPanel } from "./routes/config/PermissionsPanel";
 import { SetupPanel } from "./routes/setup/SetupPanel";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
-import {
-  type Dispatch,
-  initialTuiState,
-  reservedTranscriptRows,
-  tuiReducer,
-} from "./state/reducer";
+import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
+import { syntaxStyle } from "./theme/syntaxStyle";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
-import {
-  DEFAULT_COLUMNS,
-  DEFAULT_ROWS,
-  FALLBACK_CHROME_ROWS,
-  formatModeLabel,
-  transcriptRowsProps,
-  visibleTranscript,
-} from "./util/format";
+import { DEFAULT_COLUMNS, DEFAULT_ROWS, formatModeLabel, type TranscriptEntry } from "./util/format";
 
 export type AppProps = {
   session: SessionState<ModelMessage>;
@@ -147,11 +134,10 @@ export type AppProps = {
 };
 
 // A pty can genuinely report a terminal width as a real but unusable `0` for the first render or
-// two, before its window-size ioctl has actually landed (reproduced live over a real pty in WSL):
-// `state.columns` reaching `wrapForTranscript` as 0 clamps to 1 there — not a crash, but a
-// transcript wrapped to ONE CHARACTER PER ROW, which is worse than the silent corruption that
-// clamp was written to prevent. `|| DEFAULT_COLUMNS`, not `??`: `||` treats `0`
-// the same as `undefined`/`null`, which is exactly the substitution a column count of zero needs —
+// two, before its window-size ioctl has actually landed (reproduced live over a real pty in WSL) —
+// `formatModeLabel` (below) picks its display tier off this width, and a stray `0` would collapse
+// it to the narrowest tier for no real reason. `|| DEFAULT_COLUMNS`, not `??`: `||` treats `0` the
+// same as `undefined`/`null`, which is exactly the substitution a column count of zero needs —
 // there is no real terminal width `0` is ever the correct value for.
 function resolveWidth(columns: number): number {
   return columns || DEFAULT_COLUMNS;
@@ -198,58 +184,18 @@ export function App({
   const rows = resolveHeight(rawRows);
   const modeLabel = formatModeLabel(state.modeIndicator, state.route, width);
 
-  // The transcript viewport's own height comes from flexbox's leftover space (flexGrow, below),
-  // not from how many lines it renders — so measuring it back cannot create a feedback loop where
-  // changing the slice changes the measurement. `hasMeasured` is false only for the frames before
-  // OpenTUI's own layout pass has fired `onSizeChange` at least once; FALLBACK_CHROME_ROWS is a
-  // placeholder for those frames alone, not a real chrome-height estimate. OpenTUI's own
-  // `<scrollbox>` needs no measured-height read for a transcript fed its FULL content, but this
-  // component instead keeps the reducer's existing windowed-slice contract (`transcriptScrollOffset`
-  // et al, state/reducer.ts, unchanged) and uses `onSizeChange` (an event-driven per-renderable
-  // option, not a polling hook) as the direct replacement for Ink's `useBoxMetrics` read.
-  const [measuredRows, setMeasuredRows] = useState(0);
-  const [hasMeasured, setHasMeasured] = useState(false);
-  // `Math.max(1, ...)` on BOTH branches: the measured one had no floor. The
-  // transcript box has `minHeight={0}`, so on a short enough terminal — or one where the sibling
-  // rows above/below it (mode indicator, an open commandError line) already consume the whole
-  // budget — Yoga can genuinely measure it down to 0. `visibleTranscript(transcript, 0,
-  // ...)` then computes `start === end`, an empty slice: the transcript renders as nothing, not as
-  // "not enough room," with no visible sign anything is wrong until the layout recovers.
-  const viewportRows = Math.max(1, hasMeasured ? measuredRows : rows - FALLBACK_CHROME_ROWS);
-  // The one reserved row `TurnStatus` occupies at the bottom of the transcript box while a turn is
-  // active (below) — computed once and reused everywhere below that needs it, rather than
-  // re-derived at each call site.
-  const reserved = reservedTranscriptRows(state.turn);
-  // One line of overlap between pages, same convention a terminal pager's own PageUp/PageDown use.
-  // Derived from the same reserved-row-aware expression as the actual content window
-  // (`visibleTranscript`'s own `rows` argument below), not bare `viewportRows` — otherwise a
-  // PageUp/PageDown press during an active turn would overshoot by exactly the one row `TurnStatus`
-  // occupies, since the content window itself is one row shorter than `viewportRows` then.
-  const pageSize = Math.max(1, viewportRows - reserved - 1);
-
-  // A transcript shorter than the viewport top-anchors instead of tail-anchors: bottom-pinning a
-  // half-empty screen (the default below, `flex-end`) reads as a mostly-blank terminal until the
-  // session grows past `viewportRows`, rather than starting at the top the way a real terminal's
-  // own scrollback does.
-  const contentRows = state.totalVisualRows + reserved;
-  const isShort = contentRows < viewportRows;
-
-  // `columns`/`viewportRows` live on TuiState itself (reducer.ts's own comment on those fields) —
-  // this is the one place that ever measures them, so it's the one place that ever dispatches them
-  // in. Two things ride on this same action: `appendLines` (reducer.ts) needs the current width to
-  // wrap new transcript content to real visual rows, and a resize that GROWS `viewportRows` with no
-  // keypress at all needs `transcriptScrollOffset` re-clamped against the new max (the reducer's own
-  // `viewport-resized` case does both) — useListWindow's own effect handles the identical resize
-  // case for panel lists, just against component state instead of the reducer's.
-  //
-  // Declared before `connectDispatch`'s own effect, not after: on mount, React runs effects in
-  // declaration order within the same commit, and cli.ts's `runTui` dispatches the initial task
-  // echo and any queued startup notices from INSIDE that later effect (connectDispatch's own
-  // callback) — this one has to land first so `state.columns` is already the real measured width
-  // by the time anything gets wrapped, not the placeholder `initialTuiState` seeds it with.
+  const transcriptRef = useRef<ScrollBoxRenderable>(null);
+  // Drives the "↑ scrolled — End to follow" banner. Scroll position itself lives on the scrollbox
+  // renderable, not on `state` (App.tsx's own header comment) — this mirrors it into React state
+  // only at the points it can actually change: an explicit PageUp/PageDown/Home/End keypress
+  // (below), and `/clear` emptying the transcript (nothing left to be scrolled up on). New content
+  // arriving never needs to update this on its own: `stickyScroll` already either follows it (this
+  // was already `false`) or holds position (this was already `true`) natively — see the Risks this
+  // migration's own plan recorded on re-verifying those invariants under the new scrollbox model.
+  const [scrolledUp, setScrolledUp] = useState(false);
   useEffect(() => {
-    dispatch({ type: "viewport-resized", columns: width, viewportRows });
-  }, [width, viewportRows]);
+    if (state.transcript.length === 0) setScrolledUp(false);
+  }, [state.transcript]);
 
   useEffect(() => {
     connectDispatch?.(dispatch);
@@ -278,32 +224,27 @@ export function App({
   // A second, independent useKeyboard from InputBox's own — OpenTUI delivers the same keypress to
   // every registered handler, so this fires regardless of what InputBox does with the same press
   // (today, nothing: InputBox's own handler skips any key.ctrl input). Ctrl-C itself is NOT handled
-  // here — `runtime/renderer.ts`'s own registration owns that, see its comment for why.
+  // here — `runtime/renderer.ts`'s own registration owns that, see its comment for why. Drives the
+  // scrollbox ref directly (`scrollBy`/`unit`, @opentui/core's own `ScrollBoxRenderable`) rather than
+  // dispatching into the reducer: scroll position is the scrollbox's own state now, not derived
+  // state this component recomputes. The scrollbox itself is never given keyboard focus (no
+  // `focused` prop, below), so its own internal `handleKeyPress` (which would otherwise also react
+  // to these same keys) never fires — this is the ONLY place PageUp/PageDown/Home/End are handled.
+  // "viewport"/"content" units and the `-1`/`1` `home`/`end` convention match
+  // `ScrollBarRenderable`'s own internal PageUp/PageDown/Home/End handling one-for-one (verified
+  // against @opentui/core's own compiled source), reused here rather than invented fresh.
   useKeyboard((key) => {
     if (!noPanelOpen) return;
-    if (key.name === "pageup") dispatch({ type: "transcript-scroll", delta: pageSize });
-    if (key.name === "pagedown") dispatch({ type: "transcript-scroll", delta: -pageSize });
-    if (key.name === "home") dispatch({ type: "transcript-scroll-to", to: "top" });
-    if (key.name === "end") dispatch({ type: "transcript-scroll-to", to: "bottom" });
+    const el = transcriptRef.current;
+    if (!el) return;
+    if (key.name === "pageup") el.scrollBy(-1, "viewport");
+    else if (key.name === "pagedown") el.scrollBy(1, "viewport");
+    else if (key.name === "home") el.scrollBy(-1, "content");
+    else if (key.name === "end") el.scrollBy(1, "content");
+    else return;
+    const maxScrollTop = Math.max(0, el.scrollHeight - el.viewport.height);
+    setScrolledUp(el.scrollTop < maxScrollTop);
   });
-
-  // Memoized on its real inputs, not recomputed every render: `state.streaming`/`state.turn.tokens`
-  // change on every `text-delta` (reducer.ts), which re-renders this component without touching
-  // any of `visibleTranscript`'s own inputs — without this, a fast-streaming answer re-walks and
-  // re-wraps the scrolled-to tail slice once per token for the whole turn, for byte-identical output
-  // every time.
-  const rowProps = useMemo(
-    () =>
-      transcriptRowsProps(
-        visibleTranscript(
-          state.transcript,
-          viewportRows - reserved,
-          state.transcriptScrollOffset,
-          state.columns,
-        ),
-      ),
-    [state.transcript, viewportRows, reserved, state.transcriptScrollOffset, state.columns],
-  );
 
   return (
     // No `height - 1` spare-row workaround: that existed only for Ink's own console-patching
@@ -325,41 +266,23 @@ export function App({
       <AuthBanner
         show={state.authOffer && state.pendingAuth === undefined && !state.pendingSplash}
       />
-      {/* flexGrow/flexShrink/minHeight={0} give this box whatever height is left over after
-      every sibling below has laid out — `viewportRows` (above) reads that back via `onSizeChange`,
-      not the other way around, so there is no feedback loop from the slice into the measurement.
-      `visibleTranscript` (util/format.ts) already wraps every entry to `state.columns` and caps the
-      VISUAL row count at `viewportRows`, so `overflow="hidden"`/`justifyContent="flex-end"` are a
-      pure backstop now, not load-bearing truncation — anchoring to the end means a genuine
-      one-frame overshoot falls off the top (oldest), not the bottom (newest).
+      {/* flexGrow/flexShrink/minHeight={0} give the scrollbox whatever height is left over after
+      every sibling below has laid out. Fed the FULL `state.transcript` — no windowed slice — with
+      `stickyScroll`/`stickyStart="bottom"` doing what the old reducer-computed offset used to:
+      follow newly appended content while at the bottom, hold position when scrolled away from it.
       No mid-generation text is ever rendered here: `state.streaming` still accumulates every
       `text-delta` for `pushLine`'s next flush (state/reducer.ts), but each finished segment of the
-      answer only appears once `pushLine` commits it as a normal transcript entry.
-      `viewportRows - reserved` (above) reserves one row for `TurnStatus`'s own line (below) while a
-      turn is active. */}
-      <box
-        flexDirection="column"
-        flexGrow={1}
-        flexShrink={1}
-        minHeight={0}
-        overflow="hidden"
-        justifyContent={isShort ? "flex-start" : "flex-end"}
-        onSizeChange={function onSizeChange(this: BoxRenderable) {
-          setMeasuredRows(this.height);
-          setHasMeasured(true);
-        }}
-      >
-        {rowProps.map(({ text, backgroundColor }, index) => (
-          <text key={index} bg={backgroundColor}>
-            {text}
-          </text>
+      answer only appears once `pushLine` commits it as a normal transcript entry. Not given
+      keyboard focus (no `focused` prop) — see the `useKeyboard` handler's own comment above for
+      why. */}
+      <scrollbox ref={transcriptRef} flexGrow={1} flexShrink={1} minHeight={0} stickyScroll stickyStart="bottom">
+        {state.transcript.map((entry, index) => (
+          <TranscriptRow key={index} entry={entry} />
         ))}
-        {/* Rendered as this box's own last row (`justifyContent="flex-end"` above), directly under
-        whatever `rowProps` currently ends with — the newest committed row when the reader is
-        following the tail (`transcriptScrollOffset === 0`), but any older row once they've
-        scrolled up: `rowProps` (above) is already sliced to the current scroll position before
-        this ever renders, and `TurnStatus` itself carries no scroll awareness of its own. Keyed on
-        `state.turn.startedAt`, defensively:
+        {/* Rendered as the scrollbox's own last content child, directly under whatever the
+        transcript currently ends with — `stickyScroll` keeps it in view the same way it keeps
+        any newly appended row in view while following the tail. Keyed on `state.turn.startedAt`,
+        defensively:
         `runTurn` (cli.ts) has a single `turn-started` dispatch site, reached from two call paths —
         an interactive submission and a mount-time task/resume start — both input-driven, always
         separated from the prior turn's `turn-ended` by a user keystroke, so React never has the
@@ -377,7 +300,7 @@ export function App({
             tokenProgress={state.turn.tokens}
           />
         )}
-      </box>
+      </scrollbox>
       {state.pendingTool !== undefined && (
         <box borderStyle="single" borderColor={theme.warning}>
           {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: pendingTool is set
@@ -391,13 +314,11 @@ export function App({
       <box flexDirection="row" justifyContent="space-between">
         <text>{modeLabel}</text>
         <box flexDirection="row" gap={1}>
-          {/* `noPanelOpen` too, not just the offset: while a panel is open, End
+          {/* `noPanelOpen` too, not just `scrolledUp`: while a panel is open, End
           is swallowed by the exact same gate `noPanelOpen` already puts on the transcript-scroll
           keys above — the banner would otherwise keep telling the user to press a key that does
           nothing until they close the panel first. */}
-          {state.transcriptScrollOffset > 0 && noPanelOpen && (
-            <text fg={theme.muted}>↑ scrolled — End to follow</text>
-          )}
+          {scrolledUp && noPanelOpen && <text fg={theme.muted}>↑ scrolled — End to follow</text>}
           {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
         </box>
       </box>
@@ -466,4 +387,40 @@ export function App({
       )}
     </box>
   );
+}
+
+// One transcript entry's own render, split by role. `role === "assistant"` gets real markdown
+// (bold/headers/lists/links/tables/monochrome-syntax-highlighted code) with the `●` marker kept as
+// a fixed row prefix rather than folded into wrapped text, so it survives a multi-line markdown
+// block as one glyph at the row's own left edge, not repeated or lost mid-wrap. `role === "user"`
+// gets `theme.userBg`'s background band, `alignSelf="flex-start"` so the box shrinks to its own
+// wrapped content's width instead of stretching to the transcript's full width (Yoga's default
+// cross-axis behavior for a column-flex parent's children, which a plain `<text bg=...>` never hit
+// since a text node's own background already stops at its own characters). Everything else (tool
+// calls/results/errors/done markers) stays plain text: none of those are model prose, and a tool
+// result can legitimately contain a literal `*`/`#`/backtick that must render as-is, not get parsed
+// as markdown syntax.
+function TranscriptRow({ entry }: { entry: TranscriptEntry }) {
+  if (entry.role === "assistant") {
+    return (
+      <box flexDirection="row">
+        <text flexShrink={0}>{"● "}</text>
+        <markdown
+          flexGrow={1}
+          content={entry.text}
+          syntaxStyle={syntaxStyle}
+          treeSitterClient={getTreeSitterClient()}
+          streaming={false}
+        />
+      </box>
+    );
+  }
+  if (entry.role === "user") {
+    return (
+      <box bg={theme.userBg} alignSelf="flex-start">
+        <text>{entry.text}</text>
+      </box>
+    );
+  }
+  return <text>{entry.text}</text>;
 }
