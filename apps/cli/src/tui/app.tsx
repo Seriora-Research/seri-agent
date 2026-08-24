@@ -528,9 +528,10 @@ const TranscriptRow = memo(function TranscriptRow({ entry }: { entry: Transcript
   if (entry.role === "assistant") {
     return (
       <box flexDirection="row">
-        <text flexShrink={0}>{"● "}</text>
+        <text fg={theme.text} flexShrink={0}>{"● "}</text>
         <markdown
           flexGrow={1}
+          fg={theme.text}
           content={entry.text}
           syntaxStyle={syntaxStyle}
           treeSitterClient={getTreeSitterClient()}
@@ -542,9 +543,9 @@ const TranscriptRow = memo(function TranscriptRow({ entry }: { entry: Transcript
   if (entry.role === "user") {
     return (
       <box backgroundColor={theme.userBg} alignSelf="flex-start">
-        <text>{entry.text}</text>
+        <text fg={theme.text}>{entry.text}</text>
       </box>
     );
   }
-  return <text>{entry.text}</text>;
+  return <text fg={theme.text}>{entry.text}</text>;
 });

@@ -142,7 +142,7 @@ export function InputBox({
       echoUserInput), so it's visually clear where typed text goes. There is no cursor-position
       tracking here — the keyboard/paste handlers above only append to/delete from the end of
       `value` — so a block cursor always trails the text rather than needing its own coordinate. */}
-      <text>{`> ${value}`}</text>
+      <text fg={theme.text}>{`> ${value}`}</text>
       <text attributes={TextAttributes.INVERSE}> </text>
     </box>
   );
