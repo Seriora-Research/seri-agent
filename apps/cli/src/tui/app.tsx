@@ -235,7 +235,12 @@ export function App({
   // leave TurnStatus none — the row this whole arrangement exists to protect. A `<scrollbox
   // height={0}>` renders as nothing (same as `transcriptHeight`'s own comment notes), which is the
   // correct trade on a terminal this short: TurnStatus visible, transcript not.
-  const scrollboxHeight = Math.max(0, transcriptHeight - (state.turn !== undefined ? 1 : 0));
+  // Named once and reused below (both for this reservation and for TurnStatus's own render gate)
+  // rather than re-reading `state.turn !== undefined` at each call site — a future change to one
+  // (e.g. adding a `noPanelOpen` check) that missed the other would silently desync the reservation
+  // from what actually renders.
+  const { turn } = state;
+  const scrollboxHeight = Math.max(0, transcriptHeight - (turn !== undefined ? 1 : 0));
 
   // Drives the "↑ scrolled — End to follow" banner. Scroll position itself lives on the scrollbox
   // renderable, not on `state` (App.tsx's own header comment) — this mirrors it into React state by
@@ -393,12 +398,8 @@ export function App({
         (TurnStatus's own comment) would not re-run and the second turn would start ticking from the
         first turn's stale `now`. The key forces a fresh element identity — and so a fresh mount —
         regardless. */}
-        {state.turn !== undefined && (
-          <TurnStatus
-            key={state.turn.startedAt}
-            startedAt={state.turn.startedAt}
-            tokenProgress={state.turn.tokens}
-          />
+        {turn !== undefined && (
+          <TurnStatus key={turn.startedAt} startedAt={turn.startedAt} tokenProgress={turn.tokens} />
         )}
       </box>
       {state.pendingTool !== undefined && (
@@ -489,17 +490,6 @@ export function App({
   );
 }
 
-// One transcript entry's own render, split by role. `role === "assistant"` gets real markdown
-// (bold/headers/lists/links/tables/monochrome-syntax-highlighted code) with the `●` marker kept as
-// a fixed row prefix rather than folded into wrapped text, so it survives a multi-line markdown
-// block as one glyph at the row's own left edge, not repeated or lost mid-wrap. `role === "user"`
-// gets `theme.userBg`'s background band, `alignSelf="flex-start"` so the box shrinks to its own
-// wrapped content's width instead of stretching to the transcript's full width (Yoga's default
-// cross-axis behavior for a column-flex parent's children, which a plain `<text bg=...>` never hit
-// since a text node's own background already stops at its own characters). Everything else (tool
-// calls/results/errors/done markers) stays plain text: none of those are model prose, and a tool
-// result can legitimately contain a literal `*`/`#`/backtick that must render as-is, not get parsed
-// as markdown syntax.
 // Its own memoized component, not an inline `.map()` in App's own JSX: `state.transcript`'s
 // reference only changes on an actual append (state/reducer.ts), so `memo` here lets React skip
 // rebuilding and re-diffing the whole elements array on a render triggered by unrelated state (a
@@ -519,6 +509,17 @@ const TranscriptList = memo(function TranscriptList({
   );
 });
 
+// One transcript entry's own render, split by role. `role === "assistant"` gets real markdown
+// (bold/headers/lists/links/tables/monochrome-syntax-highlighted code) with the `●` marker kept as
+// a fixed row prefix rather than folded into wrapped text, so it survives a multi-line markdown
+// block as one glyph at the row's own left edge, not repeated or lost mid-wrap. `role === "user"`
+// gets `theme.userBg`'s background band, `alignSelf="flex-start"` so the box shrinks to its own
+// wrapped content's width instead of stretching to the transcript's full width (Yoga's default
+// cross-axis behavior for a column-flex parent's children, which a plain `<text bg=...>` never hit
+// since a text node's own background already stops at its own characters). Everything else (tool
+// calls/results/errors/done markers) stays plain text: none of those are model prose, and a tool
+// result can legitimately contain a literal `*`/`#`/backtick that must render as-is, not get parsed
+// as markdown syntax.
 // Memoized: `TranscriptList` above re-runs on every actual transcript append, but each entry's own
 // object reference is stable across renders (state/reducer.ts only appends, never replaces existing
 // entries) — so `memo` lets React skip re-invoking this for every already-rendered row (assistant

@@ -77,4 +77,8 @@ export async function flushMarkdown(
     await setup.renderOnce();
     if (isSettled(setup.captureCharFrame())) return;
   }
+  // Fails loudly here rather than letting the caller's own assertion fail against a plausible-but-
+  // unsettled frame — the two look identical to whoever reads the failure, but only one of them
+  // means "the markdown build never finished."
+  throw new Error("flushMarkdown: content never settled within 5000ms");
 }

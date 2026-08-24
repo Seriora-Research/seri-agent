@@ -27,6 +27,15 @@ export const syntaxStyle = SyntaxStyle.fromStyles({
   string: { italic: true },
   function: { underline: true },
   type: { italic: true, underline: true },
+  // Literal-value categories, checked against the bundled javascript/typescript/zig grammars'
+  // own highlights.scm files (`node_modules/@opentui/core/assets/*/highlights.scm`) the same way
+  // as the five scopes above — `constant` (registering the base name alone also covers its own
+  // `constant.builtin` subtype, e.g. JS/TS's `true`/`false`/`null`/`undefined`, per this file's own
+  // one-hop-fallback design for code scopes) and `boolean` (TypeScript/Zig only; JS has no
+  // dedicated boolean scope, its literals fall under `constant.builtin` instead).
+  number: { bold: true, dim: true },
+  constant: { underline: true, dim: true },
+  boolean: { underline: true, dim: true },
   "markup.heading.1": heading,
   "markup.heading.2": heading,
   "markup.heading.3": heading,
@@ -36,6 +45,8 @@ export const syntaxStyle = SyntaxStyle.fromStyles({
   "markup.heading": heading,
   "markup.strong": { bold: true },
   "markup.italic": { italic: true },
+  "markup.strikethrough": { dim: true },
+  "markup.raw": muted,
   "markup.link": link,
   "markup.link.url": link,
   "markup.link.label": link,

@@ -55,6 +55,8 @@ describe("syntaxStyle: markdown prose scopes resolve", () => {
     "markup.link.label",
     "markup.list",
     "markup.quote",
+    "markup.strikethrough",
+    "markup.raw",
   ])("%s resolves to a registered style", (scope) => {
     expect(syntaxStyle.resolveStyleId(scope)).not.toBeNull();
   });
@@ -66,5 +68,25 @@ describe("syntaxStyle: markdown prose scopes resolve", () => {
     expect(heading?.underline).toBe(true);
     expect(strong?.bold).toBe(true);
     expect(strong?.underline).toBeUndefined();
+  });
+});
+
+// The javascript/typescript/zig grammars' own highlights.scm files emit `number`/`constant`/
+// `boolean` with no registered style covering them until this literal-value coverage was added — a
+// plain `<markdown>` code block would otherwise render every number/constant/boolean token
+// completely unstyled, the same as ordinary prose around it.
+describe("syntaxStyle: code literal-value scopes resolve", () => {
+  test.each(["number", "constant", "boolean"])("%s resolves to a registered style", (scope) => {
+    expect(syntaxStyle.resolveStyleId(scope)).not.toBeNull();
+  });
+
+  // `constant.builtin` (JS/TS's `true`/`false`/`null`/`undefined`) is a single-level subtype with
+  // no literal registration of its own — covered only via `getStyleId`'s one-hop fallback to
+  // `constant` (this file's own header comment), NOT via `resolveStyleId`'s exact-match lookup the
+  // tests above use, so this one has to go through the actual fallback method to mean anything.
+  test("constant.builtin falls back to the registered constant style via getStyleId", () => {
+    expect(syntaxStyle.resolveStyleId("constant.builtin")).toBeNull();
+    expect(syntaxStyle.getStyleId("constant.builtin")).not.toBeNull();
+    expect(syntaxStyle.getStyleId("constant.builtin")).toBe(syntaxStyle.resolveStyleId("constant"));
   });
 });

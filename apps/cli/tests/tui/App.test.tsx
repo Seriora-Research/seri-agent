@@ -339,10 +339,11 @@ describe("App", () => {
     expect(highestLineShown(setup.captureCharFrame())).toBeGreaterThan(highestBefore);
   });
 
-  // Regression guard: the deleted reducer's `viewport-resized` case re-clamped the scroll offset on
-  // a SHRINK too, not just a grow — the native scrollbox needs the same coverage in this direction,
-  // since the two flush() passes the `/clear`-while-scrolled-up test above needed show a shrink's
-  // own `layout-changed`/scrollTop-clamp sequence has real settling behavior worth pinning down.
+  // Regression guard: `maxScrollTop = scrollHeight - viewport.height` only ever GROWS on a shrink
+  // (a smaller viewport can't lower how much content is scrollable), so there is no clamp-down case
+  // here the way a grow has (`maxScrollTop` shrinking below the current `scrollTop`, covered above)
+  // — this instead pins the weaker but still real property a shrink needs: the scrolled-to-top view
+  // renders valid, uncorrupted content and the banner stays correct, not a blanked/garbled frame.
   test("a resize that shrinks the terminal while scrolled to the top still shows valid content", async () => {
     const { setup, dispatch } = await connect();
 
@@ -477,7 +478,10 @@ describe("App", () => {
 
     dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
     await flush(setup);
-    await flushMarkdown(setup, (frame) => frame.includes("answer line 4"));
+    await flushMarkdown(
+      setup,
+      (frame) => frame.includes("answer line 0") && frame.includes("answer line 4"),
+    );
     const frame = setup.captureCharFrame();
     expect(frame).toContain("answer line 0");
     expect(frame).toContain("answer line 4");
