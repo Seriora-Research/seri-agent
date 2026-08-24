@@ -1,6 +1,6 @@
+import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, test } from "bun:test";
 import { parseColor } from "@opentui/core";
 import { syntaxStyle } from "../../src/tui/theme/syntaxStyle";
 import { theme } from "../../src/tui/theme/theme";
@@ -101,10 +101,11 @@ describe("syntaxStyle: code literal-value scopes resolve", () => {
 // syntaxStyle.ts are the ones worth visually distinguishing — styling every token defeats the point
 // of highlighting). Each entry is either a bare base scope (covers every `base.*` subtype via the
 // same one-hop fallback `getStyleId` itself uses) or one exact full scope name for a multi-part
-// scope with no useful base. Confirmed against the vendored grammars below: every one of these is
-// currently unresolved, and this test would fail loudly (not silently pass) if a future grammar
-// bump moved one of them under a base that IS registered — this list is an allowlist of gaps, not a
-// duplicate of syntaxStyle.ts's own registrations.
+// scope with no useful base — this list is an allowlist of gaps, not a duplicate of syntaxStyle.ts's
+// own registrations. The coverage test below only fails when a grammar scope resolves to NEITHER a
+// real style NOR this allowlist — a grammar bump that renames one of these entries onto a base that
+// IS registered (e.g. `variable` becoming `constant`) would make that scope pass silently there;
+// "still unresolved" is checked separately, explicitly, right below.
 const DELIBERATELY_UNSTYLED = new Set([
   "variable",
   "operator",
@@ -124,6 +125,18 @@ const DELIBERATELY_UNSTYLED = new Set([
   "import",
   "markup.link.bracket.close",
 ]);
+
+// The allowlist's own converse: every entry above must actually still be unresolved, so a grammar
+// rename that moves one onto a now-registered base (e.g. a future `variable` → `constant`) fails
+// here instead of just silently dropping out of the coverage test below.
+describe("syntaxStyle: deliberately-unstyled allowlist stays accurate", () => {
+  test.each([...DELIBERATELY_UNSTYLED])(
+    "%s is still an unresolved gap, not accidentally covered",
+    (scope) => {
+      expect(syntaxStyle.getStyleId(scope)).toBeNull();
+    },
+  );
+});
 
 // Derived, not hand-maintained: reads every scope the 5 bundled grammars' own `highlights.scm`
 // files actually emit (the same files syntaxStyle.ts's own header comment cites) and asserts each
