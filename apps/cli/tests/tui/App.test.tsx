@@ -558,6 +558,31 @@ describe("App", () => {
       expect(setup.captureCharFrame()).toContain("↑ scrolled");
     });
 
+    // Invariant: /clear while scrolled up drops the "↑ scrolled" banner instead of leaving it
+    // stuck on an empty transcript — the one scenario `scrolledUp`'s own transcript-length effect
+    // (app.tsx) exists for.
+    test("transcript-cleared while scrolled up drops the scrolled-up banner", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+
+      dispatch({ type: "transcript-cleared" });
+      // Two passes, not one: the shrink's own "layout-changed" fires with a stale scrollTop before
+      // the scrollbox's internal clamp catches up, so the first pass's `sync` (app.tsx) can compute
+      // a spurious `scrolledUp: true` from mismatched old/new dimensions — the second pass's
+      // `layout-changed`, firing once Yoga has fully settled, corrects it.
+      await flush(setup);
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+    });
+
     // Invariant: a mid-turn flush (a tool-call/tool-result/etc, not a bare
     // transcript-append) must not move a scrolled-up reader's view.
     test("a mid-turn flush does not move a scrolled-up reader's view", async () => {
@@ -583,9 +608,9 @@ describe("App", () => {
     });
 
     // Invariant: starting a turn does not itself move a scrolled-up reader's view (the old
-    // reducer's own +1 nudge for TurnStatus's reserved row no longer exists — TurnStatus is just
-    // the scrollbox's own last child now, kept in view by the same sticky behavior as everything
-    // else).
+    // reducer's own +1 nudge for TurnStatus's reserved row no longer exists — TurnStatus renders as
+    // a fixed sibling below the scrollbox now, with the scrollbox giving up one row of height for
+    // it, so a scrolled-up view is untouched by a turn starting).
     test("turn-started does not move a scrolled-up reader's view", async () => {
       const { setup, dispatch } = await connect();
 
@@ -657,10 +682,9 @@ describe("App", () => {
       expect(setup.captureCharFrame()).toContain("↑ scrolled");
     });
 
-    // TurnStatus (the scrollbox's own last content child while a turn is active) stays visible as
-    // more committed content arrives below it, the same follow-tail guarantee ordinary transcript
-    // rows get.
-    test("TurnStatus stays visible as the scrollbox's last child while committed content keeps arriving", async () => {
+    // TurnStatus (a fixed sibling row below the scrollbox while a turn is active) stays visible as
+    // more committed content arrives, because the scrollbox gives up one row of height for it.
+    test("TurnStatus stays visible below the scrollbox while committed content keeps arriving", async () => {
       const { setup, dispatch } = await connect();
 
       for (let i = 0; i < 50; i++) {
@@ -694,6 +718,19 @@ describe("App", () => {
       setup.mockInput.pressKey(HOME);
       await flush(setup);
       expect(setup.captureCharFrame()).toContain("line 0");
+
+      expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
+    });
+
+    // Regression: `scrollboxHeight` used to floor at 1, not 0 — on a terminal short enough that
+    // `transcriptHeight` itself is already the 1-row floor, that claimed the one row TurnStatus
+    // needs for the scrollbox instead, clipping TurnStatus to nothing during an active turn.
+    test("TurnStatus stays visible during an active turn even on a terminal too short for the transcript too", async () => {
+      const { setup, dispatch } = await connect();
+      await resize(setup, DEFAULT_WIDTH, 5);
+
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
 
       expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
     });

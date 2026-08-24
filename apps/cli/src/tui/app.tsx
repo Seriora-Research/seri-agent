@@ -47,7 +47,7 @@ import { type BoxRenderable, getTreeSitterClient, type ScrollBoxRenderable } fro
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { memo, useEffect, useReducer, useRef, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
@@ -229,8 +229,12 @@ export function App({
   // TurnStatus (below) renders as its own fixed row OUTSIDE the scrollbox, not as one of its
   // scrollable children, so it stays visible regardless of scroll position (this file's own header
   // comment explains why) — the scrollbox itself only gets the wrapping box's remaining height once
-  // that one row is set aside for it.
-  const scrollboxHeight = Math.max(1, transcriptHeight - (state.turn !== undefined ? 1 : 0));
+  // that one row is set aside for it. Floored at 0, not 1: `transcriptHeight` can itself already be
+  // the 1-row floor above, and flooring THIS at 1 too would claim that one row for the scrollbox and
+  // leave TurnStatus none — the row this whole arrangement exists to protect. A `<scrollbox
+  // height={0}>` renders as nothing (same as `transcriptHeight`'s own comment notes), which is the
+  // correct trade on a terminal this short: TurnStatus visible, transcript not.
+  const scrollboxHeight = Math.max(0, transcriptHeight - (state.turn !== undefined ? 1 : 0));
 
   // Drives the "↑ scrolled — End to follow" banner. Scroll position itself lives on the scrollbox
   // renderable, not on `state` (App.tsx's own header comment) — this mirrors it into React state by
@@ -248,7 +252,12 @@ export function App({
   // though `scrolledUp` must still flip to `false` once the viewport genuinely grows past the
   // content. New content arriving never needs to update this on its own: `stickyScroll` already
   // either follows it (this was already `false`) or holds position (this was already `true`)
-  // natively.
+  // natively. `/clear` (`transcript-cleared`) needs no special case either, for the same reason as
+  // a resize: shrinking the content is itself a Yoga layout change, so `layout-changed` fires and
+  // `sync` recomputes `maxScrollTop` down to 0 (or below the now-shorter `scrollTop`) on its own —
+  // confirmed empirically, not just by this reasoning (an earlier draft special-cased
+  // `state.transcript.length === 0` directly; removing it and re-running the `/clear`-while-
+  // scrolled-up regression below showed the plain `layout-changed` listener already covers it).
   const [scrolledUp, setScrolledUp] = useState(false);
   const renderer = useRenderer();
   useEffect(() => {
@@ -265,9 +274,6 @@ export function App({
       renderer.root.off("layout-changed", sync);
     };
   }, [renderer]);
-  useEffect(() => {
-    if (state.transcript.length === 0) setScrolledUp(false);
-  }, [state.transcript]);
 
   useEffect(() => {
     connectDispatch?.(dispatch);
@@ -492,7 +498,12 @@ export function App({
 // calls/results/errors/done markers) stays plain text: none of those are model prose, and a tool
 // result can legitimately contain a literal `*`/`#`/backtick that must render as-is, not get parsed
 // as markdown syntax.
-function TranscriptRow({ entry }: { entry: TranscriptEntry }) {
+// Memoized: `state.transcript.map` above re-runs on every App render (every `text-delta` during
+// an active turn re-renders App via `state.turn.tokens`), but each entry's own object reference
+// is stable across renders (state/reducer.ts only appends, never replaces existing entries) — so
+// `memo` lets React skip re-invoking this for every already-rendered row (assistant rows re-parse
+// and re-highlight markdown, the expensive case) and only render newly appended ones.
+const TranscriptRow = memo(function TranscriptRow({ entry }: { entry: TranscriptEntry }) {
   if (entry.role === "assistant") {
     return (
       <box flexDirection="row">
@@ -515,4 +526,4 @@ function TranscriptRow({ entry }: { entry: TranscriptEntry }) {
     );
   }
   return <text>{entry.text}</text>;
-}
+});
