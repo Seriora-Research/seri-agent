@@ -11,6 +11,10 @@
 // fixed, deliberately neutral value, but worth knowing if a future token ever expected to inherit
 // the terminal's own palette.
 export const theme = {
+  // An explicit off-white hex, not the ANSI-16 "white" `error`/`warning` use: pure white reads as
+  // eye-straining on most dark terminal themes for a color this large a share of the screen (the
+  // transcript's own prose), so ordinary text gets a softer off-white instead.
+  text: "#d4d4d4",
   error: "white",
   warning: "white",
   muted: "gray",
