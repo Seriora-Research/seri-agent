@@ -302,9 +302,14 @@ export function App({
   // state this component recomputes. The scrollbox itself is never given keyboard focus (no
   // `focused` prop, below), so its own internal `handleKeyPress` (which would otherwise also react
   // to these same keys) never fires — this is the ONLY place PageUp/PageDown/Home/End are handled.
-  // "viewport"/"content" units and the `-1`/`1` `home`/`end` convention match
-  // `ScrollBarRenderable`'s own internal PageUp/PageDown/Home/End handling one-for-one (verified
-  // against @opentui/core's own compiled source), reused here rather than invented fresh.
+  // Home/End's `scrollBy(∓1, "content")` matches `ScrollBarRenderable`'s own internal Home/End
+  // handling one-for-one (verified against @opentui/core's own compiled source). PageUp/PageDown's
+  // `scrollBy(∓1, "viewport")` deliberately does NOT match that same internal handling, which pages
+  // by half a viewport per press (`scrollBy(∓0.5, "viewport")`) — a full-viewport jump is the
+  // simpler of the two `scrollBy` unit multiples already available on this same API, chosen over
+  // reproducing the pre-migration reducer's own one-row-overlap pager convention
+  // (`viewportRows - reserved - 1`), which no longer has a `viewportRows`/`reserved` pair to compute
+  // it from now that scroll position lives on the scrollbox itself.
   useKeyboard((key) => {
     if (!noPanelOpen) return;
     const el = transcriptRef.current;
