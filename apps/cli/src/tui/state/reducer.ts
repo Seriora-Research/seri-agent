@@ -9,12 +9,10 @@ import type { LoopEvent } from "../../loop/loop";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
 import {
-  DEFAULT_COLUMNS,
   estimateTokens,
   type TokenProgress,
   type TranscriptEntry,
   type TranscriptRole,
-  transcriptVisualRows,
 } from "../util/format";
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
 
@@ -64,39 +62,13 @@ export type PermissionsPanelState =
 export type TuiState = {
   session: SessionState<ModelMessage>;
   // Append-only committed LOGICAL lines — one entry per `transcript-append`/pushLine call, never
-  // re-split or re-joined here. Rendered by App.tsx as a scrollable viewport (visibleTranscript,
-  // format.ts), which wraps each entry to `columns` VISUAL rows on read, not on write: a hard-wrap
-  // break is indistinguishable from a real `\n` once written, so storing the wrapped output would
-  // make a resize lossy (the old width's wrapping can never be un-done to re-wrap at the new one).
-  // Keeping this array untouched is what makes a resize a free re-derivation instead of a rewrite.
+  // re-split or re-joined here. Rendered by App.tsx inside a native `<scrollbox>`, fed this array in
+  // full — OpenTUI's own Yoga layout handles wrapping/scrolling, so there is no wrapped-row cache to
+  // keep in sync with it here.
   // Each entry carries a `role` ("user"/"assistant"/"system") alongside its logical text — used at
-  // render time to top-anchor a short transcript, band a user turn's rows with a background color,
-  // and prefix an assistant answer with its own marker (App.tsx), without changing what gets stored.
+  // render time to band a user turn's rows with a background color and render an assistant answer
+  // as markdown (App.tsx), without changing what gets stored.
   transcript: TranscriptEntry[];
-  // VISUAL rows from the BOTTOM of the (wrapped) transcript the viewport is scrolled up by. 0 =
-  // following the latest row (the default, and the state End returns to). Advanced by pushLine
-  // while > 0, by however many visual rows a flush actually added — see `appendLines`' own
-  // comment — so a scrolled-up view stays anchored on the same content as new rows arrive, rather
-  // than sliding out from under the reader mid-read.
-  transcriptScrollOffset: number;
-  // The terminal's own current width and the transcript viewport's own current height, in rows —
-  // kept on state (not threaded through every `transcript-scroll` action the way `viewportRows`
-  // used to be) so the scroll clamp and a resize both read the same two numbers from one place
-  // instead of re-deriving them at every call site. Seeded from `DEFAULT_COLUMNS`/a small
-  // placeholder here — App.tsx's own resize effect corrects both to the real measured values
-  // before the first real transcript content is ever appended (see that effect's own comment for
-  // why the ordering is guaranteed, not assumed).
-  columns: number;
-  viewportRows: number;
-  // `transcriptVisualRows(transcript, columns)` (format.ts), cached rather than recomputed by every
-  // scroll/resize case below (found by review): that function re-wraps the ENTIRE transcript, and
-  // PageUp/PageDown auto-repeat at the OS key-repeat rate, so recomputing it per dispatch meant
-  // holding either key re-wrapped the whole session's history on every repeat tick. Kept correct by
-  // construction, not by re-deriving: `appendLines` advances it by the NEW lines' own row count
-  // (cheap, proportional to what was just added) and `viewport-resized` is the only case that ever
-  // recomputes it from scratch, and only when `columns` actually changed — the one time the cached
-  // value can no longer be trusted, since every existing entry re-wraps to a different row count.
-  totalVisualRows: number;
   // The model's in-progress answer, not yet committed to the transcript and never itself rendered
   // (app.tsx's own header comment) — flushed into `transcript` the moment a non-text event needs
   // to report.
@@ -185,7 +157,7 @@ function modeIndicator(mode: PermissionMode): string {
   return `[${mode}]`;
 }
 
-// What "an empty transcript" means, as a single value rather than four fields independently kept
+// What "an empty transcript" means, as a single value rather than fields independently kept
 // in sync at two call sites (initialTuiState below, and the `transcript-cleared` case's own
 // comment on why every one of them must move together): a future field added to this set only
 // needs updating here once. `Readonly<Pick<TuiState, ...>>` (rather than a cast) means a field
@@ -194,16 +166,12 @@ function modeIndicator(mode: PermissionMode): string {
 // instance, so an in-place mutation of one state's `transcript` (nothing does this today, but
 // nothing stops it either) would otherwise corrupt every other state — including a concurrent test
 // — that spread from this same constant.
-const EMPTY_TRANSCRIPT: Readonly<
-  Pick<TuiState, "transcript" | "transcriptScrollOffset" | "totalVisualRows" | "streaming">
-> = Object.freeze({
+const EMPTY_TRANSCRIPT: Readonly<Pick<TuiState, "transcript" | "streaming">> = Object.freeze({
   // `as TranscriptEntry[]`: TuiState.transcript is declared mutable (App.tsx replaces it wholesale
   // rather than pushing in place), and TS's array variance treats `readonly T[]` and `T[]` as
   // genuinely different types — frozen at runtime regardless of this cast, which only restores the
   // static type this field is spread into everywhere else.
   transcript: Object.freeze([] as TranscriptEntry[]) as TranscriptEntry[],
-  transcriptScrollOffset: 0,
-  totalVisualRows: 0,
   streaming: "",
 });
 
@@ -215,10 +183,6 @@ export function initialTuiState(
     session,
     route: opts?.route,
     ...EMPTY_TRANSCRIPT,
-    columns: DEFAULT_COLUMNS,
-    // Not a real chrome-height estimate, same spirit as App.tsx's own FALLBACK_CHROME_ROWS
-    // placeholder — corrected by the first `viewport-resized` dispatch before it can matter.
-    viewportRows: 1,
     status: "",
     turn: undefined,
     modeIndicator: modeIndicator(session.permissionMode),
@@ -243,25 +207,9 @@ export type TuiAction =
   // pushLine's own comment).
   | { type: "transcript-append"; line: string; role?: TranscriptRole; flush?: boolean }
   // /clear's own action. The only action that ever SHRINKS the transcript, rather than adding to
-  // it — every derived counter (`transcriptScrollOffset`, `totalVisualRows`, `streaming`) must be
-  // reset alongside `transcript` itself, or a stale one would keep describing an array that no
-  // longer exists.
+  // it — `streaming` must be reset alongside `transcript` itself, or a stale in-progress answer
+  // would keep describing content that no longer exists.
   | { type: "transcript-cleared" }
-  // Scrolls the transcript viewport. Positive `delta` moves toward older rows, clamped to
-  // `[0, transcriptVisualRows(transcript, columns) - viewportRows]` — the offset at which
-  // visibleTranscript shows a full `viewportRows`-tall page of the oldest content, not just the
-  // single oldest row (`totalRows - 1` would slice down to one row pinned to the bottom by
-  // `justifyContent="flex-end"`, App.tsx).
-  | { type: "transcript-scroll"; delta: number }
-  | { type: "transcript-scroll-to"; to: "top" | "bottom" }
-  // Dispatched by App.tsx's own resize effect whenever the measured terminal width or transcript
-  // viewport height changes (mount included — see that effect's own comment). One action for both
-  // numbers, not two, since a real terminal resize changes both at once and a caller that dispatched
-  // them separately could transiently wrap new content to a stale width while the height was
-  // already current, or vice versa. Also re-clamps `transcriptScrollOffset` against the new
-  // `viewportRows`, which is what closes the "grow the terminal while scrolled up" bug this action
-  // replaced a zero-delta `transcript-scroll` workaround for.
-  | { type: "viewport-resized"; columns: number; viewportRows: number }
   | { type: "loop-event"; event: LoopEvent }
   | { type: "command-error"; message: string }
   | { type: "command-error-cleared" }
@@ -377,51 +325,6 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         ...state,
         ...EMPTY_TRANSCRIPT,
       };
-    case "transcript-scroll": {
-      const max = maxScrollOffset(
-        state.totalVisualRows,
-        reservedTranscriptRows(state.turn),
-        state.viewportRows,
-      );
-      const next = Math.min(max, Math.max(0, state.transcriptScrollOffset + action.delta));
-      return { ...state, transcriptScrollOffset: next };
-    }
-    case "transcript-scroll-to": {
-      return {
-        ...state,
-        transcriptScrollOffset:
-          action.to === "top"
-            ? maxScrollOffset(
-                state.totalVisualRows,
-                reservedTranscriptRows(state.turn),
-                state.viewportRows,
-              )
-            : 0,
-      };
-    }
-    case "viewport-resized": {
-      // Only a genuine `columns` change invalidates the cache: every existing entry re-wraps to a
-      // different row count then, and that's the one time re-deriving it from scratch is correct
-      // AND unavoidable — `viewportRows` alone changing (the far more common case, since it tracks
-      // measured box height and can jitter by a row across renders) never changes how many VISUAL
-      // rows the transcript occupies, only how many of them fit on screen at once.
-      const totalVisualRows =
-        action.columns === state.columns
-          ? state.totalVisualRows
-          : transcriptVisualRows(state.transcript, action.columns);
-      const max = maxScrollOffset(
-        totalVisualRows,
-        reservedTranscriptRows(state.turn),
-        action.viewportRows,
-      );
-      return {
-        ...state,
-        columns: action.columns,
-        viewportRows: action.viewportRows,
-        totalVisualRows,
-        transcriptScrollOffset: Math.min(max, state.transcriptScrollOffset),
-      };
-    }
     case "loop-event":
       return applyLoopEvent(state, action.event);
     case "command-error":
@@ -524,21 +427,9 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return { ...state, pendingSplash: false };
     case "route-updated":
       return { ...state, route: action.route };
-    // Nudges `transcriptScrollOffset` by 1 when scrolled up: starting a turn reserves
-    // `TurnStatus`'s own row, shrinking the content window by 1 the same way a real appended line
-    // would (`appendLines`'s own comment) — without this, a reader parked above the latest content
-    // would see their top visible row silently shift down by one, with no scroll action of their
-    // own to explain it. Guarded on `state.turn === undefined`, matching this reducer's own posture
-    // elsewhere on out-of-order events (`text-delta`/`usage`'s own comments): a `turn-started` while
-    // a turn is already active would otherwise double-nudge the offset for a reservation that never
-    // actually changed.
     case "turn-started":
       return {
         ...state,
-        transcriptScrollOffset:
-          state.turn === undefined && state.transcriptScrollOffset > 0
-            ? state.transcriptScrollOffset + 1
-            : state.transcriptScrollOffset,
         turn: {
           startedAt: action.startedAt,
           tokens: {
@@ -552,43 +443,9 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           },
         },
       };
-    // Releases `TurnStatus`'s own reserved row by subtracting it back out, the mirror image of
-    // `turn-started`'s own `+1` nudge above — without this, a scrolled-up reader's offset stays
-    // inflated by the row the turn reserved, and the visible window silently gains an extra row at
-    // the top with no scroll action of the reader's own. `Math.max(0, ...)`, not a ceiling re-clamp:
-    // `offset <= oldMax` already holds (every other case maintains it), and `newMax === oldMax - 1`,
-    // so `offset - 1 <= newMax` always — a `maxScrollOffset` re-clamp here would be provably dead.
-    // Guarded on `state.turn !== undefined`, matching `turn-started`'s own posture: a duplicate
-    // `turn-ended` with no turn to end reserved no row to release, and would otherwise decrement a
-    // valid offset for a reservation that was never there.
     case "turn-ended":
-      return {
-        ...state,
-        turn: undefined,
-        transcriptScrollOffset:
-          state.turn === undefined
-            ? state.transcriptScrollOffset
-            : Math.max(0, state.transcriptScrollOffset - 1),
-      };
+      return { ...state, turn: undefined };
   }
-}
-
-// `TurnStatus` occupies exactly one row of the transcript box for the whole turn (App.tsx's own
-// comment on its render location), not a count that grows with `state.streaming` — the single
-// definition every `maxScrollOffset`/window-height call site below shares, rather than each
-// re-deriving its own `turn !== undefined ? 1 : 0`.
-export function reservedTranscriptRows(turn: TuiState["turn"]): number {
-  return turn !== undefined ? 1 : 0;
-}
-
-// The furthest `transcriptScrollOffset` can go: every visual row that exists, committed plus
-// `TurnStatus`'s own reserved row, minus the ones already on screen.
-function maxScrollOffset(
-  totalVisualRows: number,
-  reservedRows: number,
-  viewportRows: number,
-): number {
-  return Math.max(0, totalVisualRows + reservedRows - viewportRows);
 }
 
 // Commits any pending streamed text as its own transcript line before appending `line`, so a
@@ -598,8 +455,8 @@ function maxScrollOffset(
 // later, whole, by whatever event finishes the turn) and not cleared either (clearing it would
 // silently drop the model's in-progress text instead of just deferring its commit).
 // A blank `{role: "system", text: ""}` separator is inserted immediately before `line` when it is
-// a new user turn (`role === "user"`) following existing content — `wrapForTranscript` (format.ts)
-// already guarantees `""` survives as exactly one row, so this needs no new row-accounting path.
+// a new user turn (`role === "user"`) following existing content, so a user message reads as its
+// own visually distinct block rather than running straight into whatever came before it.
 function pushLine(
   state: TuiState,
   line: string,
@@ -612,40 +469,15 @@ function pushLine(
   // user turn.
   const separator: TranscriptEntry[] =
     role === "user" && state.transcript.length > 0 ? [{ role: "system", text: "" }] : [];
-  if (!flush) return appendLines(state, [...separator, { role, text: line }]);
+  if (!flush) {
+    return { ...state, transcript: [...state.transcript, ...separator, { role, text: line }] };
+  }
   const flushedStreaming: TranscriptEntry[] =
     state.streaming.length > 0 ? [{ role: "assistant", text: state.streaming }] : [];
-  const appended = [...flushedStreaming, ...separator, { role, text: line }];
-  return { ...appendLines(state, appended), streaming: "" };
-}
-
-// Appends one or more LOGICAL lines, untouched — no wrapping here; see TuiState.transcript's own
-// comment for why the entries themselves must stay whatever was passed in. `addedRows` (the VISUAL
-// row count the new lines add at the current `columns`, not `rawLines.length`) does two things:
-// advances `totalVisualRows` (the cache `transcript-scroll`'s own clamp trusts — see that field's
-// own comment) unconditionally, since it must stay correct regardless of scroll position; and, only
-// while the viewport is scrolled up (`transcriptScrollOffset > 0`), advances the offset by the FULL
-// `addedRows`, with no subtraction, so a scrolled-up view stays anchored on the same content as new
-// rows arrive, rather than sliding out from under the reader mid-read.
-//
-// No subtraction for `TurnStatus`'s own reserved row: that row does NOT convert into committed
-// content the way the old (pre-buffer-then-reveal) streamed-text rows this function used to
-// subtract did — a mid-turn flush (`pushLine`, from a tool-call/tool-result/permission-denied/
-// tool-allowed/retry/compacted event) commits real new rows while `state.turn` stays defined, so
-// `TurnStatus`'s reserved row is UNCHANGED by this call, still sitting exactly where it was.
-// Subtracting anything here (verified live: reverting this function's offset advance to subtract
-// the reserved row, then re-running this file's own flush-anchoring test) drifted a scrolled-up
-// reader's view by 1 row on every mid-turn flush instead of leaving it anchored. Only
-// `"turn-ended"` (above) changes the reserved row, and it re-clamps the offset directly rather
-// than through this function, since ending a turn commits no new lines at all.
-function appendLines(state: TuiState, rawLines: TranscriptEntry[]): TuiState {
-  const addedRows = transcriptVisualRows(rawLines, state.columns);
   return {
     ...state,
-    transcript: [...state.transcript, ...rawLines],
-    totalVisualRows: state.totalVisualRows + addedRows,
-    transcriptScrollOffset:
-      state.transcriptScrollOffset > 0 ? state.transcriptScrollOffset + addedRows : 0,
+    transcript: [...state.transcript, ...flushedStreaming, ...separator, { role, text: line }],
+    streaming: "",
   };
 }
 

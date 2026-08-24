@@ -2,12 +2,9 @@
 // terminal" property reducer.ts already has.
 
 import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@seri/model-catalog";
-import stringWidth from "string-width";
-import wrapAnsi from "wrap-ansi";
 import { escapeControlChars } from "../../cli/output";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "../state/commands";
-import { theme } from "../theme/theme";
 
 // Shared by every list panel (ModelPicker, ConfigPanel, PermissionsPanel, SetupPanel) via
 // useListWindow.ts — the most any of their windows ever shows at once, regardless of how many
@@ -51,127 +48,14 @@ export const PANEL_CHROME_ROWS = 9;
 // own height live instead of reserving for it unconditionally.
 export const APP_CHROME_ROWS = 5;
 
-// The transcript viewport's placeholder height for the one frame before `onSizeChange` has ever
-// measured the live region below it (App.tsx) — not the real budget, just enough that the first
-// frame renders a plausible slice of the transcript instead of an empty one.
+// Rows reserved from the terminal height for everything OTHER than the transcript scrollbox
+// (app.tsx: `rows - FALLBACK_CHROME_ROWS`), for the one frame before `onSizeChange` has ever
+// measured the scrollbox's own wrapping box — not a real chrome-row count, just enough that the
+// first frame renders a plausible transcript height instead of a 0-height scrollbox.
 export const FALLBACK_CHROME_ROWS = 6;
-
-// Hard-wraps `text` to `columns` VISUAL rows, ANSI-aware (a bash/git tool result can carry real
-// color codes, and wrap-ansi tracks them across the break rather than losing the reset). `hard:
-// true` force-breaks a single word/token longer than `columns` (an unbroken path or URL) instead of
-// overflowing it. `trim: false` keeps leading whitespace exactly as written: tool output routinely
-// carries meaningful indentation (a diff, a code snippet), and wrap-ansi's own default trims it.
-// `Math.max(1, columns)`: a genuinely zero-width terminal (a resize race, an odd PTY state — real,
-// not hypothetical: `stdout.columns` can report 0 for a real pty's first render or two) would
-// otherwise hand wrap-ansi a 0 budget, which it accepts silently and degrades to one character per
-// row rather than throwing — a defensive floor here regardless of what upstream substitution
-// `resolveWidth` (App.tsx) already applies. Always returns at least one entry, even for `""`, so
-// an intentional blank separator line survives as one.
-//
-// This is called from `transcript`'s OWN read path (visibleTranscript/transcriptVisualRows, below)
-// and the transcript never stores its own wrapped output — deliberately: a hard-wrap break is
-// indistinguishable from a real `\n` once written, so a version that wrapped at write time could
-// never correctly re-wrap on a resize (there is no way to un-wrap what was already split). Deriving
-// from the untouched logical lines on every read is what makes a resize free instead of lossy.
-export function wrapForTranscript(text: string, columns: number): string[] {
-  return wrapAnsi(text, Math.max(1, columns), { hard: true, trim: false }).split("\n");
-}
 
 export type TranscriptRole = "user" | "assistant" | "system";
 export type TranscriptEntry = { role: TranscriptRole; text: string };
-// One wrapped/visual line of a TranscriptEntry — same shape today, kept as its own name since a
-// logical entry and its visual rows are conceptually distinct (one entry wraps to N rows).
-export type VisibleRow = TranscriptEntry;
-
-// The string an entry actually wraps/renders as — assistant entries get the `●` marker prefixed
-// here, at read time, rather than stored in the entry's own `text`. `transcriptVisualRows` and
-// `visibleTranscript` both funnel through this one helper so they can never disagree on how many
-// visual rows an assistant entry occupies (a divergence there would drift the scroll-offset math).
-function displayText(entry: TranscriptEntry): string {
-  return entry.role === "assistant" ? `● ${entry.text}` : entry.text;
-}
-
-// The total number of VISUAL rows `entries` (logical, unwrapped) occupies at `columns` wide — what
-// the scroll clamp (reducer.ts's `transcript-scroll`/`transcript-scroll-to`/`viewport-resized`
-// cases) needs to know the real maximum offset. O(transcript length): fine on a keypress/resize
-// (the only callers), not fine per-render, which is exactly why `visibleTranscript` below does NOT
-// call this — it only ever wraps the tail slice it actually needs.
-export function transcriptVisualRows(entries: TranscriptEntry[], columns: number): number {
-  let total = 0;
-  for (const entry of entries) total += wrapForTranscript(displayText(entry), columns).length;
-  return total;
-}
-
-// The visible slice of a committed transcript for a viewport `rows` tall, `offset` VISUAL rows up
-// from the newest (0 = following the latest line). Tail-anchored, not head-anchored: a transcript
-// longer than the viewport keeps showing its NEWEST rows by default, the same thing the terminal
-// itself would show if these lines had just scrolled by normally.
-//
-// Walks `entries` from the newest entry backward, wrapping each one, stopping as soon as
-// `offset + rows` visual rows have accumulated (or the transcript runs out) — bounded by how deep
-// the reader has scrolled, not by total session length, so this stays cheap on every call for a
-// long-running session (app.tsx's own `useMemo` around this call already skips re-invoking it for
-// every `text-delta` — see that call site's own comment) instead of re-wrapping the whole history
-// every frame. NOTE: at the deepest possible scroll (Home, offset ===
-// totalVisualRows - viewportRows) this bound degrades to the full transcript, same as the O(n)
-// clamp — unavoidable without caching wrapped output, which is the one thing this file's own
-// `wrapForTranscript` comment explains storing at write time can never safely do.
-//
-// Collected newest-line-first via `push` (O(1) amortized), each line's OWN rows kept in their
-// normal top-to-bottom order — `.reverse()` at the end restores overall chronological order in one
-// O(collected lines) pass. `unshift(...wrapped)` in this same loop was O(current
-// tail length) per call, making the accumulation up to O(scroll-depth²): cheap while scrolled near
-// the bottom, but the exact case a reader scrolled deep into a long session (or a fast streamed
-// answer on a tall terminal) would actually hit every render.
-export function visibleTranscript(
-  entries: TranscriptEntry[],
-  rows: number,
-  offset: number,
-  columns: number,
-): VisibleRow[] {
-  const collected: VisibleRow[][] = [];
-  let collectedRows = 0;
-  for (let i = entries.length - 1; i >= 0 && collectedRows < offset + rows; i--) {
-    const entry = entries[i];
-    const wrapped = wrapForTranscript(displayText(entry), columns).map((text) => ({
-      role: entry.role,
-      text,
-    }));
-    collected.push(wrapped);
-    collectedRows += wrapped.length;
-  }
-  const tail = collected.reverse().flat();
-  const end = Math.max(0, tail.length - offset);
-  const start = Math.max(0, end - rows);
-  return tail.slice(start, end);
-}
-
-// Every visible row's own render props for App.tsx's transcript viewport — factored out as a pure
-// function, same reason `displayText` above is: a per-row `backgroundColor` is otherwise only
-// checkable by rendering the whole tree, so a test can pin the actual prop this returns instead.
-//
-// The user-message band's own width is the widest currently visible role:"user" row (`stringWidth`,
-// not `padEnd`: a CJK/wide-char row is fewer UTF-16 units than terminal cells, so `padEnd` would
-// underpad it past the band's own edge). Every row `visibleTranscript` (above) returns is already
-// wrapped to the terminal width, so this function only measures and pads relative to what's already
-// there — it never needs to know the terminal width itself. A uniform band across all visible user
-// rows (rather than padding each row to only its own width) is what makes it read as one band
-// instead of a ragged per-message highlight — a deliberate design choice (docs/TUI-DESIGN.md's own
-// note on `theme.userBg` as a confirmed, deliberate second use of background color), not a leftover
-// of this being computed once for the whole array.
-export function transcriptRowsProps(
-  visibleRows: VisibleRow[],
-): { text: string; backgroundColor: string | undefined }[] {
-  const bandWidth = visibleRows.reduce(
-    (widest, row) => (row.role === "user" ? Math.max(widest, stringWidth(row.text)) : widest),
-    0,
-  );
-  return visibleRows.map((row) => {
-    if (row.role !== "user") return { text: row.text, backgroundColor: undefined };
-    const padding = " ".repeat(Math.max(0, bandWidth - stringWidth(row.text)));
-    return { text: row.text + padding, backgroundColor: theme.userBg };
-  });
-}
 
 // For a list-panel row rendered with `wrap="truncate-end"` (ConfigPanel, SetupPanel): that prop
 // only guards a value wider than the panel — it does nothing for a literal newline, which Ink still

@@ -1,16 +1,16 @@
 /** @jsxImportSource @opentui/react */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { TextAttributes } from "@opentui/core";
+import { RGBA, TextAttributes } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ReactElement, ReactNode } from "react";
-import stringWidth from "string-width";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import { App, type AppProps } from "../../src/tui/app";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";
 import type { Dispatch } from "../../src/tui/state/reducer";
+import { theme } from "../../src/tui/theme/theme";
 import { ListRow } from "../../src/tui/ui/ListRow";
 import {
   formatContextWindow,
@@ -23,12 +23,8 @@ import {
   matchesFilter,
   singleLine,
   slideWindow,
-  type TranscriptEntry,
-  transcriptRowsProps,
-  type VisibleRow,
-  visibleTranscript,
 } from "../../src/tui/util/format";
-import { flush, route, session } from "./helpers";
+import { flush, flushMarkdown, route, session } from "./helpers";
 
 // Wide enough that every "full width" formatModeLabel tier (>=76 cols) is exercised by default,
 // tall enough (>=24 rows) that every panel's own list window sits at LIST_WINDOW_MAX (10) without
@@ -178,6 +174,59 @@ describe("App", () => {
     expect(setup.captureCharFrame()).toContain("Session s1: permission mode is now auto");
   });
 
+  // TranscriptRow's own user-role band: theme.userBg's background color, shrunk to the message's
+  // own content width (`alignSelf="flex-start"`) rather than stretched across the transcript's full
+  // width.
+  test("a user-message entry gets theme.userBg's background band, shrunk to its own content width", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({ type: "transcript-append", line: "hi", role: "user" });
+    await flush(setup);
+
+    const frame = setup.captureSpans();
+    const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("hi")));
+    expect(line).toBeDefined();
+    const span = line?.spans.find((s) => s.text.includes("hi"));
+    expect(span?.bg.equals(RGBA.fromHex(theme.userBg))).toBe(true);
+    expect(span?.width).toBeLessThan(DEFAULT_WIDTH);
+  });
+
+  // Regression guard: the deleted `transcriptRowsProps` (format.ts) explicitly measured this band's
+  // width in a wide-character-aware way — an ASCII-only test can't tell a correct measurement from
+  // one that silently counts wide characters as 1 cell each, so this pins the same band assertion
+  // against 4 CJK characters, each 2 display cells wide (8 total, not 4).
+  test("a user-message entry with CJK content gets a band sized to its own display width, not char count", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({ type: "transcript-append", line: "你好世界", role: "user" });
+    await flush(setup);
+
+    const frame = setup.captureSpans();
+    const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("你")));
+    const span = line?.spans.find((s) => s.text.includes("你"));
+    expect(span?.bg.equals(RGBA.fromHex(theme.userBg))).toBe(true);
+    expect(span?.width).toBe(8);
+  });
+
+  // Regression guard: `pushLine`'s own blank `{role: "system", text: ""}` separator (reducer.ts)
+  // between turns depended, pre-migration, on `wrapForTranscript` guaranteeing an empty string
+  // survives as exactly one visual row — that guarantee has no reducer-side equivalent anymore, it's
+  // entirely on `<text>` collapsing an empty string to one row rather than zero height. Two known
+  // one-line entries with exactly one row between them pins that this still holds.
+  test("the blank separator between turns still renders as its own row, not collapsed to nothing", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({ type: "transcript-append", line: "first turn", role: "user" });
+    await flush(setup);
+    dispatch({ type: "transcript-append", line: "second turn", role: "user" });
+    await flush(setup);
+
+    const lines = setup.captureCharFrame().split("\n");
+    const firstIndex = lines.findIndex((l) => l.includes("first turn"));
+    const secondIndex = lines.findIndex((l) => l.includes("second turn"));
+    expect(secondIndex).toBe(firstIndex + 2);
+  });
+
   // Tail-anchored, not head-anchored — 300 lines is comfortably more than the fixed test viewport's
   // row count, so the viewport MUST be showing a slice, and that slice must be the newest end.
   test("a transcript longer than the viewport shows the newest line and hides the oldest, with InputBox still visible", async () => {
@@ -216,6 +265,51 @@ describe("App", () => {
     frame = setup.captureCharFrame();
     expect(frame).not.toContain("↑ scrolled");
     expect(frame).toContain("line 299");
+  });
+
+  // Regression guard: the scrollbox's own mouse-wheel handling moves its real scroll position
+  // independently of the keyboard handler that used to be the only place `scrolledUp` was set, so a
+  // wheel-up scroll used to move the viewport away from the tail with no banner ever appearing to
+  // explain why.
+  test("scrolling up with the mouse wheel shows the scrolled indicator", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush(setup);
+    expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+
+    for (let i = 0; i < 10; i++) {
+      await setup.mockMouse.scroll(5, 5, "up");
+    }
+    await flush(setup);
+
+    expect(setup.captureCharFrame()).toContain("↑ scrolled — End to follow");
+  });
+
+  // Regression guard: a resize that grows the viewport enough for all content to fit re-engages
+  // `stickyStart="bottom"` (ScrollBoxRenderable's own `recalculateBarProps`) with no keypress of the
+  // user's own — the banner has to clear from that same real scroll-position change, not just from
+  // an explicit Home/End/PageUp/PageDown press.
+  test("growing the terminal enough for all content to fit clears a stale scrolled indicator", async () => {
+    const { setup, dispatch } = await connect();
+    await resize(setup, DEFAULT_WIDTH, 10);
+
+    for (let i = 0; i < 20; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush(setup);
+
+    setup.mockInput.pressKey(HOME);
+    await flush(setup);
+    expect(setup.captureCharFrame()).toContain("↑ scrolled");
+
+    await resize(setup, DEFAULT_WIDTH, 60);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).not.toContain("↑ scrolled");
+    expect(frame).toContain("line 19");
   });
 
   // Regression guard: PageUp/PageDown/Home/End used to fire regardless of which render-ternary
@@ -268,6 +362,7 @@ describe("App", () => {
     for (let i = 0; i < 300; i++) {
       dispatch({ type: "transcript-append", line: `line ${i}` });
     }
+    await flush(setup);
     setup.mockInput.pressKey(HOME);
     await flush(setup);
 
@@ -278,6 +373,30 @@ describe("App", () => {
     await resize(setup, DEFAULT_WIDTH, 40);
 
     expect(highestLineShown(setup.captureCharFrame())).toBeGreaterThan(highestBefore);
+  });
+
+  // Regression guard: `maxScrollTop = scrollHeight - viewport.height` only ever GROWS on a shrink
+  // (a smaller viewport can't lower how much content is scrollable), so there is no clamp-down case
+  // here the way a grow has (`maxScrollTop` shrinking below the current `scrollTop`, covered above)
+  // — this instead pins the weaker but still real property a shrink needs: the scrolled-to-top view
+  // renders valid, uncorrupted content and the banner stays correct, not a blanked/garbled frame.
+  test("a resize that shrinks the terminal while scrolled to the top still shows valid content", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush(setup);
+    setup.mockInput.pressKey(HOME);
+    await flush(setup);
+    expect(setup.captureCharFrame()).toContain("line 0");
+
+    await resize(setup, DEFAULT_WIDTH, 10);
+    await flush(setup);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("line 0");
+    expect(frame).toContain("↑ scrolled");
   });
 
   // Regression guard (found by review): before `visibleTranscript`/the scroll clamp derived visual
@@ -395,6 +514,10 @@ describe("App", () => {
 
     dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
     await flush(setup);
+    await flushMarkdown(
+      setup,
+      (frame) => frame.includes("answer line 0") && frame.includes("answer line 4"),
+    );
     const frame = setup.captureCharFrame();
     expect(frame).toContain("answer line 0");
     expect(frame).toContain("answer line 4");
@@ -414,8 +537,10 @@ describe("App", () => {
     }
     dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
     await flush(setup);
+    const full = chunks.join("");
+    await flushMarkdown(setup, (frame) => frame.includes(full));
 
-    expect(setup.captureCharFrame()).toContain(chunks.join(""));
+    expect(setup.captureCharFrame()).toContain(full);
   });
 
   // Acceptance criterion: `TurnStatus` is mounted inside the transcript box (after the committed
@@ -441,9 +566,319 @@ describe("App", () => {
     expect(lines[modeLabelIndex]).not.toContain(" in, ");
   });
 
-  // A transcript shorter than the viewport top-anchors (`justifyContent: "flex-start"`) instead of
-  // bottom-padding a mostly-empty screen — the appended content must land near the very top of the
-  // frame, not down near InputBox.
+  // Scroll-anchor coverage for the native `<scrollbox>` `stickyScroll`/`stickyStart="bottom"` (no
+  // reducer-computed `transcriptScrollOffset` behind it anymore). Five invariants below, re-verified
+  // directly against the scrollbox's own behavior since none of them are guarded by reducer state
+  // anymore (the mechanisms that used to enforce them — `transcriptScrollOffset`,
+  // `reservedTranscriptRows`'s own +1/-1 nudge — no longer exist; the native scrollbox owns
+  // scroll-anchor behavior entirely on its own now).
+  //
+  // Negative control, verified once rather than per-test: removing `stickyScroll
+  // stickyStart="bottom"` from app.tsx's `<scrollbox>` fails the two tests below that assert
+  // "follows the newest line" (the follow-tail half of the guarantee) — confirming those two
+  // actually exercise the native sticky behavior rather than passing vacuously. The "holds position
+  // once scrolled up" tests pass either way: with no reducer-side nudge math left to remove (the
+  // OLD design's own `turn-started`/`turn-ended` offset adjustments no longer exist at all), there
+  // is nothing left in this codebase that COULD move a scrolled-up view out from under a reader —
+  // these pin that absence directly rather than needing a contrived way to reintroduce it.
+  describe("scrollbox stickyScroll invariants", () => {
+    test("stays on the newest line while new content keeps arriving at the bottom", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 49");
+
+      for (let i = 50; i < 60; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 59");
+      expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+    });
+
+    // Regression guard: `scrollboxHeight` shrinks by one row the same render TurnStatus mounts
+    // (app.tsx) — a reader following the live tail when a turn starts must still see the newest
+    // line, not have it pushed out of view for a frame by that same-render height change.
+    test("starting a turn while following the tail keeps the newest line visible", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 49");
+
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 49");
+      expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+    });
+
+    test("holds position once scrolled up, even as new content keeps arriving", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 0");
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+
+      for (let i = 50; i < 60; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 0");
+      expect(setup.captureCharFrame()).not.toContain("line 59");
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+    });
+
+    // Invariant: /clear while scrolled up drops the "↑ scrolled" banner instead of leaving it
+    // stuck on an empty transcript — app.tsx's own `scrolledUp` sync settles this through the same
+    // `layout-changed` listener a resize uses, no transcript-length special case needed.
+    test("transcript-cleared while scrolled up drops the scrolled-up banner", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+
+      dispatch({ type: "transcript-cleared" });
+      // Two passes, not one: the shrink's own "layout-changed" fires with a stale scrollTop before
+      // the scrollbox's internal clamp catches up, so the first pass's `sync` (app.tsx) can compute
+      // a spurious `scrolledUp: true` from mismatched old/new dimensions — the second pass's
+      // `layout-changed`, firing once Yoga has fully settled, corrects it.
+      await flush(setup);
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+    });
+
+    // Invariant: a mid-turn flush (a tool-call/tool-result/etc, not a bare
+    // transcript-append) must not move a scrolled-up reader's view.
+    test("a mid-turn flush does not move a scrolled-up reader's view", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 0");
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
+      });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 0");
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+    });
+
+    // Invariant: starting a turn does not itself move a scrolled-up reader's view (the old
+    // reducer's own +1 nudge for TurnStatus's reserved row no longer exists — TurnStatus renders as
+    // a fixed sibling below the scrollbox now, with the scrollbox giving up one row of height for
+    // it, so a scrolled-up view is untouched by a turn starting).
+    test("turn-started does not move a scrolled-up reader's view", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 0");
+
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 0");
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+    });
+
+    // Invariant: ending a turn does not move a scrolled-up reader's view either (the
+    // mirror-image -1 release no longer exists for the same reason).
+    test("turn-ended does not move a scrolled-up reader's view", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 0");
+
+      dispatch({ type: "turn-ended" });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 0");
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+    });
+
+    // Invariant: a resize while scrolled up reveals more of the transcript instead of a
+    // static slice — covered directly by "a resize while scrolled to the top reveals more of the
+    // transcript, not a static slice" above; not duplicated here.
+
+    // Invariant: duplicate/out-of-order turn-lifecycle dispatches (a bare turn-ended with
+    // no turn ever started, or two turn-started in a row) cannot corrupt the view — there is no
+    // scroll-related reducer state left for them to corrupt at all (reducer.test.ts's own former "a
+    // duplicate turn-ended with no active turn leaves a valid offset untouched" test covered the
+    // OLD reducer's equivalent state; this pins the render-visible behavior on the new model
+    // instead, since there is no analogous reducer field left to assert on).
+    test("duplicate/out-of-order turn-lifecycle dispatches do not move a scrolled-up reader's view", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 0");
+
+      // A duplicate turn-ended with no turn ever started.
+      dispatch({ type: "turn-ended" });
+      // Two turn-started in a row with no turn-ended between them.
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 0");
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+    });
+
+    // TurnStatus (a fixed sibling row below the scrollbox while a turn is active) stays visible as
+    // more committed content arrives, because the scrollbox gives up one row of height for it.
+    test("TurnStatus stays visible below the scrollbox while committed content keeps arriving", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
+      });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
+    });
+
+    // Acceptance criterion: TurnStatus stays visually pinned to the transcript's last line while a
+    // turn is active, regardless of scroll position — the reader can be looking at the oldest line
+    // in the transcript and still see the running turn's own elapsed-time/token indicator.
+    test("TurnStatus stays visible while scrolled away from the tail during an active turn", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 0");
+
+      expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
+    });
+
+    // Regression: `scrollboxHeight` used to floor at 1, not 0 — on a terminal short enough that
+    // `transcriptHeight` itself is already the 1-row floor, that claimed the one row TurnStatus
+    // needs for the scrollbox instead, clipping TurnStatus to nothing during an active turn.
+    test("TurnStatus stays visible during an active turn even on a terminal too short for the transcript too", async () => {
+      const { setup, dispatch } = await connect();
+      await resize(setup, DEFAULT_WIDTH, 5);
+
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
+    });
+  });
+
+  // An assistant entry with every markdown feature TranscriptRow supports actually renders as
+  // styled/structured output via <markdown>, not raw markdown syntax as text.
+  test("an assistant entry with bold/header/list/link/fenced-code/table renders via <markdown>, not raw syntax", async () => {
+    const { setup, dispatch } = await connect();
+
+    const answer = [
+      "# Heading",
+      "",
+      "**bold text** and a [link](https://example.com)",
+      "",
+      "- item one",
+      "- item two",
+      "",
+      "```js",
+      "const x = 1;",
+      "```",
+      "",
+      "| a | b |",
+      "| - | - |",
+      "| cellx | celly |",
+    ].join("\n");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    // Every block's own prose, not just the last one dispatched: `<markdown>`'s content tree does
+    // NOT settle top-to-bottom — probed directly, the table (the last block in source order) can
+    // render before the heading (the first) does, so polling on any single block risks reading a
+    // still-partially-built frame as done.
+    await flushMarkdown(
+      setup,
+      (frame) =>
+        frame.includes("Heading") &&
+        frame.includes("bold text") &&
+        frame.includes("item one") &&
+        frame.includes("celly"),
+    );
+
+    const frame = setup.captureCharFrame();
+    // The raw markdown syntax markers themselves are gone — conceal (MarkdownOptions' own default)
+    // strips them once parsed, unlike a plain <text> (the old rendering path), which would show
+    // them verbatim.
+    expect(frame).not.toContain("# Heading");
+    expect(frame).not.toContain("**bold text**");
+    expect(frame).not.toContain("[link](https://example.com)");
+    expect(frame).not.toContain("```");
+    // The actual prose content still renders.
+    expect(frame).toContain("Heading");
+    expect(frame).toContain("bold text");
+    expect(frame).toContain("link");
+    expect(frame).toContain("item one");
+    expect(frame).toContain("item two");
+    expect(frame).toContain("const x = 1;");
+    expect(frame).toContain("cellx");
+    expect(frame).toContain("celly");
+  });
+
+  // A transcript shorter than the viewport renders from the top of the scrollbox's own content
+  // flow (a column-direction box's children always stack top-down, with no bottom-anchoring prop
+  // needed) instead of bottom-padding a mostly-empty screen — the appended content must land near
+  // the very top of the frame, not down near InputBox.
   test("a short transcript top-anchors: content appears near the top of the frame, not bottom-padded", async () => {
     const { setup, dispatch } = await connect();
 
@@ -457,71 +892,17 @@ describe("App", () => {
   });
 
   // A committed assistant answer's own first visual row is prefixed with the `●` marker
-  // (format.ts's own displayText) — applied at render/wrap time, never stored on the entry itself.
+  // (TranscriptRow, app.tsx) — applied at render time, never stored on the entry itself.
   test("a committed assistant answer's frame line starts with the ● marker", async () => {
     const { setup, dispatch } = await connect();
 
     dispatch({ type: "loop-event", event: { type: "text-delta", text: "the answer" } });
     dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
     await flush(setup);
+    await flushMarkdown(setup, (frame) => frame.includes("the answer"));
 
     const lines = setup.captureCharFrame().split("\n");
     expect(lines.some((line) => line.trimStart().startsWith("● the answer"))).toBe(true);
-  });
-
-  // The user-message background band is a per-row `bg`, not a bordered box — invisible to
-  // `captureCharFrame()`, which returns plain characters with no color/attribute info (same
-  // limitation the old ink-testing-library harness's `lastFrame()` had). Pinning
-  // `transcriptRowsProps` (util/format.ts) directly, the same fix applied there.
-  describe("transcriptRowsProps", () => {
-    test('every visible role: "user" row is padded to the widest visible role: "user" row\'s width, and carries theme.userBg', () => {
-      const rows: VisibleRow[] = [
-        { role: "user", text: "> hi" },
-        { role: "user", text: "> a much longer message" },
-      ];
-      const widest = stringWidth("> a much longer message");
-      expect(transcriptRowsProps(rows)).toEqual([
-        { text: `> hi${" ".repeat(widest - stringWidth("> hi"))}`, backgroundColor: "#333333" },
-        { text: "> a much longer message", backgroundColor: "#333333" },
-      ]);
-    });
-
-    // The non-user row's own text is deliberately longer than either user row: the band width must
-    // stay derived from the widest role:"user" row alone, not widen to match a longer non-user row —
-    // pins the `row.role === "user"` filter in the band-width reduce itself, not just the padding.
-    test('role: "system"/"assistant" rows pass through untouched, with no padding and no background', () => {
-      const rows: VisibleRow[] = [
-        { role: "user", text: "> hi" },
-        { role: "system", text: "a much longer system row than either user row" },
-        { role: "assistant", text: "● hi" },
-        { role: "user", text: "> a bit longer message" },
-      ];
-      const widestUser = stringWidth("> a bit longer message");
-      const result = transcriptRowsProps(rows);
-      expect(result[0]).toEqual({
-        text: `> hi${" ".repeat(widestUser - stringWidth("> hi"))}`,
-        backgroundColor: "#333333",
-      });
-      expect(result[1]).toEqual({
-        text: "a much longer system row than either user row",
-        backgroundColor: undefined,
-      });
-      expect(result[2]).toEqual({ text: "● hi", backgroundColor: undefined });
-    });
-
-    // "> 你好" is 4 UTF-16 units but 6 terminal cells (each CJK char is 2 cells wide) — `padEnd`
-    // would overpad it past the band's own edge. Pad by display width so a wide-char row still
-    // lands on exactly the band width in cells.
-    test('a role: "user" row with wide (CJK) characters pads to the band width in cells, not UTF-16 units', () => {
-      const rows: VisibleRow[] = [
-        { role: "user", text: "> 你好" },
-        { role: "user", text: "> hi there" },
-      ];
-      expect(transcriptRowsProps(rows)).toEqual([
-        { text: "> 你好    ", backgroundColor: "#333333" },
-        { text: "> hi there", backgroundColor: "#333333" },
-      ]);
-    });
   });
 
   test("a tool-call loop-event sets the running status, and tool-result clears it", async () => {
@@ -1021,6 +1402,13 @@ describe("App", () => {
     // original window; this checks BOTH halves: the list actually scrolls (the 16th entry, id
     // "model-15", becomes visible; the 1st, "model-0", scrolls out), AND the row Enter resolves is
     // the one actually highlighted.
+    //
+    // Also a regression guard on the transcript's own wrapping box (app.tsx's own header comment on
+    // `flexBasis={0}`/`overflow="hidden"`): with neither of those, this box's own share of the
+    // column stayed hostage to the transcript scrollbox's stale, previously-measured height instead
+    // of shrinking for a same-frame sibling like ModelPicker, so ANY panel mounted alongside the
+    // transcript rendered with stray characters from the transcript's own last render bleeding into
+    // its rows — this scenario included, even though it never touches the transcript itself.
     test("Down past the visible window scrolls the list, and Enter selects the highlighted row", async () => {
       const selected: Array<{ model: string; provider: ModelProvider; keyConfigured: boolean }> =
         [];
@@ -1684,80 +2072,6 @@ describe("App", () => {
       expect(formatModeLabel("[approve-each]", reroutedAndGateway, 100)).toBe(
         "[approve-each]  claude-sonnet-5 · → openrouter",
       );
-    });
-  });
-
-  describe("visibleTranscript", () => {
-    // Every case below stays role: "system" throughout — same string, same columns → same row
-    // count as before the role tag existed, the "identical to a plain string" half of this file's
-    // own contract (see the role-specific cases at the end of this block for the other half).
-    const asEntries = (lines: string[]): TranscriptEntry[] =>
-      lines.map((text) => ({ role: "system", text }));
-    const asRows = (lines: string[]): VisibleRow[] =>
-      lines.map((text) => ({ role: "system", text }));
-
-    test("a transcript shorter than the viewport is shown in full", () => {
-      expect(visibleTranscript(asEntries(["a", "b", "c"]), 5, 0, 80)).toEqual(
-        asRows(["a", "b", "c"]),
-      );
-    });
-
-    // tail-anchored, not head-anchored — a transcript longer than the viewport shows its NEWEST
-    // lines by default, matching what scrolled-by terminal output would already show.
-    test("a transcript longer than the viewport shows the newest lines, not the oldest", () => {
-      expect(visibleTranscript(asEntries(["a", "b", "c", "d", "e"]), 3, 0, 80)).toEqual(
-        asRows(["c", "d", "e"]),
-      );
-    });
-
-    test("a positive offset slides the window toward older lines", () => {
-      expect(visibleTranscript(asEntries(["a", "b", "c", "d", "e"]), 3, 1, 80)).toEqual(
-        asRows(["b", "c", "d"]),
-      );
-    });
-
-    test("an offset large enough to reach the start still returns at most `rows` lines", () => {
-      expect(visibleTranscript(asEntries(["a", "b", "c"]), 5, 10, 80)).toEqual([]);
-    });
-
-    // Regression guard: a logical entry longer than `columns` used to count as exactly one row no
-    // matter how many rows it actually rendered — the "one entry, many rows" bug this file exists
-    // to close. A single 25-word-boundary-free entry, wrapped at 10 columns, must occupy exactly
-    // as many array slots as it needs, and the tail-walk must still respect `rows`.
-    test("a single entry longer than `columns` counts as multiple visual rows, not one", () => {
-      const long = "a".repeat(25); // 25 chars, no spaces — forces `hard: true` breaking
-      expect(visibleTranscript(asEntries([long]), 3, 0, 10)).toEqual(
-        asRows(["aaaaaaaaaa", "aaaaaaaaaa", "aaaaa"]),
-      );
-      // Scrolled up by exactly one visual row: the newest row drops off the bottom.
-      expect(visibleTranscript(asEntries([long]), 3, 1, 10)).toEqual(
-        asRows(["aaaaaaaaaa", "aaaaaaaaaa"]),
-      );
-    });
-
-    // A resize changes `columns` with no change to the logical `lines` array at all — this is only
-    // meaningful because the transcript stores logical lines, not pre-wrapped rows (reducer.ts's own
-    // comment on `TuiState.transcript`): the same entries must re-wrap differently at a new width,
-    // proving nothing was destroyed by the earlier (narrower) width's own wrapping.
-    test("the same transcript re-wraps differently when `columns` changes, nothing is lost", () => {
-      const long = "a".repeat(25);
-      expect(visibleTranscript(asEntries([long]), 10, 0, 10)).toHaveLength(3);
-      expect(visibleTranscript(asEntries([long]), 10, 0, 25)).toHaveLength(1);
-      expect(visibleTranscript(asEntries([long]), 10, 0, 5)).toHaveLength(5);
-    });
-
-    // An assistant entry's row count reflects its own "●" marker (format.ts's own displayText) —
-    // a string that exactly fits `columns` for a system/user entry can spill into an extra wrapped
-    // row for an assistant one, since the marker adds two characters before wrapping ever happens.
-    test("an assistant entry's `●` marker can push a boundary-length string into an extra row", () => {
-      const exact = "a".repeat(10); // exactly `columns` wide before any marker is added
-      expect(visibleTranscript([{ role: "system", text: exact }], 3, 0, 10)).toEqual([
-        { role: "system", text: exact },
-      ]);
-      expect(visibleTranscript([{ role: "assistant", text: exact }], 3, 0, 10)).toEqual([
-        { role: "assistant", text: "● " },
-        { role: "assistant", text: "aaaaaaaaaa" },
-      ]);
     });
   });
 
@@ -2516,6 +2830,11 @@ describe("App", () => {
     // every render, but `offset` previously only changed via an explicit arrow press
     // (handleArrowKey) — a terminal resize that shrinks windowSize could leave the currently
     // selected row outside [offset, offset + windowSize) with no keypress to trigger a recompute.
+    //
+    // Also a regression guard on the transcript's own wrapping box (app.tsx's own header comment on
+    // `flexBasis={0}`/`overflow="hidden"`): without `flexBasis={0}`, this box's own height stayed
+    // hostage to the transcript scrollbox's previously-measured size across a resize too, not just a
+    // panel mount, so it never converged to the smaller share this 3-row config window needs.
     test("a windowSize shrink after a selection move keeps the selected row in view without a keypress", async () => {
       const { setup, dispatch } = await connect();
 

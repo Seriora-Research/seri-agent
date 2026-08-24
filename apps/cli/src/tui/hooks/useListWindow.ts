@@ -1,9 +1,9 @@
 // Shared list-window state for every panel that renders a scrollable row list (ModelPicker,
 // ConfigPanel, PermissionsPanel, SetupPanel) — owns the row array, the selection index, and the
 // window offset slid by `slideWindow`'s own clamp-don't-re-center rule as the selection moves.
-// Component-local, not reducer state: these lists are transient and panel-scoped, and (unlike the
-// transcript's scroll offset) no external event stream mutates them — the same distinction
-// reducer.ts's own TuiState.transcriptScrollOffset comment draws.
+// Component-local, not reducer state: these lists are transient and panel-scoped, with nothing
+// external ever mutating them — only this hook's own keypress handling and the panel's own
+// row-list changes move the selection or window offset.
 
 import type { KeyEvent } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/react";

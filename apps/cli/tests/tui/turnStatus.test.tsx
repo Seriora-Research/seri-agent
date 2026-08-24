@@ -82,10 +82,9 @@ describe("TurnStatus", () => {
     expect(setup.captureCharFrame()).toContain("~0 in, ~5 out");
   });
 
-  // Regression: app.tsx's `reservedTranscriptRows` reserves exactly one row for this component in
-  // a fixed-height, `overflow="hidden"` box — the same one-row budget `truncate`/`wrapMode="none"`
-  // already protect in `ErrorLine.tsx`/`ListRow.tsx`. Without both, a long elapsed+token string on
-  // a narrow terminal soft-wraps onto a second row instead of clipping to the first.
+  // `truncate`/`wrapMode="none"` (TurnStatus.tsx's own comment: app.tsx reserves exactly one row
+  // for this component) keep a long elapsed+token string on one row instead of soft-wrapping
+  // onto a second, the same fix `ErrorLine.tsx`/`ListRow.tsx` already apply to their own rows.
   test("truncates to one row instead of soft-wrapping onto a second row on a narrow terminal", async () => {
     const setup = await createTestRenderer({ width: 10, height: 5 });
     mountedRenderers.push(setup);
