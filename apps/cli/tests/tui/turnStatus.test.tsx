@@ -82,8 +82,8 @@ describe("TurnStatus", () => {
     expect(setup.captureCharFrame()).toContain("~0 in, ~5 out");
   });
 
-  // `truncate`/`wrapMode="none"` (TurnStatus.tsx's own comment: a single-line display choice, not
-  // a reserved-row budget) keep a long elapsed+token string on one row instead of soft-wrapping
+  // `truncate`/`wrapMode="none"` (TurnStatus.tsx's own comment: app.tsx reserves exactly one row
+  // for this component) keep a long elapsed+token string on one row instead of soft-wrapping
   // onto a second, the same fix `ErrorLine.tsx`/`ListRow.tsx` already apply to their own rows.
   test("truncates to one row instead of soft-wrapping onto a second row on a narrow terminal", async () => {
     const setup = await createTestRenderer({ width: 10, height: 5 });
