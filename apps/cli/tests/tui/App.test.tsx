@@ -191,6 +191,42 @@ describe("App", () => {
     expect(span?.width).toBeLessThan(DEFAULT_WIDTH);
   });
 
+  // Regression guard: the deleted `transcriptRowsProps` (format.ts) explicitly measured this band's
+  // width in a wide-character-aware way — an ASCII-only test can't tell a correct measurement from
+  // one that silently counts wide characters as 1 cell each, so this pins the same band assertion
+  // against 4 CJK characters, each 2 display cells wide (8 total, not 4).
+  test("a user-message entry with CJK content gets a band sized to its own display width, not char count", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({ type: "transcript-append", line: "你好世界", role: "user" });
+    await flush(setup);
+
+    const frame = setup.captureSpans();
+    const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("你")));
+    const span = line?.spans.find((s) => s.text.includes("你"));
+    expect(span?.bg.equals(RGBA.fromHex(theme.userBg))).toBe(true);
+    expect(span?.width).toBe(8);
+  });
+
+  // Regression guard: `pushLine`'s own blank `{role: "system", text: ""}` separator (reducer.ts)
+  // between turns depended, pre-migration, on `wrapForTranscript` guaranteeing an empty string
+  // survives as exactly one visual row — that guarantee has no reducer-side equivalent anymore, it's
+  // entirely on `<text>` collapsing an empty string to one row rather than zero height. Two known
+  // one-line entries with exactly one row between them pins that this still holds.
+  test("the blank separator between turns still renders as its own row, not collapsed to nothing", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({ type: "transcript-append", line: "first turn", role: "user" });
+    await flush(setup);
+    dispatch({ type: "transcript-append", line: "second turn", role: "user" });
+    await flush(setup);
+
+    const lines = setup.captureCharFrame().split("\n");
+    const firstIndex = lines.findIndex((l) => l.includes("first turn"));
+    const secondIndex = lines.findIndex((l) => l.includes("second turn"));
+    expect(secondIndex).toBe(firstIndex + 2);
+  });
+
   // Tail-anchored, not head-anchored — 300 lines is comfortably more than the fixed test viewport's
   // row count, so the viewport MUST be showing a slice, and that slice must be the newest end.
   test("a transcript longer than the viewport shows the newest line and hides the oldest, with InputBox still visible", async () => {

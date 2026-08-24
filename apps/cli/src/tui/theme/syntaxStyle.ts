@@ -28,7 +28,7 @@ const muted = { fg: theme.muted, dim: true };
 
 export const syntaxStyle = SyntaxStyle.fromStyles({
   keyword: { bold: true },
-  comment: { fg: theme.muted, dim: true },
+  comment: muted,
   string: { italic: true },
   function: { underline: true },
   type: { italic: true, underline: true },
