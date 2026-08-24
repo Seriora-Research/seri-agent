@@ -505,7 +505,11 @@ export function App({
 // rebuilding and re-diffing the whole elements array on a render triggered by unrelated state (a
 // streamed token's `state.turn.tokens` tick, a scroll-banner flip) — not just skip the per-row
 // markdown work `TranscriptRow`'s own `memo` (below) already bails out of.
-const TranscriptList = memo(function TranscriptList({ transcript }: { transcript: TranscriptEntry[] }) {
+const TranscriptList = memo(function TranscriptList({
+  transcript,
+}: {
+  transcript: TranscriptEntry[];
+}) {
   return (
     <>
       {transcript.map((entry, index) => (
