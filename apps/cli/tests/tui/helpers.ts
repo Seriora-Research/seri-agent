@@ -71,7 +71,11 @@ export async function flushMarkdown(
   setup: TestRendererSetup,
   isSettled: (frame: string) => boolean,
 ): Promise<void> {
-  const deadline = Date.now() + 5000;
+  // 3000ms, not bun:test's own 5000ms default per-test timeout: every call site here runs after a
+  // `connect()`/`flush()` setup that already consumes some of that 5000ms budget, so a deadline
+  // equal to (or close to) it would let bun's own timeout fire first — silently swallowing the throw
+  // below and reporting a generic "test timed out" instead of the actual, more useful reason.
+  const deadline = Date.now() + 3000;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 20));
     await setup.renderOnce();
@@ -80,5 +84,5 @@ export async function flushMarkdown(
   // Fails loudly here rather than letting the caller's own assertion fail against a plausible-but-
   // unsettled frame — the two look identical to whoever reads the failure, but only one of them
   // means "the markdown build never finished."
-  throw new Error("flushMarkdown: content never settled within 5000ms");
+  throw new Error("flushMarkdown: content never settled within 3000ms");
 }

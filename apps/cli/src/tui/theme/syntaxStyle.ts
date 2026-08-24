@@ -4,16 +4,21 @@
 //
 // Two different registration shapes are needed below, both confirmed against @opentui/core's own
 // SyntaxStyle.getStyleId (compiled chunk-bun-*.js): an unregistered scope falls back exactly once,
-// from its full name to `name.split(".")[0]` — the text before its FIRST dot, never an intermediate
-// parent.
-// - Code scopes ("keyword", "string", ...): the bundled javascript/typescript/zig grammars only
-//   ever emit single-level subtypes ("keyword.conditional"), so registering the base name alone
-//   already covers every subtype those grammars' own highlights.scm files emit.
+// from its full name to `name.split(".")[0]` — the text before its FIRST dot, whatever the scope's
+// own depth (a two-level scope like TypeScript's `keyword.conditional.ternary` falls back to
+// `keyword` the same as a one-level `keyword.conditional` would — the fallback doesn't care how
+// many dots follow the first).
+// - Code scopes ("keyword", "string", ...): registering the base name alone covers every subtype
+//   the bundled javascript/typescript/zig grammars' own highlights.scm files emit for it, however
+//   deep, via that one-hop fallback.
 // - Prose scopes ("markup.*"): the bundled markdown/markdown_inline grammars' own highlights.scm
-//   files emit multi-part scopes ("markup.heading.1", "markup.link.url") that all collapse to the
-//   same top-level "markup" under that one-hop fallback, not to an intermediate "markup.heading" or
-//   "markup.link" — so each prose category below is registered by its literal, full scope name
-//   rather than a shared prefix.
+//   files emit multi-part scopes ("markup.heading.1", "markup.list.checked") that all collapse to
+//   the same top-level "markup" under that one-hop fallback, not to an intermediate "markup.heading"
+//   or "markup.list" — so each prose category actually used needs its own literal, full scope name
+//   registered rather than a shared prefix. `syntaxStyle.test.ts`'s own grammar-coverage test derives
+//   the full scope list straight from the vendored `highlights.scm` files and asserts every one of
+//   them either resolves here or is named in that test's own deliberately-unstyled allowlist, so a
+//   scope this file misses (prose or code) fails loudly instead of silently rendering as plain text.
 import { SyntaxStyle } from "@opentui/core";
 import { theme } from "./theme";
 
@@ -47,9 +52,12 @@ export const syntaxStyle = SyntaxStyle.fromStyles({
   "markup.italic": { italic: true },
   "markup.strikethrough": { dim: true },
   "markup.raw": muted,
+  "markup.raw.block": muted,
   "markup.link": link,
   "markup.link.url": link,
   "markup.link.label": link,
   "markup.list": muted,
+  "markup.list.checked": muted,
+  "markup.list.unchecked": muted,
   "markup.quote": muted,
 });

@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { parseColor } from "@opentui/core";
 import { syntaxStyle } from "../../src/tui/theme/syntaxStyle";
@@ -54,9 +56,12 @@ describe("syntaxStyle: markdown prose scopes resolve", () => {
     "markup.link.url",
     "markup.link.label",
     "markup.list",
+    "markup.list.checked",
+    "markup.list.unchecked",
     "markup.quote",
     "markup.strikethrough",
     "markup.raw",
+    "markup.raw.block",
   ])("%s resolves to a registered style", (scope) => {
     expect(syntaxStyle.resolveStyleId(scope)).not.toBeNull();
   });
@@ -89,4 +94,58 @@ describe("syntaxStyle: code literal-value scopes resolve", () => {
     expect(syntaxStyle.getStyleId("constant.builtin")).not.toBeNull();
     expect(syntaxStyle.getStyleId("constant.builtin")).toBe(syntaxStyle.resolveStyleId("constant"));
   });
+});
+
+// Deliberately left unstyled: identifiers/punctuation/structural scopes a minimal monochrome theme
+// leaves plain by design (the keyword/comment/string/type/function/literal-value categories in
+// syntaxStyle.ts are the ones worth visually distinguishing — styling every token defeats the point
+// of highlighting). Each entry is either a bare base scope (covers every `base.*` subtype via the
+// same one-hop fallback `getStyleId` itself uses) or one exact full scope name for a multi-part
+// scope with no useful base. Confirmed against the vendored grammars below: every one of these is
+// currently unresolved, and this test would fail loudly (not silently pass) if a future grammar
+// bump moved one of them under a base that IS registered — this list is an allowlist of gaps, not a
+// duplicate of syntaxStyle.ts's own registrations.
+const DELIBERATELY_UNSTYLED = new Set([
+  "variable",
+  "operator",
+  "punctuation",
+  "property",
+  "constructor",
+  "attribute",
+  "label",
+  "module",
+  "character",
+  "embedded",
+  "none",
+  "spell",
+  "nospell",
+  "conceal",
+  "cImport",
+  "import",
+  "markup.link.bracket.close",
+]);
+
+// Derived, not hand-maintained: reads every scope the 5 bundled grammars' own `highlights.scm`
+// files actually emit (the same files syntaxStyle.ts's own header comment cites) and asserts each
+// one either resolves through `getStyleId` (exact match or one-hop base fallback — the real
+// resolution path `<markdown>`'s renderer uses, not just `resolveStyleId`'s narrower exact lookup)
+// or is named above as an intentional gap. A hand-maintained list of "scopes I checked" — the shape
+// the two `describe` blocks above use — silently misses a scope nobody thought to add; this doesn't,
+// because it starts from the grammar files themselves rather than from memory of what they contain.
+describe("syntaxStyle: full grammar scope coverage", () => {
+  const grammarDir = join(import.meta.dir, "../../node_modules/@opentui/core/assets");
+
+  for (const grammar of readdirSync(grammarDir)) {
+    const scm = readFileSync(join(grammarDir, grammar, "highlights.scm"), "utf8");
+    const scopes = [...new Set([...scm.matchAll(/@([a-zA-Z0-9_.]+)/g)].map((m) => m[1] as string))];
+
+    test.each(scopes)(`${grammar}: %s resolves or is a known, deliberate gap`, (scope) => {
+      if (syntaxStyle.getStyleId(scope) !== null) return;
+      const base = scope.split(".")[0];
+      expect(
+        DELIBERATELY_UNSTYLED.has(scope) || DELIBERATELY_UNSTYLED.has(base),
+        `"${scope}" is unresolved and not in DELIBERATELY_UNSTYLED — register it in syntaxStyle.ts, or add it there if the gap is intentional`,
+      ).toBe(true);
+    });
+  }
 });
