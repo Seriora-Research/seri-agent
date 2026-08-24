@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { TextAttributes } from "@opentui/core";
+import { RGBA, TextAttributes } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
@@ -10,6 +10,7 @@ import type { ApprovalAnswer } from "../../src/loop/loop";
 import { App, type AppProps } from "../../src/tui/app";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";
 import type { Dispatch } from "../../src/tui/state/reducer";
+import { theme } from "../../src/tui/theme/theme";
 import { ListRow } from "../../src/tui/ui/ListRow";
 import {
   formatContextWindow,
@@ -171,6 +172,23 @@ describe("App", () => {
     await flush(setup);
 
     expect(setup.captureCharFrame()).toContain("Session s1: permission mode is now auto");
+  });
+
+  // TranscriptRow's own user-role band: theme.userBg's background color, shrunk to the message's
+  // own content width (`alignSelf="flex-start"`) rather than stretched across the transcript's full
+  // width.
+  test("a user-message entry gets theme.userBg's background band, shrunk to its own content width", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({ type: "transcript-append", line: "hi", role: "user" });
+    await flush(setup);
+
+    const frame = setup.captureSpans();
+    const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("hi")));
+    expect(line).toBeDefined();
+    const span = line?.spans.find((s) => s.text.includes("hi"));
+    expect(span?.bg.equals(RGBA.fromHex(theme.userBg))).toBe(true);
+    expect(span?.width).toBeLessThan(DEFAULT_WIDTH);
   });
 
   // Tail-anchored, not head-anchored — 300 lines is comfortably more than the fixed test viewport's

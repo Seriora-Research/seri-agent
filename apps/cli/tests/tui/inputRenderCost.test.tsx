@@ -161,9 +161,9 @@ describe("TUI input render cost", () => {
   // user-band to inflate — the property worth guarding is now "editing the input box costs the
   // same regardless of the transcript's role mix," a stronger, renderer-appropriate form of the
   // same underlying concern. The band-WIDTH correctness itself (the fix this file originally
-  // shipped alongside) is covered independently and renderer-agnostically by App.test.tsx's own
-  // `transcriptRowsProps` describe block, which asserts the padded width directly against
-  // `util/format.ts`'s pure output.
+  // shipped alongside) is covered independently by App.test.tsx's own test asserting the
+  // user-message band's background color and its shrink-to-content width directly against a
+  // rendered frame's captured spans.
   test("editing the input box costs the same bytes regardless of the transcript's role mix", async () => {
     const n = 20;
     const seedCount = 6;
