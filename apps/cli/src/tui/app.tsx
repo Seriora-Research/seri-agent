@@ -313,13 +313,7 @@ export function App({
           setHasMeasured(true);
         }}
       >
-        <scrollbox
-          ref={transcriptRef}
-          height={transcriptHeight}
-          stickyScroll
-          stickyStart="bottom"
-          viewportCulling={false}
-        >
+        <scrollbox ref={transcriptRef} height={transcriptHeight} stickyScroll stickyStart="bottom">
           {state.transcript.map((entry, index) => (
             <TranscriptRow key={index} entry={entry} />
           ))}
