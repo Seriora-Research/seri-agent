@@ -1189,21 +1189,13 @@ describe("App", () => {
     // "model-15", becomes visible; the 1st, "model-0", scrolls out), AND the row Enter resolves is
     // the one actually highlighted.
     //
-    // Skipped (known issue, not fixed by this migration): fails deterministically once the
-    // transcript's <scrollbox> is present anywhere in the tree, even though this scenario never
-    // touches the transcript itself (no dispatch ever appends to it) and ModelPicker's own code is
-    // untouched by this migration. Verified directly: re-running this exact test against the
-    // pre-scrollbox app.tsx (git show of the commit before this migration) passes; against every
-    // scrollbox configuration tried here (flexGrow-sized, measured-height-sized, with and without
-    // stickyScroll/viewportCulling) it fails identically and deterministically — neither more
-    // `flush()` passes nor a real elapsed-time wait change the result, ruling out a settle-timing
-    // race. The captured frame shows characters from the list's own PREVIOUS render bleeding into
-    // unchanged screen cells (e.g. a row's trailing characters surviving where the new row's own
-    // text is shorter), which points at a rendering-buffer interaction between `<scrollbox>` and
-    // sibling text renderables specific to this in-memory test harness. Needs the orchestrator's
-    // manual real-terminal verification (out of scope for this worktree) to confirm whether this is
-    // a genuine visual bug or purely a test-harness artifact before deciding a fix.
-    test.skip("Down past the visible window scrolls the list, and Enter selects the highlighted row", async () => {
+    // Also a regression guard on the transcript's own wrapping box (app.tsx's own header comment on
+    // `flexBasis={0}`/`overflow="hidden"`): with neither of those, this box's own share of the
+    // column stayed hostage to the transcript scrollbox's stale, previously-measured height instead
+    // of shrinking for a same-frame sibling like ModelPicker, so ANY panel mounted alongside the
+    // transcript rendered with stray characters from the transcript's own last render bleeding into
+    // its rows — this scenario included, even though it never touches the transcript itself.
+    test("Down past the visible window scrolls the list, and Enter selects the highlighted row", async () => {
       const selected: Array<{ model: string; provider: ModelProvider; keyConfigured: boolean }> =
         [];
       const { setup, dispatch } = await connect({
@@ -2631,18 +2623,11 @@ describe("App", () => {
     // (handleArrowKey) — a terminal resize that shrinks windowSize could leave the currently
     // selected row outside [offset, offset + windowSize) with no keypress to trigger a recompute.
     //
-    // Skipped (known issue, not fixed by this migration): with the transcript empty and a 15-row
-    // config panel open (windowSize genuinely 10 here — a fixed, terminal-height-only computation
-    // untouched by this migration), the transcript's own measured height settles one render short
-    // of correct — verified live via `onSizeChange` logging: it converges 26 -> 19 -> 16 -> 15
-    // across four real layout passes and then genuinely stops (confirmed against 10 `flush()`
-    // calls, not just 1-2), leaving the panel one row short of the 10-row window it asks for. Tried
-    // and ruled out: `overflow="hidden"` and `flexShrink`/`minHeight` on the scrollbox itself changed
-    // nothing (identical 26/19/16/15 sequence either way) — the settle point is a genuine, stable
-    // Yoga answer, not a stale echo this component's own props can correct. Needs the orchestrator's
-    // manual real-terminal verification (out of scope for this worktree) to confirm whether this is
-    // a genuine visual bug or purely a test-harness artifact before deciding a fix.
-    test.skip("a windowSize shrink after a selection move keeps the selected row in view without a keypress", async () => {
+    // Also a regression guard on the transcript's own wrapping box (app.tsx's own header comment on
+    // `flexBasis={0}`/`overflow="hidden"`): without `flexBasis={0}`, this box's own height stayed
+    // hostage to the transcript scrollbox's previously-measured size across a resize too, not just a
+    // panel mount, so it never converged to the smaller share this 3-row config window needs.
+    test("a windowSize shrink after a selection move keeps the selected row in view without a keypress", async () => {
       const { setup, dispatch } = await connect();
 
       const rows = Array.from({ length: 15 }, (_, i) => ({

@@ -23,6 +23,18 @@
 // plain `<box flexGrow={1}>` and measuring THAT box's own settled height via `onSizeChange` (the
 // exact pattern this component used before the scrollbox migration) sidesteps whatever in
 // `ScrollBoxRenderable`'s own flex-based sizing this trips, by handing it a plain number instead.
+// That wrapping box also needs `flexBasis={0}` and `overflow="hidden"` (below): without
+// `flexBasis={0}`, Yoga derives the box's own flex-basis from its sole child's height — the SAME
+// number this component just fed the scrollbox last render — so opening a panel that needs more
+// room than the transcript's previous share never shrinks the box below that stale number, and the
+// scrollbox (still at its old, larger explicit height) paints over the panel's own rows instead.
+// `flexBasis={0}` makes the box's share of the column purely "whatever `flexGrow`/`flexShrink`
+// leave over after every sibling lays out," independent of the child's own declared height, so it
+// shrinks to the panel's actual leftover space in the same layout pass the panel mounts in — no
+// waiting on a second `onSizeChange` round-trip. `overflow="hidden"` is the backstop for the one
+// case that still needs it: the scrollbox's own `height` prop is a number from THIS component's
+// state, necessarily one render behind a same-frame layout change, so for that one frame it can
+// still be taller than the box now measures — clipped here instead of bleeding into the rows below.
 //
 // Renderer lifecycle (mount, unmount, alt-screen entry/exit) is NOT this component's concern —
 // unlike Ink, where `App` itself called `useApp().exit()` on a `done` prop, OpenTUI has no such
@@ -293,10 +305,12 @@ export function App({
       <AuthBanner
         show={state.authOffer && state.pendingAuth === undefined && !state.pendingSplash}
       />
-      {/* flexGrow/flexShrink/minHeight={0} give this box whatever height is left over after every
-      sibling below has laid out — `transcriptHeight` (above) reads that back via `onSizeChange` and
-      hands it to the scrollbox as a definite number (this file's own header comment explains why).
-      Fed the FULL `state.transcript` — no windowed slice — with `stickyScroll`/`stickyStart="bottom"`
+      {/* flexGrow/flexShrink/flexBasis={0}/minHeight={0} give this box whatever height is left over
+      after every sibling below has laid out, independent of its own child's height (this file's own
+      header comment explains why `flexBasis={0}` and `overflow="hidden"` are both needed here) —
+      `transcriptHeight` (above) reads that back via `onSizeChange` and hands it to the scrollbox as
+      a definite number. Fed the FULL `state.transcript` — no windowed slice — with
+      `stickyScroll`/`stickyStart="bottom"`
       doing what the old reducer-computed offset used to: follow newly appended content while at the
       bottom, hold position when scrolled away from it. No mid-generation text is ever rendered here:
       `state.streaming` still accumulates every `text-delta` for `pushLine`'s next flush
@@ -307,7 +321,9 @@ export function App({
         flexDirection="column"
         flexGrow={1}
         flexShrink={1}
+        flexBasis={0}
         minHeight={0}
+        overflow="hidden"
         onSizeChange={function onSizeChange(this: BoxRenderable) {
           setMeasuredRows(this.height);
           setHasMeasured(true);
