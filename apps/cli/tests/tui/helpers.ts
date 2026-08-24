@@ -55,17 +55,26 @@ export async function flush(setup: TestRendererSetup): Promise<void> {
 // real wait reliably does. Every other renderable in this suite settles within `flush()`'s own
 // fast passes; only a test asserting on assistant/markdown-rendered content needs this instead.
 // `TestRendererSetup`'s own `waitForFrame`/`waitForVisualIdle` (settle-condition helpers that poll
-// the renderer's scheduler instead of sleeping a fixed time) don't apply here: tried directly
+// the renderer's own SCHEDULER instead of sleeping a fixed time) don't apply here: tried directly
 // against this exact scenario, `waitForFrame` times out — the renderer's scheduler reports itself
 // idle (no running/rendering/scheduled-render state) before the markdown content tree is actually
-// built, so there is no scheduler-visible signal a settle-condition helper could poll on.
+// built, so there is no scheduler-visible signal that kind of helper could poll on.
 // `@opentui/core`'s `CodeRenderable` exposes its own `highlightingDone` promise, but only for a
 // fenced code block specifically, not through `MarkdownRenderable`'s own public surface, and three
-// of this file's four `flushMarkdown` call sites assert on plain prose with no code block at all —
-// a real elapsed-time wait is the only mechanism that covers all of them. 300ms, not the 100ms
-// this margin first shipped with: a loaded CI runner (observed on a Windows runner specifically)
-// doesn't finish the build inside 100ms as reliably as a quiet dev machine does.
-export async function flushMarkdown(setup: TestRendererSetup): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  await setup.renderOnce();
+// of this file's four `flushMarkdown` call sites assert on plain prose with no code block at all.
+// Instead of a fixed sleep — which broke 3 tests on a loaded Windows CI runner at 100ms, and would
+// need bumping again on the next slower runner — this polls the caller's OWN completion signal (the
+// captured frame's rendered TEXT, not the scheduler) on a short real interval up to a generous
+// deadline: fast on a quiet machine (returns the moment the content appears), and scales to however
+// slow a runner actually is instead of guessing a fixed margin for it up front.
+export async function flushMarkdown(
+  setup: TestRendererSetup,
+  isSettled: (frame: string) => boolean,
+): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await setup.renderOnce();
+    if (isSettled(setup.captureCharFrame())) return;
+  }
 }

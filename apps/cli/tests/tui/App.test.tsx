@@ -339,6 +339,29 @@ describe("App", () => {
     expect(highestLineShown(setup.captureCharFrame())).toBeGreaterThan(highestBefore);
   });
 
+  // Regression guard: the deleted reducer's `viewport-resized` case re-clamped the scroll offset on
+  // a SHRINK too, not just a grow — the native scrollbox needs the same coverage in this direction,
+  // since the two flush() passes the `/clear`-while-scrolled-up test above needed show a shrink's
+  // own `layout-changed`/scrollTop-clamp sequence has real settling behavior worth pinning down.
+  test("a resize that shrinks the terminal while scrolled to the top still shows valid content", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush(setup);
+    setup.mockInput.pressKey(HOME);
+    await flush(setup);
+    expect(setup.captureCharFrame()).toContain("line 0");
+
+    await resize(setup, DEFAULT_WIDTH, 10);
+    await flush(setup);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("line 0");
+    expect(frame).toContain("↑ scrolled");
+  });
+
   // Regression guard (found by review): before `visibleTranscript`/the scroll clamp derived visual
   // rows from `state.transcript` on read (format.ts's own `transcriptVisualRows`), a single streamed
   // answer with embedded newlines committed as ONE transcript array entry — the clamp's `max` was
@@ -454,7 +477,7 @@ describe("App", () => {
 
     dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
     await flush(setup);
-    await flushMarkdown(setup);
+    await flushMarkdown(setup, (frame) => frame.includes("answer line 4"));
     const frame = setup.captureCharFrame();
     expect(frame).toContain("answer line 0");
     expect(frame).toContain("answer line 4");
@@ -474,9 +497,10 @@ describe("App", () => {
     }
     dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
     await flush(setup);
-    await flushMarkdown(setup);
+    const full = chunks.join("");
+    await flushMarkdown(setup, (frame) => frame.includes(full));
 
-    expect(setup.captureCharFrame()).toContain(chunks.join(""));
+    expect(setup.captureCharFrame()).toContain(full);
   });
 
   // Acceptance criterion: `TurnStatus` is mounted inside the transcript box (after the committed
@@ -536,6 +560,25 @@ describe("App", () => {
       expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
     });
 
+    // Regression guard: `scrollboxHeight` shrinks by one row the same render TurnStatus mounts
+    // (app.tsx) — a reader following the live tail when a turn starts must still see the newest
+    // line, not have it pushed out of view for a frame by that same-render height change.
+    test("starting a turn while following the tail keeps the newest line visible", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 49");
+
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 49");
+      expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+    });
+
     test("holds position once scrolled up, even as new content keeps arriving", async () => {
       const { setup, dispatch } = await connect();
 
@@ -559,8 +602,8 @@ describe("App", () => {
     });
 
     // Invariant: /clear while scrolled up drops the "↑ scrolled" banner instead of leaving it
-    // stuck on an empty transcript — the one scenario `scrolledUp`'s own transcript-length effect
-    // (app.tsx) exists for.
+    // stuck on an empty transcript — app.tsx's own `scrolledUp` sync settles this through the same
+    // `layout-changed` listener a resize uses, no transcript-length special case needed.
     test("transcript-cleared while scrolled up drops the scrolled-up banner", async () => {
       const { setup, dispatch } = await connect();
 
@@ -755,12 +798,23 @@ describe("App", () => {
       "",
       "| a | b |",
       "| - | - |",
-      "| one | two |",
+      "| cellx | celly |",
     ].join("\n");
     dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
     dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
     await flush(setup);
-    await flushMarkdown(setup);
+    // Every block's own prose, not just the last one dispatched: `<markdown>`'s content tree does
+    // NOT settle top-to-bottom — probed directly, the table (the last block in source order) can
+    // render before the heading (the first) does, so polling on any single block risks reading a
+    // still-partially-built frame as done.
+    await flushMarkdown(
+      setup,
+      (frame) =>
+        frame.includes("Heading") &&
+        frame.includes("bold text") &&
+        frame.includes("item one") &&
+        frame.includes("celly"),
+    );
 
     const frame = setup.captureCharFrame();
     // The raw markdown syntax markers themselves are gone — conceal (MarkdownOptions' own default)
@@ -777,8 +831,8 @@ describe("App", () => {
     expect(frame).toContain("item one");
     expect(frame).toContain("item two");
     expect(frame).toContain("const x = 1;");
-    expect(frame).toContain("one");
-    expect(frame).toContain("two");
+    expect(frame).toContain("cellx");
+    expect(frame).toContain("celly");
   });
 
   // A transcript shorter than the viewport renders from the top of the scrollbox's own content
@@ -805,7 +859,7 @@ describe("App", () => {
     dispatch({ type: "loop-event", event: { type: "text-delta", text: "the answer" } });
     dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
     await flush(setup);
-    await flushMarkdown(setup);
+    await flushMarkdown(setup, (frame) => frame.includes("the answer"));
 
     const lines = setup.captureCharFrame().split("\n");
     expect(lines.some((line) => line.trimStart().startsWith("● the answer"))).toBe(true);

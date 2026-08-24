@@ -48,9 +48,10 @@ export const PANEL_CHROME_ROWS = 9;
 // own height live instead of reserving for it unconditionally.
 export const APP_CHROME_ROWS = 5;
 
-// The transcript scrollbox's placeholder height for the one frame before `onSizeChange` has ever
-// measured its own wrapping box (App.tsx) — not a real chrome-height estimate, just enough that the
-// first frame renders a plausible height instead of a 0-height scrollbox.
+// Rows reserved from the terminal height for everything OTHER than the transcript scrollbox
+// (app.tsx: `rows - FALLBACK_CHROME_ROWS`), for the one frame before `onSizeChange` has ever
+// measured the scrollbox's own wrapping box — not a real chrome-row count, just enough that the
+// first frame renders a plausible transcript height instead of a 0-height scrollbox.
 export const FALLBACK_CHROME_ROWS = 6;
 
 export type TranscriptRole = "user" | "assistant" | "system";

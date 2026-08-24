@@ -19,10 +19,13 @@
 // all re-rendered in place.
 //
 // `<scrollbox>` itself is given a MEASURED, definite `height` (below), not `flexGrow`/a percentage:
-// verified live against this file's own test suite that a `<scrollbox>` sized only by `flexGrow`
-// (correct for a plain `<box>`, and what an early draft of this migration used) renders correctly on
-// its own but corrupts sibling rows below it — cells the mode-indicator/panel rows should own end up
-// carrying stray characters from elsewhere, only in the in-memory test renderer. Wrapping it in a
+// a `<scrollbox>` sized only by `flexGrow` (correct for a plain `<box>`, and what an early draft of
+// this migration used) renders correctly on its own but corrupts sibling rows below it — cells the
+// mode-indicator/panel rows should own end up carrying stray characters from elsewhere. Reverting to
+// that flexGrow-only shape and re-running this file's own test suite reproduces it directly (a
+// panel opened once the transcript already has content); this is the same failure family as the
+// `flexBasis`/`overflow="hidden"` fix below, not a narrower one, so treat it as a real rendering
+// hazard rather than an artifact of any one renderer. Wrapping it in a
 // plain `<box flexGrow={1}>` and measuring THAT box's own settled height via `onSizeChange` (the
 // exact pattern this component used before the scrollbox migration) sidesteps whatever in
 // `ScrollBoxRenderable`'s own flex-based sizing this trips, by handing it a plain number instead.
@@ -216,16 +219,14 @@ export function App({
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
   // The scrollbox's own measured height (this file's own header comment explains why it needs a
-  // definite number, not `flexGrow`) — `hasMeasured` is false only for the frames before OpenTUI's
-  // own layout pass has fired `onSizeChange` at least once on the wrapping box below;
-  // `FALLBACK_CHROME_ROWS` is a placeholder for those frames alone, not a real chrome-height
-  // estimate. `Math.max(1, ...)`: the wrapping box has `minHeight={0}`, so on a short enough
-  // terminal — or one where the sibling rows above/below it already consume the whole budget —
-  // Yoga can genuinely measure it down to 0, which a `<scrollbox height={0}>` would render as
-  // nothing rather than "not enough room."
-  const [measuredRows, setMeasuredRows] = useState(0);
-  const [hasMeasured, setHasMeasured] = useState(false);
-  const transcriptHeight = Math.max(1, hasMeasured ? measuredRows : rows - FALLBACK_CHROME_ROWS);
+  // definite number, not `flexGrow`) — `null` only for the frames before OpenTUI's own layout pass
+  // has fired `onSizeChange` at least once on the wrapping box below; `FALLBACK_CHROME_ROWS` is a
+  // placeholder for those frames alone, not a real chrome-height estimate. `Math.max(1, ...)`: the
+  // wrapping box has `minHeight={0}`, so on a short enough terminal — or one where the sibling rows
+  // above/below it already consume the whole budget — Yoga can genuinely measure it down to 0,
+  // which a `<scrollbox height={0}>` would render as nothing rather than "not enough room."
+  const [measuredRows, setMeasuredRows] = useState<number | null>(null);
+  const transcriptHeight = Math.max(1, measuredRows ?? rows - FALLBACK_CHROME_ROWS);
   // TurnStatus (below) renders as its own fixed row OUTSIDE the scrollbox, not as one of its
   // scrollable children, so it stays visible regardless of scroll position (this file's own header
   // comment explains why) — the scrollbox itself only gets the wrapping box's remaining height once
@@ -263,6 +264,10 @@ export function App({
   useEffect(() => {
     const el = transcriptRef.current;
     if (!el) return;
+    // `layout-changed` fires from `calculateLayout`, before the scrollbox's own `scrollHeight`/
+    // `viewport.height` refresh (that happens later in the same layout pass) — so a single `sync`
+    // call here can read one-frame-stale geometry; it settles on the NEXT `layout-changed` once Yoga
+    // has caught up, which is why a shrink like `/clear` needs two passes to resolve, not one.
     const sync = () => {
       const maxScrollTop = Math.max(0, el.scrollHeight - el.viewport.height);
       setScrolledUp(el.scrollTop < maxScrollTop);
@@ -368,13 +373,10 @@ export function App({
         overflow="hidden"
         onSizeChange={function onSizeChange(this: BoxRenderable) {
           setMeasuredRows(this.height);
-          setHasMeasured(true);
         }}
       >
         <scrollbox ref={transcriptRef} height={scrollboxHeight} stickyScroll stickyStart="bottom">
-          {state.transcript.map((entry, index) => (
-            <TranscriptRow key={index} entry={entry} />
-          ))}
+          <TranscriptList transcript={state.transcript} />
         </scrollbox>
         {/* Rendered as a fixed row OUTSIDE the scrollbox, directly under it, instead of as one of
         its scrollable children — a scrollbox child scrolls out of view exactly like any other row
@@ -498,11 +500,25 @@ export function App({
 // calls/results/errors/done markers) stays plain text: none of those are model prose, and a tool
 // result can legitimately contain a literal `*`/`#`/backtick that must render as-is, not get parsed
 // as markdown syntax.
-// Memoized: `state.transcript.map` above re-runs on every App render (every `text-delta` during
-// an active turn re-renders App via `state.turn.tokens`), but each entry's own object reference
-// is stable across renders (state/reducer.ts only appends, never replaces existing entries) — so
-// `memo` lets React skip re-invoking this for every already-rendered row (assistant rows re-parse
-// and re-highlight markdown, the expensive case) and only render newly appended ones.
+// Its own memoized component, not an inline `.map()` in App's own JSX: `state.transcript`'s
+// reference only changes on an actual append (state/reducer.ts), so `memo` here lets React skip
+// rebuilding and re-diffing the whole elements array on a render triggered by unrelated state (a
+// streamed token's `state.turn.tokens` tick, a scroll-banner flip) — not just skip the per-row
+// markdown work `TranscriptRow`'s own `memo` (below) already bails out of.
+const TranscriptList = memo(function TranscriptList({ transcript }: { transcript: TranscriptEntry[] }) {
+  return (
+    <>
+      {transcript.map((entry, index) => (
+        <TranscriptRow key={index} entry={entry} />
+      ))}
+    </>
+  );
+});
+
+// Memoized: `TranscriptList` above re-runs on every actual transcript append, but each entry's own
+// object reference is stable across renders (state/reducer.ts only appends, never replaces existing
+// entries) — so `memo` lets React skip re-invoking this for every already-rendered row (assistant
+// rows re-parse and re-highlight markdown, the expensive case) and only render newly appended ones.
 const TranscriptRow = memo(function TranscriptRow({ entry }: { entry: TranscriptEntry }) {
   if (entry.role === "assistant") {
     return (
