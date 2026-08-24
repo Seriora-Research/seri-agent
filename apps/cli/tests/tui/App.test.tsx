@@ -744,9 +744,10 @@ describe("App", () => {
     expect(frame).toContain("two");
   });
 
-  // A transcript shorter than the viewport top-anchors (`justifyContent: "flex-start"`) instead of
-  // bottom-padding a mostly-empty screen — the appended content must land near the very top of the
-  // frame, not down near InputBox.
+  // A transcript shorter than the viewport renders from the top of the scrollbox's own content
+  // flow (a column-direction box's children always stack top-down, with no bottom-anchoring prop
+  // needed) instead of bottom-padding a mostly-empty screen — the appended content must land near
+  // the very top of the frame, not down near InputBox.
   test("a short transcript top-anchors: content appears near the top of the frame, not bottom-padded", async () => {
     const { setup, dispatch } = await connect();
 
@@ -760,7 +761,7 @@ describe("App", () => {
   });
 
   // A committed assistant answer's own first visual row is prefixed with the `●` marker
-  // (format.ts's own displayText) — applied at render/wrap time, never stored on the entry itself.
+  // (TranscriptRow, app.tsx) — applied at render time, never stored on the entry itself.
   test("a committed assistant answer's frame line starts with the ● marker", async () => {
     const { setup, dispatch } = await connect();
 
