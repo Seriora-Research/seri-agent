@@ -48,3 +48,14 @@ export async function flush(setup: TestRendererSetup): Promise<void> {
     await setup.renderOnce();
   }
 }
+
+// `<markdown>` (app.tsx's own assistant-entry render) settles its content-to-render-tree build on
+// a REAL elapsed-time delay, not just a settled macrotask — verified empirically: 30 rapid
+// zero-delay `flush()`-style passes (tens of real milliseconds total) still render nothing, while a
+// single 100ms real wait reliably does. Every other renderable in this suite settles within
+// `flush()`'s own fast passes; only a test asserting on assistant/markdown-rendered content needs
+// this instead.
+export async function flushMarkdown(setup: TestRendererSetup): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await setup.renderOnce();
+}
