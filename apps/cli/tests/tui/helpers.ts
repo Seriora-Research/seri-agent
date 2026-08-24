@@ -54,7 +54,15 @@ export async function flush(setup: TestRendererSetup): Promise<void> {
 // zero-delay `flush()`-style passes (tens of real milliseconds total) still render nothing, while a
 // single 100ms real wait reliably does. Every other renderable in this suite settles within
 // `flush()`'s own fast passes; only a test asserting on assistant/markdown-rendered content needs
-// this instead.
+// this instead. `TestRendererSetup`'s own `waitForFrame`/`waitForVisualIdle` (settle-condition
+// helpers that poll the renderer's scheduler instead of sleeping a fixed time) don't apply here:
+// tried directly against this exact scenario, `waitForFrame` times out — the renderer's scheduler
+// reports itself idle (no running/rendering/scheduled-render state) before the markdown content
+// tree is actually built, so there is no scheduler-visible signal a settle-condition helper could
+// poll on. `@opentui/core`'s `CodeRenderable` exposes its own `highlightingDone` promise, but only
+// for a fenced code block specifically, not through `MarkdownRenderable`'s own public surface, and
+// three of this file's four `flushMarkdown` call sites assert on plain prose with no code block at
+// all — a real elapsed-time wait is the only mechanism that covers all of them.
 export async function flushMarkdown(setup: TestRendererSetup): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 100));
   await setup.renderOnce();
