@@ -8,12 +8,15 @@
 // (OpenTUI's own Yoga layout + scroll-anchor logic, not a reducer-computed slice). No mid-generation
 // text is ever rendered in it: `state.streaming` accumulates every `text-delta` for `pushLine`'s
 // next flush (state/reducer.ts), but is never itself displayed live, character by character — while
-// a turn is active, `TurnStatus` (below) stays mounted as the scrollbox's own last content child for
-// the whole turn — it never unmounts mid-turn. Each finished segment of the answer (the run of
-// `text-delta`s up to whatever the model does next — a tool call, a tool result, or the turn's own
-// end) commits atomically as a normal transcript entry the moment `pushLine` flushes it, landing
-// directly above `TurnStatus`. Everything below the transcript box is a live region: status/spinner,
-// a pending-write placeholder, the mode indicator, and a basic input box, all re-rendered in place.
+// a turn is active, `TurnStatus` (below) stays mounted for the whole turn as a fixed row OUTSIDE
+// the scrollbox, directly beneath it — it never unmounts mid-turn, and it stays visible regardless
+// of scroll position, since a child scrolled out of view is exactly what a native scrollbox would
+// otherwise do to it. Each finished segment of the answer (the run of `text-delta`s up to whatever
+// the model does next — a tool call, a tool result, or the turn's own end) commits atomically as a
+// normal transcript entry the moment `pushLine` flushes it, landing at the scrollbox's own tail,
+// directly above wherever `TurnStatus` is now pinned. Everything below the transcript box is a live
+// region: status/spinner, a pending-write placeholder, the mode indicator, and a basic input box,
+// all re-rendered in place.
 //
 // `<scrollbox>` itself is given a MEASURED, definite `height` (below), not `flexGrow`/a percentage:
 // verified live against this file's own test suite that a `<scrollbox>` sized only by `flexGrow`
@@ -24,12 +27,12 @@
 // exact pattern this component used before the scrollbox migration) sidesteps whatever in
 // `ScrollBoxRenderable`'s own flex-based sizing this trips, by handing it a plain number instead.
 // That wrapping box also needs `flexBasis={0}` and `overflow="hidden"` (below): without
-// `flexBasis={0}`, Yoga derives the box's own flex-basis from its sole child's height — the SAME
+// `flexBasis={0}`, Yoga derives the box's own flex-basis from its children's own height — the SAME
 // number this component just fed the scrollbox last render — so opening a panel that needs more
 // room than the transcript's previous share never shrinks the box below that stale number, and the
 // scrollbox (still at its old, larger explicit height) paints over the panel's own rows instead.
 // `flexBasis={0}` makes the box's share of the column purely "whatever `flexGrow`/`flexShrink`
-// leave over after every sibling lays out," independent of the child's own declared height, so it
+// leave over after every sibling lays out," independent of its children's own declared height, so it
 // shrinks to the panel's actual leftover space in the same layout pass the panel mounts in — no
 // waiting on a second `onSizeChange` round-trip. `overflow="hidden"` is the backstop for the one
 // case that still needs it: the scrollbox's own `height` prop is a number from THIS component's
@@ -223,6 +226,11 @@ export function App({
   const [measuredRows, setMeasuredRows] = useState(0);
   const [hasMeasured, setHasMeasured] = useState(false);
   const transcriptHeight = Math.max(1, hasMeasured ? measuredRows : rows - FALLBACK_CHROME_ROWS);
+  // TurnStatus (below) renders as its own fixed row OUTSIDE the scrollbox, not as one of its
+  // scrollable children, so it stays visible regardless of scroll position (this file's own header
+  // comment explains why) — the scrollbox itself only gets the wrapping box's remaining height once
+  // that one row is set aside for it.
+  const scrollboxHeight = Math.max(1, transcriptHeight - (state.turn !== undefined ? 1 : 0));
 
   // Drives the "↑ scrolled — End to follow" banner. Scroll position itself lives on the scrollbox
   // renderable, not on `state` (App.tsx's own header comment) — this mirrors it into React state by
@@ -328,17 +336,18 @@ export function App({
         show={state.authOffer && state.pendingAuth === undefined && !state.pendingSplash}
       />
       {/* flexGrow/flexShrink/flexBasis={0}/minHeight={0} give this box whatever height is left over
-      after every sibling below has laid out, independent of its own child's height (this file's own
-      header comment explains why `flexBasis={0}` and `overflow="hidden"` are both needed here) —
-      `transcriptHeight` (above) reads that back via `onSizeChange` and hands it to the scrollbox as
-      a definite number. Fed the FULL `state.transcript` — no windowed slice — with
-      `stickyScroll`/`stickyStart="bottom"`
-      doing what the old reducer-computed offset used to: follow newly appended content while at the
-      bottom, hold position when scrolled away from it. No mid-generation text is ever rendered here:
-      `state.streaming` still accumulates every `text-delta` for `pushLine`'s next flush
-      (state/reducer.ts), but each finished segment of the answer only appears once `pushLine`
-      commits it as a normal transcript entry. The scrollbox itself is not given keyboard focus (no
-      `focused` prop) — see the `useKeyboard` handler's own comment above for why. */}
+      after every sibling below has laid out, independent of its own children's height (this file's
+      own header comment explains why `flexBasis={0}` and `overflow="hidden"` are both needed here) —
+      `transcriptHeight` (above) reads that back via `onSizeChange`; `scrollboxHeight` (above) hands
+      the scrollbox its own share as a definite number, one row short of `transcriptHeight` whenever
+      TurnStatus (below) needs that row for itself. Fed the FULL `state.transcript` — no windowed
+      slice — with `stickyScroll`/`stickyStart="bottom"` doing what the old reducer-computed offset
+      used to: follow newly appended content while at the bottom, hold position when scrolled away
+      from it. No mid-generation text is ever rendered here: `state.streaming` still accumulates
+      every `text-delta` for `pushLine`'s next flush (state/reducer.ts), but each finished segment of
+      the answer only appears once `pushLine` commits it as a normal transcript entry. The scrollbox
+      itself is not given keyboard focus (no `focused` prop) — see the `useKeyboard` handler's own
+      comment above for why. */}
       <box
         flexDirection="column"
         flexGrow={1}
@@ -351,32 +360,33 @@ export function App({
           setHasMeasured(true);
         }}
       >
-        <scrollbox ref={transcriptRef} height={transcriptHeight} stickyScroll stickyStart="bottom">
+        <scrollbox ref={transcriptRef} height={scrollboxHeight} stickyScroll stickyStart="bottom">
           {state.transcript.map((entry, index) => (
             <TranscriptRow key={index} entry={entry} />
           ))}
-          {/* Rendered as the scrollbox's own last content child, directly under whatever the
-          transcript currently ends with — `stickyScroll` keeps it in view the same way it keeps
-          any newly appended row in view while following the tail. Keyed on `state.turn.startedAt`,
-          defensively:
-          `runTurn` (cli.ts) has a single `turn-started` dispatch site, reached from two call paths —
-          an interactive submission and a mount-time task/resume start — both input-driven, always
-          separated from the prior turn's `turn-ended` by a user keystroke, so React never has the
-          chance to batch two `turn-started` dispatches into one commit. But IF it ever did — a
-          `turn-ended` and the next `turn-started` landing in the same update — the intermediate "no
-          turn in flight" render (where TurnStatus would otherwise unmount) would never actually
-          commit, and TurnStatus would be REUSED rather than remounted, so its `useState(() =>
-          Date.now())` initializer (TurnStatus's own comment) would not re-run and the second turn
-          would start ticking from the first turn's stale `now`. The key forces a fresh element
-          identity — and so a fresh mount — regardless. */}
-          {state.turn !== undefined && (
-            <TurnStatus
-              key={state.turn.startedAt}
-              startedAt={state.turn.startedAt}
-              tokenProgress={state.turn.tokens}
-            />
-          )}
         </scrollbox>
+        {/* Rendered as a fixed row OUTSIDE the scrollbox, directly under it, instead of as one of
+        its scrollable children — a scrollbox child scrolls out of view exactly like any other row
+        once the reader scrolls away from the tail, which TurnStatus must not do while a turn is
+        active (`scrollboxHeight`, above, already sets the scrollbox one row short to leave this
+        exactly the room it needs). Keyed on `state.turn.startedAt`, defensively: `runTurn` (cli.ts)
+        has a single `turn-started` dispatch site, reached from two call paths — an interactive
+        submission and a mount-time task/resume start — both input-driven, always separated from the
+        prior turn's `turn-ended` by a user keystroke, so React never has the chance to batch two
+        `turn-started` dispatches into one commit. But IF it ever did — a `turn-ended` and the next
+        `turn-started` landing in the same update — the intermediate "no turn in flight" render
+        (where TurnStatus would otherwise unmount) would never actually commit, and TurnStatus would
+        be REUSED rather than remounted, so its `useState(() => Date.now())` initializer
+        (TurnStatus's own comment) would not re-run and the second turn would start ticking from the
+        first turn's stale `now`. The key forces a fresh element identity — and so a fresh mount —
+        regardless. */}
+        {state.turn !== undefined && (
+          <TurnStatus
+            key={state.turn.startedAt}
+            startedAt={state.turn.startedAt}
+            tokenProgress={state.turn.tokens}
+          />
+        )}
       </box>
       {state.pendingTool !== undefined && (
         <box borderStyle="single" borderColor={theme.warning}>

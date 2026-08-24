@@ -660,6 +660,25 @@ describe("App", () => {
 
       expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
     });
+
+    // Acceptance criterion: TurnStatus stays visually pinned to the transcript's last line while a
+    // turn is active, regardless of scroll position — the reader can be looking at the oldest line
+    // in the transcript and still see the running turn's own elapsed-time/token indicator.
+    test("TurnStatus stays visible while scrolled away from the tail during an active turn", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 0");
+
+      expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
+    });
   });
 
   // The loop's own success_check: an assistant entry with every requested markdown feature actually
