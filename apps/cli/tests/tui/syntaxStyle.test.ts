@@ -34,3 +34,37 @@ describe("syntaxStyle: monochrome compliance", () => {
     expect(styles.some((s) => s.underline)).toBe(true);
   });
 });
+
+// The markdown/markdown_inline grammars' own highlights.scm files (not the code grammars) emit
+// these exact "markup.*" scopes for bold text, headings, italics, links, list markers, and
+// blockquotes — asserted by resolveStyleId so a future edit that renames/removes one of these
+// literal keys (rather than relying on the base-scope fallback the code scopes use) fails loudly.
+describe("syntaxStyle: markdown prose scopes resolve", () => {
+  test.each([
+    "markup.heading.1",
+    "markup.heading.2",
+    "markup.heading.3",
+    "markup.heading.4",
+    "markup.heading.5",
+    "markup.heading.6",
+    "markup.heading",
+    "markup.strong",
+    "markup.italic",
+    "markup.link",
+    "markup.link.url",
+    "markup.link.label",
+    "markup.list",
+    "markup.quote",
+  ])("%s resolves to a registered style", (scope) => {
+    expect(syntaxStyle.resolveStyleId(scope)).not.toBeNull();
+  });
+
+  test("markup.heading and markup.strong are both bold, but only markup.heading is underlined", () => {
+    const heading = syntaxStyle.getStyle("markup.heading.1");
+    const strong = syntaxStyle.getStyle("markup.strong");
+    expect(heading?.bold).toBe(true);
+    expect(heading?.underline).toBe(true);
+    expect(strong?.bold).toBe(true);
+    expect(strong?.underline).toBeUndefined();
+  });
+});
