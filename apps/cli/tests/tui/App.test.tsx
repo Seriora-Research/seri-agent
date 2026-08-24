@@ -213,6 +213,51 @@ describe("App", () => {
     expect(frame).toContain("line 299");
   });
 
+  // Regression guard: the scrollbox's own mouse-wheel handling moves its real scroll position
+  // independently of the keyboard handler that used to be the only place `scrolledUp` was set, so a
+  // wheel-up scroll used to move the viewport away from the tail with no banner ever appearing to
+  // explain why.
+  test("scrolling up with the mouse wheel shows the scrolled indicator", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush(setup);
+    expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+
+    for (let i = 0; i < 10; i++) {
+      await setup.mockMouse.scroll(5, 5, "up");
+    }
+    await flush(setup);
+
+    expect(setup.captureCharFrame()).toContain("↑ scrolled — End to follow");
+  });
+
+  // Regression guard: a resize that grows the viewport enough for all content to fit re-engages
+  // `stickyStart="bottom"` (ScrollBoxRenderable's own `recalculateBarProps`) with no keypress of the
+  // user's own — the banner has to clear from that same real scroll-position change, not just from
+  // an explicit Home/End/PageUp/PageDown press.
+  test("growing the terminal enough for all content to fit clears a stale scrolled indicator", async () => {
+    const { setup, dispatch } = await connect();
+    await resize(setup, DEFAULT_WIDTH, 10);
+
+    for (let i = 0; i < 20; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush(setup);
+
+    setup.mockInput.pressKey(HOME);
+    await flush(setup);
+    expect(setup.captureCharFrame()).toContain("↑ scrolled");
+
+    await resize(setup, DEFAULT_WIDTH, 60);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).not.toContain("↑ scrolled");
+    expect(frame).toContain("line 19");
+  });
+
   // Regression guard: PageUp/PageDown/Home/End used to fire regardless of which render-ternary
   // branch was active, mutating transcriptScrollOffset in the background while a modal panel
   // (here /config) fully occluded the transcript. Closing the panel would then reveal a

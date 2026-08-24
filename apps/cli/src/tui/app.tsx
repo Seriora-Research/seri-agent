@@ -41,7 +41,7 @@
 // hook: the three callers above own the `CliRenderer` directly and destroy it themselves once a
 // quit is ready to complete (`getTuiRenderer`/`destroyTuiRenderer`, runtime/renderer.ts).
 import { type BoxRenderable, getTreeSitterClient, type ScrollBoxRenderable } from "@opentui/core";
-import { useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { useEffect, useReducer, useRef, useState } from "react";
@@ -225,13 +225,38 @@ export function App({
   const transcriptHeight = Math.max(1, hasMeasured ? measuredRows : rows - FALLBACK_CHROME_ROWS);
 
   // Drives the "↑ scrolled — End to follow" banner. Scroll position itself lives on the scrollbox
-  // renderable, not on `state` (App.tsx's own header comment) — this mirrors it into React state
-  // only at the points it can actually change: an explicit PageUp/PageDown/Home/End keypress
-  // (below), and `/clear` emptying the transcript (nothing left to be scrolled up on). New content
-  // arriving never needs to update this on its own: `stickyScroll` already either follows it (this
-  // was already `false`) or holds position (this was already `true`) natively — see the Risks this
-  // migration's own plan recorded on re-verifying those invariants under the new scrollbox model.
+  // renderable, not on `state` (App.tsx's own header comment) — this mirrors it into React state by
+  // reading the scrollbox's own current `scrollTop`/`scrollHeight`/`viewport.height` (the same
+  // computation `updateStickyState`, @opentui/core's own source, uses internally), from two events:
+  // `verticalScrollBar`'s own "change" event (`ScrollBarRenderable` extends `EventEmitter`, emitted
+  // on every actual scroll-POSITION change) covers a mouse-wheel scroll — `ScrollBoxRenderable.
+  // onMouseEvent` moves `scrollTop` through the exact same setter PageUp/PageDown/Home/End go
+  // through below, so one listener covers both input paths — and the renderer root's own
+  // "layout-changed" event (emitted after every Yoga layout pass, @opentui/core's own
+  // `RootRenderable.calculateLayout`) covers a resize that changes how much of the content now fits
+  // with the scroll POSITION unchanged (e.g. already at the top): growing the viewport enough to fit
+  // everything re-engages `stickyStart` internally without moving `scrollTop` at all if it was
+  // already 0, so there is no scroll-position CHANGE for the scrollbar's own event to fire on, even
+  // though `scrolledUp` must still flip to `false` once the viewport genuinely grows past the
+  // content. New content arriving never needs to update this on its own: `stickyScroll` already
+  // either follows it (this was already `false`) or holds position (this was already `true`)
+  // natively.
   const [scrolledUp, setScrolledUp] = useState(false);
+  const renderer = useRenderer();
+  useEffect(() => {
+    const el = transcriptRef.current;
+    if (!el) return;
+    const sync = () => {
+      const maxScrollTop = Math.max(0, el.scrollHeight - el.viewport.height);
+      setScrolledUp(el.scrollTop < maxScrollTop);
+    };
+    el.verticalScrollBar.on("change", sync);
+    renderer.root.on("layout-changed", sync);
+    return () => {
+      el.verticalScrollBar.off("change", sync);
+      renderer.root.off("layout-changed", sync);
+    };
+  }, [renderer]);
   useEffect(() => {
     if (state.transcript.length === 0) setScrolledUp(false);
   }, [state.transcript]);
@@ -280,9 +305,6 @@ export function App({
     else if (key.name === "pagedown") el.scrollBy(1, "viewport");
     else if (key.name === "home") el.scrollBy(-1, "content");
     else if (key.name === "end") el.scrollBy(1, "content");
-    else return;
-    const maxScrollTop = Math.max(0, el.scrollHeight - el.viewport.height);
-    setScrolledUp(el.scrollTop < maxScrollTop);
   });
 
   return (
