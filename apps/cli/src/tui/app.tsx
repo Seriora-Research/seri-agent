@@ -417,7 +417,7 @@ function TranscriptRow({ entry }: { entry: TranscriptEntry }) {
   }
   if (entry.role === "user") {
     return (
-      <box bg={theme.userBg} alignSelf="flex-start">
+      <box backgroundColor={theme.userBg} alignSelf="flex-start">
         <text>{entry.text}</text>
       </box>
     );
