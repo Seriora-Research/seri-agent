@@ -502,12 +502,12 @@ describe("App", () => {
     expect(lines[modeLabelIndex]).not.toContain(" in, ");
   });
 
-  // New scrollbox-native coverage — spec 028's own migration from a reducer-computed
-  // `transcriptScrollOffset` to OpenTUI's native `<scrollbox>` `stickyScroll`/`stickyStart="bottom"`.
-  // Every one of PR #157's five scroll-anchor invariants is re-verified here since none of them are
-  // guarded by reducer state anymore (the mechanisms that used to enforce them —
-  // `transcriptScrollOffset`, `reservedTranscriptRows`'s own +1/-1 nudge — no longer exist; the
-  // native scrollbox owns scroll-anchor behavior entirely on its own now).
+  // Scroll-anchor coverage for the native `<scrollbox>` `stickyScroll`/`stickyStart="bottom"` (no
+  // reducer-computed `transcriptScrollOffset` behind it anymore). Five invariants below, re-verified
+  // directly against the scrollbox's own behavior since none of them are guarded by reducer state
+  // anymore (the mechanisms that used to enforce them — `transcriptScrollOffset`,
+  // `reservedTranscriptRows`'s own +1/-1 nudge — no longer exist; the native scrollbox owns
+  // scroll-anchor behavior entirely on its own now).
   //
   // Negative control, verified once rather than per-test: removing `stickyScroll
   // stickyStart="bottom"` from app.tsx's `<scrollbox>` fails the two tests below that assert
@@ -558,7 +558,7 @@ describe("App", () => {
       expect(setup.captureCharFrame()).toContain("↑ scrolled");
     });
 
-    // PR #157 invariant: a mid-turn flush (a tool-call/tool-result/etc, not a bare
+    // Invariant: a mid-turn flush (a tool-call/tool-result/etc, not a bare
     // transcript-append) must not move a scrolled-up reader's view.
     test("a mid-turn flush does not move a scrolled-up reader's view", async () => {
       const { setup, dispatch } = await connect();
@@ -582,7 +582,7 @@ describe("App", () => {
       expect(setup.captureCharFrame()).toContain("↑ scrolled");
     });
 
-    // PR #157 invariant: starting a turn does not itself move a scrolled-up reader's view (the old
+    // Invariant: starting a turn does not itself move a scrolled-up reader's view (the old
     // reducer's own +1 nudge for TurnStatus's reserved row no longer exists — TurnStatus is just
     // the scrollbox's own last child now, kept in view by the same sticky behavior as everything
     // else).
@@ -604,7 +604,7 @@ describe("App", () => {
       expect(setup.captureCharFrame()).toContain("↑ scrolled");
     });
 
-    // PR #157 invariant: ending a turn does not move a scrolled-up reader's view either (the
+    // Invariant: ending a turn does not move a scrolled-up reader's view either (the
     // mirror-image -1 release no longer exists for the same reason).
     test("turn-ended does not move a scrolled-up reader's view", async () => {
       const { setup, dispatch } = await connect();
@@ -625,11 +625,11 @@ describe("App", () => {
       expect(setup.captureCharFrame()).toContain("↑ scrolled");
     });
 
-    // PR #157 invariant: a resize while scrolled up reveals more of the transcript instead of a
+    // Invariant: a resize while scrolled up reveals more of the transcript instead of a
     // static slice — covered directly by "a resize while scrolled to the top reveals more of the
     // transcript, not a static slice" above; not duplicated here.
 
-    // PR #157 invariant: duplicate/out-of-order turn-lifecycle dispatches (a bare turn-ended with
+    // Invariant: duplicate/out-of-order turn-lifecycle dispatches (a bare turn-ended with
     // no turn ever started, or two turn-started in a row) cannot corrupt the view — there is no
     // scroll-related reducer state left for them to corrupt at all (reducer.test.ts's own former "a
     // duplicate turn-ended with no active turn leaves a valid offset untouched" test covered the
@@ -699,8 +699,8 @@ describe("App", () => {
     });
   });
 
-  // The loop's own success_check: an assistant entry with every requested markdown feature actually
-  // renders as styled/structured output via <markdown>, not raw markdown syntax as text.
+  // An assistant entry with every markdown feature TranscriptRow supports actually renders as
+  // styled/structured output via <markdown>, not raw markdown syntax as text.
   test("an assistant entry with bold/header/list/link/fenced-code/table renders via <markdown>, not raw syntax", async () => {
     const { setup, dispatch } = await connect();
 
