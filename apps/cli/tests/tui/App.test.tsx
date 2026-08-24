@@ -439,6 +439,229 @@ describe("App", () => {
     expect(lines[modeLabelIndex]).not.toContain(" in, ");
   });
 
+  // New scrollbox-native coverage — spec 028's own migration from a reducer-computed
+  // `transcriptScrollOffset` to OpenTUI's native `<scrollbox>` `stickyScroll`/`stickyStart="bottom"`.
+  // Every one of PR #157's five scroll-anchor invariants is re-verified here since none of them are
+  // guarded by reducer state anymore (the mechanisms that used to enforce them —
+  // `transcriptScrollOffset`, `reservedTranscriptRows`'s own +1/-1 nudge — no longer exist; the
+  // native scrollbox owns scroll-anchor behavior entirely on its own now).
+  //
+  // Negative control, verified once rather than per-test: removing `stickyScroll
+  // stickyStart="bottom"` from app.tsx's `<scrollbox>` fails the two tests below that assert
+  // "follows the newest line" (the follow-tail half of the guarantee) — confirming those two
+  // actually exercise the native sticky behavior rather than passing vacuously. The "holds position
+  // once scrolled up" tests pass either way: with no reducer-side nudge math left to remove (the
+  // OLD design's own `turn-started`/`turn-ended` offset adjustments no longer exist at all), there
+  // is nothing left in this codebase that COULD move a scrolled-up view out from under a reader —
+  // these pin that absence directly rather than needing a contrived way to reintroduce it.
+  describe("scrollbox stickyScroll invariants", () => {
+    test("stays on the newest line while new content keeps arriving at the bottom", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 49");
+
+      for (let i = 50; i < 60; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 59");
+      expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+    });
+
+    test("holds position once scrolled up, even as new content keeps arriving", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 0");
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+
+      for (let i = 50; i < 60; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 0");
+      expect(setup.captureCharFrame()).not.toContain("line 59");
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+    });
+
+    // PR #157 invariant: a mid-turn flush (a tool-call/tool-result/etc, not a bare
+    // transcript-append) must not move a scrolled-up reader's view.
+    test("a mid-turn flush does not move a scrolled-up reader's view", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 0");
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
+      });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 0");
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+    });
+
+    // PR #157 invariant: starting a turn does not itself move a scrolled-up reader's view (the old
+    // reducer's own +1 nudge for TurnStatus's reserved row no longer exists — TurnStatus is just
+    // the scrollbox's own last child now, kept in view by the same sticky behavior as everything
+    // else).
+    test("turn-started does not move a scrolled-up reader's view", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 0");
+
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 0");
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+    });
+
+    // PR #157 invariant: ending a turn does not move a scrolled-up reader's view either (the
+    // mirror-image -1 release no longer exists for the same reason).
+    test("turn-ended does not move a scrolled-up reader's view", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 0");
+
+      dispatch({ type: "turn-ended" });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 0");
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+    });
+
+    // PR #157 invariant: a resize while scrolled up reveals more of the transcript instead of a
+    // static slice — covered directly by "a resize while scrolled to the top reveals more of the
+    // transcript, not a static slice" above; not duplicated here.
+
+    // PR #157 invariant: duplicate/out-of-order turn-lifecycle dispatches (a bare turn-ended with
+    // no turn ever started, or two turn-started in a row) cannot corrupt the view — there is no
+    // scroll-related reducer state left for them to corrupt at all (reducer.test.ts's own former "a
+    // duplicate turn-ended with no active turn leaves a valid offset untouched" test covered the
+    // OLD reducer's equivalent state; this pins the render-visible behavior on the new model
+    // instead, since there is no analogous reducer field left to assert on).
+    test("duplicate/out-of-order turn-lifecycle dispatches do not move a scrolled-up reader's view", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("line 0");
+
+      // A duplicate turn-ended with no turn ever started.
+      dispatch({ type: "turn-ended" });
+      // Two turn-started in a row with no turn-ended between them.
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("line 0");
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+    });
+
+    // TurnStatus (the scrollbox's own last content child while a turn is active) stays visible as
+    // more committed content arrives below it, the same follow-tail guarantee ordinary transcript
+    // rows get.
+    test("TurnStatus stays visible as the scrollbox's last child while committed content keeps arriving", async () => {
+      const { setup, dispatch } = await connect();
+
+      for (let i = 0; i < 50; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
+      });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
+    });
+  });
+
+  // The loop's own success_check: an assistant entry with every requested markdown feature actually
+  // renders as styled/structured output via <markdown>, not raw markdown syntax as text.
+  test("an assistant entry with bold/header/list/link/fenced-code/table renders via <markdown>, not raw syntax", async () => {
+    const { setup, dispatch } = await connect();
+
+    const answer = [
+      "# Heading",
+      "",
+      "**bold text** and a [link](https://example.com)",
+      "",
+      "- item one",
+      "- item two",
+      "",
+      "```js",
+      "const x = 1;",
+      "```",
+      "",
+      "| a | b |",
+      "| - | - |",
+      "| one | two |",
+    ].join("\n");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup);
+
+    const frame = setup.captureCharFrame();
+    // The raw markdown syntax markers themselves are gone — conceal (MarkdownOptions' own default)
+    // strips them once parsed, unlike a plain <text> (the old rendering path), which would show
+    // them verbatim.
+    expect(frame).not.toContain("# Heading");
+    expect(frame).not.toContain("**bold text**");
+    expect(frame).not.toContain("[link](https://example.com)");
+    expect(frame).not.toContain("```");
+    // The actual prose content still renders.
+    expect(frame).toContain("Heading");
+    expect(frame).toContain("bold text");
+    expect(frame).toContain("link");
+    expect(frame).toContain("item one");
+    expect(frame).toContain("item two");
+    expect(frame).toContain("const x = 1;");
+    expect(frame).toContain("one");
+    expect(frame).toContain("two");
+  });
+
   // A transcript shorter than the viewport top-anchors (`justifyContent: "flex-start"`) instead of
   // bottom-padding a mostly-empty screen — the appended content must land near the very top of the
   // frame, not down near InputBox.
