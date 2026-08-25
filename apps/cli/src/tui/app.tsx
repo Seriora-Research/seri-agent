@@ -416,17 +416,6 @@ export function App({
           </text>
         </box>
       )}
-      <box flexDirection="row" justifyContent="space-between">
-        <text>{modeIndicatorText + modeDetail}</text>
-        <box flexDirection="row" gap={1}>
-          {/* `noPanelOpen` too, not just `scrolledUp`: while a panel is open, End
-          is swallowed by the exact same gate `noPanelOpen` already puts on the transcript-scroll
-          keys above — the banner would otherwise keep telling the user to press a key that does
-          nothing until they close the panel first. */}
-          {scrolledUp && noPanelOpen && <text fg={theme.muted}>↑ scrolled — End to follow</text>}
-          {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
-        </box>
-      </box>
       <ErrorLine message={state.commandError} />
       {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
       is waiting on, and answering it (not typing a task or slash command) is the only input that
@@ -490,6 +479,17 @@ export function App({
           onPrefillConsumed={() => dispatch({ type: "input-prefill-consumed" })}
         />
       )}
+      <box flexDirection="row" justifyContent="space-between">
+        <text>{modeIndicatorText + modeDetail}</text>
+        <box flexDirection="row" gap={1}>
+          {/* `noPanelOpen` too, not just `scrolledUp`: while a panel is open, End
+          is swallowed by the exact same gate `noPanelOpen` already puts on the transcript-scroll
+          keys above — the banner would otherwise keep telling the user to press a key that does
+          nothing until they close the panel first. */}
+          {scrolledUp && noPanelOpen && <text fg={theme.muted}>↑ scrolled — End to follow</text>}
+          {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
+        </box>
+      </box>
     </box>
   );
 }

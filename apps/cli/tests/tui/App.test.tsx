@@ -108,6 +108,16 @@ describe("App", () => {
     expect(setup.captureCharFrame()).toContain("⏸ read-only mode on");
   });
 
+  // InputBox is the only bordered element visible at this default state (the test right below
+  // this one), so its bottom "─" rule is a unique, safe anchor for InputBox's own position.
+  test("the mode row renders below the input box, not above it", async () => {
+    const { setup } = await connect({ session: session({ permissionMode: "read-only" }) });
+    const lines = setup.captureCharFrame().split("\n");
+    const modeLineIndex = lines.findIndex((l) => l.includes("read-only mode on"));
+    const inputBottomBorderIndex = lines.reduce((last, l, i) => (l.includes("─") ? i : last), -1);
+    expect(modeLineIndex).toBeGreaterThan(inputBottomBorderIndex);
+  });
+
   // `not.toContain("╭")` is what makes this non-vacuous across all 9 borderStyle sites at once —
   // a stray "rounded" reintroduced anywhere would still leave a rounded corner present elsewhere on
   // screen. `"─"`, not `"┌"`: InputBox (the only bordered element visible at this default state)
