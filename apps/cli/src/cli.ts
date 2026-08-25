@@ -1034,7 +1034,7 @@ function runStart(ctx: RunContext): RunStart {
 // matching what a bare `seri "task"` with no /clear would have started fresh in. An explicit
 // `--resume <id> /clear` is unaffected — that id is honoured regardless of cwd, the same as every
 // other slash command.
-async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> {
+async function handleSlashCommand(ctx: RunContext, deps: CliDeps): Promise<number | undefined> {
   const [name = "", ...commandArgs] = ctx.taskText.split(/\s+/).filter(Boolean);
   const command = SLASH_COMMANDS.get(name);
   if (command === undefined || !command.accepts(commandArgs)) return undefined;
@@ -1044,7 +1044,7 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
   // only make the command fail on a fresh profile for no reason.
   if (command.needsSession === false) {
     try {
-      await command.run(commandArgs, dirs(ctx));
+      await command.run(commandArgs, dirs(ctx), undefined, deps);
       return 0;
     } catch (err) {
       console.error(messageOf(err));
@@ -1071,7 +1071,7 @@ async function handleSlashCommand(ctx: RunContext): Promise<number | undefined> 
         "the last message in this session's saved history was incomplete (an interrupted save) and has been dropped — everything before it is intact",
       ),
     );
-    await command.run(loaded, commandArgs, dirs(ctx));
+    await command.run(loaded, commandArgs, dirs(ctx), undefined, deps);
     return 0;
   } catch (err) {
     console.error(messageOf(err));
@@ -3128,7 +3128,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   // Before prepareSession, never after: a bare `/undo` must act on the resume target rather than
   // mint a session to act on.
-  const slash = await handleSlashCommand(ctx);
+  const slash = await handleSlashCommand(ctx, deps);
   if (slash !== undefined) return slash;
 
   // Open 2 (BYOK-KEY-STORAGE-AND-SETUP.md): a genuinely blank config must not hard-exit before the
