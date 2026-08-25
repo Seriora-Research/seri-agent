@@ -3390,6 +3390,7 @@ async function runTui(
     createElement(App, {
       session: prepared.session,
       route: prepared.route,
+      catalog: prepared.catalog,
       onSubmit,
       onSessionChange,
       onQuit: quit,
