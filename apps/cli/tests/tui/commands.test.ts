@@ -748,11 +748,16 @@ describe("decideAuthOffer", () => {
 
 describe("decideConfigOpen", () => {
   let configConfigDir: string;
-  // Env hygiene for every key this describe block touches, not just the two displayed ones: any
-  // dev box or CI runner with SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND genuinely exported would
-  // otherwise silently fail the "both are unset" assertion below, and SERI_WORKOS_CLIENT_ID is
-  // set directly by this file's own exclusion test further down.
-  const KNOWN_KEYS = ["SERI_WORKOS_CLIENT_ID", "SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
+  // Env hygiene for every key this describe block touches, not just the three displayed ones: any
+  // dev box or CI runner with SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND/SERI_REASONING_EFFORT
+  // genuinely exported would otherwise silently fail the "all are unset" assertion below, and
+  // SERI_WORKOS_CLIENT_ID is set directly by this file's own exclusion test further down.
+  const KNOWN_KEYS = [
+    "SERI_WORKOS_CLIENT_ID",
+    "SERI_VERIFY_ENABLED",
+    "SERI_VERIFY_COMMAND",
+    "SERI_REASONING_EFFORT",
+  ];
   const originalEnv = Object.fromEntries(KNOWN_KEYS.map((name) => [name, process.env[name]]));
 
   beforeEach(() => {
@@ -772,9 +777,13 @@ describe("decideConfigOpen", () => {
     }
   });
 
-  test("both known keys are source: unset on an empty config dir", () => {
+  test("all known keys are source: unset on an empty config dir", () => {
     const rows = decideConfigOpen(configConfigDir);
-    expect(rows.map((row) => row.key)).toEqual(["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"]);
+    expect(rows.map((row) => row.key)).toEqual([
+      "SERI_VERIFY_ENABLED",
+      "SERI_VERIFY_COMMAND",
+      "SERI_REASONING_EFFORT",
+    ]);
     expect(rows.every((row) => row.source === "unset" && row.removable === false)).toBe(true);
   });
 

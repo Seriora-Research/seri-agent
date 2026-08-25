@@ -282,6 +282,18 @@ const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
       takesEffectNextRun: true,
     },
   ],
+  [
+    "SERI_REASONING_EFFORT",
+    {
+      label: "Reasoning effort",
+      description: "Default reasoning effort for models that support it (e.g. low, medium, high).",
+      kind: "string",
+      // Read fresh at request time (config.ts's loadReasoningEffortConfig), not baked into a
+      // long-lived process the way SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND are — a /config write
+      // to this key applies to the very next turn, same as SessionState.reasoningEffort itself.
+      takesEffectNextRun: false,
+    },
+  ],
 ]);
 export const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
 
