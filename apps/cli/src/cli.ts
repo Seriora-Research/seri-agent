@@ -48,6 +48,7 @@ import {
 import { configCommand as configCommandReal } from "./config/commands";
 import {
   loadConfig,
+  loadReasoningEffortConfig,
   loadVerifyConfig,
   persistDefaultReasoningEffort,
   type VerifyConfig,
@@ -318,23 +319,25 @@ function isStepCount(args: string[]): boolean {
 // the hazard is gone from every call site rather than from the ones that remember Object.hasOwn.
 export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   ["/mode", { accepts: (args) => args.length === 0, run: cycleModeCommand }],
-  // `args.length <= 1`, not unconditional (round-2 CodeRabbit/thermo review, item 1): an
-  // unconditional `() => true` let a genuine task starting with the string "/effort" be hijacked
-  // instead of falling through to the model (the exact hazard this table's own header comment, and
-  // /clear's, exist to prevent), and let `effortCommand` silently ignore trailing garbage past
-  // `args[0]` (`/effort auto extra`). Capped at one argument closes both.
+  // `args.length <= 1`, not unconditional: an unconditional `() => true` let a genuine task
+  // starting with the string "/effort" be hijacked instead of falling through to the model (the
+  // exact hazard this table's own header comment, and /clear's, exist to prevent), and let
+  // `effortCommand` silently ignore trailing garbage past `args[0]` (`/effort auto extra`). Capped
+  // at one argument closes both.
   //
-  // `effortCommand` (below) is registered here for the NON-INTERACTIVE path only now (round-4
-  // review, "biggest item" — spec 032): every form of `/effort` (bare, `<level>`, `auto`) is
-  // claimed BEFORE reaching this table on the TUI path (runTui's own onSubmit, below), which
-  // reuses `prepared.catalog`/`prepared.plan` synchronously instead of calling `effortCommand`
-  // through this entry at all. No `mutatesRunState: true` (that field used to sit here, round-2
-  // /code-review finding, item 9 — see git history): it existed solely to gate the TUI's generic
-  // dispatch against `effortCommand`'s two awaited network calls racing a still-running turn's own
-  // `messages-updated` — now that the TUI never reaches this entry for `/effort` at all, there is
-  // nothing left for it to gate. `handleSlashCommand` (the only remaining caller of this entry) is
-  // single-shot, non-interactive: there is no "turn in flight" for a mutation to race there.
-  ["/effort", { accepts: (args) => args.length <= 1, run: effortCommand }],
+  // `effortCommand` (below) is registered here for the NON-INTERACTIVE path only: every form of
+  // `/effort` (bare, `<level>`, `auto`) is claimed BEFORE reaching this table on the TUI path
+  // (runTui's own onSubmit, below), which reuses `prepared.catalog`/`prepared.plan` synchronously
+  // instead of calling `effortCommand` through this entry at all. `mutatesRunState: true` is inert
+  // today for that same reason — the TUI never reaches this entry for `/effort` at all, so there
+  // is currently no in-flight turn for it to gate against. Kept anyway, at zero cost, as the one
+  // thing standing between a future change and the exact race it used to gate: if the TUI's own
+  // `args.length <= 1` interception guard (onSubmit, below) and this table's `accepts` above ever
+  // drift apart, some `/effort` invocation would fall through to `effortCommand`'s own awaited
+  // network calls (`getModelCatalog()`, `fetchAccountPlan()`) racing a still-running turn's own
+  // `messages-updated` — the same full-replace clobber every other `SLASH_COMMANDS` entry that
+  // calls `sessionUpdated()` across an `await` is already gated against.
+  ["/effort", { accepts: (args) => args.length <= 1, run: effortCommand, mutatesRunState: true }],
   ["/undo", { accepts: isStepCount, run: undoCommand, mutatesRunState: true }],
   // A sha and nothing else. `seri "/restore the header spacing"` is a task.
   [
@@ -425,7 +428,7 @@ async function cycleModeCommand(
 
 // /effort's own NON-INTERACTIVE path, mirroring cycleModeCommand's shape above. The TUI path
 // (runTui's own onSubmit, below) claims every form of `/effort` — bare, `<level>`, `auto` — before
-// it ever reaches this table (round-4 review, "biggest item" — spec 032): the awaited network
+// it ever reaches this table: the awaited network
 // calls this function makes below (`getModelCatalog()`, `fetchAccountPlan()`) used to run on the
 // TUI path too, through this same function, which is what forced `mutatesRunState: true` onto its
 // own SLASH_COMMANDS entry — a live turn that completes DURING those two awaits could have its own
@@ -438,16 +441,16 @@ async function cycleModeCommand(
 // Legal tiers are resolved against the model this session is CURRENTLY routed to
 // (resolveSessionRoute/resolveLegalReasoningTiers), not a static per-model catalog lookup — the
 // same opencode #34278 regression class routing.ts's own resolveLegalReasoningTiers guards
-// against. `plan` is fetched live here (M-1, spec 032 review), not threaded from a caller: this
+// against. `plan` is fetched live here, not threaded from a caller: this
 // function runs before prepareSession's own plan fetch has even happened. Omitting it (the prior
 // version of this function did) silently mis-lists tiers for a gateway-routed session: routing.ts's
 // own gateway branch changes route.model/route.provider to the gateway entry, which
 // resolveLegalReasoningTiers is keyed on — the same regression class (opencode #34278) this feature
 // exists to prevent, just triggered by a stale `plan` instead of a stale route. fetchAccountPlan's
 // own login guard skips the network call entirely for a BYOK-only/logged-out session, so the common
-// case pays nothing extra for this. `Promise.all`, not two sequential `await`s (round-4 review item
-// 8): the catalog fetch and the plan fetch are independent, the same reasoning prepareSession's own
-// identical pair already applies.
+// case pays nothing extra for this. `Promise.all`, not two sequential `await`s: the catalog fetch
+// and the plan fetch are independent, the same reasoning prepareSession's own identical pair
+// already applies.
 //
 // The actual arg-parsing/validation/resolution decision (bare/`<level>`/`auto`) is
 // `resolveEffortCommand` (provider/reasoning.ts) — shared with the TUI's own onSubmit interception,
@@ -818,7 +821,7 @@ type ParsedArgs = {
   positionals: string[];
   maxTurns: number | undefined;
   skipPermissions: boolean;
-  // Raw, unvalidated here on purpose (spec 032): legal tiers are route-dependent, and the route
+  // Raw, unvalidated here on purpose: legal tiers are route-dependent, and the route
   // isn't resolved yet at this point in `run()` — validated in prepareSession, once `route`/
   // `catalog` are available, the same deferred-validation shape as everything else route-dependent.
   effort: string | undefined;
@@ -1001,8 +1004,8 @@ function handlePermissionsCommand(positionals: string[], deps: CliDeps): number 
   }
 }
 
-// H-3 (spec 032 review): --effort is scoped to the non-interactive path only (spec 032's Open Q1
-// decision text) — a TTY run's `--effort` must not reach driveLoop at all, or it (a) applies to
+// --effort is scoped to the non-interactive path only — a TTY run's `--effort` must not reach
+// driveLoop at all, or it (a) applies to
 // EVERY turn of the whole session, not "this single invocation", and (b) permanently outranks a
 // later `/effort <level>`, since RunContext.effortFlag always wins over session.reasoningEffort in
 // driveLoop's own `??` chain. Extracted as its own pure function (rather than an inline ternary at
@@ -1029,8 +1032,9 @@ type RunContext = CommandDirs & {
   // session.reasoningEffort/config.json entirely, for this single run only. `undefined` means no
   // flag was given, not "off"/"none" (those are legal tier VALUES a model can offer, resolved the
   // normal session-then-config way when no flag overrides them). Also `undefined` on a TTY
-  // invocation even when the flag WAS given (H-3, spec 032 review) — set once, at `ctx`'s own
-  // construction (`run()`, gated on `!isTTY`), not re-checked here or at either read site.
+  // invocation even when the flag WAS given (resolveEffortFlag's own comment above) — set once, at
+  // `ctx`'s own construction (`run()`, gated on `!isTTY`), not re-checked here or at either read
+  // site.
   effortFlag: string | undefined;
 };
 
@@ -1443,6 +1447,20 @@ async function prepareSession(
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
     // cost and context-window come from the wrong provider's entry.
     const catalogEntry = findCatalogEntry(catalog, route.model, route.provider);
+    // The non-interactive counterpart to runTui's own per-turn notice (runTurn, below): a session
+    // `reasoningEffort` override that the currently resolved route no longer considers legal is
+    // dropped silently by loop.ts's own re-validation gate — surfaced here so this path is never
+    // quieter than the TUI's, gated the same `!isTTY` way the reroute/gateway notices just above
+    // are (runTurn prints the TUI equivalent into the transcript instead).
+    if (
+      session.reasoningEffort !== undefined &&
+      appliedReasoningEffort(session.reasoningEffort, catalogEntry) === undefined &&
+      !isTTY
+    ) {
+      printWarning(
+        `reasoning effort "${session.reasoningEffort}" isn't legal for the current model — this turn runs without it.`,
+      );
+    }
 
     // A model this run merely RESOLVED is deliberately left out of the file. getGroqModel accepts
     // any string — an unknown id is not rejected here, it comes back as a provider 404 mid-run — so
@@ -2050,15 +2068,26 @@ async function runTui(
   };
   // The single tracking variable /effort's own persist-on-success gate needs — see this function's
   // own messages-updated handler (below). Unlike confirmedModel/lastPersistedModel above, there is
-  // no separate "confirmed" mirror here (round-2 review item 6, thermo J-1: the previous
-  // confirmedReasoningEffort variable was provably dead state — it always equaled
-  // session.reasoningEffort immediately after its own mirror-tracking `if`, and nothing else ever
-  // read it, unlike confirmedModel, which onSessionChange genuinely consumes). `session.
-  // reasoningEffort` is read directly wherever confirmedReasoningEffort used to be. `undefined` is
-  // a real, trackable state here (no session override yet, or /effort auto cleared one), unlike
-  // the model pair, which is never optional — a turn that never touches /effort must not write
-  // SERI_REASONING_EFFORT.
-  let lastPersistedReasoningEffort: string | undefined = prepared.session.reasoningEffort;
+  // no separate "confirmed" mirror here: `session.reasoningEffort` is read directly wherever a
+  // confirmed-value mirror would otherwise sit. `undefined` is a real, trackable state here (no
+  // session override yet, or /effort auto cleared one), unlike the model pair, which is never
+  // optional — a turn that never touches /effort must not write SERI_REASONING_EFFORT.
+  //
+  // Seeded from what config.json's own SERI_REASONING_EFFORT key ACTUALLY holds right now, not
+  // from `prepared.session.reasoningEffort` (the session's own, possibly-unconfirmed field) — a
+  // real bug the raw-field seed had: `/effort high` merges into the session (and its own file)
+  // synchronously (the reducer's `effort-resolved` case, or the onSubmit interception's own
+  // `sessionUpdated` call), independently of whether any turn using it has ever succeeded. A
+  // process killed after that merge but before the first successful turn leaves the session file
+  // saying "high" while config.json never got written — and seeding this variable from that same
+  // "high" on the next `--resume` made the persist-on-success check below believe the write had
+  // already happened, silently skipping it forever. Seeding from config.json's own current value
+  // instead means a session override that was never actually confirmed by a successful turn still
+  // triggers exactly one persist attempt the first time it succeeds — the same guarantee this
+  // gate already gives a session that starts here for the very first time.
+  let lastPersistedReasoningEffort: string | undefined = loadReasoningEffortConfig(
+    loadConfig(configDir),
+  );
   // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
   // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
   // what every other function in this closure actually calls now.
@@ -2342,9 +2371,9 @@ async function runTui(
     dispatch({ type: "permissions-resolved", leftoverInput });
   }
 
-  // EffortPanel's own two resolutions (H-1, spec 032 review) — extracted to createEffortHandlers
-  // (round-2 review item 8, thermo S-1), mirroring createSetupHandlers'/createConfigHandlers' own
-  // factory shape. `effort-resolved` is the one action that both clears `pendingEffort` and (only
+  // EffortPanel's own two resolutions — extracted to createEffortHandlers, mirroring
+  // createSetupHandlers'/createConfigHandlers' own factory shape. `effort-resolved` is the one
+  // action that both clears `pendingEffort` and (only
   // when a tier was actually picked) merges it into `state.session`, in the same atomic transition
   // (reducer.ts's own comment on why). This is deliberately the ONLY effect of a pick, same as a
   // /model pick: `session.reasoningEffort` changes immediately, so the very next runTurn call
@@ -2400,7 +2429,7 @@ async function runTui(
     // another instance, say) crashed the running TUI on the very next turn, losing in-progress
     // work. Inside the try, it degrades the same way a getModel failure already does: a
     // command-error the user can see and recover from, not a crash.
-    // `ResolvedRoute` directly (round-4 review item 10), not `ReturnType<typeof resolveRoute>`: the
+    // `ResolvedRoute` directly, not `ReturnType<typeof resolveRoute>`: the
     // `resolveRoute` VALUE was never called from this scope (only `resolveSessionRoute`, just
     // below), so it was imported as a type-only binding purely to spell this declaration — dropped
     // now that the type it names is already imported under its own name.
@@ -2458,7 +2487,7 @@ async function runTui(
     }
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one.
     const catalogEntry = findCatalogEntry(prepared.catalog, modelId, provider);
-    // round-4 review item 5: a reroute is never silent (just above) — neither is a session
+    // A reroute is never silent (just above) — neither is a session
     // `reasoningEffort` override that is about to be silently dropped this turn because it isn't
     // legal for the RESOLVED route. `appliedReasoningEffort` (provider/reasoning.ts) is the exact
     // same legality check loop.ts's own re-validation gate applies before sending, so "undefined
@@ -2562,10 +2591,10 @@ async function runTui(
             // closure) is what THIS turn actually ran with, so a successful messages-updated is
             // exactly the signal to check whether this reasoning-effort override is safe to persist
             // as the new config.json default. `appliedReasoningEffort`, not the raw
-            // `session.reasoningEffort` (round-2 review item 10): the tier sitting in session state
+            // `session.reasoningEffort`: the tier sitting in session state
             // can be stale for the CURRENTLY resolved `catalogEntry` — e.g. `/effort xhigh` was set
             // on a route where it was legal, then `/model` switched to one where it isn't —
-            // loop.ts's own re-validation gate (H-2) already silently drops a tier like that rather
+            // loop.ts's own re-validation gate already silently drops a tier like that rather
             // than sending it, and persisting it anyway here would keep writing a value that just
             // keeps getting silently dropped, every future session inheriting the same dead
             // default. `appliedReasoningEffort` is the one shared function both gates call, so they
@@ -2795,25 +2824,25 @@ async function runTui(
       }
       return;
     }
-    // /effort, like /model just above, is intercepted here — now for EVERY form (bare, `<level>`,
-    // `auto`), not just the bare, picker-opening one (round-4 review, "biggest item" — spec 032).
-    // The bare form still opens EffortPanel (H-1, unchanged); `<level>`/`auto` used to fall through
-    // to the generic SLASH_COMMANDS dispatch below, which called `effortCommand` — a function that
-    // `await`s two real network calls (`getModelCatalog()`, `fetchAccountPlan()`) before it ever
-    // calls `sessionUpdated()`. That gap was a real race, not just a theoretical one: type
-    // `/effort medium`, let a DIFFERENT already-in-flight turn complete DURING those awaits, and
-    // `effortCommand`'s later `session-updated` dispatch — a full replace, not a merge (reducer.ts's
-    // own `case "session-updated"`) — silently discards everything that turn just appended, both
-    // live and on disk. `mutatesRunState: true` (that SLASH_COMMANDS entry's own former field, see
-    // git history) only ever narrowed the window (blocked while a turn was ALREADY in flight at the
-    // moment of typing) — a turn that started and finished entirely during the awaits was never
-    // caught by it. Claiming `<level>`/`auto` here closes the race at its root instead of
-    // narrowing its window further: `prepared.catalog`/`prepared.plan` are already resolved (the
-    // same values /model's own interception above reuses), so route/legal-tier resolution is
-    // synchronous — no `await` sits between reading `liveState.session` and dispatching the result,
-    // so there is no window left for another turn to land in.
+    // /effort, like /model just above, is intercepted here for EVERY form (bare, `<level>`,
+    // `auto`), not just the bare, picker-opening one. The bare form opens EffortPanel; `<level>`/
+    // `auto` are resolved synchronously here too, rather than left to fall through to the generic
+    // SLASH_COMMANDS dispatch below, which calls `effortCommand` — a function that `await`s two
+    // real network calls (`getModelCatalog()`, `fetchAccountPlan()`) before it ever calls
+    // `sessionUpdated()`. Left to reach `effortCommand` from here, that gap would be a real race:
+    // type `/effort medium`, let a DIFFERENT already-in-flight turn complete DURING those awaits,
+    // and `effortCommand`'s later `session-updated` dispatch — a full replace, not a merge
+    // (reducer.ts's own `case "session-updated"`) — would silently discard everything that turn
+    // just appended, both live and on disk. That entry's own `mutatesRunState: true` (SlashCommand's
+    // own field comment) only narrows the window (blocks while a turn is ALREADY in flight at the
+    // moment of typing) — it does not close a race where a turn starts and finishes entirely during
+    // the awaits. Claiming `<level>`/`auto` here closes the race at its root instead:
+    // `prepared.catalog`/`prepared.plan` are already resolved (the same values /model's own
+    // interception above reuses), so route/legal-tier resolution is synchronous — no `await` sits
+    // between reading `liveState.session` and dispatching the result, so there is no window left
+    // for another turn to land in.
     //
-    // `decideEffortOpen` (round-2 review item 8) still owns the bare form: route resolution,
+    // `decideEffortOpen` still owns the bare form: route resolution,
     // legal-tier lookup, and the current-tier-highlighted `selected` index for EffortPanel.
     // `resolveEffortCommand` (provider/reasoning.ts) is the shared decision behind `<level>`/`auto`
     // — the same function `effortCommand` (still SLASH_COMMANDS-registered, non-interactive path
@@ -3285,7 +3314,8 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // Matches prepareSession's own resolution (D7) so /memory and the archivist read the same
     // config.json / memories/ directory a /setup-written key or a config set just landed in.
     configDir: deps.authConfigDir ?? getConfigDir(),
-    // resolveEffortFlag's own comment explains the H-3 fix this is. Gated here, the single point
+    // resolveEffortFlag's own comment explains why this is scoped to the non-interactive path only.
+    // Gated here, the single point
     // ctx is built, not in driveLoop/prepareSession: `undefined` on a TTY run means prepareSession's
     // own --effort validation and driveLoop's own resolution both skip it identically, for free — a
     // TTY invocation of `--effort` is simply inert, the same as it doing nothing at all.

@@ -2662,7 +2662,7 @@ describe("run (/mode)", () => {
   });
 });
 
-// H-3 (spec 032 review): --effort must never apply on a TTY run — resolveEffortFlag is the one
+// --effort must never apply on a TTY run — resolveEffortFlag is the one
 // place that scoping lives (RunContext.effortFlag's own construction, cli.ts). Unit-tested
 // directly rather than through a full `run()` call with `isTTY: true`, which would mount a real
 // TUI (getTuiRenderer) this test environment cannot always drive (tuiPtyWindows.test.ts's own
@@ -2885,7 +2885,7 @@ describe("run (/effort)", () => {
     expect(errors.some((line) => line.includes("Invalid --effort value"))).toBe(true);
   });
 
-  // M-1 (spec 032 review): effortCommand's own resolveRoute() call must thread `plan`, or a
+  // effortCommand's own resolveRoute() call must thread `plan`, or a
   // gateway-routed session lists tiers for the wrong route entirely. Fixture: "gateway-model" has
   // NO local groq/openrouter key configured, so it can only be reached via the gateway
   // (openrouter's own "groq/gateway-model" sibling, routing.ts's own route-key grouping) — and
@@ -2963,20 +2963,20 @@ describe("run (/effort)", () => {
     expect(logs.some((line) => /Legal tiers for the current model: low\./.test(line))).toBe(false);
   });
 
-  // Round-4 review item 13: /effort's own SLASH_COMMANDS registration, mirroring "run (/clear)"'s
-  // own "is registered with an exact, empty accepts, mutatesRunState, and scopeTargetToCwd" test.
-  test("is registered with an at-most-one-argument accepts and no mutatesRunState", () => {
+  // /effort's own SLASH_COMMANDS registration, mirroring "run (/clear)"'s own "is registered with
+  // an exact, empty accepts, mutatesRunState, and scopeTargetToCwd" test.
+  test("is registered with an at-most-one-argument accepts and mutatesRunState", () => {
     const effort = SLASH_COMMANDS.get("/effort");
     if (effort === undefined) throw new Error("/effort is not registered");
     expect(effort.accepts([])).toBe(true);
     expect(effort.accepts(["medium"])).toBe(true);
     expect(effort.accepts(["auto"])).toBe(true);
     expect(effort.accepts(["medium", "extra"])).toBe(false);
-    // round-4 review, "biggest item": the TUI path now claims every form of /effort (bare,
-    // `<level>`, `auto`) before this table is ever reached (runTui's own onSubmit) — the race
-    // `mutatesRunState: true` used to gate against no longer reaches this entry at all, so the
-    // field is gone (this entry's own comment, cli.ts, has the full account).
-    expect(effort.mutatesRunState).toBeUndefined();
+    // Inert on the TUI path today (its own onSubmit interception claims every /effort form before
+    // this table is ever reached for it) but kept as insurance against this table's own `accepts`
+    // above and that interception's matching guard drifting apart in a later change — this
+    // entry's own comment, cli.ts, has the full account.
+    expect(effort.mutatesRunState).toBe(true);
   });
 
   // Mirrors "`/clear the screen please` stays a task", above: /effort's own `accepts()` form caps
