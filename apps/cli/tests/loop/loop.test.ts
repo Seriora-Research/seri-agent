@@ -682,4 +682,98 @@ describe("runLoop", () => {
     expect(events.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
     expect(model.doStreamCalls).toHaveLength(totalIterations);
   });
+
+  // H-2 (spec 032 review): opts.reasoningEffort must be re-validated against the CURRENTLY
+  // resolved catalog entry on every call, not just trusted from whatever set it — a stale tier
+  // from a route that has since changed (e.g. a /model switch to a model with different or no
+  // reasoningOptions) must never reach the provider.
+  describe("reasoningEffort re-validation against the resolved catalog entry", () => {
+    const reasoningCatalog = {
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+      entries: [
+        {
+          id: "reasoning-model",
+          provider: "anthropic" as const,
+          displayName: "Reasoning Model",
+          family: "test",
+          contextWindow: 1000,
+          maxOutputTokens: 100,
+          toolCall: true,
+          reasoning: true,
+          reasoningOptions: [{ type: "effort" as const, values: ["low", "medium", "high"] }],
+          pricing: undefined,
+        },
+      ],
+    };
+
+    test("a tier legal for the resolved catalog entry is sent as providerOptions", async () => {
+      const model = new MockLanguageModelV4({
+        doStream: async () => streamResult(textOnlyChunks("Hello")),
+      });
+
+      await collect(
+        runLoop({
+          model,
+          tools: {},
+          messages: baseMessages,
+          permissionMode: "auto",
+          provider: "anthropic",
+          modelId: "reasoning-model",
+          catalog: reasoningCatalog,
+          reasoningEffort: "medium",
+        }),
+      );
+
+      expect(model.doStreamCalls[0]?.providerOptions).toEqual({
+        anthropic: { thinking: { type: "enabled", budgetTokens: 10000 } },
+      });
+    });
+
+    // The concrete break the reviewer named: a tier legal on one route (or set before a /model
+    // switch) that is no longer legal for the route actually in force this call — silently
+    // dropped, never sent, and the turn is not failed over it.
+    test("a tier NOT legal for the resolved catalog entry is silently dropped, not sent", async () => {
+      const model = new MockLanguageModelV4({
+        doStream: async () => streamResult(textOnlyChunks("Hello")),
+      });
+
+      await collect(
+        runLoop({
+          model,
+          tools: {},
+          messages: baseMessages,
+          permissionMode: "auto",
+          provider: "anthropic",
+          modelId: "reasoning-model",
+          catalog: reasoningCatalog,
+          reasoningEffort: "xhigh",
+        }),
+      );
+
+      expect(model.doStreamCalls[0]?.providerOptions).toBeUndefined();
+    });
+
+    // Same drop, for a model with no reasoningOptions at all (rather than one whose options don't
+    // include this particular tier) — the other half of the regression class.
+    test("a tier set but the resolved model has no reasoningOptions at all is also dropped", async () => {
+      const model = new MockLanguageModelV4({
+        doStream: async () => streamResult(textOnlyChunks("Hello")),
+      });
+
+      await collect(
+        runLoop({
+          model,
+          tools: {},
+          messages: baseMessages,
+          permissionMode: "auto",
+          provider: "anthropic",
+          modelId: "some-unlisted-model",
+          catalog: reasoningCatalog,
+          reasoningEffort: "medium",
+        }),
+      );
+
+      expect(model.doStreamCalls[0]?.providerOptions).toBeUndefined();
+    });
+  });
 });

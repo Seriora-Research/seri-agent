@@ -11,7 +11,7 @@ import type {
 import { streamText } from "ai";
 import { checkPermission, type PermissionMode } from "../gate/gate";
 import { type CostReport, reportForOpenRouter, reportFromCatalogPricing } from "../provider/cost";
-import { buildReasoningProviderOptions } from "../provider/reasoning";
+import { buildReasoningProviderOptions, legalTiersFor } from "../provider/reasoning";
 import {
   type CompactionSummary,
   compactMessages,
@@ -229,6 +229,16 @@ export async function* runLoop(opts: {
       : undefined;
   const contextWindowSize =
     opts.contextWindowSize ?? catalogEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE;
+  // Re-validated against the CURRENTLY resolved catalogEntry, not just trusted from whatever set
+  // it (H-2, spec 032 review): a route can change between when a tier was set and when a turn
+  // actually sends it — e.g. `/effort xhigh` on a route where it's legal, then `/model` switches
+  // to a route where `xhigh` isn't legal or the entry has no reasoningOptions at all. An illegal
+  // tier is silently dropped (not sent, and this never fails the turn), matching research.md's own
+  // stated mitigation for missing/stale catalog data ("treat as no control offered").
+  const legalReasoningEffort =
+    opts.reasoningEffort !== undefined && legalTiersFor(catalogEntry).includes(opts.reasoningEffort)
+      ? opts.reasoningEffort
+      : undefined;
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
   const preserveRecentMessages = opts.preserveRecentMessages ?? DEFAULT_PRESERVE_RECENT_MESSAGES;
   const messages: ModelMessage[] = [...opts.messages];
@@ -319,8 +329,8 @@ export async function* runLoop(opts: {
         system: opts.system,
         abortSignal: opts.signal,
         maxRetries: MAX_RETRIES,
-        ...(opts.reasoningEffort && opts.provider
-          ? { providerOptions: buildReasoningProviderOptions(opts.provider, opts.reasoningEffort) }
+        ...(legalReasoningEffort && opts.provider
+          ? { providerOptions: buildReasoningProviderOptions(opts.provider, legalReasoningEffort) }
           : {}),
         onLanguageModelCallStart: () => {
           modelCallStarts++;
