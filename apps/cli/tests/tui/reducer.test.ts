@@ -24,17 +24,17 @@ function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionSt
 }
 
 describe("initialTuiState", () => {
-  test("starts with an empty transcript and a mode indicator matching the session", () => {
+  test("starts with an empty transcript and the session's own permission mode", () => {
     const state = initialTuiState(session({ permissionMode: "read-only" }));
 
     expect(state.transcript).toEqual([]);
     expect(state.streaming).toBe("");
-    expect(state.modeIndicator).toBe("⏸ read-only mode on");
+    expect(state.session.permissionMode).toBe("read-only");
   });
 });
 
 describe("tuiReducer: session-updated", () => {
-  test("replaces the session and refreshes the mode indicator", () => {
+  test("replaces the session", () => {
     const state = initialTuiState(session({ permissionMode: "read-only" }));
     const next = tuiReducer(state, {
       type: "session-updated",
@@ -42,7 +42,6 @@ describe("tuiReducer: session-updated", () => {
     });
 
     expect(next.session.permissionMode).toBe("auto");
-    expect(next.modeIndicator).toBe("⏵⏵ bypass permissions on");
   });
 });
 
@@ -158,12 +157,11 @@ describe("tuiReducer: transcript-cleared", () => {
     expect(next.streaming).toBe("");
   });
 
-  test("leaves session and modeIndicator untouched", () => {
+  test("leaves session untouched", () => {
     const before = stateBeforeClear();
     const next = tuiReducer(before, { type: "transcript-cleared" });
 
     expect(next.session).toBe(before.session);
-    expect(next.modeIndicator).toBe(before.modeIndicator);
   });
 });
 

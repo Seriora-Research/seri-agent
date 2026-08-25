@@ -2155,12 +2155,20 @@ async function runTui(
   // `sessionUpdated`, not a raw dispatch, for the same reason `cycleModeCommand` does — it is the
   // one thing this file documents as "the only thing that dispatches session-updated at all" on
   // the TUI path (this function's own header comment above), and a second dispatcher would make
-  // that comment describe an invariant the code no longer has. Not awaited: nothing here needs to
-  // sequence after the persist the way `rewindCommand`'s `recordBarrier()` does. No `.message`
-  // call: Shift+Tab is silent, unlike `/mode`, which prints its own transcript line.
+  // that comment describe an invariant the code no longer has. No `.message` call: Shift+Tab is
+  // silent, unlike `/mode`, which prints its own transcript line.
+  // `.catch`, not bare `void`: `cycleModeCommand` gets the identical failure mode (a `sessionUpdated`
+  // rejection, e.g. a save failure — this file's own comment on `onSessionChange` above) caught by
+  // the try/catch around `command.run` further below, which turns it into a `command-error`
+  // dispatch. This keypress isn't routed through that try/catch, so an un-caught rejection here
+  // would instead reach `runtime/renderer.ts`'s `process.on("unhandledRejection", ...)` handler,
+  // which calls `process.exit(1)` — crashing the whole TUI from a keypress that, via /mode, would
+  // have degraded gracefully with just an error banner.
   function onCycleMode(): void {
     const { next } = decideModeCycle(liveState.session);
-    void tuiPresenter(dispatch, awaitNextPersist).sessionUpdated(next);
+    tuiPresenter(dispatch, awaitNextPersist)
+      .sessionUpdated(next)
+      .catch((err: unknown) => dispatch({ type: "command-error", message: messageOf(err) }));
   }
 
   const { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack } = createSetupHandlers({

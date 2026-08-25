@@ -4,13 +4,11 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import type { LanguageModelUsage, ModelMessage } from "ai";
 import { toolAllowedLine, toolResultLine } from "../../cli/output";
-import type { PermissionMode } from "../../gate/gate";
 import type { LoopEvent } from "../../loop/loop";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
 import {
   estimateTokens,
-  MODE_LABEL,
   type TokenProgress,
   type TranscriptEntry,
   type TranscriptRole,
@@ -82,7 +80,6 @@ export type TuiState = {
   // decide whether to render at all. `startedAt` is a wall-clock timestamp, not a running counter —
   // see TurnStatus's own comment for why.
   turn: { startedAt: number; tokens: TokenProgress } | undefined;
-  modeIndicator: string;
   // The in-flight write_file/edit call, if any — set on that tool's own tool-call event, cleared
   // on its tool-result/permission-denied. A dedicated field rather than App.tsx string-matching
   // `status`'s rendered text (`"Running write_file…"`) against the last transcript line, which
@@ -154,10 +151,6 @@ export type TuiState = {
   route: ResolvedRoute | undefined;
 };
 
-function modeIndicator(mode: PermissionMode): string {
-  return MODE_LABEL[mode];
-}
-
 // What "an empty transcript" means, as a single value rather than fields independently kept
 // in sync at two call sites (initialTuiState below, and the `transcript-cleared` case's own
 // comment on why every one of them must move together): a future field added to this set only
@@ -186,7 +179,6 @@ export function initialTuiState(
     ...EMPTY_TRANSCRIPT,
     status: "",
     turn: undefined,
-    modeIndicator: modeIndicator(session.permissionMode),
     pendingTool: undefined,
     commandError: undefined,
     pendingApproval: undefined,
@@ -309,11 +301,7 @@ export type Dispatch = (action: TuiAction) => void;
 export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
   switch (action.type) {
     case "session-updated":
-      return {
-        ...state,
-        session: action.session,
-        modeIndicator: modeIndicator(action.session.permissionMode),
-      };
+      return { ...state, session: action.session };
     // pushLine, not a bare append: this used to be harmless when transcript-append had no real
     // callers, but tuiPresenter.message, undoPlanLines/recoveryLines and quit()'s own "quitting -
     // cancelling..." line all go through this case now, and the last of those fires specifically
@@ -347,8 +335,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return { ...state, pendingModelPicker: { entries: action.entries } };
     case "model-picker-resolved":
       // Merged into `state.session` (this reducer's own current session), not a caller-captured
-      // one — see TuiAction's own comment on `pick`. `permissionMode` is untouched by a pick, so
-      // (unlike session-updated, above) there is no `modeIndicator` to recompute here.
+      // one — see TuiAction's own comment on `pick`.
       //
       // `route` is also updated optimistically here, not just `session` — otherwise the status
       // bar (which reads `state.route`) stays on the OLD model until the next turn's

@@ -18,6 +18,7 @@ import type { ModelMessage } from "ai";
 import { checkpointStoreDir } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, resolveRef } from "../../src/checkpoint/shadowGit";
 import { loadSession, saveSession } from "../../src/session/session";
+import { childScriptInput } from "./helpers";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 const SESSION_MODULE = pathToFileURL(join(import.meta.dir, "../../src/session/session.ts")).href;
@@ -38,29 +39,6 @@ function childScriptCancel(dir: string): string {
     `  console.log("\\nRUNLOOP_ABORTED aborted=" + opts.signal.aborted);`,
     `  yield { type: "done", reason: "aborted" };`,
     `  return opts.messages;`,
-    `}`,
-    `await cli.run(["do", "a", "task"], {`,
-    `  runLoop: runLoopFake,`,
-    `  getGroqModel: () => ({}),`,
-    `  loadAgentsFile: () => "",`,
-    `  isTTY: process.stdout.isTTY,`,
-    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
-    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
-    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
-    `});`,
-  ].join("\n");
-}
-
-// A runLoop that never settles, so the TUI stays mounted and interactive for as long as the test
-// needs to type into it — nothing here is about the loop finishing, only about the input box and
-// the slash-command dispatch wired in Phase 5.
-function childScriptInput(dir: string): string {
-  return [
-    `process.env.GROQ_API_KEY = "fake-test-key";`,
-    `const cli = await import(${JSON.stringify(CLI)});`,
-    `async function* runLoopFake(opts) {`,
-    `  console.log("\\nRUNLOOP_READY");`,
-    `  await new Promise(() => {});`,
     `}`,
     `await cli.run(["do", "a", "task"], {`,
     `  runLoop: runLoopFake,`,
@@ -2039,6 +2017,47 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await sawLine("permission mode is now read-only");
     } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // Regression: onCycleMode's own sessionUpdated call used to be a bare `void`, unlike
+  // /mode's cycleModeCommand, which is `await`ed inside the try/catch around `command.run` — so a
+  // save failure there surfaces as a caught rejection (this file's own "could not save the
+  // session" tests, elsewhere) while the identical failure from Shift+Tab became an unhandled
+  // rejection instead. `runtime/renderer.ts`'s own `process.on("unhandledRejection", ...)` handler
+  // calls `process.exit(1)` — the whole TUI would crash from a keypress that, via /mode, degrades
+  // gracefully. Sabotages `sessionsDir` the same way the /clear persist-failure test above does, so
+  // Shift+Tab's own save fails, and confirms both the error surfaces AND the process is still
+  // alive afterward (answers a second, unrelated keypress) — a crash would fail the second half
+  // silently, not loudly, since `sawLine` would just hang until the test's own timeout.
+  test("shift+tab shows an error instead of crashing the TUI when its own persist fails", async () => {
+    const scriptPath = join(dir, "child-input-cycle-persist-failure.mjs");
+    writeFileSync(scriptPath, childScriptInput(dir));
+
+    const sessionsDir = join(dir, "sessions");
+    const { child, sawLine } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+      await sawLine("approve-each mode on");
+
+      // Read+execute only: saveSession's atomic write (a temp file plus a rename into this
+      // directory) can no longer create the mode-cycled session's .jsonl.
+      chmodSync(sessionsDir, 0o500);
+
+      child.stdin?.write("\x1b[Z");
+      await sawLine("could not save the session");
+
+      chmodSync(sessionsDir, 0o700);
+
+      // Proof the process is still alive, not just that the error line appeared: a real second
+      // command still gets a real response.
+      child.stdin?.write("/mode");
+      await sawLine("/mode");
+      child.stdin?.write("\r");
+      await sawLine("permission mode is now");
+    } finally {
+      chmodSync(sessionsDir, 0o700);
       child.kill("SIGKILL");
     }
   }, 60_000);
@@ -4908,7 +4927,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine, exited, rawOccurrences } = await startChild(scriptPath, dir);
       try {
-        // The mode-indicator/input box's own default-session label (modeIndicator, reducer.ts) —
+        // The mode-indicator/input box's own default-session label (MODE_LABEL, util/format.ts) —
         // proof the TUI actually mounted rather than the process just sitting there.
         await sawLine("approve-each mode on");
         // Negative control: nothing auto-started a turn. wait100ms first, matching every other

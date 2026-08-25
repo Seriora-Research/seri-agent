@@ -178,8 +178,8 @@ export type AppProps = {
   // `--dangerously-skip-permissions` (already a `runTui` parameter, cli.ts) overrides
   // `getPermissionMode()` (cli.ts) to `"auto"` regardless of what `session.permissionMode` says —
   // this is the single render-time mirror of that override: the indicator must not claim a mode
-  // the gate isn't actually enforcing. `state.session.permissionMode`/`state.modeIndicator` stay
-  // the normal, untouched source everywhere else (the reducer itself is not changed for this flag).
+  // the gate isn't actually enforcing. `state.session.permissionMode` stays the normal, untouched
+  // source everywhere else (the reducer itself is not changed for this flag).
   // Also makes Shift+Tab inert while set, checked inside this component rather than left to every
   // caller to remember: a functioning binding would silently mutate and persist a session field
   // the gate is ignoring, with zero visible feedback.

@@ -2,10 +2,14 @@
 // inputRenderCost.test.tsx needed near-identical `session`/`route`/`flush`, so a third file
 // (inputThrottle.test.tsx) reusing `flush` doesn't have to re-derive it a third time either.
 
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import type { ModelMessage } from "ai";
 import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
+
+const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
 export function session(
   overrides: Partial<SessionState<ModelMessage>> = {},
@@ -85,4 +89,29 @@ export async function flushMarkdown(
   // unsettled frame — the two look identical to whoever reads the failure, but only one of them
   // means "the markdown build never finished."
   throw new Error("flushMarkdown: content never settled within 3000ms");
+}
+
+// Shared between tuiPty.test.ts (real pty, POSIX) and tuiPtyWindows.test.ts (real ConPTY,
+// Windows) — a runLoop that never settles, so the TUI stays mounted and interactive for as long
+// as a test needs to type into it. Both suites need byte-identical child-process behavior for
+// their own cross-platform comparisons to mean anything, so this has exactly one definition
+// rather than two that could silently drift apart.
+export function childScriptInput(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
 }

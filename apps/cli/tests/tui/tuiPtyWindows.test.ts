@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 // below for why: node-pty ships no Linux prebuild, and a top-level `import` would still be
 // requested by `bun test` on ubuntu/macos CI even with the test body itself skipped).
 import type * as PtyModule from "node-pty";
+import { childScriptInput } from "./helpers";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
@@ -100,29 +101,6 @@ function startChildNodePty(pty: typeof PtyModule, scriptPath: string, cwd: strin
   };
 
   return { term, chunks, waitFor, decodedSoFar: () => decoded, exited: exitedPromise };
-}
-
-// Same shape as tuiPty.test.ts's own childScriptInput: a runLoop that never settles, so the
-// process stays alive and interactive for a keypress to reach it — unlike childScriptAltScreen
-// above, which completes a turn immediately and exists only for the enter/exit lifecycle itself.
-function childScriptInput(dir: string): string {
-  return [
-    `process.env.GROQ_API_KEY = "fake-test-key";`,
-    `const cli = await import(${JSON.stringify(CLI)});`,
-    `async function* runLoopFake(opts) {`,
-    `  console.log("\\nRUNLOOP_READY");`,
-    `  await new Promise(() => {});`,
-    `}`,
-    `await cli.run(["do", "a", "task"], {`,
-    `  runLoop: runLoopFake,`,
-    `  getGroqModel: () => ({}),`,
-    `  loadAgentsFile: () => "",`,
-    `  isTTY: process.stdout.isTTY,`,
-    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
-    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
-    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
-    `});`,
-  ].join("\n");
 }
 
 // Same orphan risk as the winpty version, different mechanism: ConPTY's wrapped child is a
