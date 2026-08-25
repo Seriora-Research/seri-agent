@@ -102,6 +102,29 @@ function startChildNodePty(pty: typeof PtyModule, scriptPath: string, cwd: strin
   return { term, chunks, waitFor, decodedSoFar: () => decoded, exited: exitedPromise };
 }
 
+// Same shape as tuiPty.test.ts's own childScriptInput: a runLoop that never settles, so the
+// process stays alive and interactive for a keypress to reach it — unlike childScriptAltScreen
+// above, which completes a turn immediately and exists only for the enter/exit lifecycle itself.
+function childScriptInput(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  await new Promise(() => {});`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // Same orphan risk as the winpty version, different mechanism: ConPTY's wrapped child is a
 // separate OS process from this test's own, and `term.kill()` alone was not enough to guarantee
 // its termination in every run observed while building this test. Matched by the unique script
@@ -276,5 +299,58 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
         killOrphansByScriptPath(scriptPath);
       }
     }, 90_000);
+
+    // E1's own measurement (the plan's risk table): Anthropic documents Bun not enabling
+    // ENABLE_VIRTUAL_TERMINAL_INPUT as a real failure mode for exactly this Node/Bun-on-Windows
+    // runtime family — Shift+Tab (`\x1b[Z`) might never reach the app at all on native Windows.
+    // This is the evidence that decides whether the conditional Alt+M fallback is needed.
+    test("shift+tab (\\x1b[Z) changes the rendered mode label on a real Windows console", async () => {
+      const scriptPath = join(dir, "child-input.mjs");
+      writeFileSync(scriptPath, childScriptInput(dir));
+
+      const pty = await import("node-pty");
+      const { term, waitFor, decodedSoFar } = startChildNodePty(pty, scriptPath, dir);
+      try {
+        // Same splash-dismiss dance as the alt-screen test above (its own comment explains why:
+        // the welcome splash mounts ahead of the normal flow on every interactive launch).
+        const sawSplash = await waitFor("SERI", 10_000);
+        if (sawSplash) {
+          try {
+            term.write("\x1b");
+            await new Promise((r) => setTimeout(r, 100));
+          } catch {}
+        }
+
+        const sawReady = await waitFor("RUNLOOP_READY", 10_000);
+        if (!sawReady) {
+          throw new Error(
+            `child never printed "RUNLOOP_READY"; got ${JSON.stringify(decodedSoFar())}`,
+          );
+        }
+        const sawDefaultMode = await waitFor("approve-each mode on", 10_000);
+        if (!sawDefaultMode) {
+          throw new Error(
+            `child never rendered the default mode label; got ${JSON.stringify(decodedSoFar())}`,
+          );
+        }
+
+        try {
+          term.write("\x1b[Z");
+        } catch {}
+
+        const sawCycled = await waitFor("bypass permissions on", 10_000);
+        if (!sawCycled) {
+          throw new Error(
+            `shift+tab never changed the rendered mode label; got ${JSON.stringify(decodedSoFar())}`,
+          );
+        }
+        expect(sawCycled).toBe(true);
+      } finally {
+        try {
+          term.kill();
+        } catch {}
+        killOrphansByScriptPath(scriptPath);
+      }
+    }, 60_000);
   },
 );
