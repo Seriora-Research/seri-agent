@@ -46,7 +46,13 @@ import {
   usageError,
 } from "./cli/output";
 import { configCommand as configCommandReal } from "./config/commands";
-import { loadVerifyConfig, type VerifyConfig } from "./config/config";
+import {
+  loadConfig,
+  loadReasoningEffortConfig,
+  loadVerifyConfig,
+  persistDefaultReasoningEffort,
+  type VerifyConfig,
+} from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
 import { messageOf } from "./errors";
 import type { PermissionMode } from "./gate/gate";
@@ -80,7 +86,12 @@ import { configuredProviders, PROVIDER_DISPLAY_NAMES, tuiMissingKeyMessage } fro
 import { dispatchModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
-import { gatewayCoverageInGroup, type ResolvedRoute, resolveRoute } from "./provider/routing";
+import {
+  gatewayCoverageInGroup,
+  type ResolvedRoute,
+  resolveLegalReasoningTiers,
+  resolveRoute,
+} from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
 import { awaitsReply } from "./session/awaitsReply";
 import {
@@ -301,6 +312,9 @@ function isStepCount(args: string[]): boolean {
 // the hazard is gone from every call site rather than from the ones that remember Object.hasOwn.
 export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   ["/mode", { accepts: (args) => args.length === 0, run: cycleModeCommand }],
+  // Unlike every other entry here, `accepts` is unconditional: effortCommand's own comment
+  // explains why (no live picker screen to lack on the non-interactive path).
+  ["/effort", { accepts: () => true, run: effortCommand }],
   ["/undo", { accepts: isStepCount, run: undoCommand, mutatesRunState: true }],
   // A sha and nothing else. `seri "/restore the header spacing"` is a task.
   [
@@ -387,6 +401,77 @@ async function cycleModeCommand(
   // when persistence happens.
   await presenter.sessionUpdated(next);
   presenter.message(message);
+}
+
+// Session override wins, falling back to the config default — used by effortCommand's own
+// no-arg print branch. The `--effort` CLI flag bypasses this resolver entirely (RunContext.
+// effortFlag, read directly in driveLoop), never reaching session.reasoningEffort or config.json.
+function resolveReasoningEffort(
+  session: SessionState<ModelMessage>,
+  config: Record<string, string>,
+): string | undefined {
+  return session.reasoningEffort ?? loadReasoningEffortConfig(config);
+}
+
+// /effort, mirroring cycleModeCommand's shape above. Unlike /model, this IS registered in
+// SLASH_COMMANDS (accepts: () => true, below) rather than intercepted in runTui's onSubmit:
+// there is no live picker screen here for the non-interactive path to lack — every form (a
+// level, "auto", or no argument) resolves through the ordinary session/presenter machinery every
+// other SLASH_COMMANDS entry already uses. `args.length === 0` therefore always means "print the
+// current resolved tier," on both the TUI and non-interactive paths — a live, arrow-key-adjustable
+// picker (research.md's Open Q2) is not built here; see spec 032's implementer report for why.
+//
+// Legal tiers are resolved against the model this session is CURRENTLY routed to
+// (resolveRoute/resolveLegalReasoningTiers), not a static per-model catalog lookup — the same
+// opencode #34278 regression class routing.ts's own resolveLegalReasoningTiers guards against.
+// `plan` is omitted (resolveRoute defaults to `null`): it only affects gateway-fallback routing,
+// which does not change which reasoning tiers a resolved (model, provider) pair legally offers.
+async function effortCommand(
+  session: SessionState<ModelMessage>,
+  args: string[],
+  dirs: CommandDirs,
+  presenter: CommandPresenter = consolePresenter(dirs),
+): Promise<void> {
+  const config = loadConfig(dirs.configDir);
+  const catalog = await getModelCatalog();
+  const configured = configuredProviders(dirs.configDir);
+  const requestedModel = session.model ?? resolveDefaultModel(dirs.configDir).model;
+  const requestedProvider = session.provider ?? DEFAULT_PROVIDER;
+  const route = resolveRoute(
+    catalog,
+    { model: requestedModel, provider: requestedProvider },
+    configured,
+  );
+  const legalTiers = resolveLegalReasoningTiers(route, catalog);
+
+  if (args.length === 0) {
+    const current = resolveReasoningEffort(session, config) ?? "unset";
+    presenter.message(
+      legalTiers.length === 0
+        ? `Reasoning effort: ${current} (this model has no reasoning-effort tiers available)`
+        : `Reasoning effort: ${current}. Legal tiers for the current model: ${legalTiers.join(", ")}.`,
+    );
+    return;
+  }
+
+  if (args[0] === "auto") {
+    await presenter.sessionUpdated({ ...session, reasoningEffort: undefined });
+    presenter.message("Reasoning effort: auto (falls back to the config default).");
+    return;
+  }
+
+  const tier = args[0] as string;
+  if (!legalTiers.includes(tier)) {
+    presenter.message(
+      legalTiers.length === 0
+        ? "This model has no reasoning-effort tiers available."
+        : `Invalid reasoning effort "${tier}". Legal tiers: ${legalTiers.join(", ")}.`,
+    );
+    return;
+  }
+
+  await presenter.sessionUpdated({ ...session, reasoningEffort: tier });
+  presenter.message(`Reasoning effort: ${tier}`);
 }
 
 // The step the user asked for, not the record's `seq`. `seq` is the 0-based index of a tool
@@ -1919,6 +2004,13 @@ async function runTui(
     model: prepared.route.model,
     provider: prepared.route.provider,
   };
+  // The same pair of tracking variables as confirmedModel/lastPersistedModel above, mirrored for
+  // /effort's own session.reasoningEffort — see this function's own messages-updated handler
+  // (below) for the confirm-then-persist gate itself. `undefined` is a real, trackable state here
+  // (no session override yet, or /effort auto cleared one), unlike the model pair, which is never
+  // optional — a turn that never touches /effort must not write SERI_REASONING_EFFORT.
+  let confirmedReasoningEffort: string | undefined = prepared.session.reasoningEffort;
+  let lastPersistedReasoningEffort: string | undefined = prepared.session.reasoningEffort;
   // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
   // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
   // what every other function in this closure actually calls now.
@@ -2322,6 +2414,10 @@ async function runTui(
     // untouched: this only caps attempts to at most one per turn, it does not suppress the next
     // turn's own attempt.
     let persistAttemptedThisTurn = false;
+    // Same one-attempt-per-turn cap as persistAttemptedThisTurn above, independent of it: the
+    // model pair and the reasoning-effort override are two different config.json keys, and a
+    // turn that persists one must not be blocked from also persisting the other.
+    let reasoningEffortPersistAttemptedThisTurn = false;
     // Boxed rather than a bare `unknown`: a rejection whose value is itself `undefined` (e.g. a
     // bare `Promise.reject()`) must still be distinguishable from "no error happened" below, or
     // the `!== undefined` check silently treats it as success and leaves H-2's own hang reopened.
@@ -2379,6 +2475,30 @@ async function runTui(
               } catch (err) {
                 const message = messageOf(err);
                 printWarning(`could not save the default model: ${message}`);
+              }
+            }
+            // /effort's own confirm-then-persist pair, same shape as confirmedModel/
+            // lastPersistedModel just above: `session` (runTurn's own parameter, captured by this
+            // closure) is what THIS turn actually ran with, so a successful messages-updated is
+            // exactly the signal that this reasoning-effort override is safe to persist as the new
+            // config.json default. `undefined` (no override, or /effort auto) never persists —
+            // there is nothing to write, and clearing a session override must not also clear the
+            // config default it falls back to.
+            if (confirmedReasoningEffort !== session.reasoningEffort) {
+              confirmedReasoningEffort = session.reasoningEffort;
+            }
+            if (
+              !reasoningEffortPersistAttemptedThisTurn &&
+              confirmedReasoningEffort !== undefined &&
+              confirmedReasoningEffort !== lastPersistedReasoningEffort
+            ) {
+              reasoningEffortPersistAttemptedThisTurn = true;
+              try {
+                persistDefaultReasoningEffort(confirmedReasoningEffort, configDir);
+                lastPersistedReasoningEffort = confirmedReasoningEffort;
+              } catch (err) {
+                const message = messageOf(err);
+                printWarning(`could not save the default reasoning effort: ${message}`);
               }
             }
           }

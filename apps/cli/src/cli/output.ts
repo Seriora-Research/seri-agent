@@ -26,6 +26,9 @@ export const USAGE = `Usage:
   seri --continue [task]          continue the most recent session
   seri --resume <id> [task]       continue that session
   seri [--resume <id>] /mode      cycle the permission mode
+  seri [--resume <id>] /effort [level|auto]
+                                    show, set to <level>, or clear (auto) this session's
+                                    reasoning-effort override — legal levels depend on the model
   /model (inside the TUI)         open the model picker — not a seri subcommand, same reasoning
                                     as /exit below: there is no picker to open outside a live TUI
   /setup (inside the TUI)         add, replace or remove a provider API key — not a seri
@@ -55,6 +58,9 @@ Options:
   --max-turns <n>                 stop after n model turns (default 500)
   /max-turns <n> (inside the TUI) override --max-turns for the rest of the session, taking
                                     effect on the next turn — not a seri subcommand
+  --effort <level>                set the reasoning effort for this run only, e.g. low, medium,
+                                    high (never saved; SERI_REASONING_EFFORT sets a persistent
+                                    default)
   --profile <name>                use the named profile's config, auth, permissions, sessions
                                     and checkpoints (or SERI_PROFILE; the flag wins)
   /profile new <name> (inside the TUI)
