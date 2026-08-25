@@ -24,7 +24,7 @@ import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
 import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS } from "../../src/cli";
 import { USAGE } from "../../src/cli/output";
-import { setConfigValue } from "../../src/config/config";
+import { loadConfig, setConfigValue } from "../../src/config/config";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
 import { loadGrants, permissionsPath, projectKey } from "../../src/permissions/store";
 import type { CostReport } from "../../src/provider/cost";
@@ -2659,6 +2659,210 @@ describe("run (/mode)", () => {
     expect(code).toBe(0);
     expect(readdirSync(sessionsDir)).toHaveLength(1);
     expect(loadSession("def", sessionsDir).permissionMode).toBe("approve-each");
+  });
+});
+
+describe("run (/effort)", () => {
+  let sessionsDir: string;
+  let tmpConfigRoot: string;
+  const originalKey = process.env.GROQ_API_KEY;
+  const originalHome = process.env.HOME;
+  const originalDisableModelsFetch = process.env.SERI_DISABLE_MODELS_FETCH;
+
+  // A groq model with a real `effort` reasoning-options entry — the bundled fallback manifest
+  // (catalog-manifest.json) predates this feature and carries no reasoning_options at all, so
+  // these tests fetch a live-shaped catalog rather than relying on this file's other describe
+  // blocks' own SERI_DISABLE_MODELS_FETCH=1/bundled-fallback convention.
+  const REASONING_CATALOG = {
+    groq: {
+      models: {
+        "reasoning-model": {
+          id: "reasoning-model",
+          name: "Reasoning Model",
+          family: "test",
+          tool_call: true,
+          reasoning: true,
+          reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
+          limit: { context: 1000, output: 100 },
+        },
+        "plain-model": {
+          id: "plain-model",
+          name: "Plain Model",
+          family: "test",
+          tool_call: true,
+          reasoning: false,
+          limit: { context: 1000, output: 100 },
+        },
+      },
+    },
+    openrouter: { models: {} },
+    anthropic: { models: {} },
+    openai: { models: {} },
+    google: { models: {} },
+  };
+
+  function restoreEnv(key: string, original: string | undefined): void {
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
+
+  beforeEach(() => {
+    sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-effort-sessions-"));
+    tmpConfigRoot = mkdtempSync(join(tmpdir(), "seri-cli-test-effort-config-"));
+    process.env.HOME = tmpConfigRoot;
+    process.env.GROQ_API_KEY = "fake-test-key";
+    delete process.env.SERI_DISABLE_MODELS_FETCH;
+    resetCatalogCache();
+  });
+
+  afterEach(() => {
+    restoreEnv("GROQ_API_KEY", originalKey);
+    restoreEnv("HOME", originalHome);
+    restoreEnv("SERI_DISABLE_MODELS_FETCH", originalDisableModelsFetch);
+    resetCatalogCache();
+    rmSync(sessionsDir, { recursive: true, force: true });
+    rmSync(tmpConfigRoot, { recursive: true, force: true });
+  });
+
+  // fetchAccountPlan's own login guard skips its network call entirely when no auth session is
+  // saved (this describe block never calls saveAuthSession), so a single unconditional mock is
+  // safe here — unlike the gateway describe block above, nothing else this run touches ever hits
+  // `fetch` for a different URL.
+  function withReasoningFetch<T>(fn: () => Promise<T>): Promise<T> {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL) =>
+      new Response(JSON.stringify(REASONING_CATALOG), { status: 200 })) as typeof fetch;
+    return fn().finally(() => {
+      globalThis.fetch = realFetch;
+    });
+  }
+
+  function seedSession(id: string, overrides: Partial<SessionState> = {}): SessionState {
+    const session: SessionState = {
+      id,
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      model: "reasoning-model",
+      provider: "groq",
+      messages: [],
+      ...overrides,
+    };
+    saveSession(session, sessionsDir);
+    return session;
+  }
+
+  test("/effort <level> on a session with that tier legal sets session.reasoningEffort", async () => {
+    seedSession("eff-1");
+
+    const code = await withReasoningFetch(() =>
+      run(["--continue", "/effort", "medium"], { sessionsDir }),
+    );
+
+    expect(code).toBe(0);
+    expect(loadSession("eff-1", sessionsDir).reasoningEffort).toBe("medium");
+  });
+
+  test("/effort <invalid-level> leaves session state unchanged and lists the actual legal tiers", async () => {
+    seedSession("eff-2");
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    let code: number;
+    try {
+      code = await withReasoningFetch(() =>
+        run(["--continue", "/effort", "extreme"], { sessionsDir }),
+      );
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(code).toBe(0);
+    expect(loadSession("eff-2", sessionsDir).reasoningEffort).toBeUndefined();
+    expect(logs.some((line) => line.includes("low, medium, high"))).toBe(true);
+  });
+
+  test("/effort auto clears session.reasoningEffort", async () => {
+    seedSession("eff-3", { reasoningEffort: "high" });
+
+    const code = await withReasoningFetch(() =>
+      run(["--continue", "/effort", "auto"], { sessionsDir }),
+    );
+
+    expect(code).toBe(0);
+    expect(loadSession("eff-3", sessionsDir).reasoningEffort).toBeUndefined();
+  });
+
+  test("a model with no reasoningOptions: /effort reports no tiers available rather than erroring", async () => {
+    seedSession("eff-4", { model: "plain-model" });
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    let code: number;
+    try {
+      code = await withReasoningFetch(() => run(["--continue", "/effort"], { sessionsDir }));
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(code).toBe(0);
+    expect(logs.some((line) => line.includes("no reasoning-effort tiers available"))).toBe(true);
+  });
+
+  test("--effort <level> on the non-interactive path is passed to runLoop and never written to config.json", async () => {
+    seedSession("eff-5");
+    const { fake, capture } = fakeRunLoop();
+    const configDir = getConfigDir();
+    expect(loadConfig(configDir).SERI_REASONING_EFFORT).toBeUndefined();
+
+    const code = await withReasoningFetch(() =>
+      run(["--continue", "--effort", "high", "another task"], {
+        sessionsDir,
+        runLoop: fake,
+        loadAgentsFile: () => "",
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(capture()?.reasoningEffort).toBe("high");
+    expect(loadConfig(configDir).SERI_REASONING_EFFORT).toBeUndefined();
+
+    // A second, later invocation with no --effort flag falls back to the config default (still
+    // unset here), not the prior invocation's flag value.
+    const { fake: fake2, capture: capture2 } = fakeRunLoop();
+    const code2 = await withReasoningFetch(() =>
+      run(["--continue", "yet another task"], {
+        sessionsDir,
+        runLoop: fake2,
+        loadAgentsFile: () => "",
+      }),
+    );
+    expect(code2).toBe(0);
+    expect(capture2()?.reasoningEffort).toBeUndefined();
+  });
+
+  test("--effort with a tier not legal for the resolved model fails the run rather than being silently ignored", async () => {
+    seedSession("eff-6");
+
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await withReasoningFetch(() =>
+        run(["--continue", "--effort", "extreme", "a", "task"], {
+          sessionsDir,
+          loadAgentsFile: () => "",
+        }),
+      );
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(code).not.toBe(0);
+    expect(errors.some((line) => line.includes("Invalid --effort value"))).toBe(true);
   });
 });
 
