@@ -312,8 +312,12 @@ function isStepCount(args: string[]): boolean {
 // the hazard is gone from every call site rather than from the ones that remember Object.hasOwn.
 export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   ["/mode", { accepts: (args) => args.length === 0, run: cycleModeCommand }],
-  // Unlike every other entry here, `accepts` is unconditional: effortCommand's own comment
-  // explains why (no live picker screen to lack on the non-interactive path).
+  // Unlike every other entry here, `accepts` is unconditional — but unlike /mode's own bare-args
+  // check, this is not because /effort has no live picker screen: it does (EffortPanel, H-1, spec
+  // 032 review), but that screen is intercepted BEFORE reaching this table, the same way /model's
+  // own picker is (runTui's own onSubmit, below — that interception's comment explains why).
+  // `accepts: () => true` here only ever actually governs the args this table DOES see: `<level>`,
+  // `auto`, and the bare no-arg form on the non-interactive path (effortCommand's own comment).
   ["/effort", { accepts: () => true, run: effortCommand }],
   ["/undo", { accepts: isStepCount, run: undoCommand, mutatesRunState: true }],
   // A sha and nothing else. `seri "/restore the header spacing"` is a task.
@@ -2358,6 +2362,22 @@ async function runTui(
     dispatch({ type: "permissions-resolved", leftoverInput });
   }
 
+  // EffortPanel's own two resolutions (H-1, spec 032 review), mirroring onModelSelected/
+  // onModelPickerCancel's own shape exactly: `effort-resolved` is the one action that both clears
+  // `pendingEffort` and (only when a tier was actually picked) merges it into `state.session`, in
+  // the same atomic transition (reducer.ts's own comment on why). This is deliberately the ONLY
+  // effect of a pick, same as a /model pick: `session.reasoningEffort` changes immediately, so the
+  // very next runTurn call (which reads `session` fresh) sends it — but `confirmedReasoningEffort`
+  // (below) does NOT move here, so the config default is only overwritten once a turn actually
+  // succeeds on this tier, the same persist-on-success gate confirmedModel already has.
+  function onEffortSelected(tier: string): void {
+    dispatch({ type: "effort-resolved", tier });
+  }
+
+  function onEffortCancel(): void {
+    dispatch({ type: "effort-resolved" });
+  }
+
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
   // reducer and driveLoop have always shared. Guarded against overlap: a second Enter press
@@ -2772,6 +2792,50 @@ async function runTui(
       }
       return;
     }
+    // /effort, like /model just above, is intercepted here for its bare, no-argument form ONLY
+    // (H-1, spec 032 review) — it opens the same kind of live, selectable picker (EffortPanel).
+    // Unlike /model, this does NOT error on `args.length > 0`: `/effort <level>` and `/effort
+    // auto` are real forms the generic SLASH_COMMANDS table below still needs to see (effortCommand
+    // handles them, and is registered with `accepts: () => true` for exactly that — that table
+    // entry's own comment). Only the picker-opening bare form is claimed here.
+    if (name === "/effort" && args.length === 0) {
+      try {
+        const configured = configuredProviders(configDir);
+        const requestedModel = liveState.session.model ?? resolveDefaultModel(configDir).model;
+        const requestedProvider = liveState.session.provider ?? DEFAULT_PROVIDER;
+        // `prepared.plan`, not a fresh fetch (M-1's own comment on effortCommand explains why THAT
+        // function fetches live instead): this interception has `prepared.plan` sitting right here,
+        // already resolved for the life of the run, the same way /model's own interception above
+        // reuses `prepared.catalog` rather than reloading it.
+        const route = resolveRoute(
+          prepared.catalog,
+          { model: requestedModel, provider: requestedProvider },
+          configured,
+          prepared.plan,
+        );
+        const legalTiers = resolveLegalReasoningTiers(route, prepared.catalog);
+        if (legalTiers.length === 0) {
+          dispatch({
+            type: "command-error",
+            message: "This model has no reasoning-effort tiers available.",
+          });
+          return;
+        }
+        // Opens on whatever is CURRENTLY resolved (session override, else the config default) so
+        // the slider doesn't always reset to the first tier — `indexOf` returns -1 for "unset" or a
+        // value not in this route's own legal list (a stale value from a route since switched away
+        // from), and Math.max(0, -1) is the same "first tier" fallback that case deserves.
+        const current = resolveReasoningEffort(liveState.session, loadConfig(configDir));
+        const selected = Math.max(0, legalTiers.indexOf(current ?? ""));
+        dispatch({ type: "effort-requested", tiers: legalTiers, selected });
+      } catch (err) {
+        dispatch({
+          type: "command-error",
+          message: messageOf(err),
+        });
+      }
+      return;
+    }
     // /setup, like /model just above, is intercepted here rather than added to SLASH_COMMANDS: it
     // opens a live panel with nothing to render on the non-interactive path either.
     if (name === "/setup") {
@@ -3089,6 +3153,8 @@ async function runTui(
       onPermissionsRemove,
       onPermissionsBack,
       onPermissionsClose,
+      onEffortSelected,
+      onEffortCancel,
       // No auth-offer recompute here — redundant: every path that reaches this (Escape on
       // "starting"/"device", Enter/Esc on a login-failure result, or
       // a logout-failure result) never changed the auth-session file between when it was last

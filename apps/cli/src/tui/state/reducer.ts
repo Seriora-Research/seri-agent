@@ -58,6 +58,12 @@ export type PermissionsPanelState =
   | { step: "list"; rows: PermissionRow[]; selected: number }
   | { step: "confirm-remove"; tool: string };
 
+// /effort's own live state (H-1, spec 032 review) — the Claude-Code-style arrow-key slider over
+// the legal tiers for the model this session is CURRENTLY routed to (resolveLegalReasoningTiers,
+// routing.ts). Flatter than PermissionsPanelState above: one step, no confirm/remove/value-entry —
+// there is nothing here but a tier to pick or cancel out of.
+export type EffortPanelState = { tiers: string[]; selected: number };
+
 export type TuiState = {
   session: SessionState<ModelMessage>;
   // Append-only committed LOGICAL lines — one entry per `transcript-append`/pushLine call, never
@@ -135,6 +141,10 @@ export type TuiState = {
   pendingConfig: ConfigPanelState | undefined;
   // /permissions' own blocking panel. Mirrors `pendingSetup`'s role.
   pendingPermissions: PermissionsPanelState | undefined;
+  // /effort's own blocking panel (H-1, spec 032 review). Mirrors `pendingSetup`'s role — set when
+  // the bare, no-argument form opens the slider (runTui's own onSubmit interception, cli.ts),
+  // cleared once resolved.
+  pendingEffort: EffortPanelState | undefined;
   // The welcome-splash mount's own blocking panel. `initialTuiState`'s own `showSplash` opt (below)
   // only seeds the value App.tsx's OWN internal `useReducer(tuiReducer, initialTuiState(session))`
   // call starts from — that call never passes `showSplash`, so every App instance still mounts with
@@ -189,6 +199,7 @@ export function initialTuiState(
     pendingAuth: undefined,
     pendingConfig: undefined,
     pendingPermissions: undefined,
+    pendingEffort: undefined,
     pendingSplash: opts?.showSplash ?? false,
   };
 }
@@ -263,6 +274,15 @@ export type TuiAction =
   | { type: "permissions-requested"; rows: PermissionRow[] }
   | { type: "permissions-step"; state: PermissionsPanelState }
   | { type: "permissions-resolved"; leftoverInput?: string }
+  // /effort's own two actions (H-1, spec 032 review), mirroring the /model pair
+  // (model-picker-requested/model-picker-resolved) rather than /setup's five-action step-dispatcher
+  // shape: there is only one step here, so one open action and one resolve action is the whole
+  // surface. `effort-resolved`'s `tier`, when present, is merged directly into `state.session` in
+  // the SAME atomic transition as clearing `pendingEffort` — the identical race `model-picker-
+  // resolved`'s own comment explains avoiding (a `messages-updated` landing between open and
+  // resolve must not be clobbered by a second, separate dispatch).
+  | { type: "effort-requested"; tiers: string[]; selected: number }
+  | { type: "effort-resolved"; tier?: string; leftoverInput?: string }
   | { type: "splash-requested" }
   | { type: "splash-resolved" }
   // Dispatched by runTurn (cli.ts) right after its own per-turn `resolveRoute` call succeeds —
@@ -408,6 +428,21 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         ...state,
         pendingPermissions: undefined,
         pendingInputPrefill: action.leftoverInput,
+      };
+    case "effort-requested":
+      return { ...state, pendingEffort: { tiers: action.tiers, selected: action.selected } };
+    case "effort-resolved":
+      // Merged into `state.session` (this reducer's own current session), not a caller-captured
+      // one — same reasoning as `model-picker-resolved`'s own comment (TuiAction, above).
+      // `tier === undefined` (Escape/Ctrl-D — no pick made) leaves `state.session` untouched.
+      return {
+        ...state,
+        pendingEffort: undefined,
+        pendingInputPrefill: action.leftoverInput,
+        session:
+          action.tier === undefined
+            ? state.session
+            : { ...state.session, reasoningEffort: action.tier },
       };
     case "splash-requested":
       return { ...state, pendingSplash: true };

@@ -785,6 +785,93 @@ describe("tuiReducer: permissions-requested / permissions-step / permissions-res
   });
 });
 
+// H-1 (spec 032 review): EffortPanel's own live picker, mirroring model-picker-requested/
+// model-picker-resolved's own shape above rather than permissions' three-action one — there is
+// only one step here.
+describe("tuiReducer: effort-requested / effort-resolved", () => {
+  test("effort-requested opens pendingEffort with the given tiers and selected index", () => {
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "effort-requested",
+      tiers: ["low", "medium", "high"],
+      selected: 1,
+    });
+
+    expect(state).toEqual({
+      ...initialTuiState(session()),
+      pendingEffort: { tiers: ["low", "medium", "high"], selected: 1 },
+    });
+  });
+
+  test("effort-resolved with a tier merges it into session.reasoningEffort and clears the picker in the same dispatch", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "effort-requested",
+      tiers: ["low", "medium", "high"],
+      selected: 0,
+    });
+
+    state = tuiReducer(state, { type: "effort-resolved", tier: "high" });
+
+    expect(state).toEqual({
+      ...initialTuiState(session()),
+      session: { ...session(), reasoningEffort: "high" },
+    });
+  });
+
+  // Mirrors model-picker-resolved's own "merges into the CURRENT session, not a stale one"
+  // regression guard — the identical race (a messages-updated landing between open and resolve)
+  // applies here too.
+  test("effort-resolved merges into the CURRENT session, not a stale one captured when the picker opened", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "effort-requested",
+      tiers: ["low", "medium", "high"],
+      selected: 0,
+    });
+    state = tuiReducer(state, {
+      type: "session-updated",
+      session: session({ id: "s2", messages: [{ role: "user", content: "hi" }] }),
+    });
+
+    state = tuiReducer(state, { type: "effort-resolved", tier: "high" });
+
+    expect(state.session).toEqual({
+      ...session({ id: "s2", messages: [{ role: "user", content: "hi" }] }),
+      reasoningEffort: "high",
+    });
+  });
+
+  test("effort-resolved with no tier (cancelled) only clears the picker, leaving session untouched", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "effort-requested",
+      tiers: ["low", "medium", "high"],
+      selected: 0,
+    });
+
+    state = tuiReducer(state, { type: "effort-resolved" });
+
+    expect(state).toEqual(initialTuiState(session()));
+  });
+
+  test("effort-resolved with leftoverInput sets pendingInputPrefill", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "effort-requested",
+      tiers: ["low", "medium", "high"],
+      selected: 0,
+    });
+
+    state = tuiReducer(state, {
+      type: "effort-resolved",
+      tier: "medium",
+      leftoverInput: "typed after close",
+    });
+
+    expect(state).toEqual({
+      ...initialTuiState(session()),
+      session: { ...session(), reasoningEffort: "medium" },
+      pendingInputPrefill: "typed after close",
+    });
+  });
+});
+
 describe("tuiReducer: splash-requested / splash-resolved", () => {
   test("initialTuiState without opts defaults pendingSplash to false", () => {
     expect(initialTuiState(session()).pendingSplash).toBe(false);
