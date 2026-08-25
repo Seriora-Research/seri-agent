@@ -439,14 +439,16 @@ async function cycleModeCommand(
 // its own fetches are unavoidable: there is no `prepared` in scope there.
 //
 // Legal tiers are resolved against the model this session is CURRENTLY routed to
-// (resolveSessionRoute/resolveLegalReasoningTiers), not a static per-model catalog lookup — the
-// same opencode #34278 regression class routing.ts's own resolveLegalReasoningTiers guards
-// against. `plan` is fetched live here, not threaded from a caller: this
-// function runs before prepareSession's own plan fetch has even happened. Omitting it (the prior
-// version of this function did) silently mis-lists tiers for a gateway-routed session: routing.ts's
-// own gateway branch changes route.model/route.provider to the gateway entry, which
-// resolveLegalReasoningTiers is keyed on — the same regression class (opencode #34278) this feature
-// exists to prevent, just triggered by a stale `plan` instead of a stale route. fetchAccountPlan's
+// (resolveSessionRoute/resolveLegalReasoningTiers), not a static per-model catalog lookup: the
+// same model id can resolve to different catalog entries — and thus different legal tiers —
+// depending on which route it's actually reached through, so routing.ts's own
+// resolveLegalReasoningTiers keys off the resolved route, not the raw model id. `plan` is fetched
+// live here, not threaded from a caller: this function runs before prepareSession's own plan fetch
+// has even happened. Omitting it (the prior version of this function did) silently mis-lists tiers
+// for a gateway-routed session: routing.ts's own gateway branch changes route.model/route.provider
+// to the gateway entry, which resolveLegalReasoningTiers is keyed on — the same route-vs-model-id
+// mismatch this function exists to prevent, just triggered by a stale `plan` instead of a stale
+// route. fetchAccountPlan's
 // own login guard skips the network call entirely for a BYOK-only/logged-out session, so the common
 // case pays nothing extra for this. `Promise.all`, not two sequential `await`s: the catalog fetch
 // and the plan fetch are independent, the same reasoning prepareSession's own identical pair

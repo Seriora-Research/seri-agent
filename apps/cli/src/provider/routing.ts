@@ -204,7 +204,7 @@ export function resolveSessionRoute(
   return resolveRoute(catalog, { model, provider }, configured, plan);
 }
 
-// Route-aware, not a static per-model lookup (opencode #34278's regression class): the same
+// Route-aware, not a static per-model lookup: the same
 // model id can resolve to different catalog entries — and thus different
 // legal reasoning tiers — depending on whether `route.provider` ends up being "openrouter" or a
 // direct provider, so this must key off `route`'s actual resolved (model, provider) pair.

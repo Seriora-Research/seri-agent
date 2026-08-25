@@ -137,8 +137,7 @@ function assertNever(x: never): never {
 }
 
 // Anthropic's SDK has no named-tier param, only a numeric budgetTokens — this fixed table is an
-// approximation, sourced from opencode's own built-in Anthropic variants (high=20k, max=32k) as
-// a reasonable, externally-validated starting point rather than an invented number.
+// approximation (high=20k, max=32k), a reasonable starting point rather than an invented number.
 const ANTHROPIC_EFFORT_BUDGET_TOKENS: Record<string, number> = {
   low: 4096,
   medium: 10000,

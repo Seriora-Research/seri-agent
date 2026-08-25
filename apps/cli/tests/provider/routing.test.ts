@@ -315,7 +315,7 @@ describe("resolveRoute", () => {
   });
 });
 
-// opencode #34278 regression class: the SAME model id, reachable via
+// The SAME model id, reachable via
 // two providers, must resolve to each route's OWN legal tier list, not a static per-model one.
 describe("resolveLegalReasoningTiers", () => {
   const reasoningCatalog: ModelCatalog = {
