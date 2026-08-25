@@ -166,6 +166,13 @@ export type AppProps = {
   onSplashLogin?: () => void;
   onSplashSignup?: () => void;
   onSplashContinue?: () => void;
+  // Shift+Tab's own resolution — a prop, not a local dispatch into this component's own reducer:
+  // `getPermissionMode()` (cli.ts) reads `liveState.session.permissionMode`, and `liveState` is
+  // only ever advanced by cli.ts's own dispatch funnel. A cycle dispatched from inside this
+  // component would never reach `liveState`, so the permission gate would keep enforcing the OLD
+  // mode while this component's own state (and the indicator it renders) already showed the new
+  // one — the exact desync `onSessionChange`'s own comment above already describes for persistence.
+  onCycleMode?: () => void;
 };
 
 // A pty can genuinely report a terminal width as a real but unusable `0` for the first render or
@@ -212,6 +219,7 @@ export function App({
   onSplashLogin,
   onSplashSignup,
   onSplashContinue,
+  onCycleMode,
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session, { route }));
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
@@ -334,6 +342,13 @@ export function App({
   // it from now that scroll position lives on the scrollbox itself.
   useKeyboard((key) => {
     if (!noPanelOpen) return;
+    // Checked before the `transcriptRef.current` null guard below: that guard exists for the
+    // scroll keys only, which have nothing to do without a mounted scrollbox — a mode cycle must
+    // still fire on a pre-layout frame where the transcript ref hasn't attached yet.
+    if (key.name === "tab" && key.shift) {
+      onCycleMode?.();
+      return;
+    }
     const el = transcriptRef.current;
     if (!el) return;
     if (key.name === "pageup") el.scrollBy(-1, "viewport");

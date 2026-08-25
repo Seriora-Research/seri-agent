@@ -106,6 +106,7 @@ const HOME = "HOME";
 const END = "END";
 const DELETE_KEY = "DELETE";
 const PAGE_UP = "\x1b[5~";
+const SHIFT_TAB = "\x1b[Z";
 
 describe("App", () => {
   test("renders the mode indicator for the session's permission mode", async () => {
@@ -2218,6 +2219,87 @@ describe("App", () => {
       const line = frame.lines.find((l) => l.spans.some((s) => s.text === label));
       const span = line?.spans.find((s) => s.text === label);
       expect(span?.width).toBe(label.length);
+    });
+  });
+
+  describe("shift+tab cycles the permission mode", () => {
+    // `onCycleMode` is a bare signal out to the caller (this component's own comment on the prop
+    // explains why it never dispatches into its own reducer directly) — the label changing is
+    // exercised as a SEPARATE step here, via the same `dispatch` a real cli.ts would eventually
+    // call, rather than folded into `onCycleMode` itself.
+    test("shift+tab calls onCycleMode once, and the label changes after the resulting session-updated", async () => {
+      let calls = 0;
+      const { setup, dispatch } = await connect({
+        session: session({ permissionMode: "read-only" }),
+        onCycleMode: () => calls++,
+      });
+      expect(setup.captureCharFrame()).toContain("read-only mode on");
+
+      setup.mockInput.pressKey(SHIFT_TAB);
+      await flush(setup);
+      expect(calls).toBe(1);
+
+      dispatch({ type: "session-updated", session: session({ permissionMode: "auto" }) });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("bypass permissions on");
+    });
+
+    // Criterion 6: a panel/approval box owns the keyboard while it's open — the same `noPanelOpen`
+    // gate the scroll keys above already share.
+    test("shift+tab does nothing while a panel is open", async () => {
+      let calls = 0;
+      const { setup, dispatch } = await connect({ onCycleMode: () => calls++ });
+
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: {},
+        offersAlways: false,
+      });
+      await flush(setup);
+
+      setup.mockInput.pressKey(SHIFT_TAB);
+      await flush(setup);
+
+      expect(calls).toBe(0);
+    });
+
+    // Criterion 4: plain Tab (no shift) shares the same `key.name === "tab"`, so this proves the
+    // `key.shift` check is what actually gates the cycle, not just the key name. `isPrintableKey`
+    // (util/keys.ts) already excludes a `key.name.length > 1` key like "tab" from InputBox's own
+    // typed-buffer handling — this also confirms that holds for real, not just by that function's
+    // own logic.
+    test("plain TAB does not cycle the mode and does not modify the input buffer", async () => {
+      let calls = 0;
+      const submitted: string[] = [];
+      const { setup } = await connect({
+        onCycleMode: () => calls++,
+        onSubmit: (v) => submitted.push(v),
+      });
+
+      await setup.mockInput.typeText("hello");
+      setup.mockInput.pressKey("\t");
+      await setup.mockInput.typeText(" world");
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      expect(calls).toBe(0);
+      expect(submitted).toEqual(["hello world"]);
+    });
+
+    // Criterion 7: the keypress handler only ever calls `onCycleMode` — nothing about it touches
+    // the transcript. A no-op `onCycleMode` here isolates that from whatever a real caller's own
+    // `onCycleMode` might separately choose to dispatch.
+    test("shift+tab does not append a transcript entry", async () => {
+      const { setup, dispatch } = await connect({ onCycleMode: () => {} });
+      dispatch({ type: "transcript-append", line: "hello" });
+      await flush(setup);
+      const before = setup.captureCharFrame();
+
+      setup.mockInput.pressKey(SHIFT_TAB);
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toBe(before);
     });
   });
 
