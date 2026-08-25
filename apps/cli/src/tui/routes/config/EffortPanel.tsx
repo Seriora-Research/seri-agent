@@ -21,8 +21,11 @@ export function EffortPanel({
   // panel's own `X-resolved` action shape, even though nothing in this component currently
   // produces a non-undefined value for it — EffortPanel has no text-entry/paste concept to capture
   // one from (mirrors PermissionsPanel's own onPermissionsClose, which carries the identical
-  // optional param for the same reason). The call sites below always pass `undefined` explicitly,
-  // not omit the argument, so the plumbing reads as deliberate rather than as a forgotten param.
+  // optional param, structurally unused there too). Unlike PermissionsPanel's own call site (which
+  // omits the argument entirely — `onPermissionsClose?.()`), the call sites below always pass
+  // `undefined` explicitly, so the plumbing here reads as deliberate rather than as a forgotten
+  // param (round-4 review item 12: this comment used to read as though PermissionsPanel's call
+  // site did the same — it does not, the two are equivalent at runtime but not in source).
   onEffortSelected?: (tier: string, leftoverInput?: string) => void;
   onEffortCancel?: (leftoverInput?: string) => void;
 }) {

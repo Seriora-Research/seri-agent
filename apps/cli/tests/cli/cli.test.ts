@@ -2962,6 +2962,52 @@ describe("run (/effort)", () => {
     expect(logs.some((line) => line.includes("low, medium, high"))).toBe(true);
     expect(logs.some((line) => /Legal tiers for the current model: low\./.test(line))).toBe(false);
   });
+
+  // Round-4 review item 13: /effort's own SLASH_COMMANDS registration, mirroring "run (/clear)"'s
+  // own "is registered with an exact, empty accepts, mutatesRunState, and scopeTargetToCwd" test.
+  test("is registered with an at-most-one-argument accepts and no mutatesRunState", () => {
+    const effort = SLASH_COMMANDS.get("/effort");
+    if (effort === undefined) throw new Error("/effort is not registered");
+    expect(effort.accepts([])).toBe(true);
+    expect(effort.accepts(["medium"])).toBe(true);
+    expect(effort.accepts(["auto"])).toBe(true);
+    expect(effort.accepts(["medium", "extra"])).toBe(false);
+    // round-4 review, "biggest item": the TUI path now claims every form of /effort (bare,
+    // `<level>`, `auto`) before this table is ever reached (runTui's own onSubmit) — the race
+    // `mutatesRunState: true` used to gate against no longer reaches this entry at all, so the
+    // field is gone (this entry's own comment, cli.ts, has the full account).
+    expect(effort.mutatesRunState).toBeUndefined();
+  });
+
+  // Mirrors "`/clear the screen please` stays a task", above: /effort's own `accepts()` form caps
+  // at one argument (SLASH_COMMANDS' own entry comment), so trailing garbage past `args[0]` must
+  // fall through to the model as a task rather than being silently truncated by effortCommand.
+  test("`/effort medium extra` stays a task, sent to the model, and does not touch session.reasoningEffort", async () => {
+    seedSession("eff-extra-args");
+    const { fake, capture } = fakeRunLoop();
+
+    const originalLog = console.log;
+    console.log = () => {};
+    let code: number;
+    try {
+      code = await withReasoningFetch(() =>
+        run(["--continue", "/effort", "medium", "extra"], {
+          sessionsDir,
+          runLoop: fake,
+          loadAgentsFile: () => "",
+        }),
+      );
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(code).toBe(0);
+    expect(capture()?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "/effort medium extra",
+    });
+    expect(loadSession("eff-extra-args", sessionsDir).reasoningEffort).toBeUndefined();
+  });
 });
 
 describe("run (/clear)", () => {

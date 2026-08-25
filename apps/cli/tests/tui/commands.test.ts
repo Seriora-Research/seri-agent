@@ -406,9 +406,17 @@ describe("decideSetupOpen", () => {
 // its own fresh configDir).
 describe("decideEffortOpen", () => {
   let effortConfigDir: string;
+  // Round-4 review item 7: `ALL_KEY_NAMES` above is provider API keys only — `decideEffortOpen`
+  // also reads SERI_REASONING_EFFORT (via resolveReasoningEffort's own config fallback), so a dev
+  // box or CI runner with that genuinely exported would silently select the wrong `selected` index
+  // in "returns the legal tiers and defaults selected to 0 with no current override" below (a
+  // real env value competing with the session's own deliberate absence of one). Own save/clear/
+  // restore, matching decideConfigOpen's own KNOWN_KEYS pattern below for the identical hazard.
+  const originalReasoningEffortEnv = process.env.SERI_REASONING_EFFORT;
 
   beforeEach(() => {
     for (const name of ALL_KEY_NAMES) delete process.env[name];
+    delete process.env.SERI_REASONING_EFFORT;
     effortConfigDir = mkdtempSync(join(tmpdir(), "seri-effort-commands-test-"));
   });
 
@@ -418,6 +426,8 @@ describe("decideEffortOpen", () => {
       if (original === undefined) delete process.env[name];
       else process.env[name] = original;
     }
+    if (originalReasoningEffortEnv === undefined) delete process.env.SERI_REASONING_EFFORT;
+    else process.env.SERI_REASONING_EFFORT = originalReasoningEffortEnv;
     rmSync(effortConfigDir, { recursive: true, force: true });
   });
 

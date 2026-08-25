@@ -85,12 +85,15 @@ import { configuredProviders, PROVIDER_DISPLAY_NAMES, tuiMissingKeyMessage } fro
 import { dispatchModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
-import { appliedReasoningEffort } from "./provider/reasoning";
+import {
+  appliedReasoningEffort,
+  resolveEffortCommand,
+  resolveReasoningEffort,
+} from "./provider/reasoning";
 import {
   gatewayCoverageInGroup,
   type ResolvedRoute,
   resolveLegalReasoningTiers,
-  type resolveRoute,
   resolveSessionRoute,
 } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
@@ -126,7 +129,6 @@ import {
   decideRewind,
   decideSetupOpen,
   decideUndo,
-  resolveReasoningEffort,
 } from "./tui/state/commands";
 import {
   createAuthHandlers,
@@ -316,26 +318,23 @@ function isStepCount(args: string[]): boolean {
 // the hazard is gone from every call site rather than from the ones that remember Object.hasOwn.
 export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   ["/mode", { accepts: (args) => args.length === 0, run: cycleModeCommand }],
-  // `args.length <= 1`, not unconditional (round-2 CodeRabbit/thermo review, item 1): `/effort` has
-  // a live picker screen (EffortPanel, H-1, spec 032 review) intercepted BEFORE reaching this
-  // table, the same way /model's own picker is (runTui's own onSubmit, below — that interception's
-  // comment explains why), so the bare no-arg form this table DOES see is only ever the
-  // non-interactive path's print-current-tier branch. But `<level>` and `auto` are still real,
-  // ONE-argument forms this table dispatches — an unconditional `() => true` let a genuine task
-  // starting with the string "/effort" be hijacked instead of falling through to the model (the
-  // exact hazard this table's own header comment, and /clear's, exist to prevent), and let
-  // `effortCommand` silently ignore trailing garbage past `args[0]` (`/effort auto extra`). Capped
-  // at one argument closes both: `effortCommand` never receives more than it reads.
-  // `mutatesRunState: true` (round-2 /code-review finding, item 9): unlike /mode (safe — no
-  // `await` before its own `sessionUpdated()` call), `effortCommand` awaits two real network calls
-  // (`getModelCatalog()`, `fetchAccountPlan()`) before it ever calls `sessionUpdated()`. Without
-  // this gate, `/effort medium` typed while a turn is in flight could still be running when that
-  // turn's own `messages-updated` appends new messages, and `effortCommand`'s eventual
-  // `session-updated` dispatch — a full replace, not a merge (reducer.ts's own `case
-  // "session-updated"`) — would silently discard everything the in-flight turn appended, both live
-  // and on disk (session persists synchronously). Matches every other `SLASH_COMMANDS` entry that
-  // calls `sessionUpdated()` across an `await` (undo/restore/rewind/clear/memory).
-  ["/effort", { accepts: (args) => args.length <= 1, run: effortCommand, mutatesRunState: true }],
+  // `args.length <= 1`, not unconditional (round-2 CodeRabbit/thermo review, item 1): an
+  // unconditional `() => true` let a genuine task starting with the string "/effort" be hijacked
+  // instead of falling through to the model (the exact hazard this table's own header comment, and
+  // /clear's, exist to prevent), and let `effortCommand` silently ignore trailing garbage past
+  // `args[0]` (`/effort auto extra`). Capped at one argument closes both.
+  //
+  // `effortCommand` (below) is registered here for the NON-INTERACTIVE path only now (round-4
+  // review, "biggest item" — spec 032): every form of `/effort` (bare, `<level>`, `auto`) is
+  // claimed BEFORE reaching this table on the TUI path (runTui's own onSubmit, below), which
+  // reuses `prepared.catalog`/`prepared.plan` synchronously instead of calling `effortCommand`
+  // through this entry at all. No `mutatesRunState: true` (that field used to sit here, round-2
+  // /code-review finding, item 9 — see git history): it existed solely to gate the TUI's generic
+  // dispatch against `effortCommand`'s two awaited network calls racing a still-running turn's own
+  // `messages-updated` — now that the TUI never reaches this entry for `/effort` at all, there is
+  // nothing left for it to gate. `handleSlashCommand` (the only remaining caller of this entry) is
+  // single-shot, non-interactive: there is no "turn in flight" for a mutation to race there.
+  ["/effort", { accepts: (args) => args.length <= 1, run: effortCommand }],
   ["/undo", { accepts: isStepCount, run: undoCommand, mutatesRunState: true }],
   // A sha and nothing else. `seri "/restore the header spacing"` is a task.
   [
@@ -424,30 +423,36 @@ async function cycleModeCommand(
   presenter.message(message);
 }
 
-// /effort, mirroring cycleModeCommand's shape above. Registered in SLASH_COMMANDS (accepts: () =>
-// true, below) for every form EXCEPT the bare, no-argument one — that form is intercepted earlier,
-// in runTui's own onSubmit (H-1, spec 032 review), the same "opens a live picker, and the
-// non-interactive path genuinely has no screen to render it on" reasoning /model's own
-// interception already documents (that reasoning used to be claimed HERE too, for /effort, before
-// the picker existed — it was never true for this function specifically, only for the bare form,
-// which is why the fix moved the bare form out rather than building the picker inside this
-// generic, session/presenter-based dispatch). This function's own `args.length === 0` branch below
-// is therefore reached ONLY on the non-interactive path (no TTY, no picker possible), where it
-// still prints the current resolved tier as text.
+// /effort's own NON-INTERACTIVE path, mirroring cycleModeCommand's shape above. The TUI path
+// (runTui's own onSubmit, below) claims every form of `/effort` — bare, `<level>`, `auto` — before
+// it ever reaches this table (round-4 review, "biggest item" — spec 032): the awaited network
+// calls this function makes below (`getModelCatalog()`, `fetchAccountPlan()`) used to run on the
+// TUI path too, through this same function, which is what forced `mutatesRunState: true` onto its
+// own SLASH_COMMANDS entry — a live turn that completes DURING those two awaits could have its own
+// `messages-updated` clobbered by this function's later, stale-captured `session-updated` dispatch
+// (a full replace, not a merge). The TUI now resolves `<level>`/`auto` synchronously off
+// `prepared.catalog`/`prepared.plan` instead, with nothing to await and so nothing to race — this
+// function survives only for `handleSlashCommand` (the single-shot, non-interactive path), where
+// its own fetches are unavoidable: there is no `prepared` in scope there.
 //
 // Legal tiers are resolved against the model this session is CURRENTLY routed to
-// (resolveRoute/resolveLegalReasoningTiers), not a static per-model catalog lookup — the same
-// opencode #34278 regression class routing.ts's own resolveLegalReasoningTiers guards against.
-// `plan` is fetched live here (M-1, spec 032 review), not threaded from a caller: this function is
-// invoked identically from both the non-interactive dispatch (handleSlashCommand, before
-// prepareSession's own plan fetch has even run) and the TUI's generic SLASH_COMMANDS dispatch
-// (onSubmit, below) — neither call site can hand this function a `plan` through SlashCommand.run's
-// own fixed signature. Omitting it (the prior version of this function did) silently mis-lists
-// tiers for a gateway-routed session: routing.ts's own gateway branch changes
-// route.model/route.provider to the gateway entry, which resolveLegalReasoningTiers is keyed on —
-// the same regression class (opencode #34278) this feature exists to prevent, just triggered by a
-// stale `plan` instead of a stale route. fetchAccountPlan's own login guard skips the network call
-// entirely for a BYOK-only/logged-out session, so the common case pays nothing extra for this.
+// (resolveSessionRoute/resolveLegalReasoningTiers), not a static per-model catalog lookup — the
+// same opencode #34278 regression class routing.ts's own resolveLegalReasoningTiers guards
+// against. `plan` is fetched live here (M-1, spec 032 review), not threaded from a caller: this
+// function runs before prepareSession's own plan fetch has even happened. Omitting it (the prior
+// version of this function did) silently mis-lists tiers for a gateway-routed session: routing.ts's
+// own gateway branch changes route.model/route.provider to the gateway entry, which
+// resolveLegalReasoningTiers is keyed on — the same regression class (opencode #34278) this feature
+// exists to prevent, just triggered by a stale `plan` instead of a stale route. fetchAccountPlan's
+// own login guard skips the network call entirely for a BYOK-only/logged-out session, so the common
+// case pays nothing extra for this. `Promise.all`, not two sequential `await`s (round-4 review item
+// 8): the catalog fetch and the plan fetch are independent, the same reasoning prepareSession's own
+// identical pair already applies.
+//
+// The actual arg-parsing/validation/resolution decision (bare/`<level>`/`auto`) is
+// `resolveEffortCommand` (provider/reasoning.ts) — shared with the TUI's own onSubmit interception,
+// so the two callers can never silently disagree about what each form means; only how
+// `legalTiers`/`current` are obtained (awaited here, synchronous there) differs.
 async function effortCommand(
   session: SessionState<ModelMessage>,
   args: string[],
@@ -455,41 +460,17 @@ async function effortCommand(
   presenter: CommandPresenter = consolePresenter(dirs),
 ): Promise<void> {
   const config = loadConfig(dirs.configDir);
-  const catalog = await getModelCatalog();
+  const [catalog, plan] = await Promise.all([getModelCatalog(), fetchAccountPlan(dirs.configDir)]);
   const configured = configuredProviders(dirs.configDir);
-  const plan = await fetchAccountPlan(dirs.configDir);
   const route = resolveSessionRoute(session, catalog, configured, plan, dirs.configDir);
   const legalTiers = resolveLegalReasoningTiers(route, catalog);
+  const current = resolveReasoningEffort(session, config);
 
-  if (args.length === 0) {
-    // Reached only on the non-interactive path — see this function's own header comment.
-    const current = resolveReasoningEffort(session, config) ?? "unset";
-    presenter.message(
-      legalTiers.length === 0
-        ? `Reasoning effort: ${current} (this model has no reasoning-effort tiers available)`
-        : `Reasoning effort: ${current}. Legal tiers for the current model: ${legalTiers.join(", ")}.`,
-    );
-    return;
+  const result = resolveEffortCommand(args, legalTiers, current);
+  if (result.changed) {
+    await presenter.sessionUpdated({ ...session, reasoningEffort: result.reasoningEffort });
   }
-
-  if (args[0] === "auto") {
-    await presenter.sessionUpdated({ ...session, reasoningEffort: undefined });
-    presenter.message("Reasoning effort: auto (falls back to the config default).");
-    return;
-  }
-
-  const tier = args[0] as string;
-  if (!legalTiers.includes(tier)) {
-    presenter.message(
-      legalTiers.length === 0
-        ? "This model has no reasoning-effort tiers available."
-        : `Invalid reasoning effort "${tier}". Legal tiers: ${legalTiers.join(", ")}.`,
-    );
-    return;
-  }
-
-  await presenter.sessionUpdated({ ...session, reasoningEffort: tier });
-  presenter.message(`Reasoning effort: ${tier}`);
+  presenter.message(result.message);
 }
 
 // The step the user asked for, not the record's `seq`. `seq` is the 0-based index of a tool
@@ -2419,7 +2400,11 @@ async function runTui(
     // another instance, say) crashed the running TUI on the very next turn, losing in-progress
     // work. Inside the try, it degrades the same way a getModel failure already does: a
     // command-error the user can see and recover from, not a crash.
-    let route: ReturnType<typeof resolveRoute>;
+    // `ResolvedRoute` directly (round-4 review item 10), not `ReturnType<typeof resolveRoute>`: the
+    // `resolveRoute` VALUE was never called from this scope (only `resolveSessionRoute`, just
+    // below), so it was imported as a type-only binding purely to spell this declaration — dropped
+    // now that the type it names is already imported under its own name.
+    let route: ResolvedRoute;
     let model: LanguageModel;
     try {
       route = resolveSessionRoute(
@@ -2473,6 +2458,21 @@ async function runTui(
     }
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one.
     const catalogEntry = findCatalogEntry(prepared.catalog, modelId, provider);
+    // round-4 review item 5: a reroute is never silent (just above) — neither is a session
+    // `reasoningEffort` override that is about to be silently dropped this turn because it isn't
+    // legal for the RESOLVED route. `appliedReasoningEffort` (provider/reasoning.ts) is the exact
+    // same legality check loop.ts's own re-validation gate applies before sending, so "undefined
+    // here" means "would also be dropped there" — reusing the same transcript channel the
+    // reroute/gateway notices above use.
+    if (
+      session.reasoningEffort !== undefined &&
+      appliedReasoningEffort(session.reasoningEffort, catalogEntry) === undefined
+    ) {
+      dispatch({
+        type: "transcript-append",
+        line: `↻ reasoning effort "${session.reasoningEffort}" isn't legal for the current model — this turn runs without it.`,
+      });
+    }
     // `session as RunSession`, not the raw (reducer-typed) `session`: PreparedRun.session is now
     // RunSession (code-review finding — see PreparedRun's own comment), and this call site already
     // established the same invariant two lines up for `requestedModel`/`requestedProvider`; reusing
@@ -2795,31 +2795,67 @@ async function runTui(
       }
       return;
     }
-    // /effort, like /model just above, is intercepted here for its bare, no-argument form ONLY
-    // (H-1, spec 032 review) — it opens the same kind of live, selectable picker (EffortPanel).
-    // Unlike /model, this does NOT error on `args.length > 0`: `/effort <level>` and `/effort
-    // auto` are real forms the generic SLASH_COMMANDS table below still needs to see (effortCommand
-    // handles them, and is registered with `accepts: (args) => args.length <= 1` for exactly that
-    // — that table entry's own comment). Only the picker-opening bare form is claimed here.
-    // `decideEffortOpen` (round-2 review item 8) owns everything this used to inline: route
-    // resolution, legal-tier lookup, and the current-tier-highlighted `selected` index — this
-    // collapses to the same shape /setup's own interception (below) already uses.
-    if (name === "/effort" && args.length === 0) {
+    // /effort, like /model just above, is intercepted here — now for EVERY form (bare, `<level>`,
+    // `auto`), not just the bare, picker-opening one (round-4 review, "biggest item" — spec 032).
+    // The bare form still opens EffortPanel (H-1, unchanged); `<level>`/`auto` used to fall through
+    // to the generic SLASH_COMMANDS dispatch below, which called `effortCommand` — a function that
+    // `await`s two real network calls (`getModelCatalog()`, `fetchAccountPlan()`) before it ever
+    // calls `sessionUpdated()`. That gap was a real race, not just a theoretical one: type
+    // `/effort medium`, let a DIFFERENT already-in-flight turn complete DURING those awaits, and
+    // `effortCommand`'s later `session-updated` dispatch — a full replace, not a merge (reducer.ts's
+    // own `case "session-updated"`) — silently discards everything that turn just appended, both
+    // live and on disk. `mutatesRunState: true` (that SLASH_COMMANDS entry's own former field, see
+    // git history) only ever narrowed the window (blocked while a turn was ALREADY in flight at the
+    // moment of typing) — a turn that started and finished entirely during the awaits was never
+    // caught by it. Claiming `<level>`/`auto` here closes the race at its root instead of
+    // narrowing its window further: `prepared.catalog`/`prepared.plan` are already resolved (the
+    // same values /model's own interception above reuses), so route/legal-tier resolution is
+    // synchronous — no `await` sits between reading `liveState.session` and dispatching the result,
+    // so there is no window left for another turn to land in.
+    //
+    // `decideEffortOpen` (round-2 review item 8) still owns the bare form: route resolution,
+    // legal-tier lookup, and the current-tier-highlighted `selected` index for EffortPanel.
+    // `resolveEffortCommand` (provider/reasoning.ts) is the shared decision behind `<level>`/`auto`
+    // — the same function `effortCommand` (still SLASH_COMMANDS-registered, non-interactive path
+    // only now) calls, so the two callers can never silently disagree about what a form means; only
+    // how `legalTiers`/`current` are obtained (synchronously here, `await`ed there) differs.
+    if (name === "/effort" && args.length <= 1) {
       try {
-        const opened = decideEffortOpen(
-          prepared.catalog,
-          configDir,
-          liveState.session,
-          prepared.plan,
-        );
-        if (opened === null) {
-          dispatch({
-            type: "command-error",
-            message: "This model has no reasoning-effort tiers available.",
-          });
+        if (args.length === 0) {
+          const opened = decideEffortOpen(
+            prepared.catalog,
+            configDir,
+            liveState.session,
+            prepared.plan,
+          );
+          if (opened === null) {
+            dispatch({
+              type: "command-error",
+              message: "This model has no reasoning-effort tiers available.",
+            });
+            return;
+          }
+          dispatch({ type: "effort-requested", tiers: opened.tiers, selected: opened.selected });
           return;
         }
-        dispatch({ type: "effort-requested", tiers: opened.tiers, selected: opened.selected });
+        const route = resolveSessionRoute(
+          liveState.session,
+          prepared.catalog,
+          configuredProviders(configDir),
+          prepared.plan,
+          configDir,
+        );
+        const legalTiers = resolveLegalReasoningTiers(route, prepared.catalog);
+        const current = resolveReasoningEffort(liveState.session, loadConfig(configDir));
+        const result = resolveEffortCommand(args, legalTiers, current);
+        const presenter = tuiPresenter(dispatch, awaitNextPersist);
+        if (result.changed) {
+          await presenter.sessionUpdated({
+            ...liveState.session,
+            reasoningEffort: result.reasoningEffort,
+          });
+        }
+        presenter.message(result.message);
       } catch (err) {
         dispatch({
           type: "command-error",

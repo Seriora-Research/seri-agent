@@ -492,6 +492,53 @@ function childScriptModelSwitch(dir: string): string {
   ].join("\n");
 }
 
+// Round-4 review item 13: regression coverage for /effort's own persist-on-success gate
+// (runTui's runTurn, cli.ts) — the reasoning-effort counterpart to childScriptModelSwitch's own
+// "the switch that just worked is now the global default" proof, above. `SERI_DISABLE_MODELS_FETCH`
+// is deliberately NOT set here (unlike most of this file's other scripts): the bundled fallback
+// manifest predates reasoning_options entirely (cli.test.ts's own REASONING_CATALOG comment has the
+// full account), so this mocks a live-shaped catalog fetch instead, the same way cli.test.ts's own
+// "run (/effort)" describe block does.
+function childScriptEffortPersist(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.SERI_MODEL = "reasoning-model";`,
+    `process.env.SERI_PROVIDER = "groq";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) => {`,
+    `  if (typeof url === "string" && url.includes("models.dev")) {`,
+    `    return Promise.resolve(new Response(JSON.stringify({`,
+    `      groq: { models: { "reasoning-model": { id: "reasoning-model", name: "Reasoning Model", family: "test", tool_call: true, reasoning: true, reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }], limit: { context: 1000, output: 100 } } } },`,
+    `      openrouter: { models: {} }, anthropic: { models: {} }, openai: { models: {} }, google: { models: {} },`,
+    `    }), { status: 200 }));`,
+    `  }`,
+    `  return realFetch(url, opts);`,
+    `};`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " reasoningEffort=" + opts.reasoningEffort);`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
+    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    `  console.log("\\nRUNLOOP_DONE " + calls);`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: (id) => ({ id }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // D1/D2 (feature-plan.md, multi-provider-byok-phase-2): plan Test-plan item 8, "/model
 // multi-route" — the end-to-end proof that decideModelPickerOpen's grouping (unit-tested already)
 // and a real picker selection actually round-trip through a live pick to a persisted provider.
@@ -2464,6 +2511,51 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       expect(config.SERI_PROVIDER).toBe("groq");
       // Negative control built in: the pre-switch model must not be the one that landed.
       expect(config.SERI_MODEL).not.toBe("openai/gpt-oss-120b");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // Round-4 review item 13: /effort's own counterpart to the model-switch persist-on-success test
+  // just above — a live `/effort <level>` mid-session becomes the global config default once (and
+  // only once) a turn that actually used it succeeds. Also end-to-end proof of the round-4
+  // "biggest item" fix: `/effort medium` here is typed while the FIRST turn is no longer in
+  // flight (it already completed), driven entirely through the TUI's own onSubmit interception
+  // (runTui, cli.ts) rather than through the non-interactive SLASH_COMMANDS dispatch.
+  test("/effort <level> mid-session persists as the config default once the turn that used it succeeds", async () => {
+    const scriptPath = join(dir, "child-effort-persist.mjs");
+    writeFileSync(scriptPath, childScriptEffortPersist(dir));
+
+    const { child, sawLine } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_CALL 1 reasoningEffort=undefined");
+      // RUNLOOP_DONE, not "(done: no-tool-call)" — see childScriptMultiTurn's own comment for why
+      // this is the reliable per-turn completion signal.
+      await sawLine("RUNLOOP_DONE 1");
+      // Not yet persisted — turn 1 ran with no override at all.
+      expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+
+      child.stdin?.write("/effort medium");
+      await sawLine("/effort medium");
+      child.stdin?.write("\r");
+      await sawLine("Reasoning effort: medium");
+      // Confirms the session update, not just the echoed command — matching childScriptModelSwitch's
+      // own 100ms wait after any keypress that resolves synchronously but whose React unmount/mount
+      // commits on a later tick (that test's own comment has the full measured account).
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      await sawLine("RUNLOOP_CALL 2 reasoningEffort=medium");
+      await sawLine("RUNLOOP_DONE 2");
+
+      const config = await waitForConfig(
+        join(dir, ".seri", "config.json"),
+        (c) => c.SERI_REASONING_EFFORT === "medium",
+      );
+      expect(config.SERI_REASONING_EFFORT).toBe("medium");
     } finally {
       child.kill("SIGKILL");
     }

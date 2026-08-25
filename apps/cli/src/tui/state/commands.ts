@@ -30,12 +30,7 @@ import {
 } from "../../checkpoint/checkpoint";
 import { projectRoot } from "../../checkpoint/shadowGit";
 import { maskValue } from "../../config/commands";
-import {
-  configBoolean,
-  loadConfig,
-  loadReasoningEffortConfig,
-  resolveConfigValue,
-} from "../../config/config";
+import { configBoolean, loadConfig, resolveConfigValue } from "../../config/config";
 import { isDefaultProfile, profileDir, profileNameError } from "../../config/paths";
 import { cycleMode } from "../../gate/gate";
 import { loadGrants, PERSISTABLE_TOOL_NAMES } from "../../permissions/store";
@@ -44,6 +39,7 @@ import {
   configuredProviders,
   PROVIDER_API_KEY_NAMES,
 } from "../../provider/keys";
+import { resolveReasoningEffort } from "../../provider/reasoning";
 import {
   byRoutePriority,
   resolveLegalReasoningTiers,
@@ -406,17 +402,6 @@ export function decidePermissionsOpen(
     }
   }
   return rows;
-}
-
-// Session override wins, falling back to the config default — used by decideEffortOpen below and
-// by cli.ts's own effortCommand (its no-arg, non-interactive print branch). The `--effort` CLI
-// flag bypasses this resolver entirely (RunContext.effortFlag, read directly in cli.ts's
-// driveLoop), never reaching session.reasoningEffort or config.json.
-export function resolveReasoningEffort(
-  session: SessionState<ModelMessage>,
-  config: Record<string, string>,
-): string | undefined {
-  return session.reasoningEffort ?? loadReasoningEffortConfig(config);
 }
 
 // The decision half of /effort's own bare, no-argument (picker-opening) form — mirrors
