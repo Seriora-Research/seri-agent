@@ -9,6 +9,7 @@ import {
 import type { Plan } from "@seri/plans";
 import { PROVIDER_API_KEY_NAMES } from "./keys";
 import { GATEWAY_PROVIDER, planCoverage } from "./planCoverage";
+import { legalTiersFor } from "./reasoning";
 
 // D2 (feature-plan.md): "native-direct" for tie-breaking is these three providers specifically —
 // not derived from routeKey's own vendor string, which would also call groq/openrouter "direct"
@@ -168,4 +169,12 @@ export function resolveRoute(
     reason: PROVIDER_API_KEY_NAMES[requested.provider],
     viaGateway: false,
   };
+}
+
+// Route-aware, not a static per-model lookup (opencode #34278's regression class, per spec 032's
+// research.md): the same model id can resolve to different catalog entries — and thus different
+// legal reasoning tiers — depending on whether `route.provider` ends up being "openrouter" or a
+// direct provider, so this must key off `route`'s actual resolved (model, provider) pair.
+export function resolveLegalReasoningTiers(route: ResolvedRoute, catalog: ModelCatalog): string[] {
+  return legalTiersFor(findCatalogEntry(catalog, route.model, route.provider));
 }
