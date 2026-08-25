@@ -478,14 +478,23 @@ async function compactCommand(
     presenter.message("Not enough history to compact.");
     return;
   }
+  presenter.message("⚙ compacting…");
 
   const configDir = deps.authConfigDir ?? getConfigDir();
   const configured = configuredProviders(configDir);
-  const requestedProvider = session.provider ?? DEFAULT_PROVIDER;
   // session.model is optional (a session written before the field existed) — backfilled the same
-  // way prepareSession's own loadOrCreateSession does for that case, rather than assuming a
-  // resumed session always has one recorded.
-  const requestedModel = session.model ?? resolveDefaultModel(configDir).model;
+  // way loadOrCreateSession's own resume branch does for that case: `model`/`provider` together,
+  // via resolveDefaultModel(), never independently (that function's own comment explains why a
+  // persisted non-groq default model paired with a hardcoded DEFAULT_PROVIDER would call the wrong
+  // provider's API). DEFAULT_PROVIDER is applied afterward, uniformly, only to fill in a provider
+  // that is still absent once the pair has been resolved — resolveRoute needs a concrete provider,
+  // but that is a routing-time default, not a second, independent backfill of the pair itself.
+  const requested =
+    session.model === undefined
+      ? resolveDefaultModel(configDir)
+      : { model: session.model, provider: session.provider };
+  const requestedModel = requested.model;
+  const requestedProvider = requested.provider ?? DEFAULT_PROVIDER;
   const [catalog, plan] = await Promise.all([
     getModelCatalog(undefined, printWarning),
     fetchAccountPlan(configDir),
@@ -2839,6 +2848,13 @@ async function runTui(
       });
       return;
     }
+    // A mutating command (e.g. /compact) can itself take a multi-second-to-multi-minute round
+    // trip, and without this a task submitted during that window would start a real turn: it
+    // would steal the single onSignalCancel slot the command holds, and the command's own
+    // sessionUpdated would later overwrite that turn's session with its pre-command snapshot.
+    // Setting the same flag runTurn sets makes the guards above (this one and the plain-task one)
+    // correctly reject a submission for the duration of the command's own run.
+    if (command.mutatesRunState === true) turnInFlight = true;
     // Captured before the try: the only thing that distinguishes "/clear ran" from "/mode or
     // /rewind ran" for the rebind below is that /clear mints a brand-new session id (decideClear's
     // own comment) while every other command's dispatch (this closure's own `dispatch`, synchronous
@@ -2887,6 +2903,7 @@ async function runTui(
         message: messageOf(err),
       });
     } finally {
+      if (command.mutatesRunState === true) turnInFlight = false;
       // Without this, `prepared.checkpointer`/`prepared.tools` — built once at session start,
       // closing over the OLD session's id — silently keep appending checkpoints to the OLD
       // session's git ref and log file (checkpoint.ts's own sessionRef/logPath, both keyed on

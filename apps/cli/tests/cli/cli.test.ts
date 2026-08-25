@@ -3612,7 +3612,7 @@ describe("run (/compact)", () => {
     expect(abortError?.name).toBe("AbortError");
     expect(readFileSync(join(sessionsDir, `${SESSION_ID}.jsonl`))).toEqual(before);
     expect(readLog(checkpointStoreDir(checkpointsDir, worktree), SESSION_ID)).toEqual([]);
-    expect(logs).toEqual([]);
+    expect(logs).toEqual(["⚙ compacting…"]);
 
     // onSignalCancel's slot is unregistered in compactCommand's own finally (cli.ts) — a
     // registration made right after the cancelled run must not be swallowed by a stale handle.
