@@ -60,8 +60,8 @@ export async function flush(setup: TestRendererSetup): Promise<void> {
 // idle (no running/rendering/scheduled-render state) before the markdown content tree is actually
 // built, so there is no scheduler-visible signal that kind of helper could poll on.
 // `@opentui/core`'s `CodeRenderable` exposes its own `highlightingDone` promise, but only for a
-// fenced code block specifically, not through `MarkdownRenderable`'s own public surface, and three
-// of this file's four `flushMarkdown` call sites assert on plain prose with no code block at all.
+// fenced code block specifically, not through `MarkdownRenderable`'s own public surface, and most
+// of this file's `flushMarkdown` call sites assert on plain prose with no code block at all.
 // Instead of a fixed sleep — which broke 3 tests on a loaded Windows CI runner at 100ms, and would
 // need bumping again on the next slower runner — this polls the caller's OWN completion signal (the
 // captured frame's rendered TEXT, not the scheduler) on a short real interval up to a generous

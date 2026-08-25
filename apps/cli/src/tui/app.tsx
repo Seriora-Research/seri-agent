@@ -183,6 +183,15 @@ function resolveHeight(rows: number): number {
   return rows || DEFAULT_ROWS;
 }
 
+// Below this width, the transcript scrollbox's own cosmetic left/right margin (below) is dropped
+// rather than applied — empirically confirmed (narrowing the test renderer column by column) that
+// stacking it with the assistant row's bullet gutter (BULLET_GUTTER, below TranscriptRow) leaves
+// too little content width for `<markdown>` to render at all between widths 4-5, vs. rendering
+// fine at those same widths with the margin dropped. 20 is a wide margin above that measured
+// breakpoint, not a tuned value — any real terminal this narrow is already unusable for other
+// reasons, so precision here isn't worth chasing further.
+const TRANSCRIPT_PADDING_MIN_WIDTH = 20;
+
 export function App({
   session,
   route,
@@ -382,18 +391,24 @@ export function App({
       >
         {/* paddingLeft/paddingRight={1}: a one-column margin from both terminal edges for the
         transcript's own content — before this, content ran flush to the right edge while the
-        left edge only looked padded because of TranscriptRow's own bullet-prefix indent, not a
-        real margin. Scoped to the scrollbox (not the app root) so it doesn't also shift the mode
-        indicator/input box/panels below it, which aren't model output. On the scrollbox directly,
-        not an inner wrapper box: an inner box here was tried and works too, but padding the
-        scrollbox itself is one prop instead of an extra element. */}
+        left edge only looked padded because of the assistant row's own bullet-prefix indent, not
+        a real margin on every row. Scoped to the scrollbox (not the app root) so it doesn't also
+        shift the mode indicator/input box/panels below it, which aren't model output. On the
+        scrollbox directly, not an inner wrapper box: an inner box here was tried and works too,
+        but padding the scrollbox itself is one prop instead of an extra element.
+        Dropped below TRANSCRIPT_PADDING_MIN_WIDTH: stacked with the assistant row's own bullet
+        gutter (BULLET_GUTTER, below), this padding left as little as 0 columns of actual content
+        width at a narrow terminal — confirmed empirically to stop assistant markdown from
+        rendering at all (not just narrowing it) at widths 4-5, where the bullet gutter alone
+        still rendered fine. The margin is cosmetic; making it recede at extreme widths trades a
+        breathing-room nicety for the transcript still rendering at all. */}
         <scrollbox
           ref={transcriptRef}
           height={scrollboxHeight}
           stickyScroll
           stickyStart="bottom"
-          paddingLeft={1}
-          paddingRight={1}
+          paddingLeft={width >= TRANSCRIPT_PADDING_MIN_WIDTH ? 1 : 0}
+          paddingRight={width >= TRANSCRIPT_PADDING_MIN_WIDTH ? 1 : 0}
         >
           <TranscriptList transcript={state.transcript} />
         </scrollbox>
@@ -523,17 +538,29 @@ const TranscriptList = memo(function TranscriptList({
   );
 });
 
+// The `●` marker's own width plus one gutter column, reserved on the assistant markdown block
+// below via `paddingLeft` so wrapped/multi-line content never starts under the bullet — kept as
+// one named pair (glyph + derived width) instead of two independently-hardcoded numbers, so a
+// future change to the marker can't silently desync the gutter from what it's actually leaving
+// room for.
+const BULLET = "●";
+const BULLET_GUTTER = BULLET.length + 1;
+
 // One transcript entry's own render, split by role. `role === "assistant"` gets real markdown
-// (bold/headers/lists/links/tables/monochrome-syntax-highlighted code) with the `●` marker kept as
-// a fixed row prefix rather than folded into wrapped text, so it survives a multi-line markdown
-// block as one glyph at the row's own left edge, not repeated or lost mid-wrap. `role === "user"`
-// gets `theme.userBg`'s background band, `alignSelf="flex-start"` so the box shrinks to its own
-// wrapped content's width instead of stretching to the transcript's full width (Yoga's default
-// cross-axis behavior for a column-flex parent's children, which a plain `<text bg=...>` never hit
-// since a text node's own background already stops at its own characters). Everything else (tool
-// calls/results/errors/done markers) stays plain text: none of those are model prose, and a tool
-// result can legitimately contain a literal `*`/`#`/backtick that must render as-is, not get parsed
-// as markdown syntax.
+// (bold/headers/lists/links/tables/monochrome-syntax-highlighted code) with the `●` marker
+// rendered as an absolutely-positioned overlay (out of flex flow) rather than an in-flow row
+// sibling, so it survives a multi-line markdown block as one glyph pinned to the row's own top-left
+// corner, not repeated or lost mid-wrap: a `flexDirection="row"` sibling's cross-axis never grows
+// to fit `<markdown>`'s wrapped content (reproduced live — that shape clipped every multi-line
+// assistant message to one row), so the bullet has to sit outside that flex flow entirely for the
+// block to size itself off `<markdown>` alone. `BULLET_GUTTER` reserves the column(s) the overlay
+// paints into. `role === "user"` gets `theme.userBg`'s background band, `alignSelf="flex-start"` so
+// the box shrinks to its own wrapped content's width instead of stretching to the transcript's full
+// width (Yoga's default cross-axis behavior for a column-flex parent's children, which a plain
+// `<text bg=...>` never hit since a text node's own background already stops at its own
+// characters). Everything else (tool calls/results/errors/done markers) stays plain text: none of
+// those are model prose, and a tool result can legitimately contain a literal `*`/`#`/backtick that
+// must render as-is, not get parsed as markdown syntax.
 // Memoized: `TranscriptList` above re-runs on every actual transcript append, but each entry's own
 // object reference is stable across renders (state/reducer.ts only appends, never replaces existing
 // entries) — so `memo` lets React skip re-invoking this for every already-rendered row (assistant
@@ -541,12 +568,17 @@ const TranscriptList = memo(function TranscriptList({
 const TranscriptRow = memo(function TranscriptRow({ entry }: { entry: TranscriptEntry }) {
   if (entry.role === "assistant") {
     return (
-      <box>
-        {/* Absolute: a row-flex sibling's cross-axis never grows to fit `<markdown>`'s
-            wrapped content, which clipped multi-line assistant messages to one row. */}
-        <text fg={theme.text} position="absolute" top={0} left={0}>{"●"}</text>
+      // minHeight={1}: without an in-flow bullet sibling, this box's height comes from `<markdown>`
+      // alone — an assistant entry whose text is whitespace-only (reachable: `pushLine`,
+      // state/reducer.ts, flushes on `state.streaming.length > 0`, which whitespace satisfies)
+      // measures to zero rows and would otherwise make the whole entry, bullet included, disappear
+      // instead of rendering a blank line the way the old row-flex layout did for free.
+      <box minHeight={1}>
+        <text fg={theme.text} position="absolute" top={0} left={0}>
+          {BULLET}
+        </text>
         <markdown
-          paddingLeft={2}
+          paddingLeft={BULLET_GUTTER}
           fg={theme.text}
           content={entry.text}
           syntaxStyle={syntaxStyle}
