@@ -335,6 +335,7 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
       scopeTargetToCwd: true,
     },
   ],
+  ["/compact", { accepts: (args) => args.length === 0, run: compactCommand, mutatesRunState: true }],
   // mutatesRunState: /memory approve|reject mutates the pending/ queue and the live memory files,
   // and must not race the archivist staging more writes mid-turn (C-7's own comment on why that
   // block runs before `finally` unregisters the cancel slot). Per-command, not per-subcommand
