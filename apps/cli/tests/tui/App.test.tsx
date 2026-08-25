@@ -1685,6 +1685,71 @@ describe("App", () => {
     });
   });
 
+  // EffortPanel's own live arrow-key slider, mirroring the "model picker"
+  // describe block above — render-on-request, Enter selects, Escape/Ctrl-D cancels.
+  describe("effort panel", () => {
+    test("renders in place of the input box once requested", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({ type: "effort-requested", tiers: ["low", "medium", "high"], selected: 0 });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("> low");
+      expect(frame).toContain("medium");
+      expect(frame).toContain("high");
+    });
+
+    test("Enter resolves the highlighted tier via onEffortSelected", async () => {
+      const selected: string[] = [];
+      const { setup, dispatch } = await connect({
+        onEffortSelected: (tier) => selected.push(tier),
+      });
+
+      dispatch({ type: "effort-requested", tiers: ["low", "medium", "high"], selected: 0 });
+      await flush(setup);
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      expect(selected).toEqual(["medium"]);
+    });
+
+    test("Escape and Ctrl-D both cancel without resolving a tier", async () => {
+      const cancelled: string[] = [];
+      const { setup, dispatch } = await connect({
+        onEffortCancel: () => cancelled.push("cancelled"),
+      });
+
+      dispatch({ type: "effort-requested", tiers: ["low", "medium", "high"], selected: 0 });
+      await flush(setup);
+      setup.mockInput.pressEscape();
+      // A bare Escape byte is ambiguous with the start of a longer ANSI sequence (an arrow key,
+      // say), so OpenTUI's own parser holds it for a short disambiguation window before treating it
+      // as a standalone Escape keypress — longer than the plain macrotask tick `flush()` waits
+      // (ModelPicker's own identical Escape test, above, needs the same wait for the same reason).
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await flush(setup);
+      expect(cancelled).toEqual(["cancelled"]);
+
+      dispatch({ type: "effort-requested", tiers: ["low", "medium", "high"], selected: 0 });
+      await flush(setup);
+      setup.mockInput.pressKey("d", { ctrl: true });
+      await flush(setup);
+      expect(cancelled).toEqual(["cancelled", "cancelled"]);
+    });
+
+    test("opens with the current tier already highlighted, not always the first", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({ type: "effort-requested", tiers: ["low", "medium", "high"], selected: 2 });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("> high");
+    });
+  });
+
   describe("setup panel", () => {
     function setupRows(): SetupProviderRow[] {
       return [
@@ -3511,10 +3576,11 @@ describe("App", () => {
   });
 
   // Render-ternary precedence (app.tsx's own comment): pendingApproval → pendingModelPicker →
-  // pendingSetup → pendingAuth → pendingConfig → pendingPermissions → InputBox. Each test below
-  // seeds one adjacent pair at once and checks the earlier-in-the-chain branch wins, extending the
-  // existing pendingSetup-vs-InputBox precedence test above to the three new Stage A branches.
-  describe("render precedence: pendingApproval / pendingSetup / pendingAuth / pendingConfig / pendingPermissions", () => {
+  // pendingSetup → pendingAuth → pendingConfig → pendingPermissions → pendingEffort → InputBox.
+  // Each test below seeds one adjacent pair at once and checks the earlier-in-the-chain branch
+  // wins, extending the existing pendingSetup-vs-InputBox precedence test above to the three new
+  // Stage A branches, and pendingEffort at the tail of the chain.
+  describe("render precedence: pendingApproval / pendingSetup / pendingAuth / pendingConfig / pendingPermissions / pendingEffort", () => {
     test("pendingApproval wins over pendingAuth", async () => {
       const { setup, dispatch } = await connect();
 
@@ -3603,6 +3669,34 @@ describe("App", () => {
       const frame = setup.captureCharFrame();
       expect(frame).toContain("/config — settings");
       expect(frame).not.toContain("/permissions — tools approved permanently");
+    });
+
+    // Extends the chain one further link: pendingPermissions -> pendingEffort -> InputBox.
+    test("pendingPermissions wins over pendingEffort", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({ type: "effort-requested", tiers: ["low", "medium", "high"], selected: 0 });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("/effort — reasoning effort");
+
+      dispatch({
+        type: "permissions-requested",
+        rows: [{ tool: "write_file", source: "persisted", removable: true }],
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("/permissions — tools approved permanently");
+      expect(frame).not.toContain("/effort — reasoning effort");
+    });
+
+    test("pendingEffort wins over InputBox", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({ type: "effort-requested", tiers: ["low", "medium", "high"], selected: 0 });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("/effort — reasoning effort");
     });
   });
 });

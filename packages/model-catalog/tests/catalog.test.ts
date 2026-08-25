@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { findCatalogEntry, isZeroPriceEntry, loadCatalog, resetCatalogCache } from "../src/catalog";
+import {
+  findCatalogEntry,
+  isZeroPriceEntry,
+  loadCatalog,
+  mapRawCatalog,
+  type RawCatalogResponse,
+  resetCatalogCache,
+} from "../src/catalog";
 import type { ModelCatalog, ModelCatalogEntry } from "../src/types";
 
 const fallbackManifest: ModelCatalog = {
@@ -215,6 +222,100 @@ describe("loadCatalog", () => {
     expect(first).toBe(fallbackManifest);
     expect(second).toBe(fallbackManifest);
     expect(calls).toBe(1);
+  });
+});
+
+describe("mapRawCatalog: reasoning_options", () => {
+  test("maps each of the 3 ReasoningOption shapes through toEntry", () => {
+    const raw: RawCatalogResponse = {
+      groq: {
+        models: {
+          "effort-model": {
+            id: "effort-model",
+            name: "Effort Model",
+            family: "family",
+            tool_call: true,
+            reasoning: true,
+            reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
+            limit: { context: 1000, output: 100 },
+          },
+          "toggle-model": {
+            id: "toggle-model",
+            name: "Toggle Model",
+            family: "family",
+            tool_call: true,
+            reasoning: true,
+            reasoning_options: [{ type: "toggle" }],
+            limit: { context: 1000, output: 100 },
+          },
+          "budget-model": {
+            id: "budget-model",
+            name: "Budget Model",
+            family: "family",
+            tool_call: true,
+            reasoning: true,
+            reasoning_options: [{ type: "budget_tokens" }],
+            limit: { context: 1000, output: 100 },
+          },
+        },
+      },
+      openrouter: { models: {} },
+      anthropic: { models: {} },
+      openai: { models: {} },
+      google: { models: {} },
+    };
+
+    const entries = mapRawCatalog(raw);
+
+    expect(entries.find((e) => e.id === "effort-model")?.reasoningOptions).toEqual([
+      { type: "effort", values: ["low", "medium", "high"] },
+    ]);
+    expect(entries.find((e) => e.id === "toggle-model")?.reasoningOptions).toEqual([
+      { type: "toggle" },
+    ]);
+    expect(entries.find((e) => e.id === "budget-model")?.reasoningOptions).toEqual([
+      { type: "budget_tokens" },
+    ]);
+  });
+
+  test("a model with multiple reasoning_options entries (GLM-5.2-shaped) keeps all of them", () => {
+    const raw: RawCatalogResponse = {
+      groq: {
+        models: {
+          "glm-shaped": {
+            id: "glm-shaped",
+            name: "GLM Shaped",
+            family: "family",
+            tool_call: true,
+            reasoning: true,
+            reasoning_options: [
+              { type: "toggle" },
+              { type: "effort", values: ["none", "low", "medium", "high"] },
+              { type: "budget_tokens" },
+            ],
+            limit: { context: 1000, output: 100 },
+          },
+        },
+      },
+      openrouter: { models: {} },
+      anthropic: { models: {} },
+      openai: { models: {} },
+      google: { models: {} },
+    };
+
+    const entries = mapRawCatalog(raw);
+
+    expect(entries.find((e) => e.id === "glm-shaped")?.reasoningOptions).toEqual([
+      { type: "toggle" },
+      { type: "effort", values: ["none", "low", "medium", "high"] },
+      { type: "budget_tokens" },
+    ]);
+  });
+
+  test("a model with no reasoning_options key does not throw and comes back undefined", () => {
+    const entries = mapRawCatalog(rawApiResponse());
+
+    expect(entries.find((e) => e.id === "live-model")?.reasoningOptions).toBeUndefined();
   });
 });
 

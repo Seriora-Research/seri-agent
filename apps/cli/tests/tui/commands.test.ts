@@ -29,6 +29,7 @@ import {
   decideAuthOffer,
   decideClear,
   decideConfigOpen,
+  decideEffortOpen,
   decideGuidedModelPickerOpen,
   decideMaxTurns,
   decideModeCycle,
@@ -400,6 +401,88 @@ describe("decideSetupOpen", () => {
   });
 });
 
+// /effort's own decide/handlers pairing, following
+// decideSetupOpen's exact fixture shape just above (env clearing via the shared ALL_KEY_NAMES,
+// its own fresh configDir).
+describe("decideEffortOpen", () => {
+  let effortConfigDir: string;
+  // `ALL_KEY_NAMES` above is provider API keys only — `decideEffortOpen`
+  // also reads SERI_REASONING_EFFORT (via resolveReasoningEffort's own config fallback), so a dev
+  // box or CI runner with that genuinely exported would silently select the wrong `selected` index
+  // in "returns the legal tiers and defaults selected to 0 with no current override" below (a
+  // real env value competing with the session's own deliberate absence of one). Own save/clear/
+  // restore, matching decideConfigOpen's own KNOWN_KEYS pattern below for the identical hazard.
+  const originalReasoningEffortEnv = process.env.SERI_REASONING_EFFORT;
+
+  beforeEach(() => {
+    for (const name of ALL_KEY_NAMES) delete process.env[name];
+    delete process.env.SERI_REASONING_EFFORT;
+    effortConfigDir = mkdtempSync(join(tmpdir(), "seri-effort-commands-test-"));
+  });
+
+  afterEach(() => {
+    for (const name of ALL_KEY_NAMES) {
+      const original = originalKeyEnv[name];
+      if (original === undefined) delete process.env[name];
+      else process.env[name] = original;
+    }
+    if (originalReasoningEffortEnv === undefined) delete process.env.SERI_REASONING_EFFORT;
+    else process.env.SERI_REASONING_EFFORT = originalReasoningEffortEnv;
+    rmSync(effortConfigDir, { recursive: true, force: true });
+  });
+
+  const catalog: ModelCatalog = {
+    fetchedAt: "2026-08-25T00:00:00.000Z",
+    entries: [
+      catalogEntry({
+        id: "reasoning-model",
+        provider: "groq",
+        reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+      }),
+      catalogEntry({ id: "plain-model", provider: "groq" }),
+    ],
+  };
+
+  test("returns the legal tiers and defaults selected to 0 with no current override", () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const result = decideEffortOpen(
+      catalog,
+      effortConfigDir,
+      session({ model: "reasoning-model", provider: "groq" }),
+      null,
+    );
+
+    expect(result).toEqual({ tiers: ["low", "medium", "high"], selected: 0 });
+  });
+
+  test("opens with the session's own current override already highlighted", () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const result = decideEffortOpen(
+      catalog,
+      effortConfigDir,
+      session({ model: "reasoning-model", provider: "groq", reasoningEffort: "high" }),
+      null,
+    );
+
+    expect(result).toEqual({ tiers: ["low", "medium", "high"], selected: 2 });
+  });
+
+  test("returns null when the resolved model has no reasoning-effort tiers at all", () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const result = decideEffortOpen(
+      catalog,
+      effortConfigDir,
+      session({ model: "plain-model", provider: "groq" }),
+      null,
+    );
+
+    expect(result).toBeNull();
+  });
+});
+
 describe.skipIf(!isGitAvailable())("decideUndo", () => {
   test("restores the previous file state and reports what changed", () => {
     const snapshot = checkpointer();
@@ -748,11 +831,16 @@ describe("decideAuthOffer", () => {
 
 describe("decideConfigOpen", () => {
   let configConfigDir: string;
-  // Env hygiene for every key this describe block touches, not just the two displayed ones: any
-  // dev box or CI runner with SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND genuinely exported would
-  // otherwise silently fail the "both are unset" assertion below, and SERI_WORKOS_CLIENT_ID is
-  // set directly by this file's own exclusion test further down.
-  const KNOWN_KEYS = ["SERI_WORKOS_CLIENT_ID", "SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"];
+  // Env hygiene for every key this describe block touches, not just the three displayed ones: any
+  // dev box or CI runner with SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND/SERI_REASONING_EFFORT
+  // genuinely exported would otherwise silently fail the "all are unset" assertion below, and
+  // SERI_WORKOS_CLIENT_ID is set directly by this file's own exclusion test further down.
+  const KNOWN_KEYS = [
+    "SERI_WORKOS_CLIENT_ID",
+    "SERI_VERIFY_ENABLED",
+    "SERI_VERIFY_COMMAND",
+    "SERI_REASONING_EFFORT",
+  ];
   const originalEnv = Object.fromEntries(KNOWN_KEYS.map((name) => [name, process.env[name]]));
 
   beforeEach(() => {
@@ -772,9 +860,13 @@ describe("decideConfigOpen", () => {
     }
   });
 
-  test("both known keys are source: unset on an empty config dir", () => {
+  test("all known keys are source: unset on an empty config dir", () => {
     const rows = decideConfigOpen(configConfigDir);
-    expect(rows.map((row) => row.key)).toEqual(["SERI_VERIFY_ENABLED", "SERI_VERIFY_COMMAND"]);
+    expect(rows.map((row) => row.key)).toEqual([
+      "SERI_VERIFY_ENABLED",
+      "SERI_VERIFY_COMMAND",
+      "SERI_REASONING_EFFORT",
+    ]);
     expect(rows.every((row) => row.source === "unset" && row.removable === false)).toBe(true);
   });
 
@@ -878,6 +970,18 @@ describe("decideConfigOpen", () => {
     const rows = decideConfigOpen(configConfigDir);
     expect(rows.find((r) => r.key === "SERI_VERIFY_ENABLED")?.kind).toBe("boolean");
     expect(rows.find((r) => r.key === "SERI_VERIFY_COMMAND")?.kind).toBe("string");
+  });
+
+  // Already covered generically by the two KNOWN_CONFIG_KEYS loops above (real label, non-empty
+  // description, description length) — this asserts the same facts by name for SERI_REASONING_EFFORT
+  // specifically, matching this describe block's existing per-key convention just above/below.
+  test("SERI_REASONING_EFFORT has a real label, non-empty description, and kind: string", () => {
+    expect(configKeyInfo("SERI_REASONING_EFFORT").label).not.toBe("SERI_REASONING_EFFORT");
+    expect(configKeyInfo("SERI_REASONING_EFFORT").description).not.toBe("");
+    expect(configKeyInfo("SERI_REASONING_EFFORT").description.length).toBeLessThanOrEqual(78);
+    expect(
+      decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_REASONING_EFFORT")?.kind,
+    ).toBe("string");
   });
 
   test("SERI_VERIFY_ENABLED's on matrix: unset/'true'/'yes' → true; 'false' → false", () => {

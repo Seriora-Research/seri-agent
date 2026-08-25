@@ -23,9 +23,16 @@ import { getConfigDir } from "../../src/config/paths";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
-import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS, tuiPresenter } from "../../src/cli";
+import {
+  addCost,
+  chooseInterfaceOutput,
+  resolveEffortFlag,
+  run,
+  SLASH_COMMANDS,
+  tuiPresenter,
+} from "../../src/cli";
 import { USAGE } from "../../src/cli/output";
-import { setConfigValue } from "../../src/config/config";
+import { loadConfig, setConfigValue } from "../../src/config/config";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
 import { loadGrants, permissionsPath, projectKey } from "../../src/permissions/store";
 import type { CostReport } from "../../src/provider/cost";
@@ -2660,6 +2667,383 @@ describe("run (/mode)", () => {
     expect(code).toBe(0);
     expect(readdirSync(sessionsDir)).toHaveLength(1);
     expect(loadSession("def", sessionsDir).permissionMode).toBe("approve-each");
+  });
+});
+
+// --effort must never apply on a TTY run — resolveEffortFlag is the one
+// place that scoping lives (RunContext.effortFlag's own construction, cli.ts). Unit-tested
+// directly rather than through a full `run()` call with `isTTY: true`, which would mount a real
+// TUI (getTuiRenderer) this test environment cannot always drive (tuiPtyWindows.test.ts's own
+// pre-existing ConPTY failures).
+describe("resolveEffortFlag", () => {
+  test("passes the flag through on the non-interactive path", () => {
+    expect(resolveEffortFlag("high", false)).toBe("high");
+  });
+
+  test("drops the flag entirely on a TTY run", () => {
+    expect(resolveEffortFlag("high", true)).toBeUndefined();
+  });
+
+  test("no flag given stays undefined on either path", () => {
+    expect(resolveEffortFlag(undefined, false)).toBeUndefined();
+    expect(resolveEffortFlag(undefined, true)).toBeUndefined();
+  });
+});
+
+describe("run (/effort)", () => {
+  let sessionsDir: string;
+  let tmpConfigRoot: string;
+  const originalKey = process.env.GROQ_API_KEY;
+  const originalHome = process.env.HOME;
+  const originalDisableModelsFetch = process.env.SERI_DISABLE_MODELS_FETCH;
+
+  // A groq model with a real `effort` reasoning-options entry — the bundled fallback manifest
+  // (catalog-manifest.json) predates this feature and carries no reasoning_options at all, so
+  // these tests fetch a live-shaped catalog rather than relying on this file's other describe
+  // blocks' own SERI_DISABLE_MODELS_FETCH=1/bundled-fallback convention.
+  const REASONING_CATALOG = {
+    groq: {
+      models: {
+        "reasoning-model": {
+          id: "reasoning-model",
+          name: "Reasoning Model",
+          family: "test",
+          tool_call: true,
+          reasoning: true,
+          reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
+          limit: { context: 1000, output: 100 },
+        },
+        "plain-model": {
+          id: "plain-model",
+          name: "Plain Model",
+          family: "test",
+          tool_call: true,
+          reasoning: false,
+          limit: { context: 1000, output: 100 },
+        },
+      },
+    },
+    openrouter: { models: {} },
+    anthropic: { models: {} },
+    openai: { models: {} },
+    google: { models: {} },
+  };
+
+  function restoreEnv(key: string, original: string | undefined): void {
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
+
+  beforeEach(() => {
+    sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-effort-sessions-"));
+    tmpConfigRoot = mkdtempSync(join(tmpdir(), "seri-cli-test-effort-config-"));
+    process.env.HOME = tmpConfigRoot;
+    process.env.GROQ_API_KEY = "fake-test-key";
+    delete process.env.SERI_DISABLE_MODELS_FETCH;
+    resetCatalogCache();
+  });
+
+  afterEach(() => {
+    restoreEnv("GROQ_API_KEY", originalKey);
+    restoreEnv("HOME", originalHome);
+    restoreEnv("SERI_DISABLE_MODELS_FETCH", originalDisableModelsFetch);
+    resetCatalogCache();
+    rmSync(sessionsDir, { recursive: true, force: true });
+    rmSync(tmpConfigRoot, { recursive: true, force: true });
+  });
+
+  // fetchAccountPlan's own login guard skips its network call entirely when no auth session is
+  // saved (this describe block never calls saveAuthSession), so a single unconditional mock is
+  // safe here — unlike the gateway describe block above, nothing else this run touches ever hits
+  // `fetch` for a different URL.
+  function withReasoningFetch<T>(fn: () => Promise<T>): Promise<T> {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL) =>
+      new Response(JSON.stringify(REASONING_CATALOG), { status: 200 })) as typeof fetch;
+    return fn().finally(() => {
+      globalThis.fetch = realFetch;
+    });
+  }
+
+  function seedSession(id: string, overrides: Partial<SessionState> = {}): SessionState {
+    const session: SessionState = {
+      id,
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      model: "reasoning-model",
+      provider: "groq",
+      messages: [],
+      ...overrides,
+    };
+    saveSession(session, sessionsDir);
+    return session;
+  }
+
+  test("/effort <level> on a session with that tier legal sets session.reasoningEffort", async () => {
+    seedSession("eff-1");
+
+    const code = await withReasoningFetch(() =>
+      run(["--continue", "/effort", "medium"], { sessionsDir }),
+    );
+
+    expect(code).toBe(0);
+    expect(loadSession("eff-1", sessionsDir).reasoningEffort).toBe("medium");
+  });
+
+  test("/effort <invalid-level> leaves session state unchanged and lists the actual legal tiers", async () => {
+    seedSession("eff-2");
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    let code: number;
+    try {
+      code = await withReasoningFetch(() =>
+        run(["--continue", "/effort", "extreme"], { sessionsDir }),
+      );
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(code).toBe(0);
+    expect(loadSession("eff-2", sessionsDir).reasoningEffort).toBeUndefined();
+    expect(logs.some((line) => line.includes("low, medium, high"))).toBe(true);
+  });
+
+  test("/effort auto clears session.reasoningEffort", async () => {
+    seedSession("eff-3", { reasoningEffort: "high" });
+
+    const code = await withReasoningFetch(() =>
+      run(["--continue", "/effort", "auto"], { sessionsDir }),
+    );
+
+    expect(code).toBe(0);
+    expect(loadSession("eff-3", sessionsDir).reasoningEffort).toBeUndefined();
+  });
+
+  test("a model with no reasoningOptions: /effort reports no tiers available rather than erroring", async () => {
+    seedSession("eff-4", { model: "plain-model" });
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    let code: number;
+    try {
+      code = await withReasoningFetch(() => run(["--continue", "/effort"], { sessionsDir }));
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(code).toBe(0);
+    expect(logs.some((line) => line.includes("no reasoning-effort tiers available"))).toBe(true);
+  });
+
+  test("--effort <level> on the non-interactive path is passed to runLoop and never written to config.json", async () => {
+    seedSession("eff-5");
+    const { fake, capture } = fakeRunLoop();
+    const configDir = getConfigDir();
+    expect(loadConfig(configDir).SERI_REASONING_EFFORT).toBeUndefined();
+
+    const code = await withReasoningFetch(() =>
+      run(["--continue", "--effort", "high", "another task"], {
+        sessionsDir,
+        runLoop: fake,
+        loadAgentsFile: () => "",
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(capture()?.reasoningEffort).toBe("high");
+    expect(loadConfig(configDir).SERI_REASONING_EFFORT).toBeUndefined();
+
+    // A second, later invocation with no --effort flag falls back to the config default (still
+    // unset here), not the prior invocation's flag value.
+    const { fake: fake2, capture: capture2 } = fakeRunLoop();
+    const code2 = await withReasoningFetch(() =>
+      run(["--continue", "yet another task"], {
+        sessionsDir,
+        runLoop: fake2,
+        loadAgentsFile: () => "",
+      }),
+    );
+    expect(code2).toBe(0);
+    expect(capture2()?.reasoningEffort).toBeUndefined();
+  });
+
+  test("--effort with a tier not legal for the resolved model fails the run rather than being silently ignored", async () => {
+    seedSession("eff-6");
+
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await withReasoningFetch(() =>
+        run(["--continue", "--effort", "extreme", "a", "task"], {
+          sessionsDir,
+          loadAgentsFile: () => "",
+        }),
+      );
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(code).not.toBe(0);
+    expect(errors.some((line) => line.includes("Invalid --effort value"))).toBe(true);
+  });
+
+  // `--effort` wins outright over `session.reasoningEffort` (driveLoop's own `??` chain) — the
+  // dropped-tier warning must key off which one the turn actually ran with, not the raw session
+  // field underneath it. A stale/illegal session override sitting unused must not be reported as
+  // dropped when a valid `--effort` flag is what the turn is actually using.
+  test("--effort overrides a stale, illegal session.reasoningEffort without printing a drop warning", async () => {
+    seedSession("eff-6b", { reasoningEffort: "xhigh" });
+    const { fake, capture } = fakeRunLoop();
+
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await withReasoningFetch(() =>
+        run(["--continue", "--effort", "high", "another task"], {
+          sessionsDir,
+          runLoop: fake,
+          loadAgentsFile: () => "",
+        }),
+      );
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(code).toBe(0);
+    expect(capture()?.reasoningEffort).toBe("high");
+    expect(errors.some((line) => line.includes("isn't legal for the current model"))).toBe(false);
+  });
+
+  // effortCommand's own resolveRoute() call must thread `plan`, or a
+  // gateway-routed session lists tiers for the wrong route entirely. Fixture: "gateway-model" has
+  // NO local groq/openrouter key configured, so it can only be reached via the gateway
+  // (openrouter's own "groq/gateway-model" sibling, routing.ts's own route-key grouping) — and
+  // that sibling's legal tiers differ from the groq-native entry's own. Without `plan` threaded,
+  // resolveRoute's own gatewayCoverage check (routing.ts) always fails closed on a null plan, so
+  // the route never reroutes at all and /effort lists the native entry's tiers — the wrong ones,
+  // since the turn itself (prepareSession, which DOES thread plan) will actually route through the
+  // gateway entry.
+  test("lists the gateway-routed entry's own legal tiers, not the unreachable native entry's", async () => {
+    delete process.env.GROQ_API_KEY;
+    seedSession("eff-7", { model: "gateway-model", provider: "groq" });
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      getConfigDir(),
+    );
+
+    const gatewayCatalog = {
+      groq: {
+        models: {
+          "gateway-model": {
+            id: "gateway-model",
+            name: "Gateway Model (native, unreachable — no key)",
+            family: "test",
+            tool_call: true,
+            reasoning: true,
+            reasoning_options: [{ type: "effort", values: ["low"] }],
+            limit: { context: 1000, output: 100 },
+          },
+        },
+      },
+      openrouter: {
+        models: {
+          "groq/gateway-model": {
+            id: "groq/gateway-model",
+            name: "Gateway Model (via gateway)",
+            family: "test",
+            tool_call: true,
+            reasoning: true,
+            reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
+            limit: { context: 1000, output: 100 },
+          },
+        },
+      },
+      anthropic: { models: {} },
+      openai: { models: {} },
+      google: { models: {} },
+    };
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("/account-status")) {
+        return new Response(JSON.stringify({ plan: "pro" }), { status: 200 });
+      }
+      return new Response(JSON.stringify(gatewayCatalog), { status: 200 });
+    }) as typeof fetch;
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["--continue", "/effort"], { sessionsDir });
+    } finally {
+      console.log = originalLog;
+      globalThis.fetch = realFetch;
+    }
+
+    expect(code).toBe(0);
+    expect(logs.some((line) => line.includes("low, medium, high"))).toBe(true);
+    expect(logs.some((line) => /Legal tiers for the current model: low\./.test(line))).toBe(false);
+  });
+
+  // /effort's own SLASH_COMMANDS registration, mirroring "run (/clear)"'s own "is registered with
+  // an exact, empty accepts, mutatesRunState, and scopeTargetToCwd" test.
+  test("is registered with an at-most-one-argument accepts and mutatesRunState", () => {
+    const effort = SLASH_COMMANDS.get("/effort");
+    if (effort === undefined) throw new Error("/effort is not registered");
+    expect(effort.accepts([])).toBe(true);
+    expect(effort.accepts(["medium"])).toBe(true);
+    expect(effort.accepts(["auto"])).toBe(true);
+    expect(effort.accepts(["medium", "extra"])).toBe(false);
+    // Inert on the TUI path today (its own onSubmit interception claims every /effort form before
+    // this table is ever reached for it) but kept as insurance against this table's own `accepts`
+    // above and that interception's matching guard drifting apart in a later change — this
+    // entry's own comment, cli.ts, has the full account.
+    expect(effort.mutatesRunState).toBe(true);
+  });
+
+  // Mirrors "`/clear the screen please` stays a task", above: /effort's own `accepts()` form caps
+  // at one argument (SLASH_COMMANDS' own entry comment), so trailing garbage past `args[0]` must
+  // fall through to the model as a task rather than being silently truncated by effortCommand.
+  test("`/effort medium extra` stays a task, sent to the model, and does not touch session.reasoningEffort", async () => {
+    seedSession("eff-extra-args");
+    const { fake, capture } = fakeRunLoop();
+
+    const originalLog = console.log;
+    console.log = () => {};
+    let code: number;
+    try {
+      code = await withReasoningFetch(() =>
+        run(["--continue", "/effort", "medium", "extra"], {
+          sessionsDir,
+          runLoop: fake,
+          loadAgentsFile: () => "",
+        }),
+      );
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(code).toBe(0);
+    expect(capture()?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "/effort medium extra",
+    });
+    expect(loadSession("eff-extra-args", sessionsDir).reasoningEffort).toBeUndefined();
   });
 });
 

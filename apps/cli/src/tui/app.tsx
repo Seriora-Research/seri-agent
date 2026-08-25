@@ -62,6 +62,7 @@ import { ModelPicker } from "./components/ModelPicker";
 import { TurnStatus } from "./components/TurnStatus";
 import { AuthBanner, AuthPanel } from "./routes/config/AuthPanel";
 import { ConfigPanel } from "./routes/config/ConfigPanel";
+import { EffortPanel } from "./routes/config/EffortPanel";
 import { PermissionsPanel } from "./routes/config/PermissionsPanel";
 import { SetupPanel } from "./routes/setup/SetupPanel";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
@@ -163,6 +164,13 @@ export type AppProps = {
   onPermissionsRemove?: (tool: string) => void;
   onPermissionsBack?: () => void;
   onPermissionsClose?: (leftoverInput?: string) => void;
+  // /effort's own two resolutions, mirroring onModelSelected/
+  // onModelPickerCancel's own shape exactly — one pair, since EffortPanel has only one step.
+  // `leftoverInput`: threaded through to createEffortHandlers'
+  // dispatched `effort-resolved` action, matching every other panel's own resolution shape —
+  // see EffortPanel's own comment on why it is always `undefined` today.
+  onEffortSelected?: (tier: string, leftoverInput?: string) => void;
+  onEffortCancel?: (leftoverInput?: string) => void;
   // The welcome-splash mount's own three resolutions — unreachable in runTui/runGuidedSetup, whose
   // own initialTuiState calls never set pendingSplash (reducer.ts's own comment).
   onSplashLogin?: () => void;
@@ -236,6 +244,8 @@ export function App({
   onPermissionsRemove,
   onPermissionsBack,
   onPermissionsClose,
+  onEffortSelected,
+  onEffortCancel,
   onSplashLogin,
   onSplashSignup,
   onSplashContinue,
@@ -344,6 +354,7 @@ export function App({
     state.pendingAuth === undefined &&
     state.pendingConfig === undefined &&
     state.pendingPermissions === undefined &&
+    state.pendingEffort === undefined &&
     !state.pendingSplash;
 
   // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
@@ -510,11 +521,12 @@ export function App({
       {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
       is waiting on, and answering it (not typing a task or slash command) is the only input that
       means anything until it clears. Extended to a third state for /model, a fourth for /setup,
-      and three more for /login /signup, /config and /permissions: each is the same kind of "only
-      this input means anything right now" question, checked in this same order (approval, /model,
-      /setup, /login /signup, /config, /permissions, then InputBox). Every branch here — including
-      AuthPanel/ConfigPanel/PermissionsPanel — is a real, wired OpenTUI component; state/handlers.ts
-      and cli.ts dispatch auth-requested/config-requested/permissions-requested. */}
+      four more for /login /signup, /config, /permissions and /effort: each is the same kind of
+      "only this input means anything right now" question, checked in this same order (approval,
+      /model, /setup, /login /signup, /config, /permissions, /effort, then InputBox). Every branch
+      here — including AuthPanel/ConfigPanel/PermissionsPanel/EffortPanel — is a real, wired OpenTUI
+      component; state/handlers.ts and cli.ts dispatch auth-requested/config-requested/
+      permissions-requested/effort-requested. */}
       {state.pendingApproval !== undefined ? (
         <ApprovalBox
           pendingApproval={state.pendingApproval}
@@ -553,6 +565,12 @@ export function App({
           onPermissionsRemove={onPermissionsRemove}
           onPermissionsBack={onPermissionsBack}
           onPermissionsClose={onPermissionsClose}
+        />
+      ) : state.pendingEffort !== undefined ? (
+        <EffortPanel
+          pendingEffort={state.pendingEffort}
+          onEffortSelected={onEffortSelected}
+          onEffortCancel={onEffortCancel}
         />
       ) : state.pendingSplash ? (
         <WelcomeSplashPanel

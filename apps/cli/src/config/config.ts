@@ -130,6 +130,22 @@ export function loadMemoryConfig(configDir?: string): MemoryConfig {
   };
 }
 
+// Takes an already-loaded config object, unlike loadVerifyConfig/loadMemoryConfig above: the
+// /effort precedence chain (session override -> this config default -> nothing sent) needs the
+// same `config` a caller already has in hand rather than re-reading config.json a second time.
+// Read fresh on every call, never cached, since SERI_REASONING_EFFORT can change mid-session via
+// `seri config set`.
+export function loadReasoningEffortConfig(config: Record<string, string>): string | undefined {
+  return configValue("SERI_REASONING_EFFORT", config);
+}
+
+// Mirrors provider/defaults.ts's persistDefaultModel: called only from runTui's own per-turn
+// confirm-then-persist tracking (cli.ts), after a turn using this tier has actually succeeded —
+// never from /effort's own handler directly, and never for the non-persisting --effort CLI flag.
+export function persistDefaultReasoningEffort(tier: string, configDir?: string): void {
+  setConfigValue("SERI_REASONING_EFFORT", tier, configDir);
+}
+
 // configDir is threaded through rather than always resolved internally so that a caller
 // which writes with an explicit dir (`seri config set`) reads back from that same dir.
 export function getApiKey(name: string, configDir?: string): string | undefined {

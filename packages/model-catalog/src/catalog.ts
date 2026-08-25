@@ -1,6 +1,6 @@
 import { fetchWithTimeout } from "./fetchWithTimeout";
 import { filterCatalogEntries } from "./filter";
-import type { ModelCatalog, ModelCatalogEntry, ModelProvider } from "./types";
+import type { ModelCatalog, ModelCatalogEntry, ModelProvider, ReasoningOption } from "./types";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 // ~10s, matching opencode's own value (research-spec.md) — models.dev has no documented rate
@@ -28,6 +28,7 @@ type RawModel = {
   family: string | null;
   tool_call: boolean;
   reasoning: boolean;
+  reasoning_options?: ReasoningOption[];
   limit: { context: number; output: number };
   cost?: {
     input: number;
@@ -49,6 +50,7 @@ function toEntry(provider: ModelProvider, raw: RawModel): ModelCatalogEntry {
     maxOutputTokens: raw.limit.output,
     toolCall: raw.tool_call,
     reasoning: raw.reasoning,
+    reasoningOptions: raw.reasoning_options,
     pricing: raw.cost
       ? {
           inputPerMTok: raw.cost.input,

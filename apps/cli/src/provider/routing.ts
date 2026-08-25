@@ -7,8 +7,10 @@ import {
   routesFor,
 } from "@seri/model-catalog";
 import type { Plan } from "@seri/plans";
+import { DEFAULT_PROVIDER, resolveDefaultModel } from "./defaults";
 import { PROVIDER_API_KEY_NAMES } from "./keys";
 import { GATEWAY_PROVIDER, planCoverage } from "./planCoverage";
+import { legalTiersFor } from "./reasoning";
 
 // D2 (feature-plan.md): "native-direct" for tie-breaking is these three providers specifically —
 // not derived from routeKey's own vendor string, which would also call groq/openrouter "direct"
@@ -168,4 +170,44 @@ export function resolveRoute(
     reason: PROVIDER_API_KEY_NAMES[requested.provider],
     viaGateway: false,
   };
+}
+
+// Extracted after the identical triplet — `session.model ??
+// resolveDefaultModel(configDir).model`, `session.provider ?? DEFAULT_PROVIDER`, then
+// `resolveRoute(...)` — was independently copy-pasted at four call sites in cli.ts (prepareSession,
+// runTurn, effortCommand, and the /effort bare-form interception). `session` is a minimal
+// structural shape, not `SessionState`, so this module stays decoupled from session.ts (no other
+// function here needs it) — every real caller's SessionState/RunSession already satisfies it.
+// `session.model` is guaranteed non-undefined at two of the four original call sites
+// (prepareSession, runTurn — both work with an already-backfilled RunSession); the `??
+// resolveDefaultModel(...)` fallback is simply dead code there, not a behavior change, so one
+// shared implementation safely covers both shapes.
+export function resolveSessionRoute(
+  session: { model?: string; provider?: ModelProvider },
+  catalog: ModelCatalog,
+  configured: ReadonlySet<ModelProvider>,
+  plan: Plan | null,
+  configDir: string,
+): ResolvedRoute {
+  // `resolveDefaultModel(configDir)`'s OWN `.provider`, not a hardcoded `DEFAULT_PROVIDER`:
+  // `provider` can legitimately be undefined on `session` (RunSession's own
+  // comment, cli.ts — "no provider was ever explicitly requested"), and `resolveDefaultModel`
+  // already resolves the correct pair for that case — e.g. SERI_MODEL=claude-sonnet-5 +
+  // SERI_PROVIDER=anthropic configured, no session override, used to resolve as claude-sonnet-5 on
+  // DEFAULT_PROVIDER ("groq") regardless, a wrong-provider dispatch or an invalid model id for
+  // that provider. `DEFAULT_PROVIDER` is still the final fallback — `resolveDefaultModel` itself
+  // returns `provider: undefined` when nothing was ever configured (env or config.json), the one
+  // case a concrete provider is still needed for routing.
+  const defaults = resolveDefaultModel(configDir);
+  const model = session.model ?? defaults.model;
+  const provider = session.provider ?? defaults.provider ?? DEFAULT_PROVIDER;
+  return resolveRoute(catalog, { model, provider }, configured, plan);
+}
+
+// Route-aware, not a static per-model lookup: the same
+// model id can resolve to different catalog entries — and thus different
+// legal reasoning tiers — depending on whether `route.provider` ends up being "openrouter" or a
+// direct provider, so this must key off `route`'s actual resolved (model, provider) pair.
+export function resolveLegalReasoningTiers(route: ResolvedRoute, catalog: ModelCatalog): string[] {
+  return legalTiersFor(findCatalogEntry(catalog, route.model, route.provider));
 }

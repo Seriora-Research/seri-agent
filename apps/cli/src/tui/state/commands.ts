@@ -14,6 +14,7 @@ import {
   type ModelCatalogEntry,
   type ModelProvider,
 } from "@seri/model-catalog";
+import type { Plan } from "@seri/plans";
 import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../agents/systemPrompt";
@@ -33,8 +34,18 @@ import { configBoolean, loadConfig, resolveConfigValue } from "../../config/conf
 import { isDefaultProfile, profileDir, profileNameError } from "../../config/paths";
 import { cycleMode } from "../../gate/gate";
 import { loadGrants, PERSISTABLE_TOOL_NAMES } from "../../permissions/store";
-import { allProviderKeyStates, PROVIDER_API_KEY_NAMES } from "../../provider/keys";
-import { byRoutePriority, resolveRoute } from "../../provider/routing";
+import {
+  allProviderKeyStates,
+  configuredProviders,
+  PROVIDER_API_KEY_NAMES,
+} from "../../provider/keys";
+import { resolveReasoningEffort } from "../../provider/reasoning";
+import {
+  byRoutePriority,
+  resolveLegalReasoningTiers,
+  resolveRoute,
+  resolveSessionRoute,
+} from "../../provider/routing";
 import type { SessionState } from "../../session/session";
 
 export type CommandDirs = { sessionsDir: string; checkpointsDir: string; configDir: string };
@@ -282,6 +293,18 @@ const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
       takesEffectNextRun: true,
     },
   ],
+  [
+    "SERI_REASONING_EFFORT",
+    {
+      label: "Reasoning effort",
+      description: "Default reasoning effort for models that support it (e.g. low, medium, high).",
+      kind: "string",
+      // Read fresh at request time (config.ts's loadReasoningEffortConfig), not baked into a
+      // long-lived process the way SERI_VERIFY_ENABLED/SERI_VERIFY_COMMAND are — a /config write
+      // to this key applies to the very next turn, same as SessionState.reasoningEffort itself.
+      takesEffectNextRun: false,
+    },
+  ],
 ]);
 export const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
 
@@ -379,6 +402,38 @@ export function decidePermissionsOpen(
     }
   }
   return rows;
+}
+
+// The decision half of /effort's own bare, no-argument (picker-opening) form — mirrors
+// decideModelPickerOpen's/decideSetupOpen's own shape: computes what the panel needs and returns
+// it, deciding nothing about presentation, matching every other panel's own decide/handlers
+// pairing (createEffortHandlers, tui/state/handlers.ts). `null` means "no
+// tiers to offer" (no reasoningOptions for the model this session is currently routed to) —
+// cli.ts's own onSubmit interception turns that into a command-error instead of opening an empty
+// picker. `configured` is derived internally from `configDir`, not threaded in by the caller,
+// matching decideSetupOpen/decideConfigOpen's own "recompute fresh from disk, `configDir` in" shape.
+export function decideEffortOpen(
+  catalog: ModelCatalog,
+  configDir: string,
+  session: SessionState<ModelMessage>,
+  plan: Plan | null,
+): { tiers: string[]; selected: number } | null {
+  const route = resolveSessionRoute(
+    session,
+    catalog,
+    configuredProviders(configDir),
+    plan,
+    configDir,
+  );
+  const tiers = resolveLegalReasoningTiers(route, catalog);
+  if (tiers.length === 0) return null;
+  // Opens on whatever is CURRENTLY resolved (session override, else the config default) so the
+  // slider doesn't always reset to the first tier — `indexOf` returns -1 for "unset" or a value
+  // not in this route's own legal list (a stale value from a route since switched away from), and
+  // Math.max(0, -1) is the same "first tier" fallback that case deserves.
+  const current = resolveReasoningEffort(session, loadConfig(configDir));
+  const selected = Math.max(0, tiers.indexOf(current ?? ""));
+  return { tiers, selected };
 }
 
 // /max-turns's own decision: a single positive-integer argument, the same shape --max-turns

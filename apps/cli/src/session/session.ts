@@ -31,6 +31,10 @@ export type SessionState<TMessage = unknown> = {
   // was never actually chosen. DEFAULT_PROVIDER is applied only at the point of actually routing,
   // never recorded here as if it were a real request.
   provider?: ModelProvider;
+  // Same optionality reasoning as `model`/`provider`: absence means no session-scoped /effort
+  // override is in effect, falling back to the SERI_REASONING_EFFORT config default at request
+  // time (see apps/cli/src/provider/reasoning.ts), not a synthetic tier that was never chosen.
+  reasoningEffort?: string;
   messages: TMessage[];
 };
 
@@ -53,6 +57,7 @@ function headerOf(state: SessionState): SessionHeader {
     permissionMode: state.permissionMode,
     model: state.model,
     provider: state.provider,
+    reasoningEffort: state.reasoningEffort,
   };
 }
 

@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCatalog, ModelCatalogEntry } from "@seri/model-catalog";
 import { getModel } from "../../src/provider/model";
-import { resolveRoute } from "../../src/provider/routing";
+import {
+  resolveLegalReasoningTiers,
+  resolveRoute,
+  resolveSessionRoute,
+} from "../../src/provider/routing";
 
 function entry(overrides: Partial<ModelCatalogEntry>): ModelCatalogEntry {
   return {
@@ -37,12 +41,19 @@ const catalog: ModelCatalog = {
   ],
 };
 
+// Provider API keys, plus SERI_MODEL/SERI_PROVIDER: the "a session with no model/provider at all"
+// tests below set the latter two directly and used to delete them at their own end, which a thrown
+// assertion mid-test skips — leaking them into whichever test in this file runs next. One shared
+// clear/capture/restore list, matching every other env var this file already guards this way,
+// closes that regardless of where in a test a failure happens.
 const ALL_KEY_NAMES = [
   "GROQ_API_KEY",
   "OPENROUTER_API_KEY",
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
   "GOOGLE_GENERATIVE_AI_API_KEY",
+  "SERI_MODEL",
+  "SERI_PROVIDER",
 ];
 const originalEnv = Object.fromEntries(ALL_KEY_NAMES.map((name) => [name, process.env[name]]));
 
@@ -300,6 +311,126 @@ describe("resolveRoute", () => {
       );
       expect(route.rerouted).toBe(true);
       expect(route.viaGateway).toBe(false);
+    });
+  });
+});
+
+// The SAME model id, reachable via
+// two providers, must resolve to each route's OWN legal tier list, not a static per-model one.
+describe("resolveLegalReasoningTiers", () => {
+  const reasoningCatalog: ModelCatalog = {
+    fetchedAt: "2026-08-25T00:00:00.000Z",
+    entries: [
+      entry({
+        id: "dual-tier-model",
+        provider: "openrouter",
+        reasoningOptions: [{ type: "effort", values: ["low", "high"] }],
+      }),
+      entry({
+        id: "dual-tier-model",
+        provider: "anthropic",
+        reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+      }),
+    ],
+  };
+
+  test("the same model id resolves its own tier list per provider route", () => {
+    expect(
+      resolveLegalReasoningTiers(
+        { model: "dual-tier-model", provider: "openrouter", rerouted: false, viaGateway: false },
+        reasoningCatalog,
+      ),
+    ).toEqual(["low", "high"]);
+
+    expect(
+      resolveLegalReasoningTiers(
+        { model: "dual-tier-model", provider: "anthropic", rerouted: false, viaGateway: false },
+        reasoningCatalog,
+      ),
+    ).toEqual(["low", "medium", "high"]);
+  });
+
+  test("a route with no matching catalog entry returns no tiers", () => {
+    expect(
+      resolveLegalReasoningTiers(
+        { model: "unknown-model", provider: "groq", rerouted: false, viaGateway: false },
+        reasoningCatalog,
+      ),
+    ).toEqual([]);
+  });
+});
+
+// The shared route-resolution helper extracted after the same
+// triplet (session.model ?? resolveDefaultModel fallback, session.provider ?? DEFAULT_PROVIDER,
+// then resolveRoute) was independently copy-pasted at four call sites in cli.ts.
+describe("resolveSessionRoute", () => {
+  test("a session with model/provider both set resolves exactly like a direct resolveRoute call", () => {
+    process.env.ANTHROPIC_API_KEY = "fake-test-key";
+
+    const route = resolveSessionRoute(
+      { model: "claude-sonnet-5", provider: "anthropic" },
+      catalog,
+      new Set(["anthropic"]),
+      null,
+      tmpRoot,
+    );
+
+    expect(route).toEqual({
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      rerouted: false,
+      viaGateway: false,
+    });
+  });
+
+  test("a session with no model at all falls back to resolveDefaultModel's own resolution", () => {
+    process.env.SERI_MODEL = "solo-model";
+    process.env.SERI_PROVIDER = "groq";
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const route = resolveSessionRoute({}, catalog, new Set(["groq"]), null, tmpRoot);
+
+    expect(route.model).toBe("solo-model");
+    expect(route.provider).toBe("groq");
+  });
+
+  test("a session with no provider at all, and nothing configured anywhere, falls back to DEFAULT_PROVIDER", () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const route = resolveSessionRoute(
+      { model: "solo-model" },
+      catalog,
+      new Set(["groq"]),
+      null,
+      tmpRoot,
+    );
+
+    expect(route.provider).toBe("groq");
+  });
+
+  // A session with a `model` but no `provider` (a legitimate state — RunSession's own comment,
+  // cli.ts) must resolve resolveDefaultModel's own resolved provider, not a hardcoded one: the
+  // catalog has no "claude-sonnet-5" entry under "groq" at all, so resolving against the wrong
+  // provider here would find no catalog entry and leave the route stuck on it, instead of the
+  // provider actually configured (SERI_PROVIDER=anthropic).
+  test("a session with a model but no provider resolves the CONFIGURED default provider, not a hardcoded one", () => {
+    process.env.SERI_MODEL = "claude-sonnet-5";
+    process.env.SERI_PROVIDER = "anthropic";
+    process.env.ANTHROPIC_API_KEY = "fake-test-key";
+
+    const route = resolveSessionRoute(
+      { model: "claude-sonnet-5" },
+      catalog,
+      new Set(["anthropic"]),
+      null,
+      tmpRoot,
+    );
+
+    expect(route).toEqual({
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      rerouted: false,
+      viaGateway: false,
     });
   });
 });

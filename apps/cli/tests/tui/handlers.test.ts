@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createConfigHandlers,
+  createEffortHandlers,
   createPermissionsHandlers,
   createSetupHandlers,
 } from "../../src/tui/state/handlers";
@@ -161,5 +162,42 @@ describe("dispatchPermissionsList (via onPermissionsBack)", () => {
     onPermissionsBack();
 
     expect(actions.map((a) => a.type)).toEqual(["command-error", "permissions-resolved"]);
+  });
+});
+
+// createEffortHandlers is the plumbing
+// leftoverInput flows through end-to-end — verified directly at the unit level, since
+// EffortPanel itself never produces a non-undefined leftoverInput today (it has no text-entry/
+// paste concept — see EffortPanel.tsx's own comment).
+describe("createEffortHandlers", () => {
+  test("onEffortSelected dispatches effort-resolved with the tier and leftoverInput", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onEffortSelected } = createEffortHandlers({ dispatch });
+
+    onEffortSelected("medium", "typed after close");
+
+    expect(actions).toEqual([
+      { type: "effort-resolved", tier: "medium", leftoverInput: "typed after close" },
+    ]);
+  });
+
+  test("onEffortSelected with no leftoverInput dispatches it as undefined", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onEffortSelected } = createEffortHandlers({ dispatch });
+
+    onEffortSelected("high");
+
+    expect(actions).toEqual([{ type: "effort-resolved", tier: "high", leftoverInput: undefined }]);
+  });
+
+  test("onEffortCancel dispatches effort-resolved with no tier, but forwards leftoverInput", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onEffortCancel } = createEffortHandlers({ dispatch });
+
+    onEffortCancel("typed after close");
+
+    expect(actions).toEqual([
+      { type: "effort-resolved", tier: undefined, leftoverInput: "typed after close" },
+    ]);
   });
 });
