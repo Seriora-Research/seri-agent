@@ -41,12 +41,19 @@ const catalog: ModelCatalog = {
   ],
 };
 
+// Provider API keys, plus SERI_MODEL/SERI_PROVIDER: the "a session with no model/provider at all"
+// tests below set the latter two directly and used to delete them at their own end, which a thrown
+// assertion mid-test skips — leaking them into whichever test in this file runs next. One shared
+// clear/capture/restore list, matching every other env var this file already guards this way,
+// closes that regardless of where in a test a failure happens.
 const ALL_KEY_NAMES = [
   "GROQ_API_KEY",
   "OPENROUTER_API_KEY",
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
   "GOOGLE_GENERATIVE_AI_API_KEY",
+  "SERI_MODEL",
+  "SERI_PROVIDER",
 ];
 const originalEnv = Object.fromEntries(ALL_KEY_NAMES.map((name) => [name, process.env[name]]));
 
@@ -308,7 +315,7 @@ describe("resolveRoute", () => {
   });
 });
 
-// opencode #34278 regression class (spec 032's research.md): the SAME model id, reachable via
+// opencode #34278 regression class: the SAME model id, reachable via
 // two providers, must resolve to each route's OWN legal tier list, not a static per-model one.
 describe("resolveLegalReasoningTiers", () => {
   const reasoningCatalog: ModelCatalog = {
@@ -353,7 +360,7 @@ describe("resolveLegalReasoningTiers", () => {
   });
 });
 
-// Round-2 review item 7 (thermo J-2): the shared route-resolution helper extracted after the same
+// The shared route-resolution helper extracted after the same
 // triplet (session.model ?? resolveDefaultModel fallback, session.provider ?? DEFAULT_PROVIDER,
 // then resolveRoute) was independently copy-pasted at four call sites in cli.ts.
 describe("resolveSessionRoute", () => {
@@ -385,9 +392,6 @@ describe("resolveSessionRoute", () => {
 
     expect(route.model).toBe("solo-model");
     expect(route.provider).toBe("groq");
-
-    delete process.env.SERI_MODEL;
-    delete process.env.SERI_PROVIDER;
   });
 
   test("a session with no provider at all, and nothing configured anywhere, falls back to DEFAULT_PROVIDER", () => {
@@ -404,13 +408,11 @@ describe("resolveSessionRoute", () => {
     expect(route.provider).toBe("groq");
   });
 
-  // Round-4 review item 3: a session with a `model` but no `provider` (a legitimate state — RunSession's
-  // own comment, cli.ts) used to fall back to the hardcoded DEFAULT_PROVIDER ("groq") unconditionally
-  // instead of resolveDefaultModel's own resolved provider, even when SERI_MODEL/SERI_PROVIDER named a
-  // DIFFERENT provider explicitly. Concrete break this reproduces: SERI_MODEL=claude-sonnet-5 +
-  // SERI_PROVIDER=anthropic configured, no session.provider override — the catalog has no
-  // "claude-sonnet-5" entry under "groq" at all, so the old behavior found no catalog entry and left
-  // the route stuck on the wrong provider instead of resolving to the one actually configured.
+  // A session with a `model` but no `provider` (a legitimate state — RunSession's own comment,
+  // cli.ts) must resolve resolveDefaultModel's own resolved provider, not a hardcoded one: the
+  // catalog has no "claude-sonnet-5" entry under "groq" at all, so resolving against the wrong
+  // provider here would find no catalog entry and leave the route stuck on it, instead of the
+  // provider actually configured (SERI_PROVIDER=anthropic).
   test("a session with a model but no provider resolves the CONFIGURED default provider, not a hardcoded one", () => {
     process.env.SERI_MODEL = "claude-sonnet-5";
     process.env.SERI_PROVIDER = "anthropic";
@@ -430,8 +432,5 @@ describe("resolveSessionRoute", () => {
       rerouted: false,
       viaGateway: false,
     });
-
-    delete process.env.SERI_MODEL;
-    delete process.env.SERI_PROVIDER;
   });
 });
