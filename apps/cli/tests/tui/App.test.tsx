@@ -895,71 +895,55 @@ describe("App", () => {
   });
 
   // Regression (#165): resolveTableRenderableOptions()/createTextTableRenderable() in the
-  // installed @opentui/core build never forwarded the markdown renderable's own fg, so a table's
-  // data cell fell back to TextTableRenderable's hardcoded white default instead of theme.text.
-  test("a markdown table's data cell renders theme.text, not white", async () => {
-    const { setup, dispatch } = await connect();
-    const answer = ["| a | b |", "| - | - |", "| cellx | celly |"].join("\n");
-    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
-    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
-    await flush(setup);
-    await flushMarkdown(setup, (frame) => frame.includes("celly"));
+  // installed @opentui/core build never forwarded the markdown renderable's own fg, so a table
+  // cell fell back to TextTableRenderable's hardcoded white default instead of theme.text. Header
+  // cells need their own case (not just an inference from the data-cell one) because
+  // createTableHeaderCellChunks re-maps every chunk's fg through headingStyle.fg ?? chunk.fg — a
+  // distinct code path. Bold cells need their own case too: createChunk's precedence rule
+  // (getStyle(group) || getStyle("default")) means a bold chunk's own scope ("markup.strong")
+  // short-circuits before ever reaching "default", which is the case that falsifies an app-side
+  // "default"-scope-only fix (that fix would still leave styled cell content white).
+  const TABLE_CELL_COLOR_CASES = [
+    {
+      name: "data cell",
+      rows: ["| a | b |", "| - | - |", "| cellx | celly |"],
+      settleOn: "celly",
+      target: "cellx",
+    },
+    {
+      name: "header cell",
+      rows: ["| hdrx | hdry |", "| - | - |", "| cellx | celly |"],
+      settleOn: "celly",
+      target: "hdrx",
+    },
+    {
+      name: "bold data cell",
+      rows: ["| a | b |", "| - | - |", "| **boldcell** | plaincell |"],
+      settleOn: "plaincell",
+      target: "boldcell",
+    },
+    {
+      name: "bold header cell",
+      rows: ["| **boldhdr** | hdry |", "| - | - |", "| cellx | celly |"],
+      settleOn: "celly",
+      target: "boldhdr",
+    },
+  ];
+  test("a markdown table's cell text renders theme.text, not white, in every case", async () => {
+    for (const { name, rows, settleOn, target } of TABLE_CELL_COLOR_CASES) {
+      const { setup, dispatch } = await connect();
+      const answer = rows.join("\n");
+      dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+      dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+      await flush(setup);
+      await flushMarkdown(setup, (frame) => frame.includes(settleOn));
 
-    const frame = setup.captureSpans();
-    const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("cellx")));
-    const span = line?.spans.find((s) => s.text.includes("cellx"));
-    expect(span?.fg.equals(parseColor(theme.text))).toBe(true);
-  });
-
-  // Same fix, header row: createTableHeaderCellChunks feeds the same fg-less TextTableRenderable
-  // default, so an unfixed header cell fails identically to the data cell above.
-  test("a markdown table's header cell renders theme.text, not white", async () => {
-    const { setup, dispatch } = await connect();
-    const answer = ["| hdrx | hdry |", "| - | - |", "| cellx | celly |"].join("\n");
-    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
-    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
-    await flush(setup);
-    await flushMarkdown(setup, (frame) => frame.includes("celly"));
-
-    const frame = setup.captureSpans();
-    const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("hdrx")));
-    const span = line?.spans.find((s) => s.text.includes("hdrx"));
-    expect(span?.fg.equals(parseColor(theme.text))).toBe(true);
-  });
-
-  // The precedence rule in createChunk (getStyle(group) || getStyle("default")) means a bold
-  // chunk's own scope ("markup.strong") short-circuits before ever reaching "default" — this is
-  // the case that falsifies an app-side "default"-scope-only fix, which would still leave styled
-  // cell content white.
-  test("a bold word inside a table cell still renders theme.text, not white", async () => {
-    const { setup, dispatch } = await connect();
-    const answer = ["| a | b |", "| - | - |", "| **boldcell** | plaincell |"].join("\n");
-    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
-    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
-    await flush(setup);
-    await flushMarkdown(setup, (frame) => frame.includes("plaincell"));
-
-    const frame = setup.captureSpans();
-    const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("boldcell")));
-    const span = line?.spans.find((s) => s.text.includes("boldcell"));
-    expect(span?.fg.equals(parseColor(theme.text))).toBe(true);
-  });
-
-  // createTableHeaderCellChunks re-maps every chunk's fg through headingStyle.fg ?? chunk.fg —
-  // a distinct code path from the data-cell bold case above, not just the same mechanism reused,
-  // so it needs its own empirical check rather than an inference from the data-cell result.
-  test("a bold word inside a table header cell still renders theme.text, not white", async () => {
-    const { setup, dispatch } = await connect();
-    const answer = ["| **boldhdr** | hdry |", "| - | - |", "| cellx | celly |"].join("\n");
-    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
-    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
-    await flush(setup);
-    await flushMarkdown(setup, (frame) => frame.includes("celly"));
-
-    const frame = setup.captureSpans();
-    const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("boldhdr")));
-    const span = line?.spans.find((s) => s.text.includes("boldhdr"));
-    expect(span?.fg.equals(parseColor(theme.text))).toBe(true);
+      const frame = setup.captureSpans();
+      const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes(target)));
+      const span = line?.spans.find((s) => s.text.includes(target));
+      expect(span, `${name}: no span found containing "${target}"`).toBeDefined();
+      expect(span?.fg.equals(parseColor(theme.text)), name).toBe(true);
+    }
   });
 
   // Regression: ordinary multi-line prose with no long tokens at all used to clip to one visual
