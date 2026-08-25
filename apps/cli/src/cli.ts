@@ -2078,21 +2078,18 @@ async function runTui(
   // session override yet, or /effort auto cleared one), unlike the model pair, which is never
   // optional — a turn that never touches /effort must not write SERI_REASONING_EFFORT.
   //
-  // Seeded from what config.json's own SERI_REASONING_EFFORT key ACTUALLY holds right now, not
-  // from `prepared.session.reasoningEffort` (the session's own, possibly-unconfirmed field) — a
-  // real bug the raw-field seed had: `/effort high` merges into the session (and its own file)
-  // synchronously (the reducer's `effort-resolved` case, or the onSubmit interception's own
-  // `sessionUpdated` call), independently of whether any turn using it has ever succeeded. A
-  // process killed after that merge but before the first successful turn leaves the session file
-  // saying "high" while config.json never got written — and seeding this variable from that same
-  // "high" on the next `--resume` made the persist-on-success check below believe the write had
-  // already happened, silently skipping it forever. Seeding from config.json's own current value
-  // instead means a session override that was never actually confirmed by a successful turn still
-  // triggers exactly one persist attempt the first time it succeeds — the same guarantee this
-  // gate already gives a session that starts here for the very first time.
-  let lastPersistedReasoningEffort: string | undefined = loadReasoningEffortConfig(
-    loadConfig(configDir),
-  );
+  // Deliberately NOT cached in a local variable the way `lastPersistedModel` is (its own comment,
+  // just above): SERI_MODEL/SERI_PROVIDER are never listed as /config's own known keys (/model is
+  // the only live-session writer, which already flows through `lastPersistedModel`), but
+  // SERI_REASONING_EFFORT is a first-class /config key (CONFIG_KEY_INFO, tui/state/commands.ts) —
+  // a user can edit it directly, mid-session, through a path that never touches this closure. A
+  // cached `let` seeded once at session start went stale the moment that happened: `/config` writes
+  // "low" straight to config.json, the cached variable keeps saying "high", and a later `/effort
+  // high` (matching the STALE cached value, not the real one) compared equal and silently skipped
+  // the write — leaving config.json stuck on "low" while the session was actually running on
+  // "high". Reading config.json fresh at the comparison site below removes the staleness entirely
+  // — there is no cached value left to go stale, whether it's this /config bypass or a process
+  // killed between a session-only /effort merge and the first turn that would have persisted it.
   // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
   // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
   // what every other function in this closure actually calls now.
@@ -2608,15 +2605,18 @@ async function runTui(
             // and clearing a session override must not also clear the config default it falls back
             // to.
             const appliedTier = appliedReasoningEffort(session.reasoningEffort, catalogEntry);
+            // Compared against config.json's own CURRENT value, read fresh here rather than a
+            // cached variable — see this closure's own declaration site (above) for why: /config
+            // can rewrite SERI_REASONING_EFFORT directly, mid-session, and a cached comparison
+            // value has no way to see that write happen.
             if (
               !reasoningEffortPersistAttemptedThisTurn &&
               appliedTier !== undefined &&
-              appliedTier !== lastPersistedReasoningEffort
+              appliedTier !== loadReasoningEffortConfig(loadConfig(configDir))
             ) {
               reasoningEffortPersistAttemptedThisTurn = true;
               try {
                 persistDefaultReasoningEffort(appliedTier, configDir);
-                lastPersistedReasoningEffort = appliedTier;
               } catch (err) {
                 const message = messageOf(err);
                 printWarning(`could not save the default reasoning effort: ${message}`);

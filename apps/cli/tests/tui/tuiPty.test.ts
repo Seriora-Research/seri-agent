@@ -2568,6 +2568,77 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
+  // /effort's persist-on-success check must compare against config.json's own CURRENT value, not
+  // a cached one seeded once at session start — /config writes SERI_REASONING_EFFORT directly,
+  // through a path the /effort persist gate never sees, so a cached comparison value has no way
+  // to notice that write happened. Reproduces the exact bug: session starts on config default
+  // "medium" (so a cached seed would also read "medium"), /config changes config.json to "low"
+  // mid-session, then /effort medium — matching the ORIGINAL "medium", not the current "low" —
+  // sets the identical session override a stale cache would think is already persisted. A cached
+  // comparison silently skips the write here, leaving config.json on "low" forever even though the
+  // session is actually running on "medium"; a fresh read at comparison time does not.
+  test("/config changing SERI_REASONING_EFFORT mid-session does not block a later /effort persist", async () => {
+    seedConfig(dir, { SERI_REASONING_EFFORT: "medium" });
+
+    const scriptPath = join(dir, "child-effort-config-bypass.mjs");
+    writeFileSync(scriptPath, childScriptEffortPersist(dir));
+
+    const { child, sawLine } = await startChild(scriptPath, dir);
+    try {
+      // Turn 1 runs on the config default ("medium") — no session override yet, so the
+      // persist-on-success gate does not touch config.json for it either way.
+      await sawLine("RUNLOOP_CALL 1 reasoningEffort=medium");
+      await sawLine("RUNLOOP_DONE 1");
+
+      child.stdin?.write("/config");
+      await sawLine("/config");
+      child.stdin?.write("\r");
+      await wait100ms();
+      await sawLine("/config — settings");
+      // KNOWN_CONFIG_KEYS order (tui/state/commands.ts): SERI_VERIFY_ENABLED, SERI_VERIFY_COMMAND,
+      // SERI_REASONING_EFFORT — two Down presses reach the third.
+      child.stdin?.write("\x1b[B");
+      await wait100ms();
+      child.stdin?.write("\x1b[B");
+      await wait100ms();
+      child.stdin?.write("a");
+      await wait100ms();
+      await sawLine("Set Reasoning effort (SERI_REASONING_EFFORT)");
+
+      child.stdin?.write("low");
+      await wait100ms();
+      child.stdin?.write("\r");
+      await sawLine("Saved SERI_REASONING_EFFORT.");
+
+      const bypassed = await waitForConfig(
+        join(dir, ".seri", "config.json"),
+        (c) => c.SERI_REASONING_EFFORT === "low",
+      );
+      expect(bypassed.SERI_REASONING_EFFORT).toBe("low");
+
+      child.stdin?.write("/effort medium");
+      await sawLine("/effort medium");
+      child.stdin?.write("\r");
+      await sawLine("Reasoning effort: medium");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      await sawLine("RUNLOOP_CALL 2 reasoningEffort=medium");
+      await sawLine("RUNLOOP_DONE 2");
+
+      const config = await waitForConfig(
+        join(dir, ".seri", "config.json"),
+        (c) => c.SERI_REASONING_EFFORT === "medium",
+      );
+      expect(config.SERI_REASONING_EFFORT).toBe("medium");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
   // D1/D2 (feature-plan.md): plan Test-plan item 8, "/model multi-route" — filtering to a model
   // reachable through more than one provider shows every route, and picking one specific route
   // (not just "a model") is what actually dispatches AND persists.
