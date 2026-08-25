@@ -10,6 +10,7 @@ import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
 import {
   estimateTokens,
+  MODE_LABEL,
   type TokenProgress,
   type TranscriptEntry,
   type TranscriptRole,
@@ -154,7 +155,7 @@ export type TuiState = {
 };
 
 function modeIndicator(mode: PermissionMode): string {
-  return `[${mode}]`;
+  return MODE_LABEL[mode];
 }
 
 // What "an empty transcript" means, as a single value rather than fields independently kept

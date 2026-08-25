@@ -105,7 +105,7 @@ const PAGE_UP = "\x1b[5~";
 describe("App", () => {
   test("renders the mode indicator for the session's permission mode", async () => {
     const { setup } = await connect({ session: session({ permissionMode: "read-only" }) });
-    expect(setup.captureCharFrame()).toContain("[read-only]");
+    expect(setup.captureCharFrame()).toContain("⏸ read-only mode on");
   });
 
   // `not.toContain("╭")` is what makes this non-vacuous across all 9 borderStyle sites at once —
@@ -554,7 +554,7 @@ describe("App", () => {
 
     const lines = setup.captureCharFrame().split("\n");
     const helloIndex = lines.findIndex((line) => line.includes("hello"));
-    const modeLabelIndex = lines.findIndex((line) => line.includes("[approve-each]"));
+    const modeLabelIndex = lines.findIndex((line) => line.includes("approve-each mode on"));
     const turnStatusIndex = lines.findIndex(
       (line) => line.includes(" in, ") && line.includes(" out)"),
     );
@@ -930,7 +930,7 @@ describe("App", () => {
     dispatch({ type: "session-updated", session: session({ permissionMode: "auto" }) });
     await flush(setup);
 
-    expect(setup.captureCharFrame()).toContain("[auto]");
+    expect(setup.captureCharFrame()).toContain("⏵⏵ bypass permissions on");
   });
 
   // A paste arrives as its own bracketed-paste event under OpenTUI (InputBox.tsx's own comment),
@@ -2850,7 +2850,7 @@ describe("App", () => {
       // under-reserved budget would either overlap two rows' worth of text or clip the panel's own
       // header line; both must render intact once the reservation accounts for AuthBanner and
       // commandError.
-      expect(frame).toContain("[approve-each]");
+      expect(frame).toContain("⏸ approve-each mode on");
       expect(frame).toContain("/config — settings");
       expect(frame).toContain("Esc/Ctrl-D close");
     });

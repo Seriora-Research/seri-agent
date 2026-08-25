@@ -2047,8 +2047,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       // Still alive: an ordinary command sent right after both of the above still works.
       // cycleMode (gate/gate.ts) cycles approve-each -> auto -> read-only -> approve-each, and a
-      // fresh session starts at approve-each (the [approve-each] indicator shown on mount), so
-      // this first /mode press lands on auto, not read-only.
+      // fresh session starts at approve-each (the "approve-each mode on" indicator shown on
+      // mount), so this first /mode press lands on auto, not read-only.
       child.stdin?.write("/mode");
       await sawLine("/mode");
       child.stdin?.write("\r");
@@ -4884,7 +4884,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         // The mode-indicator/input box's own default-session label (modeIndicator, reducer.ts) —
         // proof the TUI actually mounted rather than the process just sitting there.
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
         // Negative control: nothing auto-started a turn. wait100ms first, matching every other
         // rawOccurrences()-based negative control in this file (the seedConfig-adjacent /setup
         // tests above) — rawOccurrences() is a synchronous snapshot, so it has to be given time to
@@ -4927,7 +4927,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine, exited } = await startChild(scriptPath, dir);
       try {
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
         await wait100ms();
 
         child.stdin?.write("\x04");
@@ -4960,7 +4960,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine } = await startChild(scriptPath, dir);
       try {
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
 
         child.stdin?.write("/max-turns 1");
         await sawLine("/max-turns 1");
@@ -4988,7 +4988,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine } = await startChild(scriptPath, dir);
       try {
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
 
         // Same un-prefixed wait-then-submit shape as the positive case above.
         child.stdin?.write("do a task");
@@ -5008,7 +5008,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
       try {
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
 
         child.stdin?.write("/profile new work");
         await sawLine("/profile new work");
@@ -5048,7 +5048,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine } = await startChild(scriptPath, dir);
       try {
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
 
         child.stdin?.write("/profile new ../etc");
         await sawLine("/profile new ../etc");
@@ -5086,7 +5086,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
 
         child.stdin?.write("/profile new");
         await sawLine("/profile new");
@@ -5245,7 +5245,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // proves the child mounted AND resumed the seeded session, not merely that it never got
         // that far — rawOccurrences() staying at 0 for a process that never mounted would pass for
         // the wrong reason.
-        await sawLine("[read-only]");
+        await sawLine("read-only mode on");
         await wait100ms();
         expect(rawOccurrences("RUNLOOP_READY")).toBe(0);
       } finally {

@@ -29,7 +29,7 @@ describe("initialTuiState", () => {
 
     expect(state.transcript).toEqual([]);
     expect(state.streaming).toBe("");
-    expect(state.modeIndicator).toBe("[read-only]");
+    expect(state.modeIndicator).toBe("⏸ read-only mode on");
   });
 });
 
@@ -42,7 +42,7 @@ describe("tuiReducer: session-updated", () => {
     });
 
     expect(next.session.permissionMode).toBe("auto");
-    expect(next.modeIndicator).toBe("[auto]");
+    expect(next.modeIndicator).toBe("⏵⏵ bypass permissions on");
   });
 });
 
