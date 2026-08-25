@@ -929,12 +929,9 @@ describe("App", () => {
       target: "boldhdr",
     },
   ];
-  // Four connect()+flushMarkdown() cycles in one loop, each with its own up-to-3000ms settle
-  // budget (helpers.ts's own flushMarkdown comment) — given an explicit timeout above bun's
-  // 5000ms default so a slow runner reports THIS test's real failure instead of bun's own generic
-  // "test timed out" swallowing it.
-  test("a markdown table's cell text renders theme.text, not white, in every case", async () => {
-    for (const { name, rows, settleOn, target } of TABLE_CELL_COLOR_CASES) {
+  test.each(TABLE_CELL_COLOR_CASES.map((c) => [c.name, c] as const))(
+    "a markdown table's %s renders theme.text, not white",
+    async (name, { rows, settleOn, target }) => {
       const { setup, dispatch } = await connect();
       const answer = rows.join("\n");
       dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
@@ -946,9 +943,10 @@ describe("App", () => {
       const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes(target)));
       const span = line?.spans.find((s) => s.text.includes(target));
       expect(span, `${name}: no span found containing "${target}"`).toBeDefined();
-      expect(span?.fg.equals(parseColor(theme.text)), name).toBe(true);
-    }
-  }, 20_000);
+      expect(span?.fg.equals(parseColor(theme.text))).toBe(true);
+    },
+    10_000,
+  );
 
   // Regression: ordinary multi-line prose with no long tokens at all used to clip to one visual
   // row — broader than the long-token case below, and the case that actually revealed the bug, so
