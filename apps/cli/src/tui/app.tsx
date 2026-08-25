@@ -527,10 +527,12 @@ const TranscriptList = memo(function TranscriptList({
 const TranscriptRow = memo(function TranscriptRow({ entry }: { entry: TranscriptEntry }) {
   if (entry.role === "assistant") {
     return (
-      <box flexDirection="row">
-        <text fg={theme.text} flexShrink={0}>{"● "}</text>
+      <box>
+        {/* Absolute: a row-flex sibling's cross-axis never grows to fit `<markdown>`'s
+            wrapped content, which clipped multi-line assistant messages to one row. */}
+        <text fg={theme.text} position="absolute" top={0} left={0}>{"●"}</text>
         <markdown
-          flexGrow={1}
+          paddingLeft={2}
           fg={theme.text}
           content={entry.text}
           syntaxStyle={syntaxStyle}
