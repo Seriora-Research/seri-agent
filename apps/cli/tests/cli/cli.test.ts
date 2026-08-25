@@ -22,7 +22,7 @@ import { getConfigDir } from "../../src/config/paths";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
-import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS } from "../../src/cli";
+import { addCost, chooseInterfaceOutput, resolveEffortFlag, run, SLASH_COMMANDS } from "../../src/cli";
 import { USAGE } from "../../src/cli/output";
 import { loadConfig, setConfigValue } from "../../src/config/config";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
@@ -2659,6 +2659,26 @@ describe("run (/mode)", () => {
     expect(code).toBe(0);
     expect(readdirSync(sessionsDir)).toHaveLength(1);
     expect(loadSession("def", sessionsDir).permissionMode).toBe("approve-each");
+  });
+});
+
+// H-3 (spec 032 review): --effort must never apply on a TTY run — resolveEffortFlag is the one
+// place that scoping lives (RunContext.effortFlag's own construction, cli.ts). Unit-tested
+// directly rather than through a full `run()` call with `isTTY: true`, which would mount a real
+// TUI (getTuiRenderer) this test environment cannot always drive (tuiPtyWindows.test.ts's own
+// pre-existing ConPTY failures).
+describe("resolveEffortFlag", () => {
+  test("passes the flag through on the non-interactive path", () => {
+    expect(resolveEffortFlag("high", false)).toBe("high");
+  });
+
+  test("drops the flag entirely on a TTY run", () => {
+    expect(resolveEffortFlag("high", true)).toBeUndefined();
+  });
+
+  test("no flag given stays undefined on either path", () => {
+    expect(resolveEffortFlag(undefined, false)).toBeUndefined();
+    expect(resolveEffortFlag(undefined, true)).toBeUndefined();
   });
 });
 

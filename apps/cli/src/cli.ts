@@ -1002,6 +1002,18 @@ function handlePermissionsCommand(positionals: string[], deps: CliDeps): number 
   }
 }
 
+// H-3 (spec 032 review): --effort is scoped to the non-interactive path only (spec 032's Open Q1
+// decision text) — a TTY run's `--effort` must not reach driveLoop at all, or it (a) applies to
+// EVERY turn of the whole session, not "this single invocation", and (b) permanently outranks a
+// later `/effort <level>`, since RunContext.effortFlag always wins over session.reasoningEffort in
+// driveLoop's own `??` chain. Extracted as its own pure function (rather than an inline ternary at
+// ctx's own construction) so this scoping rule is directly unit-testable without mounting a real
+// TUI — this repo's own pty-based TUI tests need a real console the CI/dev sandbox this ran in
+// does not always have (tuiPtyWindows.test.ts's own pre-existing ConPTY failures).
+export function resolveEffortFlag(effort: string | undefined, isTTY: boolean): string | undefined {
+  return isTTY ? undefined : effort;
+}
+
 // What the task path needs after the subcommands have had their say. It extends CommandDirs, so it
 // satisfies the two callees that take one structurally — but it is not handed to them whole:
 // `dirs(ctx)` below narrows it back down at each call. Structural typing makes passing the whole
@@ -1017,7 +1029,9 @@ type RunContext = CommandDirs & {
   // The `--effort <level>` flag, raw and unvalidated (ParsedArgs.effort's own comment) — bypasses
   // session.reasoningEffort/config.json entirely, for this single run only. `undefined` means no
   // flag was given, not "off"/"none" (those are legal tier VALUES a model can offer, resolved the
-  // normal session-then-config way when no flag overrides them).
+  // normal session-then-config way when no flag overrides them). Also `undefined` on a TTY
+  // invocation even when the flag WAS given (H-3, spec 032 review) — set once, at `ctx`'s own
+  // construction (`run()`, gated on `!isTTY`), not re-checked here or at either read site.
   effortFlag: string | undefined;
 };
 
@@ -3163,7 +3177,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // Matches prepareSession's own resolution (D7) so /memory and the archivist read the same
     // config.json / memories/ directory a /setup-written key or a config set just landed in.
     configDir: deps.authConfigDir ?? getConfigDir(),
-    effortFlag: effort,
+    // resolveEffortFlag's own comment explains the H-3 fix this is. Gated here, the single point
+    // ctx is built, not in driveLoop/prepareSession: `undefined` on a TTY run means prepareSession's
+    // own --effort validation and driveLoop's own resolution both skip it identically, for free — a
+    // TTY invocation of `--effort` is simply inert, the same as it doing nothing at all.
+    effortFlag: resolveEffortFlag(effort, isTTY),
   };
 
   // Bare `seri` in a TTY mounts the TUI directly (idle, empty input box) instead of printing
