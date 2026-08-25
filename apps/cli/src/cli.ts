@@ -226,6 +226,16 @@ type CommandPresenter = {
   // driveLoop's own re-raise; tuiPresenter only appends a transcript line, matching the LOW-J
   // precedent (a per-turn cancel returns control to the input prompt, not to process death).
   cancelled: (signal: NodeJS.Signals) => void;
+  // /compact's own hook, read at persist time rather than trusted from its caller's pre-await
+  // snapshot: compactCommand holds two real awaits (the catalog/plan fetch, the summarizer's own
+  // round trip) between reading `session` and building its result, and /mode is deliberately NOT
+  // gated by `turnInFlight` while /compact runs (SlashCommand's own comment on why /mode is exempt)
+  // — so a /mode change landed mid-compact would otherwise be overwritten when /compact spreads
+  // its own stale `session` back out. consolePresenter has nothing else running concurrently to
+  // race, so it just echoes back whatever it was constructed with; tuiPresenter reads runTui's own
+  // `liveState.session` (this file's own comment on why that, not a closure, is the live source of
+  // truth on the TUI path).
+  currentSession: () => SessionState<ModelMessage>;
 };
 
 type SlashCommand = {
@@ -377,7 +387,14 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
 // needs `dirs` to call saveSession with — closed over here rather than threaded through a second
 // way. `onPlan` is what makes the console path print the plan BEFORE undoFiles/restoreCommit
 // mutate anything, restoring output.ts's own documented guarantee.
-function consolePresenter(dirs: CommandDirs): CommandPresenter {
+function consolePresenter(
+  dirs: CommandDirs,
+  // Only /compact ever calls `.currentSession()`, and only compactCommand's own default parameter
+  // (below) passes one — every other command's `consolePresenter(dirs)` call site omits it and
+  // never invokes the field, so the cast in `currentSession` below is safe by construction, the
+  // same shape as compactCommand's own `cancelledSignal` cast.
+  session?: SessionState<ModelMessage>,
+): CommandPresenter {
   return {
     message: (text) => console.log(text),
     onPlan: (plan) => undoPlanLines(plan),
@@ -397,6 +414,7 @@ function consolePresenter(dirs: CommandDirs): CommandPresenter {
       console.log("Compaction cancelled.");
       raiseSignal(signal);
     },
+    currentSession: () => session as SessionState<ModelMessage>,
   };
 }
 
@@ -476,6 +494,36 @@ async function rewindCommand(
   presenter.message(message);
 }
 
+// Shared by compactCommand and prepareSession (below): both resolve an already-known
+// `{model, provider}` pair into a live route and a dispatched model the exact same way —
+// configuredProviders, an independent catalog+plan fetch (run together rather than stacked,
+// prepareSession's own comment on why explains the latency reasoning), resolveRoute, dispatchModel.
+// runTui's own runTurn keeps its own inline version instead of calling this: it resolves against
+// `prepared`'s already-fetched catalog/plan on every turn rather than fetching a fresh pair each
+// time, a genuinely different shape this helper would only complicate by trying to also cover.
+async function resolveModelRoute(
+  requested: { model: string; provider: ModelProvider | undefined },
+  configDir: string,
+  sessionId: string,
+  deps: CliDeps,
+  warnSink?: (text: string) => void,
+): Promise<{ model: LanguageModel; route: ResolvedRoute; catalog: ModelCatalog; plan: Plan | null }> {
+  const configured = configuredProviders(configDir);
+  const requestedProvider = requested.provider ?? DEFAULT_PROVIDER;
+  const [catalog, plan] = await Promise.all([
+    getModelCatalog(undefined, warnSink),
+    fetchAccountPlan(configDir),
+  ]);
+  const route = resolveRoute(
+    catalog,
+    { model: requested.model, provider: requestedProvider },
+    configured,
+    plan,
+  );
+  const model = dispatchModel(route, sessionId, configDir, deps);
+  return { model, route, catalog, plan };
+}
+
 // /compact: the same findSafeEvictionBoundary/compactMessages the automatic path (loop.ts) uses,
 // run on demand. Not a pure decide-then-present function like rewindCommand's decideRewind:
 // resolving a live model and calling compactMessages are both real I/O, so this stays one `async`
@@ -484,7 +532,7 @@ async function compactCommand(
   session: SessionState<ModelMessage>,
   _args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter = consolePresenter(dirs, session),
   deps: CliDeps = {},
 ): Promise<void> {
   const evictBoundary = findSafeEvictionBoundary(
@@ -498,7 +546,6 @@ async function compactCommand(
   presenter.message("⚙ compacting…");
 
   const configDir = deps.authConfigDir ?? getConfigDir();
-  const configured = configuredProviders(configDir);
   // session.model is optional (a session written before the field existed) — backfilled the same
   // way loadOrCreateSession's own resume branch does for that case: `model`/`provider` together,
   // via resolveDefaultModel(), never independently (that function's own comment explains why a
@@ -510,19 +557,7 @@ async function compactCommand(
     session.model === undefined
       ? resolveDefaultModel(configDir)
       : { model: session.model, provider: session.provider };
-  const requestedModel = requested.model;
-  const requestedProvider = requested.provider ?? DEFAULT_PROVIDER;
-  const [catalog, plan] = await Promise.all([
-    getModelCatalog(undefined, printWarning),
-    fetchAccountPlan(configDir),
-  ]);
-  const route = resolveRoute(
-    catalog,
-    { model: requestedModel, provider: requestedProvider },
-    configured,
-    plan,
-  );
-  const model = dispatchModel(route, session.id, configDir, deps);
+  const { model } = await resolveModelRoute(requested, configDir, session.id, deps, printWarning);
 
   const controller = new AbortController();
   let cancelledSignal: NodeJS.Signals | undefined;
@@ -545,11 +580,26 @@ async function compactCommand(
     unregisterCancel();
   }
 
-  await presenter.sessionUpdated({ ...session, messages: compacted.messages });
+  // `presenter.currentSession()`, not this function's own `session` parameter: the two awaits
+  // above (the catalog/plan fetch, the summarizer's own round trip) are a real window in which
+  // /mode can run — it is deliberately exempt from the `turnInFlight` gate that blocks every other
+  // mutating command (SlashCommand's own comment on why) — and spreading this function's own
+  // pre-await `session` back out would silently revert whatever /mode changed in that window.
+  // CommandPresenter's own comment on `currentSession` has the full account.
+  await presenter.sessionUpdated({ ...presenter.currentSession(), messages: compacted.messages });
   const { storeDir } = checkpointTarget(session, dirs);
   try {
     appendBarrier(storeDir, session.id, "compaction");
   } catch (err) {
+    // Warn-and-continue, matching driveLoop's own identical compaction-barrier catch (its own
+    // comment: this is the one checkpoint call deliberately outside the degrade-never-fail policy
+    // every other one obeys) — not rewindCommand's throw-through. rewindCommand's own comment
+    // explains why IT differs: a rewind's truncation is the only mutation that already happened by
+    // that point, so a barrier failure there is the sole signal a *later* /rewind may cross a point
+    // it shouldn't. Compaction's messages are already persisted the same way by the line above, but
+    // the automatic path already decided a lost compaction barrier is a warning, not a crash — this
+    // command runs the identical `compactMessages` that path does, so it keeps the same answer
+    // rather than making its own manual invocation strictly less forgiving than the automatic one.
     printWarning(
       `could not record the compaction barrier, so /rewind may not be able to cross this point: ${messageOf(err)}`,
     );
@@ -1389,30 +1439,25 @@ async function prepareSession(
     // does a bare `JSON.parse`, so a corrupted config.json throws SYNCHRONOUSLY — the same failure
     // mode `getModel` itself already guards against below, and why this needs to be inside the try
     // at all ("a corrupted config.json prints a clean error and exits 1," not an uncaught crash).
-    const configured = configuredProviders(configDir);
-    const requestedProvider = session.provider ?? DEFAULT_PROVIDER;
-    // The catalog load and the plan fetch are independent network calls — run them together rather
-    // than stacking their latency. `plan` is still fetched even when `requestedProvider` already
-    // has a configured key (resolveRoute's own Rule 1 below would discard it for THIS route): the
-    // same `prepared.plan` also feeds /model's own gatewayCoverageInGroup predicate for every OTHER model
-    // in the catalog the user might switch to later in the session (tuiPty.test.ts's "a logged-in
-    // session's account-status fetch happens once at session start" — asserts the fetch happens
-    // even though its own fixture sets GROQ_API_KEY, the DEFAULT_PROVIDER). `accountStatus.ts`'s
-    // own login guard already skips the fetch for a BYOK-only/logged-out session. Loaded once,
-    // here, alongside the model resolution it feeds — /model (runTui's own runTurn) reuses this
-    // SAME catalog on every later turn rather than reloading it, but @seri/model-catalog caches
-    // for the rest of the process either way (catalog.ts's own loadCatalog).
-    const [catalog, plan] = await Promise.all([
-      getModelCatalog(undefined, warnSink),
-      fetchAccountPlan(configDir),
-    ]);
-    const route = resolveRoute(
-      catalog,
-      { model: session.model, provider: requestedProvider },
-      configured,
-      plan,
+    // The catalog load and the plan fetch (inside resolveModelRoute) are independent network calls,
+    // run together rather than stacked. `plan` is still fetched even when the session's own provider
+    // already has a configured key (resolveRoute's own Rule 1 would discard it for THIS route): the
+    // same `prepared.plan` also feeds /model's own gatewayCoverageInGroup predicate for every OTHER
+    // model in the catalog the user might switch to later in the session (tuiPty.test.ts's "a
+    // logged-in session's account-status fetch happens once at session start" — asserts the fetch
+    // happens even though its own fixture sets GROQ_API_KEY, the DEFAULT_PROVIDER). `accountStatus.ts`'s
+    // own login guard already skips the fetch for a BYOK-only/logged-out session. Resolved once,
+    // here, alongside the model resolution it feeds — /model (runTui's own runTurn) reuses the SAME
+    // catalog/plan on every later turn rather than reloading it (`prepared.catalog`/`.plan`, below),
+    // but @seri/model-catalog caches for the rest of the process either way (catalog.ts's own
+    // loadCatalog).
+    const { model, route, catalog, plan } = await resolveModelRoute(
+      { model: session.model, provider: session.provider },
+      configDir,
+      session.id,
+      deps,
+      warnSink,
     );
-    const model = dispatchModel(route, session.id, configDir, deps);
     // A rerouted OR gateway-served pair is never silent — the piped/non-interactive path gets
     // the notice here, gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent
     // into the transcript once per turn for either case, and this call ALSO runs on the TUI path
@@ -1420,9 +1465,9 @@ async function prepareSession(
     // reroute printed twice for the same turn: once here (before Ink even mounts) and again from
     // runTurn. `rerouted` and `viaGateway` are mutually exclusive (routing.ts's own ResolvedRoute
     // comment), so at most one of these ever fires. Both notices take `session.provider` directly
-    // (not the locally-defaulted `requestedProvider`), matching rerouteNotice's own undefined-aware
-    // contract: blaming DEFAULT_PROVIDER for a blank first run that never named one is worse than
-    // naming none.
+    // (not resolveModelRoute's own DEFAULT_PROVIDER-defaulted copy), matching rerouteNotice's own
+    // undefined-aware contract: blaming DEFAULT_PROVIDER for a blank first run that never named one
+    // is worse than naming none.
     if (route.rerouted && !isTTY) {
       printWarning(rerouteNotice(route, session.provider));
     } else if (route.viaGateway && !isTTY) {
@@ -1898,6 +1943,11 @@ function pushTranscriptLine(dispatch: Dispatch, line: string): void {
 export function tuiPresenter(
   dispatch: Dispatch,
   awaitPersist: () => Promise<void>,
+  // CommandPresenter's own comment on `currentSession`: the live `liveState.session` read fresh at
+  // persist time, not a closure's stale copy — required (not defaulted, unlike `onUsageAccrued`
+  // below) because there is no neutral session a default could return, and every call site already
+  // has a `liveState` of its own to read from.
+  getSession: () => SessionState<ModelMessage>,
   // /compact's usage fold: tuiPresenter does not itself close over runTui's usage/cost `let`s
   // (those live in a different function), so the fold is supplied by the caller instead. Defaults
   // to a no-op for every call site but the two that go through command.run inside onSubmit.
@@ -1922,6 +1972,7 @@ export function tuiPresenter(
     // comment) that a per-turn cancel on the TUI path returns control to the input prompt rather
     // than killing the process.
     cancelled: () => append("Compaction cancelled."),
+    currentSession: getSession,
   };
 }
 
@@ -2284,7 +2335,7 @@ async function runTui(
   // turns the identical failure into a `command-error` dispatch for `/mode`, so it needs its own.
   function onCycleMode(): void {
     const { next } = decideModeCycle(liveState.session);
-    tuiPresenter(dispatch, awaitNextPersist)
+    tuiPresenter(dispatch, awaitNextPersist, () => liveState.session)
       .sessionUpdated(next)
       .catch((err: unknown) => dispatch({ type: "command-error", message: messageOf(err) }));
   }
@@ -2911,7 +2962,7 @@ async function runTui(
         await command.run(
           args,
           dirs(ctx),
-          tuiPresenter(dispatch, awaitNextPersist, foldUsage),
+          tuiPresenter(dispatch, awaitNextPersist, () => liveState.session, foldUsage),
           deps,
         );
       } else {
@@ -2919,7 +2970,7 @@ async function runTui(
           liveState.session,
           args,
           dirs(ctx),
-          tuiPresenter(dispatch, awaitNextPersist, foldUsage),
+          tuiPresenter(dispatch, awaitNextPersist, () => liveState.session, foldUsage),
           deps,
         );
       }

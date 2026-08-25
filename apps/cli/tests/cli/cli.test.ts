@@ -2801,6 +2801,7 @@ describe("run (/clear)", () => {
       },
       usageAccrued: () => {},
       cancelled: () => {},
+      currentSession: () => existing,
     };
 
     const clear = SLASH_COMMANDS.get("/clear");
@@ -3365,6 +3366,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       transcriptCleared: () => {},
       usageAccrued: () => {},
       cancelled: () => {},
+      currentSession: () => session,
     };
 
     const rewind = SLASH_COMMANDS.get("/rewind");
@@ -3613,6 +3615,7 @@ describe("run (/compact)", () => {
       cancelled: (signal: NodeJS.Signals) => {
         cancelledSignal = signal;
       },
+      currentSession: () => session,
     };
 
     let runError: unknown;
@@ -3701,19 +3704,76 @@ describe("run (/compact)", () => {
 
     expect(killedWithSignal).toBe("SIGINT");
   });
+
+  // Regression for the race CommandPresenter's own `currentSession` comment describes: /mode is
+  // deliberately exempt from `turnInFlight` gating (SlashCommand's own comment on why), so it can
+  // run while /compact's own two awaits (the catalog/plan fetch, the summarizer round trip) are
+  // still in flight. This presenter's `currentSession` returns a DIFFERENT permissionMode than the
+  // `session` passed to `run` — standing in for a /mode dispatch that landed mid-compact — and
+  // asserts the final `sessionUpdated` call carries that live value forward instead of the stale
+  // `permissionMode` compactCommand's own `session` parameter still holds.
+  test("a permissionMode change made mid-compact survives — sessionUpdated merges onto the live session, not compactCommand's own stale snapshot", async () => {
+    const session = makeSession(longMessages(30));
+    saveSession(session, sessionsDir);
+
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ goal: "g", progress: "p", blockers: "b", nextSteps: "n" }),
+          },
+        ],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: compactionUsage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    const liveSession: SessionState<ModelMessage> = { ...session, permissionMode: "read-only" };
+    let updated: SessionState<ModelMessage> | undefined;
+    const presenter = {
+      message: () => {},
+      onPlan: () => {},
+      restore: () => {},
+      sessionUpdated: async (next: SessionState<ModelMessage>) => {
+        updated = next;
+      },
+      transcriptCleared: () => {},
+      usageAccrued: () => {},
+      cancelled: () => {},
+      // Stands in for /mode having already dispatched into live TUI state while /compact awaited.
+      currentSession: () => liveSession,
+    };
+
+    await getCompact().run(
+      session,
+      [],
+      { sessionsDir, checkpointsDir, configDir },
+      presenter,
+      { authConfigDir: configDir, getGroqModel: () => model },
+    );
+
+    expect(updated?.permissionMode).toBe("read-only");
+    expect(updated?.messages.length).toBeLessThan(session.messages.length);
+  });
 });
 
 // The onSubmit call sites both build their fold callback inline (cli.ts: `tuiPresenter(dispatch,
-// awaitNextPersist, (u) => { usage = {...} })`) — this exercises tuiPresenter's own contract that
-// `usageAccrued` is exactly the third argument, unmodified, so a future edit that drops the fold
-// or wires it to the wrong variable at either call site fails here rather than only being
-// observable through a live /compact run in the TUI.
+// awaitNextPersist, () => liveState.session, (u) => { usage = {...} })`) — this exercises
+// tuiPresenter's own contract that `usageAccrued` is exactly the fourth argument, unmodified, so a
+// future edit that drops the fold or wires it to the wrong variable at either call site fails here
+// rather than only being observable through a live /compact run in the TUI.
 describe("tuiPresenter", () => {
   test("usageAccrued calls the supplied fold with the usage it was given", () => {
     const received: LanguageModelUsage[] = [];
+    // getSession is never called in this test — usageAccrued is the only thing exercised.
     const presenter = tuiPresenter(
       () => {},
       () => Promise.resolve(),
+      () => {
+        throw new Error("not exercised by this test");
+      },
       (usage) => received.push(usage),
     );
     const usage: LanguageModelUsage = {
