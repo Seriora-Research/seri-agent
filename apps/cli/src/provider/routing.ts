@@ -189,8 +189,18 @@ export function resolveSessionRoute(
   plan: Plan | null,
   configDir: string,
 ): ResolvedRoute {
-  const model = session.model ?? resolveDefaultModel(configDir).model;
-  const provider = session.provider ?? DEFAULT_PROVIDER;
+  // `resolveDefaultModel(configDir)`'s OWN `.provider`, not a hardcoded `DEFAULT_PROVIDER` (round-4
+  // review item 3): `provider` can legitimately be undefined on `session` (RunSession's own
+  // comment, cli.ts — "no provider was ever explicitly requested"), and `resolveDefaultModel`
+  // already resolves the correct pair for that case — e.g. SERI_MODEL=claude-sonnet-5 +
+  // SERI_PROVIDER=anthropic configured, no session override, used to resolve as claude-sonnet-5 on
+  // DEFAULT_PROVIDER ("groq") regardless, a wrong-provider dispatch or an invalid model id for
+  // that provider. `DEFAULT_PROVIDER` is still the final fallback — `resolveDefaultModel` itself
+  // returns `provider: undefined` when nothing was ever configured (env or config.json), the one
+  // case a concrete provider is still needed for routing.
+  const defaults = resolveDefaultModel(configDir);
+  const model = session.model ?? defaults.model;
+  const provider = session.provider ?? defaults.provider ?? DEFAULT_PROVIDER;
   return resolveRoute(catalog, { model, provider }, configured, plan);
 }
 

@@ -390,7 +390,7 @@ describe("resolveSessionRoute", () => {
     delete process.env.SERI_PROVIDER;
   });
 
-  test("a session with no provider at all falls back to DEFAULT_PROVIDER", () => {
+  test("a session with no provider at all, and nothing configured anywhere, falls back to DEFAULT_PROVIDER", () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
     const route = resolveSessionRoute(
@@ -402,5 +402,36 @@ describe("resolveSessionRoute", () => {
     );
 
     expect(route.provider).toBe("groq");
+  });
+
+  // Round-4 review item 3: a session with a `model` but no `provider` (a legitimate state — RunSession's
+  // own comment, cli.ts) used to fall back to the hardcoded DEFAULT_PROVIDER ("groq") unconditionally
+  // instead of resolveDefaultModel's own resolved provider, even when SERI_MODEL/SERI_PROVIDER named a
+  // DIFFERENT provider explicitly. Concrete break this reproduces: SERI_MODEL=claude-sonnet-5 +
+  // SERI_PROVIDER=anthropic configured, no session.provider override — the catalog has no
+  // "claude-sonnet-5" entry under "groq" at all, so the old behavior found no catalog entry and left
+  // the route stuck on the wrong provider instead of resolving to the one actually configured.
+  test("a session with a model but no provider resolves the CONFIGURED default provider, not a hardcoded one", () => {
+    process.env.SERI_MODEL = "claude-sonnet-5";
+    process.env.SERI_PROVIDER = "anthropic";
+    process.env.ANTHROPIC_API_KEY = "fake-test-key";
+
+    const route = resolveSessionRoute(
+      { model: "claude-sonnet-5" },
+      catalog,
+      new Set(["anthropic"]),
+      null,
+      tmpRoot,
+    );
+
+    expect(route).toEqual({
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      rerouted: false,
+      viaGateway: false,
+    });
+
+    delete process.env.SERI_MODEL;
+    delete process.env.SERI_PROVIDER;
   });
 });
