@@ -25,3 +25,5 @@ if a version bump silently drops the fix.
 the root `package.json`) once a `@opentui/core` release forwards `fg` into its
 table-rendering path natively — check whether the upstream fix has landed
 before bumping past `0.5.6`.
+
+Filed upstream: [anomalyco/opentui#1432](https://github.com/anomalyco/opentui/issues/1432).
