@@ -3568,10 +3568,10 @@ describe("run (/compact)", () => {
   // AbortSignal/AbortController matches in compaction.test.ts/loop.test.ts).
   //
   // Presenter is a stub, not the default consolePresenter: consolePresenter's own `cancelled`
-  // re-raises the signal (M1's fix), which would actually kill this test process. The stub isolates
-  // what this test is actually checking — that compactCommand's own catch branch calls
-  // `presenter.cancelled` with the signal that caused the abort — from consolePresenter's own
-  // (trivial, one-line) re-raise wiring.
+  // re-raises the signal (cli.ts's own CommandPresenter comment), which would actually kill this
+  // test process. The stub isolates what this test is actually checking — that compactCommand's
+  // own catch branch calls `presenter.cancelled` with the signal that caused the abort — from
+  // consolePresenter's own (trivial, one-line) re-raise wiring.
   test("cancelled compaction is a strict no-op and reports the cancelling signal to the presenter", async () => {
     seedCheckpointLog();
     const session = makeSession(longMessages(30));
@@ -3646,14 +3646,20 @@ describe("run (/compact)", () => {
     expect(cancelledSignal).toBe("SIGINT");
   });
 
-  // Rewritten from a prior version that fired a signal immediately after the run and checked a
-  // NEW registration fired — but deliverSignal (signals.ts) clears its slot BEFORE invoking the
-  // callback, so that passed regardless of whether compactCommand's own finally ever ran. Running
-  // a SUCCESSFUL compaction to completion and then registering a fresh callback is what actually
-  // proves compactCommand's finally freed the slot: if it left a stale handle behind, `onSignalCancel`
-  // below would silently overwrite it (there is exactly one slot, this file's own comment), and this
-  // assertion would still pass for the wrong reason too — so it's the ONLY thing this test checks.
-  test("a successful compaction frees the onSignalCancel slot for the next registration", async () => {
+  // Rewritten from a prior version that fired a signal immediately after the run and then checked
+  // a NEW registration fired — but deliverSignal (signals.ts) clears its slot BEFORE invoking the
+  // callback, so that passed regardless of whether compactCommand's own finally ever ran; and
+  // registering a new callback afterward would have passed just as trivially even without that
+  // rewrite, since onSignalCancel unconditionally overwrites whatever is already in the slot
+  // (signals.ts's own comment: one slot, last writer wins) — the assertion cannot tell a freed slot
+  // from a stale one that way. The only way to actually observe whether the slot is free is to fire
+  // a signal with NOTHING newly registered and check which of deliverSignal's two branches ran: a
+  // stale handle takes the (silent, no-op) cancel branch, a freed slot falls through to the real,
+  // nothing-to-cancel path, which re-raises the signal via `process.kill`. `process.kill` is stubbed
+  // so that path is observable without actually ending this test process, and the process-level
+  // SIGINT/SIGTERM listeners signals.ts installs at import time — removed by that same real path as
+  // part of re-raising — are restored afterward so later tests still get them.
+  test("a successful compaction frees the onSignalCancel slot, so a later signal is not silently swallowed", async () => {
     const session = makeSession(longMessages(30));
     saveSession(session, sessionsDir);
 
@@ -3679,16 +3685,25 @@ describe("run (/compact)", () => {
       { authConfigDir: configDir, getGroqModel: () => model },
     );
 
-    let laterFired = false;
-    const unregister = onSignalCancel(() => {
-      laterFired = true;
-    });
+    const sigintListeners = process.listeners("SIGINT");
+    const sigtermListeners = process.listeners("SIGTERM");
+    const originalKill = process.kill.bind(process);
+    let killedWithSignal: string | number | undefined;
+    process.kill = ((pid: number, signal?: string | number) => {
+      killedWithSignal = signal;
+      return true;
+    }) as typeof process.kill;
     try {
       deliverSignal("SIGINT");
     } finally {
-      unregister();
+      process.kill = originalKill;
+      process.removeAllListeners("SIGINT");
+      process.removeAllListeners("SIGTERM");
+      for (const listener of sigintListeners) process.on("SIGINT", listener as () => void);
+      for (const listener of sigtermListeners) process.on("SIGTERM", listener as () => void);
     }
-    expect(laterFired).toBe(true);
+
+    expect(killedWithSignal).toBe("SIGINT");
   });
 });
 
