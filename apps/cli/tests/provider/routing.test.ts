@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCatalog, ModelCatalogEntry } from "@seri/model-catalog";
 import { getModel } from "../../src/provider/model";
-import { resolveRoute } from "../../src/provider/routing";
+import { resolveLegalReasoningTiers, resolveRoute } from "../../src/provider/routing";
 
 function entry(overrides: Partial<ModelCatalogEntry>): ModelCatalogEntry {
   return {
@@ -301,5 +301,50 @@ describe("resolveRoute", () => {
       expect(route.rerouted).toBe(true);
       expect(route.viaGateway).toBe(false);
     });
+  });
+});
+
+// opencode #34278 regression class (spec 032's research.md): the SAME model id, reachable via
+// two providers, must resolve to each route's OWN legal tier list, not a static per-model one.
+describe("resolveLegalReasoningTiers", () => {
+  const reasoningCatalog: ModelCatalog = {
+    fetchedAt: "2026-08-25T00:00:00.000Z",
+    entries: [
+      entry({
+        id: "dual-tier-model",
+        provider: "openrouter",
+        reasoningOptions: [{ type: "effort", values: ["low", "high"] }],
+      }),
+      entry({
+        id: "dual-tier-model",
+        provider: "anthropic",
+        reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+      }),
+    ],
+  };
+
+  test("the same model id resolves its own tier list per provider route", () => {
+    expect(
+      resolveLegalReasoningTiers(
+        { model: "dual-tier-model", provider: "openrouter", rerouted: false, viaGateway: false },
+        reasoningCatalog,
+      ),
+    ).toEqual(["low", "high"]);
+
+    expect(
+      resolveLegalReasoningTiers(
+        { model: "dual-tier-model", provider: "anthropic", rerouted: false, viaGateway: false },
+        reasoningCatalog,
+      ),
+    ).toEqual(["low", "medium", "high"]);
+  });
+
+  test("a route with no matching catalog entry returns no tiers", () => {
+    expect(
+      resolveLegalReasoningTiers(
+        { model: "unknown-model", provider: "groq", rerouted: false, viaGateway: false },
+        reasoningCatalog,
+      ),
+    ).toEqual([]);
   });
 });
