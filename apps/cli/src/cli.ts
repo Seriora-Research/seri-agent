@@ -426,56 +426,67 @@ async function cycleModeCommand(
   presenter.message(message);
 }
 
-// /effort's own NON-INTERACTIVE path, mirroring cycleModeCommand's shape above. The TUI path
-// (runTui's own onSubmit, below) claims every form of `/effort` — bare, `<level>`, `auto` — before
-// it ever reaches this table: the awaited network
-// calls this function makes below (`getModelCatalog()`, `fetchAccountPlan()`) used to run on the
-// TUI path too, through this same function, which is what forced `mutatesRunState: true` onto its
-// own SLASH_COMMANDS entry — a live turn that completes DURING those two awaits could have its own
-// `messages-updated` clobbered by this function's later, stale-captured `session-updated` dispatch
-// (a full replace, not a merge). The TUI now resolves `<level>`/`auto` synchronously off
-// `prepared.catalog`/`prepared.plan` instead, with nothing to await and so nothing to race — this
-// function survives only for `handleSlashCommand` (the single-shot, non-interactive path), where
-// its own fetches are unavoidable: there is no `prepared` in scope there.
+// Shared by both `/effort` callers (this file's own non-interactive `effortCommand` below, and the
+// TUI's `onSubmit` interception further down) so they can never silently disagree about what a
+// `<level>`/`auto` form resolves to — only how `catalog`/`plan` were obtained (awaited fresh here by
+// `effortCommand`, already resolved and reused by the TUI) differs between them.
 //
 // Legal tiers are resolved against the model this session is CURRENTLY routed to
-// (resolveSessionRoute/resolveLegalReasoningTiers), not a static per-model catalog lookup: the
-// same model id can resolve to different catalog entries — and thus different legal tiers —
-// depending on which route it's actually reached through, so routing.ts's own
-// resolveLegalReasoningTiers keys off the resolved route, not the raw model id. `plan` is fetched
-// live here, not threaded from a caller: this function runs before prepareSession's own plan fetch
-// has even happened. Omitting it (the prior version of this function did) silently mis-lists tiers
-// for a gateway-routed session: routing.ts's own gateway branch changes route.model/route.provider
-// to the gateway entry, which resolveLegalReasoningTiers is keyed on — the same route-vs-model-id
-// mismatch this function exists to prevent, just triggered by a stale `plan` instead of a stale
-// route. fetchAccountPlan's
-// own login guard skips the network call entirely for a BYOK-only/logged-out session, so the common
-// case pays nothing extra for this. `Promise.all`, not two sequential `await`s: the catalog fetch
-// and the plan fetch are independent, the same reasoning prepareSession's own identical pair
-// already applies.
-//
-// The actual arg-parsing/validation/resolution decision (bare/`<level>`/`auto`) is
-// `resolveEffortCommand` (provider/reasoning.ts) — shared with the TUI's own onSubmit interception,
-// so the two callers can never silently disagree about what each form means; only how
-// `legalTiers`/`current` are obtained (awaited here, synchronous there) differs.
-async function effortCommand(
+// (resolveSessionRoute/resolveLegalReasoningTiers), not a static per-model catalog lookup: the same
+// model id can resolve to different catalog entries — and thus different legal tiers — depending on
+// which route it's actually reached through, so routing.ts's own resolveLegalReasoningTiers keys off
+// the resolved route, not the raw model id. A stale/missing `plan` mis-resolves a gateway route the
+// same way a stale route id would: routing.ts's own gateway branch changes route.model/route.provider
+// to the gateway entry, which resolveLegalReasoningTiers is keyed on.
+async function applyEffortCommand(
   session: SessionState<ModelMessage>,
   args: string[],
-  dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  catalog: ModelCatalog,
+  plan: Plan | null,
+  configDir: string,
+  presenter: CommandPresenter,
 ): Promise<void> {
-  const config = loadConfig(dirs.configDir);
-  const [catalog, plan] = await Promise.all([getModelCatalog(), fetchAccountPlan(dirs.configDir)]);
-  const configured = configuredProviders(dirs.configDir);
-  const route = resolveSessionRoute(session, catalog, configured, plan, dirs.configDir);
+  const configured = configuredProviders(configDir);
+  const route = resolveSessionRoute(session, catalog, configured, plan, configDir);
   const legalTiers = resolveLegalReasoningTiers(route, catalog);
-  const current = resolveReasoningEffort(session, config);
+  const current = resolveReasoningEffort(session, loadConfig(configDir));
 
   const result = resolveEffortCommand(args, legalTiers, current);
   if (result.changed) {
     await presenter.sessionUpdated({ ...session, reasoningEffort: result.reasoningEffort });
   }
   presenter.message(result.message);
+}
+
+// /effort's own NON-INTERACTIVE path, mirroring cycleModeCommand's shape above. The TUI path
+// (runTui's own onSubmit, below) claims every form of `/effort` — bare, `<level>`, `auto` — before it
+// ever reaches this table, resolving `<level>`/`auto` synchronously off `prepared.catalog`/
+// `prepared.plan` instead of calling this function: this function survives only for
+// `handleSlashCommand` (the single-shot, non-interactive path), where its own fetches below are
+// unavoidable — there is no `prepared` in scope there.
+//
+// `auto` skips both fetches entirely: resolveEffortCommand ignores `legalTiers`/`current` for that
+// form, so awaiting `getModelCatalog()`/`fetchAccountPlan()` first would just be discarded latency.
+async function effortCommand(
+  session: SessionState<ModelMessage>,
+  args: string[],
+  dirs: CommandDirs,
+  presenter: CommandPresenter = consolePresenter(dirs),
+): Promise<void> {
+  if (args[0] === "auto") {
+    const result = resolveEffortCommand(args, [], undefined);
+    if (result.changed) {
+      await presenter.sessionUpdated({ ...session, reasoningEffort: result.reasoningEffort });
+    }
+    presenter.message(result.message);
+    return;
+  }
+  // `Promise.all`, not two sequential `await`s: the catalog fetch and the plan fetch are
+  // independent, the same reasoning prepareSession's own identical pair already applies.
+  // fetchAccountPlan's own login guard skips the network call entirely for a BYOK-only/logged-out
+  // session, so the common case pays nothing extra for this.
+  const [catalog, plan] = await Promise.all([getModelCatalog(), fetchAccountPlan(dirs.configDir)]);
+  await applyEffortCommand(session, args, catalog, plan, dirs.configDir, presenter);
 }
 
 // The step the user asked for, not the record's `seq`. `seq` is the 0-based index of a tool
@@ -2832,29 +2843,18 @@ async function runTui(
       return;
     }
     // /effort, like /model just above, is intercepted here for EVERY form (bare, `<level>`,
-    // `auto`), not just the bare, picker-opening one. The bare form opens EffortPanel; `<level>`/
-    // `auto` are resolved synchronously here too, rather than left to fall through to the generic
-    // SLASH_COMMANDS dispatch below, which calls `effortCommand` — a function that `await`s two
-    // real network calls (`getModelCatalog()`, `fetchAccountPlan()`) before it ever calls
-    // `sessionUpdated()`. Left to reach `effortCommand` from here, that gap would be a real race:
-    // type `/effort medium`, let a DIFFERENT already-in-flight turn complete DURING those awaits,
-    // and `effortCommand`'s later `session-updated` dispatch — a full replace, not a merge
-    // (reducer.ts's own `case "session-updated"`) — would silently discard everything that turn
-    // just appended, both live and on disk. That entry's own `mutatesRunState: true` (SlashCommand's
-    // own field comment) only narrows the window (blocks while a turn is ALREADY in flight at the
-    // moment of typing) — it does not close a race where a turn starts and finishes entirely during
-    // the awaits. Claiming `<level>`/`auto` here closes the race at its root instead:
-    // `prepared.catalog`/`prepared.plan` are already resolved (the same values /model's own
-    // interception above reuses), so route/legal-tier resolution is synchronous — no `await` sits
-    // between reading `liveState.session` and dispatching the result, so there is no window left
-    // for another turn to land in.
+    // `auto`), not just the bare, picker-opening one. Left to fall through to the generic
+    // SLASH_COMMANDS dispatch below instead, `<level>`/`auto` would hit `effortCommand`, which
+    // `await`s two real network calls before its own `sessionUpdated()` — a window where a
+    // different already-in-flight turn could complete and have its `session-updated` dispatch (a
+    // full replace, not a merge) silently discarded by `effortCommand`'s later one. Claiming
+    // `<level>`/`auto` here closes that race at its root: `prepared.catalog`/`prepared.plan` are
+    // already resolved (the same values /model's own interception above reuses), so
+    // `applyEffortCommand` below resolves synchronously — no `await` sits between reading
+    // `liveState.session` and dispatching the result.
     //
-    // `decideEffortOpen` still owns the bare form: route resolution,
-    // legal-tier lookup, and the current-tier-highlighted `selected` index for EffortPanel.
-    // `resolveEffortCommand` (provider/reasoning.ts) is the shared decision behind `<level>`/`auto`
-    // — the same function `effortCommand` (still SLASH_COMMANDS-registered, non-interactive path
-    // only now) calls, so the two callers can never silently disagree about what a form means; only
-    // how `legalTiers`/`current` are obtained (synchronously here, `await`ed there) differs.
+    // `decideEffortOpen` still owns the bare form: route resolution, legal-tier lookup, and the
+    // current-tier-highlighted `selected` index for EffortPanel.
     if (name === "/effort" && args.length <= 1) {
       try {
         if (args.length === 0) {
@@ -2874,24 +2874,14 @@ async function runTui(
           dispatch({ type: "effort-requested", tiers: opened.tiers, selected: opened.selected });
           return;
         }
-        const route = resolveSessionRoute(
+        await applyEffortCommand(
           liveState.session,
+          args,
           prepared.catalog,
-          configuredProviders(configDir),
           prepared.plan,
           configDir,
+          tuiPresenter(dispatch, awaitNextPersist),
         );
-        const legalTiers = resolveLegalReasoningTiers(route, prepared.catalog);
-        const current = resolveReasoningEffort(liveState.session, loadConfig(configDir));
-        const result = resolveEffortCommand(args, legalTiers, current);
-        const presenter = tuiPresenter(dispatch, awaitNextPersist);
-        if (result.changed) {
-          await presenter.sessionUpdated({
-            ...liveState.session,
-            reasoningEffort: result.reasoningEffort,
-          });
-        }
-        presenter.message(result.message);
       } catch (err) {
         dispatch({
           type: "command-error",
