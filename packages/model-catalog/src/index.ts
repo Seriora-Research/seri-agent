@@ -8,4 +8,4 @@ export {
 export { fetchWithTimeout } from "./fetchWithTimeout";
 export { filterCatalogEntries } from "./filter";
 export { groupRoutes, routeKey, routesFor } from "./routes";
-export type { ModelCatalog, ModelCatalogEntry, ModelProvider } from "./types";
+export type { ModelCatalog, ModelCatalogEntry, ModelProvider, ReasoningOption } from "./types";
