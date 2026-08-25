@@ -413,19 +413,30 @@ function resolveReasoningEffort(
   return session.reasoningEffort ?? loadReasoningEffortConfig(config);
 }
 
-// /effort, mirroring cycleModeCommand's shape above. Unlike /model, this IS registered in
-// SLASH_COMMANDS (accepts: () => true, below) rather than intercepted in runTui's onSubmit:
-// there is no live picker screen here for the non-interactive path to lack — every form (a
-// level, "auto", or no argument) resolves through the ordinary session/presenter machinery every
-// other SLASH_COMMANDS entry already uses. `args.length === 0` therefore always means "print the
-// current resolved tier," on both the TUI and non-interactive paths — a live, arrow-key-adjustable
-// picker (research.md's Open Q2) is not built here; see spec 032's implementer report for why.
+// /effort, mirroring cycleModeCommand's shape above. Registered in SLASH_COMMANDS (accepts: () =>
+// true, below) for every form EXCEPT the bare, no-argument one — that form is intercepted earlier,
+// in runTui's own onSubmit (H-1, spec 032 review), the same "opens a live picker, and the
+// non-interactive path genuinely has no screen to render it on" reasoning /model's own
+// interception already documents (that reasoning used to be claimed HERE too, for /effort, before
+// the picker existed — it was never true for this function specifically, only for the bare form,
+// which is why the fix moved the bare form out rather than building the picker inside this
+// generic, session/presenter-based dispatch). This function's own `args.length === 0` branch below
+// is therefore reached ONLY on the non-interactive path (no TTY, no picker possible), where it
+// still prints the current resolved tier as text.
 //
 // Legal tiers are resolved against the model this session is CURRENTLY routed to
 // (resolveRoute/resolveLegalReasoningTiers), not a static per-model catalog lookup — the same
 // opencode #34278 regression class routing.ts's own resolveLegalReasoningTiers guards against.
-// `plan` is omitted (resolveRoute defaults to `null`): it only affects gateway-fallback routing,
-// which does not change which reasoning tiers a resolved (model, provider) pair legally offers.
+// `plan` is fetched live here (M-1, spec 032 review), not threaded from a caller: this function is
+// invoked identically from both the non-interactive dispatch (handleSlashCommand, before
+// prepareSession's own plan fetch has even run) and the TUI's generic SLASH_COMMANDS dispatch
+// (onSubmit, below) — neither call site can hand this function a `plan` through SlashCommand.run's
+// own fixed signature. Omitting it (the prior version of this function did) silently mis-lists
+// tiers for a gateway-routed session: routing.ts's own gateway branch changes
+// route.model/route.provider to the gateway entry, which resolveLegalReasoningTiers is keyed on —
+// the same regression class (opencode #34278) this feature exists to prevent, just triggered by a
+// stale `plan` instead of a stale route. fetchAccountPlan's own login guard skips the network call
+// entirely for a BYOK-only/logged-out session, so the common case pays nothing extra for this.
 async function effortCommand(
   session: SessionState<ModelMessage>,
   args: string[],
@@ -435,16 +446,19 @@ async function effortCommand(
   const config = loadConfig(dirs.configDir);
   const catalog = await getModelCatalog();
   const configured = configuredProviders(dirs.configDir);
+  const plan = await fetchAccountPlan(dirs.configDir);
   const requestedModel = session.model ?? resolveDefaultModel(dirs.configDir).model;
   const requestedProvider = session.provider ?? DEFAULT_PROVIDER;
   const route = resolveRoute(
     catalog,
     { model: requestedModel, provider: requestedProvider },
     configured,
+    plan,
   );
   const legalTiers = resolveLegalReasoningTiers(route, catalog);
 
   if (args.length === 0) {
+    // Reached only on the non-interactive path — see this function's own header comment.
     const current = resolveReasoningEffort(session, config) ?? "unset";
     presenter.message(
       legalTiers.length === 0

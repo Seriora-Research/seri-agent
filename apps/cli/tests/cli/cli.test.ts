@@ -2884,6 +2884,84 @@ describe("run (/effort)", () => {
     expect(code).not.toBe(0);
     expect(errors.some((line) => line.includes("Invalid --effort value"))).toBe(true);
   });
+
+  // M-1 (spec 032 review): effortCommand's own resolveRoute() call must thread `plan`, or a
+  // gateway-routed session lists tiers for the wrong route entirely. Fixture: "gateway-model" has
+  // NO local groq/openrouter key configured, so it can only be reached via the gateway
+  // (openrouter's own "groq/gateway-model" sibling, routing.ts's own route-key grouping) — and
+  // that sibling's legal tiers differ from the groq-native entry's own. Without `plan` threaded,
+  // resolveRoute's own gatewayCoverage check (routing.ts) always fails closed on a null plan, so
+  // the route never reroutes at all and /effort lists the native entry's tiers — the wrong ones,
+  // since the turn itself (prepareSession, which DOES thread plan) will actually route through the
+  // gateway entry.
+  test("lists the gateway-routed entry's own legal tiers, not the unreachable native entry's", async () => {
+    delete process.env.GROQ_API_KEY;
+    seedSession("eff-7", { model: "gateway-model", provider: "groq" });
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      getConfigDir(),
+    );
+
+    const gatewayCatalog = {
+      groq: {
+        models: {
+          "gateway-model": {
+            id: "gateway-model",
+            name: "Gateway Model (native, unreachable — no key)",
+            family: "test",
+            tool_call: true,
+            reasoning: true,
+            reasoning_options: [{ type: "effort", values: ["low"] }],
+            limit: { context: 1000, output: 100 },
+          },
+        },
+      },
+      openrouter: {
+        models: {
+          "groq/gateway-model": {
+            id: "groq/gateway-model",
+            name: "Gateway Model (via gateway)",
+            family: "test",
+            tool_call: true,
+            reasoning: true,
+            reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
+            limit: { context: 1000, output: 100 },
+          },
+        },
+      },
+      anthropic: { models: {} },
+      openai: { models: {} },
+      google: { models: {} },
+    };
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("/account-status")) {
+        return new Response(JSON.stringify({ plan: "pro" }), { status: 200 });
+      }
+      return new Response(JSON.stringify(gatewayCatalog), { status: 200 });
+    }) as typeof fetch;
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["--continue", "/effort"], { sessionsDir });
+    } finally {
+      console.log = originalLog;
+      globalThis.fetch = realFetch;
+    }
+
+    expect(code).toBe(0);
+    expect(logs.some((line) => line.includes("low, medium, high"))).toBe(true);
+    expect(logs.some((line) => /Legal tiers for the current model: low\./.test(line))).toBe(false);
+  });
 });
 
 describe("run (/clear)", () => {
