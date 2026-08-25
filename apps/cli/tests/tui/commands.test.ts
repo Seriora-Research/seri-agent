@@ -29,6 +29,7 @@ import {
   decideAuthOffer,
   decideClear,
   decideConfigOpen,
+  decideEffortOpen,
   decideGuidedModelPickerOpen,
   decideMaxTurns,
   decideModeCycle,
@@ -397,6 +398,78 @@ describe("decideSetupOpen", () => {
     const row = decideSetupOpen(setupConfigDir).find((r) => r.provider === "anthropic");
     expect(row?.source).toBe("env");
     expect(row?.removable).toBe(true);
+  });
+});
+
+// Round-2 review item 8 (thermo S-1): /effort's own decide/handlers pairing, following
+// decideSetupOpen's exact fixture shape just above (env clearing via the shared ALL_KEY_NAMES,
+// its own fresh configDir).
+describe("decideEffortOpen", () => {
+  let effortConfigDir: string;
+
+  beforeEach(() => {
+    for (const name of ALL_KEY_NAMES) delete process.env[name];
+    effortConfigDir = mkdtempSync(join(tmpdir(), "seri-effort-commands-test-"));
+  });
+
+  afterEach(() => {
+    for (const name of ALL_KEY_NAMES) {
+      const original = originalKeyEnv[name];
+      if (original === undefined) delete process.env[name];
+      else process.env[name] = original;
+    }
+    rmSync(effortConfigDir, { recursive: true, force: true });
+  });
+
+  const catalog: ModelCatalog = {
+    fetchedAt: "2026-08-25T00:00:00.000Z",
+    entries: [
+      catalogEntry({
+        id: "reasoning-model",
+        provider: "groq",
+        reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+      }),
+      catalogEntry({ id: "plain-model", provider: "groq" }),
+    ],
+  };
+
+  test("returns the legal tiers and defaults selected to 0 with no current override", () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const result = decideEffortOpen(
+      catalog,
+      effortConfigDir,
+      session({ model: "reasoning-model", provider: "groq" }),
+      null,
+    );
+
+    expect(result).toEqual({ tiers: ["low", "medium", "high"], selected: 0 });
+  });
+
+  test("opens with the session's own current override already highlighted", () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const result = decideEffortOpen(
+      catalog,
+      effortConfigDir,
+      session({ model: "reasoning-model", provider: "groq", reasoningEffort: "high" }),
+      null,
+    );
+
+    expect(result).toEqual({ tiers: ["low", "medium", "high"], selected: 2 });
+  });
+
+  test("returns null when the resolved model has no reasoning-effort tiers at all", () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const result = decideEffortOpen(
+      catalog,
+      effortConfigDir,
+      session({ model: "plain-model", provider: "groq" }),
+      null,
+    );
+
+    expect(result).toBeNull();
   });
 });
 

@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCatalog, ModelCatalogEntry } from "@seri/model-catalog";
 import { getModel } from "../../src/provider/model";
-import { resolveLegalReasoningTiers, resolveRoute } from "../../src/provider/routing";
+import {
+  resolveLegalReasoningTiers,
+  resolveRoute,
+  resolveSessionRoute,
+} from "../../src/provider/routing";
 
 function entry(overrides: Partial<ModelCatalogEntry>): ModelCatalogEntry {
   return {
@@ -346,5 +350,57 @@ describe("resolveLegalReasoningTiers", () => {
         reasoningCatalog,
       ),
     ).toEqual([]);
+  });
+});
+
+// Round-2 review item 7 (thermo J-2): the shared route-resolution helper extracted after the same
+// triplet (session.model ?? resolveDefaultModel fallback, session.provider ?? DEFAULT_PROVIDER,
+// then resolveRoute) was independently copy-pasted at four call sites in cli.ts.
+describe("resolveSessionRoute", () => {
+  test("a session with model/provider both set resolves exactly like a direct resolveRoute call", () => {
+    process.env.ANTHROPIC_API_KEY = "fake-test-key";
+
+    const route = resolveSessionRoute(
+      { model: "claude-sonnet-5", provider: "anthropic" },
+      catalog,
+      new Set(["anthropic"]),
+      null,
+      tmpRoot,
+    );
+
+    expect(route).toEqual({
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      rerouted: false,
+      viaGateway: false,
+    });
+  });
+
+  test("a session with no model at all falls back to resolveDefaultModel's own resolution", () => {
+    process.env.SERI_MODEL = "solo-model";
+    process.env.SERI_PROVIDER = "groq";
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const route = resolveSessionRoute({}, catalog, new Set(["groq"]), null, tmpRoot);
+
+    expect(route.model).toBe("solo-model");
+    expect(route.provider).toBe("groq");
+
+    delete process.env.SERI_MODEL;
+    delete process.env.SERI_PROVIDER;
+  });
+
+  test("a session with no provider at all falls back to DEFAULT_PROVIDER", () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const route = resolveSessionRoute(
+      { model: "solo-model" },
+      catalog,
+      new Set(["groq"]),
+      null,
+      tmpRoot,
+    );
+
+    expect(route.provider).toBe("groq");
   });
 });

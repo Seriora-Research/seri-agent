@@ -166,8 +166,11 @@ export type AppProps = {
   onPermissionsClose?: (leftoverInput?: string) => void;
   // /effort's own two resolutions (H-1, spec 032 review), mirroring onModelSelected/
   // onModelPickerCancel's own shape exactly — one pair, since EffortPanel has only one step.
-  onEffortSelected?: (tier: string) => void;
-  onEffortCancel?: () => void;
+  // `leftoverInput` (round-2 review item 3): threaded through to createEffortHandlers'
+  // dispatched `effort-resolved` action, matching every other panel's own resolution shape —
+  // see EffortPanel's own comment on why it is always `undefined` today.
+  onEffortSelected?: (tier: string, leftoverInput?: string) => void;
+  onEffortCancel?: (leftoverInput?: string) => void;
   // The welcome-splash mount's own three resolutions — unreachable in runTui/runGuidedSetup, whose
   // own initialTuiState calls never set pendingSplash (reducer.ts's own comment).
   onSplashLogin?: () => void;

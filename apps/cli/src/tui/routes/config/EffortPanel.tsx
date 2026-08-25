@@ -17,8 +17,14 @@ export function EffortPanel({
   onEffortCancel,
 }: {
   pendingEffort: EffortPanelState;
-  onEffortSelected?: (tier: string) => void;
-  onEffortCancel?: () => void;
+  // `leftoverInput` (round-2 review item 3, CodeRabbit): threaded through, matching every other
+  // panel's own `X-resolved` action shape, even though nothing in this component currently
+  // produces a non-undefined value for it — EffortPanel has no text-entry/paste concept to capture
+  // one from (mirrors PermissionsPanel's own onPermissionsClose, which carries the identical
+  // optional param for the same reason). The call sites below always pass `undefined` explicitly,
+  // not omit the argument, so the plumbing reads as deliberate rather than as a forgotten param.
+  onEffortSelected?: (tier: string, leftoverInput?: string) => void;
+  onEffortCancel?: (leftoverInput?: string) => void;
 }) {
   const { tiers } = pendingEffort;
   const { selected, visible, remainingCount, handleArrowKey } = useListWindow(
@@ -28,13 +34,13 @@ export function EffortPanel({
 
   useKeyboard((key) => {
     if (isDismiss(key)) {
-      onEffortCancel?.();
+      onEffortCancel?.(undefined);
       return;
     }
     if (handleArrowKey(key)) return;
     if (isEnter(key)) {
       const tier = tiers[selected];
-      if (tier !== undefined) onEffortSelected?.(tier);
+      if (tier !== undefined) onEffortSelected?.(tier, undefined);
     }
   });
 

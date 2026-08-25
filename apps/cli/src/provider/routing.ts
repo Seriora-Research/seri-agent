@@ -7,6 +7,7 @@ import {
   routesFor,
 } from "@seri/model-catalog";
 import type { Plan } from "@seri/plans";
+import { DEFAULT_PROVIDER, resolveDefaultModel } from "./defaults";
 import { PROVIDER_API_KEY_NAMES } from "./keys";
 import { GATEWAY_PROVIDER, planCoverage } from "./planCoverage";
 import { legalTiersFor } from "./reasoning";
@@ -169,6 +170,28 @@ export function resolveRoute(
     reason: PROVIDER_API_KEY_NAMES[requested.provider],
     viaGateway: false,
   };
+}
+
+// Extracted (round-2 review item 7, thermo J-2) after the identical triplet — `session.model ??
+// resolveDefaultModel(configDir).model`, `session.provider ?? DEFAULT_PROVIDER`, then
+// `resolveRoute(...)` — was independently copy-pasted at four call sites in cli.ts (prepareSession,
+// runTurn, effortCommand, and the /effort bare-form interception). `session` is a minimal
+// structural shape, not `SessionState`, so this module stays decoupled from session.ts (no other
+// function here needs it) — every real caller's SessionState/RunSession already satisfies it.
+// `session.model` is guaranteed non-undefined at two of the four original call sites
+// (prepareSession, runTurn — both work with an already-backfilled RunSession); the `??
+// resolveDefaultModel(...)` fallback is simply dead code there, not a behavior change, so one
+// shared implementation safely covers both shapes.
+export function resolveSessionRoute(
+  session: { model?: string; provider?: ModelProvider },
+  catalog: ModelCatalog,
+  configured: ReadonlySet<ModelProvider>,
+  plan: Plan | null,
+  configDir: string,
+): ResolvedRoute {
+  const model = session.model ?? resolveDefaultModel(configDir).model;
+  const provider = session.provider ?? DEFAULT_PROVIDER;
+  return resolveRoute(catalog, { model, provider }, configured, plan);
 }
 
 // Route-aware, not a static per-model lookup (opencode #34278's regression class, per spec 032's

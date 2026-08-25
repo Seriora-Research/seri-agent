@@ -48,7 +48,6 @@ import {
 import { configCommand as configCommandReal } from "./config/commands";
 import {
   loadConfig,
-  loadReasoningEffortConfig,
   loadVerifyConfig,
   persistDefaultReasoningEffort,
   type VerifyConfig,
@@ -78,7 +77,7 @@ import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
 import { getModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
-import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
+import { persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import type { getGatewayModel as getGatewayModelReal } from "./provider/gateway";
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
@@ -86,11 +85,13 @@ import { configuredProviders, PROVIDER_DISPLAY_NAMES, tuiMissingKeyMessage } fro
 import { dispatchModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
+import { appliedReasoningEffort } from "./provider/reasoning";
 import {
   gatewayCoverageInGroup,
   type ResolvedRoute,
   resolveLegalReasoningTiers,
-  resolveRoute,
+  type resolveRoute,
+  resolveSessionRoute,
 } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
 import { awaitsReply } from "./session/awaitsReply";
@@ -115,6 +116,7 @@ import {
   decideAuthOffer,
   decideClear,
   decideConfigOpen,
+  decideEffortOpen,
   decideMaxTurns,
   decideModeCycle,
   decideModelPickerOpen,
@@ -124,10 +126,12 @@ import {
   decideRewind,
   decideSetupOpen,
   decideUndo,
+  resolveReasoningEffort,
 } from "./tui/state/commands";
 import {
   createAuthHandlers,
   createConfigHandlers,
+  createEffortHandlers,
   createPermissionsHandlers,
   createSetupHandlers,
 } from "./tui/state/handlers";
@@ -420,16 +424,6 @@ async function cycleModeCommand(
   presenter.message(message);
 }
 
-// Session override wins, falling back to the config default — used by effortCommand's own
-// no-arg print branch. The `--effort` CLI flag bypasses this resolver entirely (RunContext.
-// effortFlag, read directly in driveLoop), never reaching session.reasoningEffort or config.json.
-function resolveReasoningEffort(
-  session: SessionState<ModelMessage>,
-  config: Record<string, string>,
-): string | undefined {
-  return session.reasoningEffort ?? loadReasoningEffortConfig(config);
-}
-
 // /effort, mirroring cycleModeCommand's shape above. Registered in SLASH_COMMANDS (accepts: () =>
 // true, below) for every form EXCEPT the bare, no-argument one — that form is intercepted earlier,
 // in runTui's own onSubmit (H-1, spec 032 review), the same "opens a live picker, and the
@@ -464,14 +458,7 @@ async function effortCommand(
   const catalog = await getModelCatalog();
   const configured = configuredProviders(dirs.configDir);
   const plan = await fetchAccountPlan(dirs.configDir);
-  const requestedModel = session.model ?? resolveDefaultModel(dirs.configDir).model;
-  const requestedProvider = session.provider ?? DEFAULT_PROVIDER;
-  const route = resolveRoute(
-    catalog,
-    { model: requestedModel, provider: requestedProvider },
-    configured,
-    plan,
-  );
+  const route = resolveSessionRoute(session, catalog, configured, plan, dirs.configDir);
   const legalTiers = resolveLegalReasoningTiers(route, catalog);
 
   if (args.length === 0) {
@@ -1423,28 +1410,23 @@ async function prepareSession(
     // mode `getModel` itself already guards against below, and why this needs to be inside the try
     // at all ("a corrupted config.json prints a clean error and exits 1," not an uncaught crash).
     const configured = configuredProviders(configDir);
-    const requestedProvider = session.provider ?? DEFAULT_PROVIDER;
     // The catalog load and the plan fetch are independent network calls — run them together rather
-    // than stacking their latency. `plan` is still fetched even when `requestedProvider` already
-    // has a configured key (resolveRoute's own Rule 1 below would discard it for THIS route): the
-    // same `prepared.plan` also feeds /model's own gatewayCoverageInGroup predicate for every OTHER model
-    // in the catalog the user might switch to later in the session (tuiPty.test.ts's "a logged-in
-    // session's account-status fetch happens once at session start" — asserts the fetch happens
-    // even though its own fixture sets GROQ_API_KEY, the DEFAULT_PROVIDER). `accountStatus.ts`'s
-    // own login guard already skips the fetch for a BYOK-only/logged-out session. Loaded once,
-    // here, alongside the model resolution it feeds — /model (runTui's own runTurn) reuses this
-    // SAME catalog on every later turn rather than reloading it, but @seri/model-catalog caches
-    // for the rest of the process either way (catalog.ts's own loadCatalog).
+    // than stacking their latency. `plan` is still fetched even when the session's own requested
+    // provider already has a configured key (resolveRoute's own Rule 1, inside
+    // resolveSessionRoute below, would discard it for THIS route): the same `prepared.plan` also
+    // feeds /model's own gatewayCoverageInGroup predicate for every OTHER model in the catalog the
+    // user might switch to later in the session (tuiPty.test.ts's "a logged-in session's
+    // account-status fetch happens once at session start" — asserts the fetch happens even though
+    // its own fixture sets GROQ_API_KEY, the DEFAULT_PROVIDER). `accountStatus.ts`'s own login
+    // guard already skips the fetch for a BYOK-only/logged-out session. Loaded once, here,
+    // alongside the model resolution it feeds — /model (runTui's own runTurn) reuses this SAME
+    // catalog on every later turn rather than reloading it, but @seri/model-catalog caches for the
+    // rest of the process either way (catalog.ts's own loadCatalog).
     const [catalog, plan] = await Promise.all([
       getModelCatalog(undefined, warnSink),
       fetchAccountPlan(configDir),
     ]);
-    const route = resolveRoute(
-      catalog,
-      { model: session.model, provider: requestedProvider },
-      configured,
-      plan,
-    );
+    const route = resolveSessionRoute(session, catalog, configured, plan, configDir);
     const model = dispatchModel(route, session.id, configDir, deps);
     // --effort's own validation, deferred to here rather than parseCliArgs (ParsedArgs.effort's
     // own comment): legal tiers are route-dependent, and `route`/`catalog` only exist from this
@@ -2085,12 +2067,16 @@ async function runTui(
     model: prepared.route.model,
     provider: prepared.route.provider,
   };
-  // The same pair of tracking variables as confirmedModel/lastPersistedModel above, mirrored for
-  // /effort's own session.reasoningEffort — see this function's own messages-updated handler
-  // (below) for the confirm-then-persist gate itself. `undefined` is a real, trackable state here
-  // (no session override yet, or /effort auto cleared one), unlike the model pair, which is never
-  // optional — a turn that never touches /effort must not write SERI_REASONING_EFFORT.
-  let confirmedReasoningEffort: string | undefined = prepared.session.reasoningEffort;
+  // The single tracking variable /effort's own persist-on-success gate needs — see this function's
+  // own messages-updated handler (below). Unlike confirmedModel/lastPersistedModel above, there is
+  // no separate "confirmed" mirror here (round-2 review item 6, thermo J-1: the previous
+  // confirmedReasoningEffort variable was provably dead state — it always equaled
+  // session.reasoningEffort immediately after its own mirror-tracking `if`, and nothing else ever
+  // read it, unlike confirmedModel, which onSessionChange genuinely consumes). `session.
+  // reasoningEffort` is read directly wherever confirmedReasoningEffort used to be. `undefined` is
+  // a real, trackable state here (no session override yet, or /effort auto cleared one), unlike
+  // the model pair, which is never optional — a turn that never touches /effort must not write
+  // SERI_REASONING_EFFORT.
   let lastPersistedReasoningEffort: string | undefined = prepared.session.reasoningEffort;
   // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
   // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
@@ -2375,21 +2361,16 @@ async function runTui(
     dispatch({ type: "permissions-resolved", leftoverInput });
   }
 
-  // EffortPanel's own two resolutions (H-1, spec 032 review), mirroring onModelSelected/
-  // onModelPickerCancel's own shape exactly: `effort-resolved` is the one action that both clears
-  // `pendingEffort` and (only when a tier was actually picked) merges it into `state.session`, in
-  // the same atomic transition (reducer.ts's own comment on why). This is deliberately the ONLY
-  // effect of a pick, same as a /model pick: `session.reasoningEffort` changes immediately, so the
-  // very next runTurn call (which reads `session` fresh) sends it — but `confirmedReasoningEffort`
-  // (below) does NOT move here, so the config default is only overwritten once a turn actually
-  // succeeds on this tier, the same persist-on-success gate confirmedModel already has.
-  function onEffortSelected(tier: string): void {
-    dispatch({ type: "effort-resolved", tier });
-  }
-
-  function onEffortCancel(): void {
-    dispatch({ type: "effort-resolved" });
-  }
+  // EffortPanel's own two resolutions (H-1, spec 032 review) — extracted to createEffortHandlers
+  // (round-2 review item 8, thermo S-1), mirroring createSetupHandlers'/createConfigHandlers' own
+  // factory shape. `effort-resolved` is the one action that both clears `pendingEffort` and (only
+  // when a tier was actually picked) merges it into `state.session`, in the same atomic transition
+  // (reducer.ts's own comment on why). This is deliberately the ONLY effect of a pick, same as a
+  // /model pick: `session.reasoningEffort` changes immediately, so the very next runTurn call
+  // (which reads `session` fresh) sends it — the persist-on-success gate (below, runTurn's own
+  // `messages-updated` handler) only overwrites the config default once a turn actually succeeds
+  // on this tier, the same gate `confirmedModel` already has.
+  const { onEffortSelected, onEffortCancel } = createEffortHandlers({ dispatch });
 
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
@@ -2420,11 +2401,12 @@ async function runTui(
     // `SessionState<ModelMessage>` (tui/reducer.ts), so this is the one place that puts it back —
     // the same kind of "this file already knows a stronger invariant tsc can't see" gap
     // `resolveRunTui!`'s own definite-assignment assertion, above, papers over too.
-    const {
-      id: sessionId,
-      model: requestedModel,
-      provider: requestedProvider,
-    } = session as RunSession;
+    // `requestedProvider` (RunSession's own, possibly-undefined `provider` field) is kept as its
+    // own binding, not folded into `resolveSessionRoute` below's internal computation: rerouteNotice/
+    // gatewayNotice (below) need the RAW, undefined-preserving value, not any DEFAULT_PROVIDER-
+    // defaulted one — see their own call site's comment. `requestedModel` needed no equivalent
+    // binding — nothing else in this function reads it once route resolution owns it.
+    const { id: sessionId, provider: requestedProvider } = session as RunSession;
     // D3 (feature-plan.md): re-resolved every turn, same reasoning as the model re-resolution
     // above — a routing-priority reroute (D2) must be reconsidered on every turn too, not just at
     // session start, so a key added mid-session via /setup takes effect on the very next turn.
@@ -2440,11 +2422,12 @@ async function runTui(
     let route: ReturnType<typeof resolveRoute>;
     let model: LanguageModel;
     try {
-      route = resolveRoute(
+      route = resolveSessionRoute(
+        session,
         prepared.catalog,
-        { model: requestedModel, provider: requestedProvider ?? DEFAULT_PROVIDER },
         configuredProviders(configDir),
         prepared.plan,
+        configDir,
       );
       model = dispatchModel(route, sessionId, configDir, deps);
     } catch (err) {
@@ -2574,25 +2557,32 @@ async function runTui(
                 printWarning(`could not save the default model: ${message}`);
               }
             }
-            // /effort's own confirm-then-persist pair, same shape as confirmedModel/
+            // /effort's own persist-on-success check, same trigger as confirmedModel/
             // lastPersistedModel just above: `session` (runTurn's own parameter, captured by this
             // closure) is what THIS turn actually ran with, so a successful messages-updated is
-            // exactly the signal that this reasoning-effort override is safe to persist as the new
-            // config.json default. `undefined` (no override, or /effort auto) never persists —
-            // there is nothing to write, and clearing a session override must not also clear the
-            // config default it falls back to.
-            if (confirmedReasoningEffort !== session.reasoningEffort) {
-              confirmedReasoningEffort = session.reasoningEffort;
-            }
+            // exactly the signal to check whether this reasoning-effort override is safe to persist
+            // as the new config.json default. `appliedReasoningEffort`, not the raw
+            // `session.reasoningEffort` (round-2 review item 10): the tier sitting in session state
+            // can be stale for the CURRENTLY resolved `catalogEntry` — e.g. `/effort xhigh` was set
+            // on a route where it was legal, then `/model` switched to one where it isn't —
+            // loop.ts's own re-validation gate (H-2) already silently drops a tier like that rather
+            // than sending it, and persisting it anyway here would keep writing a value that just
+            // keeps getting silently dropped, every future session inheriting the same dead
+            // default. `appliedReasoningEffort` is the one shared function both gates call, so they
+            // can never disagree about what "legal for this turn" means. `undefined` (no override,
+            // /effort auto, or a now-illegal tier) never persists — there is nothing safe to write,
+            // and clearing a session override must not also clear the config default it falls back
+            // to.
+            const appliedTier = appliedReasoningEffort(session.reasoningEffort, catalogEntry);
             if (
               !reasoningEffortPersistAttemptedThisTurn &&
-              confirmedReasoningEffort !== undefined &&
-              confirmedReasoningEffort !== lastPersistedReasoningEffort
+              appliedTier !== undefined &&
+              appliedTier !== lastPersistedReasoningEffort
             ) {
               reasoningEffortPersistAttemptedThisTurn = true;
               try {
-                persistDefaultReasoningEffort(confirmedReasoningEffort, configDir);
-                lastPersistedReasoningEffort = confirmedReasoningEffort;
+                persistDefaultReasoningEffort(appliedTier, configDir);
+                lastPersistedReasoningEffort = appliedTier;
               } catch (err) {
                 const message = messageOf(err);
                 printWarning(`could not save the default reasoning effort: ${message}`);
@@ -2809,38 +2799,27 @@ async function runTui(
     // (H-1, spec 032 review) — it opens the same kind of live, selectable picker (EffortPanel).
     // Unlike /model, this does NOT error on `args.length > 0`: `/effort <level>` and `/effort
     // auto` are real forms the generic SLASH_COMMANDS table below still needs to see (effortCommand
-    // handles them, and is registered with `accepts: () => true` for exactly that — that table
-    // entry's own comment). Only the picker-opening bare form is claimed here.
+    // handles them, and is registered with `accepts: (args) => args.length <= 1` for exactly that
+    // — that table entry's own comment). Only the picker-opening bare form is claimed here.
+    // `decideEffortOpen` (round-2 review item 8) owns everything this used to inline: route
+    // resolution, legal-tier lookup, and the current-tier-highlighted `selected` index — this
+    // collapses to the same shape /setup's own interception (below) already uses.
     if (name === "/effort" && args.length === 0) {
       try {
-        const configured = configuredProviders(configDir);
-        const requestedModel = liveState.session.model ?? resolveDefaultModel(configDir).model;
-        const requestedProvider = liveState.session.provider ?? DEFAULT_PROVIDER;
-        // `prepared.plan`, not a fresh fetch (M-1's own comment on effortCommand explains why THAT
-        // function fetches live instead): this interception has `prepared.plan` sitting right here,
-        // already resolved for the life of the run, the same way /model's own interception above
-        // reuses `prepared.catalog` rather than reloading it.
-        const route = resolveRoute(
+        const opened = decideEffortOpen(
           prepared.catalog,
-          { model: requestedModel, provider: requestedProvider },
-          configured,
+          configDir,
+          liveState.session,
           prepared.plan,
         );
-        const legalTiers = resolveLegalReasoningTiers(route, prepared.catalog);
-        if (legalTiers.length === 0) {
+        if (opened === null) {
           dispatch({
             type: "command-error",
             message: "This model has no reasoning-effort tiers available.",
           });
           return;
         }
-        // Opens on whatever is CURRENTLY resolved (session override, else the config default) so
-        // the slider doesn't always reset to the first tier — `indexOf` returns -1 for "unset" or a
-        // value not in this route's own legal list (a stale value from a route since switched away
-        // from), and Math.max(0, -1) is the same "first tier" fallback that case deserves.
-        const current = resolveReasoningEffort(liveState.session, loadConfig(configDir));
-        const selected = Math.max(0, legalTiers.indexOf(current ?? ""));
-        dispatch({ type: "effort-requested", tiers: legalTiers, selected });
+        dispatch({ type: "effort-requested", tiers: opened.tiers, selected: opened.selected });
       } catch (err) {
         dispatch({
           type: "command-error",

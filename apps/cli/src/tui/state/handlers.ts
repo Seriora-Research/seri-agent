@@ -1,10 +1,11 @@
 // The action half of the decision/presentation split tui/commands.ts's own header describes —
 // each factory here pairs 1:1 with a decide* function there (createSetupHandlers/decideSetupOpen,
 // createConfigHandlers/decideConfigOpen, createPermissionsHandlers/decidePermissionsOpen,
-// createAuthHandlers/decideAuthOffer): the decide* function recomputes fresh truth from disk and
-// returns it, the handler here dispatches it (or degrades to a command-error) and owns the actual
-// I/O and side effects. Extracted from cli.ts (originally ~670 of its lines) to live next to the
-// functions it mirrors rather than across the module boundary from them.
+// createAuthHandlers/decideAuthOffer, createEffortHandlers/decideEffortOpen): the decide* function
+// recomputes fresh truth from disk and returns it, the handler here dispatches it (or degrades to
+// a command-error) and owns the actual I/O and side effects. Extracted from cli.ts (originally
+// ~670 of its lines) to live next to the functions it mirrors rather than across the module
+// boundary from them.
 import type { ModelProvider } from "@seri/model-catalog";
 import { login as loginReal, logout as logoutReal } from "../../auth/commands";
 import { getWorkosClientId } from "../../auth/deviceFlow";
@@ -700,4 +701,30 @@ export function createPermissionsHandlers(opts: {
   }
 
   return { onPermissionsRemove, onPermissionsBack };
+}
+
+// /effort's own two resolutions (H-1, spec 032 review), mirroring createConfigHandlers'/
+// createSetupHandlers' own factory shape (round-2 review item 8, thermo S-1 — /effort was the
+// only panel that skipped this repo's established decide/handlers pairing) even though its own
+// flow is flatter than either: one step, no disk recompute on resolve — `dispatch` is this
+// factory's only real dependency. `leftoverInput` (round-2 review item 3, CodeRabbit): EffortPanel
+// itself has no text-entry/paste concept (mirrors PermissionsPanel's own shape, which carries the
+// identical optional param through its own `onPermissionsClose` for the same consistency reason,
+// structurally unused there too) — threaded through here so the plumbing is correct end-to-end,
+// matching every other panel's `X-resolved` action shape.
+export function createEffortHandlers(opts: { dispatch: Dispatch }): {
+  onEffortSelected: (tier: string, leftoverInput?: string) => void;
+  onEffortCancel: (leftoverInput?: string) => void;
+} {
+  const { dispatch } = opts;
+
+  function onEffortSelected(tier: string, leftoverInput?: string): void {
+    dispatch({ type: "effort-resolved", tier, leftoverInput });
+  }
+
+  function onEffortCancel(leftoverInput?: string): void {
+    dispatch({ type: "effort-resolved", leftoverInput });
+  }
+
+  return { onEffortSelected, onEffortCancel };
 }

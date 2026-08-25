@@ -14,6 +14,7 @@ import {
   type ModelCatalogEntry,
   type ModelProvider,
 } from "@seri/model-catalog";
+import type { Plan } from "@seri/plans";
 import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../agents/systemPrompt";
@@ -29,12 +30,26 @@ import {
 } from "../../checkpoint/checkpoint";
 import { projectRoot } from "../../checkpoint/shadowGit";
 import { maskValue } from "../../config/commands";
-import { configBoolean, loadConfig, resolveConfigValue } from "../../config/config";
+import {
+  configBoolean,
+  loadConfig,
+  loadReasoningEffortConfig,
+  resolveConfigValue,
+} from "../../config/config";
 import { isDefaultProfile, profileDir, profileNameError } from "../../config/paths";
 import { cycleMode } from "../../gate/gate";
 import { loadGrants, PERSISTABLE_TOOL_NAMES } from "../../permissions/store";
-import { allProviderKeyStates, PROVIDER_API_KEY_NAMES } from "../../provider/keys";
-import { byRoutePriority, resolveRoute } from "../../provider/routing";
+import {
+  allProviderKeyStates,
+  configuredProviders,
+  PROVIDER_API_KEY_NAMES,
+} from "../../provider/keys";
+import {
+  byRoutePriority,
+  resolveLegalReasoningTiers,
+  resolveRoute,
+  resolveSessionRoute,
+} from "../../provider/routing";
 import type { SessionState } from "../../session/session";
 
 export type CommandDirs = { sessionsDir: string; checkpointsDir: string; configDir: string };
@@ -391,6 +406,49 @@ export function decidePermissionsOpen(
     }
   }
   return rows;
+}
+
+// Session override wins, falling back to the config default — used by decideEffortOpen below and
+// by cli.ts's own effortCommand (its no-arg, non-interactive print branch). The `--effort` CLI
+// flag bypasses this resolver entirely (RunContext.effortFlag, read directly in cli.ts's
+// driveLoop), never reaching session.reasoningEffort or config.json.
+export function resolveReasoningEffort(
+  session: SessionState<ModelMessage>,
+  config: Record<string, string>,
+): string | undefined {
+  return session.reasoningEffort ?? loadReasoningEffortConfig(config);
+}
+
+// The decision half of /effort's own bare, no-argument (picker-opening) form — mirrors
+// decideModelPickerOpen's/decideSetupOpen's own shape: computes what the panel needs and returns
+// it, deciding nothing about presentation (round-2 review item 8, thermo S-1 — /effort was the
+// only panel that skipped this repo's established decide/handlers pairing). `null` means "no
+// tiers to offer" (no reasoningOptions for the model this session is currently routed to) —
+// cli.ts's own onSubmit interception turns that into a command-error instead of opening an empty
+// picker. `configured` is derived internally from `configDir`, not threaded in by the caller,
+// matching decideSetupOpen/decideConfigOpen's own "recompute fresh from disk, `configDir` in" shape.
+export function decideEffortOpen(
+  catalog: ModelCatalog,
+  configDir: string,
+  session: SessionState<ModelMessage>,
+  plan: Plan | null,
+): { tiers: string[]; selected: number } | null {
+  const route = resolveSessionRoute(
+    session,
+    catalog,
+    configuredProviders(configDir),
+    plan,
+    configDir,
+  );
+  const tiers = resolveLegalReasoningTiers(route, catalog);
+  if (tiers.length === 0) return null;
+  // Opens on whatever is CURRENTLY resolved (session override, else the config default) so the
+  // slider doesn't always reset to the first tier — `indexOf` returns -1 for "unset" or a value
+  // not in this route's own legal list (a stale value from a route since switched away from), and
+  // Math.max(0, -1) is the same "first tier" fallback that case deserves.
+  const current = resolveReasoningEffort(session, loadConfig(configDir));
+  const selected = Math.max(0, tiers.indexOf(current ?? ""));
+  return { tiers, selected };
 }
 
 // /max-turns's own decision: a single positive-integer argument, the same shape --max-turns
