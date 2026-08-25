@@ -542,8 +542,8 @@ export function App({
       )}
       <box flexDirection="row" justifyContent="space-between">
         {/* No `gap` — all spacing between these three is carried inside the strings themselves
-        (MODE_CYCLE_HINT's own leading space, `detail`'s own leading two spaces), so the mode hue
-        never bleeds onto the hint/model/route by way of an inserted gap cell. */}
+        (MODE_CYCLE_HINT's own leading space, `modeDetail`'s own leading two spaces), so the mode
+        hue never bleeds onto the hint/model/route by way of an inserted gap cell. */}
         <box flexDirection="row">
           <text fg={theme.mode[displayMode]}>{indicatorText}</text>
           {width - rightSideWidth >= MODE_HINT_COLS && (

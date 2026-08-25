@@ -33,11 +33,13 @@ export const theme = {
   // The mode indicator's own scoped exception (docs/design/tui.md): the three `PermissionMode`
   // values get one soft hue each rather than sharing `text`/`muted` — the whole point of the
   // indicator is that the most dangerous mode must not look identical to the safest one at a
-  // glance. Explicit hex, not ANSI-16 names, for `userBg`'s own reason above (a plain `"gray"`
-  // downsamples inconsistently across terminals' own ANSI-16 palettes). `approve-each` is the one
-  // entry that stays `MUTED` rather than getting its own hex: it's seri's factory default (CC's own
-  // ask-first default is gray too), so the common case adds no hue at all. Typed against
-  // `PermissionMode` via `satisfies` so a fourth mode is a compile error.
+  // glance. Explicit hex for `read-only`/`auto`, for `userBg`'s own reason above (a plain `"gray"`
+  // downsamples inconsistently across terminals' own ANSI-16 palettes — that's a problem for a
+  // BACKGROUND, where washed-out contrast against light text is the failure mode). `approve-each`
+  // is the one entry that stays `MUTED` (`"gray"` as a foreground, the same token every other muted
+  // string in this file already uses without issue) rather than getting its own hex: it's seri's
+  // factory default (CC's own ask-first default is gray too), so the common case adds no hue at
+  // all. Typed against `PermissionMode` via `satisfies` so a fourth mode is a compile error.
   mode: {
     "read-only": "#8ab4c8",
     "approve-each": MUTED,

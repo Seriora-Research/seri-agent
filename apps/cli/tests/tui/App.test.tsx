@@ -121,6 +121,9 @@ describe("App", () => {
     const lines = setup.captureCharFrame().split("\n");
     const modeLineIndex = lines.findIndex((l) => l.includes("read-only mode on"));
     const inputBottomBorderIndex = lines.reduce((last, l, i) => (l.includes("─") ? i : last), -1);
+    // The comment above asserts InputBox is the only bordered element here — assert it, not just
+    // narrate it, or a future border elsewhere silently degrades this into "the mode line exists."
+    expect(inputBottomBorderIndex).toBeGreaterThan(-1);
     expect(modeLineIndex).toBeGreaterThan(inputBottomBorderIndex);
   });
 
@@ -2172,6 +2175,9 @@ describe("App", () => {
 
     test("the shift+tab hint is present at MODE_HINT_COLS and absent below it", async () => {
       const { setup } = await connect();
+      expect(setup.captureCharFrame()).toContain("(shift+tab to cycle)");
+
+      await resize(setup, MODE_HINT_COLS, DEFAULT_HEIGHT);
       expect(setup.captureCharFrame()).toContain("(shift+tab to cycle)");
 
       await resize(setup, MODE_HINT_COLS - 1, DEFAULT_HEIGHT);

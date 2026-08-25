@@ -122,10 +122,11 @@ export const COST_WIDTH = 18;
 
 // The three `PermissionMode` label strings the persistent mode-indicator row renders — Claude
 // Code's own `<what it does> on` shape, not the raw union value. `⏸` prefixes the two modes that
-// pause before acting; `⏵⏵` the one that doesn't — the same convention CC uses for identical
-// semantics. `auto` deliberately reads "bypass permissions", not "auto": seri's `auto` mode
-// short-circuits every permission check to allow (gate/gate.ts), which is CC's own
-// `bypassPermissions`, not CC's classifier-reviewed `auto`.
+// don't let a write tool through unconditionally (`read-only` blocks it outright, `approve-each`
+// pauses for a prompt — `gate/gate.ts`'s own `checkPermission`); `⏵⏵` the one that does — the same
+// convention CC uses for identical semantics. `auto` deliberately reads "bypass permissions", not
+// "auto": seri's `auto` mode short-circuits every permission check to allow (gate/gate.ts), which
+// is CC's own `bypassPermissions`, not CC's classifier-reviewed `auto`.
 export const MODE_LABEL = {
   "read-only": "⏸ read-only mode on",
   "approve-each": "⏸ approve-each mode on",
@@ -138,8 +139,8 @@ export const MODE_CYCLE_HINT = " (shift+tab to cycle)";
 
 // The persistent mode-indicator row's own 3-tier width breakpoints. `MODE_HINT_COLS` gates
 // MODE_CYCLE_HINT's own visibility (app.tsx's own JSX); `MODE_MODEL_MIN_COLS`/`MODE_ROUTE_MIN_COLS`
-// gate how much of formatModeDetail's own `detail` shows (below). Sized against the longest label,
-// "⏵⏵ bypass permissions on" (26 cols, worst case its glyph renders double-width) + the hint
+// gate how much of formatModeDetail's own return value shows (below). Sized against the longest
+// label, "⏵⏵ bypass permissions on" (26 cols, worst case its glyph renders double-width) + the hint
 // (21 cols) = 47, still under 52; + the model name ("  " + NAME_WIDTH) = 71, still under 76; +
 // the route (" · " + the widest route label, "→ openrouter") = 86, still under 100 — every
 // threshold holds even in that worst case. This proof does not (and cannot) account for the mode
