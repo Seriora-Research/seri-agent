@@ -3393,7 +3393,12 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
 // file exports no such helper.
 function compactionUsage(inputTotal: number, outputTotal: number) {
   return {
-    inputTokens: { total: inputTotal, noCache: inputTotal, cacheRead: undefined, cacheWrite: undefined },
+    inputTokens: {
+      total: inputTotal,
+      noCache: inputTotal,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    },
     outputTokens: { total: outputTotal, text: outputTotal, reasoning: undefined },
   };
 }
@@ -3503,13 +3508,10 @@ describe("run (/compact)", () => {
     const originalLog = console.log;
     console.log = (msg: string) => logs.push(String(msg));
     try {
-      await getCompact().run(
-        session,
-        [],
-        { sessionsDir, checkpointsDir, configDir },
-        undefined,
-        { authConfigDir: configDir, getGroqModel: () => model },
-      );
+      await getCompact().run(session, [], { sessionsDir, checkpointsDir, configDir }, undefined, {
+        authConfigDir: configDir,
+        getGroqModel: () => model,
+      });
     } finally {
       console.log = originalLog;
     }
@@ -3543,13 +3545,10 @@ describe("run (/compact)", () => {
     const originalLog = console.log;
     console.log = (msg: string) => logs.push(String(msg));
     try {
-      await getCompact().run(
-        session,
-        [],
-        { sessionsDir, checkpointsDir, configDir },
-        undefined,
-        { authConfigDir: configDir, getGroqModel: () => model },
-      );
+      await getCompact().run(session, [], { sessionsDir, checkpointsDir, configDir }, undefined, {
+        authConfigDir: configDir,
+        getGroqModel: () => model,
+      });
     } finally {
       console.log = originalLog;
     }
@@ -3677,13 +3676,10 @@ describe("run (/compact)", () => {
       }),
     });
 
-    await getCompact().run(
-      session,
-      [],
-      { sessionsDir, checkpointsDir, configDir },
-      undefined,
-      { authConfigDir: configDir, getGroqModel: () => model },
-    );
+    await getCompact().run(session, [], { sessionsDir, checkpointsDir, configDir }, undefined, {
+      authConfigDir: configDir,
+      getGroqModel: () => model,
+    });
 
     const sigintListeners = process.listeners("SIGINT");
     const sigtermListeners = process.listeners("SIGTERM");
@@ -3722,7 +3718,11 @@ describe("tuiPresenter", () => {
     );
     const usage: LanguageModelUsage = {
       inputTokens: 20,
-      inputTokenDetails: { noCacheTokens: 20, cacheReadTokens: undefined, cacheWriteTokens: undefined },
+      inputTokenDetails: {
+        noCacheTokens: 20,
+        cacheReadTokens: undefined,
+        cacheWriteTokens: undefined,
+      },
       outputTokens: 10,
       outputTokenDetails: { textTokens: 10, reasoningTokens: undefined },
       totalTokens: 30,

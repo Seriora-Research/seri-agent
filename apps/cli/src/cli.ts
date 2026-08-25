@@ -341,7 +341,10 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
       scopeTargetToCwd: true,
     },
   ],
-  ["/compact", { accepts: (args) => args.length === 0, run: compactCommand, mutatesRunState: true }],
+  [
+    "/compact",
+    { accepts: (args) => args.length === 0, run: compactCommand, mutatesRunState: true },
+  ],
   // mutatesRunState: /memory approve|reject mutates the pending/ queue and the live memory files,
   // and must not race the archivist staging more writes mid-turn (C-7's own comment on why that
   // block runs before `finally` unregisters the cancel slot). Per-command, not per-subcommand
@@ -388,7 +391,8 @@ function consolePresenter(dirs: CommandDirs): CommandPresenter {
     // Explicit no-op, not an ANSI screen-clear: the user's own scrollback is not seri's to erase,
     // and clearing it would corrupt piped/redirected output.
     transcriptCleared: () => {},
-    usageAccrued: (usage) => printUsage({ inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }),
+    usageAccrued: (usage) =>
+      printUsage({ inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }),
     cancelled: (signal) => {
       console.log("Compaction cancelled.");
       raiseSignal(signal);
@@ -483,7 +487,10 @@ async function compactCommand(
   presenter: CommandPresenter = consolePresenter(dirs),
   deps: CliDeps = {},
 ): Promise<void> {
-  const evictBoundary = findSafeEvictionBoundary(session.messages, DEFAULT_PRESERVE_RECENT_MESSAGES);
+  const evictBoundary = findSafeEvictionBoundary(
+    session.messages,
+    DEFAULT_PRESERVE_RECENT_MESSAGES,
+  );
   if (evictBoundary === null) {
     presenter.message("Not enough history to compact.");
     return;
@@ -509,7 +516,12 @@ async function compactCommand(
     getModelCatalog(undefined, printWarning),
     fetchAccountPlan(configDir),
   ]);
-  const route = resolveRoute(catalog, { model: requestedModel, provider: requestedProvider }, configured, plan);
+  const route = resolveRoute(
+    catalog,
+    { model: requestedModel, provider: requestedProvider },
+    configured,
+    plan,
+  );
   const model = dispatchModel(route, session.id, configDir, deps);
 
   const controller = new AbortController();
@@ -538,7 +550,9 @@ async function compactCommand(
   try {
     appendBarrier(storeDir, session.id, "compaction");
   } catch (err) {
-    printWarning(`could not record the compaction barrier, so /rewind may not be able to cross this point: ${messageOf(err)}`);
+    printWarning(
+      `could not record the compaction barrier, so /rewind may not be able to cross this point: ${messageOf(err)}`,
+    );
   }
   presenter.usageAccrued(compacted.usage);
   presenter.message(`⚙ compacted ${compacted.evictedCount} messages`);
