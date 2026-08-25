@@ -2877,6 +2877,7 @@ async function runTui(
       onModelSelected,
       onModelPickerCancel,
       onCycleMode,
+      skipPermissions,
       onSetupSelect,
       onSetupKeyEntered,
       onSetupRemove,

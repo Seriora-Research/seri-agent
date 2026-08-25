@@ -2303,6 +2303,41 @@ describe("App", () => {
     });
   });
 
+  describe("skipPermissions pins the indicator to bypass", () => {
+    // Criterion 15: --dangerously-skip-permissions overrides getPermissionMode() (cli.ts) to
+    // "auto" regardless of the session's own stored permissionMode — the indicator must not claim
+    // a mode the gate isn't actually enforcing.
+    test("the label and hue read bypass permissions on, in theme.mode.auto, regardless of the stored mode", async () => {
+      const { setup } = await connect({
+        session: session({ permissionMode: "approve-each" }),
+        skipPermissions: true,
+      });
+
+      const label = MODE_LABEL.auto;
+      expect(setup.captureCharFrame()).toContain(label);
+      expect(setup.captureCharFrame()).not.toContain("approve-each mode on");
+
+      const frame = setup.captureSpans();
+      const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes(label)));
+      const span = line?.spans.find((s) => s.text.includes(label));
+      expect(span?.fg.equals(parseColor(theme.mode.auto))).toBe(true);
+    });
+
+    test("shift+tab does not call onCycleMode while skipPermissions is set", async () => {
+      let calls = 0;
+      const { setup } = await connect({
+        session: session({ permissionMode: "approve-each" }),
+        skipPermissions: true,
+        onCycleMode: () => calls++,
+      });
+
+      setup.mockInput.pressKey(SHIFT_TAB);
+      await flush(setup);
+
+      expect(calls).toBe(0);
+    });
+  });
+
   // Stage A scaffolding (cli-commands-to-tui feature-plan.md): nothing dispatches
   // auth-requested/config-requested/permissions-requested yet — these tests seed the reducer's
   // state directly (auth-offer/auth-step/config-step/permissions-step) to prove the render wiring

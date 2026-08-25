@@ -52,6 +52,7 @@ import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { memo, useEffect, useReducer, useRef, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
+import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
@@ -75,6 +76,7 @@ import {
   formatModeLabel,
   MODE_CYCLE_HINT,
   MODE_HINT_COLS,
+  MODE_LABEL,
   type TranscriptEntry,
 } from "./util/format";
 
@@ -173,6 +175,14 @@ export type AppProps = {
   // mode while this component's own state (and the indicator it renders) already showed the new
   // one — the exact desync `onSessionChange`'s own comment above already describes for persistence.
   onCycleMode?: () => void;
+  // `--dangerously-skip-permissions` (already a `runTui` parameter, cli.ts) overrides
+  // `getPermissionMode()` (cli.ts) to `"auto"` regardless of what `session.permissionMode` says —
+  // this is the single render-time mirror of that override: the indicator must not claim a mode
+  // the gate isn't actually enforcing. `state.session.permissionMode`/`state.modeIndicator` stay
+  // the normal, untouched source everywhere else (the reducer itself is not changed for this flag).
+  // Also makes Shift+Tab inert while set: a functioning binding would silently mutate and persist a
+  // session field the gate is ignoring, with zero visible feedback.
+  skipPermissions?: boolean;
 };
 
 // A pty can genuinely report a terminal width as a real but unusable `0` for the first render or
@@ -220,13 +230,20 @@ export function App({
   onSplashSignup,
   onSplashContinue,
   onCycleMode,
+  skipPermissions,
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session, { route }));
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
+  // The single render-time override `skipPermissions` needs — see `AppProps.skipPermissions`'s
+  // own comment. `displayMode` drives the indicator's hue, `indicatorText` its label; both feed
+  // straight into `formatModeLabel` below so the model/route `detail` derivation is untouched.
+  const displayMode: PermissionMode =
+    skipPermissions === true ? "auto" : state.session.permissionMode;
+  const indicatorText = skipPermissions === true ? MODE_LABEL.auto : state.modeIndicator;
   const { indicator: modeIndicatorText, detail: modeDetail } = formatModeLabel(
-    state.modeIndicator,
+    indicatorText,
     state.route,
     width,
   );
@@ -346,7 +363,10 @@ export function App({
     // scroll keys only, which have nothing to do without a mounted scrollbox — a mode cycle must
     // still fire on a pre-layout frame where the transcript ref hasn't attached yet.
     if (key.name === "tab" && key.shift) {
-      onCycleMode?.();
+      // Inert under skipPermissions (AppProps.skipPermissions's own comment): the indicator is
+      // pinned to bypass regardless of what a cycle would compute, so a functioning binding here
+      // would silently mutate and persist a session field the gate is already ignoring.
+      if (skipPermissions !== true) onCycleMode?.();
       return;
     }
     const el = transcriptRef.current;
@@ -501,7 +521,7 @@ export function App({
         (MODE_CYCLE_HINT's own leading space, `detail`'s own leading two spaces), so the mode hue
         never bleeds onto the hint/model/route by way of an inserted gap cell. */}
         <box flexDirection="row">
-          <text fg={theme.mode[state.session.permissionMode]}>{modeIndicatorText}</text>
+          <text fg={theme.mode[displayMode]}>{modeIndicatorText}</text>
           {width >= MODE_HINT_COLS && <text fg={theme.muted}>{MODE_CYCLE_HINT}</text>}
           <text fg={theme.muted}>{modeDetail}</text>
         </box>
