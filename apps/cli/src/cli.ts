@@ -1451,8 +1451,13 @@ async function prepareSession(
     // `reasoningEffort` override that the currently resolved route no longer considers legal is
     // dropped silently by loop.ts's own re-validation gate — surfaced here so this path is never
     // quieter than the TUI's, gated the same `!isTTY` way the reroute/gateway notices just above
-    // are (runTurn prints the TUI equivalent into the transcript instead).
+    // are (runTurn prints the TUI equivalent into the transcript instead). `ctx.effortFlag ===
+    // undefined` guards against a false positive: when `--effort` is given, it wins outright over
+    // `session.reasoningEffort` (driveLoop's own `??` chain) — the turn actually runs on the flag's
+    // tier, so a stale/illegal `session.reasoningEffort` sitting unused underneath it must not be
+    // reported as dropped.
     if (
+      ctx.effortFlag === undefined &&
       session.reasoningEffort !== undefined &&
       appliedReasoningEffort(session.reasoningEffort, catalogEntry) === undefined &&
       !isTTY

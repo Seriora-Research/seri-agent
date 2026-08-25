@@ -2885,6 +2885,35 @@ describe("run (/effort)", () => {
     expect(errors.some((line) => line.includes("Invalid --effort value"))).toBe(true);
   });
 
+  // `--effort` wins outright over `session.reasoningEffort` (driveLoop's own `??` chain) — the
+  // dropped-tier warning must key off which one the turn actually ran with, not the raw session
+  // field underneath it. A stale/illegal session override sitting unused must not be reported as
+  // dropped when a valid `--effort` flag is what the turn is actually using.
+  test("--effort overrides a stale, illegal session.reasoningEffort without printing a drop warning", async () => {
+    seedSession("eff-6b", { reasoningEffort: "xhigh" });
+    const { fake, capture } = fakeRunLoop();
+
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await withReasoningFetch(() =>
+        run(["--continue", "--effort", "high", "another task"], {
+          sessionsDir,
+          runLoop: fake,
+          loadAgentsFile: () => "",
+        }),
+      );
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(code).toBe(0);
+    expect(capture()?.reasoningEffort).toBe("high");
+    expect(errors.some((line) => line.includes("isn't legal for the current model"))).toBe(false);
+  });
+
   // effortCommand's own resolveRoute() call must thread `plan`, or a
   // gateway-routed session lists tiers for the wrong route entirely. Fixture: "gateway-model" has
   // NO local groq/openrouter key configured, so it can only be reached via the gateway
