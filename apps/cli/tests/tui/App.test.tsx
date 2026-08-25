@@ -1,11 +1,12 @@
 /** @jsxImportSource @opentui/react */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { RGBA, TextAttributes } from "@opentui/core";
+import { parseColor, RGBA, TextAttributes } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ReactElement, ReactNode } from "react";
+import type { PermissionMode } from "../../src/gate/gate";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import { App, type AppProps } from "../../src/tui/app";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";
@@ -13,20 +14,24 @@ import type { Dispatch } from "../../src/tui/state/reducer";
 import { theme } from "../../src/tui/theme/theme";
 import { ListRow } from "../../src/tui/ui/ListRow";
 import {
+  DEFAULT_COLUMNS,
   formatContextWindow,
   formatCost,
-  formatModeLabel,
   formatModelRow,
   formatRouteLabel,
   formatSetupRow,
   listWindowSize,
+  MODE_CYCLE_HINT,
+  MODE_HINT_COLS,
+  MODE_LABEL,
   matchesFilter,
   singleLine,
   slideWindow,
 } from "../../src/tui/util/format";
 import { flush, flushMarkdown, route, session } from "./helpers";
 
-// Wide enough that every "full width" formatModeLabel tier (>=76 cols) is exercised by default,
+// Wide enough that every formatModeDetail tier, including the route label (>=MODE_ROUTE_MIN_COLS,
+// 100 cols), is exercised by default,
 // tall enough (>=24 rows) that every panel's own list window sits at LIST_WINDOW_MAX (10) without
 // each test having to resize just to clear that floor (util/format.ts's own PANEL_CHROME_ROWS/
 // APP_CHROME_ROWS math: listWindowSize(height - 14), which reaches 10 at height >= 24). Deliberately
@@ -101,11 +106,25 @@ const HOME = "HOME";
 const END = "END";
 const DELETE_KEY = "DELETE";
 const PAGE_UP = "\x1b[5~";
+const SHIFT_TAB = "\x1b[Z";
 
 describe("App", () => {
   test("renders the mode indicator for the session's permission mode", async () => {
     const { setup } = await connect({ session: session({ permissionMode: "read-only" }) });
-    expect(setup.captureCharFrame()).toContain("[read-only]");
+    expect(setup.captureCharFrame()).toContain("⏸ read-only mode on");
+  });
+
+  // InputBox is the only bordered element visible at this default state (the test right below
+  // this one), so its bottom "─" rule is a unique, safe anchor for InputBox's own position.
+  test("the mode row renders below the input box, not above it", async () => {
+    const { setup } = await connect({ session: session({ permissionMode: "read-only" }) });
+    const lines = setup.captureCharFrame().split("\n");
+    const modeLineIndex = lines.findIndex((l) => l.includes("read-only mode on"));
+    const inputBottomBorderIndex = lines.reduce((last, l, i) => (l.includes("─") ? i : last), -1);
+    // The comment above asserts InputBox is the only bordered element here — assert it, not just
+    // narrate it, or a future border elsewhere silently degrades this into "the mode line exists."
+    expect(inputBottomBorderIndex).toBeGreaterThan(-1);
+    expect(modeLineIndex).toBeGreaterThan(inputBottomBorderIndex);
   });
 
   // `not.toContain("╭")` is what makes this non-vacuous across all 9 borderStyle sites at once —
@@ -554,7 +573,7 @@ describe("App", () => {
 
     const lines = setup.captureCharFrame().split("\n");
     const helloIndex = lines.findIndex((line) => line.includes("hello"));
-    const modeLabelIndex = lines.findIndex((line) => line.includes("[approve-each]"));
+    const modeLabelIndex = lines.findIndex((line) => line.includes("approve-each mode on"));
     const turnStatusIndex = lines.findIndex(
       (line) => line.includes(" in, ") && line.includes(" out)"),
     );
@@ -1101,7 +1120,7 @@ describe("App", () => {
     dispatch({ type: "session-updated", session: session({ permissionMode: "auto" }) });
     await flush(setup);
 
-    expect(setup.captureCharFrame()).toContain("[auto]");
+    expect(setup.captureCharFrame()).toContain("⏵⏵ bypass permissions on");
   });
 
   // A paste arrives as its own bracketed-paste event under OpenTUI (InputBox.tsx's own comment),
@@ -2162,90 +2181,6 @@ describe("App", () => {
     });
   });
 
-  // D2-D5 (feature-plan.md): the mode-indicator row's own content, factored out as the pure
-  // `formatModeLabel` (app.tsx's own comment explains why: unit-testable without mounting the
-  // renderer, same reasoning formatModelRow's own extraction already used). `route` can be
-  // undefined (runGuidedSetup, cli.ts, mounts App before any provider key exists) — covered below.
-  describe("formatModeLabel", () => {
-    const nonRerouted = route();
-    const rerouted = route({ provider: "openrouter", rerouted: true, reason: "ANTHROPIC_API_KEY" });
-
-    test("full width (>=76 cols): mode indicator, model, and 'your key'", () => {
-      expect(formatModeLabel("[approve-each]", nonRerouted, 76)).toBe(
-        "[approve-each]  claude-sonnet-5 · your key",
-      );
-    });
-
-    test("full width with a rerouted route: '→ <provider>'", () => {
-      expect(formatModeLabel("[approve-each]", rerouted, 100)).toBe(
-        "[approve-each]  claude-sonnet-5 · → openrouter",
-      );
-    });
-
-    // D5: compact tier (52-75 cols) keeps the model name but drops the route suffix.
-    test("compact width (52-75 cols): mode indicator and model, no route label", () => {
-      expect(formatModeLabel("[approve-each]", nonRerouted, 60)).toBe(
-        "[approve-each]  claude-sonnet-5",
-      );
-      expect(formatModeLabel("[approve-each]", nonRerouted, 75)).toBe(
-        "[approve-each]  claude-sonnet-5",
-      );
-    });
-
-    // Negative control: below 52 cols the row reverts to EXACTLY today's pre-change
-    // output — mode indicator only, regardless of what `route` carries — proving the model+route
-    // label can never crowd the spinner/status text off screen at any width.
-    test("minimal width (<52 cols): mode indicator only, byte-identical to the pre-change row", () => {
-      expect(formatModeLabel("[approve-each]", nonRerouted, 51)).toBe("[approve-each]");
-      expect(formatModeLabel("[approve-each]", rerouted, 10)).toBe("[approve-each]");
-    });
-
-    // post-review fix: a real catalog id (an OpenRouter id is easily 40+ chars) used to go into
-    // the row unbounded, so it could overflow the exact terminal width the tier boundary assumed
-    // it fit in. Capped to NAME_WIDTH (22, the same width the picker table already truncates
-    // model names to), in both the tiers that render the model name.
-    test("long model id is truncated to NAME_WIDTH in both compact and full tiers", () => {
-      const longModel = route({ model: "openrouter/deepseek/deepseek-r1-distill-llama-70b" });
-      expect(formatModeLabel("[approve-each]", longModel, 60)).toBe(
-        "[approve-each]  openrouter/deepseek/d…",
-      );
-      expect(formatModeLabel("[approve-each]", longModel, 76)).toBe(
-        "[approve-each]  openrouter/deepseek/d… · your key",
-      );
-    });
-
-    // runGuidedSetup (cli.ts) mounts App with route: undefined before any provider key exists —
-    // the mode indicator must fall back to the bare label at every width, never a fabricated
-    // "your key"/"→ <provider>" for a route that does not exist yet.
-    test("undefined route: mode indicator only, at every width", () => {
-      expect(formatModeLabel("[approve-each]", undefined, 100)).toBe("[approve-each]");
-      expect(formatModeLabel("[approve-each]", undefined, 60)).toBe("[approve-each]");
-      expect(formatModeLabel("[approve-each]", undefined, 10)).toBe("[approve-each]");
-    });
-
-    test("full width with a gateway-served route: 'provided'", () => {
-      const viaGateway = route({ viaGateway: true });
-      expect(formatModeLabel("[approve-each]", viaGateway, 100)).toBe(
-        "[approve-each]  claude-sonnet-5 · provided",
-      );
-    });
-
-    // Defensive: resolveRoute's own contract makes rerouted && viaGateway both true unreachable,
-    // but formatModeLabel must not rely on that — a rerouted route always reads "→ provider",
-    // never "provided", regardless of what viaGateway carries.
-    test("a rerouted route still reads '→ <provider>' even if viaGateway were also true", () => {
-      const reroutedAndGateway = route({
-        provider: "openrouter",
-        rerouted: true,
-        reason: "ANTHROPIC_API_KEY",
-        viaGateway: true,
-      });
-      expect(formatModeLabel("[approve-each]", reroutedAndGateway, 100)).toBe(
-        "[approve-each]  claude-sonnet-5 · → openrouter",
-      );
-    });
-  });
-
   describe("slideWindow", () => {
     // The exact "clamp, don't re-center" cases ModelPicker's own moveSelection relies on.
     test("selection still inside the window: offset does not move", () => {
@@ -2293,10 +2228,11 @@ describe("App", () => {
   });
 
   describe("persistent mode+route indicator (mounted)", () => {
-    // useTerminalDimensions' own live-resize wiring — formatModeLabel's tests above already cover
-    // the tier DECISION logic as a pure function, so this is the one mounted-level smoke test
-    // needed to confirm a real resize actually reaches the rendered row end-to-end.
-    test("renders the model+route label at the default width, and drops it after a resize below the compact tier", async () => {
+    // useTerminalDimensions' own live-resize wiring — formatModeDetail's own unit tests
+    // (format.test.ts) already cover the tier DECISION logic as a pure function, so this is the
+    // one mounted-level smoke test needed to confirm a real resize actually reaches the rendered
+    // row end-to-end.
+    test("renders the model+route label at the default width, and drops it after a resize below MODE_MODEL_MIN_COLS", async () => {
       const { setup } = await connect();
       expect(setup.captureCharFrame()).toContain("your key");
 
@@ -2356,7 +2292,7 @@ describe("App", () => {
     // resolveRoute will actually route it (a sibling reroute or the gateway) — only the NEXT
     // turn's route-updated dispatch does. Optimistically claiming `rerouted: false` here would
     // render "your key" for a provider the user doesn't have a key for: a fabricated route,
-    // exactly what formatModeLabel's own comment says to avoid. The bar should stay on the OLD
+    // exactly what formatModeDetail's own comment says to avoid. The bar should stay on the OLD
     // route rather than assert a wrong one.
     test("a /model pick with no configured key leaves the status bar on the old route, not a fabricated one", async () => {
       const { setup, dispatch } = await connect();
@@ -2372,6 +2308,283 @@ describe("App", () => {
       const frame = setup.captureCharFrame();
       expect(frame).toContain("claude-sonnet-5");
       expect(frame).not.toContain("some-unconfigured-model");
+    });
+  });
+
+  describe("mode row color and hint", () => {
+    // theme.mode's own entries are a mix of hex ("#8ab4c8") and the ANSI-16 name "gray"
+    // (approve-each, = theme.muted) — parseColor, not RGBA.fromHex directly, is what every real
+    // `fg` prop resolves through (theme.ts's own header comment), so it's what a fair comparison
+    // here has to go through too: RGBA.fromHex("gray") is not a valid hex string and would silently
+    // resolve to magenta instead of failing loudly. `.includes`, not `===`: approve-each's own hue
+    // is literally the same value as the hint/detail's `theme.muted`, so the renderer merges them
+    // into one span with no style boundary between them — the indicator's own text is a substring
+    // of that merged span, not the whole span, for that one mode only.
+    test("each permission mode renders its indicator with its own theme.mode color", async () => {
+      const modes: PermissionMode[] = ["read-only", "approve-each", "auto"];
+      for (const mode of modes) {
+        const { setup } = await connect({ session: session({ permissionMode: mode }) });
+        const label = MODE_LABEL[mode];
+        const frame = setup.captureSpans();
+        const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes(label)));
+        const span = line?.spans.find((s) => s.text.includes(label));
+        expect(span?.fg.equals(parseColor(theme.mode[mode]))).toBe(true);
+      }
+    });
+
+    // The mode hue is confined to the indicator — formatModeDetail's own `detail` (the model name +
+    // route) is a SEPARATE `<text fg={theme.muted}>`, so it must never pick up `auto`'s own rust
+    // hue even though it sits right next to it.
+    test("the model name stays theme.muted, not the mode hue, even in auto", async () => {
+      const { setup } = await connect({ session: session({ permissionMode: "auto" }) });
+      const frame = setup.captureSpans();
+      const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("claude-sonnet-5")));
+      const span = line?.spans.find((s) => s.text.includes("claude-sonnet-5"));
+      expect(span?.fg.equals(parseColor(theme.muted))).toBe(true);
+      expect(span?.fg.equals(parseColor(theme.mode.auto))).toBe(false);
+    });
+
+    test("the shift+tab hint is present at MODE_HINT_COLS and absent below it", async () => {
+      const { setup } = await connect();
+      expect(setup.captureCharFrame()).toContain("(shift+tab to cycle)");
+
+      await resize(setup, MODE_HINT_COLS, DEFAULT_HEIGHT);
+      expect(setup.captureCharFrame()).toContain("(shift+tab to cycle)");
+
+      await resize(setup, MODE_HINT_COLS - 1, DEFAULT_HEIGHT);
+      expect(setup.captureCharFrame()).not.toContain("(shift+tab to cycle)");
+    });
+
+    // Even with a route present, the row's own arithmetic (indicator + hint + the model-only
+    // detail the width ladder allows at this width) must actually fit 80 columns in the RENDERED
+    // row, not just in formatModeDetail's own return value.
+    test("at 80 columns, the longest label with a route present fits the row and does not wrap", async () => {
+      const { setup } = await connect({
+        session: session({ permissionMode: "auto" }),
+        route: route(),
+      });
+      await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
+
+      const expectedRow = `${MODE_LABEL.auto}${MODE_CYCLE_HINT}  claude-sonnet-5`;
+      const lines = setup.captureCharFrame().split("\n");
+      const modeLine = lines.find((l) => l.includes(expectedRow));
+      expect(modeLine).toBeDefined();
+      expect(modeLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
+    });
+
+    // `⏸`/`⏵⏵` are outside the BMP-only glyph set used elsewhere in this file and could render
+    // double-width, corrupting the row's own column math — so their cell width has to be measured,
+    // not assumed. `captureSpans()` groups a whole `<text>` node into one span
+    // rather than one span per character, so there is no isolated "just the glyph" span to measure
+    // directly; instead, the indicator span's OWN measured `width` equalling its `length` (JS
+    // UTF-16 code units, ASCII for every character here except the glyph) proves every character in
+    // it — the glyph included — rendered as exactly one cell. If the glyph rendered double-width,
+    // this span's `width` would exceed its `length` by one.
+    test("the pause glyph (⏸) renders single-width in the component renderer", async () => {
+      const { setup } = await connect({ session: session({ permissionMode: "read-only" }) });
+      const label = MODE_LABEL["read-only"];
+      const frame = setup.captureSpans();
+      const line = frame.lines.find((l) => l.spans.some((s) => s.text === label));
+      const span = line?.spans.find((s) => s.text === label);
+      expect(span?.width).toBe(label.length);
+    });
+
+    test("the play glyphs (⏵⏵) render single-width each in the component renderer", async () => {
+      const { setup } = await connect({ session: session({ permissionMode: "auto" }) });
+      const label = MODE_LABEL.auto;
+      const frame = setup.captureSpans();
+      const line = frame.lines.find((l) => l.spans.some((s) => s.text === label));
+      const span = line?.spans.find((s) => s.text === label);
+      expect(span?.width).toBe(label.length);
+    });
+
+    // Regression (found live via tests/tui/tuiPty.test.ts's real-pty PageUp assertion, which
+    // started failing once the label grew a glyph + persistent hint): the mode row and the
+    // "↑ scrolled — End to follow" banner share one row via `justifyContent="space-between"`, but
+    // formatModeDetail's own width tiers only ever accounted for the row's LEFT-hand content. At 80
+    // columns with a route present, the model name showing on the left plus the banner on the
+    // right together exceed 80 cells, and OpenTUI wraps the row across two lines — splitting the
+    // banner's own text mid-word, so "sawLine" style assertions (and a real user) never see it
+    // intact.
+    test("the scroll banner and the mode row's model name coexist at 80 columns without wrapping", async () => {
+      const { setup, dispatch } = await connect({ route: route() });
+      await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
+
+      for (let i = 0; i < 300; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      setup.mockInput.pressKey(PAGE_UP);
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("↑ scrolled — End to follow");
+      const lines = frame.split("\n");
+      const bannerLine = lines.find((l) => l.includes("↑ scrolled — End to follow"));
+      expect(bannerLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
+    });
+
+    // Regression: the fix above only reserved the right-side banner's width in the call to
+    // formatModeDetail (which gates the model/route detail), not in the hint's own visibility check
+    // a few lines below — so at a width narrower than 80 (no room for the model anyway, so the
+    // first fix's own test never exercised this), the hint alone could still collide with the
+    // banner. 60 columns: "⏸ approve-each mode on" (22) + hint (21) = 43, well under 52
+    // (MODE_HINT_COLS against the raw width) even though 43 + the banner's 26 = 69 > 60.
+    test("the scroll banner and the hint coexist at a narrow width without wrapping", async () => {
+      const { setup, dispatch } = await connect();
+      await resize(setup, 60, DEFAULT_HEIGHT);
+
+      for (let i = 0; i < 300; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      setup.mockInput.pressKey(PAGE_UP);
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      const lines = frame.split("\n");
+      const bannerLine = lines.find((l) => l.includes("↑ scrolled — End to follow"));
+      expect(bannerLine).toBeDefined();
+      expect(bannerLine?.trimEnd().length).toBeLessThanOrEqual(60);
+    });
+
+    // Regression: unlike the hint/model/route, the mode label itself has no width tier — it never
+    // shrinks or hides as the terminal narrows, since there's no shorter fallback for a mode's own
+    // name. At 40 columns, `auto`'s label (⏵⏵ bypass permissions on, 24 cols) plus a running-tool
+    // `state.status` ("Running write_file…", 20 cols) together exceed the row, and without the
+    // right side backing off, OpenTUI wraps the row across two lines — splitting both the label and
+    // the status mid-word. A split terminal pane hits this width routinely.
+    test("a narrow terminal with a running-tool status does not wrap the mode row", async () => {
+      const { setup, dispatch } = await connect({ session: session({ permissionMode: "auto" }) });
+      await resize(setup, 40, DEFAULT_HEIGHT);
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "write_file", args: {} },
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      const lines = frame.split("\n");
+      const modeLine = lines.find((l) => l.includes("bypass permissions on"));
+      expect(modeLine).toBeDefined();
+      expect(modeLine?.trimEnd().length).toBeLessThanOrEqual(40);
+    });
+  });
+
+  describe("shift+tab cycles the permission mode", () => {
+    // `onCycleMode` is a bare signal out to the caller (this component's own comment on the prop
+    // explains why it never dispatches into its own reducer directly) — the label changing is
+    // exercised as a SEPARATE step here, via the same `dispatch` a real cli.ts would eventually
+    // call, rather than folded into `onCycleMode` itself.
+    test("shift+tab calls onCycleMode once, and the label changes after the resulting session-updated", async () => {
+      let calls = 0;
+      const { setup, dispatch } = await connect({
+        session: session({ permissionMode: "read-only" }),
+        onCycleMode: () => calls++,
+      });
+      expect(setup.captureCharFrame()).toContain("read-only mode on");
+
+      setup.mockInput.pressKey(SHIFT_TAB);
+      await flush(setup);
+      expect(calls).toBe(1);
+
+      dispatch({ type: "session-updated", session: session({ permissionMode: "auto" }) });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("bypass permissions on");
+    });
+
+    // A panel/approval box owns the keyboard while it's open — the same `noPanelOpen` gate the
+    // scroll keys above already share.
+    test("shift+tab does nothing while a panel is open", async () => {
+      let calls = 0;
+      const { setup, dispatch } = await connect({ onCycleMode: () => calls++ });
+
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: {},
+        offersAlways: false,
+      });
+      await flush(setup);
+
+      setup.mockInput.pressKey(SHIFT_TAB);
+      await flush(setup);
+
+      expect(calls).toBe(0);
+    });
+
+    // Plain Tab (no shift) shares the same `key.name === "tab"`, so this proves the `key.shift`
+    // check is what actually gates the cycle, not just the key name. `isPrintableKey`
+    // (util/keys.ts) already excludes a `key.name.length > 1` key like "tab" from InputBox's own
+    // typed-buffer handling — this also confirms that holds for real, not just by that function's
+    // own logic.
+    test("plain TAB does not cycle the mode and does not modify the input buffer", async () => {
+      let calls = 0;
+      const submitted: string[] = [];
+      const { setup } = await connect({
+        onCycleMode: () => calls++,
+        onSubmit: (v) => submitted.push(v),
+      });
+
+      await setup.mockInput.typeText("hello");
+      setup.mockInput.pressKey("\t");
+      await setup.mockInput.typeText(" world");
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      expect(calls).toBe(0);
+      expect(submitted).toEqual(["hello world"]);
+    });
+
+    // The keypress handler only ever calls `onCycleMode` — nothing about it touches the
+    // transcript. A no-op `onCycleMode` here isolates that from whatever a real caller's own
+    // `onCycleMode` might separately choose to dispatch.
+    test("shift+tab does not append a transcript entry", async () => {
+      const { setup, dispatch } = await connect({ onCycleMode: () => {} });
+      dispatch({ type: "transcript-append", line: "hello" });
+      await flush(setup);
+      const before = setup.captureCharFrame();
+
+      setup.mockInput.pressKey(SHIFT_TAB);
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toBe(before);
+    });
+  });
+
+  describe("skipPermissions pins the indicator to bypass", () => {
+    // --dangerously-skip-permissions overrides getPermissionMode() (cli.ts) to "auto" regardless
+    // of the session's own stored permissionMode — the indicator must not claim a mode the gate
+    // isn't actually enforcing.
+    test("the label and hue read bypass permissions on, in theme.mode.auto, regardless of the stored mode", async () => {
+      const { setup } = await connect({
+        session: session({ permissionMode: "approve-each" }),
+        skipPermissions: true,
+      });
+
+      const label = MODE_LABEL.auto;
+      expect(setup.captureCharFrame()).toContain(label);
+      expect(setup.captureCharFrame()).not.toContain("approve-each mode on");
+
+      const frame = setup.captureSpans();
+      const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes(label)));
+      const span = line?.spans.find((s) => s.text.includes(label));
+      expect(span?.fg.equals(parseColor(theme.mode.auto))).toBe(true);
+    });
+
+    test("shift+tab does not call onCycleMode while skipPermissions is set", async () => {
+      let calls = 0;
+      const { setup } = await connect({
+        session: session({ permissionMode: "approve-each" }),
+        skipPermissions: true,
+        onCycleMode: () => calls++,
+      });
+
+      setup.mockInput.pressKey(SHIFT_TAB);
+      await flush(setup);
+
+      expect(calls).toBe(0);
     });
   });
 
@@ -3104,7 +3317,7 @@ describe("App", () => {
       // under-reserved budget would either overlap two rows' worth of text or clip the panel's own
       // header line; both must render intact once the reservation accounts for AuthBanner and
       // commandError.
-      expect(frame).toContain("[approve-each]");
+      expect(frame).toContain("⏸ approve-each mode on");
       expect(frame).toContain("/config — settings");
       expect(frame).toContain("Esc/Ctrl-D close");
     });

@@ -3,6 +3,7 @@
 
 import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@seri/model-catalog";
 import { escapeControlChars } from "../../cli/output";
+import type { PermissionMode } from "../../gate/gate";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "../state/commands";
 
@@ -119,10 +120,35 @@ export const ROUTE_WIDTH = 13;
 // to spare, not the exact minimum.
 export const COST_WIDTH = 18;
 
-// Hermes Agent's own 3-tier width breakpoints for the persistent mode-indicator row — reused as-is,
-// not a new scheme.
-export const MODE_LABEL_FULL_COLS = 76;
-export const MODE_LABEL_COMPACT_COLS = 52;
+// The three `PermissionMode` label strings the persistent mode-indicator row renders — Claude
+// Code's own `<what it does> on` shape, not the raw union value. `⏸` prefixes the two modes that
+// don't let a write tool through unconditionally (`read-only` blocks it outright, `approve-each`
+// pauses for a prompt — `gate/gate.ts`'s own `checkPermission`); `⏵⏵` the one that does — the same
+// convention CC uses for identical semantics. `auto` deliberately reads "bypass permissions", not
+// "auto": seri's `auto` mode short-circuits every permission check to allow (gate/gate.ts), which
+// is CC's own `bypassPermissions`, not CC's classifier-reviewed `auto`.
+export const MODE_LABEL = {
+  "read-only": "⏸ read-only mode on",
+  "approve-each": "⏸ approve-each mode on",
+  auto: "⏵⏵ bypass permissions on",
+} satisfies Record<PermissionMode, string>;
+
+// Persistent (shown on every render, not just right after a cycle) — a transient hint would not
+// help a user who has never pressed the key yet.
+export const MODE_CYCLE_HINT = " (shift+tab to cycle)";
+
+// The persistent mode-indicator row's own 3-tier width breakpoints. `MODE_HINT_COLS` gates
+// MODE_CYCLE_HINT's own visibility (app.tsx's own JSX); `MODE_MODEL_MIN_COLS`/`MODE_ROUTE_MIN_COLS`
+// gate how much of formatModeDetail's own return value shows (below). Sized against the longest
+// label, "⏵⏵ bypass permissions on" (26 cols, worst case its glyph renders double-width) + the hint
+// (21 cols) = 47, still under 52; + the model name ("  " + NAME_WIDTH) = 71, still under 76; +
+// the route (" · " + the widest route label, "→ openrouter") = 86, still under 100 — every
+// threshold holds even in that worst case. This proof does not (and cannot) account for the mode
+// row's own right-hand content (the scroll banner / `state.status`) sharing the same row — see
+// app.tsx's own `showRightSide` for how that side of the row is kept from wrapping instead.
+export const MODE_HINT_COLS = 52;
+export const MODE_MODEL_MIN_COLS = 76;
+export const MODE_ROUTE_MIN_COLS = 100;
 
 // A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined`,
 // and a real pty can separately report a genuine but unusable `columns === 0` for its first render
@@ -267,7 +293,7 @@ export function formatTokenProgress(progress: TokenProgress): string {
 // persistent mode-indicator's route label (App.tsx's own JSX) share ONE vocabulary function —
 // they can never independently drift on what "your key"/"→ provider"/"provided"/"no key" means
 // for the same inputs. `gatewayReachable` is `true` only when `decideModelPickerOpen`/
-// `formatModeLabel`'s caller passed a real plan-coverage predicate/route.
+// `formatModeDetail`'s caller passed a real plan-coverage predicate/route.
 export function formatRouteLabel(input: {
   keyConfigured: boolean;
   rerouteTo?: ModelProvider;
@@ -279,36 +305,35 @@ export function formatRouteLabel(input: {
   return "no key";
 }
 
-// The persistent mode-indicator row's own content, factored out as a pure function for the same
-// reason formatModelRow's own comment gives — unit-testable without mounting Ink. `route.rerouted`
-// alone used to disambiguate "your key" from "→ provider", back when a gateway-served route was
-// indistinguishable from a local one here — both have `rerouted: false`. `route.viaGateway` is
-// what tells them apart now: `keyConfigured` is true only when NEITHER is set, and
-// `gatewayReachable` is threaded through so a gateway-served route reads "provided" here exactly
-// as it already does in the model picker's Route column.
+// The persistent mode-indicator row's own model/route suffix, factored out as a pure function for
+// the same reason formatModelRow's own comment gives — unit-testable without mounting Ink.
+// `route.rerouted` alone used to disambiguate "your key" from "→ provider", back when a
+// gateway-served route was indistinguishable from a local one here — both have `rerouted: false`.
+// `route.viaGateway` is what tells them apart now: `keyConfigured` is true only when NEITHER is
+// set, and `gatewayReachable` is threaded through so a gateway-served route reads "provided" here
+// exactly as it already does in the model picker's Route column.
 // `route` can be undefined (found 2026-08-13, AppProps.route's own comment): runGuidedSetup mounts
-// App before any provider key exists, so there is genuinely no route to show yet. Falls back to
-// the bare mode indicator, same as the narrow-terminal branch below — showing a fabricated route
-// would misreport "your key"/"→ provider" during the exact flow where neither is true.
+// App before any provider key exists, so there is genuinely no route to show yet. Falls back to no
+// suffix, same as the narrow-terminal branch below — showing a fabricated route would misreport
+// "your key"/"→ provider" during the exact flow where neither is true.
 // post-review fix: `route.model` is capped to NAME_WIDTH (the same width the picker table already
-// truncates model names to) before it goes into the label — a real catalog id (a long OpenRouter
+// truncates model names to) before it goes into the return — a real catalog id (a long OpenRouter
 // id is well over 40 chars) was otherwise unbounded here, so it could push the row past the very
-// terminal width MODE_LABEL_FULL_COLS/MODE_LABEL_COMPACT_COLS assumed it fit in.
-export function formatModeLabel(
-  modeIndicator: string,
-  route: ResolvedRoute | undefined,
-  width: number,
-): string {
-  if (route === undefined || width < MODE_LABEL_COMPACT_COLS) return modeIndicator;
+// terminal width MODE_MODEL_MIN_COLS/MODE_ROUTE_MIN_COLS assumed it fit in.
+// Carries its own leading two spaces (mirroring the old inline `"  "` join) and is `""` when there
+// is nothing to show, so app.tsx's JSX never has to add spacing of its own — it renders this
+// directly next to the mode indicator, which app.tsx already has in hand and colors separately.
+export function formatModeDetail(route: ResolvedRoute | undefined, width: number): string {
+  if (route === undefined || width < MODE_MODEL_MIN_COLS) return "";
   const modelName =
     route.model.length > NAME_WIDTH ? `${route.model.slice(0, NAME_WIDTH - 1)}…` : route.model;
-  if (width < MODE_LABEL_FULL_COLS) return `${modeIndicator}  ${modelName}`;
+  if (width < MODE_ROUTE_MIN_COLS) return `  ${modelName}`;
   const routeLabel = formatRouteLabel({
     keyConfigured: !route.rerouted && !route.viaGateway,
     rerouteTo: route.rerouted ? route.provider : undefined,
     gatewayReachable: route.viaGateway,
   });
-  return `${modeIndicator}  ${modelName} · ${routeLabel}`;
+  return `  ${modelName} · ${routeLabel}`;
 }
 
 export function formatModelRow(row: ModelPickerEntry): string {

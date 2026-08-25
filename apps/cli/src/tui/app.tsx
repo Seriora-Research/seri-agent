@@ -52,6 +52,7 @@ import type { ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { memo, useEffect, useReducer, useRef, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
+import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
@@ -72,7 +73,10 @@ import {
   DEFAULT_COLUMNS,
   DEFAULT_ROWS,
   FALLBACK_CHROME_ROWS,
-  formatModeLabel,
+  formatModeDetail,
+  MODE_CYCLE_HINT,
+  MODE_HINT_COLS,
+  MODE_LABEL,
   type TranscriptEntry,
 } from "./util/format";
 
@@ -85,7 +89,7 @@ export type AppProps = {
   // optional would let a future `createElement(App, ...)` call site silently omit it instead of
   // failing to compile. The VALUE is `| undefined` because one call site (runGuidedSetup, cli.ts)
   // mounts App before any provider key exists at all — genuinely no PreparedRun/route to pass.
-  // formatModeLabel drops the model+route suffix entirely when `state.route` is undefined, rather
+  // formatModeDetail drops the model+route suffix entirely when `state.route` is undefined, rather
   // than showing a fabricated route ("your key" during a flow where there is provably no key yet
   // would be actively wrong, not just a placeholder).
   route: ResolvedRoute | undefined;
@@ -164,11 +168,27 @@ export type AppProps = {
   onSplashLogin?: () => void;
   onSplashSignup?: () => void;
   onSplashContinue?: () => void;
+  // Shift+Tab's own resolution — a prop, not a local dispatch into this component's own reducer:
+  // `getPermissionMode()` (cli.ts) reads `liveState.session.permissionMode`, and `liveState` is
+  // only ever advanced by cli.ts's own dispatch funnel. A cycle dispatched from inside this
+  // component would never reach `liveState`, so the permission gate would keep enforcing the OLD
+  // mode while this component's own state (and the indicator it renders) already showed the new
+  // one — the exact desync `onSessionChange`'s own comment above already describes for persistence.
+  onCycleMode?: () => void;
+  // `--dangerously-skip-permissions` (already a `runTui` parameter, cli.ts) overrides
+  // `getPermissionMode()` (cli.ts) to `"auto"` regardless of what `session.permissionMode` says —
+  // this is the single render-time mirror of that override: the indicator must not claim a mode
+  // the gate isn't actually enforcing. `state.session.permissionMode` stays the normal, untouched
+  // source everywhere else (the reducer itself is not changed for this flag).
+  // Also makes Shift+Tab inert while set, checked inside this component rather than left to every
+  // caller to remember: a functioning binding would silently mutate and persist a session field
+  // the gate is ignoring, with zero visible feedback.
+  skipPermissions?: boolean;
 };
 
 // A pty can genuinely report a terminal width as a real but unusable `0` for the first render or
 // two, before its window-size ioctl has actually landed (reproduced live over a real pty in WSL) —
-// `formatModeLabel` (below) picks its display tier off this width, and a stray `0` would collapse
+// `formatModeDetail` (below) picks its display tier off this width, and a stray `0` would collapse
 // it to the narrowest tier for no real reason. `|| DEFAULT_COLUMNS`, not `??`: `||` treats `0` the
 // same as `undefined`/`null`, which is exactly the substitution a column count of zero needs —
 // there is no real terminal width `0` is ever the correct value for.
@@ -219,12 +239,20 @@ export function App({
   onSplashLogin,
   onSplashSignup,
   onSplashContinue,
+  onCycleMode,
+  skipPermissions,
 }: AppProps) {
   const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session, { route }));
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
-  const modeLabel = formatModeLabel(state.modeIndicator, state.route, width);
+  // The single render-time override `skipPermissions` needs — see `AppProps.skipPermissions`'s own
+  // comment. One derived value, not two: `indicatorText` reads off `displayMode` rather than
+  // carrying its own separate `skipPermissions` ternary, so the hue and the label can't disagree
+  // about which mode is showing.
+  const displayMode: PermissionMode =
+    skipPermissions === true ? "auto" : state.session.permissionMode;
+  const indicatorText = MODE_LABEL[displayMode];
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
   // The scrollbox's own measured height (this file's own header comment explains why it needs a
@@ -317,6 +345,43 @@ export function App({
     state.pendingConfig === undefined &&
     state.pendingPermissions === undefined &&
     !state.pendingSplash;
+
+  // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
+  // "space-between"`, below) — the row's own tier thresholds are sized against the LEFT side
+  // alone, so once the right side is actually showing, its own width has to come out of the
+  // budget BOTH the hint's own visibility check and `formatModeDetail` see, or the two collide and
+  // OpenTUI wraps the row across two lines. `+ 1` for the row's own `gap={1}` between banner and
+  // status, only when both are shown at once. Also what the JSX below renders, rather than
+  // re-typing the banner string a second time — the two can't drift apart if there's only one copy.
+  const rightSideText = scrolledUp && noPanelOpen ? "↑ scrolled — End to follow" : "";
+  const rawRightSideWidth =
+    rightSideText.length +
+    (rightSideText.length > 0 && state.status.length > 0 ? 1 : 0) +
+    state.status.length;
+  // `indicatorText` — the mode label — has no width tier of its own: unlike the hint/model/route,
+  // it's never hidden or shortened as the terminal narrows (there's nothing smaller to fall back
+  // to than the mode's own name). So on a narrow enough terminal, indicatorText + the right side
+  // together can still exceed `width` even after the hint/detail have already given up all the
+  // room they can. Rather than let that wrap the row, the right side loses instead: it only shows
+  // when there's room for it alongside the label, which — like the hint/detail split above — is
+  // real terminal width, not a real cell-width measurement (`.length`, not `stringWidth`; the
+  // banner's own `—`/`↑` and `state.status`'s `…` can in principle render wider than 1 cell on a
+  // terminal configured for ambiguous-width-double, same caveat the D3 glyphs already carry).
+  const showRightSide = width >= indicatorText.length + rawRightSideWidth;
+  const rightSideWidth = showRightSide ? rawRightSideWidth : 0;
+  const modeDetail = formatModeDetail(state.route, width - rightSideWidth);
+
+  // Its own useKeyboard, separate from the scroll handler below — OpenTUI delivers the same
+  // keypress to every registered handler (that handler's own comment explains this), so a second,
+  // independent registration is the idiomatic way to keep two unrelated concerns from having to
+  // reason about each other's ordering/guards, the same shape InputBox's own handler already uses.
+  // Inert under skipPermissions (AppProps.skipPermissions's own comment): the indicator is pinned
+  // to bypass regardless of what a cycle would compute, so a functioning binding here would
+  // silently mutate and persist a session field the gate is already ignoring.
+  useKeyboard((key) => {
+    if (!noPanelOpen) return;
+    if (key.name === "tab" && key.shift && skipPermissions !== true) onCycleMode?.();
+  });
 
   // A second, independent useKeyboard from InputBox's own — OpenTUI delivers the same keypress to
   // every registered handler, so this fires regardless of what InputBox does with the same press
@@ -441,17 +506,6 @@ export function App({
           </text>
         </box>
       )}
-      <box flexDirection="row" justifyContent="space-between">
-        <text>{modeLabel}</text>
-        <box flexDirection="row" gap={1}>
-          {/* `noPanelOpen` too, not just `scrolledUp`: while a panel is open, End
-          is swallowed by the exact same gate `noPanelOpen` already puts on the transcript-scroll
-          keys above — the banner would otherwise keep telling the user to press a key that does
-          nothing until they close the panel first. */}
-          {scrolledUp && noPanelOpen && <text fg={theme.muted}>↑ scrolled — End to follow</text>}
-          {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
-        </box>
-      </box>
       <ErrorLine message={state.commandError} />
       {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
       is waiting on, and answering it (not typing a task or slash command) is the only input that
@@ -515,6 +569,34 @@ export function App({
           onPrefillConsumed={() => dispatch({ type: "input-prefill-consumed" })}
         />
       )}
+      <box flexDirection="row" justifyContent="space-between">
+        {/* No `gap` — all spacing between these three is carried inside the strings themselves
+        (MODE_CYCLE_HINT's own leading space, `modeDetail`'s own leading two spaces), so the mode
+        hue never bleeds onto the hint/model/route by way of an inserted gap cell. */}
+        <box flexDirection="row">
+          <text fg={theme.mode[displayMode]}>{indicatorText}</text>
+          {width - rightSideWidth >= MODE_HINT_COLS && (
+            <text fg={theme.muted}>{MODE_CYCLE_HINT}</text>
+          )}
+          <text fg={theme.muted}>{modeDetail}</text>
+        </box>
+        <box flexDirection="row" gap={1}>
+          {/* `rightSideText`, not a re-check of `scrolledUp && noPanelOpen` (`noPanelOpen` matters
+          here too: while a panel is open, End is swallowed by the exact same gate that puts on the
+          transcript-scroll keys above — the banner would otherwise keep telling the user to press
+          a key that does nothing until they close the panel first) — reusing the already-computed
+          string keeps this render in lockstep with the width budget above, rather than risking the
+          two drifting if one is ever edited without the other. `showRightSide` on both nodes: the
+          label can't shrink, so on a narrow enough terminal these lose the row instead of wrapping
+          it (see `showRightSide`'s own comment above). */}
+          {showRightSide && rightSideText.length > 0 && (
+            <text fg={theme.muted}>{rightSideText}</text>
+          )}
+          {showRightSide && state.status.length > 0 && (
+            <text fg={theme.muted}>{state.status}</text>
+          )}
+        </box>
+      </box>
     </box>
   );
 }

@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 // below for why: node-pty ships no Linux prebuild, and a top-level `import` would still be
 // requested by `bun test` on ubuntu/macos CI even with the test body itself skipped).
 import type * as PtyModule from "node-pty";
+import { childScriptInput } from "./helpers";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
@@ -276,5 +277,58 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
         killOrphansByScriptPath(scriptPath);
       }
     }, 90_000);
+
+    // Anthropic documents Bun not enabling ENABLE_VIRTUAL_TERMINAL_INPUT as a real failure mode
+    // for exactly this Node/Bun-on-Windows runtime family — Shift+Tab (`\x1b[Z`) might never reach
+    // the app at all on native Windows. Measured here rather than assumed, since that's exactly
+    // the kind of platform claim a local pass can't confirm.
+    test("shift+tab (\\x1b[Z) changes the rendered mode label on a real Windows console", async () => {
+      const scriptPath = join(dir, "child-input.mjs");
+      writeFileSync(scriptPath, childScriptInput(dir));
+
+      const pty = await import("node-pty");
+      const { term, waitFor, decodedSoFar } = startChildNodePty(pty, scriptPath, dir);
+      try {
+        // Same splash-dismiss dance as the alt-screen test above (its own comment explains why:
+        // the welcome splash mounts ahead of the normal flow on every interactive launch).
+        const sawSplash = await waitFor("SERI", 10_000);
+        if (sawSplash) {
+          try {
+            term.write("\x1b");
+            await new Promise((r) => setTimeout(r, 100));
+          } catch {}
+        }
+
+        const sawReady = await waitFor("RUNLOOP_READY", 10_000);
+        if (!sawReady) {
+          throw new Error(
+            `child never printed "RUNLOOP_READY"; got ${JSON.stringify(decodedSoFar())}`,
+          );
+        }
+        const sawDefaultMode = await waitFor("approve-each mode on", 10_000);
+        if (!sawDefaultMode) {
+          throw new Error(
+            `child never rendered the default mode label; got ${JSON.stringify(decodedSoFar())}`,
+          );
+        }
+
+        try {
+          term.write("\x1b[Z");
+        } catch {}
+
+        const sawCycled = await waitFor("bypass permissions on", 10_000);
+        if (!sawCycled) {
+          throw new Error(
+            `shift+tab never changed the rendered mode label; got ${JSON.stringify(decodedSoFar())}`,
+          );
+        }
+        expect(sawCycled).toBe(true);
+      } finally {
+        try {
+          term.kill();
+        } catch {}
+        killOrphansByScriptPath(scriptPath);
+      }
+    }, 60_000);
   },
 );

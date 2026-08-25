@@ -18,6 +18,7 @@ import type { ModelMessage } from "ai";
 import { checkpointStoreDir } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, resolveRef } from "../../src/checkpoint/shadowGit";
 import { loadSession, saveSession } from "../../src/session/session";
+import { childScriptInput } from "./helpers";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 const SESSION_MODULE = pathToFileURL(join(import.meta.dir, "../../src/session/session.ts")).href;
@@ -38,29 +39,6 @@ function childScriptCancel(dir: string): string {
     `  console.log("\\nRUNLOOP_ABORTED aborted=" + opts.signal.aborted);`,
     `  yield { type: "done", reason: "aborted" };`,
     `  return opts.messages;`,
-    `}`,
-    `await cli.run(["do", "a", "task"], {`,
-    `  runLoop: runLoopFake,`,
-    `  getGroqModel: () => ({}),`,
-    `  loadAgentsFile: () => "",`,
-    `  isTTY: process.stdout.isTTY,`,
-    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
-    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
-    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
-    `});`,
-  ].join("\n");
-}
-
-// A runLoop that never settles, so the TUI stays mounted and interactive for as long as the test
-// needs to type into it — nothing here is about the loop finishing, only about the input box and
-// the slash-command dispatch wired in Phase 5.
-function childScriptInput(dir: string): string {
-  return [
-    `process.env.GROQ_API_KEY = "fake-test-key";`,
-    `const cli = await import(${JSON.stringify(CLI)});`,
-    `async function* runLoopFake(opts) {`,
-    `  console.log("\\nRUNLOOP_READY");`,
-    `  await new Promise(() => {});`,
     `}`,
     `await cli.run(["do", "a", "task"], {`,
     `  runLoop: runLoopFake,`,
@@ -2017,6 +1995,73 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
+  // Doubles as the liveState-desync guard: `/mode` reads its starting point off `liveState.session`
+  // (cli.ts's own dispatch funnel), the same state Shift+Tab's own `onCycleMode` just advanced —
+  // this can only pass if the keypress actually reached `liveState`, not just this component's own
+  // render. cycleMode's own order (gate/gate.ts): a fresh session starts at approve-each, one
+  // Shift+Tab press lands on auto, and the following /mode advances FROM auto to read-only.
+  test("shift+tab and /mode share one source of truth, keeping liveState in step with the indicator", async () => {
+    const scriptPath = join(dir, "child-input.mjs");
+    writeFileSync(scriptPath, childScriptInput(dir));
+
+    const { child, sawLine } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+      await sawLine("approve-each mode on");
+
+      child.stdin?.write("\x1b[Z");
+      await sawLine("bypass permissions on");
+
+      child.stdin?.write("/mode");
+      await sawLine("/mode");
+      child.stdin?.write("\r");
+      await sawLine("permission mode is now read-only");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // Regression: onCycleMode's own sessionUpdated call used to be a bare `void`, unlike
+  // /mode's cycleModeCommand, which is `await`ed inside the try/catch around `command.run` — so a
+  // save failure there surfaces as a caught rejection (this file's own "could not save the
+  // session" tests, elsewhere) while the identical failure from Shift+Tab became an unhandled
+  // rejection instead. `runtime/renderer.ts`'s own `process.on("unhandledRejection", ...)` handler
+  // calls `process.exit(1)` — the whole TUI would crash from a keypress that, via /mode, degrades
+  // gracefully. Sabotages `sessionsDir` the same way the /clear persist-failure test above does, so
+  // Shift+Tab's own save fails, and confirms both the error surfaces AND the process is still
+  // alive afterward (answers a second, unrelated keypress) — a crash would fail the second half
+  // silently, not loudly, since `sawLine` would just hang until the test's own timeout.
+  test("shift+tab shows an error instead of crashing the TUI when its own persist fails", async () => {
+    const scriptPath = join(dir, "child-input-cycle-persist-failure.mjs");
+    writeFileSync(scriptPath, childScriptInput(dir));
+
+    const sessionsDir = join(dir, "sessions");
+    const { child, sawLine } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+      await sawLine("approve-each mode on");
+
+      // Read+execute only: saveSession's atomic write (a temp file plus a rename into this
+      // directory) can no longer create the mode-cycled session's .jsonl.
+      chmodSync(sessionsDir, 0o500);
+
+      child.stdin?.write("\x1b[Z");
+      await sawLine("could not save the session");
+
+      chmodSync(sessionsDir, 0o700);
+
+      // Proof the process is still alive, not just that the error line appeared: a real second
+      // command still gets a real response.
+      child.stdin?.write("/mode");
+      await sawLine("/mode");
+      child.stdin?.write("\r");
+      await sawLine("permission mode is now");
+    } finally {
+      chmodSync(sessionsDir, 0o700);
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
   // H-1 + M-3: a command decision function throwing (no checkpoints to /undo to) used to escape
   // straight out of Ink's own input handler. Confirmed here two ways — the error is shown, not
   // silently dropped, AND the process is still alive and answers a second, unrelated command
@@ -2047,8 +2092,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       // Still alive: an ordinary command sent right after both of the above still works.
       // cycleMode (gate/gate.ts) cycles approve-each -> auto -> read-only -> approve-each, and a
-      // fresh session starts at approve-each (the [approve-each] indicator shown on mount), so
-      // this first /mode press lands on auto, not read-only.
+      // fresh session starts at approve-each (the "approve-each mode on" indicator shown on
+      // mount), so this first /mode press lands on auto, not read-only.
       child.stdin?.write("/mode");
       await sawLine("/mode");
       child.stdin?.write("\r");
@@ -4882,9 +4927,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine, exited, rawOccurrences } = await startChild(scriptPath, dir);
       try {
-        // The mode-indicator/input box's own default-session label (modeIndicator, reducer.ts) —
+        // The mode-indicator/input box's own default-session label (MODE_LABEL, util/format.ts) —
         // proof the TUI actually mounted rather than the process just sitting there.
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
         // Negative control: nothing auto-started a turn. wait100ms first, matching every other
         // rawOccurrences()-based negative control in this file (the seedConfig-adjacent /setup
         // tests above) — rawOccurrences() is a synchronous snapshot, so it has to be given time to
@@ -4927,7 +4972,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine, exited } = await startChild(scriptPath, dir);
       try {
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
         await wait100ms();
 
         child.stdin?.write("\x04");
@@ -4960,7 +5005,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine } = await startChild(scriptPath, dir);
       try {
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
 
         child.stdin?.write("/max-turns 1");
         await sawLine("/max-turns 1");
@@ -4988,7 +5033,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine } = await startChild(scriptPath, dir);
       try {
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
 
         // Same un-prefixed wait-then-submit shape as the positive case above.
         child.stdin?.write("do a task");
@@ -5008,7 +5053,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine, sawLineTimes } = await startChild(scriptPath, dir);
       try {
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
 
         child.stdin?.write("/profile new work");
         await sawLine("/profile new work");
@@ -5048,7 +5093,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine } = await startChild(scriptPath, dir);
       try {
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
 
         child.stdin?.write("/profile new ../etc");
         await sawLine("/profile new ../etc");
@@ -5086,7 +5131,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
-        await sawLine("[approve-each]");
+        await sawLine("approve-each mode on");
 
         child.stdin?.write("/profile new");
         await sawLine("/profile new");
@@ -5245,7 +5290,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // proves the child mounted AND resumed the seeded session, not merely that it never got
         // that far — rawOccurrences() staying at 0 for a process that never mounted would pass for
         // the wrong reason.
-        await sawLine("[read-only]");
+        await sawLine("read-only mode on");
         await wait100ms();
         expect(rawOccurrences("RUNLOOP_READY")).toBe(0);
       } finally {
