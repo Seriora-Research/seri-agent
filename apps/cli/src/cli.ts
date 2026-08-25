@@ -2885,17 +2885,19 @@ async function runTui(
     // actual identity change, not on `name === "/clear"`, means a future command that also mints a
     // new session id is covered by construction instead of needing its own added branch here.
     const sessionIdBeforeCommand = liveState.session.id;
+    // /compact's usage fold, shared by both command.run call sites just below.
+    const foldUsage = (u: LanguageModelUsage): void => {
+      usage = {
+        inputTokens: addTokens(usage.inputTokens, u.inputTokens),
+        outputTokens: addTokens(usage.outputTokens, u.outputTokens),
+      };
+    };
     try {
       if (command.needsSession === false) {
         await command.run(
           args,
           dirs(ctx),
-          tuiPresenter(dispatch, awaitNextPersist, (u) => {
-            usage = {
-              inputTokens: addTokens(usage.inputTokens, u.inputTokens),
-              outputTokens: addTokens(usage.outputTokens, u.outputTokens),
-            };
-          }),
+          tuiPresenter(dispatch, awaitNextPersist, foldUsage),
           deps,
         );
       } else {
@@ -2903,12 +2905,7 @@ async function runTui(
           liveState.session,
           args,
           dirs(ctx),
-          tuiPresenter(dispatch, awaitNextPersist, (u) => {
-            usage = {
-              inputTokens: addTokens(usage.inputTokens, u.inputTokens),
-              outputTokens: addTokens(usage.outputTokens, u.outputTokens),
-            };
-          }),
+          tuiPresenter(dispatch, awaitNextPersist, foldUsage),
           deps,
         );
       }
