@@ -238,15 +238,11 @@ export function App({
   const rows = resolveHeight(rawRows);
   // The single render-time override `skipPermissions` needs — see `AppProps.skipPermissions`'s
   // own comment. `displayMode` drives the indicator's hue, `indicatorText` its label; both feed
-  // straight into `formatModeLabel` below so the model/route `detail` derivation is untouched.
+  // into `formatModeLabel` further below (once `scrolledUp`/`noPanelOpen` exist) so the model/route
+  // `detail` derivation can account for the row's own right-hand content.
   const displayMode: PermissionMode =
     skipPermissions === true ? "auto" : state.session.permissionMode;
   const indicatorText = skipPermissions === true ? MODE_LABEL.auto : state.modeIndicator;
-  const { indicator: modeIndicatorText, detail: modeDetail } = formatModeLabel(
-    indicatorText,
-    state.route,
-    width,
-  );
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
   // The scrollbox's own measured height (this file's own header comment explains why it needs a
@@ -339,6 +335,24 @@ export function App({
     state.pendingConfig === undefined &&
     state.pendingPermissions === undefined &&
     !state.pendingSplash;
+
+  // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
+  // "space-between"`, below) — the row's own tier thresholds were sized against the LEFT side
+  // alone, so once the right side is actually showing, its own width has to come out of the
+  // budget `formatModeLabel` sees, or the two collide and OpenTUI wraps the row across two lines
+  // (observed live: `tests/tui/tuiPty.test.ts`'s scroll-banner assertion broke on this exact
+  // interaction once the label grew a glyph + persistent hint). `+ 1` for the row's own `gap={1}`
+  // between banner and status, only when both are shown at once.
+  const rightSideText = scrolledUp && noPanelOpen ? "↑ scrolled — End to follow" : "";
+  const rightSideWidth =
+    rightSideText.length +
+    (rightSideText.length > 0 && state.status.length > 0 ? 1 : 0) +
+    state.status.length;
+  const { indicator: modeIndicatorText, detail: modeDetail } = formatModeLabel(
+    indicatorText,
+    state.route,
+    width - rightSideWidth,
+  );
 
   // A second, independent useKeyboard from InputBox's own — OpenTUI delivers the same keypress to
   // every registered handler, so this fires regardless of what InputBox does with the same press

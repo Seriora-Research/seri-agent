@@ -2220,6 +2220,32 @@ describe("App", () => {
       const span = line?.spans.find((s) => s.text === label);
       expect(span?.width).toBe(label.length);
     });
+
+    // Regression (found live via tests/tui/tuiPty.test.ts's real-pty PageUp assertion, which
+    // started failing once the label grew a glyph + persistent hint): the mode row and the
+    // "↑ scrolled — End to follow" banner share one row via `justifyContent="space-between"`, but
+    // formatModeLabel's own width tiers only ever accounted for the row's LEFT-hand content. At 80
+    // columns with a route present, the model name showing on the left plus the banner on the
+    // right together exceed 80 cells, and OpenTUI wraps the row across two lines — splitting the
+    // banner's own text mid-word, so "sawLine" style assertions (and a real user) never see it
+    // intact.
+    test("the scroll banner and the mode row's model name coexist at 80 columns without wrapping", async () => {
+      const { setup, dispatch } = await connect({ route: route() });
+      await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
+
+      for (let i = 0; i < 300; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      setup.mockInput.pressKey(PAGE_UP);
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("↑ scrolled — End to follow");
+      const lines = frame.split("\n");
+      const bannerLine = lines.find((l) => l.includes("↑ scrolled — End to follow"));
+      expect(bannerLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
+    });
   });
 
   describe("shift+tab cycles the permission mode", () => {
