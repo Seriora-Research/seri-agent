@@ -2788,6 +2788,7 @@ describe("run (/clear)", () => {
       transcriptCleared: () => {
         calls.push("transcriptCleared");
       },
+      usageAccrued: () => {},
     };
 
     const clear = SLASH_COMMANDS.get("/clear");
@@ -3350,6 +3351,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
           resolveSessionUpdated = resolve;
         }),
       transcriptCleared: () => {},
+      usageAccrued: () => {},
     };
 
     const rewind = SLASH_COMMANDS.get("/rewind");

@@ -12,7 +12,7 @@ import {
   type ModelProvider,
 } from "@seri/model-catalog";
 import type { Plan } from "@seri/plans";
-import type { LanguageModel, ModelMessage, ToolSet } from "ai";
+import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "ai";
 import { createElement } from "react";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
@@ -50,9 +50,11 @@ import { loadVerifyConfig, type VerifyConfig } from "./config/config";
 import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
 import { messageOf } from "./errors";
 import type { PermissionMode } from "./gate/gate";
+import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
 import {
   type ApprovalAnswer,
   type ApprovalPrompt,
+  DEFAULT_PRESERVE_RECENT_MESSAGES,
   type LoopEvent,
   runLoop as runLoopReal,
 } from "./loop/loop";
@@ -211,6 +213,13 @@ type CommandPresenter = {
   // is actually rendered — the non-interactive path has no live transcript to wipe (consolePresenter's
   // own no-op below).
   transcriptCleared: () => void;
+  // Reports a compaction summarizer round-trip's real token spend, which does not flow through
+  // driveLoop's own usage fold (compactCommand never runs inside driveLoop) and would otherwise be
+  // silently dropped from the run's reported totals — the same failure class loop.ts's own
+  // "compacted alongside usage" comment already documents for the automatic path. No `cost`
+  // parameter: compactMessages returns only `usage`, matching the automatic path's own asymmetry
+  // (loop.ts's comment on `"compacted" has no cost of its own`).
+  usageAccrued: (usage: LanguageModelUsage) => void;
 };
 
 type SlashCommand = {
@@ -262,6 +271,7 @@ type SlashCommand = {
         args: string[],
         dirs: CommandDirs,
         presenter?: CommandPresenter,
+        deps?: CliDeps,
       ) => void | Promise<void>;
     }
   | {
@@ -278,6 +288,7 @@ type SlashCommand = {
         args: string[],
         dirs: CommandDirs,
         presenter?: CommandPresenter,
+        deps?: CliDeps,
       ) => void | Promise<void>;
     }
 );
@@ -370,6 +381,7 @@ function consolePresenter(dirs: CommandDirs): CommandPresenter {
     // Explicit no-op, not an ANSI screen-clear: the user's own scrollback is not seri's to erase,
     // and clearing it would corrupt piped/redirected output.
     transcriptCleared: () => {},
+    usageAccrued: (usage) => printUsage({ inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }),
   };
 }
 
@@ -447,6 +459,60 @@ async function rewindCommand(
   // be able to cross this point.
   recordBarrier();
   presenter.message(message);
+}
+
+// /compact: the same findSafeEvictionBoundary/compactMessages the automatic path (loop.ts) uses,
+// run on demand. Not a pure decide-then-present function like rewindCommand's decideRewind:
+// resolving a live model and calling compactMessages are both real I/O, so this stays one `async`
+// function rather than forcing a split that would fight nothing but "no speculative abstraction."
+async function compactCommand(
+  session: SessionState<ModelMessage>,
+  _args: string[],
+  dirs: CommandDirs,
+  presenter: CommandPresenter = consolePresenter(dirs),
+  deps: CliDeps = {},
+): Promise<void> {
+  const evictBoundary = findSafeEvictionBoundary(session.messages, DEFAULT_PRESERVE_RECENT_MESSAGES);
+  if (evictBoundary === null) {
+    presenter.message("Not enough history to compact.");
+    return;
+  }
+
+  const configDir = deps.authConfigDir ?? getConfigDir();
+  const configured = configuredProviders(configDir);
+  const requestedProvider = session.provider ?? DEFAULT_PROVIDER;
+  // session.model is optional (a session written before the field existed) — backfilled the same
+  // way prepareSession's own loadOrCreateSession does for that case, rather than assuming a
+  // resumed session always has one recorded.
+  const requestedModel = session.model ?? resolveDefaultModel(configDir).model;
+  const [catalog, plan] = await Promise.all([
+    getModelCatalog(undefined, printWarning),
+    fetchAccountPlan(configDir),
+  ]);
+  const route = resolveRoute(catalog, { model: requestedModel, provider: requestedProvider }, configured, plan);
+  const model = dispatchModel(route, session.id, configDir, deps);
+
+  const controller = new AbortController();
+  const unregisterCancel = onSignalCancel(() => controller.abort());
+  let compacted: Awaited<ReturnType<typeof compactMessages>>;
+  try {
+    compacted = await compactMessages(session.messages, model, evictBoundary, controller.signal);
+  } catch (err) {
+    if (controller.signal.aborted) return; // cancelled: strict no-op, nothing to report
+    throw err;
+  } finally {
+    unregisterCancel();
+  }
+
+  await presenter.sessionUpdated({ ...session, messages: compacted.messages });
+  const { storeDir } = checkpointTarget(session, dirs);
+  try {
+    appendBarrier(storeDir, session.id, "compaction");
+  } catch (err) {
+    printWarning(`could not record the compaction barrier, so /rewind may not be able to cross this point: ${messageOf(err)}`);
+  }
+  presenter.usageAccrued(compacted.usage);
+  presenter.message(`⚙ compacted ${compacted.evictedCount} messages`);
 }
 
 // /clear: starts a brand-new session in the running process. No try/catch of its own — this runs
@@ -1786,7 +1852,14 @@ function pushTranscriptLine(dispatch: Dispatch, line: string): void {
 // makes `sessionUpdated` genuinely await the reducer's own onSessionChange effect actually
 // persisting, not just dispatching, fixing the gap code review found in the previous round's
 // finding-9 fix (this file's own CommandPresenter comment has the full account).
-function tuiPresenter(dispatch: Dispatch, awaitPersist: () => Promise<void>): CommandPresenter {
+function tuiPresenter(
+  dispatch: Dispatch,
+  awaitPersist: () => Promise<void>,
+  // /compact's usage fold: tuiPresenter does not itself close over runTui's usage/cost `let`s
+  // (those live in a different function), so the fold is supplied by the caller instead. Defaults
+  // to a no-op for every call site but the two that go through command.run inside onSubmit.
+  onUsageAccrued: (usage: LanguageModelUsage) => void = () => {},
+): CommandPresenter {
   const append = (line: string): void => pushTranscriptLine(dispatch, line);
   return {
     message: append,
@@ -1801,6 +1874,7 @@ function tuiPresenter(dispatch: Dispatch, awaitPersist: () => Promise<void>): Co
       return persisted;
     },
     transcriptCleared: () => dispatch({ type: "transcript-cleared" }),
+    usageAccrued: onUsageAccrued,
   };
 }
 
@@ -2773,13 +2847,29 @@ async function runTui(
     const sessionIdBeforeCommand = liveState.session.id;
     try {
       if (command.needsSession === false) {
-        await command.run(args, dirs(ctx), tuiPresenter(dispatch, awaitNextPersist));
+        await command.run(
+          args,
+          dirs(ctx),
+          tuiPresenter(dispatch, awaitNextPersist, (u) => {
+            usage = {
+              inputTokens: addTokens(usage.inputTokens, u.inputTokens),
+              outputTokens: addTokens(usage.outputTokens, u.outputTokens),
+            };
+          }),
+          deps,
+        );
       } else {
         await command.run(
           liveState.session,
           args,
           dirs(ctx),
-          tuiPresenter(dispatch, awaitNextPersist),
+          tuiPresenter(dispatch, awaitNextPersist, (u) => {
+            usage = {
+              inputTokens: addTokens(usage.inputTokens, u.inputTokens),
+              outputTokens: addTokens(usage.outputTokens, u.outputTokens),
+            };
+          }),
+          deps,
         );
       }
       // resetArchivistForRewind's own comment (memory/archivist.ts) explains why this must be
