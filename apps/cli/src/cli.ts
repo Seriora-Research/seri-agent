@@ -88,6 +88,7 @@ import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
 import {
   appliedReasoningEffort,
+  type EffortCommandResult,
   resolveEffortCommand,
   resolveReasoningEffort,
 } from "./provider/reasoning";
@@ -438,6 +439,17 @@ async function cycleModeCommand(
 // the resolved route, not the raw model id. A stale/missing `plan` mis-resolves a gateway route the
 // same way a stale route id would: routing.ts's own gateway branch changes route.model/route.provider
 // to the gateway entry, which resolveLegalReasoningTiers is keyed on.
+async function applyEffortResult(
+  session: SessionState<ModelMessage>,
+  result: EffortCommandResult,
+  presenter: CommandPresenter,
+): Promise<void> {
+  if (result.changed) {
+    await presenter.sessionUpdated({ ...session, reasoningEffort: result.reasoningEffort });
+  }
+  presenter.message(result.message);
+}
+
 async function applyEffortCommand(
   session: SessionState<ModelMessage>,
   args: string[],
@@ -452,10 +464,7 @@ async function applyEffortCommand(
   const current = resolveReasoningEffort(session, loadConfig(configDir));
 
   const result = resolveEffortCommand(args, legalTiers, current);
-  if (result.changed) {
-    await presenter.sessionUpdated({ ...session, reasoningEffort: result.reasoningEffort });
-  }
-  presenter.message(result.message);
+  await applyEffortResult(session, result, presenter);
 }
 
 // /effort's own NON-INTERACTIVE path, mirroring cycleModeCommand's shape above. The TUI path
@@ -474,11 +483,7 @@ async function effortCommand(
   presenter: CommandPresenter = consolePresenter(dirs),
 ): Promise<void> {
   if (args[0] === "auto") {
-    const result = resolveEffortCommand(args, [], undefined);
-    if (result.changed) {
-      await presenter.sessionUpdated({ ...session, reasoningEffort: result.reasoningEffort });
-    }
-    presenter.message(result.message);
+    await applyEffortResult(session, resolveEffortCommand(args, [], undefined), presenter);
     return;
   }
   // `Promise.all`, not two sequential `await`s: the catalog fetch and the plan fetch are
