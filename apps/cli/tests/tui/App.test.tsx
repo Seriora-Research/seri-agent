@@ -894,6 +894,57 @@ describe("App", () => {
     expect(frame).toContain("celly");
   });
 
+  // Regression (#165): resolveTableRenderableOptions()/createTextTableRenderable() in the
+  // installed @opentui/core build never forwarded the markdown renderable's own fg, so a table's
+  // data cell fell back to TextTableRenderable's hardcoded white default instead of theme.text.
+  test("a markdown table's data cell renders theme.text, not white", async () => {
+    const { setup, dispatch } = await connect();
+    const answer = ["| a | b |", "| - | - |", "| cellx | celly |"].join("\n");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => frame.includes("celly"));
+
+    const frame = setup.captureSpans();
+    const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("cellx")));
+    const span = line?.spans.find((s) => s.text.includes("cellx"));
+    expect(span?.fg.equals(parseColor(theme.text))).toBe(true);
+  });
+
+  // Same fix, header row: createTableHeaderCellChunks feeds the same fg-less TextTableRenderable
+  // default, so an unfixed header cell fails identically to the data cell above.
+  test("a markdown table's header cell renders theme.text, not white", async () => {
+    const { setup, dispatch } = await connect();
+    const answer = ["| a | b |", "| - | - |", "| cellx | celly |"].join("\n");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => frame.includes("celly"));
+
+    const frame = setup.captureSpans();
+    const line = frame.lines.find((l) => l.spans.some((s) => s.text.trim() === "a"));
+    const span = line?.spans.find((s) => s.text.trim() === "a");
+    expect(span?.fg.equals(parseColor(theme.text))).toBe(true);
+  });
+
+  // The precedence rule in createChunk (getStyle(group) || getStyle("default")) means a bold
+  // chunk's own scope ("markup.strong") short-circuits before ever reaching "default" — this is
+  // the case that falsifies an app-side "default"-scope-only fix, which would still leave styled
+  // cell content white.
+  test("a bold word inside a table cell still renders theme.text, not white", async () => {
+    const { setup, dispatch } = await connect();
+    const answer = ["| a | b |", "| - | - |", "| **boldcell** | plaincell |"].join("\n");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => frame.includes("plaincell"));
+
+    const frame = setup.captureSpans();
+    const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("boldcell")));
+    const span = line?.spans.find((s) => s.text.includes("boldcell"));
+    expect(span?.fg.equals(parseColor(theme.text))).toBe(true);
+  });
+
   // Regression: ordinary multi-line prose with no long tokens at all used to clip to one visual
   // row — broader than the long-token case below, and the case that actually revealed the bug, so
   // it's asserted on its own rather than relying on the long-token test alone.
