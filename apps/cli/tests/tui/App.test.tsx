@@ -21,10 +21,10 @@ import {
   formatRouteLabel,
   formatSetupRow,
   listWindowSize,
-  matchesFilter,
   MODE_CYCLE_HINT,
   MODE_HINT_COLS,
   MODE_LABEL,
+  matchesFilter,
   singleLine,
   slideWindow,
 } from "../../src/tui/util/format";
