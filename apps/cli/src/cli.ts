@@ -2147,6 +2147,17 @@ async function runTui(
     dispatch({ type: "model-picker-resolved" });
   }
 
+  // Shift+Tab's own resolution (App.tsx's own comment on `onCycleMode` explains why this is a
+  // prop, not a dispatch app.tsx makes itself): the same `decideModeCycle` /mode already calls
+  // (`cycleModeCommand`, above), read off `liveState.session` — this closure's own synchronous
+  // mirror of the reducer's state, not a stale copy — so `getPermissionMode()`'s own `liveState`
+  // read is guaranteed to see the new mode on the very next gate check. No `presenter.message`:
+  // Shift+Tab is silent, unlike `/mode`, which prints its own transcript line.
+  function onCycleMode(): void {
+    const { next } = decideModeCycle(liveState.session);
+    dispatch({ type: "session-updated", session: next });
+  }
+
   const { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack } = createSetupHandlers({
     dispatch,
     getPendingSetup: () => liveState.pendingSetup,
@@ -2865,6 +2876,7 @@ async function runTui(
       onApprovalAnswer,
       onModelSelected,
       onModelPickerCancel,
+      onCycleMode,
       onSetupSelect,
       onSetupKeyEntered,
       onSetupRemove,
