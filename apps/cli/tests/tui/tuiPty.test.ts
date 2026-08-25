@@ -2017,6 +2017,32 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
+  // Doubles as the liveState-desync guard: `/mode` reads its starting point off `liveState.session`
+  // (cli.ts's own dispatch funnel), the same state Shift+Tab's own `onCycleMode` just advanced —
+  // this can only pass if the keypress actually reached `liveState`, not just this component's own
+  // render. cycleMode's own order (gate/gate.ts): a fresh session starts at approve-each, one
+  // Shift+Tab press lands on auto, and the following /mode advances FROM auto to read-only.
+  test("shift+tab and /mode share one source of truth, keeping liveState in step with the indicator", async () => {
+    const scriptPath = join(dir, "child-input.mjs");
+    writeFileSync(scriptPath, childScriptInput(dir));
+
+    const { child, sawLine } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_READY");
+      await sawLine("approve-each mode on");
+
+      child.stdin?.write("\x1b[Z");
+      await sawLine("bypass permissions on");
+
+      child.stdin?.write("/mode");
+      await sawLine("/mode");
+      child.stdin?.write("\r");
+      await sawLine("permission mode is now read-only");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
   // H-1 + M-3: a command decision function throwing (no checkpoints to /undo to) used to escape
   // straight out of Ink's own input handler. Confirmed here two ways — the error is shown, not
   // silently dropped, AND the process is still alive and answers a second, unrelated command
