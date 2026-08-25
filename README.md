@@ -120,7 +120,7 @@ to a temporary copy.
 | --- | --- |
 | `/mode` | cycle the permission mode: `read-only` → `approve-each` → `auto` |
 | `/model` | open the model picker, across all five providers and every route to a given model |
-| `/effort [level\|auto]` | show, set, or clear (`auto`) this session's reasoning-effort override — legal levels depend on the current model |
+| `/effort [level\|auto]` | show, set, or clear (`auto`) this session's reasoning-effort override — legal levels depend on the current model (non-interactive runs: use `--effort <level>` instead) |
 | `/setup` | add, replace, or remove a provider API key without leaving the session |
 | `/config` | view or edit non-provider settings (e.g. the verify command) |
 | `/permissions` | view or revoke tools you've permanently approved |

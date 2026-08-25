@@ -60,7 +60,7 @@ Options:
                                     effect on the next turn — not a seri subcommand
   --effort <level>                set the reasoning effort for this run only, e.g. low, medium,
                                     high (never saved; SERI_REASONING_EFFORT sets a persistent
-                                    default)
+                                    default) (non-interactive runs only — use /effort inside the TUI)
   --profile <name>                use the named profile's config, auth, permissions, sessions
                                     and checkpoints (or SERI_PROFILE; the flag wins)
   /profile new <name> (inside the TUI)
