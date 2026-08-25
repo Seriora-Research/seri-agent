@@ -338,21 +338,41 @@ export function App({
     !state.pendingSplash;
 
   // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
-  // "space-between"`, below) — the row's own tier thresholds were sized against the LEFT side
+  // "space-between"`, below) — the row's own tier thresholds are sized against the LEFT side
   // alone, so once the right side is actually showing, its own width has to come out of the
   // budget BOTH the hint's own visibility check and `formatModeDetail` see, or the two collide and
-  // OpenTUI wraps the row across two lines (observed live: `tests/tui/tuiPty.test.ts`'s
-  // scroll-banner assertion broke on this exact interaction once the label grew a glyph +
-  // persistent hint — and a second time, at a narrower width, when only the hint's own gate had
-  // been fixed and not the model/route one). `+ 1` for the row's own `gap={1}` between banner and
+  // OpenTUI wraps the row across two lines. `+ 1` for the row's own `gap={1}` between banner and
   // status, only when both are shown at once. Also what the JSX below renders, rather than
   // re-typing the banner string a second time — the two can't drift apart if there's only one copy.
   const rightSideText = scrolledUp && noPanelOpen ? "↑ scrolled — End to follow" : "";
-  const rightSideWidth =
+  const rawRightSideWidth =
     rightSideText.length +
     (rightSideText.length > 0 && state.status.length > 0 ? 1 : 0) +
     state.status.length;
+  // `indicatorText` — the mode label — has no width tier of its own: unlike the hint/model/route,
+  // it's never hidden or shortened as the terminal narrows (there's nothing smaller to fall back
+  // to than the mode's own name). So on a narrow enough terminal, indicatorText + the right side
+  // together can still exceed `width` even after the hint/detail have already given up all the
+  // room they can. Rather than let that wrap the row, the right side loses instead: it only shows
+  // when there's room for it alongside the label, which — like the hint/detail split above — is
+  // real terminal width, not a real cell-width measurement (`.length`, not `stringWidth`; the
+  // banner's own `—`/`↑` and `state.status`'s `…` can in principle render wider than 1 cell on a
+  // terminal configured for ambiguous-width-double, same caveat the D3 glyphs already carry).
+  const showRightSide = width >= indicatorText.length + rawRightSideWidth;
+  const rightSideWidth = showRightSide ? rawRightSideWidth : 0;
   const modeDetail = formatModeDetail(state.route, width - rightSideWidth);
+
+  // Its own useKeyboard, separate from the scroll handler below — OpenTUI delivers the same
+  // keypress to every registered handler (that handler's own comment explains this), so a second,
+  // independent registration is the idiomatic way to keep two unrelated concerns from having to
+  // reason about each other's ordering/guards, the same shape InputBox's own handler already uses.
+  // Inert under skipPermissions (AppProps.skipPermissions's own comment): the indicator is pinned
+  // to bypass regardless of what a cycle would compute, so a functioning binding here would
+  // silently mutate and persist a session field the gate is already ignoring.
+  useKeyboard((key) => {
+    if (!noPanelOpen) return;
+    if (key.name === "tab" && key.shift && skipPermissions !== true) onCycleMode?.();
+  });
 
   // A second, independent useKeyboard from InputBox's own — OpenTUI delivers the same keypress to
   // every registered handler, so this fires regardless of what InputBox does with the same press
@@ -373,16 +393,6 @@ export function App({
   // it from now that scroll position lives on the scrollbox itself.
   useKeyboard((key) => {
     if (!noPanelOpen) return;
-    // Checked before the `transcriptRef.current` null guard below: that guard exists for the
-    // scroll keys only, which have nothing to do without a mounted scrollbox — a mode cycle must
-    // still fire on a pre-layout frame where the transcript ref hasn't attached yet.
-    if (key.name === "tab" && key.shift) {
-      // Inert under skipPermissions (AppProps.skipPermissions's own comment): the indicator is
-      // pinned to bypass regardless of what a cycle would compute, so a functioning binding here
-      // would silently mutate and persist a session field the gate is already ignoring.
-      if (skipPermissions !== true) onCycleMode?.();
-      return;
-    }
     const el = transcriptRef.current;
     if (!el) return;
     if (key.name === "pageup") el.scrollBy(-1, "viewport");
@@ -547,9 +557,15 @@ export function App({
           transcript-scroll keys above — the banner would otherwise keep telling the user to press
           a key that does nothing until they close the panel first) — reusing the already-computed
           string keeps this render in lockstep with the width budget above, rather than risking the
-          two drifting if one is ever edited without the other. */}
-          {rightSideText.length > 0 && <text fg={theme.muted}>{rightSideText}</text>}
-          {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
+          two drifting if one is ever edited without the other. `showRightSide` on both nodes: the
+          label can't shrink, so on a narrow enough terminal these lose the row instead of wrapping
+          it (see `showRightSide`'s own comment above). */}
+          {showRightSide && rightSideText.length > 0 && (
+            <text fg={theme.muted}>{rightSideText}</text>
+          )}
+          {showRightSide && state.status.length > 0 && (
+            <text fg={theme.muted}>{state.status}</text>
+          )}
         </box>
       </box>
     </box>

@@ -2270,6 +2270,29 @@ describe("App", () => {
       expect(bannerLine).toBeDefined();
       expect(bannerLine?.trimEnd().length).toBeLessThanOrEqual(60);
     });
+
+    // Regression: unlike the hint/model/route, the mode label itself has no width tier — it never
+    // shrinks or hides as the terminal narrows, since there's no shorter fallback for a mode's own
+    // name. At 40 columns, `auto`'s label (⏵⏵ bypass permissions on, 24 cols) plus a running-tool
+    // `state.status` ("Running write_file…", 20 cols) together exceed the row, and without the
+    // right side backing off, OpenTUI wraps the row across two lines — splitting both the label and
+    // the status mid-word. A split terminal pane hits this width routinely.
+    test("a narrow terminal with a running-tool status does not wrap the mode row", async () => {
+      const { setup, dispatch } = await connect({ session: session({ permissionMode: "auto" }) });
+      await resize(setup, 40, DEFAULT_HEIGHT);
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "write_file", args: {} },
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      const lines = frame.split("\n");
+      const modeLine = lines.find((l) => l.includes("bypass permissions on"));
+      expect(modeLine).toBeDefined();
+      expect(modeLine?.trimEnd().length).toBeLessThanOrEqual(40);
+    });
   });
 
   describe("shift+tab cycles the permission mode", () => {

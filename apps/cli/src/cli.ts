@@ -2154,16 +2154,13 @@ async function runTui(
   // read is guaranteed to see the new mode on the very next gate check. Goes through
   // `sessionUpdated`, not a raw dispatch, for the same reason `cycleModeCommand` does — it is the
   // one thing this file documents as "the only thing that dispatches session-updated at all" on
-  // the TUI path (this function's own header comment above), and a second dispatcher would make
-  // that comment describe an invariant the code no longer has. No `.message` call: Shift+Tab is
+  // the TUI path (this function's own header comment above). No `.message` call: Shift+Tab is
   // silent, unlike `/mode`, which prints its own transcript line.
-  // `.catch`, not bare `void`: `cycleModeCommand` gets the identical failure mode (a `sessionUpdated`
-  // rejection, e.g. a save failure — this file's own comment on `onSessionChange` above) caught by
-  // the try/catch around `command.run` further below, which turns it into a `command-error`
-  // dispatch. This keypress isn't routed through that try/catch, so an un-caught rejection here
-  // would instead reach `runtime/renderer.ts`'s `process.on("unhandledRejection", ...)` handler,
-  // which calls `process.exit(1)` — crashing the whole TUI from a keypress that, via /mode, would
-  // have degraded gracefully with just an error banner.
+  // `.catch`, not bare `void`: a `sessionUpdated` rejection (e.g. a save failure — this file's own
+  // comment on `onSessionChange` above) is otherwise an unhandled rejection, and
+  // `runtime/renderer.ts`'s `process.on("unhandledRejection", ...)` handler calls `process.exit(1)`
+  // — this keypress isn't routed through the try/catch around `command.run` further below that
+  // turns the identical failure into a `command-error` dispatch for `/mode`, so it needs its own.
   function onCycleMode(): void {
     const { next } = decideModeCycle(liveState.session);
     tuiPresenter(dispatch, awaitNextPersist)

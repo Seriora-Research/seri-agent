@@ -4,14 +4,15 @@ import type { PermissionMode } from "../../gate/gate";
 // rather than hardcoding a literal. `error`/`warning` carry no hue — ERROR_MARK/WARNING_MARK below
 // are what distinguishes an alert from ordinary text now that color no longer does. Selection is
 // reverse video, not a background color token (see ui/ListRow.tsx). ANSI-16 color names only, with
-// two exceptions — `userBg` and `mode` below. Verified against @opentui/core's parseColor (lib/RGBA.ts): both
-// an ANSI-16 name ("white"/"gray") and a raw hex string resolve through the same `fg`/`bg` props
-// every `<text>`/`<box>` accepts, so no adapter is needed here. One real difference from Ink/chalk:
-// OpenTUI resolves a named color to a fixed RGB value at parse time and always emits truecolor
-// escapes, rather than chalk's real ANSI-16 SGR codes that let a user's own terminal theme repaint
-// "white"/"gray" — harmless for this palette specifically, since every token here is already a
-// fixed, deliberately neutral value, but worth knowing if a future token ever expected to inherit
-// the terminal's own palette.
+// two exceptions — `userBg` and `mode` below. Verified against @opentui/core's parseColor
+// (lib/RGBA.ts): both an ANSI-16 name ("white"/"gray") and a raw hex string resolve through the
+// same `fg`/`bg` props every `<text>`/`<box>` accepts, so no adapter is needed here. One real
+// difference from Ink/chalk: OpenTUI resolves a named color to a fixed RGB value at parse time
+// and always emits truecolor escapes, rather than chalk's real ANSI-16 SGR codes that let a
+// user's own terminal theme repaint "white"/"gray" — harmless for this palette specifically,
+// since every token here is already a fixed value chosen deliberately (`mode`'s own hues
+// included), not one meant to track a live terminal theme, but worth knowing if a future token
+// ever expected to inherit the terminal's own palette.
 const MUTED = "gray";
 
 export const theme = {

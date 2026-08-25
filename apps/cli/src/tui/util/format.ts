@@ -142,8 +142,9 @@ export const MODE_CYCLE_HINT = " (shift+tab to cycle)";
 // "⏵⏵ bypass permissions on" (26 cols, worst case its glyph renders double-width) + the hint
 // (21 cols) = 47, still under 52; + the model name ("  " + NAME_WIDTH) = 71, still under 76; +
 // the route (" · " + the widest route label, "→ openrouter") = 86, still under 100 — every
-// threshold holds even in that worst case, so only this arithmetic (not the values) changed when
-// the labels grew a glyph prefix.
+// threshold holds even in that worst case. This proof does not (and cannot) account for the mode
+// row's own right-hand content (the scroll banner / `state.status`) sharing the same row — see
+// app.tsx's own `showRightSide` for how that side of the row is kept from wrapping instead.
 export const MODE_HINT_COLS = 52;
 export const MODE_MODEL_MIN_COLS = 76;
 export const MODE_ROUTE_MIN_COLS = 100;
