@@ -7,3 +7,9 @@
 # LF on disk today, and without this line the first fresh checkout or worktree would receive
 # them as CRLF and every hook would silently stop running.
 *.sh text eol=lf
+
+# bun patch files must stay LF too: bun's own patch-apply matches hunks against the exact bytes
+# it generated (LF), so a CRLF checkout on Windows risks the same root cause as the hooks above
+# (a CRLF-mangled tracked file) — just surfacing as a hard `bun install` error instead of a
+# skipped script.
+patches/** text eol=lf

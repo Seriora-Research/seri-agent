@@ -14,7 +14,8 @@ import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { PassThrough } from "node:stream";
 import { resetCatalogCache } from "@seri/model-catalog";
-import type { ModelMessage } from "ai";
+import type { LanguageModelUsage, ModelMessage } from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { saveAuthSession } from "../../src/auth/authStore";
@@ -22,7 +23,14 @@ import { getConfigDir } from "../../src/config/paths";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
-import { addCost, chooseInterfaceOutput, resolveEffortFlag, run, SLASH_COMMANDS } from "../../src/cli";
+import {
+  addCost,
+  chooseInterfaceOutput,
+  resolveEffortFlag,
+  run,
+  SLASH_COMMANDS,
+  tuiPresenter,
+} from "../../src/cli";
 import { USAGE } from "../../src/cli/output";
 import { loadConfig, setConfigValue } from "../../src/config/config";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
@@ -32,7 +40,7 @@ import { getGroqModel } from "../../src/provider/groq";
 import { configuredProviders, PROVIDER_API_KEY_NAMES } from "../../src/provider/keys";
 import { toolDefinitions } from "../../src/provider/tools";
 import { loadSession, type SessionState, saveSession } from "../../src/session/session";
-import { onSignalCancel } from "../../src/signals";
+import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { CheckOutcome } from "../../src/verify/run";
 import { fakeRunLoop } from "./fakeRunLoop";
 
@@ -3060,11 +3068,21 @@ describe("run (/clear)", () => {
     // handleSlashCommand's bare-invocation resolution reads this field, not a `name === "/clear"`
     // check (SlashCommand's own comment on why) — /undo, /rewind and /restore must NOT set it.
     expect(clear.scopeTargetToCwd).toBe(true);
-    for (const name of ["/undo", "/rewind", "/restore", "/mode", "/memory"]) {
+    for (const name of ["/undo", "/rewind", "/restore", "/mode", "/memory", "/compact"]) {
       const command = SLASH_COMMANDS.get(name);
       if (command === undefined) throw new Error(`${name} is not registered`);
       expect(command.scopeTargetToCwd).toBeUndefined();
     }
+  });
+
+  // /compact mutates the checkpoint store and truncates session.messages exactly like /undo,
+  // /restore and /rewind — a mid-turn run would race the in-flight turn's own messages-updated the
+  // same way (SlashCommand's own mutatesRunState comment). This is the field runTui's onSubmit
+  // actually gates on to refuse it while a turn is in flight.
+  test("/compact is registered with mutatesRunState so onSubmit refuses it mid-turn", () => {
+    const compact = SLASH_COMMANDS.get("/compact");
+    if (compact === undefined) throw new Error("/compact is not registered");
+    expect(compact.mutatesRunState).toBe(true);
   });
 
   // Mirrors "`/mode is broken, fix it` stays a task", above: /clear's own accepts() form is the
@@ -3165,6 +3183,9 @@ describe("run (/clear)", () => {
       transcriptCleared: () => {
         calls.push("transcriptCleared");
       },
+      usageAccrued: () => {},
+      cancelled: () => {},
+      currentSession: () => existing,
     };
 
     const clear = SLASH_COMMANDS.get("/clear");
@@ -3727,6 +3748,9 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
           resolveSessionUpdated = resolve;
         }),
       transcriptCleared: () => {},
+      usageAccrued: () => {},
+      cancelled: () => {},
+      currentSession: () => session,
     };
 
     const rewind = SLASH_COMMANDS.get("/rewind");
@@ -3747,6 +3771,411 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
 
     expect(readLog(storeDir, SESSION_ID).some((r) => r.kind === "rewind-barrier")).toBe(true);
   }, 15_000);
+});
+
+// The doGenerate usage shape a real generateText call reports back (LanguageModelV4's own
+// breakdown, not the normalized LanguageModelUsage compactMessages returns) — same shape
+// compaction.test.ts's own `usage()` helper uses, restated here rather than imported since that
+// file exports no such helper.
+function compactionUsage(inputTotal: number, outputTotal: number) {
+  return {
+    inputTokens: {
+      total: inputTotal,
+      noCache: inputTotal,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    },
+    outputTokens: { total: outputTotal, text: outputTotal, reasoning: undefined },
+  };
+}
+
+describe("run (/compact)", () => {
+  const SESSION_ID = "compact-session";
+
+  let sessionsDir: string;
+  let checkpointsDir: string;
+  let configDir: string;
+  let worktree: string;
+  const originalEnv: Partial<Record<string, string>> = {};
+
+  function restoreEnv(key: string, original: string | undefined): void {
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
+
+  beforeEach(() => {
+    sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-compact-sessions-"));
+    checkpointsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-compact-checkpoints-"));
+    configDir = mkdtempSync(join(tmpdir(), "seri-cli-test-compact-config-"));
+    worktree = mkdtempSync(join(tmpdir(), "seri-cli-test-compact-work-"));
+    // Cleared for the duration so a real key already exported on the dev/CI box can never make
+    // resolveRoute reroute past the injected mock model to a real provider (code-quality.md's "the
+    // platform matrix does not cover the unset case").
+    for (const keyName of Object.values(PROVIDER_API_KEY_NAMES)) {
+      originalEnv[keyName] = process.env[keyName];
+      delete process.env[keyName];
+    }
+  });
+
+  afterEach(() => {
+    rmSync(sessionsDir, { recursive: true, force: true });
+    rmSync(checkpointsDir, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+    rmSync(worktree, { recursive: true, force: true });
+    for (const [keyName, original] of Object.entries(originalEnv)) restoreEnv(keyName, original);
+  });
+
+  function longMessages(count: number): ModelMessage[] {
+    const out: ModelMessage[] = [];
+    for (let i = 0; i < count; i++) {
+      out.push(
+        i % 2 === 0
+          ? { role: "user", content: `message ${i}` }
+          : { role: "assistant", content: [{ type: "text", text: `reply ${i}` }] },
+      );
+    }
+    return out;
+  }
+
+  function makeSession(messages: ModelMessage[]): SessionState<ModelMessage> {
+    return {
+      id: SESSION_ID,
+      cwd: worktree,
+      systemPrompt: "",
+      permissionMode: "auto",
+      model: "openai/gpt-oss-120b",
+      provider: "groq",
+      messages,
+    };
+  }
+
+  // appendBarrier (checkpoint.ts) is itself a no-op with no checkpoint log to protect — this seeds
+  // an empty one so a compaction barrier actually gets appended and is observable, the same
+  // precondition the /undo-and-/rewind describe block's own seed() establishes with a real
+  // checkpointer (not needed here: /compact never reads a checkpoint snapshot, only the barrier).
+  function seedCheckpointLog(): string {
+    const storeDir = checkpointStoreDir(checkpointsDir, worktree);
+    mkdirSync(storeDir, { recursive: true });
+    writeFileSync(join(storeDir, `${SESSION_ID}.jsonl`), "");
+    return storeDir;
+  }
+
+  function getCompact() {
+    const compact = SLASH_COMMANDS.get("/compact");
+    if (compact === undefined) throw new Error("/compact is not registered");
+    if (compact.needsSession === false) throw new Error("/compact unexpectedly needs no session");
+    return compact;
+  }
+
+  test("compacts with confirmation: prints the summary line, persists the summarized session with the tail intact, appends a compaction barrier, and reports usage", async () => {
+    const storeDir = seedCheckpointLog();
+    const session = makeSession(longMessages(30));
+    saveSession(session, sessionsDir);
+
+    let doGenerateCalls = 0;
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        doGenerateCalls++;
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ goal: "g", progress: "p", blockers: "b", nextSteps: "n" }),
+            },
+          ],
+          finishReason: { unified: "stop", raw: undefined },
+          usage: compactionUsage(20, 10),
+          warnings: [],
+        };
+      },
+    });
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    try {
+      await getCompact().run(session, [], { sessionsDir, checkpointsDir, configDir }, undefined, {
+        authConfigDir: configDir,
+        getGroqModel: () => model,
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(doGenerateCalls).toBe(1);
+    // findSafeEvictionBoundary(30 plain messages, preserve=20) = 10, min-evictable-clear.
+    expect(logs).toContain("⚙ compacted 10 messages");
+    expect(logs).toContain("\n(tokens: 20 in, 10 out)");
+
+    const saved = loadSession<ModelMessage>(SESSION_ID, sessionsDir);
+    expect(saved.messages).toHaveLength(21); // 1 summary + the 20 preserved tail messages
+    expect(saved.messages.slice(1)).toEqual(session.messages.slice(10));
+
+    expect(readLog(storeDir, SESSION_ID).some((r) => r.kind === "compaction-barrier")).toBe(true);
+  });
+
+  test("no-op below the eviction boundary: leaves the session byte-identical, prints the no-op message, and never calls the model", async () => {
+    const session = makeSession(longMessages(5));
+    saveSession(session, sessionsDir);
+    const before = readFileSync(join(sessionsDir, `${SESSION_ID}.jsonl`));
+
+    let doGenerateCalls = 0;
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        doGenerateCalls++;
+        throw new Error("must not be called: this session has too little history to compact");
+      },
+    });
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    try {
+      await getCompact().run(session, [], { sessionsDir, checkpointsDir, configDir }, undefined, {
+        authConfigDir: configDir,
+        getGroqModel: () => model,
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    // Negative control: a regression that always compacts would still print SOMETHING here and
+    // would call the model — this is what makes that regression fail rather than pass silently.
+    expect(doGenerateCalls).toBe(0);
+    expect(logs).toEqual(["Not enough history to compact."]);
+    expect(readFileSync(join(sessionsDir, `${SESSION_ID}.jsonl`))).toEqual(before);
+    expect(readLog(checkpointStoreDir(checkpointsDir, worktree), SESSION_ID)).toEqual([]);
+  });
+
+  // Round-trips through the real SLASH_COMMANDS.get("/compact") entry with a doGenerate that hangs
+  // until aborted — the abortable-mock fixture (compactionUsage's own abortable counterpart, just
+  // above) that nothing else in the repo needed before /compact (EXPLORE: zero
+  // AbortSignal/AbortController matches in compaction.test.ts/loop.test.ts).
+  //
+  // Presenter is a stub, not the default consolePresenter: consolePresenter's own `cancelled`
+  // re-raises the signal (cli.ts's own CommandPresenter comment), which would actually kill this
+  // test process. The stub isolates what this test is actually checking — that compactCommand's
+  // own catch branch calls `presenter.cancelled` with the signal that caused the abort — from
+  // consolePresenter's own (trivial, one-line) re-raise wiring.
+  test("cancelled compaction is a strict no-op and reports the cancelling signal to the presenter", async () => {
+    seedCheckpointLog();
+    const session = makeSession(longMessages(30));
+    saveSession(session, sessionsDir);
+    const before = readFileSync(join(sessionsDir, `${SESSION_ID}.jsonl`));
+
+    let resolveStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let abortError: Error | undefined;
+    const model = new MockLanguageModelV4({
+      doGenerate: async ({ abortSignal }) => {
+        resolveStarted();
+        return await new Promise((_, reject) => {
+          abortSignal?.addEventListener("abort", () => {
+            // Shaped the way a real aborted generateText call throws (name "AbortError"), not a
+            // generic error — otherwise this test could pass for the wrong reason: compactCommand's
+            // own catch only treats it as a cancellation because `controller.signal.aborted` is
+            // true, not because of this error's shape, so asserting the shape here is what proves
+            // the mock actually exercised an abort rather than any other rejection.
+            const err = new Error("This operation was aborted.");
+            err.name = "AbortError";
+            abortError = err;
+            reject(err);
+          });
+        });
+      },
+    });
+
+    const messages: string[] = [];
+    let cancelledSignal: NodeJS.Signals | undefined;
+    const presenter = {
+      message: (text: string) => messages.push(text),
+      onPlan: () => {},
+      restore: () => {},
+      sessionUpdated: async () => {},
+      transcriptCleared: () => {},
+      usageAccrued: () => {},
+      cancelled: (signal: NodeJS.Signals) => {
+        cancelledSignal = signal;
+      },
+      currentSession: () => session,
+    };
+
+    let runError: unknown;
+    try {
+      const done = getCompact().run(
+        session,
+        [],
+        { sessionsDir, checkpointsDir, configDir },
+        presenter,
+        { authConfigDir: configDir, getGroqModel: () => model },
+      );
+      await started;
+      // The real path this exercises: process.on("SIGINT") calls deliverSignal directly
+      // (signals.ts) — this IS a Ctrl-C, not a stand-in for one. Safe to call unconditionally only
+      // because `started` already resolved: compactCommand registers its onSignalCancel callback
+      // (cli.ts) before calling compactMessages/generateText, the only path that reaches this
+      // mock's doGenerate, so the slot is guaranteed populated here and deliverSignal's
+      // process-killing fallback (nothing registered) is unreachable.
+      deliverSignal("SIGINT");
+      await done;
+    } catch (err) {
+      runError = err;
+    }
+
+    expect(runError).toBeUndefined();
+    expect(abortError?.name).toBe("AbortError");
+    expect(readFileSync(join(sessionsDir, `${SESSION_ID}.jsonl`))).toEqual(before);
+    expect(readLog(checkpointStoreDir(checkpointsDir, worktree), SESSION_ID)).toEqual([]);
+    expect(messages).toEqual(["⚙ compacting…"]);
+    expect(cancelledSignal).toBe("SIGINT");
+  });
+
+  // Rewritten from a prior version that fired a signal immediately after the run and then checked
+  // a NEW registration fired — but deliverSignal (signals.ts) clears its slot BEFORE invoking the
+  // callback, so that passed regardless of whether compactCommand's own finally ever ran; and
+  // registering a new callback afterward would have passed just as trivially even without that
+  // rewrite, since onSignalCancel unconditionally overwrites whatever is already in the slot
+  // (signals.ts's own comment: one slot, last writer wins) — the assertion cannot tell a freed slot
+  // from a stale one that way. The only way to actually observe whether the slot is free is to fire
+  // a signal with NOTHING newly registered and check which of deliverSignal's two branches ran: a
+  // stale handle takes the (silent, no-op) cancel branch, a freed slot falls through to the real,
+  // nothing-to-cancel path, which re-raises the signal via `process.kill`. `process.kill` is stubbed
+  // so that path is observable without actually ending this test process, and the process-level
+  // SIGINT/SIGTERM listeners signals.ts installs at import time — removed by that same real path as
+  // part of re-raising — are restored afterward so later tests still get them.
+  test("a successful compaction frees the onSignalCancel slot, so a later signal is not silently swallowed", async () => {
+    const session = makeSession(longMessages(30));
+    saveSession(session, sessionsDir);
+
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ goal: "g", progress: "p", blockers: "b", nextSteps: "n" }),
+          },
+        ],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: compactionUsage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    await getCompact().run(session, [], { sessionsDir, checkpointsDir, configDir }, undefined, {
+      authConfigDir: configDir,
+      getGroqModel: () => model,
+    });
+
+    const sigintListeners = process.listeners("SIGINT");
+    const sigtermListeners = process.listeners("SIGTERM");
+    const originalKill = process.kill.bind(process);
+    let killedWithSignal: string | number | undefined;
+    process.kill = ((pid: number, signal?: string | number) => {
+      killedWithSignal = signal;
+      return true;
+    }) as typeof process.kill;
+    try {
+      deliverSignal("SIGINT");
+    } finally {
+      process.kill = originalKill;
+      process.removeAllListeners("SIGINT");
+      process.removeAllListeners("SIGTERM");
+      for (const listener of sigintListeners) process.on("SIGINT", listener as () => void);
+      for (const listener of sigtermListeners) process.on("SIGTERM", listener as () => void);
+    }
+
+    expect(killedWithSignal).toBe("SIGINT");
+  });
+
+  // Regression for the race CommandPresenter's own `currentSession` comment describes: /mode is
+  // deliberately exempt from `turnInFlight` gating (SlashCommand's own comment on why), so it can
+  // run while /compact's own two awaits (the catalog/plan fetch, the summarizer round trip) are
+  // still in flight. This presenter's `currentSession` returns a DIFFERENT permissionMode than the
+  // `session` passed to `run` — standing in for a /mode dispatch that landed mid-compact — and
+  // asserts the final `sessionUpdated` call carries that live value forward instead of the stale
+  // `permissionMode` compactCommand's own `session` parameter still holds.
+  test("a permissionMode change made mid-compact survives — sessionUpdated merges onto the live session, not compactCommand's own stale snapshot", async () => {
+    const session = makeSession(longMessages(30));
+    saveSession(session, sessionsDir);
+
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ goal: "g", progress: "p", blockers: "b", nextSteps: "n" }),
+          },
+        ],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: compactionUsage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    const liveSession: SessionState<ModelMessage> = { ...session, permissionMode: "read-only" };
+    let updated: SessionState<ModelMessage> | undefined;
+    const presenter = {
+      message: () => {},
+      onPlan: () => {},
+      restore: () => {},
+      sessionUpdated: async (next: SessionState<ModelMessage>) => {
+        updated = next;
+      },
+      transcriptCleared: () => {},
+      usageAccrued: () => {},
+      cancelled: () => {},
+      // Stands in for /mode having already dispatched into live TUI state while /compact awaited.
+      currentSession: () => liveSession,
+    };
+
+    await getCompact().run(
+      session,
+      [],
+      { sessionsDir, checkpointsDir, configDir },
+      presenter,
+      { authConfigDir: configDir, getGroqModel: () => model },
+    );
+
+    expect(updated?.permissionMode).toBe("read-only");
+    expect(updated?.messages.length).toBeLessThan(session.messages.length);
+  });
+});
+
+// The onSubmit call sites both build their fold callback inline (cli.ts: `tuiPresenter(dispatch,
+// awaitNextPersist, () => liveState.session, (u) => { usage = {...} })`) — this exercises
+// tuiPresenter's own contract that `usageAccrued` is exactly the fourth argument, unmodified, so a
+// future edit that drops the fold or wires it to the wrong variable at either call site fails here
+// rather than only being observable through a live /compact run in the TUI.
+describe("tuiPresenter", () => {
+  test("usageAccrued calls the supplied fold with the usage it was given", () => {
+    const received: LanguageModelUsage[] = [];
+    // getSession is never called in this test — usageAccrued is the only thing exercised.
+    const presenter = tuiPresenter(
+      () => {},
+      () => Promise.resolve(),
+      () => {
+        throw new Error("not exercised by this test");
+      },
+      (usage) => received.push(usage),
+    );
+    const usage: LanguageModelUsage = {
+      inputTokens: 20,
+      inputTokenDetails: {
+        noCacheTokens: 20,
+        cacheReadTokens: undefined,
+        cacheWriteTokens: undefined,
+      },
+      outputTokens: 10,
+      outputTokenDetails: { textTokens: 10, reasoningTokens: undefined },
+      totalTokens: 30,
+    };
+
+    presenter.usageAccrued(usage);
+
+    expect(received).toEqual([usage]);
+  });
 });
 
 describe("addCost", () => {
