@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelCatalogEntry } from "@seri/model-catalog";
-import { buildReasoningProviderOptions, legalTiersFor } from "../../src/provider/reasoning";
+import {
+  appliedReasoningEffort,
+  buildReasoningProviderOptions,
+  legalTiersFor,
+} from "../../src/provider/reasoning";
 
 function entry(overrides: Partial<ModelCatalogEntry>): ModelCatalogEntry {
   return {
@@ -64,6 +68,42 @@ describe("legalTiersFor", () => {
     expect(() => legalTiersFor(e)).not.toThrow();
     expect(legalTiersFor(e)).toEqual([]);
   });
+
+  // Round-2 review item 11: `reasoningOptions` itself might not be an array at all (a single
+  // object instead of a one-element array — the same class of upstream shape drift research.md's
+  // own Risks section already warns is recurring for other catalog fields). Must not throw
+  // `TypeError: opts.find is not a function`.
+  test("reasoningOptions itself is not an array: returns empty rather than throwing", () => {
+    const e = entry({
+      reasoningOptions: {
+        type: "effort",
+        values: ["low"],
+      } as unknown as ModelCatalogEntry["reasoningOptions"],
+    });
+    expect(() => legalTiersFor(e)).not.toThrow();
+    expect(legalTiersFor(e)).toEqual([]);
+  });
+});
+
+describe("appliedReasoningEffort", () => {
+  test("a legal tier for the entry is returned as-is", () => {
+    const e = entry({ reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }] });
+    expect(appliedReasoningEffort("medium", e)).toBe("medium");
+  });
+
+  test("an illegal tier for the entry resolves to undefined", () => {
+    const e = entry({ reasoningOptions: [{ type: "effort", values: ["low", "medium"] }] });
+    expect(appliedReasoningEffort("xhigh", e)).toBeUndefined();
+  });
+
+  test("no entry (no reasoningOptions at all) resolves to undefined", () => {
+    expect(appliedReasoningEffort("medium", undefined)).toBeUndefined();
+  });
+
+  test("no tier requested resolves to undefined regardless of the entry", () => {
+    const e = entry({ reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }] });
+    expect(appliedReasoningEffort(undefined, e)).toBeUndefined();
+  });
 });
 
 describe("buildReasoningProviderOptions", () => {
@@ -97,11 +137,39 @@ describe("buildReasoningProviderOptions", () => {
     });
   });
 
-  test("off/none: non-openrouter providers get no providerOptions", () => {
-    expect(buildReasoningProviderOptions("anthropic", "off")).toEqual({});
-    expect(buildReasoningProviderOptions("openai", "none")).toEqual({});
-    expect(buildReasoningProviderOptions("google", "off")).toEqual({});
-    expect(buildReasoningProviderOptions("groq", "none")).toEqual({});
+  // Round-2 review item 2: `{}` (= no providerOptions sent) means "the provider's own default
+  // applies," not "off" — every provider now gets a real, verified disable shape.
+  test("off/none: anthropic gets thinking.type: disabled", () => {
+    expect(buildReasoningProviderOptions("anthropic", "off")).toEqual({
+      anthropic: { thinking: { type: "disabled" } },
+    });
+    expect(buildReasoningProviderOptions("anthropic", "none")).toEqual({
+      anthropic: { thinking: { type: "disabled" } },
+    });
+  });
+
+  test("off/none: google gets thinkingConfig.thinkingBudget: 0", () => {
+    expect(buildReasoningProviderOptions("google", "off")).toEqual({
+      google: { thinkingConfig: { thinkingBudget: 0 } },
+    });
+    expect(buildReasoningProviderOptions("google", "none")).toEqual({
+      google: { thinkingConfig: { thinkingBudget: 0 } },
+    });
+  });
+
+  test("off/none: openai and groq get reasoningEffort: none", () => {
+    expect(buildReasoningProviderOptions("openai", "off")).toEqual({
+      openai: { reasoningEffort: "none" },
+    });
+    expect(buildReasoningProviderOptions("openai", "none")).toEqual({
+      openai: { reasoningEffort: "none" },
+    });
+    expect(buildReasoningProviderOptions("groq", "off")).toEqual({
+      groq: { reasoningEffort: "none" },
+    });
+    expect(buildReasoningProviderOptions("groq", "none")).toEqual({
+      groq: { reasoningEffort: "none" },
+    });
   });
 
   test("off/none: openrouter gets an explicit reasoning.enabled: false", () => {

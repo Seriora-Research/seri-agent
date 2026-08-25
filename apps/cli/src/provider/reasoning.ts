@@ -8,16 +8,38 @@ import type { JSONValue } from "ai";
 // min/max/default in the live models.dev catalog today — see spec 032's research.md §3), as is
 // a model with no reasoningOptions at all.
 export function legalTiersFor(entry?: ModelCatalogEntry): string[] {
-  const opts = entry?.reasoningOptions ?? [];
+  // `Array.isArray`, not a bare `?? []`: models.dev is an external, unvalidated source and
+  // catalog.ts does no runtime schema validation (TS type cast only, round-2 review item 11) — a
+  // response where `reasoning_options` itself isn't an array (a single object instead of a
+  // one-element array, the same class of upstream shape drift research.md's own Risks section
+  // already warns is recurring) would otherwise reach `opts.find(...)` below and throw
+  // `TypeError: opts.find is not a function`, straight out of loop.ts's hot-path re-validation
+  // gate, breaking every turn for that model instead of degrading to "no tiers offered."
+  const raw = entry?.reasoningOptions;
+  const opts = Array.isArray(raw) ? raw : [];
   const effort = opts.find((o) => o.type === "effort");
-  // `?? []`, not a bare `effort.values`: models.dev is an external, unvalidated source, and a
-  // malformed `{type: "effort"}` entry with no `values` field would otherwise return `undefined`
-  // here — which throws `TypeError: undefined.includes` at loop.ts's own re-validation gate on
-  // the hot turn path, breaking the whole turn over a catalog data problem, not just /effort.
+  // `?? []`, not a bare `effort.values`: a malformed `{type: "effort"}` entry with no `values`
+  // field would otherwise return `undefined` here — which throws `TypeError: undefined.includes`
+  // at loop.ts's own re-validation gate on the hot turn path, breaking the whole turn over a
+  // catalog data problem, not just /effort (round-2 review item, prior fix).
   if (effort) return effort.values ?? [];
   const toggle = opts.find((o) => o.type === "toggle");
   if (toggle) return ["off", "on"];
   return [];
+}
+
+// Whether `tier` is actually legal for `entry` right now, and if so, `tier` itself — otherwise
+// `undefined`. The one source of truth both loop.ts (does this turn's request actually carry
+// providerOptions for this tier) and cli.ts's own persist-on-success gate (is this tier still
+// legal for the route the turn that just succeeded actually used) must agree on, so a tier
+// silently dropped on the send side is never persisted as the new config default either (round-2
+// review item 10 — a stale `/effort` value surviving a `/model` switch to an incompatible route
+// used to keep getting silently re-persisted every turn it was still sitting in session state).
+export function appliedReasoningEffort(
+  tier: string | undefined,
+  entry?: ModelCatalogEntry,
+): string | undefined {
+  return tier !== undefined && legalTiersFor(entry).includes(tier) ? tier : undefined;
 }
 
 // Anthropic's SDK has no named-tier param, only a numeric budgetTokens — this fixed table is an
@@ -44,7 +66,29 @@ export function buildReasoningProviderOptions(
   tier: string,
 ): Record<string, Record<string, JSONValue>> {
   if (tier === "off" || tier === "none") {
-    return provider === "openrouter" ? { openrouter: { reasoning: { enabled: false } } } : {};
+    // A real disable shape per provider (round-2 review item 2), not `{}` for every provider but
+    // OpenRouter — `{}` means "send no providerOptions at all," which lets the provider's own
+    // default reasoning behavior apply, not "off." Each shape below is verified against the same
+    // installed @ai-sdk/* type definitions the enabled-tier switch below was verified against.
+    switch (provider) {
+      case "anthropic":
+        // `{type: "disabled"}` is a real, named member of the SDK's own thinking union — not an
+        // omission standing in for "disabled" the way the enabled-tier budgetTokens table is.
+        return { anthropic: { thinking: { type: "disabled" } } };
+      case "google":
+        // No "disabled" member exists in @ai-sdk/google's own thinkingConfig type (only
+        // thinkingBudget?: number / thinkingLevel?: string) — thinkingBudget: 0 is Gemini's own
+        // documented mechanism for turning thinking off on a model that supports it.
+        return { google: { thinkingConfig: { thinkingBudget: 0 } } };
+      case "openai":
+      case "groq":
+        // "none" is a real member of both SDKs' own reasoningEffort union (openai:
+        // "none"|"minimal"|"low"|"medium"|"high"|"xhigh"|"max"; groq:
+        // "none"|"default"|"low"|"medium"|"high") — not a value invented for this branch.
+        return { [provider]: { reasoningEffort: "none" } };
+      case "openrouter":
+        return { openrouter: { reasoning: { enabled: false } } };
+    }
   }
   switch (provider) {
     case "anthropic":
