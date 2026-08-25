@@ -3403,12 +3403,25 @@ describe("run (/compact)", () => {
   let checkpointsDir: string;
   let configDir: string;
   let worktree: string;
+  const originalEnv: Partial<Record<string, string>> = {};
+
+  function restoreEnv(key: string, original: string | undefined): void {
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
 
   beforeEach(() => {
     sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-compact-sessions-"));
     checkpointsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-compact-checkpoints-"));
     configDir = mkdtempSync(join(tmpdir(), "seri-cli-test-compact-config-"));
     worktree = mkdtempSync(join(tmpdir(), "seri-cli-test-compact-work-"));
+    // Cleared for the duration so a real key already exported on the dev/CI box can never make
+    // resolveRoute reroute past the injected mock model to a real provider (code-quality.md's "the
+    // platform matrix does not cover the unset case").
+    for (const keyName of Object.values(PROVIDER_API_KEY_NAMES)) {
+      originalEnv[keyName] = process.env[keyName];
+      delete process.env[keyName];
+    }
   });
 
   afterEach(() => {
@@ -3416,6 +3429,7 @@ describe("run (/compact)", () => {
     rmSync(checkpointsDir, { recursive: true, force: true });
     rmSync(configDir, { recursive: true, force: true });
     rmSync(worktree, { recursive: true, force: true });
+    for (const [keyName, original] of Object.entries(originalEnv)) restoreEnv(keyName, original);
   });
 
   function longMessages(count: number): ModelMessage[] {
