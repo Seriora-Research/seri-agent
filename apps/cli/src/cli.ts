@@ -312,13 +312,26 @@ function isStepCount(args: string[]): boolean {
 // the hazard is gone from every call site rather than from the ones that remember Object.hasOwn.
 export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   ["/mode", { accepts: (args) => args.length === 0, run: cycleModeCommand }],
-  // Unlike every other entry here, `accepts` is unconditional — but unlike /mode's own bare-args
-  // check, this is not because /effort has no live picker screen: it does (EffortPanel, H-1, spec
-  // 032 review), but that screen is intercepted BEFORE reaching this table, the same way /model's
-  // own picker is (runTui's own onSubmit, below — that interception's comment explains why).
-  // `accepts: () => true` here only ever actually governs the args this table DOES see: `<level>`,
-  // `auto`, and the bare no-arg form on the non-interactive path (effortCommand's own comment).
-  ["/effort", { accepts: () => true, run: effortCommand }],
+  // `args.length <= 1`, not unconditional (round-2 CodeRabbit/thermo review, item 1): `/effort` has
+  // a live picker screen (EffortPanel, H-1, spec 032 review) intercepted BEFORE reaching this
+  // table, the same way /model's own picker is (runTui's own onSubmit, below — that interception's
+  // comment explains why), so the bare no-arg form this table DOES see is only ever the
+  // non-interactive path's print-current-tier branch. But `<level>` and `auto` are still real,
+  // ONE-argument forms this table dispatches — an unconditional `() => true` let a genuine task
+  // starting with the string "/effort" be hijacked instead of falling through to the model (the
+  // exact hazard this table's own header comment, and /clear's, exist to prevent), and let
+  // `effortCommand` silently ignore trailing garbage past `args[0]` (`/effort auto extra`). Capped
+  // at one argument closes both: `effortCommand` never receives more than it reads.
+  // `mutatesRunState: true` (round-2 /code-review finding, item 9): unlike /mode (safe — no
+  // `await` before its own `sessionUpdated()` call), `effortCommand` awaits two real network calls
+  // (`getModelCatalog()`, `fetchAccountPlan()`) before it ever calls `sessionUpdated()`. Without
+  // this gate, `/effort medium` typed while a turn is in flight could still be running when that
+  // turn's own `messages-updated` appends new messages, and `effortCommand`'s eventual
+  // `session-updated` dispatch — a full replace, not a merge (reducer.ts's own `case
+  // "session-updated"`) — would silently discard everything the in-flight turn appended, both live
+  // and on disk (session persists synchronously). Matches every other `SLASH_COMMANDS` entry that
+  // calls `sessionUpdated()` across an `await` (undo/restore/rewind/clear/memory).
+  ["/effort", { accepts: (args) => args.length <= 1, run: effortCommand, mutatesRunState: true }],
   ["/undo", { accepts: isStepCount, run: undoCommand, mutatesRunState: true }],
   // A sha and nothing else. `seri "/restore the header spacing"` is a task.
   [
