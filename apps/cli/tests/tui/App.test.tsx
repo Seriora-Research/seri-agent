@@ -894,15 +894,15 @@ describe("App", () => {
     expect(frame).toContain("celly");
   });
 
-  // Regression (#165): resolveTableRenderableOptions()/createTextTableRenderable() in the
-  // installed @opentui/core build never forwarded the markdown renderable's own fg, so a table
-  // cell fell back to TextTableRenderable's hardcoded white default instead of theme.text. Header
-  // cells need their own case (not just an inference from the data-cell one) because
-  // createTableHeaderCellChunks re-maps every chunk's fg through headingStyle.fg ?? chunk.fg — a
-  // distinct code path. Bold cells need their own case too: createChunk's precedence rule
-  // (getStyle(group) || getStyle("default")) means a bold chunk's own scope ("markup.strong")
-  // short-circuits before ever reaching "default", which is the case that falsifies an app-side
-  // "default"-scope-only fix (that fix would still leave styled cell content white).
+  // resolveTableRenderableOptions()/createTextTableRenderable() in the installed @opentui/core
+  // build never forwarded the markdown renderable's own fg, so a table cell fell back to
+  // TextTableRenderable's hardcoded white default instead of theme.text. Header cells need their
+  // own case (not just an inference from the data-cell one) because createTableHeaderCellChunks
+  // re-maps every chunk's fg through headingStyle.fg ?? chunk.fg — a distinct code path. Bold
+  // cells need their own case too: createChunk's precedence rule (getStyle(group) ||
+  // getStyle("default")) means a bold chunk's own scope ("markup.strong") short-circuits before
+  // ever reaching "default", which is the case that falsifies an app-side "default"-scope-only
+  // fix (that fix would still leave styled cell content white).
   const TABLE_CELL_COLOR_CASES = [
     {
       name: "data cell",
@@ -929,6 +929,10 @@ describe("App", () => {
       target: "boldhdr",
     },
   ];
+  // Four connect()+flushMarkdown() cycles in one loop, each with its own up-to-3000ms settle
+  // budget (helpers.ts's own flushMarkdown comment) — given an explicit timeout above bun's
+  // 5000ms default so a slow runner reports THIS test's real failure instead of bun's own generic
+  // "test timed out" swallowing it.
   test("a markdown table's cell text renders theme.text, not white, in every case", async () => {
     for (const { name, rows, settleOn, target } of TABLE_CELL_COLOR_CASES) {
       const { setup, dispatch } = await connect();
@@ -944,7 +948,7 @@ describe("App", () => {
       expect(span, `${name}: no span found containing "${target}"`).toBeDefined();
       expect(span?.fg.equals(parseColor(theme.text)), name).toBe(true);
     }
-  });
+  }, 20_000);
 
   // Regression: ordinary multi-line prose with no long tokens at all used to clip to one visual
   // row — broader than the long-token case below, and the case that actually revealed the bug, so
