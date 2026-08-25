@@ -2800,6 +2800,7 @@ describe("run (/clear)", () => {
         calls.push("transcriptCleared");
       },
       usageAccrued: () => {},
+      cancelled: () => {},
     };
 
     const clear = SLASH_COMMANDS.get("/clear");
@@ -3363,6 +3364,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
         }),
       transcriptCleared: () => {},
       usageAccrued: () => {},
+      cancelled: () => {},
     };
 
     const rewind = SLASH_COMMANDS.get("/rewind");
@@ -3561,10 +3563,16 @@ describe("run (/compact)", () => {
   });
 
   // Round-trips through the real SLASH_COMMANDS.get("/compact") entry with a doGenerate that hangs
-  // until aborted — the abortable-mock fixture (compactionUsage's sibling below) that nothing else
-  // in the repo needed before /compact (EXPLORE: zero AbortSignal/AbortController matches in
-  // compaction.test.ts/loop.test.ts).
-  test("cancelled compaction is a strict no-op, and does not leave a stale onSignalCancel handle behind", async () => {
+  // until aborted — the abortable-mock fixture (compactionUsage's own abortable counterpart, just
+  // above) that nothing else in the repo needed before /compact (EXPLORE: zero
+  // AbortSignal/AbortController matches in compaction.test.ts/loop.test.ts).
+  //
+  // Presenter is a stub, not the default consolePresenter: consolePresenter's own `cancelled`
+  // re-raises the signal (M1's fix), which would actually kill this test process. The stub isolates
+  // what this test is actually checking — that compactCommand's own catch branch calls
+  // `presenter.cancelled` with the signal that caused the abort — from consolePresenter's own
+  // (trivial, one-line) re-raise wiring.
+  test("cancelled compaction is a strict no-op and reports the cancelling signal to the presenter", async () => {
     seedCheckpointLog();
     const session = makeSession(longMessages(30));
     saveSession(session, sessionsDir);
@@ -3581,11 +3589,10 @@ describe("run (/compact)", () => {
         return await new Promise((_, reject) => {
           abortSignal?.addEventListener("abort", () => {
             // Shaped the way a real aborted generateText call throws (name "AbortError"), not a
-            // generic error — otherwise this test could pass for the wrong reason (risk table,
-            // spec.md): compactCommand's own catch only treats it as a cancellation because
-            // `controller.signal.aborted` is true, not because of this error's shape, so asserting
-            // the shape here is what proves the mock actually exercised an abort rather than any
-            // other rejection.
+            // generic error — otherwise this test could pass for the wrong reason: compactCommand's
+            // own catch only treats it as a cancellation because `controller.signal.aborted` is
+            // true, not because of this error's shape, so asserting the shape here is what proves
+            // the mock actually exercised an abort rather than any other rejection.
             const err = new Error("This operation was aborted.");
             err.name = "AbortError";
             abortError = err;
@@ -3595,16 +3602,27 @@ describe("run (/compact)", () => {
       },
     });
 
-    const logs: string[] = [];
-    const originalLog = console.log;
-    console.log = (msg: string) => logs.push(String(msg));
+    const messages: string[] = [];
+    let cancelledSignal: NodeJS.Signals | undefined;
+    const presenter = {
+      message: (text: string) => messages.push(text),
+      onPlan: () => {},
+      restore: () => {},
+      sessionUpdated: async () => {},
+      transcriptCleared: () => {},
+      usageAccrued: () => {},
+      cancelled: (signal: NodeJS.Signals) => {
+        cancelledSignal = signal;
+      },
+    };
+
     let runError: unknown;
     try {
       const done = getCompact().run(
         session,
         [],
         { sessionsDir, checkpointsDir, configDir },
-        undefined,
+        presenter,
         { authConfigDir: configDir, getGroqModel: () => model },
       );
       await started;
@@ -3618,18 +3636,49 @@ describe("run (/compact)", () => {
       await done;
     } catch (err) {
       runError = err;
-    } finally {
-      console.log = originalLog;
     }
 
     expect(runError).toBeUndefined();
     expect(abortError?.name).toBe("AbortError");
     expect(readFileSync(join(sessionsDir, `${SESSION_ID}.jsonl`))).toEqual(before);
     expect(readLog(checkpointStoreDir(checkpointsDir, worktree), SESSION_ID)).toEqual([]);
-    expect(logs).toEqual(["⚙ compacting…"]);
+    expect(messages).toEqual(["⚙ compacting…"]);
+    expect(cancelledSignal).toBe("SIGINT");
+  });
 
-    // onSignalCancel's slot is unregistered in compactCommand's own finally (cli.ts) — a
-    // registration made right after the cancelled run must not be swallowed by a stale handle.
+  // Rewritten from a prior version that fired a signal immediately after the run and checked a
+  // NEW registration fired — but deliverSignal (signals.ts) clears its slot BEFORE invoking the
+  // callback, so that passed regardless of whether compactCommand's own finally ever ran. Running
+  // a SUCCESSFUL compaction to completion and then registering a fresh callback is what actually
+  // proves compactCommand's finally freed the slot: if it left a stale handle behind, `onSignalCancel`
+  // below would silently overwrite it (there is exactly one slot, this file's own comment), and this
+  // assertion would still pass for the wrong reason too — so it's the ONLY thing this test checks.
+  test("a successful compaction frees the onSignalCancel slot for the next registration", async () => {
+    const session = makeSession(longMessages(30));
+    saveSession(session, sessionsDir);
+
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ goal: "g", progress: "p", blockers: "b", nextSteps: "n" }),
+          },
+        ],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: compactionUsage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    await getCompact().run(
+      session,
+      [],
+      { sessionsDir, checkpointsDir, configDir },
+      undefined,
+      { authConfigDir: configDir, getGroqModel: () => model },
+    );
+
     let laterFired = false;
     const unregister = onSignalCancel(() => {
       laterFired = true;

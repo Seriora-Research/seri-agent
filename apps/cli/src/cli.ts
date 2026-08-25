@@ -220,6 +220,12 @@ type CommandPresenter = {
   // parameter: compactMessages returns only `usage`, matching the automatic path's own asymmetry
   // (loop.ts's comment on `"compacted" has no cost of its own`).
   usageAccrued: (usage: LanguageModelUsage) => void;
+  // /compact's own cancellation report — the SIGINT-exit-code contract (run()'s own comment on why
+  // it re-raises rather than exiting plainly) applies to a cancelled /compact too, but only on the
+  // non-interactive path: consolePresenter re-raises the signal after reporting, matching
+  // driveLoop's own re-raise; tuiPresenter only appends a transcript line, matching the LOW-J
+  // precedent (a per-turn cancel returns control to the input prompt, not to process death).
+  cancelled: (signal: NodeJS.Signals) => void;
 };
 
 type SlashCommand = {
@@ -383,6 +389,10 @@ function consolePresenter(dirs: CommandDirs): CommandPresenter {
     // and clearing it would corrupt piped/redirected output.
     transcriptCleared: () => {},
     usageAccrued: (usage) => printUsage({ inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }),
+    cancelled: (signal) => {
+      console.log("Compaction cancelled.");
+      raiseSignal(signal);
+    },
   };
 }
 
@@ -503,12 +513,21 @@ async function compactCommand(
   const model = dispatchModel(route, session.id, configDir, deps);
 
   const controller = new AbortController();
-  const unregisterCancel = onSignalCancel(() => controller.abort());
+  let cancelledSignal: NodeJS.Signals | undefined;
+  const unregisterCancel = onSignalCancel((signal) => {
+    cancelledSignal = signal;
+    controller.abort();
+  });
   let compacted: Awaited<ReturnType<typeof compactMessages>>;
   try {
     compacted = await compactMessages(session.messages, model, evictBoundary, controller.signal);
   } catch (err) {
-    if (controller.signal.aborted) return; // cancelled: strict no-op, nothing to report
+    // `cancelledSignal` is guaranteed defined here: `controller.signal.aborted` is only ever set
+    // by the onSignalCancel callback above.
+    if (controller.signal.aborted) {
+      presenter.cancelled(cancelledSignal as NodeJS.Signals);
+      return;
+    }
     throw err;
   } finally {
     unregisterCancel();
@@ -1885,6 +1904,10 @@ function tuiPresenter(
     },
     transcriptCleared: () => dispatch({ type: "transcript-cleared" }),
     usageAccrued: onUsageAccrued,
+    // No signal re-raise, unlike consolePresenter: matches the LOW-J precedent (runTurn's own
+    // comment) that a per-turn cancel on the TUI path returns control to the input prompt rather
+    // than killing the process.
+    cancelled: () => append("Compaction cancelled."),
   };
 }
 
