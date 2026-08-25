@@ -498,13 +498,21 @@ function childScriptModelSwitch(dir: string): string {
 // is deliberately NOT set here (unlike most of this file's other scripts): the bundled fallback
 // manifest predates reasoning_options entirely (cli.test.ts's own REASONING_CATALOG comment has the
 // full account), so this mocks a live-shaped catalog fetch instead, the same way cli.test.ts's own
-// "run (/effort)" describe block does.
+// "run (/effort)" describe block does. Round-4-round-2 fix (found live on WSL, the only place this
+// file's own pty describe block actually runs): explicitly DELETED, not just "not set" — this
+// suite's own npm script sets SERI_DISABLE_MODELS_FETCH=1 for the WHOLE `bun test` process
+// (apps/cli/package.json), inherited by this spawned child (startChild's own `env: {...process.env,
+// ...}`) unless deleted here, matching childScriptGuidedSetupSlowFetch's own identical fix a few
+// hundred lines up. Left un-deleted, `getModelCatalog()` resolves synchronously from the bundled
+// fallback manifest — no reasoning_options at all — and `/effort medium` reported "This model has
+// no reasoning-effort tiers available" instead of ever reaching this script's own fetch mock.
 function childScriptEffortPersist(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `process.env.SERI_MODEL = "reasoning-model";`,
     `process.env.SERI_PROVIDER = "groq";`,
+    `delete process.env.SERI_DISABLE_MODELS_FETCH;`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `const realFetch = globalThis.fetch;`,
     `globalThis.fetch = (url, opts) => {`,
