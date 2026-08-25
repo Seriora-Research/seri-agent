@@ -894,6 +894,60 @@ describe("App", () => {
     expect(frame).toContain("celly");
   });
 
+  // resolveTableRenderableOptions()/createTextTableRenderable() in the installed @opentui/core
+  // build never forwarded the markdown renderable's own fg, so a table cell fell back to
+  // TextTableRenderable's hardcoded white default instead of theme.text. Header cells need their
+  // own case (not just an inference from the data-cell one) because createTableHeaderCellChunks
+  // re-maps every chunk's fg through headingStyle.fg ?? chunk.fg — a distinct code path. Bold
+  // cells need their own case too: createChunk's precedence rule (getStyle(group) ||
+  // getStyle("default")) means a bold chunk's own scope ("markup.strong") short-circuits before
+  // ever reaching "default", which is the case that falsifies an app-side "default"-scope-only
+  // fix (that fix would still leave styled cell content white).
+  const TABLE_CELL_COLOR_CASES = [
+    {
+      name: "data cell",
+      rows: ["| a | b |", "| - | - |", "| cellx | celly |"],
+      settleOn: "celly",
+      target: "cellx",
+    },
+    {
+      name: "header cell",
+      rows: ["| hdrx | hdry |", "| - | - |", "| cellx | celly |"],
+      settleOn: "celly",
+      target: "hdrx",
+    },
+    {
+      name: "bold data cell",
+      rows: ["| a | b |", "| - | - |", "| **boldcell** | plaincell |"],
+      settleOn: "plaincell",
+      target: "boldcell",
+    },
+    {
+      name: "bold header cell",
+      rows: ["| **boldhdr** | hdry |", "| - | - |", "| cellx | celly |"],
+      settleOn: "celly",
+      target: "boldhdr",
+    },
+  ];
+  test.each(TABLE_CELL_COLOR_CASES.map((c) => [c.name, c] as const))(
+    "a markdown table's %s renders theme.text, not white",
+    async (name, { rows, settleOn, target }) => {
+      const { setup, dispatch } = await connect();
+      const answer = rows.join("\n");
+      dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+      dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+      await flush(setup);
+      await flushMarkdown(setup, (frame) => frame.includes(settleOn));
+
+      const frame = setup.captureSpans();
+      const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes(target)));
+      const span = line?.spans.find((s) => s.text.includes(target));
+      expect(span, `${name}: no span found containing "${target}"`).toBeDefined();
+      expect(span?.fg.equals(parseColor(theme.text))).toBe(true);
+    },
+    10_000,
+  );
+
   // Regression: ordinary multi-line prose with no long tokens at all used to clip to one visual
   // row — broader than the long-token case below, and the case that actually revealed the bug, so
   // it's asserted on its own rather than relying on the long-token test alone.

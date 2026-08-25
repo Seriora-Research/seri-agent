@@ -29,5 +29,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7"
+  },
+  "patchedDependencies": {
+    "@opentui/core@0.5.6": "patches/@opentui%2Fcore@0.5.6.patch"
   }
 }

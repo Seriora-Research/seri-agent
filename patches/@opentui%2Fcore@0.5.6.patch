@@ -1,0 +1,24 @@
+diff --git a/index.bun.js b/index.bun.js
+index f2e4a449042bdd7552cd77d68865c6a2940de48d..236a86512f6c0da883e18f1b1e4dd3e6b782453b 100644
+--- a/index.bun.js
++++ b/index.bun.js
+@@ -12618,7 +12618,8 @@ class MarkdownRenderable extends Renderable {
+       showBorders: borders,
+       borderStyle: this._tableOptions?.borderStyle ?? "single",
+       borderColor: this._tableOptions?.borderColor ?? this.getStyle("conceal")?.fg ?? "#888888",
+-      selectable: this._tableOptions?.selectable ?? true
++      selectable: this._tableOptions?.selectable ?? true,
++      fg: this._fg
+     };
+   }
+   applyTableRenderableOptions(tableRenderable, options) {
+@@ -12667,7 +12668,8 @@ class MarkdownRenderable extends Renderable {
+       showBorders: options.showBorders,
+       borderStyle: options.borderStyle,
+       borderColor: options.borderColor,
+-      selectable: options.selectable
++      selectable: options.selectable,
++      fg: options.fg
+     });
+   }
+   createTableBlock(table, id, marginBottom = 0, previousCache, forceRegenerate = false) {
