@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { PassThrough } from "node:stream";
 import { resetCatalogCache } from "@seri/model-catalog";
-import type { ModelMessage } from "ai";
+import type { LanguageModelUsage, ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
@@ -23,7 +23,7 @@ import { getConfigDir } from "../../src/config/paths";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
-import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS } from "../../src/cli";
+import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS, tuiPresenter } from "../../src/cli";
 import { USAGE } from "../../src/cli/output";
 import { setConfigValue } from "../../src/config/config";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
@@ -3689,6 +3689,33 @@ describe("run (/compact)", () => {
       unregister();
     }
     expect(laterFired).toBe(true);
+  });
+});
+
+// The onSubmit call sites both build their fold callback inline (cli.ts: `tuiPresenter(dispatch,
+// awaitNextPersist, (u) => { usage = {...} })`) — this exercises tuiPresenter's own contract that
+// `usageAccrued` is exactly the third argument, unmodified, so a future edit that drops the fold
+// or wires it to the wrong variable at either call site fails here rather than only being
+// observable through a live /compact run in the TUI.
+describe("tuiPresenter", () => {
+  test("usageAccrued calls the supplied fold with the usage it was given", () => {
+    const received: LanguageModelUsage[] = [];
+    const presenter = tuiPresenter(
+      () => {},
+      () => Promise.resolve(),
+      (usage) => received.push(usage),
+    );
+    const usage: LanguageModelUsage = {
+      inputTokens: 20,
+      inputTokenDetails: { noCacheTokens: 20, cacheReadTokens: undefined, cacheWriteTokens: undefined },
+      outputTokens: 10,
+      outputTokenDetails: { textTokens: 10, reasoningTokens: undefined },
+      totalTokens: 30,
+    };
+
+    presenter.usageAccrued(usage);
+
+    expect(received).toEqual([usage]);
   });
 });
 

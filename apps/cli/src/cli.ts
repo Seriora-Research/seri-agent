@@ -1881,7 +1881,7 @@ function pushTranscriptLine(dispatch: Dispatch, line: string): void {
 // makes `sessionUpdated` genuinely await the reducer's own onSessionChange effect actually
 // persisting, not just dispatching, fixing the gap code review found in the previous round's
 // finding-9 fix (this file's own CommandPresenter comment has the full account).
-function tuiPresenter(
+export function tuiPresenter(
   dispatch: Dispatch,
   awaitPersist: () => Promise<void>,
   // /compact's usage fold: tuiPresenter does not itself close over runTui's usage/cost `let`s
