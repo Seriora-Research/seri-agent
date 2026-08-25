@@ -801,6 +801,7 @@ const PARSE_OPTIONS = {
   "max-turns": { type: "string" },
   "dangerously-skip-permissions": { type: "boolean" },
   profile: { type: "string" },
+  effort: { type: "string" },
 } as const;
 
 type ParsedArgs = {
@@ -813,10 +814,15 @@ type ParsedArgs = {
     "max-turns"?: string;
     "dangerously-skip-permissions"?: boolean;
     profile?: string;
+    effort?: string;
   };
   positionals: string[];
   maxTurns: number | undefined;
   skipPermissions: boolean;
+  // Raw, unvalidated here on purpose (spec 032): legal tiers are route-dependent, and the route
+  // isn't resolved yet at this point in `run()` — validated in prepareSession, once `route`/
+  // `catalog` are available, the same deferred-validation shape as everything else route-dependent.
+  effort: string | undefined;
 };
 
 // One convention across every handler below, so `run` reads as the sequence it is: a `number` is
@@ -881,6 +887,7 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     positionals,
     maxTurns,
     skipPermissions: values["dangerously-skip-permissions"] === true,
+    effort: values.effort,
   };
 }
 
@@ -1007,6 +1014,11 @@ type RunContext = CommandDirs & {
   resumeId: string | undefined;
   taskText: string;
   permissionsDir: string;
+  // The `--effort <level>` flag, raw and unvalidated (ParsedArgs.effort's own comment) — bypasses
+  // session.reasoningEffort/config.json entirely, for this single run only. `undefined` means no
+  // flag was given, not "off"/"none" (those are legal tier VALUES a model can offer, resolved the
+  // normal session-then-config way when no flag overrides them).
+  effortFlag: string | undefined;
 };
 
 function dirs(ctx: RunContext): CommandDirs {
@@ -1389,6 +1401,22 @@ async function prepareSession(
       plan,
     );
     const model = dispatchModel(route, session.id, configDir, deps);
+    // --effort's own validation, deferred to here rather than parseCliArgs (ParsedArgs.effort's
+    // own comment): legal tiers are route-dependent, and `route`/`catalog` only exist from this
+    // point on. Throws, like every other fallible call in this function, so it goes through the
+    // SAME catch below (fatalDuringTui) rather than a bespoke early return — a `return
+    // usageError(...)` here would print straight to console even mid-TTY-mount, bypassing
+    // fatalDuringTui's own preMountMessages flush and renderer teardown.
+    if (ctx.effortFlag !== undefined) {
+      const legalTiers = resolveLegalReasoningTiers(route, catalog);
+      if (!legalTiers.includes(ctx.effortFlag)) {
+        throw new Error(
+          legalTiers.length === 0
+            ? "Invalid --effort value: the resolved model has no reasoning-effort tiers available."
+            : `Invalid --effort value: ${ctx.effortFlag}. Legal tiers: ${legalTiers.join(", ")}.`,
+        );
+      }
+    }
     // A rerouted OR gateway-served pair is never silent — the piped/non-interactive path gets
     // the notice here, gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent
     // into the transcript once per turn for either case, and this call ALSO runs on the TUI path
@@ -1651,6 +1679,13 @@ async function driveLoop(
     memory,
   } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
+  // `ctx.effortFlag` (--effort) wins outright and bypasses session.reasoningEffort/config.json
+  // entirely, for this call only (ParsedArgs.effort's own comment) — otherwise the ordinary
+  // precedence chain: session override, then the SERI_REASONING_EFFORT config default. Read fresh
+  // every driveLoop call, same reasoning as `system`/`route` above: a live /effort switch or a
+  // config default written mid-session must take effect on the very next turn.
+  const reasoningEffort =
+    ctx.effortFlag ?? resolveReasoningEffort(session, loadConfig(ctx.configDir));
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
   // the consumer is the only thing that knows what a Ctrl-C means. The first press lands in
@@ -1749,6 +1784,7 @@ async function driveLoop(
       // /model switch to a provider/model with a different limit must change compaction's own
       // math, not just which endpoint gets called (PreparedRun.catalogEntry's own comment).
       contextWindowSize: catalogEntry?.contextWindow,
+      reasoningEffort,
     })) {
       // The archivist's entire view of this turn — its own module owns what each event means to
       // it (memory/archivist.ts's own comment on observeArchivistEvent), so nothing else in this
@@ -3087,7 +3123,7 @@ async function runTui(
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const parsed = parseCliArgs(argv);
   if (typeof parsed === "number") return parsed;
-  const { values, positionals, maxTurns, skipPermissions } = parsed;
+  const { values, positionals, maxTurns, skipPermissions, effort } = parsed;
   // The override is already set — parseCliArgs does it before any of its own validation can
   // short-circuit with a usage error (see the comment there). Nothing to do here except rely on
   // it having happened before handleInfoFlags, runSelftest and all seven getConfigDir() consumers.
@@ -3127,6 +3163,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // Matches prepareSession's own resolution (D7) so /memory and the archivist read the same
     // config.json / memories/ directory a /setup-written key or a config set just landed in.
     configDir: deps.authConfigDir ?? getConfigDir(),
+    effortFlag: effort,
   };
 
   // Bare `seri` in a TTY mounts the TUI directly (idle, empty input box) instead of printing
