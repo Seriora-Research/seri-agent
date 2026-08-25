@@ -492,14 +492,13 @@ function childScriptModelSwitch(dir: string): string {
   ].join("\n");
 }
 
-// Round-4 review item 13: regression coverage for /effort's own persist-on-success gate
+// Regression coverage for /effort's own persist-on-success gate
 // (runTui's runTurn, cli.ts) — the reasoning-effort counterpart to childScriptModelSwitch's own
 // "the switch that just worked is now the global default" proof, above. `SERI_DISABLE_MODELS_FETCH`
 // is deliberately NOT set here (unlike most of this file's other scripts): the bundled fallback
 // manifest predates reasoning_options entirely (cli.test.ts's own REASONING_CATALOG comment has the
 // full account), so this mocks a live-shaped catalog fetch instead, the same way cli.test.ts's own
-// "run (/effort)" describe block does. Round-4-round-2 fix (found live on WSL, the only place this
-// file's own pty describe block actually runs): explicitly DELETED, not just "not set" — this
+// "run (/effort)" describe block does. Explicitly DELETED, not just "not set": this
 // suite's own npm script sets SERI_DISABLE_MODELS_FETCH=1 for the WHOLE `bun test` process
 // (apps/cli/package.json), inherited by this spawned child (startChild's own `env: {...process.env,
 // ...}`) unless deleted here, matching childScriptGuidedSetupSlowFetch's own identical fix a few
@@ -2524,12 +2523,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // Round-4 review item 13: /effort's own counterpart to the model-switch persist-on-success test
+  // /effort's own counterpart to the model-switch persist-on-success test
   // just above — a live `/effort <level>` mid-session becomes the global config default once (and
-  // only once) a turn that actually used it succeeds. Also end-to-end proof of the round-4
-  // "biggest item" fix: `/effort medium` here is typed while the FIRST turn is no longer in
-  // flight (it already completed), driven entirely through the TUI's own onSubmit interception
-  // (runTui, cli.ts) rather than through the non-interactive SLASH_COMMANDS dispatch.
+  // only once) a turn that actually used it succeeds. `/effort medium` here is typed while the
+  // FIRST turn is no longer in flight (it already completed), driven entirely through the TUI's
+  // own onSubmit interception (runTui, cli.ts) rather than through the non-interactive
+  // SLASH_COMMANDS dispatch.
   test("/effort <level> mid-session persists as the config default once the turn that used it succeeds", async () => {
     const scriptPath = join(dir, "child-effort-persist.mjs");
     writeFileSync(scriptPath, childScriptEffortPersist(dir));

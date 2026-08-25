@@ -164,9 +164,9 @@ export type AppProps = {
   onPermissionsRemove?: (tool: string) => void;
   onPermissionsBack?: () => void;
   onPermissionsClose?: (leftoverInput?: string) => void;
-  // /effort's own two resolutions (H-1, spec 032 review), mirroring onModelSelected/
+  // /effort's own two resolutions, mirroring onModelSelected/
   // onModelPickerCancel's own shape exactly — one pair, since EffortPanel has only one step.
-  // `leftoverInput` (round-2 review item 3): threaded through to createEffortHandlers'
+  // `leftoverInput`: threaded through to createEffortHandlers'
   // dispatched `effort-resolved` action, matching every other panel's own resolution shape —
   // see EffortPanel's own comment on why it is always `undefined` today.
   onEffortSelected?: (tier: string, leftoverInput?: string) => void;

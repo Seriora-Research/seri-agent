@@ -230,15 +230,15 @@ export async function* runLoop(opts: {
   const contextWindowSize =
     opts.contextWindowSize ?? catalogEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE;
   // Re-validated against the CURRENTLY resolved catalogEntry, not just trusted from whatever set
-  // it (H-2, spec 032 review): a route can change between when a tier was set and when a turn
-  // actually sends it — e.g. `/effort xhigh` on a route where it's legal, then `/model` switches
-  // to a route where `xhigh` isn't legal or the entry has no reasoningOptions at all. An illegal
-  // tier is silently dropped (not sent, and this never fails the turn), matching research.md's own
-  // stated mitigation for missing/stale catalog data ("treat as no control offered").
-  // `appliedReasoningEffort`, not an inline check: cli.ts's own persist-on-success gate (round-2
-  // review item 10) needs to know the SAME answer this line computes — whether the tier actually
-  // sitting in session state was, or was not, applied to the turn that just succeeded — and a
-  // shared function is what keeps the two from silently disagreeing.
+  // it: a route can change between when a tier was set and when a turn actually sends it — e.g.
+  // `/effort xhigh` on a route where it's legal, then `/model` switches to a route where `xhigh`
+  // isn't legal or the entry has no reasoningOptions at all. An illegal tier is silently dropped
+  // (not sent, and this never fails the turn) — missing or stale catalog data degrades to "no
+  // control offered" rather than a hard failure.
+  // `appliedReasoningEffort`, not an inline check: cli.ts's own persist-on-success gate needs to
+  // know the SAME answer this line computes — whether the tier actually sitting in session state
+  // was, or was not, applied to the turn that just succeeded — and a shared function is what keeps
+  // the two from silently disagreeing.
   const legalReasoningEffort = appliedReasoningEffort(opts.reasoningEffort, catalogEntry);
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
   const preserveRecentMessages = opts.preserveRecentMessages ?? DEFAULT_PRESERVE_RECENT_MESSAGES;

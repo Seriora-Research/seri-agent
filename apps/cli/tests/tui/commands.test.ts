@@ -401,12 +401,12 @@ describe("decideSetupOpen", () => {
   });
 });
 
-// Round-2 review item 8 (thermo S-1): /effort's own decide/handlers pairing, following
+// /effort's own decide/handlers pairing, following
 // decideSetupOpen's exact fixture shape just above (env clearing via the shared ALL_KEY_NAMES,
 // its own fresh configDir).
 describe("decideEffortOpen", () => {
   let effortConfigDir: string;
-  // Round-4 review item 7: `ALL_KEY_NAMES` above is provider API keys only — `decideEffortOpen`
+  // `ALL_KEY_NAMES` above is provider API keys only — `decideEffortOpen`
   // also reads SERI_REASONING_EFFORT (via resolveReasoningEffort's own config fallback), so a dev
   // box or CI runner with that genuinely exported would silently select the wrong `selected` index
   // in "returns the legal tiers and defaults selected to 0 with no current override" below (a

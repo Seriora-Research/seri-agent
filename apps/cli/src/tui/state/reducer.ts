@@ -58,7 +58,7 @@ export type PermissionsPanelState =
   | { step: "list"; rows: PermissionRow[]; selected: number }
   | { step: "confirm-remove"; tool: string };
 
-// /effort's own live state (H-1, spec 032 review) — the Claude-Code-style arrow-key slider over
+// /effort's own live state — the arrow-key slider over
 // the legal tiers for the model this session is CURRENTLY routed to (resolveLegalReasoningTiers,
 // routing.ts). Flatter than PermissionsPanelState above: one step, no confirm/remove/value-entry —
 // there is nothing here but a tier to pick or cancel out of.
@@ -141,7 +141,7 @@ export type TuiState = {
   pendingConfig: ConfigPanelState | undefined;
   // /permissions' own blocking panel. Mirrors `pendingSetup`'s role.
   pendingPermissions: PermissionsPanelState | undefined;
-  // /effort's own blocking panel (H-1, spec 032 review). Mirrors `pendingSetup`'s role — set when
+  // /effort's own blocking panel. Mirrors `pendingSetup`'s role — set when
   // the bare, no-argument form opens the slider (runTui's own onSubmit interception, cli.ts),
   // cleared once resolved.
   pendingEffort: EffortPanelState | undefined;
@@ -274,7 +274,7 @@ export type TuiAction =
   | { type: "permissions-requested"; rows: PermissionRow[] }
   | { type: "permissions-step"; state: PermissionsPanelState }
   | { type: "permissions-resolved"; leftoverInput?: string }
-  // /effort's own two actions (H-1, spec 032 review), mirroring the /model pair
+  // /effort's own two actions, mirroring the /model pair
   // (model-picker-requested/model-picker-resolved) rather than /setup's five-action step-dispatcher
   // shape: there is only one step here, so one open action and one resolve action is the whole
   // surface. `effort-resolved`'s `tier`, when present, is merged directly into `state.session` in

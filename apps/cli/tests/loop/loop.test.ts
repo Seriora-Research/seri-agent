@@ -683,7 +683,7 @@ describe("runLoop", () => {
     expect(model.doStreamCalls).toHaveLength(totalIterations);
   });
 
-  // H-2 (spec 032 review): opts.reasoningEffort must be re-validated against the CURRENTLY
+  // opts.reasoningEffort must be re-validated against the CURRENTLY
   // resolved catalog entry on every call, not just trusted from whatever set it — a stale tier
   // from a route that has since changed (e.g. a /model switch to a model with different or no
   // reasoningOptions) must never reach the provider.

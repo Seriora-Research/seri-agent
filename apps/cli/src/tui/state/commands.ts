@@ -406,8 +406,8 @@ export function decidePermissionsOpen(
 
 // The decision half of /effort's own bare, no-argument (picker-opening) form — mirrors
 // decideModelPickerOpen's/decideSetupOpen's own shape: computes what the panel needs and returns
-// it, deciding nothing about presentation (round-2 review item 8, thermo S-1 — /effort was the
-// only panel that skipped this repo's established decide/handlers pairing). `null` means "no
+// it, deciding nothing about presentation, matching every other panel's own decide/handlers
+// pairing (createEffortHandlers, tui/state/handlers.ts). `null` means "no
 // tiers to offer" (no reasoningOptions for the model this session is currently routed to) —
 // cli.ts's own onSubmit interception turns that into a command-error instead of opening an empty
 // picker. `configured` is derived internally from `configDir`, not threaded in by the caller,

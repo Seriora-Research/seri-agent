@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-// /effort's own live picker (H-1, spec 032 review) — a flat arrow-key list over the legal tiers
+// /effort's own live picker — a flat arrow-key list over the legal tiers
 // for the model this session is CURRENTLY routed to (resolveLegalReasoningTiers, cli.ts's own
 // onSubmit interception). Mirrors PermissionsPanel.tsx's own "list" step, one step simpler still:
 // no confirm-remove, no value-entry — there is nothing here but a tier to pick or cancel out of.
@@ -17,15 +17,14 @@ export function EffortPanel({
   onEffortCancel,
 }: {
   pendingEffort: EffortPanelState;
-  // `leftoverInput` (round-2 review item 3, CodeRabbit): threaded through, matching every other
+  // `leftoverInput`: threaded through, matching every other
   // panel's own `X-resolved` action shape, even though nothing in this component currently
   // produces a non-undefined value for it — EffortPanel has no text-entry/paste concept to capture
   // one from (mirrors PermissionsPanel's own onPermissionsClose, which carries the identical
   // optional param, structurally unused there too). Unlike PermissionsPanel's own call site (which
   // omits the argument entirely — `onPermissionsClose?.()`), the call sites below always pass
   // `undefined` explicitly, so the plumbing here reads as deliberate rather than as a forgotten
-  // param (round-4 review item 12: this comment used to read as though PermissionsPanel's call
-  // site did the same — it does not, the two are equivalent at runtime but not in source).
+  // param.
   onEffortSelected?: (tier: string, leftoverInput?: string) => void;
   onEffortCancel?: (leftoverInput?: string) => void;
 }) {

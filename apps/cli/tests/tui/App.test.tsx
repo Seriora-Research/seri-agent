@@ -1631,7 +1631,7 @@ describe("App", () => {
     });
   });
 
-  // H-1 (spec 032 review): EffortPanel's own live arrow-key slider, mirroring the "model picker"
+  // EffortPanel's own live arrow-key slider, mirroring the "model picker"
   // describe block above — render-on-request, Enter selects, Escape/Ctrl-D cancels.
   describe("effort panel", () => {
     test("renders in place of the input box once requested", async () => {
@@ -3525,7 +3525,7 @@ describe("App", () => {
   // pendingSetup → pendingAuth → pendingConfig → pendingPermissions → pendingEffort → InputBox.
   // Each test below seeds one adjacent pair at once and checks the earlier-in-the-chain branch
   // wins, extending the existing pendingSetup-vs-InputBox precedence test above to the three new
-  // Stage A branches, and (H-1, spec 032 review) pendingEffort at the tail of the chain.
+  // Stage A branches, and pendingEffort at the tail of the chain.
   describe("render precedence: pendingApproval / pendingSetup / pendingAuth / pendingConfig / pendingPermissions / pendingEffort", () => {
     test("pendingApproval wins over pendingAuth", async () => {
       const { setup, dispatch } = await connect();
@@ -3617,8 +3617,7 @@ describe("App", () => {
       expect(frame).not.toContain("/permissions — tools approved permanently");
     });
 
-    // Extends the chain one further link (H-1, spec 032 review): pendingPermissions -> pendingEffort
-    // -> InputBox.
+    // Extends the chain one further link: pendingPermissions -> pendingEffort -> InputBox.
     test("pendingPermissions wins over pendingEffort", async () => {
       const { setup, dispatch } = await connect();
 

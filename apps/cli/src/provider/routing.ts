@@ -172,7 +172,7 @@ export function resolveRoute(
   };
 }
 
-// Extracted (round-2 review item 7, thermo J-2) after the identical triplet — `session.model ??
+// Extracted after the identical triplet — `session.model ??
 // resolveDefaultModel(configDir).model`, `session.provider ?? DEFAULT_PROVIDER`, then
 // `resolveRoute(...)` — was independently copy-pasted at four call sites in cli.ts (prepareSession,
 // runTurn, effortCommand, and the /effort bare-form interception). `session` is a minimal
@@ -189,8 +189,8 @@ export function resolveSessionRoute(
   plan: Plan | null,
   configDir: string,
 ): ResolvedRoute {
-  // `resolveDefaultModel(configDir)`'s OWN `.provider`, not a hardcoded `DEFAULT_PROVIDER` (round-4
-  // review item 3): `provider` can legitimately be undefined on `session` (RunSession's own
+  // `resolveDefaultModel(configDir)`'s OWN `.provider`, not a hardcoded `DEFAULT_PROVIDER`:
+  // `provider` can legitimately be undefined on `session` (RunSession's own
   // comment, cli.ts — "no provider was ever explicitly requested"), and `resolveDefaultModel`
   // already resolves the correct pair for that case — e.g. SERI_MODEL=claude-sonnet-5 +
   // SERI_PROVIDER=anthropic configured, no session override, used to resolve as claude-sonnet-5 on
@@ -204,8 +204,8 @@ export function resolveSessionRoute(
   return resolveRoute(catalog, { model, provider }, configured, plan);
 }
 
-// Route-aware, not a static per-model lookup (opencode #34278's regression class, per spec 032's
-// research.md): the same model id can resolve to different catalog entries — and thus different
+// Route-aware, not a static per-model lookup (opencode #34278's regression class): the same
+// model id can resolve to different catalog entries — and thus different
 // legal reasoning tiers — depending on whether `route.provider` ends up being "openrouter" or a
 // direct provider, so this must key off `route`'s actual resolved (model, provider) pair.
 export function resolveLegalReasoningTiers(route: ResolvedRoute, catalog: ModelCatalog): string[] {

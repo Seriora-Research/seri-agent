@@ -703,11 +703,9 @@ export function createPermissionsHandlers(opts: {
   return { onPermissionsRemove, onPermissionsBack };
 }
 
-// /effort's own two resolutions (H-1, spec 032 review), mirroring createConfigHandlers'/
-// createSetupHandlers' own factory shape (round-2 review item 8, thermo S-1 — /effort was the
-// only panel that skipped this repo's established decide/handlers pairing) even though its own
-// flow is flatter than either: one step, no disk recompute on resolve — `dispatch` is this
-// factory's only real dependency. `leftoverInput` (round-2 review item 3, CodeRabbit): EffortPanel
+// /effort's own two resolutions, mirroring createConfigHandlers'/createSetupHandlers' own factory
+// shape even though its own flow is flatter than either: one step, no disk recompute on resolve —
+// `dispatch` is this factory's only real dependency. `leftoverInput`: EffortPanel
 // itself has no text-entry/paste concept (mirrors PermissionsPanel's own shape, which carries the
 // identical optional param through its own `onPermissionsClose` for the same consistency reason,
 // structurally unused there too) — threaded through here so the plumbing is correct end-to-end,

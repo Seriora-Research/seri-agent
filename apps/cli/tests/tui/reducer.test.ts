@@ -785,7 +785,7 @@ describe("tuiReducer: permissions-requested / permissions-step / permissions-res
   });
 });
 
-// H-1 (spec 032 review): EffortPanel's own live picker, mirroring model-picker-requested/
+// EffortPanel's own live picker, mirroring model-picker-requested/
 // model-picker-resolved's own shape above rather than permissions' three-action one — there is
 // only one step here.
 describe("tuiReducer: effort-requested / effort-resolved", () => {

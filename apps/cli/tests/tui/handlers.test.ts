@@ -165,8 +165,8 @@ describe("dispatchPermissionsList (via onPermissionsBack)", () => {
   });
 });
 
-// Round-2 review items 3 (CodeRabbit) and 8 (thermo S-1): createEffortHandlers is the new plumbing
-// leftoverInput now flows through end-to-end — verified directly at the unit level, since
+// createEffortHandlers is the plumbing
+// leftoverInput flows through end-to-end — verified directly at the unit level, since
 // EffortPanel itself never produces a non-undefined leftoverInput today (it has no text-entry/
 // paste concept — see EffortPanel.tsx's own comment).
 describe("createEffortHandlers", () => {

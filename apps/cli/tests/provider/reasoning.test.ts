@@ -57,7 +57,7 @@ describe("legalTiersFor", () => {
     expect(legalTiersFor(undefined)).toEqual([]);
   });
 
-  // Round-2 review MEDIUM finding: models.dev is an external, unvalidated source — a malformed
+  // models.dev is an external, unvalidated source — a malformed
   // `{type: "effort"}` entry with no `values` field must not throw (`undefined.includes` at
   // loop.ts's own re-validation gate, breaking the whole turn over a catalog data problem, not
   // just /effort). `as ModelCatalogEntry["reasoningOptions"]`: deliberately bypasses the static
@@ -70,9 +70,9 @@ describe("legalTiersFor", () => {
     expect(legalTiersFor(e)).toEqual([]);
   });
 
-  // Round-2 review item 11: `reasoningOptions` itself might not be an array at all (a single
-  // object instead of a one-element array — the same class of upstream shape drift research.md's
-  // own Risks section already warns is recurring for other catalog fields). Must not throw
+  // `reasoningOptions` itself might not be an array at all (a single
+  // object instead of a one-element array — the same class of upstream shape drift this module
+  // has to assume can recur across other catalog fields too). Must not throw
   // `TypeError: opts.find is not a function`.
   test("reasoningOptions itself is not an array: returns empty rather than throwing", () => {
     const e = entry({
@@ -85,8 +85,8 @@ describe("legalTiersFor", () => {
     expect(legalTiersFor(e)).toEqual([]);
   });
 
-  // Round-4 review item 1: `values` present but not an array (e.g. `{}` or a string) used to pass
-  // through unchanged via a bare `?? []`, breaking every downstream `.includes()`/`.join()` caller.
+  // `values` present but not an array (e.g. `{}` or a string) must not pass
+  // through unchanged — every downstream caller relies on `.includes()`/`.join()` working.
   test("effort entry with a non-array values field: returns empty rather than the malformed value", () => {
     const e = entry({
       reasoningOptions: [
@@ -97,8 +97,8 @@ describe("legalTiersFor", () => {
     expect(legalTiersFor(e)).toEqual([]);
   });
 
-  // Round-4 review item 2: a well-formed ARRAY can still carry a malformed (null) element —
-  // reading `.type` off it used to throw straight out of `opts.find(...)`.
+  // A well-formed ARRAY can still carry a malformed (null) element —
+  // reading `.type` off it must not throw straight out of `opts.find(...)`.
   test("a null element inside an otherwise well-formed reasoningOptions array: does not throw", () => {
     const e = entry({
       reasoningOptions: [
@@ -119,7 +119,7 @@ describe("legalTiersFor", () => {
   });
 });
 
-// The shared decision behind every /effort form (round-4 review, "biggest item" — spec 032):
+// The shared decision behind every /effort form:
 // cli.ts's own effortCommand (non-interactive) and runTui's onSubmit interception (TUI) both call
 // this with an already-resolved `legalTiers`/`current` pair — tested here directly rather than
 // through either caller, since neither caller's own tests should need to re-verify this decision.
@@ -140,7 +140,7 @@ describe("resolveEffortCommand", () => {
     });
   });
 
-  // Round-4 review item 5(b): a session override that is no longer legal for the CURRENTLY
+  // A session override that is no longer legal for the CURRENTLY
   // resolved model (e.g. a stale value surviving a /model switch) must not be reported as though
   // it were still active — it is about to be silently dropped, the same fact
   // appliedReasoningEffort's own re-validation gate already enforces on the send side.
@@ -248,8 +248,8 @@ describe("buildReasoningProviderOptions", () => {
     });
   });
 
-  // Round-2 review item 2: `{}` (= no providerOptions sent) means "the provider's own default
-  // applies," not "off" — every provider now gets a real, verified disable shape.
+  // `{}` (= no providerOptions sent) means "the provider's own default
+  // applies," not "off" — every provider needs a real, verified disable shape.
   test("off/none: anthropic gets thinking.type: disabled", () => {
     expect(buildReasoningProviderOptions("anthropic", "off")).toEqual({
       anthropic: { thinking: { type: "disabled" } },
