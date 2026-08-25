@@ -875,6 +875,177 @@ describe("App", () => {
     expect(frame).toContain("celly");
   });
 
+  // Regression: ordinary multi-line prose with no long tokens at all used to clip to one visual
+  // row — broader than the long-token case below, and the case that actually revealed the bug, so
+  // it's asserted on its own rather than relying on the long-token test alone.
+  test("a long multi-line assistant message wraps across rows instead of clipping to one", async () => {
+    const { setup, dispatch } = await connect();
+    await resize(setup, 30, DEFAULT_HEIGHT);
+
+    const answer = Array(30).fill("word").join(" ");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => (frame.match(/word/g) ?? []).length === 30);
+
+    expect((setup.captureCharFrame().match(/word/g) ?? []).length).toBe(30);
+  });
+
+  // Regression: a single token too long for one row (a bare unbroken run, no code-span markup)
+  // used to clip past its tail — asserting the FULL token, not just its tail, since a clipped
+  // prefix with an intact tail would otherwise still pass.
+  test("a long inline-code token that overflows one row still shows in full on wrapped lines", async () => {
+    const { setup, dispatch } = await connect();
+    await resize(setup, 30, DEFAULT_HEIGHT);
+
+    const token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ";
+    const answer = "`" + token + "`";
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => frame.includes(token.slice(-10)));
+
+    const rendered = setup.captureCharFrame().replace(/\s+/g, "");
+    expect(rendered).toContain(token);
+  });
+
+  // Same regression, issue #161's own literal report: a long bare URL with no code-span markup at
+  // all — the unbroken-token case most likely to actually appear in a real response.
+  test("a long bare URL that overflows one row still shows in full on wrapped lines", async () => {
+    const { setup, dispatch } = await connect();
+    await resize(setup, 30, DEFAULT_HEIGHT);
+
+    const url = "https://example.com/some/very/long/path/segment/wider/than/the/terminal";
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: url } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => frame.includes(url.slice(-10)));
+
+    const rendered = setup.captureCharFrame().replace(/\s+/g, "");
+    expect(rendered).toContain(url);
+  });
+
+  // Negative control: content that already fit on one row before the fix must still render on
+  // EXACTLY that one row after it (not merely "a matching row exists somewhere") — guards against
+  // an off-by-one from `<markdown>`'s own `paddingLeft` AND asserts the scrollbox's separate
+  // `paddingLeft={1}` actually reaches this row (the bullet lands at column 1, not column 0).
+  test("a short assistant message that fits on one row renders unchanged", async () => {
+    const { setup, dispatch } = await connect();
+    await resize(setup, 30, DEFAULT_HEIGHT);
+
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: "hi there" } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => frame.includes("hi there"));
+
+    const lines = setup.captureCharFrame().split("\n");
+    const contentLines = lines.filter((line) => line.includes("hi there"));
+    expect(contentLines).toHaveLength(1);
+    expect(contentLines[0]?.indexOf("●")).toBe(1);
+    expect(contentLines[0]?.trimStart().startsWith("● hi there")).toBe(true);
+  });
+
+  // Bullet-placement invariant TranscriptRow's own comment requires: a fixed row prefix, not
+  // repeated or lost mid-wrap — checked for both a wrapped and a single-row message. Two full
+  // connect()+flushMarkdown() cycles in one test, each with its own up-to-3000ms settle budget
+  // (helpers.ts's own flushMarkdown comment) — given an explicit timeout above bun's 5000ms
+  // default so a slow runner reports THIS test's real failure instead of bun's own generic
+  // "test timed out" swallowing it.
+  test("exactly one ● bullet renders, at the start of the block's first row, wrapped or not", async () => {
+    const assertBulletInvariant = (frame: string) => {
+      expect((frame.match(/●/g) ?? []).length).toBe(1);
+      const bulletLine = frame.split("\n").find((line) => line.includes("●"));
+      expect(bulletLine?.trimStart().startsWith("●")).toBe(true);
+    };
+
+    const wrapped = await connect();
+    await resize(wrapped.setup, 30, DEFAULT_HEIGHT);
+    const answer = Array(30).fill("word").join(" ");
+    wrapped.dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    wrapped.dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(wrapped.setup);
+    await flushMarkdown(wrapped.setup, (frame) => (frame.match(/word/g) ?? []).length === 30);
+    assertBulletInvariant(wrapped.setup.captureCharFrame());
+
+    const singleRow = await connect();
+    singleRow.dispatch({ type: "loop-event", event: { type: "text-delta", text: "hi there" } });
+    singleRow.dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(singleRow.setup);
+    await flushMarkdown(singleRow.setup, (frame) => frame.includes("hi there"));
+    assertBulletInvariant(singleRow.setup.captureCharFrame());
+  }, 10_000);
+
+  // Resize re-flow: a message wrapped at a narrow width re-flows onto fewer rows once the
+  // terminal widens, with no stale wrapped line left over from the narrower layout. The post-resize
+  // `flushMarkdown` predicate requires the row count to have actually DROPPED below `narrowRows`,
+  // not just that all 30 words are still present — the word-count condition alone was already true
+  // before the resize, so a predicate that only re-checked it could return the moment the resize
+  // dispatch lands, before Yoga's own re-layout pass has actually run, and read `wideRows` off a
+  // stale narrow-layout frame. Explicit timeout: two flushMarkdown calls in one test, same margin
+  // reasoning as the bullet-invariant test above.
+  test("a wrapped message re-flows onto fewer rows when the terminal widens", async () => {
+    const { setup, dispatch } = await connect();
+    await resize(setup, 30, DEFAULT_HEIGHT);
+
+    const answer = Array(30).fill("word").join(" ");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => (frame.match(/word/g) ?? []).length === 30);
+    const narrowRows = setup
+      .captureCharFrame()
+      .split("\n")
+      .filter((line) => line.includes("word")).length;
+
+    await resize(setup, 100, DEFAULT_HEIGHT);
+    await flushMarkdown(setup, (frame) => {
+      const rows = frame.split("\n").filter((line) => line.includes("word")).length;
+      return (frame.match(/word/g) ?? []).length === 30 && rows < narrowRows;
+    });
+    const frame = setup.captureCharFrame();
+    const wideRows = frame.split("\n").filter((line) => line.includes("word")).length;
+
+    expect(wideRows).toBeLessThan(narrowRows);
+    expect((frame.match(/●/g) ?? []).length).toBe(1);
+  }, 10_000);
+
+  // Regression: without an in-flow bullet sibling, the assistant row's height comes from
+  // `<markdown>` alone (TranscriptRow's own `minHeight={1}` comment) — a whitespace-only entry
+  // (reachable: state/reducer.ts's `pushLine` flushes on `state.streaming.length > 0`, which
+  // whitespace satisfies) used to make the whole row, bullet included, disappear instead of
+  // rendering a blank line the way the old row-flex layout did for free.
+  test("a whitespace-only assistant message still renders its bullet", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: "\n" } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => frame.includes("●"));
+
+    expect((setup.captureCharFrame().match(/●/g) ?? []).length).toBe(1);
+  });
+
+  // Regression: the scrollbox's cosmetic paddingLeft/paddingRight stacked with the assistant row's
+  // own bullet gutter left too little content width at a narrow terminal for `<markdown>` to
+  // render at all (confirmed empirically down to width 4-5, fine again from width 6) — below
+  // TRANSCRIPT_PADDING_MIN_WIDTH the margin is dropped so content still renders. Width 5 here is
+  // comfortably under that threshold and was one of the confirmed-broken widths.
+  test("a narrow terminal still renders assistant content once the transcript margin drops", async () => {
+    const { setup, dispatch } = await connect();
+    await resize(setup, 5, DEFAULT_HEIGHT);
+
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: "hi" } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => frame.includes("hi"));
+
+    const bulletLine = setup
+      .captureCharFrame()
+      .split("\n")
+      .find((line) => line.includes("●"));
+    expect(bulletLine?.indexOf("●")).toBe(0);
+  });
+
   // A transcript shorter than the viewport renders from the top of the scrollbox's own content
   // flow (a column-direction box's children always stack top-down, with no bottom-anchoring prop
   // needed) instead of bottom-padding a mostly-empty screen — the appended content must land near
