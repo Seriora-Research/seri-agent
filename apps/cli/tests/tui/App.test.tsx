@@ -1,11 +1,12 @@
 /** @jsxImportSource @opentui/react */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { RGBA, TextAttributes } from "@opentui/core";
+import { parseColor, RGBA, TextAttributes } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ReactElement, ReactNode } from "react";
+import type { PermissionMode } from "../../src/gate/gate";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import { App, type AppProps } from "../../src/tui/app";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";
@@ -13,6 +14,7 @@ import type { Dispatch } from "../../src/tui/state/reducer";
 import { theme } from "../../src/tui/theme/theme";
 import { ListRow } from "../../src/tui/ui/ListRow";
 import {
+  DEFAULT_COLUMNS,
   formatContextWindow,
   formatCost,
   formatModelRow,
@@ -20,6 +22,9 @@ import {
   formatSetupRow,
   listWindowSize,
   matchesFilter,
+  MODE_CYCLE_HINT,
+  MODE_HINT_COLS,
+  MODE_LABEL,
   singleLine,
   slideWindow,
 } from "../../src/tui/util/format";
@@ -2128,6 +2133,91 @@ describe("App", () => {
       const frame = setup.captureCharFrame();
       expect(frame).toContain("claude-sonnet-5");
       expect(frame).not.toContain("some-unconfigured-model");
+    });
+  });
+
+  describe("mode row color and hint", () => {
+    // theme.mode's own entries are a mix of hex ("#8ab4c8") and the ANSI-16 name "gray"
+    // (approve-each, = theme.muted) — parseColor, not RGBA.fromHex directly, is what every real
+    // `fg` prop resolves through (theme.ts's own header comment), so it's what a fair comparison
+    // here has to go through too: RGBA.fromHex("gray") is not a valid hex string and would silently
+    // resolve to magenta instead of failing loudly. `.includes`, not `===`: approve-each's own hue
+    // is literally the same value as the hint/detail's `theme.muted`, so the renderer merges them
+    // into one span with no style boundary between them — the indicator's own text is a substring
+    // of that merged span, not the whole span, for that one mode only.
+    test("each permission mode renders its indicator with its own theme.mode color", async () => {
+      const modes: PermissionMode[] = ["read-only", "approve-each", "auto"];
+      for (const mode of modes) {
+        const { setup } = await connect({ session: session({ permissionMode: mode }) });
+        const label = MODE_LABEL[mode];
+        const frame = setup.captureSpans();
+        const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes(label)));
+        const span = line?.spans.find((s) => s.text.includes(label));
+        expect(span?.fg.equals(parseColor(theme.mode[mode]))).toBe(true);
+      }
+    });
+
+    // Acceptance criterion 13: the mode hue is confined to the indicator — formatModeLabel's own
+    // `detail` (the model name + route) is a SEPARATE `<text fg={theme.muted}>`, so it must never
+    // pick up `auto`'s own rust hue even though it sits right next to it.
+    test("the model name stays theme.muted, not the mode hue, even in auto", async () => {
+      const { setup } = await connect({ session: session({ permissionMode: "auto" }) });
+      const frame = setup.captureSpans();
+      const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("claude-sonnet-5")));
+      const span = line?.spans.find((s) => s.text.includes("claude-sonnet-5"));
+      expect(span?.fg.equals(parseColor(theme.muted))).toBe(true);
+      expect(span?.fg.equals(parseColor(theme.mode.auto))).toBe(false);
+    });
+
+    test("the shift+tab hint is present at MODE_HINT_COLS and absent below it", async () => {
+      const { setup } = await connect();
+      expect(setup.captureCharFrame()).toContain("(shift+tab to cycle)");
+
+      await resize(setup, MODE_HINT_COLS - 1, DEFAULT_HEIGHT);
+      expect(setup.captureCharFrame()).not.toContain("(shift+tab to cycle)");
+    });
+
+    // Acceptance criterion 14: even with a route present, the row's own arithmetic (indicator +
+    // hint + the model-only detail P4's ladder allows at this width) must actually fit 80 columns
+    // in the RENDERED row, not just in formatModeLabel's own return value.
+    test("at 80 columns, the longest label with a route present fits the row and does not wrap", async () => {
+      const { setup } = await connect({
+        session: session({ permissionMode: "auto" }),
+        route: route(),
+      });
+      await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
+
+      const expectedRow = `${MODE_LABEL.auto}${MODE_CYCLE_HINT}  claude-sonnet-5`;
+      const lines = setup.captureCharFrame().split("\n");
+      const modeLine = lines.find((l) => l.includes(expectedRow));
+      expect(modeLine).toBeDefined();
+      expect(modeLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
+    });
+
+    // D3 (glyphs) was chosen over the D2 no-glyph recommendation, which re-opens the risk that
+    // `⏸`/`⏵⏵` render double-width and corrupt the row's own column math — the risk table's stated
+    // condition for shipping D3 at all. `captureSpans()` groups a whole `<text>` node into one span
+    // rather than one span per character, so there is no isolated "just the glyph" span to measure
+    // directly; instead, the indicator span's OWN measured `width` equalling its `length` (JS
+    // UTF-16 code units, ASCII for every character here except the glyph) proves every character in
+    // it — the glyph included — rendered as exactly one cell. If the glyph rendered double-width,
+    // this span's `width` would exceed its `length` by one.
+    test("the pause glyph (⏸) renders single-width in the component renderer", async () => {
+      const { setup } = await connect({ session: session({ permissionMode: "read-only" }) });
+      const label = MODE_LABEL["read-only"];
+      const frame = setup.captureSpans();
+      const line = frame.lines.find((l) => l.spans.some((s) => s.text === label));
+      const span = line?.spans.find((s) => s.text === label);
+      expect(span?.width).toBe(label.length);
+    });
+
+    test("the play glyphs (⏵⏵) render single-width each in the component renderer", async () => {
+      const { setup } = await connect({ session: session({ permissionMode: "auto" }) });
+      const label = MODE_LABEL.auto;
+      const frame = setup.captureSpans();
+      const line = frame.lines.find((l) => l.spans.some((s) => s.text === label));
+      const span = line?.spans.find((s) => s.text === label);
+      expect(span?.width).toBe(label.length);
     });
   });
 

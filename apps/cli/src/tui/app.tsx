@@ -73,6 +73,8 @@ import {
   DEFAULT_ROWS,
   FALLBACK_CHROME_ROWS,
   formatModeLabel,
+  MODE_CYCLE_HINT,
+  MODE_HINT_COLS,
   type TranscriptEntry,
 } from "./util/format";
 
@@ -480,7 +482,14 @@ export function App({
         />
       )}
       <box flexDirection="row" justifyContent="space-between">
-        <text>{modeIndicatorText + modeDetail}</text>
+        {/* No `gap` — all spacing between these three is carried inside the strings themselves
+        (MODE_CYCLE_HINT's own leading space, `detail`'s own leading two spaces), so the mode hue
+        never bleeds onto the hint/model/route by way of an inserted gap cell. */}
+        <box flexDirection="row">
+          <text fg={theme.mode[state.session.permissionMode]}>{modeIndicatorText}</text>
+          {width >= MODE_HINT_COLS && <text fg={theme.muted}>{MODE_CYCLE_HINT}</text>}
+          <text fg={theme.muted}>{modeDetail}</text>
+        </box>
         <box flexDirection="row" gap={1}>
           {/* `noPanelOpen` too, not just `scrolledUp`: while a panel is open, End
           is swallowed by the exact same gate `noPanelOpen` already puts on the transcript-scroll
