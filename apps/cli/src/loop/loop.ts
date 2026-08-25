@@ -11,6 +11,7 @@ import type {
 import { streamText } from "ai";
 import { checkPermission, type PermissionMode } from "../gate/gate";
 import { type CostReport, reportForOpenRouter, reportFromCatalogPricing } from "../provider/cost";
+import { buildReasoningProviderOptions } from "../provider/reasoning";
 import {
   type CompactionSummary,
   compactMessages,
@@ -216,6 +217,10 @@ export async function* runLoop(opts: {
   provider?: ModelProvider;
   modelId?: string;
   catalog?: ModelCatalog;
+  // The resolved reasoning-effort tier (session /effort override, config default, or the
+  // non-persisting --effort CLI flag — resolution happens in cli.ts, this is just the winning
+  // value). Requires opts.provider too, to know which provider-options shape to build.
+  reasoningEffort?: string;
 }): AsyncGenerator<LoopEvent> {
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const catalogEntry =
@@ -314,6 +319,9 @@ export async function* runLoop(opts: {
         system: opts.system,
         abortSignal: opts.signal,
         maxRetries: MAX_RETRIES,
+        ...(opts.reasoningEffort && opts.provider
+          ? { providerOptions: buildReasoningProviderOptions(opts.provider, opts.reasoningEffort) }
+          : {}),
         onLanguageModelCallStart: () => {
           modelCallStarts++;
         },

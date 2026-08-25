@@ -1,4 +1,5 @@
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
+import type { JSONValue } from "ai";
 
 // Returns the tiers legal to offer a user for `entry` — an `effort` entry's named values win
 // over a `toggle` entry when a model's reasoningOptions array has both (e.g. GLM 5.2, which
@@ -30,10 +31,14 @@ const ANTHROPIC_EFFORT_BUDGET_TOKENS: Record<string, number> = {
 // @ai-sdk/google@4.0.39, @ai-sdk/groq@4.0.19/4.0.26, and @openrouter/ai-sdk-provider@3.0.0 type
 // definitions (node_modules) — every shape below matches the installed packages' own
 // providerOptions types exactly, no corrections needed from spec 032's Contract section.
+// Return type is `Record<string, Record<string, JSONValue>>` (streamText's own
+// `providerOptions` shape), not spec 032's `Record<string, unknown>`: `unknown` does not
+// structurally satisfy the AI SDK's `SharedV4ProviderOptions`, so passing it straight to
+// `streamText` failed to typecheck — the values built below were already JSON-safe.
 export function buildReasoningProviderOptions(
   provider: ModelProvider,
   tier: string,
-): Record<string, unknown> {
+): Record<string, Record<string, JSONValue>> {
   if (tier === "off" || tier === "none") {
     return provider === "openrouter" ? { openrouter: { reasoning: { enabled: false } } } : {};
   }
