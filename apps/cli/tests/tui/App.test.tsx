@@ -915,15 +915,15 @@ describe("App", () => {
   // default, so an unfixed header cell fails identically to the data cell above.
   test("a markdown table's header cell renders theme.text, not white", async () => {
     const { setup, dispatch } = await connect();
-    const answer = ["| a | b |", "| - | - |", "| cellx | celly |"].join("\n");
+    const answer = ["| hdrx | hdry |", "| - | - |", "| cellx | celly |"].join("\n");
     dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
     dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
     await flush(setup);
     await flushMarkdown(setup, (frame) => frame.includes("celly"));
 
     const frame = setup.captureSpans();
-    const line = frame.lines.find((l) => l.spans.some((s) => s.text.trim() === "a"));
-    const span = line?.spans.find((s) => s.text.trim() === "a");
+    const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("hdrx")));
+    const span = line?.spans.find((s) => s.text.includes("hdrx"));
     expect(span?.fg.equals(parseColor(theme.text))).toBe(true);
   });
 
@@ -942,6 +942,23 @@ describe("App", () => {
     const frame = setup.captureSpans();
     const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("boldcell")));
     const span = line?.spans.find((s) => s.text.includes("boldcell"));
+    expect(span?.fg.equals(parseColor(theme.text))).toBe(true);
+  });
+
+  // createTableHeaderCellChunks re-maps every chunk's fg through headingStyle.fg ?? chunk.fg —
+  // a distinct code path from the data-cell bold case above, not just the same mechanism reused,
+  // so it needs its own empirical check rather than an inference from the data-cell result.
+  test("a bold word inside a table header cell still renders theme.text, not white", async () => {
+    const { setup, dispatch } = await connect();
+    const answer = ["| **boldhdr** | hdry |", "| - | - |", "| cellx | celly |"].join("\n");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => frame.includes("celly"));
+
+    const frame = setup.captureSpans();
+    const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes("boldhdr")));
+    const span = line?.spans.find((s) => s.text.includes("boldhdr"));
     expect(span?.fg.equals(parseColor(theme.text))).toBe(true);
   });
 
