@@ -54,7 +54,11 @@ Flags are flags in any position and remaining positionals are the task; `--` is 
 escape for a task that contains what looks like a flag (`seri -- fix the --help output`). Exit
 codes: **0** a request was served or the turn finished, **1** the turn did not finish, **2** a bad
 invocation (parseArgs rejected it, or no task was given; `config`'s own invocation errors also
-exit 2). `--max-turns <n>` is the only `runLoop` option the CLI sets, default 500. `--help`/
+exit 2). `--max-turns <n>` (default 500) is the CLI-facing knob for `runLoop`'s own
+`maxIterations` option; the CLI also sets a handful of other `runLoop` options that carry routing/
+cost/reasoning context rather than user-facing flags (`provider`, `modelId`, `catalog`,
+`reasoningEffort`) — see `runLoop`'s own opts type (`apps/cli/src/loop/loop.ts`) for the full list.
+`--help`/
 `--version`/`--selftest` are checked before any subcommand dispatch, so `seri login --help` (and
 `signup`/`logout`) prints seri's own usage rather than reaching the subcommand.
 
