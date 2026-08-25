@@ -101,7 +101,10 @@ describe("legalTiersFor", () => {
   // reading `.type` off it used to throw straight out of `opts.find(...)`.
   test("a null element inside an otherwise well-formed reasoningOptions array: does not throw", () => {
     const e = entry({
-      reasoningOptions: [null, { type: "effort", values: ["low", "medium"] }] as unknown as ModelCatalogEntry["reasoningOptions"],
+      reasoningOptions: [
+        null,
+        { type: "effort", values: ["low", "medium"] },
+      ] as unknown as ModelCatalogEntry["reasoningOptions"],
     });
     expect(() => legalTiersFor(e)).not.toThrow();
     expect(legalTiersFor(e)).toEqual(["low", "medium"]);
@@ -146,7 +149,7 @@ describe("resolveEffortCommand", () => {
     expect(result).toEqual({
       changed: false,
       message:
-        'Reasoning effort: xhigh is set but not legal for the current model — it will be dropped. Legal tiers: low, medium.',
+        "Reasoning effort: xhigh is set but not legal for the current model — it will be dropped. Legal tiers: low, medium.",
     });
   });
 
@@ -169,7 +172,11 @@ describe("resolveEffortCommand", () => {
 
   test("a legal tier: applies it", () => {
     const result = resolveEffortCommand(["low"], ["low", "medium"], undefined);
-    expect(result).toEqual({ changed: true, reasoningEffort: "low", message: "Reasoning effort: low" });
+    expect(result).toEqual({
+      changed: true,
+      reasoningEffort: "low",
+      message: "Reasoning effort: low",
+    });
   });
 
   test("an illegal tier, with tiers available: reports the actual legal ones, unchanged", () => {
