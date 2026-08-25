@@ -889,6 +889,18 @@ describe("decideConfigOpen", () => {
     expect(rows.find((r) => r.key === "SERI_VERIFY_COMMAND")?.kind).toBe("string");
   });
 
+  // Already covered generically by the two KNOWN_CONFIG_KEYS loops above (real label, non-empty
+  // description, description length) — this asserts the same facts by name for SERI_REASONING_EFFORT
+  // specifically, matching this describe block's existing per-key convention just above/below.
+  test("SERI_REASONING_EFFORT has a real label, non-empty description, and kind: string", () => {
+    expect(configKeyInfo("SERI_REASONING_EFFORT").label).not.toBe("SERI_REASONING_EFFORT");
+    expect(configKeyInfo("SERI_REASONING_EFFORT").description).not.toBe("");
+    expect(configKeyInfo("SERI_REASONING_EFFORT").description.length).toBeLessThanOrEqual(78);
+    expect(
+      decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_REASONING_EFFORT")?.kind,
+    ).toBe("string");
+  });
+
   test("SERI_VERIFY_ENABLED's on matrix: unset/'true'/'yes' → true; 'false' → false", () => {
     const on = (): boolean | undefined => {
       const row = decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_VERIFY_ENABLED");
