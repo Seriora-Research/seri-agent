@@ -380,7 +380,21 @@ export function App({
           setMeasuredRows(this.height);
         }}
       >
-        <scrollbox ref={transcriptRef} height={scrollboxHeight} stickyScroll stickyStart="bottom">
+        {/* paddingLeft/paddingRight={1}: a one-column margin from both terminal edges for the
+        transcript's own content — before this, content ran flush to the right edge while the
+        left edge only looked padded because of TranscriptRow's own bullet-prefix indent, not a
+        real margin. Scoped to the scrollbox (not the app root) so it doesn't also shift the mode
+        indicator/input box/panels below it, which aren't model output. On the scrollbox directly,
+        not an inner wrapper box: an inner box here was tried and works too, but padding the
+        scrollbox itself is one prop instead of an extra element. */}
+        <scrollbox
+          ref={transcriptRef}
+          height={scrollboxHeight}
+          stickyScroll
+          stickyStart="bottom"
+          paddingLeft={1}
+          paddingRight={1}
+        >
           <TranscriptList transcript={state.transcript} />
         </scrollbox>
         {/* Rendered as a fixed row OUTSIDE the scrollbox, directly under it, instead of as one of
