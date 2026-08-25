@@ -875,6 +875,104 @@ describe("App", () => {
     expect(frame).toContain("celly");
   });
 
+  // Regression (issue #161): ordinary multi-line prose with no long tokens at all used to clip to
+  // one visual row — broader than the long-token case below, and the case that actually revealed
+  // the bug, so it's asserted on its own rather than relying on the long-token test alone.
+  test("a long multi-line assistant message wraps across rows instead of clipping to one", async () => {
+    const { setup, dispatch } = await connect();
+    await resize(setup, 30, DEFAULT_HEIGHT);
+
+    const answer = Array(30).fill("word").join(" ");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => (frame.match(/word/g) ?? []).length === 30);
+
+    expect((setup.captureCharFrame().match(/word/g) ?? []).length).toBe(30);
+  });
+
+  // Regression (issue #161's own literal report): a single token too long for one row.
+  test("a long inline-code token that overflows one row still shows its tail on a wrapped line", async () => {
+    const { setup, dispatch } = await connect();
+    await resize(setup, 30, DEFAULT_HEIGHT);
+
+    const token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ";
+    const answer = "`" + token + "`";
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    const tail = token.slice(-10);
+    await flushMarkdown(setup, (frame) => frame.includes(tail));
+
+    expect(setup.captureCharFrame()).toContain(tail);
+  });
+
+  // Negative control: content that already fit on one row before the fix must still render on
+  // exactly that one row after it — guards against an off-by-one from the new `paddingLeft`.
+  test("a short assistant message that fits on one row renders unchanged", async () => {
+    const { setup, dispatch } = await connect();
+    await resize(setup, 30, DEFAULT_HEIGHT);
+
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: "hi there" } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => frame.includes("hi there"));
+
+    const lines = setup.captureCharFrame().split("\n");
+    expect(lines.some((line) => line.trimStart().startsWith("● hi there"))).toBe(true);
+  });
+
+  // Bullet-placement invariant TranscriptRow's own comment requires: a fixed row prefix, not
+  // repeated or lost mid-wrap — checked for both a wrapped and a single-row message.
+  test("exactly one ● bullet renders, at the start of the block's first row, wrapped or not", async () => {
+    const assertBulletInvariant = (frame: string) => {
+      expect((frame.match(/●/g) ?? []).length).toBe(1);
+      const bulletLine = frame.split("\n").find((line) => line.includes("●"));
+      expect(bulletLine?.trimStart().startsWith("●")).toBe(true);
+    };
+
+    const wrapped = await connect();
+    await resize(wrapped.setup, 30, DEFAULT_HEIGHT);
+    const answer = Array(30).fill("word").join(" ");
+    wrapped.dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    wrapped.dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(wrapped.setup);
+    await flushMarkdown(wrapped.setup, (frame) => (frame.match(/word/g) ?? []).length === 30);
+    assertBulletInvariant(wrapped.setup.captureCharFrame());
+
+    const singleRow = await connect();
+    singleRow.dispatch({ type: "loop-event", event: { type: "text-delta", text: "hi there" } });
+    singleRow.dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(singleRow.setup);
+    await flushMarkdown(singleRow.setup, (frame) => frame.includes("hi there"));
+    assertBulletInvariant(singleRow.setup.captureCharFrame());
+  });
+
+  // Resize re-flow: a message wrapped at a narrow width re-flows onto fewer rows once the
+  // terminal widens, with no stale wrapped line left over from the narrower layout.
+  test("a wrapped message re-flows onto fewer rows when the terminal widens", async () => {
+    const { setup, dispatch } = await connect();
+    await resize(setup, 30, DEFAULT_HEIGHT);
+
+    const answer = Array(30).fill("word").join(" ");
+    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => (frame.match(/word/g) ?? []).length === 30);
+    const narrowRows = setup
+      .captureCharFrame()
+      .split("\n")
+      .filter((line) => line.includes("word")).length;
+
+    await resize(setup, 100, DEFAULT_HEIGHT);
+    await flushMarkdown(setup, (frame) => (frame.match(/word/g) ?? []).length === 30);
+    const frame = setup.captureCharFrame();
+    const wideRows = frame.split("\n").filter((line) => line.includes("word")).length;
+
+    expect(wideRows).toBeLessThan(narrowRows);
+    expect((frame.match(/●/g) ?? []).length).toBe(1);
+  });
+
   // A transcript shorter than the viewport renders from the top of the scrollbox's own content
   // flow (a column-direction box's children always stack top-down, with no bottom-anchoring prop
   // needed) instead of bottom-padding a mostly-empty screen — the appended content must land near
