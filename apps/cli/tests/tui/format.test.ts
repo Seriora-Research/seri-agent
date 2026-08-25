@@ -186,4 +186,29 @@ describe("formatModeDetail", () => {
       expect(formatModeDetail(undefined, width, undefined)).toBe("");
     }
   });
+
+  test("effortTier defined at MODE_ROUTE_MIN_COLS (100): appended after the route label", () => {
+    expect(formatModeDetail(nonRerouted, 100, "high")).toBe("  claude-sonnet-5 · your key · high");
+  });
+
+  test("effortTier defined but width < MODE_ROUTE_MIN_COLS (76, 99): tier does not appear", () => {
+    expect(formatModeDetail(nonRerouted, 76, "high")).toBe("  claude-sonnet-5");
+    expect(formatModeDetail(nonRerouted, 99, "high")).toBe("  claude-sonnet-5");
+  });
+
+  test("effortTier undefined at MODE_ROUTE_MIN_COLS (100): unchanged from today's route-only output", () => {
+    expect(formatModeDetail(nonRerouted, 100, undefined)).toBe("  claude-sonnet-5 · your key");
+  });
+
+  test("an effortTier longer than EFFORT_WIDTH is truncated with a trailing ellipsis", () => {
+    expect(formatModeDetail(nonRerouted, 100, "extra-thinky")).toBe(
+      "  claude-sonnet-5 · your key · extra-t…",
+    );
+  });
+
+  test("route === undefined: no detail at every width, even with an effortTier", () => {
+    for (const width of [10, 76, 80, 100]) {
+      expect(formatModeDetail(undefined, width, "high")).toBe("");
+    }
+  });
 });
