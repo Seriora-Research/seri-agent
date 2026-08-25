@@ -10,7 +10,11 @@ import type { JSONValue } from "ai";
 export function legalTiersFor(entry?: ModelCatalogEntry): string[] {
   const opts = entry?.reasoningOptions ?? [];
   const effort = opts.find((o) => o.type === "effort");
-  if (effort) return effort.values;
+  // `?? []`, not a bare `effort.values`: models.dev is an external, unvalidated source, and a
+  // malformed `{type: "effort"}` entry with no `values` field would otherwise return `undefined`
+  // here — which throws `TypeError: undefined.includes` at loop.ts's own re-validation gate on
+  // the hot turn path, breaking the whole turn over a catalog data problem, not just /effort.
+  if (effort) return effort.values ?? [];
   const toggle = opts.find((o) => o.type === "toggle");
   if (toggle) return ["off", "on"];
   return [];

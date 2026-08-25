@@ -51,6 +51,19 @@ describe("legalTiersFor", () => {
   test("no entry at all: returns empty", () => {
     expect(legalTiersFor(undefined)).toEqual([]);
   });
+
+  // Round-2 review MEDIUM finding: models.dev is an external, unvalidated source — a malformed
+  // `{type: "effort"}` entry with no `values` field must not throw (`undefined.includes` at
+  // loop.ts's own re-validation gate, breaking the whole turn over a catalog data problem, not
+  // just /effort). `as ModelCatalogEntry["reasoningOptions"]`: deliberately bypasses the static
+  // `values: string[]` requirement to model what untrusted external JSON can actually contain.
+  test("malformed effort entry with no values field: returns empty rather than throwing", () => {
+    const e = entry({
+      reasoningOptions: [{ type: "effort" }] as unknown as ModelCatalogEntry["reasoningOptions"],
+    });
+    expect(() => legalTiersFor(e)).not.toThrow();
+    expect(legalTiersFor(e)).toEqual([]);
+  });
 });
 
 describe("buildReasoningProviderOptions", () => {
