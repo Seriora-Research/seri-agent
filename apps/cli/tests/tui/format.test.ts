@@ -2,9 +2,13 @@ import { describe, expect, test } from "bun:test";
 import {
   estimateTokens,
   formatElapsed,
+  formatModeLabel,
   formatTokenProgress,
+  MODE_CYCLE_HINT,
+  MODE_LABEL,
   type TokenProgress,
 } from "../../src/tui/util/format";
+import { route } from "./helpers";
 
 describe("formatElapsed", () => {
   test("under a minute renders as seconds", () => {
@@ -93,5 +97,115 @@ describe("formatTokenProgress", () => {
   // reconciliation was itself complete (`exact: true`) — see `TokenProgress`'s own comment.
   test("prefixes both with ~ when hasGap is set, even though exact is true", () => {
     expect(formatTokenProgress(progress({ exact: true, hasGap: true }))).toBe("~10 in, ~20 out");
+  });
+});
+
+describe("MODE_LABEL", () => {
+  test("carries the three glyph-prefixed permission-mode labels", () => {
+    expect(MODE_LABEL["read-only"]).toBe("⏸ read-only mode on");
+    expect(MODE_LABEL["approve-each"]).toBe("⏸ approve-each mode on");
+    expect(MODE_LABEL.auto).toBe("⏵⏵ bypass permissions on");
+  });
+});
+
+describe("MODE_CYCLE_HINT", () => {
+  test("is the shift+tab hint, with its own leading space", () => {
+    expect(MODE_CYCLE_HINT).toBe(" (shift+tab to cycle)");
+  });
+});
+
+// The mode-indicator row's own content, factored out as a pure function so its tier logic is
+// testable without mounting a renderer (formatModelRow's own extraction already used this
+// reasoning). `route` can be undefined — runGuidedSetup (cli.ts) mounts App before any provider
+// key exists, so there is genuinely no route to show yet.
+describe("formatModeLabel", () => {
+  const nonRerouted = route();
+  const rerouted = route({ provider: "openrouter", rerouted: true, reason: "ANTHROPIC_API_KEY" });
+
+  test("indicator is always the bare mode indicator, with no leading/trailing spacing, at any width", () => {
+    for (const width of [10, 51, 52, 75, 76, 80, 99, 100]) {
+      expect(formatModeLabel(MODE_LABEL.auto, nonRerouted, width).indicator).toBe(MODE_LABEL.auto);
+    }
+  });
+
+  test("below MODE_MODEL_MIN_COLS (51, 52, 75): no detail", () => {
+    for (const width of [51, 52, 75]) {
+      expect(formatModeLabel(MODE_LABEL["approve-each"], nonRerouted, width).detail).toBe("");
+    }
+  });
+
+  test("at MODE_MODEL_MIN_COLS (76): model name, no route", () => {
+    expect(formatModeLabel(MODE_LABEL["approve-each"], nonRerouted, 76).detail).toBe(
+      "  claude-sonnet-5",
+    );
+  });
+
+  // The route label disappears at the terminal's own default 80 columns (below
+  // MODE_ROUTE_MIN_COLS), asserted here so a later widening of that threshold is a deliberate
+  // change, not a silent one.
+  test("at 80 columns (DEFAULT_COLUMNS): model name, still no route", () => {
+    expect(formatModeLabel(MODE_LABEL["approve-each"], nonRerouted, 80).detail).toBe(
+      "  claude-sonnet-5",
+    );
+  });
+
+  test("just below MODE_ROUTE_MIN_COLS (99): model name, still no route", () => {
+    expect(formatModeLabel(MODE_LABEL["approve-each"], nonRerouted, 99).detail).toBe(
+      "  claude-sonnet-5",
+    );
+  });
+
+  test("at MODE_ROUTE_MIN_COLS (100): model name and 'your key'", () => {
+    expect(formatModeLabel(MODE_LABEL["approve-each"], nonRerouted, 100).detail).toBe(
+      "  claude-sonnet-5 · your key",
+    );
+  });
+
+  test("at MODE_ROUTE_MIN_COLS with a rerouted route: '→ <provider>'", () => {
+    expect(formatModeLabel(MODE_LABEL["approve-each"], rerouted, 100).detail).toBe(
+      "  claude-sonnet-5 · → openrouter",
+    );
+  });
+
+  test("at MODE_ROUTE_MIN_COLS with a gateway-served route: 'provided'", () => {
+    const viaGateway = route({ viaGateway: true });
+    expect(formatModeLabel(MODE_LABEL["approve-each"], viaGateway, 100).detail).toBe(
+      "  claude-sonnet-5 · provided",
+    );
+  });
+
+  // Defensive: resolveRoute's own contract makes rerouted && viaGateway both true unreachable, but
+  // formatModeLabel must not rely on that — a rerouted route always reads "→ provider", never
+  // "provided", regardless of what viaGateway carries.
+  test("a rerouted route still reads '→ <provider>' even if viaGateway were also true", () => {
+    const reroutedAndGateway = route({
+      provider: "openrouter",
+      rerouted: true,
+      reason: "ANTHROPIC_API_KEY",
+      viaGateway: true,
+    });
+    expect(formatModeLabel(MODE_LABEL["approve-each"], reroutedAndGateway, 100).detail).toBe(
+      "  claude-sonnet-5 · → openrouter",
+    );
+  });
+
+  // A real catalog id (an OpenRouter id is easily 40+ chars) would otherwise go into the row
+  // unbounded, overflowing the exact terminal width the tier boundary assumed it fit in — capped
+  // to NAME_WIDTH (22, the same width the picker table already truncates model names to), in both
+  // tiers that render the model name.
+  test("long model id is truncated to NAME_WIDTH in both the model-only and full tiers", () => {
+    const longModel = route({ model: "openrouter/deepseek/deepseek-r1-distill-llama-70b" });
+    expect(formatModeLabel(MODE_LABEL["approve-each"], longModel, 80).detail).toBe(
+      "  openrouter/deepseek/d…",
+    );
+    expect(formatModeLabel(MODE_LABEL["approve-each"], longModel, 100).detail).toBe(
+      "  openrouter/deepseek/d… · your key",
+    );
+  });
+
+  test("route === undefined: no detail at every width", () => {
+    for (const width of [10, 76, 80, 100]) {
+      expect(formatModeLabel(MODE_LABEL["approve-each"], undefined, width).detail).toBe("");
+    }
   });
 });

@@ -3,6 +3,7 @@
 
 import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@seri/model-catalog";
 import { escapeControlChars } from "../../cli/output";
+import type { PermissionMode } from "../../gate/gate";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "../state/commands";
 
@@ -119,10 +120,33 @@ export const ROUTE_WIDTH = 13;
 // to spare, not the exact minimum.
 export const COST_WIDTH = 18;
 
-// Hermes Agent's own 3-tier width breakpoints for the persistent mode-indicator row — reused as-is,
-// not a new scheme.
-export const MODE_LABEL_FULL_COLS = 76;
-export const MODE_LABEL_COMPACT_COLS = 52;
+// The three `PermissionMode` label strings the persistent mode-indicator row renders — Claude
+// Code's own `<what it does> on` shape, not the raw union value. `⏸` prefixes the two modes that
+// pause before acting; `⏵⏵` the one that doesn't — the same convention CC uses for identical
+// semantics. `auto` deliberately reads "bypass permissions", not "auto": seri's `auto` mode
+// short-circuits every permission check to allow (gate/gate.ts), which is CC's own
+// `bypassPermissions`, not CC's classifier-reviewed `auto`.
+export const MODE_LABEL: Record<PermissionMode, string> = {
+  "read-only": "⏸ read-only mode on",
+  "approve-each": "⏸ approve-each mode on",
+  auto: "⏵⏵ bypass permissions on",
+};
+
+// Persistent (shown on every render, not just right after a cycle) — a transient hint would not
+// help a user who has never pressed the key yet.
+export const MODE_CYCLE_HINT = " (shift+tab to cycle)";
+
+// The persistent mode-indicator row's own 3-tier width breakpoints. `MODE_HINT_COLS` gates
+// MODE_CYCLE_HINT's own visibility (app.tsx's own JSX); `MODE_MODEL_MIN_COLS`/`MODE_ROUTE_MIN_COLS`
+// gate how much of formatModeLabel's own `detail` shows (below). Sized against the longest label,
+// "⏵⏵ bypass permissions on" (26 cols, worst case its glyph renders double-width) + the hint
+// (21 cols) = 47, still under 52; + the model name ("  " + NAME_WIDTH) = 71, still under 76; +
+// the route (" · " + the widest route label, "→ openrouter") = 86, still under 100 — every
+// threshold holds even in that worst case, so only this arithmetic (not the values) changed when
+// the labels grew a glyph prefix.
+export const MODE_HINT_COLS = 52;
+export const MODE_MODEL_MIN_COLS = 76;
+export const MODE_ROUTE_MIN_COLS = 100;
 
 // A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined`,
 // and a real pty can separately report a genuine but unusable `columns === 0` for its first render
@@ -291,24 +315,33 @@ export function formatRouteLabel(input: {
 // the bare mode indicator, same as the narrow-terminal branch below — showing a fabricated route
 // would misreport "your key"/"→ provider" during the exact flow where neither is true.
 // post-review fix: `route.model` is capped to NAME_WIDTH (the same width the picker table already
-// truncates model names to) before it goes into the label — a real catalog id (a long OpenRouter
+// truncates model names to) before it goes into `detail` — a real catalog id (a long OpenRouter
 // id is well over 40 chars) was otherwise unbounded here, so it could push the row past the very
-// terminal width MODE_LABEL_FULL_COLS/MODE_LABEL_COMPACT_COLS assumed it fit in.
+// terminal width MODE_MODEL_MIN_COLS/MODE_ROUTE_MIN_COLS assumed it fit in.
+// Returns the mode indicator and the model/route suffix as two separate strings, not one
+// concatenated one: `indicator` is the bare label, with no spacing of its own, so app.tsx can give
+// it its own per-mode color without also coloring the model name/route it sits next to. `detail`
+// carries its own leading two spaces (mirroring the old inline `"  "` join) and is `""` when there
+// is nothing to show, so app.tsx's JSX never has to add spacing of its own either.
 export function formatModeLabel(
   modeIndicator: string,
   route: ResolvedRoute | undefined,
   width: number,
-): string {
-  if (route === undefined || width < MODE_LABEL_COMPACT_COLS) return modeIndicator;
+): { indicator: string; detail: string } {
+  if (route === undefined || width < MODE_MODEL_MIN_COLS) {
+    return { indicator: modeIndicator, detail: "" };
+  }
   const modelName =
     route.model.length > NAME_WIDTH ? `${route.model.slice(0, NAME_WIDTH - 1)}…` : route.model;
-  if (width < MODE_LABEL_FULL_COLS) return `${modeIndicator}  ${modelName}`;
+  if (width < MODE_ROUTE_MIN_COLS) {
+    return { indicator: modeIndicator, detail: `  ${modelName}` };
+  }
   const routeLabel = formatRouteLabel({
     keyConfigured: !route.rerouted && !route.viaGateway,
     rerouteTo: route.rerouted ? route.provider : undefined,
     gatewayReachable: route.viaGateway,
   });
-  return `${modeIndicator}  ${modelName} · ${routeLabel}`;
+  return { indicator: modeIndicator, detail: `  ${modelName} · ${routeLabel}` };
 }
 
 export function formatModelRow(row: ModelPickerEntry): string {

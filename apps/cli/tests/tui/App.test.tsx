@@ -15,7 +15,6 @@ import { ListRow } from "../../src/tui/ui/ListRow";
 import {
   formatContextWindow,
   formatCost,
-  formatModeLabel,
   formatModelRow,
   formatRouteLabel,
   formatSetupRow,
@@ -26,7 +25,8 @@ import {
 } from "../../src/tui/util/format";
 import { flush, flushMarkdown, route, session } from "./helpers";
 
-// Wide enough that every "full width" formatModeLabel tier (>=76 cols) is exercised by default,
+// Wide enough that every formatModeLabel tier, including the route label (>=MODE_ROUTE_MIN_COLS,
+// 100 cols), is exercised by default,
 // tall enough (>=24 rows) that every panel's own list window sits at LIST_WINDOW_MAX (10) without
 // each test having to resize just to clear that floor (util/format.ts's own PANEL_CHROME_ROWS/
 // APP_CHROME_ROWS math: listWindowSize(height - 14), which reaches 10 at height >= 24). Deliberately
@@ -1991,90 +1991,6 @@ describe("App", () => {
     });
   });
 
-  // D2-D5 (feature-plan.md): the mode-indicator row's own content, factored out as the pure
-  // `formatModeLabel` (app.tsx's own comment explains why: unit-testable without mounting the
-  // renderer, same reasoning formatModelRow's own extraction already used). `route` can be
-  // undefined (runGuidedSetup, cli.ts, mounts App before any provider key exists) — covered below.
-  describe("formatModeLabel", () => {
-    const nonRerouted = route();
-    const rerouted = route({ provider: "openrouter", rerouted: true, reason: "ANTHROPIC_API_KEY" });
-
-    test("full width (>=76 cols): mode indicator, model, and 'your key'", () => {
-      expect(formatModeLabel("[approve-each]", nonRerouted, 76)).toBe(
-        "[approve-each]  claude-sonnet-5 · your key",
-      );
-    });
-
-    test("full width with a rerouted route: '→ <provider>'", () => {
-      expect(formatModeLabel("[approve-each]", rerouted, 100)).toBe(
-        "[approve-each]  claude-sonnet-5 · → openrouter",
-      );
-    });
-
-    // D5: compact tier (52-75 cols) keeps the model name but drops the route suffix.
-    test("compact width (52-75 cols): mode indicator and model, no route label", () => {
-      expect(formatModeLabel("[approve-each]", nonRerouted, 60)).toBe(
-        "[approve-each]  claude-sonnet-5",
-      );
-      expect(formatModeLabel("[approve-each]", nonRerouted, 75)).toBe(
-        "[approve-each]  claude-sonnet-5",
-      );
-    });
-
-    // Negative control: below 52 cols the row reverts to EXACTLY today's pre-change
-    // output — mode indicator only, regardless of what `route` carries — proving the model+route
-    // label can never crowd the spinner/status text off screen at any width.
-    test("minimal width (<52 cols): mode indicator only, byte-identical to the pre-change row", () => {
-      expect(formatModeLabel("[approve-each]", nonRerouted, 51)).toBe("[approve-each]");
-      expect(formatModeLabel("[approve-each]", rerouted, 10)).toBe("[approve-each]");
-    });
-
-    // post-review fix: a real catalog id (an OpenRouter id is easily 40+ chars) used to go into
-    // the row unbounded, so it could overflow the exact terminal width the tier boundary assumed
-    // it fit in. Capped to NAME_WIDTH (22, the same width the picker table already truncates
-    // model names to), in both the tiers that render the model name.
-    test("long model id is truncated to NAME_WIDTH in both compact and full tiers", () => {
-      const longModel = route({ model: "openrouter/deepseek/deepseek-r1-distill-llama-70b" });
-      expect(formatModeLabel("[approve-each]", longModel, 60)).toBe(
-        "[approve-each]  openrouter/deepseek/d…",
-      );
-      expect(formatModeLabel("[approve-each]", longModel, 76)).toBe(
-        "[approve-each]  openrouter/deepseek/d… · your key",
-      );
-    });
-
-    // runGuidedSetup (cli.ts) mounts App with route: undefined before any provider key exists —
-    // the mode indicator must fall back to the bare label at every width, never a fabricated
-    // "your key"/"→ <provider>" for a route that does not exist yet.
-    test("undefined route: mode indicator only, at every width", () => {
-      expect(formatModeLabel("[approve-each]", undefined, 100)).toBe("[approve-each]");
-      expect(formatModeLabel("[approve-each]", undefined, 60)).toBe("[approve-each]");
-      expect(formatModeLabel("[approve-each]", undefined, 10)).toBe("[approve-each]");
-    });
-
-    test("full width with a gateway-served route: 'provided'", () => {
-      const viaGateway = route({ viaGateway: true });
-      expect(formatModeLabel("[approve-each]", viaGateway, 100)).toBe(
-        "[approve-each]  claude-sonnet-5 · provided",
-      );
-    });
-
-    // Defensive: resolveRoute's own contract makes rerouted && viaGateway both true unreachable,
-    // but formatModeLabel must not rely on that — a rerouted route always reads "→ provider",
-    // never "provided", regardless of what viaGateway carries.
-    test("a rerouted route still reads '→ <provider>' even if viaGateway were also true", () => {
-      const reroutedAndGateway = route({
-        provider: "openrouter",
-        rerouted: true,
-        reason: "ANTHROPIC_API_KEY",
-        viaGateway: true,
-      });
-      expect(formatModeLabel("[approve-each]", reroutedAndGateway, 100)).toBe(
-        "[approve-each]  claude-sonnet-5 · → openrouter",
-      );
-    });
-  });
-
   describe("slideWindow", () => {
     // The exact "clamp, don't re-center" cases ModelPicker's own moveSelection relies on.
     test("selection still inside the window: offset does not move", () => {
@@ -2122,10 +2038,11 @@ describe("App", () => {
   });
 
   describe("persistent mode+route indicator (mounted)", () => {
-    // useTerminalDimensions' own live-resize wiring — formatModeLabel's tests above already cover
-    // the tier DECISION logic as a pure function, so this is the one mounted-level smoke test
-    // needed to confirm a real resize actually reaches the rendered row end-to-end.
-    test("renders the model+route label at the default width, and drops it after a resize below the compact tier", async () => {
+    // useTerminalDimensions' own live-resize wiring — formatModeLabel's own unit tests
+    // (format.test.ts) already cover the tier DECISION logic as a pure function, so this is the
+    // one mounted-level smoke test needed to confirm a real resize actually reaches the rendered
+    // row end-to-end.
+    test("renders the model+route label at the default width, and drops it after a resize below MODE_MODEL_MIN_COLS", async () => {
       const { setup } = await connect();
       expect(setup.captureCharFrame()).toContain("your key");
 

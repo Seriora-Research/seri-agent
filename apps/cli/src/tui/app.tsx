@@ -215,7 +215,11 @@ export function App({
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
-  const modeLabel = formatModeLabel(state.modeIndicator, state.route, width);
+  const { indicator: modeIndicatorText, detail: modeDetail } = formatModeLabel(
+    state.modeIndicator,
+    state.route,
+    width,
+  );
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
   // The scrollbox's own measured height (this file's own header comment explains why it needs a
@@ -413,7 +417,7 @@ export function App({
         </box>
       )}
       <box flexDirection="row" justifyContent="space-between">
-        <text>{modeLabel}</text>
+        <text>{modeIndicatorText + modeDetail}</text>
         <box flexDirection="row" gap={1}>
           {/* `noPanelOpen` too, not just `scrolledUp`: while a panel is open, End
           is swallowed by the exact same gate `noPanelOpen` already puts on the transcript-scroll
