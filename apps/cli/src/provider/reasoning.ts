@@ -1,5 +1,6 @@
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { JSONValue } from "ai";
+import { loadReasoningEffortConfig } from "../config/config";
 
 // Returns the tiers legal to offer a user for `entry` — an `effort` entry's named values win
 // over a `toggle` entry when a model's reasoningOptions array has both (e.g. GLM 5.2, which
@@ -17,13 +18,17 @@ export function legalTiersFor(entry?: ModelCatalogEntry): string[] {
   // gate, breaking every turn for that model instead of degrading to "no tiers offered."
   const raw = entry?.reasoningOptions;
   const opts = Array.isArray(raw) ? raw : [];
-  const effort = opts.find((o) => o.type === "effort");
-  // `?? []`, not a bare `effort.values`: a malformed `{type: "effort"}` entry with no `values`
-  // field would otherwise return `undefined` here — which throws `TypeError: undefined.includes`
-  // at loop.ts's own re-validation gate on the hot turn path, breaking the whole turn over a
-  // catalog data problem, not just /effort (round-2 review item, prior fix).
-  if (effort) return effort.values ?? [];
-  const toggle = opts.find((o) => o.type === "toggle");
+  // `o != null && typeof o === "object"`, not a bare `o.type === "effort"` (round-4 review): a
+  // well-formed ARRAY can still carry a malformed element — `reasoning_options: [null]` — and
+  // reading `.type` off `null` throws the identical `TypeError` this function's own `Array.isArray`
+  // guard above already exists to prevent for the array-vs-non-array case.
+  const effort = opts.find((o) => o != null && typeof o === "object" && o.type === "effort");
+  // `Array.isArray`, not a bare `?? []`: a present-but-non-array `values` field (e.g. `{}` or a
+  // string) would otherwise pass through unchanged and break every downstream `.includes()`/
+  // `.join()` caller — the same upstream-shape-drift class this function's own header comment
+  // warns is recurring, just one field deeper.
+  if (effort) return Array.isArray(effort.values) ? effort.values : [];
+  const toggle = opts.find((o) => o != null && typeof o === "object" && o.type === "toggle");
   if (toggle) return ["off", "on"];
   return [];
 }
@@ -40,6 +45,95 @@ export function appliedReasoningEffort(
   entry?: ModelCatalogEntry,
 ): string | undefined {
   return tier !== undefined && legalTiersFor(entry).includes(tier) ? tier : undefined;
+}
+
+// Session override wins, falling back to the config default — used by /effort's own decision
+// (resolveEffortCommand and decideEffortOpen, tui/state/commands.ts) and by cli.ts's driveLoop.
+// The `--effort` CLI flag bypasses this resolver entirely (RunContext.effortFlag, read directly in
+// cli.ts's driveLoop), never reaching session.reasoningEffort or config.json. Moved here from
+// tui/state/commands.ts (round-4 review item 6): this module, not that one, is the established
+// canonical home for reasoning-effort resolution — its own sibling `appliedReasoningEffort` above
+// already lived here, and driveLoop (a shared, non-TUI-specific path) was importing a "tui/state"
+// module for a function with nothing TUI-specific about it. A minimal structural session type, not
+// `SessionState<ModelMessage>`: the only field this reads is `reasoningEffort`, and importing
+// session.ts here for that one field would pull a session/message dependency into a module that has
+// none today (matches resolveSessionRoute's own minimal-shape parameter, routing.ts).
+export function resolveReasoningEffort(
+  session: { reasoningEffort?: string },
+  config: Record<string, string>,
+): string | undefined {
+  return session.reasoningEffort ?? loadReasoningEffortConfig(config);
+}
+
+export type EffortCommandResult =
+  | { changed: false; message: string }
+  | { changed: true; reasoningEffort: string | undefined; message: string };
+
+// The shared arg-parsing/validation/resolution logic behind every /effort form (bare, `<level>`,
+// `auto`) — cli.ts's own effortCommand (the non-interactive path, awaiting its own catalog/plan/
+// route) and runTui's onSubmit interception (the TUI path, reusing prepared.catalog/prepared.plan
+// synchronously — the round-4 review fix for the race an awaited effortCommand call used to open on
+// a live turn, spec 032) both call this with an already-resolved `legalTiers`/`current` pair; only
+// how those two are obtained differs between the two callers, not the decision itself.
+export function resolveEffortCommand(
+  args: string[],
+  legalTiers: string[],
+  current: string | undefined,
+): EffortCommandResult {
+  if (args.length === 0) {
+    if (legalTiers.length === 0) {
+      return {
+        changed: false,
+        message: `Reasoning effort: ${current ?? "unset"} (this model has no reasoning-effort tiers available)`,
+      };
+    }
+    // round-4 review item 5: don't report a session override as active when it is actually
+    // illegal for the currently resolved route and gets silently dropped on send —
+    // appliedReasoningEffort (above) is the same check loop.ts's own re-validation gate applies.
+    if (current !== undefined && !legalTiers.includes(current)) {
+      return {
+        changed: false,
+        message: `Reasoning effort: ${current} is set but not legal for the current model — it will be dropped. Legal tiers: ${legalTiers.join(", ")}.`,
+      };
+    }
+    return {
+      changed: false,
+      message: `Reasoning effort: ${current ?? "unset"}. Legal tiers for the current model: ${legalTiers.join(", ")}.`,
+    };
+  }
+
+  if (args[0] === "auto") {
+    return {
+      changed: true,
+      reasoningEffort: undefined,
+      message: "Reasoning effort: auto (falls back to the config default).",
+    };
+  }
+
+  // Destructured, not `args[0] as string` (round-4 review item 9): `args.length === 0` was already
+  // handled above, so `tier` is only ever `undefined` here if a future caller passes more than one
+  // argument — SLASH_COMMANDS' own `accepts: (args) => args.length <= 1` and the TUI interception's
+  // matching guard both already keep that from happening, but this reads as a real check rather
+  // than an assertion of an invariant enforced two call sites away.
+  const [tier] = args;
+  if (tier === undefined || !legalTiers.includes(tier)) {
+    return {
+      changed: false,
+      message:
+        legalTiers.length === 0
+          ? "This model has no reasoning-effort tiers available."
+          : `Invalid reasoning effort "${tier}". Legal tiers: ${legalTiers.join(", ")}.`,
+    };
+  }
+  return { changed: true, reasoningEffort: tier, message: `Reasoning effort: ${tier}` };
+}
+
+// Forces a compile error at the call site when `x` is not actually `never` — buildReasoningProviderOptions's
+// own disabled-branch switch (below) is the one caller, added there because that switch, unlike its
+// enabled-branch sibling, is not this function's terminal return and so gets no exhaustiveness
+// check from tsc on its own (round-4 review item 4, that switch's own comment has the full account).
+function assertNever(x: never): never {
+  throw new Error(`Unhandled provider: ${String(x)}`);
 }
 
 // Anthropic's SDK has no named-tier param, only a numeric budgetTokens — this fixed table is an
@@ -88,6 +182,17 @@ export function buildReasoningProviderOptions(
         return { [provider]: { reasoningEffort: "none" } };
       case "openrouter":
         return { openrouter: { reasoning: { enabled: false } } };
+      // round-4 review item 4: this switch is not the function's own terminal return (the
+      // enabled-tier switch below is, and IS exhaustiveness-checked by tsc for free — falling off
+      // it without a case is a "not all code paths return a value" error with no default needed).
+      // This one sits inside an `if` block, so falling off it without a case is NOT a compile
+      // error — execution just continues into the enabled-tier switch below, silently sending the
+      // ENABLED shape for a tier the user asked to turn off. `assertNever` makes a 6th provider
+      // added to ModelProvider without a case here a compile error instead: once every real case
+      // above narrows `provider` to `never`, `assertNever(provider)` typechecks; a provider with no
+      // case does not.
+      default:
+        return assertNever(provider);
     }
   }
   switch (provider) {

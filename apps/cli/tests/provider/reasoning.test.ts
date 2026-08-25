@@ -4,6 +4,7 @@ import {
   appliedReasoningEffort,
   buildReasoningProviderOptions,
   legalTiersFor,
+  resolveEffortCommand,
 } from "../../src/provider/reasoning";
 
 function entry(overrides: Partial<ModelCatalogEntry>): ModelCatalogEntry {
@@ -82,6 +83,109 @@ describe("legalTiersFor", () => {
     });
     expect(() => legalTiersFor(e)).not.toThrow();
     expect(legalTiersFor(e)).toEqual([]);
+  });
+
+  // Round-4 review item 1: `values` present but not an array (e.g. `{}` or a string) used to pass
+  // through unchanged via a bare `?? []`, breaking every downstream `.includes()`/`.join()` caller.
+  test("effort entry with a non-array values field: returns empty rather than the malformed value", () => {
+    const e = entry({
+      reasoningOptions: [
+        { type: "effort", values: {} },
+      ] as unknown as ModelCatalogEntry["reasoningOptions"],
+    });
+    expect(() => legalTiersFor(e)).not.toThrow();
+    expect(legalTiersFor(e)).toEqual([]);
+  });
+
+  // Round-4 review item 2: a well-formed ARRAY can still carry a malformed (null) element —
+  // reading `.type` off it used to throw straight out of `opts.find(...)`.
+  test("a null element inside an otherwise well-formed reasoningOptions array: does not throw", () => {
+    const e = entry({
+      reasoningOptions: [null, { type: "effort", values: ["low", "medium"] }] as unknown as ModelCatalogEntry["reasoningOptions"],
+    });
+    expect(() => legalTiersFor(e)).not.toThrow();
+    expect(legalTiersFor(e)).toEqual(["low", "medium"]);
+  });
+
+  test("a null element with no other reasoningOptions entries: returns empty rather than throwing", () => {
+    const e = entry({
+      reasoningOptions: [null] as unknown as ModelCatalogEntry["reasoningOptions"],
+    });
+    expect(() => legalTiersFor(e)).not.toThrow();
+    expect(legalTiersFor(e)).toEqual([]);
+  });
+});
+
+// The shared decision behind every /effort form (round-4 review, "biggest item" — spec 032):
+// cli.ts's own effortCommand (non-interactive) and runTui's onSubmit interception (TUI) both call
+// this with an already-resolved `legalTiers`/`current` pair — tested here directly rather than
+// through either caller, since neither caller's own tests should need to re-verify this decision.
+describe("resolveEffortCommand", () => {
+  test("bare, no override, tiers available: reports unset and lists the legal tiers", () => {
+    const result = resolveEffortCommand([], ["low", "medium", "high"], undefined);
+    expect(result).toEqual({
+      changed: false,
+      message: "Reasoning effort: unset. Legal tiers for the current model: low, medium, high.",
+    });
+  });
+
+  test("bare, no tiers available at all: reports that plainly, regardless of `current`", () => {
+    const result = resolveEffortCommand([], [], undefined);
+    expect(result).toEqual({
+      changed: false,
+      message: "Reasoning effort: unset (this model has no reasoning-effort tiers available)",
+    });
+  });
+
+  // Round-4 review item 5(b): a session override that is no longer legal for the CURRENTLY
+  // resolved model (e.g. a stale value surviving a /model switch) must not be reported as though
+  // it were still active — it is about to be silently dropped, the same fact
+  // appliedReasoningEffort's own re-validation gate already enforces on the send side.
+  test("bare, a session override that isn't legal for the current model: reports it as dropped, not active", () => {
+    const result = resolveEffortCommand([], ["low", "medium"], "xhigh");
+    expect(result).toEqual({
+      changed: false,
+      message:
+        'Reasoning effort: xhigh is set but not legal for the current model — it will be dropped. Legal tiers: low, medium.',
+    });
+  });
+
+  test("bare, a session override that IS legal: reports it as the active tier", () => {
+    const result = resolveEffortCommand([], ["low", "medium"], "medium");
+    expect(result).toEqual({
+      changed: false,
+      message: "Reasoning effort: medium. Legal tiers for the current model: low, medium.",
+    });
+  });
+
+  test("auto: clears the override regardless of legal tiers", () => {
+    const result = resolveEffortCommand(["auto"], ["low", "medium"], "medium");
+    expect(result).toEqual({
+      changed: true,
+      reasoningEffort: undefined,
+      message: "Reasoning effort: auto (falls back to the config default).",
+    });
+  });
+
+  test("a legal tier: applies it", () => {
+    const result = resolveEffortCommand(["low"], ["low", "medium"], undefined);
+    expect(result).toEqual({ changed: true, reasoningEffort: "low", message: "Reasoning effort: low" });
+  });
+
+  test("an illegal tier, with tiers available: reports the actual legal ones, unchanged", () => {
+    const result = resolveEffortCommand(["extreme"], ["low", "medium"], undefined);
+    expect(result).toEqual({
+      changed: false,
+      message: 'Invalid reasoning effort "extreme". Legal tiers: low, medium.',
+    });
+  });
+
+  test("any single argument, with no tiers available: reports that plainly", () => {
+    const result = resolveEffortCommand(["low"], [], undefined);
+    expect(result).toEqual({
+      changed: false,
+      message: "This model has no reasoning-effort tiers available.",
+    });
   });
 });
 
