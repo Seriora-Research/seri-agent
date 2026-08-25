@@ -73,7 +73,7 @@ import {
   DEFAULT_COLUMNS,
   DEFAULT_ROWS,
   FALLBACK_CHROME_ROWS,
-  formatModeLabel,
+  formatModeDetail,
   MODE_CYCLE_HINT,
   MODE_HINT_COLS,
   MODE_LABEL,
@@ -89,7 +89,7 @@ export type AppProps = {
   // optional would let a future `createElement(App, ...)` call site silently omit it instead of
   // failing to compile. The VALUE is `| undefined` because one call site (runGuidedSetup, cli.ts)
   // mounts App before any provider key exists at all — genuinely no PreparedRun/route to pass.
-  // formatModeLabel drops the model+route suffix entirely when `state.route` is undefined, rather
+  // formatModeDetail drops the model+route suffix entirely when `state.route` is undefined, rather
   // than showing a fabricated route ("your key" during a flow where there is provably no key yet
   // would be actively wrong, not just a placeholder).
   route: ResolvedRoute | undefined;
@@ -180,14 +180,15 @@ export type AppProps = {
   // this is the single render-time mirror of that override: the indicator must not claim a mode
   // the gate isn't actually enforcing. `state.session.permissionMode`/`state.modeIndicator` stay
   // the normal, untouched source everywhere else (the reducer itself is not changed for this flag).
-  // Also makes Shift+Tab inert while set: a functioning binding would silently mutate and persist a
-  // session field the gate is ignoring, with zero visible feedback.
+  // Also makes Shift+Tab inert while set, checked inside this component rather than left to every
+  // caller to remember: a functioning binding would silently mutate and persist a session field
+  // the gate is ignoring, with zero visible feedback.
   skipPermissions?: boolean;
 };
 
 // A pty can genuinely report a terminal width as a real but unusable `0` for the first render or
 // two, before its window-size ioctl has actually landed (reproduced live over a real pty in WSL) —
-// `formatModeLabel` (below) picks its display tier off this width, and a stray `0` would collapse
+// `formatModeDetail` (below) picks its display tier off this width, and a stray `0` would collapse
 // it to the narrowest tier for no real reason. `|| DEFAULT_COLUMNS`, not `??`: `||` treats `0` the
 // same as `undefined`/`null`, which is exactly the substitution a column count of zero needs —
 // there is no real terminal width `0` is ever the correct value for.
@@ -236,13 +237,13 @@ export function App({
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
-  // The single render-time override `skipPermissions` needs — see `AppProps.skipPermissions`'s
-  // own comment. `displayMode` drives the indicator's hue, `indicatorText` its label; both feed
-  // into `formatModeLabel` further below (once `scrolledUp`/`noPanelOpen` exist) so the model/route
-  // `detail` derivation can account for the row's own right-hand content.
+  // The single render-time override `skipPermissions` needs — see `AppProps.skipPermissions`'s own
+  // comment. One derived value, not two: `indicatorText` reads off `displayMode` rather than
+  // carrying its own separate `skipPermissions` ternary, so the hue and the label can't disagree
+  // about which mode is showing.
   const displayMode: PermissionMode =
     skipPermissions === true ? "auto" : state.session.permissionMode;
-  const indicatorText = skipPermissions === true ? MODE_LABEL.auto : state.modeIndicator;
+  const indicatorText = MODE_LABEL[displayMode];
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
   // The scrollbox's own measured height (this file's own header comment explains why it needs a
@@ -339,20 +340,19 @@ export function App({
   // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
   // "space-between"`, below) — the row's own tier thresholds were sized against the LEFT side
   // alone, so once the right side is actually showing, its own width has to come out of the
-  // budget `formatModeLabel` sees, or the two collide and OpenTUI wraps the row across two lines
-  // (observed live: `tests/tui/tuiPty.test.ts`'s scroll-banner assertion broke on this exact
-  // interaction once the label grew a glyph + persistent hint). `+ 1` for the row's own `gap={1}`
-  // between banner and status, only when both are shown at once.
+  // budget BOTH the hint's own visibility check and `formatModeDetail` see, or the two collide and
+  // OpenTUI wraps the row across two lines (observed live: `tests/tui/tuiPty.test.ts`'s
+  // scroll-banner assertion broke on this exact interaction once the label grew a glyph +
+  // persistent hint — and a second time, at a narrower width, when only the hint's own gate had
+  // been fixed and not the model/route one). `+ 1` for the row's own `gap={1}` between banner and
+  // status, only when both are shown at once. Also what the JSX below renders, rather than
+  // re-typing the banner string a second time — the two can't drift apart if there's only one copy.
   const rightSideText = scrolledUp && noPanelOpen ? "↑ scrolled — End to follow" : "";
   const rightSideWidth =
     rightSideText.length +
     (rightSideText.length > 0 && state.status.length > 0 ? 1 : 0) +
     state.status.length;
-  const { indicator: modeIndicatorText, detail: modeDetail } = formatModeLabel(
-    indicatorText,
-    state.route,
-    width - rightSideWidth,
-  );
+  const modeDetail = formatModeDetail(state.route, width - rightSideWidth);
 
   // A second, independent useKeyboard from InputBox's own — OpenTUI delivers the same keypress to
   // every registered handler, so this fires regardless of what InputBox does with the same press
@@ -535,16 +535,20 @@ export function App({
         (MODE_CYCLE_HINT's own leading space, `detail`'s own leading two spaces), so the mode hue
         never bleeds onto the hint/model/route by way of an inserted gap cell. */}
         <box flexDirection="row">
-          <text fg={theme.mode[displayMode]}>{modeIndicatorText}</text>
-          {width >= MODE_HINT_COLS && <text fg={theme.muted}>{MODE_CYCLE_HINT}</text>}
+          <text fg={theme.mode[displayMode]}>{indicatorText}</text>
+          {width - rightSideWidth >= MODE_HINT_COLS && (
+            <text fg={theme.muted}>{MODE_CYCLE_HINT}</text>
+          )}
           <text fg={theme.muted}>{modeDetail}</text>
         </box>
         <box flexDirection="row" gap={1}>
-          {/* `noPanelOpen` too, not just `scrolledUp`: while a panel is open, End
-          is swallowed by the exact same gate `noPanelOpen` already puts on the transcript-scroll
-          keys above — the banner would otherwise keep telling the user to press a key that does
-          nothing until they close the panel first. */}
-          {scrolledUp && noPanelOpen && <text fg={theme.muted}>↑ scrolled — End to follow</text>}
+          {/* `rightSideText`, not a re-check of `scrolledUp && noPanelOpen` (`noPanelOpen` matters
+          here too: while a panel is open, End is swallowed by the exact same gate that puts on the
+          transcript-scroll keys above — the banner would otherwise keep telling the user to press
+          a key that does nothing until they close the panel first) — reusing the already-computed
+          string keeps this render in lockstep with the width budget above, rather than risking the
+          two drifting if one is ever edited without the other. */}
+          {rightSideText.length > 0 && <text fg={theme.muted}>{rightSideText}</text>}
           {state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
         </box>
       </box>

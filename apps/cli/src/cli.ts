@@ -2151,11 +2151,16 @@ async function runTui(
   // prop, not a dispatch app.tsx makes itself): the same `decideModeCycle` /mode already calls
   // (`cycleModeCommand`, above), read off `liveState.session` — this closure's own synchronous
   // mirror of the reducer's state, not a stale copy — so `getPermissionMode()`'s own `liveState`
-  // read is guaranteed to see the new mode on the very next gate check. No `presenter.message`:
-  // Shift+Tab is silent, unlike `/mode`, which prints its own transcript line.
+  // read is guaranteed to see the new mode on the very next gate check. Goes through
+  // `sessionUpdated`, not a raw dispatch, for the same reason `cycleModeCommand` does — it is the
+  // one thing this file documents as "the only thing that dispatches session-updated at all" on
+  // the TUI path (this function's own header comment above), and a second dispatcher would make
+  // that comment describe an invariant the code no longer has. Not awaited: nothing here needs to
+  // sequence after the persist the way `rewindCommand`'s `recordBarrier()` does. No `.message`
+  // call: Shift+Tab is silent, unlike `/mode`, which prints its own transcript line.
   function onCycleMode(): void {
     const { next } = decideModeCycle(liveState.session);
-    dispatch({ type: "session-updated", session: next });
+    void tuiPresenter(dispatch, awaitNextPersist).sessionUpdated(next);
   }
 
   const { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack } = createSetupHandlers({

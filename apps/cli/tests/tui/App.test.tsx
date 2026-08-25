@@ -30,7 +30,7 @@ import {
 } from "../../src/tui/util/format";
 import { flush, flushMarkdown, route, session } from "./helpers";
 
-// Wide enough that every formatModeLabel tier, including the route label (>=MODE_ROUTE_MIN_COLS,
+// Wide enough that every formatModeDetail tier, including the route label (>=MODE_ROUTE_MIN_COLS,
 // 100 cols), is exercised by default,
 // tall enough (>=24 rows) that every panel's own list window sits at LIST_WINDOW_MAX (10) without
 // each test having to resize just to clear that floor (util/format.ts's own PANEL_CHROME_ROWS/
@@ -2054,7 +2054,7 @@ describe("App", () => {
   });
 
   describe("persistent mode+route indicator (mounted)", () => {
-    // useTerminalDimensions' own live-resize wiring — formatModeLabel's own unit tests
+    // useTerminalDimensions' own live-resize wiring — formatModeDetail's own unit tests
     // (format.test.ts) already cover the tier DECISION logic as a pure function, so this is the
     // one mounted-level smoke test needed to confirm a real resize actually reaches the rendered
     // row end-to-end.
@@ -2118,7 +2118,7 @@ describe("App", () => {
     // resolveRoute will actually route it (a sibling reroute or the gateway) — only the NEXT
     // turn's route-updated dispatch does. Optimistically claiming `rerouted: false` here would
     // render "your key" for a provider the user doesn't have a key for: a fabricated route,
-    // exactly what formatModeLabel's own comment says to avoid. The bar should stay on the OLD
+    // exactly what formatModeDetail's own comment says to avoid. The bar should stay on the OLD
     // route rather than assert a wrong one.
     test("a /model pick with no configured key leaves the status bar on the old route, not a fabricated one", async () => {
       const { setup, dispatch } = await connect();
@@ -2158,9 +2158,9 @@ describe("App", () => {
       }
     });
 
-    // Acceptance criterion 13: the mode hue is confined to the indicator — formatModeLabel's own
-    // `detail` (the model name + route) is a SEPARATE `<text fg={theme.muted}>`, so it must never
-    // pick up `auto`'s own rust hue even though it sits right next to it.
+    // The mode hue is confined to the indicator — formatModeDetail's own `detail` (the model name +
+    // route) is a SEPARATE `<text fg={theme.muted}>`, so it must never pick up `auto`'s own rust
+    // hue even though it sits right next to it.
     test("the model name stays theme.muted, not the mode hue, even in auto", async () => {
       const { setup } = await connect({ session: session({ permissionMode: "auto" }) });
       const frame = setup.captureSpans();
@@ -2178,9 +2178,9 @@ describe("App", () => {
       expect(setup.captureCharFrame()).not.toContain("(shift+tab to cycle)");
     });
 
-    // Acceptance criterion 14: even with a route present, the row's own arithmetic (indicator +
-    // hint + the model-only detail P4's ladder allows at this width) must actually fit 80 columns
-    // in the RENDERED row, not just in formatModeLabel's own return value.
+    // Even with a route present, the row's own arithmetic (indicator + hint + the model-only
+    // detail the width ladder allows at this width) must actually fit 80 columns in the RENDERED
+    // row, not just in formatModeDetail's own return value.
     test("at 80 columns, the longest label with a route present fits the row and does not wrap", async () => {
       const { setup } = await connect({
         session: session({ permissionMode: "auto" }),
@@ -2195,9 +2195,9 @@ describe("App", () => {
       expect(modeLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
     });
 
-    // D3 (glyphs) was chosen over the D2 no-glyph recommendation, which re-opens the risk that
-    // `⏸`/`⏵⏵` render double-width and corrupt the row's own column math — the risk table's stated
-    // condition for shipping D3 at all. `captureSpans()` groups a whole `<text>` node into one span
+    // `⏸`/`⏵⏵` are outside the BMP-only glyph set used elsewhere in this file and could render
+    // double-width, corrupting the row's own column math — so their cell width has to be measured,
+    // not assumed. `captureSpans()` groups a whole `<text>` node into one span
     // rather than one span per character, so there is no isolated "just the glyph" span to measure
     // directly; instead, the indicator span's OWN measured `width` equalling its `length` (JS
     // UTF-16 code units, ASCII for every character here except the glyph) proves every character in
@@ -2224,7 +2224,7 @@ describe("App", () => {
     // Regression (found live via tests/tui/tuiPty.test.ts's real-pty PageUp assertion, which
     // started failing once the label grew a glyph + persistent hint): the mode row and the
     // "↑ scrolled — End to follow" banner share one row via `justifyContent="space-between"`, but
-    // formatModeLabel's own width tiers only ever accounted for the row's LEFT-hand content. At 80
+    // formatModeDetail's own width tiers only ever accounted for the row's LEFT-hand content. At 80
     // columns with a route present, the model name showing on the left plus the banner on the
     // right together exceed 80 cells, and OpenTUI wraps the row across two lines — splitting the
     // banner's own text mid-word, so "sawLine" style assertions (and a real user) never see it
@@ -2245,6 +2245,30 @@ describe("App", () => {
       const lines = frame.split("\n");
       const bannerLine = lines.find((l) => l.includes("↑ scrolled — End to follow"));
       expect(bannerLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
+    });
+
+    // Regression: the fix above only reserved the right-side banner's width in the call to
+    // formatModeDetail (which gates the model/route detail), not in the hint's own visibility check
+    // a few lines below — so at a width narrower than 80 (no room for the model anyway, so the
+    // first fix's own test never exercised this), the hint alone could still collide with the
+    // banner. 60 columns: "⏸ approve-each mode on" (22) + hint (21) = 43, well under 52
+    // (MODE_HINT_COLS against the raw width) even though 43 + the banner's 26 = 69 > 60.
+    test("the scroll banner and the hint coexist at a narrow width without wrapping", async () => {
+      const { setup, dispatch } = await connect();
+      await resize(setup, 60, DEFAULT_HEIGHT);
+
+      for (let i = 0; i < 300; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+      setup.mockInput.pressKey(PAGE_UP);
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      const lines = frame.split("\n");
+      const bannerLine = lines.find((l) => l.includes("↑ scrolled — End to follow"));
+      expect(bannerLine).toBeDefined();
+      expect(bannerLine?.trimEnd().length).toBeLessThanOrEqual(60);
     });
   });
 
@@ -2270,8 +2294,8 @@ describe("App", () => {
       expect(setup.captureCharFrame()).toContain("bypass permissions on");
     });
 
-    // Criterion 6: a panel/approval box owns the keyboard while it's open — the same `noPanelOpen`
-    // gate the scroll keys above already share.
+    // A panel/approval box owns the keyboard while it's open — the same `noPanelOpen` gate the
+    // scroll keys above already share.
     test("shift+tab does nothing while a panel is open", async () => {
       let calls = 0;
       const { setup, dispatch } = await connect({ onCycleMode: () => calls++ });
@@ -2290,8 +2314,8 @@ describe("App", () => {
       expect(calls).toBe(0);
     });
 
-    // Criterion 4: plain Tab (no shift) shares the same `key.name === "tab"`, so this proves the
-    // `key.shift` check is what actually gates the cycle, not just the key name. `isPrintableKey`
+    // Plain Tab (no shift) shares the same `key.name === "tab"`, so this proves the `key.shift`
+    // check is what actually gates the cycle, not just the key name. `isPrintableKey`
     // (util/keys.ts) already excludes a `key.name.length > 1` key like "tab" from InputBox's own
     // typed-buffer handling — this also confirms that holds for real, not just by that function's
     // own logic.
@@ -2313,8 +2337,8 @@ describe("App", () => {
       expect(submitted).toEqual(["hello world"]);
     });
 
-    // Criterion 7: the keypress handler only ever calls `onCycleMode` — nothing about it touches
-    // the transcript. A no-op `onCycleMode` here isolates that from whatever a real caller's own
+    // The keypress handler only ever calls `onCycleMode` — nothing about it touches the
+    // transcript. A no-op `onCycleMode` here isolates that from whatever a real caller's own
     // `onCycleMode` might separately choose to dispatch.
     test("shift+tab does not append a transcript entry", async () => {
       const { setup, dispatch } = await connect({ onCycleMode: () => {} });
@@ -2330,9 +2354,9 @@ describe("App", () => {
   });
 
   describe("skipPermissions pins the indicator to bypass", () => {
-    // Criterion 15: --dangerously-skip-permissions overrides getPermissionMode() (cli.ts) to
-    // "auto" regardless of the session's own stored permissionMode — the indicator must not claim
-    // a mode the gate isn't actually enforcing.
+    // --dangerously-skip-permissions overrides getPermissionMode() (cli.ts) to "auto" regardless
+    // of the session's own stored permissionMode — the indicator must not claim a mode the gate
+    // isn't actually enforcing.
     test("the label and hue read bypass permissions on, in theme.mode.auto, regardless of the stored mode", async () => {
       const { setup } = await connect({
         session: session({ permissionMode: "approve-each" }),

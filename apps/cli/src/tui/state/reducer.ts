@@ -359,7 +359,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       // be rerouted or gateway-served, but WHERE it lands is `resolveRoute`'s computation (it needs
       // the catalog/configured-providers/plan this reducer doesn't have) — guessing `rerouted: false`
       // here would render "your key" for a provider the user doesn't actually have a key for, exactly
-      // the fabricated-route claim `formatModeLabel`'s own comment says to avoid. `state.route` is
+      // the fabricated-route claim `formatModeDetail`'s own comment says to avoid. `state.route` is
       // left as-is (stale for the one turn until `route-updated` supplies the real answer) rather
       // than asserting something false.
       if (action.pick === undefined) {

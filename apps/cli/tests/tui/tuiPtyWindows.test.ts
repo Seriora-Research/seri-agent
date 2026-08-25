@@ -300,10 +300,10 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
       }
     }, 90_000);
 
-    // E1's own measurement (the plan's risk table): Anthropic documents Bun not enabling
-    // ENABLE_VIRTUAL_TERMINAL_INPUT as a real failure mode for exactly this Node/Bun-on-Windows
-    // runtime family — Shift+Tab (`\x1b[Z`) might never reach the app at all on native Windows.
-    // This is the evidence that decides whether the conditional Alt+M fallback is needed.
+    // Anthropic documents Bun not enabling ENABLE_VIRTUAL_TERMINAL_INPUT as a real failure mode
+    // for exactly this Node/Bun-on-Windows runtime family — Shift+Tab (`\x1b[Z`) might never reach
+    // the app at all on native Windows. Measured here rather than assumed, since that's exactly
+    // the kind of platform claim a local pass can't confirm.
     test("shift+tab (\\x1b[Z) changes the rendered mode label on a real Windows console", async () => {
       const scriptPath = join(dir, "child-input.mjs");
       writeFileSync(scriptPath, childScriptInput(dir));
