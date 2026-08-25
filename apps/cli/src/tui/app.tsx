@@ -380,7 +380,7 @@ export function App({
   // terminal configured for ambiguous-width-double, same caveat the D3 glyphs already carry).
   const showRightSide = width >= indicatorText.length + rawRightSideWidth;
   const rightSideWidth = showRightSide ? rawRightSideWidth : 0;
-  const modeDetail = formatModeDetail(state.route, width - rightSideWidth);
+  const modeDetail = formatModeDetail(state.route, width - rightSideWidth, undefined);
 
   // Its own useKeyboard, separate from the scroll handler below — OpenTUI delivers the same
   // keypress to every registered handler (that handler's own comment explains this), so a second,

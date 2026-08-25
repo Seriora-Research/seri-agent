@@ -119,6 +119,11 @@ export const ROUTE_WIDTH = 13;
 // real pair in the bundled manifest (measured: $150.00/$600.00, 15 characters) with a little room
 // to spare, not the exact minimum.
 export const COST_WIDTH = 18;
+// The widest reasoning-tier value referenced anywhere in this codebase's own provider tables is
+// "minimal" (7 chars — provider/reasoning.ts's own comment on OpenAI's full effort union). One
+// column of slack over that, matching COST_WIDTH's own "to spare, not the exact minimum" convention
+// above.
+export const EFFORT_WIDTH = 8;
 
 // The three `PermissionMode` label strings the persistent mode-indicator row renders — Claude
 // Code's own `<what it does> on` shape, not the raw union value. `⏸` prefixes the two modes that
@@ -323,7 +328,17 @@ export function formatRouteLabel(input: {
 // Carries its own leading two spaces (mirroring the old inline `"  "` join) and is `""` when there
 // is nothing to show, so app.tsx's JSX never has to add spacing of its own — it renders this
 // directly next to the mode indicator, which app.tsx already has in hand and colors separately.
-export function formatModeDetail(route: ResolvedRoute | undefined, width: number): string {
+// `effortTier` is the active `/effort` override (or `undefined` for none/auto/stale — see its
+// caller in app.tsx), appended only at the same width tier the route label already requires: 86
+// (this row's own proven worst case, see MODE_ROUTE_MIN_COLS's comment above) + 3 (" · ") + 8
+// (EFFORT_WIDTH) = 97 < 100, so the combined worst case still holds with room to spare. Truncated
+// with the same defensive shape as the model name below, since a tier value ultimately comes from
+// models.dev, an external and unvalidated source.
+export function formatModeDetail(
+  route: ResolvedRoute | undefined,
+  width: number,
+  effortTier: string | undefined,
+): string {
   if (route === undefined || width < MODE_MODEL_MIN_COLS) return "";
   const modelName =
     route.model.length > NAME_WIDTH ? `${route.model.slice(0, NAME_WIDTH - 1)}…` : route.model;
@@ -333,7 +348,10 @@ export function formatModeDetail(route: ResolvedRoute | undefined, width: number
     rerouteTo: route.rerouted ? route.provider : undefined,
     gatewayReachable: route.viaGateway,
   });
-  return `  ${modelName} · ${routeLabel}`;
+  if (effortTier === undefined) return `  ${modelName} · ${routeLabel}`;
+  const tier =
+    effortTier.length > EFFORT_WIDTH ? `${effortTier.slice(0, EFFORT_WIDTH - 1)}…` : effortTier;
+  return `  ${modelName} · ${routeLabel} · ${tier}`;
 }
 
 export function formatModelRow(row: ModelPickerEntry): string {
