@@ -546,6 +546,47 @@ function childScriptEffortPersist(dir: string): string {
   ].join("\n");
 }
 
+// The mount-time counterpart of childScriptEffortPersist, above: `cli.run([])` (no positional
+// task), so the TUI mounts idle and no turn ever starts — the config default's own tier must
+// already be in App's very first rendered frame, not just from turn 1's own
+// `reasoning-effort-default-updated` dispatch (runTurn, cli.ts). Same live-shaped catalog fetch
+// mock as childScriptEffortPersist, and the same reason: the bundled fallback manifest has no
+// reasoning_options at all.
+function childScriptEffortDefaultAtMount(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.SERI_MODEL = "reasoning-model";`,
+    `process.env.SERI_PROVIDER = "groq";`,
+    `delete process.env.SERI_DISABLE_MODELS_FETCH;`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) => {`,
+    `  if (typeof url === "string" && url.includes("models.dev")) {`,
+    `    return Promise.resolve(new Response(JSON.stringify({`,
+    `      groq: { models: { "reasoning-model": { id: "reasoning-model", name: "Reasoning Model", family: "test", tool_call: true, reasoning: true, reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }], limit: { context: 1000, output: 100 } } } },`,
+    `      openrouter: { models: {} }, anthropic: { models: {} }, openai: { models: {} }, google: { models: {} },`,
+    `    }), { status: 200 }));`,
+    `  }`,
+    `  return realFetch(url, opts);`,
+    `};`,
+    `async function* runLoopFake(opts) {`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run([], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: (id) => ({ id }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
 // D1/D2 (feature-plan.md, multi-provider-byok-phase-2): plan Test-plan item 8, "/model
 // multi-route" — the end-to-end proof that decideModelPickerOpen's grouping (unit-tested already)
 // and a real picker selection actually round-trip through a live pick to a persisted provider.
@@ -1724,6 +1765,67 @@ function countLogicalOccurrences(raw: string, line: string): number {
 // comment for why a pty (not a pipe) is load-bearing here: raw mode's interpretation of input —
 // both 0x03 as a keypress rather than a signal, and each typed character reflecting live — is the
 // entire mechanism under test, and a pipe cannot exercise either.
+//
+// argv[1]/argv[2] are the requested rows/cols, argv[3:] the real command to run. `os.openpty` (not
+// `pty.fork`, which `startChild`'s own default invocation uses) so the `TIOCSWINSZ` ioctl below runs
+// on the slave before the child is even forked — no race against how fast the child's own first
+// terminal-size read happens. `os.setsid`/the three `dup2`s/`TIOCSCTTY` are what `pty.fork` already
+// does internally for the default path; reproduced here by hand since bypassing `pty.fork` to reach
+// its own winsize means losing that plumbing too. The `select` loop proxies both directions — master
+// to this process's stdout (what every `sawLine` call reads) and this process's stdin to the master
+// (what every `child.stdin?.write(...)` call needs to actually reach the child) — the same two
+// directions `pty.spawn` already copies for the default path.
+const PTY_RESIZE_SPAWN = [
+  "import fcntl, os, pty, select, struct, sys, termios",
+  "rows, cols = int(sys.argv[1]), int(sys.argv[2])",
+  "master_fd, slave_fd = pty.openpty()",
+  'fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))',
+  "pid = os.fork()",
+  "if pid == 0:",
+  "    os.close(master_fd)",
+  "    os.setsid()",
+  "    os.dup2(slave_fd, 0)",
+  "    os.dup2(slave_fd, 1)",
+  "    os.dup2(slave_fd, 2)",
+  "    if slave_fd > 2:",
+  "        os.close(slave_fd)",
+  "    fcntl.ioctl(0, termios.TIOCSCTTY, 0)",
+  "    os.execvp(sys.argv[3], sys.argv[3:])",
+  "os.close(slave_fd)",
+  "while True:",
+  "    try:",
+  "        readable, _, _ = select.select([master_fd, 0], [], [])",
+  "    except (OSError, ValueError):",
+  "        break",
+  "    if master_fd in readable:",
+  "        try:",
+  "            data = os.read(master_fd, 1024)",
+  "        except OSError:",
+  "            break",
+  "        if not data:",
+  "            break",
+  "        os.write(1, data)",
+  "    if 0 in readable:",
+  "        data = os.read(0, 1024)",
+  "        if data:",
+  "            try:",
+  "                os.write(master_fd, data)",
+  "            except OSError:",
+  "                break",
+  "os.waitpid(pid, 0)",
+].join("\n");
+
+// `startChild`'s own default invocation (`import pty, sys; pty.spawn(sys.argv[1:])`, below) never
+// sets a window size on the pty it allocates — confirmed live (an `@opentui/core` `createCliRenderer`
+// probe run over the identical harness): a fresh pty with no winsize ioctl ever applied reports
+// `terminalWidth`/`terminalHeight` as `80`/`24`, OpenTUI's own hardcoded fallback for "no real size
+// available," not a real terminal's dimensions. `formatModeDetail` (util/format.ts) gates the mode
+// row's route/effort-tier suffix behind `MODE_ROUTE_MIN_COLS` (100) — strictly wider than that
+// 80-column default — so no test using the plain `startChild` invocation can ever observe that
+// suffix, regardless of what it asserts. `terminalSize`, below, is this file's only opt-in past that:
+// it swaps in a small hand-rolled pty (`os.openpty` + `TIOCSWINSZ`, not `pty.spawn`) that sets the
+// slave's winsize before the child ever execs, so the child's very first terminal-size read already
+// sees it. Every other call site omits it and keeps the exact behavior it always had.
 async function startChild(
   scriptPath: string,
   cwd: string,
@@ -1731,7 +1833,7 @@ async function startChild(
   // scripts ahead of RUNLOOP_READY/the zero-key /setup gate, so every existing call site needs it
   // dismissed before its own assertions can ever be reached. Only the "welcome splash" describe
   // block below (whose whole job is exercising the splash itself) passes `false`.
-  opts: { dismissSplash?: boolean } = {},
+  opts: { dismissSplash?: boolean; terminalSize?: { cols: number; rows: number } } = {},
 ): Promise<{
   child: ReturnType<typeof spawn>;
   exited: Promise<Exit>;
@@ -1778,7 +1880,16 @@ async function startChild(
   // `sawLine`) until `frameOccurrences(line) >= count`.
   sawInFrameTimes: (line: string, count: number) => Promise<void>;
 }> {
-  const args = ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, scriptPath];
+  const args = opts.terminalSize
+    ? [
+        "-c",
+        PTY_RESIZE_SPAWN,
+        String(opts.terminalSize.rows),
+        String(opts.terminalSize.cols),
+        process.execPath,
+        scriptPath,
+      ]
+    : ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, scriptPath];
   // `OTUI_USE_CONSOLE=false`: OpenTUI's `TerminalConsoleCache` intercepts `console.log`/`console.error`
   // into a hidden debug overlay by default (`@opentui/core`'s own `registerEnvVar` for this — a
   // documented escape hatch, not an internal hack) — every `childScript*` fixture below relies on a
@@ -5146,6 +5257,29 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(result).not.toBe("the run never settled");
         const { stdout } = result as Exit;
         expect(stdout).toContain("EXIT_CODE 0");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Regression coverage for the mount-time counterpart of `reasoning-effort-default-updated`
+    // (reducer.ts/app.tsx): SERI_REASONING_EFFORT seeded in config.json before the process ever
+    // starts must show up in the mode row's own effort-tier suffix from the very first frame — no
+    // turn has run yet, so `runTui`'s own per-turn dispatch (cli.ts) cannot be what put it there.
+    // `terminalSize` widens the pty past `MODE_ROUTE_MIN_COLS` (`startChild`'s own comment has the
+    // full account of why every other test in this file can't observe this suffix at all).
+    test("SERI_REASONING_EFFORT from config.json shows the tier in the mode row before any input is typed", async () => {
+      seedConfig(dir, { SERI_REASONING_EFFORT: "medium" });
+      const scriptPath = join(dir, "child-effort-default-mount.mjs");
+      writeFileSync(scriptPath, childScriptEffortDefaultAtMount(dir));
+
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
+      try {
+        await sawLine("reasoning-model · your key · medium");
+        // Negative control: this is the mount-time seed, not a turn-triggered one.
+        expect(rawOccurrences("RUNLOOP_READY")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
