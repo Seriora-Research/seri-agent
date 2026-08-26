@@ -549,7 +549,7 @@ function childScriptEffortPersist(dir: string): string {
 // The mount-time counterpart of childScriptEffortPersist, above: `cli.run([])` (no positional
 // task), so the TUI mounts idle and no turn ever starts — the config default's own tier must
 // already be in App's very first rendered frame, not just from turn 1's own
-// `reasoning-effort-default-updated` dispatch (runTurn, cli.ts). Same live-shaped catalog fetch
+// `config-updated` dispatch (runTurn, cli.ts). Same live-shaped catalog fetch
 // mock as childScriptEffortPersist, and the same reason: the bundled fallback manifest has no
 // reasoning_options at all.
 function childScriptEffortDefaultAtMount(dir: string): string {
@@ -5289,7 +5289,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Regression coverage for the mount-time counterpart of `reasoning-effort-default-updated`
+    // Regression coverage for the mount-time counterpart of `config-updated`
     // (reducer.ts/app.tsx): SERI_REASONING_EFFORT seeded in config.json before the process ever
     // starts must show up in the mode row's own effort-tier suffix from the very first frame — no
     // turn has run yet, so `runTui`'s own per-turn dispatch (cli.ts) cannot be what put it there.

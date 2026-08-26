@@ -58,9 +58,8 @@ export function appliedReasoningEffort(
 // `SessionState<ModelMessage>`: the only field this reads is `reasoningEffort`, and importing
 // session.ts here for that one field would pull a session/message dependency into a module that has
 // none today (matches resolveSessionRoute's own minimal-shape parameter, routing.ts). The TUI
-// header's own `effortTier` (app.tsx) applies the identical `??` directly against `state.config`
-// rather than calling this: it already has the resolved record in reducer state, and a second
-// function wrapping one operator bought nothing but an extra import and a longer call site.
+// header's own `effortTier` (app.tsx) calls this too, against `state.session`/`state.config` — the
+// same rule, one place, rather than the two independent copies an earlier version of this file had.
 export function resolveReasoningEffort(
   session: { reasoningEffort?: string },
   config: Record<string, string>,

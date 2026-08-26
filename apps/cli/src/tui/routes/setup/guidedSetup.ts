@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
 import { createElement } from "react";
+import { loadConfig } from "../../../config/config";
 import { messageOf } from "../../../errors";
 import { catalogWithFallback } from "../../../provider/catalog";
 import { persistDefaultModel } from "../../../provider/defaults";
@@ -256,6 +257,18 @@ export async function runGuidedSetup(
     );
   }
 
+  // Unlike route/catalog (this phase never has a PreparedRun to give them), config.json IS
+  // available here — but guarded the same as every other loadConfig-adjacent read in this file
+  // (e.g. onGuidedModelSelected's own `configuredProviders` calls, above): a corrupted config.json
+  // must not crash the mount, it just means the header shows no config-derived tier, same as the
+  // `{}` every other mount before a real read fires here would already show.
+  let initialConfig: Record<string, string>;
+  try {
+    initialConfig = loadConfig(configDir);
+  } catch {
+    initialConfig = {};
+  }
+
   root.render(
     createElement(App, {
       session: liveState.session,
@@ -265,10 +278,7 @@ export async function runGuidedSetup(
       // rather than a fabricated value.
       route: undefined,
       catalog: undefined, // same reason as route above: no PreparedRun exists yet at this point
-      // Unlike route/catalog, an empty record here isn't a stand-in for "unavailable" — `state
-      // .route` being undefined already drops the whole effort-tier suffix (formatModeDetail's own
-      // route gate, app.tsx), so what config.json holds is unobservable at this mount regardless.
-      config: {},
+      config: initialConfig,
       onQuit: onSetupClose, // dead in this phase (InputBox/ApprovalBox never show) but wired for safety
       onModelSelected: onGuidedModelSelected,
       onModelPickerCancel: onGuidedModelPickerCancel,

@@ -52,10 +52,9 @@ import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/m
 import type { ModelMessage } from "ai";
 import { memo, useEffect, useReducer, useRef, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
-import { loadReasoningEffortConfig } from "../config/config";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
-import { appliedReasoningEffort } from "../provider/reasoning";
+import { appliedReasoningEffort, resolveReasoningEffort } from "../provider/reasoning";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 import { ApprovalBox } from "./components/ApprovalBox";
@@ -404,7 +403,7 @@ export function App({
       ? findCatalogEntry(catalog, state.route.model, state.route.provider)
       : undefined;
   const effortTier = appliedReasoningEffort(
-    state.session.reasoningEffort ?? loadReasoningEffortConfig(state.config),
+    resolveReasoningEffort(state.session, state.config),
     catalogEntry,
   );
   const modeDetail = formatModeDetail(state.route, width - rightSideWidth, effortTier);

@@ -119,7 +119,7 @@ describe("dispatchConfigList (via onConfigBack)", () => {
 // and has no turn to wait for on a /config-only edit — regression coverage for the gap a review
 // found: saving/unsetting a config value here used to dispatch nothing, so the header kept showing
 // whatever it last saw until the next turn ran.
-describe("config-updated live dispatch (via onConfigValueEntered/onConfigUnset)", () => {
+describe("config-updated live dispatch (via onConfigSelect/onConfigValueEntered/onConfigUnset)", () => {
   let configDir: string;
 
   beforeEach(() => {
@@ -132,6 +132,28 @@ describe("config-updated live dispatch (via onConfigValueEntered/onConfigUnset)"
 
   afterEach(() => {
     rmSync(configDir, { recursive: true, force: true });
+  });
+
+  // A latent gap a review found: this is the only one of the three /config write paths that
+  // toggles rather than saves/unsets, and it was the one still missing this dispatch after the
+  // other two were fixed — every boolean key happens not to be config-derived display state today,
+  // which is exactly why it went unnoticed rather than why it was safe.
+  test("toggling a boolean config value dispatches config-updated with the fresh record", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onConfigSelect } = createConfigHandlers({
+      dispatch,
+      getPendingConfig: () => undefined,
+      configDir,
+    });
+
+    onConfigSelect("SERI_VERIFY_ENABLED");
+
+    // configBoolean(undefined) is true (config.ts: `value !== "false"`), so the very first toggle
+    // of an unset key flips it to "false", not "true".
+    expect(actions).toContainEqual({
+      type: "config-updated",
+      config: { SERI_VERIFY_ENABLED: "false" },
+    });
   });
 
   test("saving a config value dispatches config-updated with the fresh record", () => {

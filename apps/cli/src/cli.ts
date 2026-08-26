@@ -2837,18 +2837,26 @@ async function runTui(
             // cached variable — see this closure's own declaration site (above) for why: /config
             // can rewrite SERI_REASONING_EFFORT directly, mid-session, and a cached comparison
             // value has no way to see that write happen.
+            const currentConfig = loadConfig(configDir);
             if (
               !reasoningEffortPersistAttemptedThisTurn &&
               appliedTier !== undefined &&
-              appliedTier !== loadReasoningEffortConfig(loadConfig(configDir))
+              appliedTier !== loadReasoningEffortConfig(currentConfig)
             ) {
               reasoningEffortPersistAttemptedThisTurn = true;
               try {
                 persistDefaultReasoningEffort(appliedTier, configDir);
-                // This write is invisible to the header otherwise: it lands between turns, not
-                // from /config or the next turn's own re-read, so it needs the same
-                // "config.json just changed" dispatch those already send.
-                dispatch({ type: "config-updated", config: loadConfig(configDir) });
+                // Constructed in memory (persistDefaultReasoningEffort's own contract, config.ts:
+                // `setConfigValue("SERI_REASONING_EFFORT", tier, configDir)`, is exactly this merge),
+                // not re-read from disk: this write is invisible to the header otherwise (it lands
+                // between turns, not from /config or the next turn's own re-read), so it needs the
+                // same "config.json just changed" dispatch those already send — but a second disk
+                // read here could throw on an unrelated race and misreport this successful write as
+                // a failure (code-review finding), for a value already known without it.
+                dispatch({
+                  type: "config-updated",
+                  config: { ...currentConfig, SERI_REASONING_EFFORT: appliedTier },
+                });
               } catch (err) {
                 const message = messageOf(err);
                 printWarning(`could not save the default reasoning effort: ${message}`);
