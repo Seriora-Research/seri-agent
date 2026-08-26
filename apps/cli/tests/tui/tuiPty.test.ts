@@ -2757,7 +2757,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-effort-persist-header.mjs");
     writeFileSync(scriptPath, childScriptEffortPersist(dir));
 
-    const { child, sawLine } = await startChild(scriptPath, dir, {
+    const { child, sawLine, sawInFrameTimes, lastFrame } = await startChild(scriptPath, dir, {
       terminalSize: { cols: 100, rows: 30 },
     });
     try {
@@ -2786,7 +2786,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await sawLine("Reasoning effort: auto (falls back to the config default).");
 
-      await sawLine("reasoning-model · your key · high");
+      // `sawLine`/cumulative capture, not used here: "· high" already occurred once during the
+      // override phase above, so a plain substring check on history would pass whether or not the
+      // header still shows it NOW — the exact ambiguity `lastFrame()`'s own comment (startChild)
+      // warns about. `sawInFrameTimes` on the transcript's own confirmation line, then reading
+      // `lastFrame()` fresh, catches the case that matters: without the persist-on-success gate's
+      // own dispatch, the header falls back to `state.config`'s STALE mount-time value ("low"),
+      // not what config.json now actually holds ("high").
+      await sawInFrameTimes("Reasoning effort: auto (falls back to the config default).", 1);
+      expect(lastFrame()).toContain("reasoning-model · your key · high");
+      expect(lastFrame()).not.toContain("· low");
     } finally {
       child.kill("SIGKILL");
     }
