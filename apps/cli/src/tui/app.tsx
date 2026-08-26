@@ -54,7 +54,7 @@ import { memo, useEffect, useReducer, useRef, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
-import { appliedReasoningEffort } from "../provider/reasoning";
+import { appliedReasoningEffort, resolveReasoningEffort } from "../provider/reasoning";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 import { ApprovalBox } from "./components/ApprovalBox";
@@ -103,6 +103,13 @@ export type AppProps = {
   // call sites (runGuidedSetup, runWelcomeSplash) mount App before any `PreparedRun`/catalog
   // exists at all.
   catalog: ModelCatalog | undefined;
+  // Seeds `state.config` at mount — see `"config-updated"`'s own comment (reducer.ts) for what
+  // that is and how it stays live afterward. Unlike `route`/`catalog` just above, this is never
+  // `| undefined`: config.json can be read at any point in startup regardless of whether a
+  // `PreparedRun` exists yet, so every call site (including the two that pass `route`/`catalog`
+  // as `undefined`) has a real record to pass — `loadConfig` itself never fails to produce one,
+  // returning `{}` rather than throwing when config.json doesn't exist.
+  config: Record<string, string>;
   // The seam driveLoop's dispatch is wired through: called once on mount with the reducer's own
   // dispatch function, the same shape `useReducer` returns. Optional because some tests exercise
   // the reducer via `connectDispatch` directly, with no live loop behind it.
@@ -233,6 +240,7 @@ export function App({
   session,
   route,
   catalog,
+  config,
   connectDispatch,
   onSubmit,
   onSessionChange,
@@ -262,7 +270,7 @@ export function App({
   onCycleMode,
   skipPermissions,
 }: AppProps) {
-  const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session, { route }));
+  const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session, { route, config }));
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
@@ -394,7 +402,10 @@ export function App({
     state.route !== undefined && catalog !== undefined
       ? findCatalogEntry(catalog, state.route.model, state.route.provider)
       : undefined;
-  const effortTier = appliedReasoningEffort(state.session.reasoningEffort, catalogEntry);
+  const effortTier = appliedReasoningEffort(
+    resolveReasoningEffort(state.session, state.config),
+    catalogEntry,
+  );
   const modeDetail = formatModeDetail(state.route, width - rightSideWidth, effortTier);
 
   // Its own useKeyboard, separate from the scroll handler below — OpenTUI delivers the same

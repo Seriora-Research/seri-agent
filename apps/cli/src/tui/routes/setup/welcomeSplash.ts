@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto";
 import { createElement } from "react";
 import type { CliDeps } from "../../../cli";
+import { loadConfig } from "../../../config/config";
 import { App } from "../../app";
 import { getTuiRenderer } from "../../runtime/renderer";
 import { decideAuthOffer } from "../../state/commands";
@@ -79,11 +80,23 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
     resolveClosed();
   }
 
+  // Unlike route/catalog (this phase never has a PreparedRun to give them), config.json IS
+  // available here — guarded so a corrupted config.json can't crash the splash mount; it just
+  // means the header shows no config-derived tier, same as the `{}` every other mount before a
+  // real read fires here would already show.
+  let initialConfig: Record<string, string>;
+  try {
+    initialConfig = loadConfig(configDir);
+  } catch {
+    initialConfig = {};
+  }
+
   root.render(
     createElement(App, {
       session: liveState.session,
       route: undefined,
       catalog: undefined, // no PreparedRun exists yet at this point in startup
+      config: initialConfig,
       onSplashLogin,
       onSplashSignup,
       onSplashContinue,

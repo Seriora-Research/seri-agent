@@ -57,7 +57,9 @@ export function appliedReasoningEffort(
 // a function with nothing TUI-specific about it. A minimal structural session type, not
 // `SessionState<ModelMessage>`: the only field this reads is `reasoningEffort`, and importing
 // session.ts here for that one field would pull a session/message dependency into a module that has
-// none today (matches resolveSessionRoute's own minimal-shape parameter, routing.ts).
+// none today (matches resolveSessionRoute's own minimal-shape parameter, routing.ts). The TUI
+// header's own `effortTier` (app.tsx) calls this too, against `state.session`/`state.config` — the
+// same rule, one place, rather than the two independent copies an earlier version of this file had.
 export function resolveReasoningEffort(
   session: { reasoningEffort?: string },
   config: Record<string, string>,

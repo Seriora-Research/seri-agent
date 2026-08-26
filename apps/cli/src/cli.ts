@@ -2240,7 +2240,18 @@ async function runTui(
   // and deliberately stays effect-driven — `onSessionChange` below still only fires from React's
   // own effect, MEDIUM-1's own accepted, documented, narrow trade-off (persistence lagging by a
   // tick) is unrelated to reads racing ahead of a stale copy, which is what this closes.
-  let liveState: TuiState = initialTuiState(prepared.session, { route: prepared.route });
+
+  // Computed once, here, and reused for both `liveState`'s own seed (below) and the
+  // `createElement(App, ...)` mount call (this function's own `root.render` near the end) — the
+  // same single-source-of-truth shape `prepared.route` already gives both of those, so the two
+  // can't start out disagreeing about what config.json held at mount. Re-read fresh on every
+  // config.json write afterward (`config-updated`, dispatched below and from handlers.ts); this
+  // initial read only ever covers the window before the first such dispatch lands.
+  const initialConfig = loadConfig(configDir);
+  let liveState: TuiState = initialTuiState(prepared.session, {
+    route: prepared.route,
+    config: initialConfig,
+  });
   // B2 fix (MEDIUM-5): the model/provider onSessionChange (below) actually WRITES to disk, kept
   // deliberately separate from `liveState.session.model`/`.provider` (what a picked model changes
   // immediately, so the next runTurn attempts it — onModelSelected's own comment) — mirrors
@@ -2643,6 +2654,7 @@ async function runTui(
     // now that the type it names is already imported under its own name.
     let route: ResolvedRoute;
     let model: LanguageModel;
+    let config: Record<string, string>;
     try {
       route = resolveSessionRoute(
         session,
@@ -2652,6 +2664,13 @@ async function runTui(
         configDir,
       );
       model = dispatchModel(route, sessionId, configDir, deps);
+      // Read inside the same try as route/model resolution, not after it: `configuredProviders`
+      // above already reads config.json via `loadConfig`, so config.json can be rewritten
+      // concurrently between that read and this one (another `seri` process, a hand edit) — and
+      // this function is called fire-and-forget (no `.catch()` at either call site), so a throw
+      // reaching past this try would become an unhandled rejection instead of the command-error
+      // the catch below degrades every other failure in this block to.
+      config = loadConfig(configDir);
     } catch (err) {
       // tuiMissingKeyMessage, not a bare err.message: this catch is reachable ONLY from inside an
       // already-running TUI turn (runTurn, called solely by runTui), where /setup is a keystroke
@@ -2669,6 +2688,9 @@ async function runTui(
     // dispatching the freshly resolved route here, every turn, is what makes a /model switch (or
     // any other mid-session reroute) show up without waiting for the session to quit and remount.
     dispatch({ type: "route-updated", route });
+    // See "config-updated"'s own comment (reducer.ts) for why this is re-dispatched every turn
+    // alongside `route-updated`.
+    dispatch({ type: "config-updated", config });
     // Starts TurnStatus's elapsed clock/token count — dispatched here, alongside `route-updated`,
     // rather than earlier: this is the first point in runTurn a turn is actually committed to
     // running (resolveRoute/dispatchModel have already succeeded above), not just requested.
@@ -2815,14 +2837,26 @@ async function runTui(
             // cached variable — see this closure's own declaration site (above) for why: /config
             // can rewrite SERI_REASONING_EFFORT directly, mid-session, and a cached comparison
             // value has no way to see that write happen.
+            const currentConfig = loadConfig(configDir);
             if (
               !reasoningEffortPersistAttemptedThisTurn &&
               appliedTier !== undefined &&
-              appliedTier !== loadReasoningEffortConfig(loadConfig(configDir))
+              appliedTier !== loadReasoningEffortConfig(currentConfig)
             ) {
               reasoningEffortPersistAttemptedThisTurn = true;
               try {
                 persistDefaultReasoningEffort(appliedTier, configDir);
+                // Constructed in memory (persistDefaultReasoningEffort's own contract, config.ts:
+                // `setConfigValue("SERI_REASONING_EFFORT", tier, configDir)`, is exactly this merge),
+                // not re-read from disk: this write is invisible to the header otherwise (it lands
+                // between turns, not from /config or the next turn's own re-read), so it needs the
+                // same "config.json just changed" dispatch those already send — but a second disk
+                // read here could throw on an unrelated race and misreport this successful write as
+                // a failure (code-review finding), for a value already known without it.
+                dispatch({
+                  type: "config-updated",
+                  config: { ...currentConfig, SERI_REASONING_EFFORT: appliedTier },
+                });
               } catch (err) {
                 const message = messageOf(err);
                 printWarning(`could not save the default reasoning effort: ${message}`);
@@ -3397,6 +3431,7 @@ async function runTui(
       session: prepared.session,
       route: prepared.route,
       catalog: prepared.catalog,
+      config: initialConfig,
       onSubmit,
       onSessionChange,
       onQuit: quit,

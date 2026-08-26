@@ -546,6 +546,51 @@ function childScriptEffortPersist(dir: string): string {
   ].join("\n");
 }
 
+// The mount-time counterpart of childScriptEffortPersist, above: `cli.run([])` (no positional
+// task), so the TUI mounts idle and no turn ever starts — the config default's own tier must
+// already be in App's very first rendered frame, not just from turn 1's own
+// `config-updated` dispatch (runTurn, cli.ts). Same live-shaped catalog fetch
+// mock as childScriptEffortPersist, and the same reason: the bundled fallback manifest has no
+// reasoning_options at all.
+function childScriptEffortDefaultAtMount(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `process.env.SERI_MODEL = "reasoning-model";`,
+    `process.env.SERI_PROVIDER = "groq";`,
+    `delete process.env.SERI_DISABLE_MODELS_FETCH;`,
+    // resolveConfigValue (config/config.ts) is env-first — a developer's own shell exporting this
+    // would make the header show ITS tier regardless of what this test seeds in config.json.
+    `delete process.env.SERI_REASONING_EFFORT;`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) => {`,
+    `  if (typeof url === "string" && url.includes("models.dev")) {`,
+    `    return Promise.resolve(new Response(JSON.stringify({`,
+    `      groq: { models: { "reasoning-model": { id: "reasoning-model", name: "Reasoning Model", family: "test", tool_call: true, reasoning: true, reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }], limit: { context: 1000, output: 100 } } } },`,
+    `      openrouter: { models: {} }, anthropic: { models: {} }, openai: { models: {} }, google: { models: {} },`,
+    `    }), { status: 200 }));`,
+    `  }`,
+    `  return realFetch(url, opts);`,
+    `};`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run([], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: (id) => ({ id }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
 // D1/D2 (feature-plan.md, multi-provider-byok-phase-2): plan Test-plan item 8, "/model
 // multi-route" — the end-to-end proof that decideModelPickerOpen's grouping (unit-tested already)
 // and a real picker selection actually round-trip through a live pick to a persisted provider.
@@ -1724,6 +1769,27 @@ function countLogicalOccurrences(raw: string, line: string): number {
 // comment for why a pty (not a pipe) is load-bearing here: raw mode's interpretation of input —
 // both 0x03 as a keypress rather than a signal, and each typed character reflecting live — is the
 // entire mechanism under test, and a pipe cannot exercise either.
+//
+// A `sh -c` body, not a Python script: `startChild`'s own `target` construction below prefixes
+// `['sh', '-c', PTY_RESIZE_SPAWN, 'sh', rows, cols, execPath, scriptPath]` onto the SAME
+// `pty.spawn(sys.argv[1:])` bootstrap every other call uses, so within this script `$1`/`$2` are
+// the requested rows/cols and `$3`/`$4` (the rest of `"$@"` after the `shift`) are the real command
+// to run. `stty` runs on the slave `pty.spawn` already allocated and attached the forked child to,
+// as the first thing that child does — before `exec` replaces it with the real target — so the
+// target's very first terminal-size read already sees it, with none of `pty.fork`'s own session/fd
+// plumbing to reproduce by hand.
+const PTY_RESIZE_SPAWN = 'stty rows "$1" cols "$2"; shift 2; exec "$@"';
+
+// `startChild`'s own default `target` (`[process.execPath, scriptPath]`, below) never sets a
+// window size on the pty `pty.spawn` allocates — confirmed live (an `@opentui/core`
+// `createCliRenderer` probe run over the identical harness): a fresh pty with no winsize ioctl ever
+// applied reports `terminalWidth`/`terminalHeight` as `80`/`24`, OpenTUI's own hardcoded fallback
+// for "no real size available," not a real terminal's dimensions. `formatModeDetail` (util/format.ts)
+// gates the mode row's route/effort-tier suffix behind `MODE_ROUTE_MIN_COLS` (100) — strictly wider
+// than that 80-column default — so no test using the plain `target` can ever observe that suffix,
+// regardless of what it asserts. `terminalSize`, below, is this file's only opt-in past that: it
+// prefixes an `sh -c` wrapper (`PTY_RESIZE_SPAWN`, above) onto `target` that sets the winsize before
+// exec'ing the real one. Every other call site omits it and keeps the exact behavior it always had.
 async function startChild(
   scriptPath: string,
   cwd: string,
@@ -1731,7 +1797,7 @@ async function startChild(
   // scripts ahead of RUNLOOP_READY/the zero-key /setup gate, so every existing call site needs it
   // dismissed before its own assertions can ever be reached. Only the "welcome splash" describe
   // block below (whose whole job is exercising the splash itself) passes `false`.
-  opts: { dismissSplash?: boolean } = {},
+  opts: { dismissSplash?: boolean; terminalSize?: { cols: number; rows: number } } = {},
 ): Promise<{
   child: ReturnType<typeof spawn>;
   exited: Promise<Exit>;
@@ -1778,7 +1844,23 @@ async function startChild(
   // `sawLine`) until `frameOccurrences(line) >= count`.
   sawInFrameTimes: (line: string, count: number) => Promise<void>;
 }> {
-  const args = ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, scriptPath];
+  // One Python bootstrap either way — `pty.spawn(sys.argv[1:])` — with `terminalSize` only
+  // changing what that argv IS: the real target directly, or an `sh -c` wrapper (`PTY_RESIZE_SPAWN`,
+  // above) prefixed in front of it. Two argv conventions for one bootstrap to reconcile would cost
+  // a reader more than the branch it replaces.
+  const target = opts.terminalSize
+    ? [
+        "sh",
+        "-c",
+        PTY_RESIZE_SPAWN,
+        "sh",
+        String(opts.terminalSize.rows),
+        String(opts.terminalSize.cols),
+        process.execPath,
+        scriptPath,
+      ]
+    : [process.execPath, scriptPath];
+  const args = ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", ...target];
   // `OTUI_USE_CONSOLE=false`: OpenTUI's `TerminalConsoleCache` intercepts `console.log`/`console.error`
   // into a hidden debug overlay by default (`@opentui/core`'s own `registerEnvVar` for this — a
   // documented escape hatch, not an internal hack) — every `childScript*` fixture below relies on a
@@ -2658,6 +2740,62 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         (c) => c.SERI_REASONING_EFFORT === "medium",
       );
       expect(config.SERI_REASONING_EFFORT).toBe("medium");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // The persist-on-success gate (cli.ts, right after `persistDefaultReasoningEffort`) is a THIRD
+  // writer of config.json, alongside runTurn's own per-turn dispatch and /config's handlers — it
+  // must dispatch too, or the header keeps showing whatever config.json held at mount even after
+  // a turn just rewrote it. Reproduces the exact sequence: /effort override -> turn persists it as
+  // the new default -> /effort auto clears the override, falling through to `state.config` -> the
+  // header must show the JUST-persisted tier, not the stale one still in `state.config` from mount.
+  test("a value the persist-on-success gate just wrote reaches the header on /effort auto, with no turn in between", async () => {
+    seedConfig(dir, { SERI_REASONING_EFFORT: "low" });
+
+    const scriptPath = join(dir, "child-effort-persist-header.mjs");
+    writeFileSync(scriptPath, childScriptEffortPersist(dir));
+
+    const { child, sawLine, sawInFrameTimes, lastFrame } = await startChild(scriptPath, dir, {
+      terminalSize: { cols: 100, rows: 30 },
+    });
+    try {
+      await sawLine("RUNLOOP_CALL 1 reasoningEffort=low");
+      await sawLine("RUNLOOP_DONE 1");
+      await sawLine("reasoning-model · your key · low");
+
+      child.stdin?.write("/effort high");
+      await sawLine("/effort high");
+      child.stdin?.write("\r");
+      await sawLine("Reasoning effort: high");
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+      await sawLine("RUNLOOP_CALL 2 reasoningEffort=high");
+      await sawLine("RUNLOOP_DONE 2");
+
+      await waitForConfig(
+        join(dir, ".seri", "config.json"),
+        (c) => c.SERI_REASONING_EFFORT === "high",
+      );
+
+      child.stdin?.write("/effort auto");
+      await sawLine("/effort auto");
+      child.stdin?.write("\r");
+      await sawLine("Reasoning effort: auto (falls back to the config default).");
+
+      // `sawLine`/cumulative capture, not used here: "· high" already occurred once during the
+      // override phase above, so a plain substring check on history would pass whether or not the
+      // header still shows it NOW — the exact ambiguity `lastFrame()`'s own comment (startChild)
+      // warns about. `sawInFrameTimes` on the transcript's own confirmation line, then reading
+      // `lastFrame()` fresh, catches the case that matters: without the persist-on-success gate's
+      // own dispatch, the header falls back to `state.config`'s STALE mount-time value ("low"),
+      // not what config.json now actually holds ("high").
+      await sawInFrameTimes("Reasoning effort: auto (falls back to the config default).", 1);
+      expect(lastFrame()).toContain("reasoning-model · your key · high");
+      expect(lastFrame()).not.toContain("· low");
     } finally {
       child.kill("SIGKILL");
     }
@@ -5146,6 +5284,29 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(result).not.toBe("the run never settled");
         const { stdout } = result as Exit;
         expect(stdout).toContain("EXIT_CODE 0");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Regression coverage for the mount-time counterpart of `config-updated`
+    // (reducer.ts/app.tsx): SERI_REASONING_EFFORT seeded in config.json before the process ever
+    // starts must show up in the mode row's own effort-tier suffix from the very first frame — no
+    // turn has run yet, so `runTui`'s own per-turn dispatch (cli.ts) cannot be what put it there.
+    // `terminalSize` widens the pty past `MODE_ROUTE_MIN_COLS` (`startChild`'s own comment has the
+    // full account of why every other test in this file can't observe this suffix at all).
+    test("SERI_REASONING_EFFORT from config.json shows the tier in the mode row before any turn runs", async () => {
+      seedConfig(dir, { SERI_REASONING_EFFORT: "medium" });
+      const scriptPath = join(dir, "child-effort-default-mount.mjs");
+      writeFileSync(scriptPath, childScriptEffortDefaultAtMount(dir));
+
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
+      try {
+        await sawLine("reasoning-model · your key · medium");
+        // Negative control: this is the mount-time seed, not a turn-triggered one.
+        expect(rawOccurrences("RUNLOOP_READY")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }

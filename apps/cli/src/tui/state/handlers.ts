@@ -412,6 +412,22 @@ export function createConfigHandlers(opts: {
     }
   }
 
+  // Called after every successful config.json write below (toggle, save, unset) — the single seam
+  // that makes it structurally impossible for a config write here to leave `state.config` (see
+  // "config-updated"'s own comment, reducer.ts) stale, rather than each write site needing to
+  // remember its own dispatch. Swallows a read failure rather than surfacing it: the write already
+  // succeeded and already has its own confirmation (or error) dispatched around it, so a race that
+  // corrupts config.json in the instant between that write and this re-read must not turn a
+  // successful save into a reported failure, or crash this handler with an uncaught throw from a
+  // keypress callback — it only costs the header a refresh it will get on the next write anyway.
+  function dispatchConfigUpdated(): void {
+    try {
+      dispatch({ type: "config-updated", config: loadConfig(configDir) });
+    } catch {
+      // Best-effort — see this function's own comment above.
+    }
+  }
+
   // A boolean row toggles in place (write + transcript line + list refresh — a toggle has no
   // screen of its own, unlike enter-value); everything else opens the free-text entry step. `kind`
   // is static (configKeyInfo(key), a pure function of `key`) — no need to read it off the panel's
@@ -440,6 +456,7 @@ export function createConfigHandlers(opts: {
       });
       return;
     }
+    dispatchConfigUpdated();
     // The write above always lands in config.json, but a truthy env var wins the precedence race —
     // say so instead of claiming the active value changed.
     const envWins = Boolean(process.env[key]);
@@ -468,6 +485,7 @@ export function createConfigHandlers(opts: {
       });
       return;
     }
+    dispatchConfigUpdated();
     dispatch({
       type: "transcript-append",
       line: `Saved ${key}.${verifyConfigTakesEffectNote(key)}`,
@@ -515,6 +533,9 @@ export function createConfigHandlers(opts: {
         });
         return;
       }
+      // `removed`, not unconditional: nothing actually changed if the race it guards against had
+      // already removed this key first.
+      if (removed) dispatchConfigUpdated();
       dispatch({
         type: "transcript-append",
         line: removed
