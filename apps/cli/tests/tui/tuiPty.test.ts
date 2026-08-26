@@ -1823,8 +1823,24 @@ async function startChild(
   // The cheap raw-substring check first (true for the common case: console output, and any TUI
   // content OpenTUI happened to write as one contiguous run) — `reconstructRows` only runs once
   // that fails, since it re-walks the full capture from scratch on every call.
-  const seenLine = (line: string): boolean =>
-    stdout.includes(line) || reconstructRows(stdout).some((row) => row.includes(line));
+  //
+  // The adjacent-row-pair check (not just single rows) exists because a long transcript line
+  // word-wraps at Ink's column width, and where it wraps depends on how long the content BEFORE
+  // the checked fragment is (a profile/tmp-dir path, e.g.) — not something a test can pin down
+  // in advance. Measured live on macOS CI: a fragment picked to sit safely inside one wrapped
+  // half still landed exactly on a longer path's wrap point. Trimming each row's trailing padding
+  // and rejoining pairs with a single space reconstructs the original word-wrapped sentence
+  // (OpenTUI wraps on word boundaries, never mid-word), so a fragment straddling any one wrap
+  // point still matches regardless of where that point falls.
+  const seenLine = (line: string): boolean => {
+    if (stdout.includes(line)) return true;
+    const rows = reconstructRows(stdout);
+    if (rows.some((row) => row.includes(line))) return true;
+    return rows.some(
+      (row, i) =>
+        i + 1 < rows.length && `${row.trimEnd()} ${rows[i + 1].trimStart()}`.includes(line),
+    );
+  };
 
   const sawLine = async (line: string): Promise<void> => {
     const deadline = Date.now() + 20_000;
@@ -2615,6 +2631,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         (c) => c.SERI_REASONING_EFFORT === "low",
       );
       expect(bypassed.SERI_REASONING_EFFORT).toBe("low");
+
+      // The /config panel stays open on the list after a save (onConfigValueEntered's own
+      // comment: NOT dispatchConfigList, so a refresh failure doesn't lose the edit step) — Escape
+      // it closed first, or the next line's own "r" (in "effort") lands on the list's "r/Delete
+      // unset" shortcut instead of the main input box.
+      child.stdin?.write("\x1b");
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await wait100ms();
 
       child.stdin?.write("/effort medium");
       await sawLine("/effort medium");
@@ -4987,9 +5011,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // follows that symlink, so a projectKey computed here from the unresolved `dir` never
       // matches the one the child computes from its own resolved cwd. Scoped to this local
       // `worktree`, not applied to the shared `dir` itself: `dir` also feeds childScriptSetup's
-      // HOME (a literal env-var string, never OS-resolved) and this describe block's other
-      // tests, and lengthening it broke /profile new's own pty test via terminal line-wrapping
-      // on macOS CI (measured: the confirmation line's word boundary moved mid-sentence).
+      // HOME (a literal env-var string, never OS-resolved) and this describe block's other tests.
       const worktree = realpathSync(dir);
       const { rememberGrant, loadGrants } = await import("../../src/permissions/store");
       rememberGrant(permissionsDir, worktree, "write_file");
@@ -5229,9 +5251,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("/profile new work");
         child.stdin?.write("\r");
         await sawLine("Profile directory");
-        // A short fragment, not the whole sentence: the full line wraps at Ink's 80-column
-        // width between "does not" and "switch", so a longer substring straddling that wrap
-        // would never appear on one rendered line and this would time out.
+        // The full line wraps at Ink's column width somewhere inside this fragment — exactly
+        // where depends on this run's profile-directory path length, which `sawLine` itself
+        // accounts for (its own comment on the adjacent-row-pair check).
         await sawLine("switch the running session's profile");
 
         // waitForConfig's own reasoning, applied to a directory instead of a file: a bare
