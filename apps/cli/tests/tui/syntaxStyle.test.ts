@@ -6,20 +6,25 @@ import { syntaxStyle } from "../../src/tui/theme/syntaxStyle";
 import { theme } from "../../src/tui/theme/theme";
 
 // Monochrome-compliance guard (docs/design/tui.md's ANSI-16-only constraint): every registered
-// style's own `fg` must be either unset (default terminal color) or exactly `theme.muted` — the one
-// existing token syntaxStyle.ts reuses — and `bg` must never be set at all, since no code-block style
-// introduces a background color. A style carrying any OTHER color would be a new hue this migration
-// was explicitly told not to introduce.
+// style's own `fg` must be either unset (default terminal color), exactly `theme.muted`, or
+// exactly `theme.code` (the deliberate soft-blue exception for inline/block code, markup.raw /
+// markup.raw.block) — and `bg` must never be set at all, since no code-block style introduces a
+// background color. A style carrying any OTHER color would be a new hue this file wasn't
+// explicitly told to introduce.
 describe("syntaxStyle: monochrome compliance", () => {
-  test("every registered style's own color is unset or theme.muted — never a new hue", () => {
+  test("every registered style's own color is unset, theme.muted, or theme.code — never a new hue", () => {
     const mutedColor = parseColor(theme.muted);
+    const codeColor = parseColor(theme.code);
     const styles = syntaxStyle.getAllStyles();
     expect(styles.size).toBeGreaterThan(0);
 
     for (const [name, style] of styles) {
       expect(style.bg, `${name}'s own bg`).toBeUndefined();
       if (style.fg !== undefined) {
-        expect(style.fg.toString(), `${name}'s own fg`).toBe(mutedColor.toString());
+        expect(
+          [mutedColor.toString(), codeColor.toString()],
+          `${name}'s own fg`,
+        ).toContain(style.fg.toString());
       }
     }
   });

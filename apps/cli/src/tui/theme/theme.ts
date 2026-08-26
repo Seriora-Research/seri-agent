@@ -45,6 +45,12 @@ export const theme = {
     "approve-each": MUTED,
     auto: "#cc8a6a",
   } satisfies Record<PermissionMode, string>,
+  // Inline code / code blocks (markup.raw, syntaxStyle.ts): a fourth deliberate hue exception.
+  // `muted` ("gray") reads as near-black on most dark terminal themes — too close to the
+  // background to read as "marked" text at all. A soft light blue instead, distinct from the
+  // mode indicator's own hues, so code the model emits stands out from prose without competing
+  // with `mode`'s danger signal.
+  code: "#9fc5e8",
 } as const;
 
 // Prefixed onto an alert addressed to the user (a failure or a question) at the TUI call site —
