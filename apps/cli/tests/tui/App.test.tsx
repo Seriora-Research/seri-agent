@@ -82,7 +82,7 @@ async function connect(
       session={session()}
       route={route()}
       catalog={undefined}
-      reasoningEffortDefault={undefined}
+      config={{}}
       {...overrides}
       connectDispatch={(d) => {
         dispatch = d;
@@ -2493,7 +2493,7 @@ describe("App", () => {
 
       dispatch({ type: "session-updated", session: session({ reasoningEffort: undefined }) });
       await flush(setup);
-      dispatch({ type: "reasoning-effort-default-updated", reasoningEffortDefault: "high" });
+      dispatch({ type: "config-updated", config: { SERI_REASONING_EFFORT: "high" } });
       await flush(setup);
 
       expect(modeRow(setup)).not.toContain("· high");
@@ -2503,7 +2503,7 @@ describe("App", () => {
     // Fresh session (no `effort-resolved` ever dispatched) with a config default present: the
     // header must reflect it, since driveLoop already resolves at this tier from turn 1
     // (resolveReasoningEffort, provider/reasoning.ts) — the bug this test suite guards against.
-    test("a reasoning-effort-default-updated dispatch, with no session override, renders the tier in the mode row", async () => {
+    test("a config-updated dispatch, with no session override, renders the tier in the mode row", async () => {
       const { setup, dispatch } = await connect({
         catalog: catalogOf([
           catalogEntry({
@@ -2512,7 +2512,7 @@ describe("App", () => {
         ]),
       });
 
-      dispatch({ type: "reasoning-effort-default-updated", reasoningEffortDefault: "high" });
+      dispatch({ type: "config-updated", config: { SERI_REASONING_EFFORT: "high" } });
       await flush(setup);
 
       expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
@@ -2520,28 +2520,27 @@ describe("App", () => {
 
     // The mount-time counterpart of the dispatch-based test above, and the actual regression guard
     // for the bug it left uncovered: App's OWN `useReducer(tuiReducer, initialTuiState(session, {
-    // route, reasoningEffortDefault }))` call (app.tsx) must seed `state.reasoningEffortDefault`
-    // from the `reasoningEffortDefault` PROP at mount, not only ever receive it via a later
-    // `reasoning-effort-default-updated` dispatch — every other case in this describe block
-    // dispatches that action first, so none of them can tell a real mount-time seed apart from a
-    // reducer that starts `undefined` and only happens to be fixed up before the first assertion.
-    // Zero dispatches here: the tier must already be in the very first rendered frame.
-    test("mounting with reasoningEffortDefault already renders the tier, with no dispatch at all", async () => {
+    // route, config }))` call (app.tsx) must seed `state.config` from the `config` PROP at mount,
+    // not only ever receive it via a later `config-updated` dispatch — every other case in this
+    // describe block dispatches that action first, so none of them can tell a real mount-time seed
+    // apart from a reducer that starts `{}` and only happens to be fixed up before the first
+    // assertion. Zero dispatches here: the tier must already be in the very first rendered frame.
+    test("mounting with a config default already renders the tier, with no dispatch at all", async () => {
       const { setup } = await connect({
         catalog: catalogOf([
           catalogEntry({
             reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
           }),
         ]),
-        reasoningEffortDefault: "high",
+        config: { SERI_REASONING_EFFORT: "high" },
       });
 
       expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
     });
 
     // Fresh session, no config default dispatched either: confirms the existing no-tier behavior
-    // is unchanged by the new `reasoningEffortDefault` field (it stays `undefined` until a
-    // `reasoning-effort-default-updated` dispatch supplies one).
+    // is unchanged by the new `config` field (it stays `{}` until a `config-updated` dispatch
+    // supplies a record with `SERI_REASONING_EFFORT` in it).
     test("no session override and no config default: the mode row shows no tier", async () => {
       const { setup } = await connect({
         catalog: catalogOf([
@@ -2556,9 +2555,9 @@ describe("App", () => {
     });
 
     // A session override (`/effort`) must keep winning outright over a config default present at
-    // the same time — `state.session.reasoningEffort ?? state.reasoningEffortDefault` (app.tsx)
-    // only falls through to the default when the session field is `undefined`.
-    test("an effort-resolved override wins over a reasoning-effort-default-updated dispatch", async () => {
+    // the same time — `state.session.reasoningEffort ?? loadReasoningEffortConfig(state.config)`
+    // (app.tsx) only falls through to the default when the session field is `undefined`.
+    test("an effort-resolved override wins over a config-updated dispatch", async () => {
       const { setup, dispatch } = await connect({
         catalog: catalogOf([
           catalogEntry({
@@ -2567,7 +2566,7 @@ describe("App", () => {
         ]),
       });
 
-      dispatch({ type: "reasoning-effort-default-updated", reasoningEffortDefault: "low" });
+      dispatch({ type: "config-updated", config: { SERI_REASONING_EFFORT: "low" } });
       await flush(setup);
       dispatch({ type: "effort-resolved", tier: "high" });
       await flush(setup);

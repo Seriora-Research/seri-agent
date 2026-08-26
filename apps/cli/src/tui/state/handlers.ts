@@ -10,13 +10,7 @@ import type { ModelProvider } from "@seri/model-catalog";
 import { login as loginReal, logout as logoutReal } from "../../auth/commands";
 import { getWorkosClientId } from "../../auth/deviceFlow";
 import type { CliDeps } from "../../cli";
-import {
-  configBoolean,
-  loadConfig,
-  loadReasoningEffortConfig,
-  setConfigValue,
-  unsetConfigValue,
-} from "../../config/config";
+import { configBoolean, loadConfig, setConfigValue, unsetConfigValue } from "../../config/config";
 import { messageOf } from "../../errors";
 import { forgetGrant, loadGrants } from "../../permissions/store";
 import {
@@ -474,15 +468,10 @@ export function createConfigHandlers(opts: {
       });
       return;
     }
-    // The header's own effort-tier suffix (reasoning-effort-default-updated's own comment,
-    // reducer.ts) has no turn to wait for here — a config-only edit needs its own dispatch, not
-    // just the per-turn one runTurn (cli.ts) already does.
-    if (key === "SERI_REASONING_EFFORT") {
-      dispatch({
-        type: "reasoning-effort-default-updated",
-        reasoningEffortDefault: loadReasoningEffortConfig(loadConfig(configDir)),
-      });
-    }
+    // Unconditional, not keyed to SERI_REASONING_EFFORT specifically: `state.config` (reducer.ts's
+    // own "config-updated" comment) is read by any config-derived display value, and a config-only
+    // edit has no turn to wait for the way runTurn's (cli.ts) own per-turn dispatch does.
+    dispatch({ type: "config-updated", config: loadConfig(configDir) });
     dispatch({
       type: "transcript-append",
       line: `Saved ${key}.${verifyConfigTakesEffectNote(key)}`,
@@ -530,13 +519,10 @@ export function createConfigHandlers(opts: {
         });
         return;
       }
-      // See onConfigValueEntered's own comment on this same dispatch, just above.
-      if (removed && confirmedKey === "SERI_REASONING_EFFORT") {
-        dispatch({
-          type: "reasoning-effort-default-updated",
-          reasoningEffortDefault: loadReasoningEffortConfig(loadConfig(configDir)),
-        });
-      }
+      // See onConfigValueEntered's own comment on this same dispatch, just above. `removed`, not
+      // unconditional here: nothing actually changed if the race it guards against had already
+      // removed this key first.
+      if (removed) dispatch({ type: "config-updated", config: loadConfig(configDir) });
       dispatch({
         type: "transcript-append",
         line: removed

@@ -2244,13 +2244,13 @@ async function runTui(
   // Computed once, here, and reused for both `liveState`'s own seed (below) and the
   // `createElement(App, ...)` mount call (this function's own `root.render` near the end) — the
   // same single-source-of-truth shape `prepared.route` already gives both of those, so the two
-  // can't start out disagreeing about what the config default was at mount. Read fresh every turn
-  // afterward (`reasoning-effort-default-updated`, dispatched below) for a live `/config` edit;
-  // this initial read only ever covers the window before turn 1's own dispatch lands.
-  const initialReasoningEffortDefault = loadReasoningEffortConfig(loadConfig(configDir));
+  // can't start out disagreeing about what config.json held at mount. Re-read fresh on every
+  // config.json write afterward (`config-updated`, dispatched below and from handlers.ts); this
+  // initial read only ever covers the window before the first such dispatch lands.
+  const initialConfig = loadConfig(configDir);
   let liveState: TuiState = initialTuiState(prepared.session, {
     route: prepared.route,
-    reasoningEffortDefault: initialReasoningEffortDefault,
+    config: initialConfig,
   });
   // B2 fix (MEDIUM-5): the model/provider onSessionChange (below) actually WRITES to disk, kept
   // deliberately separate from `liveState.session.model`/`.provider` (what a picked model changes
@@ -2654,7 +2654,7 @@ async function runTui(
     // now that the type it names is already imported under its own name.
     let route: ResolvedRoute;
     let model: LanguageModel;
-    let reasoningEffortDefault: string | undefined;
+    let config: Record<string, string>;
     try {
       route = resolveSessionRoute(
         session,
@@ -2665,12 +2665,12 @@ async function runTui(
       );
       model = dispatchModel(route, sessionId, configDir, deps);
       // Read inside the same try as route/model resolution, not after it: `configuredProviders`
-      // above already reads config.json via `loadConfig`, so a config.json corrupted between that
-      // read and this one (a concurrent /setup write from another instance, the same race the
-      // catch below's own comment names) must be caught here too, not left to throw into runTurn's
-      // fire-and-forget caller — the exact crash class PR #73 fixed for resolveRoute/
-      // configuredProviders themselves.
-      reasoningEffortDefault = loadReasoningEffortConfig(loadConfig(configDir));
+      // above already reads config.json via `loadConfig`, so config.json can be rewritten
+      // concurrently between that read and this one (another `seri` process, a hand edit) — and
+      // this function is called fire-and-forget (no `.catch()` at either call site), so a throw
+      // reaching past this try would become an unhandled rejection instead of the command-error
+      // the catch below degrades every other failure in this block to.
+      config = loadConfig(configDir);
     } catch (err) {
       // tuiMissingKeyMessage, not a bare err.message: this catch is reachable ONLY from inside an
       // already-running TUI turn (runTurn, called solely by runTui), where /setup is a keystroke
@@ -2688,9 +2688,9 @@ async function runTui(
     // dispatching the freshly resolved route here, every turn, is what makes a /model switch (or
     // any other mid-session reroute) show up without waiting for the session to quit and remount.
     dispatch({ type: "route-updated", route });
-    // See "reasoning-effort-default-updated"'s own comment (reducer.ts) for why this is
-    // re-dispatched every turn alongside `route-updated`.
-    dispatch({ type: "reasoning-effort-default-updated", reasoningEffortDefault });
+    // See "config-updated"'s own comment (reducer.ts) for why this is re-dispatched every turn
+    // alongside `route-updated`.
+    dispatch({ type: "config-updated", config });
     // Starts TurnStatus's elapsed clock/token count — dispatched here, alongside `route-updated`,
     // rather than earlier: this is the first point in runTurn a turn is actually committed to
     // running (resolveRoute/dispatchModel have already succeeded above), not just requested.
@@ -2845,6 +2845,10 @@ async function runTui(
               reasoningEffortPersistAttemptedThisTurn = true;
               try {
                 persistDefaultReasoningEffort(appliedTier, configDir);
+                // This write is invisible to the header otherwise: it lands between turns, not
+                // from /config or the next turn's own re-read, so it needs the same
+                // "config.json just changed" dispatch those already send.
+                dispatch({ type: "config-updated", config: loadConfig(configDir) });
               } catch (err) {
                 const message = messageOf(err);
                 printWarning(`could not save the default reasoning effort: ${message}`);
@@ -3419,7 +3423,7 @@ async function runTui(
       session: prepared.session,
       route: prepared.route,
       catalog: prepared.catalog,
-      reasoningEffortDefault: initialReasoningEffortDefault,
+      config: initialConfig,
       onSubmit,
       onSessionChange,
       onQuit: quit,

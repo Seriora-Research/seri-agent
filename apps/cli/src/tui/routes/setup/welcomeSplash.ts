@@ -84,7 +84,10 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
       session: liveState.session,
       route: undefined,
       catalog: undefined, // no PreparedRun exists yet at this point in startup
-      reasoningEffortDefault: undefined, // same reason as route/catalog above
+      // Unlike route/catalog, an empty record here isn't a stand-in for "unavailable" — `state
+      // .route` being undefined already drops the whole effort-tier suffix (formatModeDetail's own
+      // route gate, app.tsx), so what config.json holds is unobservable at this mount regardless.
+      config: {},
       onSplashLogin,
       onSplashSignup,
       onSplashContinue,

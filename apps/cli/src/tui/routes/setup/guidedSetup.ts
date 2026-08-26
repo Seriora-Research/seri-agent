@@ -265,7 +265,10 @@ export async function runGuidedSetup(
       // rather than a fabricated value.
       route: undefined,
       catalog: undefined, // same reason as route above: no PreparedRun exists yet at this point
-      reasoningEffortDefault: undefined, // same reason as route/catalog above
+      // Unlike route/catalog, an empty record here isn't a stand-in for "unavailable" — `state
+      // .route` being undefined already drops the whole effort-tier suffix (formatModeDetail's own
+      // route gate, app.tsx), so what config.json holds is unobservable at this mount regardless.
+      config: {},
       onQuit: onSetupClose, // dead in this phase (InputBox/ApprovalBox never show) but wired for safety
       onModelSelected: onGuidedModelSelected,
       onModelPickerCancel: onGuidedModelPickerCancel,

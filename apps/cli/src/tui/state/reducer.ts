@@ -159,8 +159,8 @@ export type TuiState = {
   // copy" shape `session` above already uses. Optional for the identical reason `AppProps.route`
   // is: runGuidedSetup mounts App before any provider key/route exists yet.
   route: ResolvedRoute | undefined;
-  // See `"reasoning-effort-default-updated"`'s own comment, below, for what this is and why.
-  reasoningEffortDefault: string | undefined;
+  // See `"config-updated"`'s own comment, below, for what this is and why.
+  config: Record<string, string>;
 };
 
 // What "an empty transcript" means, as a single value rather than fields independently kept
@@ -183,12 +183,12 @@ const EMPTY_TRANSCRIPT: Readonly<Pick<TuiState, "transcript" | "streaming">> = O
 
 export function initialTuiState(
   session: SessionState<ModelMessage>,
-  opts?: { showSplash?: boolean; route?: ResolvedRoute; reasoningEffortDefault?: string },
+  opts?: { showSplash?: boolean; route?: ResolvedRoute; config?: Record<string, string> },
 ): TuiState {
   return {
     session,
     route: opts?.route,
-    reasoningEffortDefault: opts?.reasoningEffortDefault,
+    config: opts?.config ?? {},
     ...EMPTY_TRANSCRIPT,
     status: "",
     turn: undefined,
@@ -293,12 +293,15 @@ export type TuiAction =
   // `route` prop, never re-read after the initial render), so a /model switch's own freshly
   // resolved route never reached it. `state.route` is what the label now reads.
   | { type: "route-updated"; route: ResolvedRoute }
-  // Dispatched by runTurn (cli.ts) alongside `route-updated`, every turn, and by /config's own
-  // save/unset handlers (handlers.ts) the moment `SERI_REASONING_EFFORT` itself is written — a
-  // config-only edit has no turn to wait for, so it needs its own dispatch rather than relying on
-  // the next turn's copy to catch up. `state.reasoningEffortDefault` is what the header's own
-  // `effortTier` (app.tsx) falls back to when `session.reasoningEffort` is `undefined`.
-  | { type: "reasoning-effort-default-updated"; reasoningEffortDefault: string | undefined }
+  // Dispatched with the freshly re-read config.json record by every writer of it: runTurn (cli.ts)
+  // alongside `route-updated` every turn, /config's own save/unset handlers (handlers.ts) the
+  // moment a key is written or removed, and the per-turn `SERI_REASONING_EFFORT` persist-on-
+  // success gate (cli.ts) right after it writes. One unconditional action carrying the whole
+  // record, rather than a bespoke dispatch per config-derived display value: `state.config` is
+  // what the header's own `effortTier` (app.tsx) reads `SERI_REASONING_EFFORT` out of via
+  // `loadReasoningEffortConfig` when `session.reasoningEffort` is `undefined`, and a future
+  // config-derived field reads the same `state.config` rather than needing its own action.
+  | { type: "config-updated"; config: Record<string, string> }
   // Dispatched by runTurn (cli.ts) right alongside `route-updated`, before driveLoop starts —
   // the one place in runTurn that already fires once per turn, before the model is invoked. Starts
   // TurnStatus's elapsed clock and resets the turn's token progress fresh, so a second turn never
@@ -459,8 +462,8 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return { ...state, pendingSplash: false };
     case "route-updated":
       return { ...state, route: action.route };
-    case "reasoning-effort-default-updated":
-      return { ...state, reasoningEffortDefault: action.reasoningEffortDefault };
+    case "config-updated":
+      return { ...state, config: action.config };
     case "turn-started":
       return {
         ...state,

@@ -113,12 +113,28 @@ describe("dispatchConfigList (via onConfigBack)", () => {
 
     expect(actions.map((a) => a.type)).toEqual(["command-error", "config-resolved"]);
   });
+});
 
-  // The TUI header's effort-tier suffix (app.tsx) has no turn to wait for on a /config-only edit —
-  // regression coverage for the gap a thermo-nuclear review found: saving/unsetting
-  // SERI_REASONING_EFFORT here used to dispatch nothing, so the header kept showing the OLD tier
-  // until the next turn ran.
-  test("saving SERI_REASONING_EFFORT dispatches reasoning-effort-default-updated with the new value", () => {
+// The TUI header's effort-tier suffix (app.tsx) reads `state.config` via `loadReasoningEffortConfig`
+// and has no turn to wait for on a /config-only edit — regression coverage for the gap a review
+// found: saving/unsetting a config value here used to dispatch nothing, so the header kept showing
+// whatever it last saw until the next turn ran.
+describe("config-updated live dispatch (via onConfigValueEntered/onConfigUnset)", () => {
+  let configDir: string;
+
+  beforeEach(() => {
+    configDir = mkdtempSync(join(tmpdir(), "seri-tui-handlers-test-"));
+    // resolveConfigValue (config/config.ts) is env-first, so a developer's own shell exporting this
+    // would make loadReasoningEffortConfig see it regardless of what these tests write to
+    // config.json.
+    delete process.env.SERI_REASONING_EFFORT;
+  });
+
+  afterEach(() => {
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  test("saving a config value dispatches config-updated with the fresh record", () => {
     const { actions, dispatch } = actionsCollector();
     const { onConfigValueEntered } = createConfigHandlers({
       dispatch,
@@ -128,26 +144,13 @@ describe("dispatchConfigList (via onConfigBack)", () => {
 
     onConfigValueEntered("SERI_REASONING_EFFORT", "high");
 
-    const effortAction = actions.find((a) => a.type === "reasoning-effort-default-updated");
-    expect(effortAction?.type === "reasoning-effort-default-updated" && effortAction.reasoningEffortDefault).toBe(
-      "high",
-    );
-  });
-
-  test("saving an unrelated config key dispatches no reasoning-effort-default-updated", () => {
-    const { actions, dispatch } = actionsCollector();
-    const { onConfigValueEntered } = createConfigHandlers({
-      dispatch,
-      getPendingConfig: () => undefined,
-      configDir,
+    expect(actions).toContainEqual({
+      type: "config-updated",
+      config: { SERI_REASONING_EFFORT: "high" },
     });
-
-    onConfigValueEntered("SERI_VERIFY_COMMAND", "bun run check");
-
-    expect(actions.some((a) => a.type === "reasoning-effort-default-updated")).toBe(false);
   });
 
-  test("unsetting SERI_REASONING_EFFORT dispatches reasoning-effort-default-updated with undefined", () => {
+  test("unsetting a config value dispatches config-updated once it's actually removed", () => {
     writeFileSync(
       join(configDir, "config.json"),
       JSON.stringify({ SERI_REASONING_EFFORT: "medium" }),
@@ -161,10 +164,20 @@ describe("dispatchConfigList (via onConfigBack)", () => {
 
     onConfigUnset("SERI_REASONING_EFFORT");
 
-    const effortAction = actions.find((a) => a.type === "reasoning-effort-default-updated");
-    expect(effortAction?.type === "reasoning-effort-default-updated" && effortAction.reasoningEffortDefault).toBe(
-      undefined,
-    );
+    expect(actions).toContainEqual({ type: "config-updated", config: {} });
+  });
+
+  test("unsetting a key that was already gone dispatches no config-updated", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onConfigUnset } = createConfigHandlers({
+      dispatch,
+      getPendingConfig: () => ({ step: "confirm-unset", key: "SERI_REASONING_EFFORT" }),
+      configDir,
+    });
+
+    onConfigUnset("SERI_REASONING_EFFORT");
+
+    expect(actions.some((a) => a.type === "config-updated")).toBe(false);
   });
 });
 

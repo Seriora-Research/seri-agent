@@ -559,6 +559,9 @@ function childScriptEffortDefaultAtMount(dir: string): string {
     `process.env.SERI_MODEL = "reasoning-model";`,
     `process.env.SERI_PROVIDER = "groq";`,
     `delete process.env.SERI_DISABLE_MODELS_FETCH;`,
+    // resolveConfigValue (config/config.ts) is env-first — a developer's own shell exporting this
+    // would make the header show ITS tier regardless of what this test seeds in config.json.
+    `delete process.env.SERI_REASONING_EFFORT;`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `const realFetch = globalThis.fetch;`,
     `globalThis.fetch = (url, opts) => {`,
@@ -1761,26 +1764,32 @@ function countLogicalOccurrences(raw: string, line: string): number {
   return count;
 }
 
-// A `sh -c` body, not a Python script: `startChild`'s own `args` construction below invokes
-// `pty.spawn(['sh', '-c', PTY_RESIZE_SPAWN, 'sh', rows, cols, execPath, scriptPath])`, so within
-// this script `$1`/`$2` are the requested rows/cols and `$3`/`$4` (the rest of `"$@"` after the
-// `shift`) are the real command to run. `stty` runs on the slave `pty.spawn` already allocated and
-// attached the forked child to, as the first thing that child does — before `exec` replaces it
-// with the real target — so the target's very first terminal-size read already sees it, with none
-// of `pty.fork`'s own session/fd plumbing to reproduce by hand.
+// Identical shape to tests/cli/approvalPromptPty.test.ts's own startChild — duplicated rather than
+// imported, matching this repo's convention of self-contained pty test files. See that file's own
+// comment for why a pty (not a pipe) is load-bearing here: raw mode's interpretation of input —
+// both 0x03 as a keypress rather than a signal, and each typed character reflecting live — is the
+// entire mechanism under test, and a pipe cannot exercise either.
+//
+// A `sh -c` body, not a Python script: `startChild`'s own `target` construction below prefixes
+// `['sh', '-c', PTY_RESIZE_SPAWN, 'sh', rows, cols, execPath, scriptPath]` onto the SAME
+// `pty.spawn(sys.argv[1:])` bootstrap every other call uses, so within this script `$1`/`$2` are
+// the requested rows/cols and `$3`/`$4` (the rest of `"$@"` after the `shift`) are the real command
+// to run. `stty` runs on the slave `pty.spawn` already allocated and attached the forked child to,
+// as the first thing that child does — before `exec` replaces it with the real target — so the
+// target's very first terminal-size read already sees it, with none of `pty.fork`'s own session/fd
+// plumbing to reproduce by hand.
 const PTY_RESIZE_SPAWN = 'stty rows "$1" cols "$2"; shift 2; exec "$@"';
 
-// `startChild`'s own default invocation (`import pty, sys; pty.spawn(sys.argv[1:])`, below) never
-// sets a window size on the pty it allocates — confirmed live (an `@opentui/core` `createCliRenderer`
-// probe run over the identical harness): a fresh pty with no winsize ioctl ever applied reports
-// `terminalWidth`/`terminalHeight` as `80`/`24`, OpenTUI's own hardcoded fallback for "no real size
-// available," not a real terminal's dimensions. `formatModeDetail` (util/format.ts) gates the mode
-// row's route/effort-tier suffix behind `MODE_ROUTE_MIN_COLS` (100) — strictly wider than that
-// 80-column default — so no test using the plain `startChild` invocation can ever observe that
-// suffix, regardless of what it asserts. `terminalSize`, below, is this file's only opt-in past that:
-// it routes the child through a `sh -c` wrapper (`PTY_RESIZE_SPAWN`, above) that sets the winsize
-// before exec'ing the real target. Every other call site omits it and keeps the exact behavior it
-// always had.
+// `startChild`'s own default `target` (`[process.execPath, scriptPath]`, below) never sets a
+// window size on the pty `pty.spawn` allocates — confirmed live (an `@opentui/core`
+// `createCliRenderer` probe run over the identical harness): a fresh pty with no winsize ioctl ever
+// applied reports `terminalWidth`/`terminalHeight` as `80`/`24`, OpenTUI's own hardcoded fallback
+// for "no real size available," not a real terminal's dimensions. `formatModeDetail` (util/format.ts)
+// gates the mode row's route/effort-tier suffix behind `MODE_ROUTE_MIN_COLS` (100) — strictly wider
+// than that 80-column default — so no test using the plain `target` can ever observe that suffix,
+// regardless of what it asserts. `terminalSize`, below, is this file's only opt-in past that: it
+// prefixes an `sh -c` wrapper (`PTY_RESIZE_SPAWN`, above) onto `target` that sets the winsize before
+// exec'ing the real one. Every other call site omits it and keeps the exact behavior it always had.
 async function startChild(
   scriptPath: string,
   cwd: string,
@@ -1835,17 +1844,23 @@ async function startChild(
   // `sawLine`) until `frameOccurrences(line) >= count`.
   sawInFrameTimes: (line: string, count: number) => Promise<void>;
 }> {
-  const args = opts.terminalSize
+  // One Python bootstrap either way — `pty.spawn(sys.argv[1:])` — with `terminalSize` only
+  // changing what that argv IS: the real target directly, or an `sh -c` wrapper (`PTY_RESIZE_SPAWN`,
+  // above) prefixed in front of it. Two argv conventions for one bootstrap to reconcile would cost
+  // a reader more than the branch it replaces.
+  const target = opts.terminalSize
     ? [
+        "sh",
         "-c",
-        "import pty, sys; pty.spawn(['sh', '-c', sys.argv[1], 'sh'] + sys.argv[2:])",
         PTY_RESIZE_SPAWN,
+        "sh",
         String(opts.terminalSize.rows),
         String(opts.terminalSize.cols),
         process.execPath,
         scriptPath,
       ]
-    : ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, scriptPath];
+    : [process.execPath, scriptPath];
+  const args = ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", ...target];
   // `OTUI_USE_CONSOLE=false`: OpenTUI's `TerminalConsoleCache` intercepts `console.log`/`console.error`
   // into a hidden debug overlay by default (`@opentui/core`'s own `registerEnvVar` for this — a
   // documented escape hatch, not an internal hack) — every `childScript*` fixture below relies on a
@@ -2725,6 +2740,53 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         (c) => c.SERI_REASONING_EFFORT === "medium",
       );
       expect(config.SERI_REASONING_EFFORT).toBe("medium");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // The persist-on-success gate (cli.ts, right after `persistDefaultReasoningEffort`) is a THIRD
+  // writer of config.json, alongside runTurn's own per-turn dispatch and /config's handlers — it
+  // must dispatch too, or the header keeps showing whatever config.json held at mount even after
+  // a turn just rewrote it. Reproduces the exact sequence: /effort override -> turn persists it as
+  // the new default -> /effort auto clears the override, falling through to `state.config` -> the
+  // header must show the JUST-persisted tier, not the stale one still in `state.config` from mount.
+  test("a value the persist-on-success gate just wrote reaches the header on /effort auto, with no turn in between", async () => {
+    seedConfig(dir, { SERI_REASONING_EFFORT: "low" });
+
+    const scriptPath = join(dir, "child-effort-persist-header.mjs");
+    writeFileSync(scriptPath, childScriptEffortPersist(dir));
+
+    const { child, sawLine } = await startChild(scriptPath, dir, {
+      terminalSize: { cols: 100, rows: 30 },
+    });
+    try {
+      await sawLine("RUNLOOP_CALL 1 reasoningEffort=low");
+      await sawLine("RUNLOOP_DONE 1");
+      await sawLine("reasoning-model · your key · low");
+
+      child.stdin?.write("/effort high");
+      await sawLine("/effort high");
+      child.stdin?.write("\r");
+      await sawLine("Reasoning effort: high");
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+      await sawLine("RUNLOOP_CALL 2 reasoningEffort=high");
+      await sawLine("RUNLOOP_DONE 2");
+
+      await waitForConfig(
+        join(dir, ".seri", "config.json"),
+        (c) => c.SERI_REASONING_EFFORT === "high",
+      );
+
+      child.stdin?.write("/effort auto");
+      await sawLine("/effort auto");
+      child.stdin?.write("\r");
+      await sawLine("Reasoning effort: auto (falls back to the config default).");
+
+      await sawLine("reasoning-model · your key · high");
     } finally {
       child.kill("SIGKILL");
     }
