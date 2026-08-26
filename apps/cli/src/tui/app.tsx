@@ -48,12 +48,13 @@
 // quit is ready to complete (`getTuiRenderer`/`destroyTuiRenderer`, runtime/renderer.ts).
 import { type BoxRenderable, getTreeSitterClient, type ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
-import type { ModelProvider } from "@seri/model-catalog";
+import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { memo, useEffect, useReducer, useRef, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
+import { appliedReasoningEffort } from "../provider/reasoning";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 import { ApprovalBox } from "./components/ApprovalBox";
@@ -94,6 +95,14 @@ export type AppProps = {
   // than showing a fabricated route ("your key" during a flow where there is provably no key yet
   // would be actively wrong, not just a placeholder).
   route: ResolvedRoute | undefined;
+  // Used, alongside `state.route`, to look up the active model's `reasoningOptions` for the
+  // persistent mode-indicator's `/effort` tier suffix (see the `catalogEntry`/`effortTier`
+  // computation below). Same required-key/optional-VALUE shape as `route` above, for the same
+  // reason: the key is required so a future `createElement(App, ...)` call site must explicitly
+  // decide what to pass rather than silently omitting it; the value is `| undefined` because two
+  // call sites (runGuidedSetup, runWelcomeSplash) mount App before any `PreparedRun`/catalog
+  // exists at all.
+  catalog: ModelCatalog | undefined;
   // The seam driveLoop's dispatch is wired through: called once on mount with the reducer's own
   // dispatch function, the same shape `useReducer` returns. Optional because some tests exercise
   // the reducer via `connectDispatch` directly, with no live loop behind it.
@@ -223,6 +232,7 @@ const TRANSCRIPT_PADDING_MIN_WIDTH = 20;
 export function App({
   session,
   route,
+  catalog,
   connectDispatch,
   onSubmit,
   onSessionChange,
@@ -380,7 +390,12 @@ export function App({
   // terminal configured for ambiguous-width-double, same caveat the D3 glyphs already carry).
   const showRightSide = width >= indicatorText.length + rawRightSideWidth;
   const rightSideWidth = showRightSide ? rawRightSideWidth : 0;
-  const modeDetail = formatModeDetail(state.route, width - rightSideWidth);
+  const catalogEntry =
+    state.route !== undefined && catalog !== undefined
+      ? findCatalogEntry(catalog, state.route.model, state.route.provider)
+      : undefined;
+  const effortTier = appliedReasoningEffort(state.session.reasoningEffort, catalogEntry);
+  const modeDetail = formatModeDetail(state.route, width - rightSideWidth, effortTier);
 
   // Its own useKeyboard, separate from the scroll handler below — OpenTUI delivers the same
   // keypress to every registered handler (that handler's own comment explains this), so a second,
@@ -610,9 +625,7 @@ export function App({
           {showRightSide && rightSideText.length > 0 && (
             <text fg={theme.muted}>{rightSideText}</text>
           )}
-          {showRightSide && state.status.length > 0 && (
-            <text fg={theme.muted}>{state.status}</text>
-          )}
+          {showRightSide && state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
         </box>
       </box>
     </box>

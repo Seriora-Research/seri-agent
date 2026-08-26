@@ -124,36 +124,36 @@ describe("formatModeDetail", () => {
 
   test("below MODE_MODEL_MIN_COLS (51, 52, 75): no detail", () => {
     for (const width of [51, 52, 75]) {
-      expect(formatModeDetail(nonRerouted, width)).toBe("");
+      expect(formatModeDetail(nonRerouted, width, undefined)).toBe("");
     }
   });
 
   test("at MODE_MODEL_MIN_COLS (76): model name, no route", () => {
-    expect(formatModeDetail(nonRerouted, 76)).toBe("  claude-sonnet-5");
+    expect(formatModeDetail(nonRerouted, 76, undefined)).toBe("  claude-sonnet-5");
   });
 
   // The route label disappears at the terminal's own default 80 columns (below
   // MODE_ROUTE_MIN_COLS), asserted here so a later widening of that threshold is a deliberate
   // change, not a silent one.
   test("at 80 columns (DEFAULT_COLUMNS): model name, still no route", () => {
-    expect(formatModeDetail(nonRerouted, 80)).toBe("  claude-sonnet-5");
+    expect(formatModeDetail(nonRerouted, 80, undefined)).toBe("  claude-sonnet-5");
   });
 
   test("just below MODE_ROUTE_MIN_COLS (99): model name, still no route", () => {
-    expect(formatModeDetail(nonRerouted, 99)).toBe("  claude-sonnet-5");
+    expect(formatModeDetail(nonRerouted, 99, undefined)).toBe("  claude-sonnet-5");
   });
 
   test("at MODE_ROUTE_MIN_COLS (100): model name and 'your key'", () => {
-    expect(formatModeDetail(nonRerouted, 100)).toBe("  claude-sonnet-5 · your key");
+    expect(formatModeDetail(nonRerouted, 100, undefined)).toBe("  claude-sonnet-5 · your key");
   });
 
   test("at MODE_ROUTE_MIN_COLS with a rerouted route: '→ <provider>'", () => {
-    expect(formatModeDetail(rerouted, 100)).toBe("  claude-sonnet-5 · → openrouter");
+    expect(formatModeDetail(rerouted, 100, undefined)).toBe("  claude-sonnet-5 · → openrouter");
   });
 
   test("at MODE_ROUTE_MIN_COLS with a gateway-served route: 'provided'", () => {
     const viaGateway = route({ viaGateway: true });
-    expect(formatModeDetail(viaGateway, 100)).toBe("  claude-sonnet-5 · provided");
+    expect(formatModeDetail(viaGateway, 100, undefined)).toBe("  claude-sonnet-5 · provided");
   });
 
   // Defensive: resolveRoute's own contract makes rerouted && viaGateway both true unreachable, but
@@ -166,7 +166,9 @@ describe("formatModeDetail", () => {
       reason: "ANTHROPIC_API_KEY",
       viaGateway: true,
     });
-    expect(formatModeDetail(reroutedAndGateway, 100)).toBe("  claude-sonnet-5 · → openrouter");
+    expect(formatModeDetail(reroutedAndGateway, 100, undefined)).toBe(
+      "  claude-sonnet-5 · → openrouter",
+    );
   });
 
   // A real catalog id (an OpenRouter id is easily 40+ chars) would otherwise go into the row
@@ -175,13 +177,38 @@ describe("formatModeDetail", () => {
   // tiers that render the model name.
   test("long model id is truncated to NAME_WIDTH in both the model-only and full tiers", () => {
     const longModel = route({ model: "openrouter/deepseek/deepseek-r1-distill-llama-70b" });
-    expect(formatModeDetail(longModel, 80)).toBe("  openrouter/deepseek/d…");
-    expect(formatModeDetail(longModel, 100)).toBe("  openrouter/deepseek/d… · your key");
+    expect(formatModeDetail(longModel, 80, undefined)).toBe("  openrouter/deepseek/d…");
+    expect(formatModeDetail(longModel, 100, undefined)).toBe("  openrouter/deepseek/d… · your key");
   });
 
   test("route === undefined: no detail at every width", () => {
     for (const width of [10, 76, 80, 100]) {
-      expect(formatModeDetail(undefined, width)).toBe("");
+      expect(formatModeDetail(undefined, width, undefined)).toBe("");
+    }
+  });
+
+  test("effortTier defined at MODE_ROUTE_MIN_COLS (100): appended after the route label", () => {
+    expect(formatModeDetail(nonRerouted, 100, "high")).toBe("  claude-sonnet-5 · your key · high");
+  });
+
+  test("effortTier defined but width < MODE_ROUTE_MIN_COLS (76, 99): tier does not appear", () => {
+    expect(formatModeDetail(nonRerouted, 76, "high")).toBe("  claude-sonnet-5");
+    expect(formatModeDetail(nonRerouted, 99, "high")).toBe("  claude-sonnet-5");
+  });
+
+  test("effortTier undefined at MODE_ROUTE_MIN_COLS (100): unchanged from today's route-only output", () => {
+    expect(formatModeDetail(nonRerouted, 100, undefined)).toBe("  claude-sonnet-5 · your key");
+  });
+
+  test("an effortTier longer than EFFORT_WIDTH is truncated with a trailing ellipsis", () => {
+    expect(formatModeDetail(nonRerouted, 100, "extra-thinky")).toBe(
+      "  claude-sonnet-5 · your key · extra-t…",
+    );
+  });
+
+  test("route === undefined: no detail at every width, even with an effortTier", () => {
+    for (const width of [10, 76, 80, 100]) {
+      expect(formatModeDetail(undefined, width, "high")).toBe("");
     }
   });
 });

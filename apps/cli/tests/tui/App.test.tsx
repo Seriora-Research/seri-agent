@@ -28,7 +28,7 @@ import {
   singleLine,
   slideWindow,
 } from "../../src/tui/util/format";
-import { flush, flushMarkdown, route, session } from "./helpers";
+import { catalogEntry, catalogOf, flush, flushMarkdown, route, session } from "./helpers";
 
 // Wide enough that every formatModeDetail tier, including the route label (>=MODE_ROUTE_MIN_COLS,
 // 100 cols), is exercised by default,
@@ -81,6 +81,7 @@ async function connect(
     <App
       session={session()}
       route={route()}
+      catalog={undefined}
       {...overrides}
       connectDispatch={(d) => {
         dispatch = d;
@@ -2427,6 +2428,77 @@ describe("App", () => {
       const frame = setup.captureCharFrame();
       expect(frame).toContain("claude-sonnet-5");
       expect(frame).not.toContain("some-unconfigured-model");
+    });
+
+    // Locates the mode row specifically rather than searching the whole frame — a whole-frame
+    // `toContain("high")` could pick up unrelated transcript text, reporting success identically
+    // to a broken indicator.
+    function modeRow(setup: TestRendererSetup): string | undefined {
+      return setup
+        .captureCharFrame()
+        .split("\n")
+        .find((l) => l.includes(MODE_LABEL["approve-each"]));
+    }
+
+    test("an effort-resolved dispatch renders the tier in the mode row, in the same render pass", async () => {
+      const { setup, dispatch } = await connect({
+        catalog: catalogOf([
+          catalogEntry({
+            reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+          }),
+        ]),
+      });
+
+      dispatch({ type: "effort-resolved", tier: "high" });
+      await flush(setup);
+
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
+    });
+
+    test("/effort auto (a session-updated dispatch clearing reasoningEffort) removes the tier from the mode row", async () => {
+      const { setup, dispatch } = await connect({
+        catalog: catalogOf([
+          catalogEntry({
+            reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+          }),
+        ]),
+      });
+      dispatch({ type: "effort-resolved", tier: "high" });
+      await flush(setup);
+      expect(modeRow(setup)).toContain("· high");
+
+      dispatch({ type: "session-updated", session: session({ reasoningEffort: undefined }) });
+      await flush(setup);
+
+      expect(modeRow(setup)).not.toContain("· high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+    });
+
+    // A tier surviving a model switch onto a model with no reasoningOptions at all (the reducer
+    // does not gate `effort-resolved` on legality) must not render — appliedReasoningEffort's own
+    // legality check is what makes this the case, not anything special in the row itself.
+    test("a stale tier on a model with no reasoningOptions does not render", async () => {
+      const { setup, dispatch } = await connect({
+        catalog: catalogOf([catalogEntry({ reasoningOptions: undefined })]),
+      });
+
+      dispatch({ type: "effort-resolved", tier: "high" });
+      await flush(setup);
+
+      expect(modeRow(setup)).not.toContain("· high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+    });
+
+    // guidedSetup.ts/welcomeSplash.ts's own mounts omit `catalog` entirely — this confirms that is
+    // safe, not just untested.
+    test("mounting with no catalog prop is safe: no crash, and no tier renders", async () => {
+      const { setup, dispatch } = await connect({ catalog: undefined });
+
+      dispatch({ type: "effort-resolved", tier: "high" });
+      await flush(setup);
+
+      expect(modeRow(setup)).not.toContain("· high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
     });
   });
 

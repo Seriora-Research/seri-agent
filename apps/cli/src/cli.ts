@@ -613,13 +613,19 @@ async function resolveModelRoute(
   sessionId: string,
   deps: CliDeps,
   warnSink?: (text: string) => void,
-): Promise<{ model: LanguageModel; route: ResolvedRoute; catalog: ModelCatalog; plan: Plan | null }> {
+): Promise<{
+  model: LanguageModel;
+  route: ResolvedRoute;
+  catalog: ModelCatalog;
+  plan: Plan | null;
+}> {
   const configured = configuredProviders(configDir);
   // `resolveDefaultModel(configDir)`'s own provider, not a hardcoded `DEFAULT_PROVIDER` — mirrors
   // resolveSessionRoute's own defaulting (routing.ts's own comment on why): `provider` can
   // legitimately be undefined here (no session override, no explicit /model pick), and
   // resolveDefaultModel already resolves the correct pair for that case.
-  const requestedProvider = requested.provider ?? resolveDefaultModel(configDir).provider ?? DEFAULT_PROVIDER;
+  const requestedProvider =
+    requested.provider ?? resolveDefaultModel(configDir).provider ?? DEFAULT_PROVIDER;
   const [catalog, plan] = await Promise.all([
     getModelCatalog(undefined, warnSink),
     fetchAccountPlan(configDir),
@@ -3390,6 +3396,7 @@ async function runTui(
     createElement(App, {
       session: prepared.session,
       route: prepared.route,
+      catalog: prepared.catalog,
       onSubmit,
       onSessionChange,
       onQuit: quit,

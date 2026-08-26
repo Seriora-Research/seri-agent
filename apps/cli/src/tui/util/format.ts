@@ -149,6 +149,13 @@ export const MODE_CYCLE_HINT = " (shift+tab to cycle)";
 export const MODE_HINT_COLS = 52;
 export const MODE_MODEL_MIN_COLS = 76;
 export const MODE_ROUTE_MIN_COLS = 100;
+// formatModeDetail's display cap for the `/effort` tier suffix — a tier value ultimately comes
+// from models.dev, an external and unvalidated source, so this is a display budget, not a bound
+// on the data. The widest values referenced anywhere in this codebase's own provider tables today
+// are "minimal" and "default" (7 chars each — provider/reasoning.ts's own comment on OpenAI's and
+// groq's effort unions); one column of breathing room over that, matching ROUTE_WIDTH's own
+// convention above (13 for a 12-char worst case) rather than COST_WIDTH's wider 3-column margin.
+export const EFFORT_WIDTH = 8;
 
 // A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined`,
 // and a real pty can separately report a genuine but unusable `columns === 0` for its first render
@@ -164,11 +171,15 @@ export const DEFAULT_COLUMNS = 80;
 export const DEFAULT_ROWS = 24;
 
 // Truncates with a trailing ellipsis (never mid-multi-byte-safe beyond what .slice already is —
-// every field this feeds is plain ASCII: a model id/displayName/provider name) or pads with
-// trailing spaces, so every row's later columns start at the same screen column regardless of an
-// earlier one's actual length.
+// every field this feeds is plain ASCII: a model id/displayName/provider name/effort tier).
+function truncate(text: string, width: number): string {
+  return text.length > width ? `${text.slice(0, width - 1)}…` : text;
+}
+
+// truncate(), then pads with trailing spaces, so every row's later columns start at the same
+// screen column regardless of an earlier one's actual length.
 export function truncatePad(text: string, width: number): string {
-  return text.length > width ? `${text.slice(0, width - 1)}…` : text.padEnd(width);
+  return truncate(text, width).padEnd(width);
 }
 
 // Binary units (1024, not 1000): matches how a context window is actually described everywhere
@@ -323,17 +334,27 @@ export function formatRouteLabel(input: {
 // Carries its own leading two spaces (mirroring the old inline `"  "` join) and is `""` when there
 // is nothing to show, so app.tsx's JSX never has to add spacing of its own — it renders this
 // directly next to the mode indicator, which app.tsx already has in hand and colors separately.
-export function formatModeDetail(route: ResolvedRoute | undefined, width: number): string {
+// `effortTier` is the active `/effort` override (or `undefined` for none/auto/stale — see its
+// caller in app.tsx), appended only at the same width tier the route label already requires: 86
+// (this row's own proven worst case, see MODE_ROUTE_MIN_COLS's comment above) + 3 (" · ") + 8
+// (EFFORT_WIDTH) = 97 < 100, so the combined worst case still holds with room to spare. Truncated
+// with the same defensive shape as the model name below, since a tier value ultimately comes from
+// models.dev, an external and unvalidated source.
+export function formatModeDetail(
+  route: ResolvedRoute | undefined,
+  width: number,
+  effortTier: string | undefined,
+): string {
   if (route === undefined || width < MODE_MODEL_MIN_COLS) return "";
-  const modelName =
-    route.model.length > NAME_WIDTH ? `${route.model.slice(0, NAME_WIDTH - 1)}…` : route.model;
+  const modelName = truncate(route.model, NAME_WIDTH);
   if (width < MODE_ROUTE_MIN_COLS) return `  ${modelName}`;
   const routeLabel = formatRouteLabel({
     keyConfigured: !route.rerouted && !route.viaGateway,
     rerouteTo: route.rerouted ? route.provider : undefined,
     gatewayReachable: route.viaGateway,
   });
-  return `  ${modelName} · ${routeLabel}`;
+  if (effortTier === undefined) return `  ${modelName} · ${routeLabel}`;
+  return `  ${modelName} · ${routeLabel} · ${truncate(effortTier, EFFORT_WIDTH)}`;
 }
 
 export function formatModelRow(row: ModelPickerEntry): string {

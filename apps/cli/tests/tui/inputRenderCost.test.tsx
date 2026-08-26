@@ -91,6 +91,7 @@ async function measureBackspaceCost(options: {
     <App
       session={session()}
       route={route()}
+      catalog={undefined}
       connectDispatch={(d) => {
         dispatch = d;
       }}
