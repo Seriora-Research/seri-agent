@@ -571,6 +571,7 @@ function childScriptEffortDefaultAtMount(dir: string): string {
     `  return realFetch(url, opts);`,
     `};`,
     `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
     `}`,
@@ -1766,7 +1767,7 @@ function countLogicalOccurrences(raw: string, line: string): number {
 // both 0x03 as a keypress rather than a signal, and each typed character reflecting live — is the
 // entire mechanism under test, and a pipe cannot exercise either.
 //
-// argv[1]/argv[2] are the requested rows/cols, argv[3:] the real command to run. `os.openpty` (not
+// argv[1]/argv[2] are the requested rows/cols, argv[3:] the real command to run. `pty.openpty` (not
 // `pty.fork`, which `startChild`'s own default invocation uses) so the `TIOCSWINSZ` ioctl below runs
 // on the slave before the child is even forked — no race against how fast the child's own first
 // terminal-size read happens. `os.setsid`/the three `dup2`s/`TIOCSCTTY` are what `pty.fork` already
@@ -1823,7 +1824,7 @@ const PTY_RESIZE_SPAWN = [
 // row's route/effort-tier suffix behind `MODE_ROUTE_MIN_COLS` (100) — strictly wider than that
 // 80-column default — so no test using the plain `startChild` invocation can ever observe that
 // suffix, regardless of what it asserts. `terminalSize`, below, is this file's only opt-in past that:
-// it swaps in a small hand-rolled pty (`os.openpty` + `TIOCSWINSZ`, not `pty.spawn`) that sets the
+// it swaps in a small hand-rolled pty (`pty.openpty` + `TIOCSWINSZ`, not `pty.spawn`) that sets the
 // slave's winsize before the child ever execs, so the child's very first terminal-size read already
 // sees it. Every other call site omits it and keeps the exact behavior it always had.
 async function startChild(
@@ -5268,7 +5269,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // turn has run yet, so `runTui`'s own per-turn dispatch (cli.ts) cannot be what put it there.
     // `terminalSize` widens the pty past `MODE_ROUTE_MIN_COLS` (`startChild`'s own comment has the
     // full account of why every other test in this file can't observe this suffix at all).
-    test("SERI_REASONING_EFFORT from config.json shows the tier in the mode row before any input is typed", async () => {
+    test("SERI_REASONING_EFFORT from config.json shows the tier in the mode row before any turn runs", async () => {
       seedConfig(dir, { SERI_REASONING_EFFORT: "medium" });
       const scriptPath = join(dir, "child-effort-default-mount.mjs");
       writeFileSync(scriptPath, childScriptEffortDefaultAtMount(dir));
