@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { parseColor, RGBA, TextAttributes } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
-import type { ModelCatalog, ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
+import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ReactElement, ReactNode } from "react";
 import type { PermissionMode } from "../../src/gate/gate";
 import type { ApprovalAnswer } from "../../src/loop/loop";
@@ -28,7 +28,7 @@ import {
   singleLine,
   slideWindow,
 } from "../../src/tui/util/format";
-import { flush, flushMarkdown, route, session } from "./helpers";
+import { catalogEntry, catalogOf, flush, flushMarkdown, route, session } from "./helpers";
 
 // Wide enough that every formatModeDetail tier, including the route label (>=MODE_ROUTE_MIN_COLS,
 // 100 cols), is exercised by default,
@@ -2346,27 +2346,6 @@ describe("App", () => {
       expect(listWindowSize(15)).toBe(6);
     });
   });
-
-  // Matches route()'s own default model/provider (helpers.ts) so findCatalogEntry(catalog,
-  // state.route.model, state.route.provider) actually resolves to this entry.
-  function catalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
-    return {
-      id: "claude-sonnet-5",
-      provider: "anthropic",
-      displayName: "Claude Sonnet 5",
-      family: "claude",
-      contextWindow: 200_000,
-      maxOutputTokens: 64_000,
-      toolCall: true,
-      reasoning: true,
-      pricing: undefined,
-      ...overrides,
-    };
-  }
-
-  function catalogOf(entries: ModelCatalogEntry[]): ModelCatalog {
-    return { fetchedAt: "2026-08-25T00:00:00.000Z", entries };
-  }
 
   describe("persistent mode+route indicator (mounted)", () => {
     // useTerminalDimensions' own live-resize wiring — formatModeDetail's own unit tests

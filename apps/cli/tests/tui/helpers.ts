@@ -5,6 +5,7 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { TestRendererSetup } from "@opentui/core/testing";
+import type { ModelCatalog, ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import type { ResolvedRoute } from "../../src/provider/routing";
 import type { SessionState } from "../../src/session/session";
@@ -34,6 +35,30 @@ export function route(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
     viaGateway: false,
     ...overrides,
   };
+}
+
+// Structurally coupled to route()'s own defaults (id/provider), not just documented to match
+// them, so a future change to route()'s default model or provider can't silently make a
+// findCatalogEntry(catalog, route.model, route.provider) lookup miss without this fixture
+// noticing too — both derive from the same source of truth.
+export function catalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+  const defaultRoute = route();
+  return {
+    id: defaultRoute.model,
+    provider: defaultRoute.provider,
+    displayName: "Claude Sonnet 5",
+    family: "claude",
+    contextWindow: 200_000,
+    maxOutputTokens: 64_000,
+    toolCall: true,
+    reasoning: true,
+    pricing: undefined,
+    ...overrides,
+  };
+}
+
+export function catalogOf(entries: ModelCatalogEntry[]): ModelCatalog {
+  return { fetchedAt: "2026-08-25T00:00:00.000Z", entries };
 }
 
 // @opentui/react's reconciler commits on a macrotask, not a microtask (verified independently
