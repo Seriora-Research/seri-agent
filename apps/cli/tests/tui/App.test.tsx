@@ -2463,7 +2463,9 @@ describe("App", () => {
     test("an effort-resolved dispatch renders the tier in the mode row, in the same render pass", async () => {
       const { setup, dispatch } = await connect({
         catalog: catalogOf([
-          catalogEntry({ reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }] }),
+          catalogEntry({
+            reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+          }),
         ]),
       });
 
@@ -2476,7 +2478,9 @@ describe("App", () => {
     test("/effort auto (a session-updated dispatch clearing reasoningEffort) removes the tier from the mode row", async () => {
       const { setup, dispatch } = await connect({
         catalog: catalogOf([
-          catalogEntry({ reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }] }),
+          catalogEntry({
+            reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+          }),
         ]),
       });
       dispatch({ type: "effort-resolved", tier: "high" });
