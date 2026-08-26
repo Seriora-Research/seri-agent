@@ -159,13 +159,7 @@ export type TuiState = {
   // copy" shape `session` above already uses. Optional for the identical reason `AppProps.route`
   // is: runGuidedSetup mounts App before any provider key/route exists yet.
   route: ResolvedRoute | undefined;
-  // The header's own effort-tier suffix (app.tsx's `effortTier`) falls back to this when
-  // `session.reasoningEffort` is `undefined` — the config default (`SERI_REASONING_EFFORT`)
-  // already drives real turn behavior from turn 1 (resolveReasoningEffort,
-  // provider/reasoning.ts) even before the user ever runs `/effort`, so the header must be able
-  // to show it too. Seeded and kept current the same way `route` is: an optional mount-time
-  // value, refreshed every turn by `reasoning-effort-default-updated` (dispatched alongside
-  // `route-updated`) so a live `/config` edit takes effect on the next turn.
+  // See `"reasoning-effort-default-updated"`'s own comment, below, for what this is and why.
   reasoningEffortDefault: string | undefined;
 };
 
@@ -299,12 +293,12 @@ export type TuiAction =
   // `route` prop, never re-read after the initial render), so a /model switch's own freshly
   // resolved route never reached it. `state.route` is what the label now reads.
   | { type: "route-updated"; route: ResolvedRoute }
-  // Dispatched by runTurn (cli.ts) alongside `route-updated`, every turn — a mid-session
-  // `/config` edit to `SERI_REASONING_EFFORT` must take effect on the very next turn, the same
-  // way a `/model` switch already does for `route-updated`. `state.reasoningEffortDefault` is
-  // what the header's own `effortTier` (app.tsx) falls back to when `session.reasoningEffort` is
-  // `undefined`.
-  | { type: "reasoning-effort-default-updated"; tier: string | undefined }
+  // Dispatched by runTurn (cli.ts) alongside `route-updated`, every turn, and by /config's own
+  // save/unset handlers (handlers.ts) the moment `SERI_REASONING_EFFORT` itself is written — a
+  // config-only edit has no turn to wait for, so it needs its own dispatch rather than relying on
+  // the next turn's copy to catch up. `state.reasoningEffortDefault` is what the header's own
+  // `effortTier` (app.tsx) falls back to when `session.reasoningEffort` is `undefined`.
+  | { type: "reasoning-effort-default-updated"; reasoningEffortDefault: string | undefined }
   // Dispatched by runTurn (cli.ts) right alongside `route-updated`, before driveLoop starts —
   // the one place in runTurn that already fires once per turn, before the model is invoked. Starts
   // TurnStatus's elapsed clock and resets the turn's token progress fresh, so a second turn never
@@ -466,7 +460,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "route-updated":
       return { ...state, route: action.route };
     case "reasoning-effort-default-updated":
-      return { ...state, reasoningEffortDefault: action.tier };
+      return { ...state, reasoningEffortDefault: action.reasoningEffortDefault };
     case "turn-started":
       return {
         ...state,

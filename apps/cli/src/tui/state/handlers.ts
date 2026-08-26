@@ -10,7 +10,13 @@ import type { ModelProvider } from "@seri/model-catalog";
 import { login as loginReal, logout as logoutReal } from "../../auth/commands";
 import { getWorkosClientId } from "../../auth/deviceFlow";
 import type { CliDeps } from "../../cli";
-import { configBoolean, loadConfig, setConfigValue, unsetConfigValue } from "../../config/config";
+import {
+  configBoolean,
+  loadConfig,
+  loadReasoningEffortConfig,
+  setConfigValue,
+  unsetConfigValue,
+} from "../../config/config";
 import { messageOf } from "../../errors";
 import { forgetGrant, loadGrants } from "../../permissions/store";
 import {
@@ -468,6 +474,15 @@ export function createConfigHandlers(opts: {
       });
       return;
     }
+    // The header's own effort-tier suffix (reasoning-effort-default-updated's own comment,
+    // reducer.ts) has no turn to wait for here — a config-only edit needs its own dispatch, not
+    // just the per-turn one runTurn (cli.ts) already does.
+    if (key === "SERI_REASONING_EFFORT") {
+      dispatch({
+        type: "reasoning-effort-default-updated",
+        reasoningEffortDefault: loadReasoningEffortConfig(loadConfig(configDir)),
+      });
+    }
     dispatch({
       type: "transcript-append",
       line: `Saved ${key}.${verifyConfigTakesEffectNote(key)}`,
@@ -514,6 +529,13 @@ export function createConfigHandlers(opts: {
           message: messageOf(err),
         });
         return;
+      }
+      // See onConfigValueEntered's own comment on this same dispatch, just above.
+      if (removed && confirmedKey === "SERI_REASONING_EFFORT") {
+        dispatch({
+          type: "reasoning-effort-default-updated",
+          reasoningEffortDefault: loadReasoningEffortConfig(loadConfig(configDir)),
+        });
       }
       dispatch({
         type: "transcript-append",

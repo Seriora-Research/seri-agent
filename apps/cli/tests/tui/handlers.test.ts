@@ -113,6 +113,59 @@ describe("dispatchConfigList (via onConfigBack)", () => {
 
     expect(actions.map((a) => a.type)).toEqual(["command-error", "config-resolved"]);
   });
+
+  // The TUI header's effort-tier suffix (app.tsx) has no turn to wait for on a /config-only edit —
+  // regression coverage for the gap a thermo-nuclear review found: saving/unsetting
+  // SERI_REASONING_EFFORT here used to dispatch nothing, so the header kept showing the OLD tier
+  // until the next turn ran.
+  test("saving SERI_REASONING_EFFORT dispatches reasoning-effort-default-updated with the new value", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onConfigValueEntered } = createConfigHandlers({
+      dispatch,
+      getPendingConfig: () => undefined,
+      configDir,
+    });
+
+    onConfigValueEntered("SERI_REASONING_EFFORT", "high");
+
+    const effortAction = actions.find((a) => a.type === "reasoning-effort-default-updated");
+    expect(effortAction?.type === "reasoning-effort-default-updated" && effortAction.reasoningEffortDefault).toBe(
+      "high",
+    );
+  });
+
+  test("saving an unrelated config key dispatches no reasoning-effort-default-updated", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onConfigValueEntered } = createConfigHandlers({
+      dispatch,
+      getPendingConfig: () => undefined,
+      configDir,
+    });
+
+    onConfigValueEntered("SERI_VERIFY_COMMAND", "bun run check");
+
+    expect(actions.some((a) => a.type === "reasoning-effort-default-updated")).toBe(false);
+  });
+
+  test("unsetting SERI_REASONING_EFFORT dispatches reasoning-effort-default-updated with undefined", () => {
+    writeFileSync(
+      join(configDir, "config.json"),
+      JSON.stringify({ SERI_REASONING_EFFORT: "medium" }),
+    );
+    const { actions, dispatch } = actionsCollector();
+    const { onConfigUnset } = createConfigHandlers({
+      dispatch,
+      getPendingConfig: () => ({ step: "confirm-unset", key: "SERI_REASONING_EFFORT" }),
+      configDir,
+    });
+
+    onConfigUnset("SERI_REASONING_EFFORT");
+
+    const effortAction = actions.find((a) => a.type === "reasoning-effort-default-updated");
+    expect(effortAction?.type === "reasoning-effort-default-updated" && effortAction.reasoningEffortDefault).toBe(
+      undefined,
+    );
+  });
 });
 
 describe("dispatchPermissionsList (via onPermissionsBack)", () => {

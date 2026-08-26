@@ -2493,7 +2493,7 @@ describe("App", () => {
 
       dispatch({ type: "session-updated", session: session({ reasoningEffort: undefined }) });
       await flush(setup);
-      dispatch({ type: "reasoning-effort-default-updated", tier: "high" });
+      dispatch({ type: "reasoning-effort-default-updated", reasoningEffortDefault: "high" });
       await flush(setup);
 
       expect(modeRow(setup)).not.toContain("· high");
@@ -2512,7 +2512,7 @@ describe("App", () => {
         ]),
       });
 
-      dispatch({ type: "reasoning-effort-default-updated", tier: "high" });
+      dispatch({ type: "reasoning-effort-default-updated", reasoningEffortDefault: "high" });
       await flush(setup);
 
       expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
@@ -2567,7 +2567,7 @@ describe("App", () => {
         ]),
       });
 
-      dispatch({ type: "reasoning-effort-default-updated", tier: "low" });
+      dispatch({ type: "reasoning-effort-default-updated", reasoningEffortDefault: "low" });
       await flush(setup);
       dispatch({ type: "effort-resolved", tier: "high" });
       await flush(setup);

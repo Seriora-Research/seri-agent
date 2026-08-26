@@ -54,7 +54,7 @@ import { memo, useEffect, useReducer, useRef, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
-import { appliedReasoningEffort } from "../provider/reasoning";
+import { appliedReasoningEffort, withReasoningEffortDefault } from "../provider/reasoning";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 import { ApprovalBox } from "./components/ApprovalBox";
@@ -103,16 +103,9 @@ export type AppProps = {
   // call sites (runGuidedSetup, runWelcomeSplash) mount App before any `PreparedRun`/catalog
   // exists at all.
   catalog: ModelCatalog | undefined;
-  // Seeds the reducer's own `state.reasoningEffortDefault` at mount (`initialTuiState(session, {
-  // route, reasoningEffortDefault })`, below) — the persistent mode-indicator's effort-tier suffix
-  // falls back to `state.reasoningEffortDefault` (this component's own `effortTier` computation)
-  // whenever `state.session.reasoningEffort` is `undefined`, so a later `/config` edit to
-  // SERI_REASONING_EFFORT reaches the label by dispatching `reasoning-effort-default-updated` into
-  // the reducer instead of this prop ever changing. Same required-key/optional-VALUE shape as
-  // `route` above, for the same reason: the key is required so a future `createElement(App, ...)`
-  // call site must explicitly decide what to pass rather than silently omitting it; the value is
-  // `| undefined` because two call sites (runGuidedSetup, runWelcomeSplash) mount App before any
-  // config-derived default has ever been resolved.
+  // Same required-key/optional-VALUE shape as `route`/`catalog` above, for the same reason. Seeds
+  // `state.reasoningEffortDefault` at mount — see `"reasoning-effort-default-updated"`'s own
+  // comment (reducer.ts) for what that is and how it stays live afterward.
   reasoningEffortDefault: string | undefined;
   // The seam driveLoop's dispatch is wired through: called once on mount with the reducer's own
   // dispatch function, the same shape `useReducer` returns. Optional because some tests exercise
@@ -410,7 +403,7 @@ export function App({
       ? findCatalogEntry(catalog, state.route.model, state.route.provider)
       : undefined;
   const effortTier = appliedReasoningEffort(
-    state.session.reasoningEffort ?? state.reasoningEffortDefault,
+    withReasoningEffortDefault(state.session.reasoningEffort, state.reasoningEffortDefault),
     catalogEntry,
   );
   const modeDetail = formatModeDetail(state.route, width - rightSideWidth, effortTier);

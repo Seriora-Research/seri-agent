@@ -1761,60 +1761,14 @@ function countLogicalOccurrences(raw: string, line: string): number {
   return count;
 }
 
-// Identical shape to tests/cli/approvalPromptPty.test.ts's own startChild — duplicated rather than
-// imported, matching this repo's convention of self-contained pty test files. See that file's own
-// comment for why a pty (not a pipe) is load-bearing here: raw mode's interpretation of input —
-// both 0x03 as a keypress rather than a signal, and each typed character reflecting live — is the
-// entire mechanism under test, and a pipe cannot exercise either.
-//
-// argv[1]/argv[2] are the requested rows/cols, argv[3:] the real command to run. `pty.openpty` (not
-// `pty.fork`, which `startChild`'s own default invocation uses) so the `TIOCSWINSZ` ioctl below runs
-// on the slave before the child is even forked — no race against how fast the child's own first
-// terminal-size read happens. `os.setsid`/the three `dup2`s/`TIOCSCTTY` are what `pty.fork` already
-// does internally for the default path; reproduced here by hand since bypassing `pty.fork` to reach
-// its own winsize means losing that plumbing too. The `select` loop proxies both directions — master
-// to this process's stdout (what every `sawLine` call reads) and this process's stdin to the master
-// (what every `child.stdin?.write(...)` call needs to actually reach the child) — the same two
-// directions `pty.spawn` already copies for the default path.
-const PTY_RESIZE_SPAWN = [
-  "import fcntl, os, pty, select, struct, sys, termios",
-  "rows, cols = int(sys.argv[1]), int(sys.argv[2])",
-  "master_fd, slave_fd = pty.openpty()",
-  'fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))',
-  "pid = os.fork()",
-  "if pid == 0:",
-  "    os.close(master_fd)",
-  "    os.setsid()",
-  "    os.dup2(slave_fd, 0)",
-  "    os.dup2(slave_fd, 1)",
-  "    os.dup2(slave_fd, 2)",
-  "    if slave_fd > 2:",
-  "        os.close(slave_fd)",
-  "    fcntl.ioctl(0, termios.TIOCSCTTY, 0)",
-  "    os.execvp(sys.argv[3], sys.argv[3:])",
-  "os.close(slave_fd)",
-  "while True:",
-  "    try:",
-  "        readable, _, _ = select.select([master_fd, 0], [], [])",
-  "    except (OSError, ValueError):",
-  "        break",
-  "    if master_fd in readable:",
-  "        try:",
-  "            data = os.read(master_fd, 1024)",
-  "        except OSError:",
-  "            break",
-  "        if not data:",
-  "            break",
-  "        os.write(1, data)",
-  "    if 0 in readable:",
-  "        data = os.read(0, 1024)",
-  "        if data:",
-  "            try:",
-  "                os.write(master_fd, data)",
-  "            except OSError:",
-  "                break",
-  "os.waitpid(pid, 0)",
-].join("\n");
+// A `sh -c` body, not a Python script: `startChild`'s own `args` construction below invokes
+// `pty.spawn(['sh', '-c', PTY_RESIZE_SPAWN, 'sh', rows, cols, execPath, scriptPath])`, so within
+// this script `$1`/`$2` are the requested rows/cols and `$3`/`$4` (the rest of `"$@"` after the
+// `shift`) are the real command to run. `stty` runs on the slave `pty.spawn` already allocated and
+// attached the forked child to, as the first thing that child does — before `exec` replaces it
+// with the real target — so the target's very first terminal-size read already sees it, with none
+// of `pty.fork`'s own session/fd plumbing to reproduce by hand.
+const PTY_RESIZE_SPAWN = 'stty rows "$1" cols "$2"; shift 2; exec "$@"';
 
 // `startChild`'s own default invocation (`import pty, sys; pty.spawn(sys.argv[1:])`, below) never
 // sets a window size on the pty it allocates — confirmed live (an `@opentui/core` `createCliRenderer`
@@ -1824,9 +1778,9 @@ const PTY_RESIZE_SPAWN = [
 // row's route/effort-tier suffix behind `MODE_ROUTE_MIN_COLS` (100) — strictly wider than that
 // 80-column default — so no test using the plain `startChild` invocation can ever observe that
 // suffix, regardless of what it asserts. `terminalSize`, below, is this file's only opt-in past that:
-// it swaps in a small hand-rolled pty (`pty.openpty` + `TIOCSWINSZ`, not `pty.spawn`) that sets the
-// slave's winsize before the child ever execs, so the child's very first terminal-size read already
-// sees it. Every other call site omits it and keeps the exact behavior it always had.
+// it routes the child through a `sh -c` wrapper (`PTY_RESIZE_SPAWN`, above) that sets the winsize
+// before exec'ing the real target. Every other call site omits it and keeps the exact behavior it
+// always had.
 async function startChild(
   scriptPath: string,
   cwd: string,
@@ -1884,6 +1838,7 @@ async function startChild(
   const args = opts.terminalSize
     ? [
         "-c",
+        "import pty, sys; pty.spawn(['sh', '-c', sys.argv[1], 'sh'] + sys.argv[2:])",
         PTY_RESIZE_SPAWN,
         String(opts.terminalSize.rows),
         String(opts.terminalSize.cols),

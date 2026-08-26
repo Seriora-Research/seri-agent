@@ -47,6 +47,17 @@ export function appliedReasoningEffort(
   return tier !== undefined && legalTiersFor(entry).includes(tier) ? tier : undefined;
 }
 
+// The one precedence rule — session override wins, falling back to the config default — both
+// `resolveReasoningEffort` below and the TUI header's own `effortTier` (app.tsx) apply. Extracted
+// so there is exactly one place that states the rule, rather than the same `??` re-typed at both
+// call sites with nothing binding them together if a third source is ever added.
+export function withReasoningEffortDefault(
+  sessionOverride: string | undefined,
+  configDefault: string | undefined,
+): string | undefined {
+  return sessionOverride ?? configDefault;
+}
+
 // Session override wins, falling back to the config default — used by /effort's own decision
 // (resolveEffortCommand and decideEffortOpen, tui/state/commands.ts) and by cli.ts's driveLoop.
 // The `--effort` CLI flag bypasses this resolver entirely (RunContext.effortFlag, read directly in
@@ -62,7 +73,7 @@ export function resolveReasoningEffort(
   session: { reasoningEffort?: string },
   config: Record<string, string>,
 ): string | undefined {
-  return session.reasoningEffort ?? loadReasoningEffortConfig(config);
+  return withReasoningEffortDefault(session.reasoningEffort, loadReasoningEffortConfig(config));
 }
 
 export type EffortCommandResult =

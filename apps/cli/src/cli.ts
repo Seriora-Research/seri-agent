@@ -2654,6 +2654,7 @@ async function runTui(
     // now that the type it names is already imported under its own name.
     let route: ResolvedRoute;
     let model: LanguageModel;
+    let reasoningEffortDefault: string | undefined;
     try {
       route = resolveSessionRoute(
         session,
@@ -2663,6 +2664,13 @@ async function runTui(
         configDir,
       );
       model = dispatchModel(route, sessionId, configDir, deps);
+      // Read inside the same try as route/model resolution, not after it: `configuredProviders`
+      // above already reads config.json via `loadConfig`, so a config.json corrupted between that
+      // read and this one (a concurrent /setup write from another instance, the same race the
+      // catch below's own comment names) must be caught here too, not left to throw into runTurn's
+      // fire-and-forget caller — the exact crash class PR #73 fixed for resolveRoute/
+      // configuredProviders themselves.
+      reasoningEffortDefault = loadReasoningEffortConfig(loadConfig(configDir));
     } catch (err) {
       // tuiMissingKeyMessage, not a bare err.message: this catch is reachable ONLY from inside an
       // already-running TUI turn (runTurn, called solely by runTui), where /setup is a keystroke
@@ -2680,13 +2688,9 @@ async function runTui(
     // dispatching the freshly resolved route here, every turn, is what makes a /model switch (or
     // any other mid-session reroute) show up without waiting for the session to quit and remount.
     dispatch({ type: "route-updated", route });
-    // The header's own effort-tier suffix falls back to this when there is no `/effort` session
-    // override — dispatched every turn, alongside `route-updated`, for the identical reason: a
-    // live `/config` edit to `SERI_REASONING_EFFORT` must take effect on the very next turn.
-    dispatch({
-      type: "reasoning-effort-default-updated",
-      tier: loadReasoningEffortConfig(loadConfig(configDir)),
-    });
+    // See "reasoning-effort-default-updated"'s own comment (reducer.ts) for why this is
+    // re-dispatched every turn alongside `route-updated`.
+    dispatch({ type: "reasoning-effort-default-updated", reasoningEffortDefault });
     // Starts TurnStatus's elapsed clock/token count — dispatched here, alongside `route-updated`,
     // rather than earlier: this is the first point in runTurn a turn is actually committed to
     // running (resolveRoute/dispatchModel have already succeeded above), not just requested.
