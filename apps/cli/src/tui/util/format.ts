@@ -151,9 +151,10 @@ export const MODE_MODEL_MIN_COLS = 76;
 export const MODE_ROUTE_MIN_COLS = 100;
 // formatModeDetail's display cap for the `/effort` tier suffix — a tier value ultimately comes
 // from models.dev, an external and unvalidated source, so this is a display budget, not a bound
-// on the data. The widest value referenced anywhere in this codebase's own provider tables today
-// is "minimal" (7 chars — provider/reasoning.ts's own comment on OpenAI's full effort union); one
-// column of slack over that, matching COST_WIDTH's own "to spare, not the exact minimum" convention.
+// on the data. The widest values referenced anywhere in this codebase's own provider tables today
+// are "minimal" and "default" (7 chars each — provider/reasoning.ts's own comment on OpenAI's and
+// groq's effort unions); one column of breathing room over that, matching ROUTE_WIDTH's own
+// convention above (13 for a 12-char worst case) rather than COST_WIDTH's wider 3-column margin.
 export const EFFORT_WIDTH = 8;
 
 // A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined`,
