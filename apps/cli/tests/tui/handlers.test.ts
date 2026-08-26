@@ -121,17 +121,22 @@ describe("dispatchConfigList (via onConfigBack)", () => {
 // whatever it last saw until the next turn ran.
 describe("config-updated live dispatch (via onConfigSelect/onConfigValueEntered/onConfigUnset)", () => {
   let configDir: string;
+  let originalReasoningEffort: string | undefined;
 
   beforeEach(() => {
     configDir = mkdtempSync(join(tmpdir(), "seri-tui-handlers-test-"));
     // resolveConfigValue (config/config.ts) is env-first, so a developer's own shell exporting this
     // would make loadReasoningEffortConfig see it regardless of what these tests write to
-    // config.json.
+    // config.json. Saved, not just deleted: bun runs every test file in one process, so leaving it
+    // deleted here would affect every test after this describe block too.
+    originalReasoningEffort = process.env.SERI_REASONING_EFFORT;
     delete process.env.SERI_REASONING_EFFORT;
   });
 
   afterEach(() => {
     rmSync(configDir, { recursive: true, force: true });
+    if (originalReasoningEffort === undefined) delete process.env.SERI_REASONING_EFFORT;
+    else process.env.SERI_REASONING_EFFORT = originalReasoningEffort;
   });
 
   // A latent gap a review found: this is the only one of the three /config write paths that
