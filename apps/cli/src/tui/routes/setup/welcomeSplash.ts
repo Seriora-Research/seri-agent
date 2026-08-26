@@ -83,6 +83,7 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
     createElement(App, {
       session: liveState.session,
       route: undefined,
+      catalog: undefined, // no PreparedRun exists yet at this point in startup
       onSplashLogin,
       onSplashSignup,
       onSplashContinue,

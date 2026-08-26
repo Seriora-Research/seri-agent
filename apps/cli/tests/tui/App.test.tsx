@@ -81,6 +81,7 @@ async function connect(
     <App
       session={session()}
       route={route()}
+      catalog={undefined}
       {...overrides}
       connectDispatch={(d) => {
         dispatch = d;
@@ -2506,6 +2507,7 @@ describe("App", () => {
       await flush(setup);
 
       expect(modeRow(setup)).not.toContain("· high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
     });
 
     // guidedSetup.ts/welcomeSplash.ts's own mounts omit `catalog` entirely — this confirms that is
@@ -2517,6 +2519,7 @@ describe("App", () => {
       await flush(setup);
 
       expect(modeRow(setup)).not.toContain("· high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
     });
   });
 

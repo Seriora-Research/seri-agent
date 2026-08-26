@@ -264,6 +264,7 @@ export async function runGuidedSetup(
       // ResolvedRoute to pass. AppProps.route's own comment covers why this is `| undefined`
       // rather than a fabricated value.
       route: undefined,
+      catalog: undefined, // same reason as route above: no PreparedRun exists yet at this point
       onQuit: onSetupClose, // dead in this phase (InputBox/ApprovalBox never show) but wired for safety
       onModelSelected: onGuidedModelSelected,
       onModelPickerCancel: onGuidedModelPickerCancel,

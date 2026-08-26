@@ -97,11 +97,12 @@ export type AppProps = {
   route: ResolvedRoute | undefined;
   // Used, alongside `state.route`, to look up the active model's `reasoningOptions` for the
   // persistent mode-indicator's `/effort` tier suffix (see the `catalogEntry`/`effortTier`
-  // computation below). Optional, unlike `route`: `PreparedRun.catalog` exists at only one of the
-  // three `createElement(App, ...)` mount sites (runGuidedSetup/runWelcomeSplash have no
-  // PreparedRun at all), and a forgotten prop here must degrade to "no effort tier shown," not a
-  // compile error.
-  catalog?: ModelCatalog;
+  // computation below). Same required-key/optional-VALUE shape as `route` above, for the same
+  // reason: the key is required so a future `createElement(App, ...)` call site must explicitly
+  // decide what to pass rather than silently omitting it; the value is `| undefined` because two
+  // call sites (runGuidedSetup, runWelcomeSplash) mount App before any `PreparedRun`/catalog
+  // exists at all.
+  catalog: ModelCatalog | undefined;
   // The seam driveLoop's dispatch is wired through: called once on mount with the reducer's own
   // dispatch function, the same shape `useReducer` returns. Optional because some tests exercise
   // the reducer via `connectDispatch` directly, with no live loop behind it.
