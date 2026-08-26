@@ -1,6 +1,7 @@
 // Syntax highlighting for `<markdown>` (app.tsx) — kept inside docs/design/tui.md's ANSI-16
-// monochrome constraint by construction: every scope below is distinguished by weight
-// (bold/dim/italic/underline), never by a color hue this file doesn't already share with theme.ts.
+// monochrome constraint by construction: most scopes below are distinguished by weight
+// (bold/dim/italic/underline), the rest by the shared `muted` ink-soft token, but never by a
+// color hue this file doesn't already share with theme.ts.
 //
 // Two different registration shapes are needed below, both confirmed against @opentui/core's own
 // SyntaxStyle.getStyleId (compiled chunk-bun-*.js): an unregistered scope falls back exactly once,
@@ -24,7 +25,10 @@ import { theme } from "./theme";
 
 const heading = { bold: true, underline: true };
 const link = { underline: true };
-const muted = { fg: theme.muted, dim: true };
+// theme.muted IS docs/design/tui.md's one-step "ink-soft" dilution already — stacking `dim` on
+// top applied a second dilution pass and dropped inline code, list markers, and quotes below
+// readable contrast against theme.text prose (the double-dim contrast regression).
+const muted = { fg: theme.muted };
 
 export const syntaxStyle = SyntaxStyle.fromStyles({
   keyword: { bold: true },

@@ -37,6 +37,32 @@ describe("syntaxStyle: monochrome compliance", () => {
   });
 });
 
+// docs/design/tui.md: `ink-soft` (== theme.muted, "gray") IS the single diluted tone — "ink and
+// paper themselves, just diluted". A scope that sets it must NOT also set `dim`, which applies a
+// second dilution on top of the first and drops inline code, fenced blocks, paths, list markers
+// and quotes below readable contrast against the theme.text prose they sit in. `dim` on its own
+// is still a legitimate weight — number/constant/boolean/markup.strikethrough all use it with no
+// `fg` — so what this guards is specifically the two stacked on one style, not `dim` itself.
+// Derived, not hand-maintained (same reasoning as the grammar-coverage test below): every scope
+// whose own `fg` is theme.muted is in scope here, so a future scope added to the shared `muted`
+// object is covered automatically instead of silently missing from a hand-copied list.
+describe("syntaxStyle: ink-soft scopes dilute once, not twice", () => {
+  const mutedColor = parseColor(theme.muted).toString();
+  const mutedScopes = [...syntaxStyle.getAllStyles()]
+    .filter(([, style]) => style.fg?.toString() === mutedColor)
+    .map(([name]) => name);
+
+  test("at least one scope uses theme.muted", () => {
+    expect(mutedScopes.length).toBeGreaterThan(0);
+  });
+
+  test.each(mutedScopes)("%s uses theme.muted with no second dim pass", (scope) => {
+    const style = syntaxStyle.getStyle(scope);
+    expect(style?.fg?.toString(), `${scope}'s own fg`).toBe(mutedColor);
+    expect(style?.dim, `${scope} stacks dim on top of theme.muted`).toBeUndefined();
+  });
+});
+
 // The markdown/markdown_inline grammars' own highlights.scm files (not the code grammars) emit
 // these exact "markup.*" scopes for bold text, headings, italics, links, list markers, and
 // blockquotes — asserted by resolveStyleId so a future edit that renames/removes one of these
