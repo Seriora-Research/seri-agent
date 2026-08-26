@@ -84,6 +84,7 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
       session: liveState.session,
       route: undefined,
       catalog: undefined, // no PreparedRun exists yet at this point in startup
+      reasoningEffortDefault: undefined, // same reason as route/catalog above
       onSplashLogin,
       onSplashSignup,
       onSplashContinue,

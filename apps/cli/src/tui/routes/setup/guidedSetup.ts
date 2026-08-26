@@ -265,6 +265,7 @@ export async function runGuidedSetup(
       // rather than a fabricated value.
       route: undefined,
       catalog: undefined, // same reason as route above: no PreparedRun exists yet at this point
+      reasoningEffortDefault: undefined, // same reason as route/catalog above
       onQuit: onSetupClose, // dead in this phase (InputBox/ApprovalBox never show) but wired for safety
       onModelSelected: onGuidedModelSelected,
       onModelPickerCancel: onGuidedModelPickerCancel,

@@ -2240,9 +2240,16 @@ async function runTui(
   // and deliberately stays effect-driven — `onSessionChange` below still only fires from React's
   // own effect, MEDIUM-1's own accepted, documented, narrow trade-off (persistence lagging by a
   // tick) is unrelated to reads racing ahead of a stale copy, which is what this closes.
+  // Computed once, here, and reused for both `liveState`'s own seed (below) and the `createElement
+  // (App, ...)` mount call (this function's own `root.render` near the end) — the same single-
+  // source-of-truth shape `prepared.route` already gives both of those, so the two can't start out
+  // disagreeing about what the config default was at mount. Read fresh every turn afterward
+  // (`reasoning-effort-default-updated`, dispatched below) for a live `/config` edit; this initial
+  // read only ever covers the window before turn 1's own dispatch lands.
+  const initialReasoningEffortDefault = loadReasoningEffortConfig(loadConfig(configDir));
   let liveState: TuiState = initialTuiState(prepared.session, {
     route: prepared.route,
-    reasoningEffortDefault: loadReasoningEffortConfig(loadConfig(configDir)),
+    reasoningEffortDefault: initialReasoningEffortDefault,
   });
   // B2 fix (MEDIUM-5): the model/provider onSessionChange (below) actually WRITES to disk, kept
   // deliberately separate from `liveState.session.model`/`.provider` (what a picked model changes
@@ -3407,6 +3414,7 @@ async function runTui(
       session: prepared.session,
       route: prepared.route,
       catalog: prepared.catalog,
+      reasoningEffortDefault: initialReasoningEffortDefault,
       onSubmit,
       onSessionChange,
       onQuit: quit,

@@ -82,6 +82,7 @@ async function connect(
       session={session()}
       route={route()}
       catalog={undefined}
+      reasoningEffortDefault={undefined}
       {...overrides}
       connectDispatch={(d) => {
         dispatch = d;
@@ -2513,6 +2514,27 @@ describe("App", () => {
 
       dispatch({ type: "reasoning-effort-default-updated", tier: "high" });
       await flush(setup);
+
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
+    });
+
+    // The mount-time counterpart of the dispatch-based test above, and the actual regression guard
+    // for the bug it left uncovered: App's OWN `useReducer(tuiReducer, initialTuiState(session, {
+    // route, reasoningEffortDefault }))` call (app.tsx) must seed `state.reasoningEffortDefault`
+    // from the `reasoningEffortDefault` PROP at mount, not only ever receive it via a later
+    // `reasoning-effort-default-updated` dispatch — every other case in this describe block
+    // dispatches that action first, so none of them can tell a real mount-time seed apart from a
+    // reducer that starts `undefined` and only happens to be fixed up before the first assertion.
+    // Zero dispatches here: the tier must already be in the very first rendered frame.
+    test("mounting with reasoningEffortDefault already renders the tier, with no dispatch at all", async () => {
+      const { setup } = await connect({
+        catalog: catalogOf([
+          catalogEntry({
+            reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+          }),
+        ]),
+        reasoningEffortDefault: "high",
+      });
 
       expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
     });

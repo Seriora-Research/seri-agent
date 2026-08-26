@@ -92,6 +92,7 @@ async function measureBackspaceCost(options: {
       session={session()}
       route={route()}
       catalog={undefined}
+      reasoningEffortDefault={undefined}
       connectDispatch={(d) => {
         dispatch = d;
       }}

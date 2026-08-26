@@ -103,6 +103,17 @@ export type AppProps = {
   // call sites (runGuidedSetup, runWelcomeSplash) mount App before any `PreparedRun`/catalog
   // exists at all.
   catalog: ModelCatalog | undefined;
+  // Seeds the reducer's own `state.reasoningEffortDefault` at mount (`initialTuiState(session, {
+  // route, reasoningEffortDefault })`, below) — the persistent mode-indicator's effort-tier suffix
+  // falls back to `state.reasoningEffortDefault` (this component's own `effortTier` computation)
+  // whenever `state.session.reasoningEffort` is `undefined`, so a later `/config` edit to
+  // SERI_REASONING_EFFORT reaches the label by dispatching `reasoning-effort-default-updated` into
+  // the reducer instead of this prop ever changing. Same required-key/optional-VALUE shape as
+  // `route` above, for the same reason: the key is required so a future `createElement(App, ...)`
+  // call site must explicitly decide what to pass rather than silently omitting it; the value is
+  // `| undefined` because two call sites (runGuidedSetup, runWelcomeSplash) mount App before any
+  // config-derived default has ever been resolved.
+  reasoningEffortDefault: string | undefined;
   // The seam driveLoop's dispatch is wired through: called once on mount with the reducer's own
   // dispatch function, the same shape `useReducer` returns. Optional because some tests exercise
   // the reducer via `connectDispatch` directly, with no live loop behind it.
@@ -233,6 +244,7 @@ export function App({
   session,
   route,
   catalog,
+  reasoningEffortDefault,
   connectDispatch,
   onSubmit,
   onSessionChange,
@@ -262,7 +274,10 @@ export function App({
   onCycleMode,
   skipPermissions,
 }: AppProps) {
-  const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session, { route }));
+  const [state, dispatch] = useReducer(
+    tuiReducer,
+    initialTuiState(session, { route, reasoningEffortDefault }),
+  );
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
