@@ -271,10 +271,7 @@ export function App({
   onCycleMode,
   skipPermissions,
 }: AppProps) {
-  const [state, dispatch] = useReducer(
-    tuiReducer,
-    initialTuiState(session, { route, config }),
-  );
+  const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session, { route, config }));
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
