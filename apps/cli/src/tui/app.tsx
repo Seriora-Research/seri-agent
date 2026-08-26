@@ -394,7 +394,10 @@ export function App({
     state.route !== undefined && catalog !== undefined
       ? findCatalogEntry(catalog, state.route.model, state.route.provider)
       : undefined;
-  const effortTier = appliedReasoningEffort(state.session.reasoningEffort, catalogEntry);
+  const effortTier = appliedReasoningEffort(
+    state.session.reasoningEffort ?? state.reasoningEffortDefault,
+    catalogEntry,
+  );
   const modeDetail = formatModeDetail(state.route, width - rightSideWidth, effortTier);
 
   // Its own useKeyboard, separate from the scroll handler below — OpenTUI delivers the same

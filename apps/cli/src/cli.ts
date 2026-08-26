@@ -2240,7 +2240,10 @@ async function runTui(
   // and deliberately stays effect-driven — `onSessionChange` below still only fires from React's
   // own effect, MEDIUM-1's own accepted, documented, narrow trade-off (persistence lagging by a
   // tick) is unrelated to reads racing ahead of a stale copy, which is what this closes.
-  let liveState: TuiState = initialTuiState(prepared.session, { route: prepared.route });
+  let liveState: TuiState = initialTuiState(prepared.session, {
+    route: prepared.route,
+    reasoningEffortDefault: loadReasoningEffortConfig(loadConfig(configDir)),
+  });
   // B2 fix (MEDIUM-5): the model/provider onSessionChange (below) actually WRITES to disk, kept
   // deliberately separate from `liveState.session.model`/`.provider` (what a picked model changes
   // immediately, so the next runTurn attempts it — onModelSelected's own comment) — mirrors
@@ -2669,6 +2672,13 @@ async function runTui(
     // dispatching the freshly resolved route here, every turn, is what makes a /model switch (or
     // any other mid-session reroute) show up without waiting for the session to quit and remount.
     dispatch({ type: "route-updated", route });
+    // The header's own effort-tier suffix falls back to this when there is no `/effort` session
+    // override — dispatched every turn, alongside `route-updated`, for the identical reason: a
+    // live `/config` edit to `SERI_REASONING_EFFORT` must take effect on the very next turn.
+    dispatch({
+      type: "reasoning-effort-default-updated",
+      tier: loadReasoningEffortConfig(loadConfig(configDir)),
+    });
     // Starts TurnStatus's elapsed clock/token count — dispatched here, alongside `route-updated`,
     // rather than earlier: this is the first point in runTurn a turn is actually committed to
     // running (resolveRoute/dispatchModel have already succeeded above), not just requested.
