@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelCatalogEntry } from "@seri/model-catalog";
+import { loadReasoningEffortConfig } from "../../src/config/config";
 import {
   appliedReasoningEffort,
   buildReasoningProviderOptions,
   legalTiersFor,
   resolveEffortCommand,
+  resolveReasoningEffort,
 } from "../../src/provider/reasoning";
 
 function entry(overrides: Partial<ModelCatalogEntry>): ModelCatalogEntry {
@@ -214,6 +216,32 @@ describe("appliedReasoningEffort", () => {
   test("no tier requested resolves to undefined regardless of the entry", () => {
     const e = entry({ reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }] });
     expect(appliedReasoningEffort(undefined, e)).toBeUndefined();
+  });
+});
+
+describe("loadReasoningEffortConfig", () => {
+  test("reads SERI_REASONING_EFFORT from a config record", () => {
+    expect(loadReasoningEffortConfig({ SERI_REASONING_EFFORT: "high" })).toBe("high");
+  });
+
+  test("absent: returns undefined", () => {
+    expect(loadReasoningEffortConfig({})).toBeUndefined();
+  });
+});
+
+describe("resolveReasoningEffort", () => {
+  test("a session override wins over the config default", () => {
+    expect(
+      resolveReasoningEffort({ reasoningEffort: "high" }, { SERI_REASONING_EFFORT: "low" }),
+    ).toBe("high");
+  });
+
+  test("no session override: falls back to the config default", () => {
+    expect(resolveReasoningEffort({}, { SERI_REASONING_EFFORT: "low" })).toBe("low");
+  });
+
+  test("neither a session override nor a config default: undefined", () => {
+    expect(resolveReasoningEffort({}, {})).toBeUndefined();
   });
 });
 

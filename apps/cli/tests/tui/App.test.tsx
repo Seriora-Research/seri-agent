@@ -2476,8 +2476,10 @@ describe("App", () => {
 
     // A tier surviving a model switch onto a model with no reasoningOptions at all (the reducer
     // does not gate `effort-resolved` on legality) must not render — appliedReasoningEffort's own
-    // legality check is what makes this the case, not anything special in the row itself.
-    test("a stale tier on a model with no reasoningOptions does not render", async () => {
+    // legality check is what makes this the case, not anything special in the row itself. Covers
+    // both sources appliedReasoningEffort is fed (session override and config default): neither
+    // bypasses the legality check.
+    test("a stale tier on a model with no reasoningOptions does not render, from either source", async () => {
       const { setup, dispatch } = await connect({
         catalog: catalogOf([catalogEntry({ reasoningOptions: undefined })]),
       });
@@ -2487,6 +2489,69 @@ describe("App", () => {
 
       expect(modeRow(setup)).not.toContain("· high");
       expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+
+      dispatch({ type: "session-updated", session: session({ reasoningEffort: undefined }) });
+      await flush(setup);
+      dispatch({ type: "reasoning-effort-default-updated", tier: "high" });
+      await flush(setup);
+
+      expect(modeRow(setup)).not.toContain("· high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+    });
+
+    // Fresh session (no `effort-resolved` ever dispatched) with a config default present: the
+    // header must reflect it, since driveLoop already resolves at this tier from turn 1
+    // (resolveReasoningEffort, provider/reasoning.ts) — the bug this test suite guards against.
+    test("a reasoning-effort-default-updated dispatch, with no session override, renders the tier in the mode row", async () => {
+      const { setup, dispatch } = await connect({
+        catalog: catalogOf([
+          catalogEntry({
+            reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+          }),
+        ]),
+      });
+
+      dispatch({ type: "reasoning-effort-default-updated", tier: "high" });
+      await flush(setup);
+
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
+    });
+
+    // Fresh session, no config default dispatched either: confirms the existing no-tier behavior
+    // is unchanged by the new `reasoningEffortDefault` field (it stays `undefined` until a
+    // `reasoning-effort-default-updated` dispatch supplies one).
+    test("no session override and no config default: the mode row shows no tier", async () => {
+      const { setup } = await connect({
+        catalog: catalogOf([
+          catalogEntry({
+            reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+          }),
+        ]),
+      });
+
+      expect(modeRow(setup)).not.toContain("· high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+    });
+
+    // A session override (`/effort`) must keep winning outright over a config default present at
+    // the same time — `state.session.reasoningEffort ?? state.reasoningEffortDefault` (app.tsx)
+    // only falls through to the default when the session field is `undefined`.
+    test("an effort-resolved override wins over a reasoning-effort-default-updated dispatch", async () => {
+      const { setup, dispatch } = await connect({
+        catalog: catalogOf([
+          catalogEntry({
+            reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+          }),
+        ]),
+      });
+
+      dispatch({ type: "reasoning-effort-default-updated", tier: "low" });
+      await flush(setup);
+      dispatch({ type: "effort-resolved", tier: "high" });
+      await flush(setup);
+
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
+      expect(modeRow(setup)).not.toContain("· low");
     });
 
     // guidedSetup.ts/welcomeSplash.ts's own mounts omit `catalog` entirely — this confirms that is
