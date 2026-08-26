@@ -625,9 +625,7 @@ export function App({
           {showRightSide && rightSideText.length > 0 && (
             <text fg={theme.muted}>{rightSideText}</text>
           )}
-          {showRightSide && state.status.length > 0 && (
-            <text fg={theme.muted}>{state.status}</text>
-          )}
+          {showRightSide && state.status.length > 0 && <text fg={theme.muted}>{state.status}</text>}
         </box>
       </box>
     </box>

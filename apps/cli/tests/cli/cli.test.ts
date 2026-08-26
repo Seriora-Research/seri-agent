@@ -4130,13 +4130,10 @@ describe("run (/compact)", () => {
       currentSession: () => liveSession,
     };
 
-    await getCompact().run(
-      session,
-      [],
-      { sessionsDir, checkpointsDir, configDir },
-      presenter,
-      { authConfigDir: configDir, getGroqModel: () => model },
-    );
+    await getCompact().run(session, [], { sessionsDir, checkpointsDir, configDir }, presenter, {
+      authConfigDir: configDir,
+      getGroqModel: () => model,
+    });
 
     expect(updated?.permissionMode).toBe("read-only");
     expect(updated?.messages.length).toBeLessThan(session.messages.length);
