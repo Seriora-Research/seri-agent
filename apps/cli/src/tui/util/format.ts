@@ -119,11 +119,6 @@ export const ROUTE_WIDTH = 13;
 // real pair in the bundled manifest (measured: $150.00/$600.00, 15 characters) with a little room
 // to spare, not the exact minimum.
 export const COST_WIDTH = 18;
-// The widest reasoning-tier value referenced anywhere in this codebase's own provider tables is
-// "minimal" (7 chars — provider/reasoning.ts's own comment on OpenAI's full effort union). One
-// column of slack over that, matching COST_WIDTH's own "to spare, not the exact minimum" convention
-// above.
-export const EFFORT_WIDTH = 8;
 
 // The three `PermissionMode` label strings the persistent mode-indicator row renders — Claude
 // Code's own `<what it does> on` shape, not the raw union value. `⏸` prefixes the two modes that
@@ -154,6 +149,12 @@ export const MODE_CYCLE_HINT = " (shift+tab to cycle)";
 export const MODE_HINT_COLS = 52;
 export const MODE_MODEL_MIN_COLS = 76;
 export const MODE_ROUTE_MIN_COLS = 100;
+// formatModeDetail's display cap for the `/effort` tier suffix — a tier value ultimately comes
+// from models.dev, an external and unvalidated source, so this is a display budget, not a bound
+// on the data. The widest value referenced anywhere in this codebase's own provider tables today
+// is "minimal" (7 chars — provider/reasoning.ts's own comment on OpenAI's full effort union); one
+// column of slack over that, matching COST_WIDTH's own "to spare, not the exact minimum" convention.
+export const EFFORT_WIDTH = 8;
 
 // A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined`,
 // and a real pty can separately report a genuine but unusable `columns === 0` for its first render
@@ -169,11 +170,15 @@ export const DEFAULT_COLUMNS = 80;
 export const DEFAULT_ROWS = 24;
 
 // Truncates with a trailing ellipsis (never mid-multi-byte-safe beyond what .slice already is —
-// every field this feeds is plain ASCII: a model id/displayName/provider name) or pads with
-// trailing spaces, so every row's later columns start at the same screen column regardless of an
-// earlier one's actual length.
+// every field this feeds is plain ASCII: a model id/displayName/provider name/effort tier).
+function truncate(text: string, width: number): string {
+  return text.length > width ? `${text.slice(0, width - 1)}…` : text;
+}
+
+// truncate(), then pads with trailing spaces, so every row's later columns start at the same
+// screen column regardless of an earlier one's actual length.
 export function truncatePad(text: string, width: number): string {
-  return text.length > width ? `${text.slice(0, width - 1)}…` : text.padEnd(width);
+  return truncate(text, width).padEnd(width);
 }
 
 // Binary units (1024, not 1000): matches how a context window is actually described everywhere
@@ -340,8 +345,7 @@ export function formatModeDetail(
   effortTier: string | undefined,
 ): string {
   if (route === undefined || width < MODE_MODEL_MIN_COLS) return "";
-  const modelName =
-    route.model.length > NAME_WIDTH ? `${route.model.slice(0, NAME_WIDTH - 1)}…` : route.model;
+  const modelName = truncate(route.model, NAME_WIDTH);
   if (width < MODE_ROUTE_MIN_COLS) return `  ${modelName}`;
   const routeLabel = formatRouteLabel({
     keyConfigured: !route.rerouted && !route.viaGateway,
@@ -349,9 +353,7 @@ export function formatModeDetail(
     gatewayReachable: route.viaGateway,
   });
   if (effortTier === undefined) return `  ${modelName} · ${routeLabel}`;
-  const tier =
-    effortTier.length > EFFORT_WIDTH ? `${effortTier.slice(0, EFFORT_WIDTH - 1)}…` : effortTier;
-  return `  ${modelName} · ${routeLabel} · ${tier}`;
+  return `  ${modelName} · ${routeLabel} · ${truncate(effortTier, EFFORT_WIDTH)}`;
 }
 
 export function formatModelRow(row: ModelPickerEntry): string {
