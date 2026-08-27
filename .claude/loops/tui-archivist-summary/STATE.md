@@ -2,8 +2,8 @@
 - Mode: feature
 - Task: issue #175 — TUI archivist summary renders as raw markdown with no visual framing. Same design family as #173/#174.
 - Branch: feat/tui-archivist-summary
-- Status: INIT
-- Started: 2026-08-27T12:37:00Z  |  Updated: 2026-08-27T12:37:00Z
+- Status: PLAN
+- Started: 2026-08-27T12:37:00Z  |  Updated: 2026-08-27T12:44:32Z
 
 ## Model config
 | role              | model   |
@@ -25,7 +25,12 @@
 - success_check: An ArchivistReport whose summary contains `**bold**` and `code`, applied through the TUI reducer/App, appears muted with a leading mark and does not show literal `**` in the rendered frame. archivistLine/CLI path still emits a stats prefix; output tests cover the CLI shape.
 
 ## Plan checklist
-- [ ] pending EXPLORE
+- [ ] RED App test: additive `transcript-append` fields so the test typechecks; dispatch stats+summary with `**bold**`; assert the GREEN contract (fails on literal `**` still visible).
+- [ ] `ARCHIVIST_MARK` + `archivistStatsLine` / `archivistLine`; update `output.test.ts`.
+- [ ] Thread `muted`/`markdown` through `pushLine` + `pushTranscriptLine`; two TUI pushes in `cli.ts`; reducer tests for the flags.
+- [ ] `TranscriptRow`: muted markdown path (GREEN the App test). Negative system line still raw.
+- [ ] `docs/design/tui.md`.
+- [ ] lint, typecheck, full `apps/cli` tests; record exit codes.
 
 ## Gate results (latest)
 | gate      | command | exit | notes |
@@ -44,4 +49,4 @@
 ## Reviewer verdict
 
 ## Open questions / blockers
-- Parallel with open PR 183 (toolActivity live-paint on app.tsx). This loop starts from main; rebase onto main after 183 merges if needed.
+- Parallel with PR 183 (toolActivity live-paint on app.tsx TranscriptRow). This loop starts from main @ b42c547 (PR 181). Rebase onto main after 183 merges if needed.
