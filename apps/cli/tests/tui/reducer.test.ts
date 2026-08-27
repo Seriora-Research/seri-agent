@@ -10,6 +10,7 @@ import type {
   SetupProviderRow,
 } from "../../src/tui/state/commands";
 import { initialTuiState, type TuiState, tuiReducer } from "../../src/tui/state/reducer";
+import { TREE_BRANCH } from "../../src/tui/theme/theme";
 import { estimateTokens, formatTokenProgress, type TokenProgress } from "../../src/tui/util/format";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -227,11 +228,25 @@ describe("tuiReducer: transcript role tagging", () => {
     ]);
   });
 
-  test('every applyLoopEvent case lands as role: "system"', () => {
+  test("tool-call, tool-result, and permission-denied do not push a transcript line", () => {
     const events: LoopEvent[] = [
       { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
       { type: "tool-result", name: "read_file", result: "ok" },
       { type: "permission-denied", name: "write_file", reason: "declined" },
+    ];
+
+    let state = initialTuiState(session());
+    for (const event of events) {
+      const before = state.transcript.length;
+      state = tuiReducer(state, { type: "loop-event", event });
+      expect(state.transcript.length).toBe(before);
+    }
+    expect(state.pendingTool).toBeUndefined();
+    expect(state.toolActivity.length).toBeGreaterThan(0);
+  });
+
+  test('done, error, compacted, retry, and tool-allowed still land as role: "system"', () => {
+    const events: LoopEvent[] = [
       { type: "tool-allowed", name: "write_file" },
       {
         type: "compacted",
@@ -275,38 +290,198 @@ describe("tuiReducer: loop-event", () => {
     expect(state.transcript).toEqual([]);
   });
 
-  test("a tool-call flushes pending streamed text and sets a running status", () => {
+  test("a tool-call flushes pending streamed text, sets pendingTool for a non-write tool, and does not push raw JSON", () => {
     let state = apply(undefined, { type: "text-delta", text: "thinking…" });
     state = apply(state, { type: "tool-call", name: "read_file", args: { path: "a.txt" } });
 
-    expect(state.transcript).toEqual([
-      { role: "assistant", text: "thinking…" },
-      { role: "system", text: `→ read_file({"path":"a.txt"})` },
-    ]);
+    expect(state.transcript).toEqual([{ role: "assistant", text: "thinking…" }]);
     expect(state.streaming).toBe("");
     expect(state.status).toBe("Running read_file…");
+    expect(state.pendingTool).toEqual({ name: "read_file", args: { path: "a.txt" } });
+    expect(state.transcript.some((e) => e.text.includes("→ read_file"))).toBe(false);
   });
 
-  test("a tool-result clears the running status", () => {
-    let state = apply(undefined, { type: "tool-call", name: "read_file", args: {} });
+  test("a tool-result clears the running status without pushing a transcript line", () => {
+    let state = apply(undefined, { type: "tool-call", name: "read_file", args: { path: "a.txt" } });
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
 
     expect(state.status).toBe("");
-    expect(state.transcript.at(-1)).toEqual({ role: "system", text: "✓ read_file done" });
+    expect(state.pendingTool).toBeUndefined();
+    expect(state.transcript).toEqual([]);
+    expect(state.toolActivity).toHaveLength(1);
   });
 
-  test("permission-denied and tool-allowed each append their own line", () => {
-    let state = apply(undefined, {
-      type: "permission-denied",
-      name: "write_file",
-      reason: "declined",
-    });
-    expect(state.transcript.at(-1)).toEqual({ role: "system", text: "✗ write_file blocked" });
+  test("a single successful tool-result followed by done produces one muted entry with no raw JSON", () => {
+    let state = apply(undefined, { type: "tool-call", name: "read_file", args: { path: "a.txt" } });
+    state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
+    state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    state = apply(state, { type: "tool-allowed", name: "write_file" });
+    const toolLines = state.transcript.filter((e) => e.muted);
+    expect(toolLines).toHaveLength(1);
+    expect(toolLines[0]).toEqual({ role: "system", text: "Read a.txt", muted: true });
+    expect(toolLines[0].text).not.toContain("{");
+    expect(state.toolActivity).toEqual([]);
+  });
+
+  test("two same-name successful results followed by done produce one aggregated-count entry", () => {
+    let state = apply(undefined, { type: "tool-call", name: "read_file", args: { path: "a.txt" } });
+    state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
+    state = apply(state, { type: "tool-call", name: "read_file", args: { path: "b.txt" } });
+    state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
+    state = apply(state, { type: "done", reason: "no-tool-call" });
+
+    const toolLines = state.transcript.filter((e) => e.muted);
+    expect(toolLines).toHaveLength(1);
+    expect(toolLines[0].text).toBe("Read 2 files");
+    expect(toolLines[0].muted).toBe(true);
+  });
+
+  test("a failing bash result followed by done produces a TREE_BRANCH-prefixed anomaly line", () => {
+    let state = apply(undefined, { type: "tool-call", name: "bash", args: { command: "false" } });
+    state = apply(state, {
+      type: "tool-result",
+      name: "bash",
+      result: {
+        stdout: "",
+        stderr: "boom",
+        exitCode: 1,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        timedOut: false,
+      },
+    });
+    state = apply(state, { type: "done", reason: "no-tool-call" });
+
+    const toolLines = state.transcript.filter((e) => e.muted);
+    expect(toolLines).toHaveLength(1);
+    expect(toolLines[0].text).toContain(TREE_BRANCH);
+    expect(toolLines[0].text).toContain("exit 1");
+  });
+
+  test("a declined permission-denied followed by done produces an anomaly line and does not throw", () => {
+    let state = apply(undefined, {
+      type: "tool-call",
+      name: "write_file",
+      args: { path: "a.txt" },
+    });
+    expect(state.pendingTool).toEqual({ name: "write_file", args: { path: "a.txt" } });
+    state = apply(state, { type: "permission-denied", name: "write_file", reason: "declined" });
+    state = apply(state, { type: "done", reason: "no-tool-call" });
+
+    const toolLines = state.transcript.filter((e) => e.muted);
+    expect(toolLines).toHaveLength(1);
+    expect(toolLines[0].text).toContain(TREE_BRANCH);
+    expect(toolLines[0].text).toContain("declined");
+  });
+
+  // HIGH 1: loop.ts yields `error` and continues (compaction catch, unknown tool, thrown
+  // execute). Flushing toolActivity on error would split one turn's calls across two muted
+  // groups and drop anything that arrives after the error.
+  test("a mid-turn error does not flush toolActivity; later tools still aggregate on done", () => {
+    let state = apply(undefined, {
+      type: "tool-call",
+      name: "read_file",
+      args: { path: "a.txt" },
+    });
+    state = apply(state, { type: "tool-result", name: "read_file", result: { content: "x" } });
+    state = apply(state, { type: "error", error: "compaction failed" });
+
+    expect(state.toolActivity).toHaveLength(1);
+    expect(state.transcript.filter((e) => e.muted)).toEqual([]);
+    expect(state.transcript.at(-1)?.text).toBe("compaction failed");
+
+    state = apply(state, {
+      type: "tool-call",
+      name: "read_file",
+      args: { path: "b.txt" },
+    });
+    state = apply(state, { type: "tool-result", name: "read_file", result: { content: "y" } });
+    state = apply(state, { type: "done", reason: "no-tool-call" });
+
+    const muted = state.transcript.filter((e) => e.muted);
+    expect(muted).toHaveLength(1);
+    expect(muted[0]?.text).toBe("Read 2 files");
+  });
+
+  // HIGH 2: thrown execute is tool-call then error, no tool-result. Without recordCall the
+  // live line vanishes and no settled line is ever committed.
+  test("a tool-call followed by error (no tool-result) still flushes a settled line on done", () => {
+    let state = apply(undefined, {
+      type: "tool-call",
+      name: "bash",
+      args: { command: "explode" },
+    });
+    state = apply(state, { type: "error", error: "tool threw" });
+
+    expect(state.toolActivity).toHaveLength(1);
+    expect(state.transcript.filter((e) => e.muted)).toEqual([]);
+
+    state = apply(state, { type: "done", reason: "no-tool-call" });
+
+    const muted = state.transcript.filter((e) => e.muted);
+    expect(muted.length).toBeGreaterThanOrEqual(1);
+    expect(muted.some((e) => e.text.includes("explode"))).toBe(true);
+  });
+
+  // loop.ts mid-stream / streamText catch yields error then return — no done. HIGH 1 is still
+  // correct (error itself must not flush, because some errors continue), but turn-ended is the
+  // actual end of that turn and must commit whatever was already recorded.
+  test("error then turn-ended without done flushes accumulated toolActivity", () => {
+    let state = apply(undefined, {
+      type: "tool-call",
+      name: "read_file",
+      args: { path: "a.txt" },
+    });
+    state = apply(state, { type: "tool-result", name: "read_file", result: { content: "x" } });
+    state = apply(state, { type: "error", error: "stream failed" });
+
+    expect(state.toolActivity).toHaveLength(1);
+    expect(state.transcript.filter((e) => e.muted)).toEqual([]);
+
+    state = tuiReducer(state, { type: "turn-ended" });
+
+    const muted = state.transcript.filter((e) => e.muted);
+    expect(muted).toHaveLength(1);
+    expect(muted[0]?.text).toBe("Read a.txt");
+    expect(state.toolActivity).toEqual([]);
+  });
+
+  test("tool-allowed still appends immediately, non-muted", () => {
+    const state = apply(undefined, { type: "tool-allowed", name: "write_file" });
     expect(state.transcript.at(-1)).toEqual({
       role: "system",
       text: "✓ write_file approved for the rest of this run",
+    });
+  });
+
+  test("compacted still appends immediately, non-muted", () => {
+    const state = apply(undefined, {
+      type: "compacted",
+      summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
+      evictedCount: 3,
+      usage: {
+        inputTokens: 12,
+        inputTokenDetails: {
+          noCacheTokens: 12,
+          cacheReadTokens: undefined,
+          cacheWriteTokens: undefined,
+        },
+        outputTokens: 34,
+        outputTokenDetails: { textTokens: 34, reasoningTokens: undefined },
+        totalTokens: 46,
+      },
+    });
+    expect(state.transcript.at(-1)).toEqual({
+      role: "system",
+      text: "⚙ compacted 3 messages",
+    });
+  });
+
+  test("retry still appends immediately, non-muted", () => {
+    const state = apply(undefined, { type: "retry", attempt: 1 });
+    expect(state.transcript.at(-1)).toEqual({
+      role: "system",
+      text: "↻ rate-limited or unavailable; retrying (attempt 1)",
     });
   });
 

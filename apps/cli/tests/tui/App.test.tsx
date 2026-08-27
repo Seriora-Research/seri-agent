@@ -1167,7 +1167,7 @@ describe("App", () => {
     });
     await flush(setup);
     expect(setup.captureCharFrame()).not.toContain("Running read_file…");
-    expect(setup.captureCharFrame()).toContain("→ read_file");
+    expect(setup.captureCharFrame()).not.toContain("→ read_file");
   });
 
   test("session-updated refreshes the mode indicator shown", async () => {
@@ -1254,6 +1254,26 @@ describe("App", () => {
     const frame = setup.captureCharFrame();
     expect(frame).toContain("write_file(");
     expect(frame).not.toContain("! write_file");
+  });
+
+  // Non-write tools use an unbordered theme.muted live line, not the write_file/edit bordered box.
+  test("a pending read_file call renders an unbordered muted line, not a bordered box", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
+    });
+    await flush(setup);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("Read a.txt");
+    expect(frame).not.toContain("read_file(");
+    const spans = setup.captureSpans();
+    const line = spans.lines.find((l) => l.spans.some((s) => s.text.includes("Read a.txt")));
+    const span = line?.spans.find((s) => s.text.includes("Read a.txt"));
+    expect(span, "no span found containing Read a.txt").toBeDefined();
+    expect(span?.fg.equals(parseColor(theme.muted))).toBe(true);
   });
 
   // Ctrl-D calls the onQuit prop directly — app.tsx wires it through to InputBox unconditionally,

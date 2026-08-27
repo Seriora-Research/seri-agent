@@ -3,7 +3,7 @@
 // import — a plain, standalone reducer, testable without a terminal.
 import type { ModelProvider } from "@seri/model-catalog";
 import type { LanguageModelUsage, ModelMessage } from "ai";
-import { toolAllowedLine, toolResultLine } from "../../cli/output";
+import { toolAllowedLine } from "../../cli/output";
 import type { LoopEvent } from "../../loop/loop";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
@@ -14,6 +14,13 @@ import {
   type TranscriptRole,
 } from "../util/format";
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
+import {
+  recordCall,
+  recordDenial,
+  recordResult,
+  renderToolActivity,
+  type ToolActivityEntry,
+} from "./toolActivity";
 
 // /setup's own live state — a three-step flow, mirrored on the reducer
 // the same way /model's picker is: "list" shows all five providers, "enter-key" is the masked
@@ -86,11 +93,19 @@ export type TuiState = {
   // decide whether to render at all. `startedAt` is a wall-clock timestamp, not a running counter —
   // see TurnStatus's own comment for why.
   turn: { startedAt: number; tokens: TokenProgress } | undefined;
-  // The in-flight write_file/edit call, if any — set on that tool's own tool-call event, cleared
-  // on its tool-result/permission-denied. A dedicated field rather than App.tsx string-matching
-  // `status`'s rendered text (`"Running write_file…"`) against the last transcript line, which
-  // only worked by coincidence and would silently stop working the moment either string changed.
+  // The in-flight tool call, if any — set on every tool-call event, cleared on its
+  // tool-result/permission-denied. Single-slot: loop.ts runs tools strictly sequentially, so
+  // the next result's args are always this pending call's. A dedicated field rather than
+  // App.tsx string-matching `status`'s rendered text (`"Running write_file…"`) against the last
+  // transcript line, which only worked by coincidence and would silently stop working the moment
+  // either string changed.
   pendingTool: { name: string; args: unknown } | undefined;
+  // Per-tool-name stats for the current turn, living outside `transcript`. Updated on every
+  // tool-call/tool-result/permission-denied, flushed into the transcript as muted lines on done
+  // and on turn-ended (the latter covers loop.ts's error-then-return exits that never yield
+  // done). An error LoopEvent is not turn-end (loop.ts continues), so this accumulator is left
+  // in place across it. After a real done, turn-ended's flush is a no-op on [].
+  toolActivity: ToolActivityEntry[];
   // A slash command that threw (previously uncaught, straight through Ink's own input handler),
   // or input shaped like a slash command that matched nothing / failed its own accepts() guard —
   // rendered with theme.ts's `error` role rather than left to vanish silently. Cleared by
@@ -172,14 +187,16 @@ export type TuiState = {
 // instance, so an in-place mutation of one state's `transcript` (nothing does this today, but
 // nothing stops it either) would otherwise corrupt every other state — including a concurrent test
 // — that spread from this same constant.
-const EMPTY_TRANSCRIPT: Readonly<Pick<TuiState, "transcript" | "streaming">> = Object.freeze({
-  // `as TranscriptEntry[]`: TuiState.transcript is declared mutable (App.tsx replaces it wholesale
-  // rather than pushing in place), and TS's array variance treats `readonly T[]` and `T[]` as
-  // genuinely different types — frozen at runtime regardless of this cast, which only restores the
-  // static type this field is spread into everywhere else.
-  transcript: Object.freeze([] as TranscriptEntry[]) as TranscriptEntry[],
-  streaming: "",
-});
+const EMPTY_TRANSCRIPT: Readonly<Pick<TuiState, "transcript" | "streaming" | "toolActivity">> =
+  Object.freeze({
+    // `as TranscriptEntry[]`: TuiState.transcript is declared mutable (App.tsx replaces it wholesale
+    // rather than pushing in place), and TS's array variance treats `readonly T[]` and `T[]` as
+    // genuinely different types — frozen at runtime regardless of this cast, which only restores the
+    // static type this field is spread into everywhere else.
+    transcript: Object.freeze([] as TranscriptEntry[]) as TranscriptEntry[],
+    streaming: "",
+    toolActivity: Object.freeze([] as ToolActivityEntry[]) as ToolActivityEntry[],
+  });
 
 export function initialTuiState(
   session: SessionState<ModelMessage>,
@@ -481,7 +498,10 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         },
       };
     case "turn-ended":
-      return { ...state, turn: undefined };
+      // Flush first: loop.ts's mid-stream / streamText catch yields error then return with no
+      // done, so this is the only commit point for tools already recorded. After a real done
+      // the accumulator is already [], so the flush is a no-op.
+      return { ...flushToolActivity(state), turn: undefined };
   }
 }
 
@@ -499,23 +519,46 @@ function pushLine(
   line: string,
   role: TranscriptRole = "system",
   flush = true,
+  muted = false,
 ): TuiState {
   // Computed before the `flush` branch below, not inside the `flush: true` half of it: echoUserInput
   // (cli.ts) — the only call site that ever dispatches `role: "user"` — always passes `flush: false`,
   // so a separator that only existed on the `flush: true` path would never actually fire for a real
   // user turn.
+  const entry: TranscriptEntry = muted ? { role, text: line, muted: true } : { role, text: line };
   const separator: TranscriptEntry[] =
     role === "user" && state.transcript.length > 0 ? [{ role: "system", text: "" }] : [];
   if (!flush) {
-    return { ...state, transcript: [...state.transcript, ...separator, { role, text: line }] };
+    return { ...state, transcript: [...state.transcript, ...separator, entry] };
   }
   const flushedStreaming: TranscriptEntry[] =
     state.streaming.length > 0 ? [{ role: "assistant", text: state.streaming }] : [];
   return {
     ...state,
-    transcript: [...state.transcript, ...flushedStreaming, ...separator, { role, text: line }],
+    transcript: [...state.transcript, ...flushedStreaming, ...separator, entry],
     streaming: "",
   };
+}
+
+// Commits any pending streamed text as its own assistant transcript line without adding a
+// system line — tool-call/result/permission-denied no longer push their own transcript lines
+// (those flush at turn-end via toolActivity), but a mid-stream tool-call still has to park the
+// model's partial answer so later text-deltas don't concatenate onto it.
+function flushStreaming(state: TuiState): TuiState {
+  if (state.streaming.length === 0) return state;
+  return {
+    ...state,
+    transcript: [...state.transcript, { role: "assistant", text: state.streaming }],
+    streaming: "",
+  };
+}
+
+function flushToolActivity(state: TuiState): TuiState {
+  let next = state;
+  for (const line of renderToolActivity(state.toolActivity)) {
+    next = pushLine(next, line, "system", true, true);
+  }
+  return { ...next, toolActivity: [] };
 }
 
 // Folds one completed model call's real usage onto `progress`'s running totals — shared by the
@@ -576,24 +619,40 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
           },
         },
       };
+    // Tool-call/result/permission-denied do not push a transcript line here. Stats accumulate
+    // on `toolActivity` and flush as muted compact lines on done (not error: loop.ts yields
+    // error and continues). pendingTool is set for every tool name so the live status slot
+    // (app.tsx) can show the in-flight call. recordCall on tool-call so a thrown execute
+    // (tool-call then error, no tool-result) still has a settled line to flush.
     case "tool-call":
       return {
-        ...pushLine(state, `→ ${event.name}(${JSON.stringify(event.args)})`),
+        ...flushStreaming(state),
         status: `Running ${event.name}…`,
-        pendingTool:
-          event.name === "write_file" || event.name === "edit"
-            ? { name: event.name, args: event.args }
-            : state.pendingTool,
+        pendingTool: { name: event.name, args: event.args },
+        toolActivity: recordCall(state.toolActivity, event.name, event.args),
       };
-    // toolResultLine/toolAllowedLine (cli/output.ts), not a hand-copied line shape — a hand-copied
-    // one would drift from printEvent's own rendering (missing the edit-specific message and the
-    // verification suffix here, missing escapeControlChars on tool-allowed's name); sharing the
-    // same two functions closes that gap for good.
     case "tool-result":
-      return { ...pushLine(state, toolResultLine(event)), status: "", pendingTool: undefined };
+      return {
+        ...state,
+        toolActivity: recordResult(
+          state.toolActivity,
+          event.name,
+          state.pendingTool?.args,
+          event.result,
+        ),
+        status: "",
+        pendingTool: undefined,
+      };
     case "permission-denied":
-      return { ...pushLine(state, `✗ ${event.name} blocked`), status: "", pendingTool: undefined };
+      return {
+        ...state,
+        toolActivity: recordDenial(state.toolActivity, event.name, event.reason),
+        status: "",
+        pendingTool: undefined,
+      };
     case "tool-allowed":
+      // Immediate, not deferred — toolAllowedLine (cli/output.ts), same as printEvent, so the
+      // grant the user just made is visible before the turn ends.
       return {
         ...pushLine(state, toolAllowedLine(event.name)),
         status: "",
@@ -631,9 +690,15 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     case "messages-updated":
       return { ...state, session: { ...state.session, messages: event.messages } };
     case "done":
-      return { ...pushLine(state, `(done: ${event.reason})`), status: "", pendingTool: undefined };
+      return {
+        ...pushLine(flushToolActivity(state), `(done: ${event.reason})`),
+        status: "",
+        pendingTool: undefined,
+      };
     // `state.turn` is deliberately left untouched here — see `"turn-ended"`'s own comment
-    // (TuiAction) for why only that action, not this event, ends a turn.
+    // (TuiAction) for why only that action, not this event, ends a turn. toolActivity is
+    // also left in place: an error is not turn-end, and flushing here would drop calls
+    // that arrive after the error and erase a thrown tool-call that never got a result.
     case "error":
       return {
         ...pushLine(state, event.error),

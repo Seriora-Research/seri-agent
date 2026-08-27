@@ -54,10 +54,11 @@ function childScriptCancel(dir: string): string {
 
 // App.tsx's own viewport: a transcript longer than any real terminal's row count, built
 // fast (no real I/O per iteration) rather than 300 separate turns — one turn yielding 300
-// tool-call events, each a distinct, greppable transcript line (`read_file`'s own args embed the
-// iteration number). `read_file` specifically: applyLoopEvent (reducer.ts) only sets `pendingTool`
-// for write_file/edit, so this never renders the pending-write box the viewport tests don't care
-// about.
+// error events, each a distinct, greppable transcript line (`line-N.txt` embedded in the
+// error text). error, not tool-call: tool-call/result no longer land in the transcript until
+// turn-end (and pendingTool is set for every tool, including read_file), so a 300-call loop
+// would not overflow the viewport. error still pushLine's immediately, which is what these
+// viewport tests need.
 function childScriptManyLines(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -65,7 +66,7 @@ function childScriptManyLines(dir: string): string {
     `async function* runLoopFake(opts) {`,
     `  console.log("\\nRUNLOOP_READY");`,
     `  for (let i = 0; i < 300; i++) {`,
-    `    yield { type: "tool-call", name: "read_file", args: { path: "line-" + i + ".txt" } };`,
+    `    yield { type: "error", error: "line-" + i + ".txt" };`,
     `  }`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
