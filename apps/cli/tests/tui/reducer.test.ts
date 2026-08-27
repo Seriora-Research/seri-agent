@@ -374,6 +374,55 @@ describe("tuiReducer: loop-event", () => {
     expect(toolLines[0].text).toContain("declined");
   });
 
+  // HIGH 1: loop.ts yields `error` and continues (compaction catch, unknown tool, thrown
+  // execute). Flushing toolActivity on error would split one turn's calls across two muted
+  // groups and drop anything that arrives after the error.
+  test("a mid-turn error does not flush toolActivity; later tools still aggregate on done", () => {
+    let state = apply(undefined, {
+      type: "tool-call",
+      name: "read_file",
+      args: { path: "a.txt" },
+    });
+    state = apply(state, { type: "tool-result", name: "read_file", result: { content: "x" } });
+    state = apply(state, { type: "error", error: "compaction failed" });
+
+    expect(state.toolActivity).toHaveLength(1);
+    expect(state.transcript.filter((e) => e.muted)).toEqual([]);
+    expect(state.transcript.at(-1)?.text).toBe("compaction failed");
+
+    state = apply(state, {
+      type: "tool-call",
+      name: "read_file",
+      args: { path: "b.txt" },
+    });
+    state = apply(state, { type: "tool-result", name: "read_file", result: { content: "y" } });
+    state = apply(state, { type: "done", reason: "no-tool-call" });
+
+    const muted = state.transcript.filter((e) => e.muted);
+    expect(muted).toHaveLength(1);
+    expect(muted[0]?.text).toBe("Read 2 files");
+  });
+
+  // HIGH 2: thrown execute is tool-call then error, no tool-result. Without recordCall the
+  // live line vanishes and no settled line is ever committed.
+  test("a tool-call followed by error (no tool-result) still flushes a settled line on done", () => {
+    let state = apply(undefined, {
+      type: "tool-call",
+      name: "bash",
+      args: { command: "explode" },
+    });
+    state = apply(state, { type: "error", error: "tool threw" });
+
+    expect(state.toolActivity).toHaveLength(1);
+    expect(state.transcript.filter((e) => e.muted)).toEqual([]);
+
+    state = apply(state, { type: "done", reason: "no-tool-call" });
+
+    const muted = state.transcript.filter((e) => e.muted);
+    expect(muted.length).toBeGreaterThanOrEqual(1);
+    expect(muted.some((e) => e.text.includes("explode"))).toBe(true);
+  });
+
   test("tool-allowed still appends immediately, non-muted", () => {
     const state = apply(undefined, { type: "tool-allowed", name: "write_file" });
     expect(state.transcript.at(-1)).toEqual({

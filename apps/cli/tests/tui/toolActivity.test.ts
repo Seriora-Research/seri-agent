@@ -52,6 +52,11 @@ describe("trimPath", () => {
   test("an absolute path outside cwd is left unchanged", () => {
     expect(trimPath("/tmp/outside-seri.txt")).toBe("/tmp/outside-seri.txt");
   });
+
+  test("a path that walks out of cwd via .. is left unchanged", () => {
+    const outside = join(process.cwd(), "..", "outside-seri.txt");
+    expect(trimPath(outside)).toBe(outside);
+  });
 });
 
 describe("summarizeArgs", () => {
@@ -85,6 +90,18 @@ describe("summarizeArgs", () => {
 
   test("powershell uses the same Ran verb", () => {
     expect(summarizeArgs("powershell", { command: "Get-ChildItem" })).toBe("Ran Get-ChildItem");
+  });
+
+  test("a control character in a bash command is escaped", () => {
+    const line = summarizeArgs("bash", { command: "echo \x1b[31mhi" });
+    expect(line.includes("\x1b")).toBe(false);
+    expect(line).toContain("\\x1b");
+  });
+
+  test("a control character in a read_file path is escaped", () => {
+    const line = summarizeArgs("read_file", { path: "a\x07.txt" });
+    expect(line.includes("\x07")).toBe(false);
+    expect(line).toContain("\\x07");
   });
 });
 
@@ -144,6 +161,12 @@ describe("detailLinesForResult", () => {
   test("every other tool returns no detail lines", () => {
     expect(detailLinesForResult("read_file", "ok")).toEqual([]);
     expect(detailLinesForResult("bash", proc())).toEqual([]);
+  });
+
+  test("a control character in a glob path is escaped", () => {
+    const lines = detailLinesForResult("glob", { files: ["a\x1b.ts"], truncated: false });
+    expect(lines[0]?.includes("\x1b")).toBe(false);
+    expect(lines[0]).toContain("\\x1b");
   });
 });
 
@@ -223,6 +246,17 @@ describe("anomalyLineForResult", () => {
         },
       ),
     ).toBeUndefined();
+  });
+
+  test("a control character in stderr is escaped", () => {
+    const line = anomalyLineForResult(
+      "bash",
+      { command: "false" },
+      proc({ exitCode: 1, stderr: "bad\x1bseq" }),
+    );
+    expect(line).toBeDefined();
+    expect(line?.includes("\x1b")).toBe(false);
+    expect(line).toContain("\\x1b");
   });
 });
 
@@ -341,5 +375,22 @@ describe("recordCall / recordResult / recordDenial", () => {
     const entries = recordDenial([], "write_file", "declined");
     expect(entries[0].anomalyLines).toEqual(["declined"]);
     expect(entries[0].count).toBe(1);
+  });
+
+  test("recordCall then recordResult does not double-count", () => {
+    let entries = recordCall([], "read_file", { path: "a.txt" });
+    entries = recordResult(entries, "read_file", { path: "a.txt" }, { content: "x" });
+    expect(entries[0].count).toBe(1);
+    expect(renderToolActivity(entries)).toEqual(["Read a.txt"]);
+  });
+
+  test("two failing results in one name-group emit exactly one TREE_BRANCH line", () => {
+    const fail = proc({ exitCode: 1, stderr: "boom" });
+    let entries = recordResult([], "bash", { command: "false" }, fail);
+    entries = recordResult(entries, "bash", { command: "false" }, fail);
+    const rendered = renderToolActivity(entries)[0] ?? "";
+    const branches = rendered.split("\n").filter((line) => line.startsWith(TREE_BRANCH));
+    expect(entries[0].count).toBe(2);
+    expect(branches).toHaveLength(1);
   });
 });
