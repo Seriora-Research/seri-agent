@@ -180,9 +180,9 @@ export type TuiState = {
   route: ResolvedRoute | undefined;
   // See `"config-updated"`'s own comment, below, for what this is and why.
   config: Record<string, string>;
-  // In-memory live rows for the current turn. Survives the parent dispatch tool-result
-  // and parent done so the roster stays inspectable. Cleared on transcript-cleared
-  // (`/clear`) and turn-started (the next user submit). Not session JSON.
+  // In-memory live rows for the in-flight dispatch. Cleared when the parent
+  // dispatch_subagents tool-result lands (the summaries are already in the parent
+  // context), on transcript-cleared (`/clear`), and on turn-started. Not session JSON.
   subagents: ChildView[];
   subagentPanelFocus: boolean;
   // Marker only: `"main"` or a child id. `pendingChildView` is whose transcript fills
@@ -811,6 +811,7 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     case "tool-result":
       return {
         ...state,
+        ...(event.name === "dispatch_subagents" ? EMPTY_ROSTER : {}),
         toolActivity: recordResult(
           state.toolActivity,
           event.name,
