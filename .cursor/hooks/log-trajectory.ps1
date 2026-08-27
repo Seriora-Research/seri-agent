@@ -10,7 +10,7 @@
 #      WebFetch/WebSearch-backed sub-steps it issues itself) fires its own SubagentStop
 #      event with `agent_type` genuinely absent, not mis-parsed - measured 83-89% of all
 #      subagent: rows across four loops. Skip the entry instead of writing
-#      "unknown-agent"; retro's trigger table never keys on these rows.
+#      "unknown-agent".
 
 $payload = [Console]::In.ReadToEnd()
 $sid = $null; $agent = $null; $agentId = $null

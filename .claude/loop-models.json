@@ -13,6 +13,5 @@
   "planner": "claude-opus-5",
   "implementer": "claude-sonnet-5",
   "reviewer-verifier": "claude-opus-5",
-  "test-runner": "claude-sonnet-5",
-  "retro": "claude-opus-5"
+  "test-runner": "claude-sonnet-5"
 }
