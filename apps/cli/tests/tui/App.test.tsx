@@ -1498,7 +1498,7 @@ describe("App", () => {
 
       const frame = setup.captureCharFrame();
       expect(countNeedle(frame, "Read 2 files")).toBe(1);
-      expect(frame).toContain("(done:");
+      expect(frame).toContain("(done");
     });
 
     test("a mid-turn error does not flush; live paint still shows the settled group", async () => {

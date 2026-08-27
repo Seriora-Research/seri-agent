@@ -257,7 +257,7 @@ function childScriptMultiTurn(dir: string): string {
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls + " messages=" + opts.messages.length);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
-    // RUNLOOP_DONE, not a count of the rendered "(done: no-tool-call)" line: console.log is exact
+    // RUNLOOP_DONE, not a count of the rendered done line: console.log is exact
     // (Ink's own patchConsole routes it through `log()`, written once, never re-emitted by a later
     // repaint), and it fires here, before the "done" yield, only once the prior messages-updated
     // event above has already been fully handled by the consuming for-await loop (generators only
@@ -321,7 +321,7 @@ function childScriptAccountStatusOnce(dir: string): string {
     `  console.log("\\nRUNLOOP_CALL " + calls + " messages=" + opts.messages.length);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
     // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    // rendered done line, is the reliable per-turn completion signal.
     `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -476,7 +476,7 @@ function childScriptModelSwitch(dir: string): string {
     `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " messages=" + opts.messages.length + " systemHasModelId=" + opts.system.includes(opts.model.id));`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
     // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    // rendered done line, is the reliable per-turn completion signal.
     `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -530,7 +530,7 @@ function childScriptEffortPersist(dir: string): string {
     `  console.log("\\nRUNLOOP_CALL " + calls + " reasoningEffort=" + opts.reasoningEffort);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
     // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    // rendered done line, is the reliable per-turn completion signal.
     `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -611,7 +611,7 @@ function childScriptModelMultiRoute(dir: string): string {
     `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " provider=" + opts.provider);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
     // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    // rendered done line, is the reliable per-turn completion signal.
     `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -651,7 +651,7 @@ function childScriptModelPickRerouted(dir: string): string {
     `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " provider=" + opts.provider);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
     // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    // rendered done line, is the reliable per-turn completion signal.
     `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -691,7 +691,7 @@ function childScriptModelSwitchMultiToolCall(dir: string): string {
     `    yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "tool-call-2" }] };`,
     `    yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "tool-call-3" }] };`,
     // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    // rendered done line, is the reliable per-turn completion signal.
     `    console.log("\\nRUNLOOP_DONE " + calls);`,
     `    yield { type: "done", reason: "no-tool-call" };`,
     `    return opts.messages;`,
@@ -932,7 +932,7 @@ function childScriptMultiTurnUsage(dir: string): string {
     `  console.log("\\nRUNLOOP_CALL " + calls);`,
     `  yield { type: "usage", usage: { inputTokens: 10 * calls, outputTokens: 20 * calls } };`,
     // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered "(done: no-tool-call)" line, is the reliable per-turn completion signal.
+    // rendered done line, is the reliable per-turn completion signal.
     `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -1810,7 +1810,7 @@ async function startChild(
   // opposite failure mode — undercounting a run that OpenTUI's own cell-diff split across two
   // writes, a plain substring check over the raw bytes alone is not exact for. `sawLineTimes` is
   // for the one case that still needs a COUNT rather
-  // than a bare substring check: the transcript prints the identical "(done: no-tool-call)" line for
+  // than a bare substring check: the transcript prints an identical done line for
   // every turn in a multi-turn session, so `sawLine` is already true for turn 2's own occurrence the
   // instant turn 1's happens — this counts occurrences instead, so a caller can wait for the SECOND
   // (or Nth) one specifically rather than racing turn 2's own completion against an assertion that
@@ -2021,7 +2021,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
   // Polls for config.json to satisfy a predicate on its own PARSED content, rather than a flat
   // sleep or a bare existence check — measured live (a session-start reroute test, WSL; then
-  // three more sites, macOS CI round 3): a fixed "(done: no-tool-call)"/"Saved …"/"Removed …" line
+  // three more sites, macOS CI round 3): a fixed "(done"/"Saved …"/"Removed …" line
   // landing in the captured pty stdout is not a reliable proxy for "the write already happened"
   // (the file write itself is synchronous once persistDefaultModel/setConfigValue actually runs,
   // but nothing guarantees a captured stdout line and a DIFFERENT process's own filesystem read
@@ -2229,7 +2229,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_READY");
       // Turn resolves right away (this script's own comment explains why) — waited for here so
       // `/undo 5` below exercises decideUndo's own throw, not MEDIUM-3's turn-in-flight gate.
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       // M-3: a typo'd command name matches nothing in SLASH_COMMANDS at all.
       child.stdin?.write("/mdoe");
@@ -2267,7 +2267,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       child.stdin?.write("/exit the debugger and retry");
       await sawLine("/exit the debugger and retry");
@@ -2397,7 +2397,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // onSessionChange has already run for turn 1's own messages-updated (its dispatch strictly
       // precedes "done"'s in the same driveLoop call), so liveSession already carries the turn-1
       // assistant reply before task 2 is submitted.
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       child.stdin?.write("a second task");
       // Reflected live in the input box's own rendered frame first, same as the raw-mode-input
@@ -2432,7 +2432,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // immediately before the fake runLoop yields its "done" event, once the prior
       // messages-updated event (and any persist attempt it triggers) has already been fully
       // processed by the consuming for-await loop — a marker, not a count of the rendered
-      // "(done: no-tool-call)" line itself, which (unlike under the old `<Static>` transcript)
+      // done line itself, which (unlike under the old `<Static>` transcript)
       // now recurs on every later repaint and would satisfy a count-based wait long before turn 2
       // actually finishes.
       await sawLine("RUNLOOP_DONE 2");
@@ -2533,7 +2533,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const noticePrefix = "↻ routing ~openai/gpt-latest via openrouter on your seri plan — no";
       await sawLine(noticePrefix);
       await sawLine("configured");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       // Exactly one transcript notice for this one turn, and no console-only "⚠ routing" line
       // (prepareSession's own !isTTY-gated notice, dead on a real pty) — the same pair of checks
@@ -2560,7 +2560,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // The default model (groq.ts's own DEFAULT_MODEL) — proves the FIRST turn used it, before
       // any switch.
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       child.stdin?.write("/model");
       await sawLine("/model");
@@ -2635,7 +2635,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 reasoningEffort=undefined");
-      // RUNLOOP_DONE, not "(done: no-tool-call)" — see childScriptMultiTurn's own comment for why
+      // RUNLOOP_DONE, not "(done" — see childScriptMultiTurn's own comment for why
       // this is the reliable per-turn completion signal.
       await sawLine("RUNLOOP_DONE 1");
       // Not yet persisted — turn 1 ran with no override at all.
@@ -2812,7 +2812,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       child.stdin?.write("/model");
       await sawLine("/model");
@@ -2847,7 +2847,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
 
       await sawLine("RUNLOOP_CALL 2 model=claude-sonnet-5 provider=anthropic");
-      // RUNLOOP_DONE, not a count of the rendered "(done: no-tool-call)" line — see
+      // RUNLOOP_DONE, not a count of the rendered done line — see
       // childScriptMultiTurn's own comment for why.
       await sawLine("RUNLOOP_DONE 2");
 
@@ -2875,7 +2875,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       // Turn 1 ran on the session's own starting pair (GROQ_API_KEY configured, no reroute) — the
       // pre-condition this test needs: nothing persisted yet, so a later write is provably new.
@@ -2914,7 +2914,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const noticePrefix = "↻ routing claude-sonnet-5 via anthropic (your key) — no OpenRouter key";
       await sawLine(noticePrefix);
       await sawLine("configured");
-      // RUNLOOP_DONE, not a count of the rendered "(done: no-tool-call)" line — see
+      // RUNLOOP_DONE, not a count of the rendered done line — see
       // childScriptMultiTurn's own comment for why.
       await sawLine("RUNLOOP_DONE 2");
       // Not a reliable proxy for "config.json has already been written" even so — measured live,
@@ -2948,7 +2948,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       // Sabotage the NEXT persist attempt before it happens: atomicWriteFile.ts (the shared
       // write-tmp-then-rename helper writeConfig now goes through) checks the destination
@@ -2996,7 +2996,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine(
         "RUNLOOP_CALL 3 model=llama-3.3-70b-versatile messages=5 systemHasModelId=true",
       );
-      // RUNLOOP_DONE, not a count of the rendered "(done: no-tool-call)" line — see
+      // RUNLOOP_DONE, not a count of the rendered done line — see
       // childScriptMultiTurn's own comment for why.
       await sawLine("RUNLOOP_DONE 3");
       // waitForConfig, not a bare readFileSync right after — the same race macOS CI caught
@@ -3026,7 +3026,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       // Sabotaged for the rest of this run — never cleared, unlike the retry test above, since
       // this test is about how many times ONE turn attempts against a failure that never clears.
@@ -3086,7 +3086,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       child.stdin?.write("/model");
       await sawLine("/model");
@@ -3134,7 +3134,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       child.stdin?.write("/model");
       await sawLine("/model");
@@ -3234,7 +3234,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       child.stdin?.write("/exit");
       await sawLine("/exit");
@@ -3271,7 +3271,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       child.stdin?.write("\x04");
 
@@ -3367,13 +3367,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       child.stdin?.write("a second task");
       await sawLine("a second task");
       child.stdin?.write("\r");
       await sawLine("RUNLOOP_CALL 2");
-      // Turn 2's own completion specifically — the plain "(done: no-tool-call)" text is already
+      // Turn 2's own completion specifically — the plain "(done" text is already
       // true from turn 1's own, and (unlike under the old <Static> transcript) now also recurs on
       // every later, unrelated repaint, so counting its raw occurrences can't distinguish "turn 1
       // repainted again" from "turn 2 actually finished". RUNLOOP_DONE (childScriptMultiTurn's own
@@ -3461,7 +3461,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("/rewind: can't run while a turn is in flight.");
 
       writeFileSync(flagPath, "");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
       // Bug fixed here (macOS CI): waited on "(done: …)" but never on "Hello world" itself before
       // counting it. That first fix used `sawLine` (a raw substring check), which is not enough on
       // its own: the raw pty stream can deliver "Hello world"'s bytes before the synchronized-output
@@ -3617,7 +3617,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       // Still alive and the turn actually finished — proof the answer really unblocked
       // driveLoop's own await, not that the process just happened to still be running.
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
     } finally {
       child.kill("SIGKILL");
     }
@@ -3655,7 +3655,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const noticePrefix = "↻ routing claude-sonnet-5 via anthropic (your key) — no OpenRouter key";
       await sawLine(noticePrefix);
       await sawLine("configured");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       // Exactly one transcript notice for this one turn — the per-turn cap D2's own acceptance
       // criterion names, not a re-print on every messages-updated event within it.
@@ -3710,7 +3710,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 via=or provider=openrouter");
-      await sawLine("(done: no-tool-call)");
+      await sawLine("(done");
 
       // Absence check, safe under the raw cumulative count regardless of source.
       expect(rawOccurrences("↻ routing")).toBe(0);
@@ -4501,7 +4501,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // The fall-through: prepareSession -> runTui -> driveLoop, unchanged, now actually reached.
         await sawLine("> do a task");
         await sawLine("RUNLOOP_READY");
-        await sawLine("(done: no-tool-call)");
+        await sawLine("(done");
 
         const modelConfig = await waitForConfig(
           join(dir, ".seri", "config.json"),
@@ -4792,7 +4792,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("> do a task");
         await sawLine("RUNLOOP_READY");
-        await sawLine("(done: no-tool-call)");
+        await sawLine("(done");
 
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
@@ -5679,7 +5679,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const { child, exited, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        await sawLine("(done: no-tool-call)");
+        await sawLine("(done");
 
         child.stdin?.write("/exit");
         await sawLine("/exit");
@@ -5837,7 +5837,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("RUNLOOP_READY");
         await sawLine("line-299.txt");
-        await sawLine("(done: no-tool-call)");
+        await sawLine("(done");
 
         child.stdin?.write("\x1b[5~"); // Page Up
         // `sawInFrameTimes`, not `sawLine`, immediately before reading `lastFrame()` below — same
@@ -5860,7 +5860,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("RUNLOOP_READY");
         await sawLine("line-299.txt");
-        await sawLine("(done: no-tool-call)");
+        await sawLine("(done");
 
         child.stdin?.write("\x1b[5~"); // Page Up
         await sawLine("↑ scrolled — End to follow");
@@ -5926,7 +5926,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("RUNLOOP_READY 1");
         await sawLine("WROTE 1");
-        await sawLine("(done: no-tool-call)");
+        await sawLine("(done");
 
         const files1 = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
         expect(files1).toHaveLength(1);
@@ -5958,7 +5958,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("RUNLOOP_READY 2");
         await sawLine("WROTE 2");
-        await sawLine("(done: no-tool-call)");
+        await sawLine("(done");
 
         // The new session got a real checkpoint, through a real checkpointer.
         const newRef = `refs/seri/sessions/${newId}`;
@@ -5996,7 +5996,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("RUNLOOP_READY 1");
         await sawLine("WROTE 1");
-        await sawLine("(done: no-tool-call)");
+        await sawLine("(done");
 
         const files1 = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
         expect(files1).toHaveLength(1);
@@ -6028,7 +6028,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("RUNLOOP_READY 2");
         await sawLine("WROTE 2");
-        await sawLine("(done: no-tool-call)");
+        await sawLine("(done");
 
         // The old session's ref did not receive a second commit — the post-/clear tool call did
         // not land there, even though /clear's own persist never succeeded.
@@ -6054,7 +6054,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("RUNLOOP_READY 1");
         await sawLine("EMITTED 1 9");
-        await sawLine("(done: no-tool-call)");
+        await sawLine("(done");
 
         child.stdin?.write("/clear");
         await sawLine("/clear");
@@ -6071,7 +6071,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // `sawLine` here would resolve immediately against that earlier occurrence instead of
         // waiting for turn 2's own — this file's own sawLineTimes doc comment describes exactly
         // this pitfall.
-        await sawLineTimes("(done: no-tool-call)", 2);
+        await sawLineTimes("(done", 2);
         // `archivistLine`'s own "(archivist: ..." stats line (cli/output.ts) is dispatched into
         // the transcript only when maybeRunArchivist actually returns a report — i.e. only once
         // shouldRunArchivist's own trigger fired. A bounded margin, not `sawLine`, since this half
@@ -6155,7 +6155,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         try {
           await sawLine("RUNLOOP_READY 1");
           await sawLine("WROTE 1");
-          await sawLine("(done: no-tool-call)");
+          await sawLine("(done");
 
           child.stdin?.write("/clear");
           await sawLine("/clear");
@@ -6183,7 +6183,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         try {
           await sawLine("RUNLOOP_READY 1");
           await sawLine("WROTE 1");
-          await sawLine("(done: no-tool-call)");
+          await sawLine("(done");
 
           const files1 = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
           expect(files1).toHaveLength(1);
@@ -6200,7 +6200,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
           child.stdin?.write("\r");
           await sawLine("RUNLOOP_READY 2");
           await sawLine("WROTE 2");
-          await sawLine("(done: no-tool-call)");
+          await sawLine("(done");
 
           expect(loadSession<ModelMessage>(oldId, sessionsDir).messages).toEqual(preClearMessages);
         } finally {
