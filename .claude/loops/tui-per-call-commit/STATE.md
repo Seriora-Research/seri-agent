@@ -2,8 +2,8 @@
 - Mode: feature
 - Task: issue #182 — TUI shows aggregated tool-call/result lines in real time as calls settle (Claude Code in-place update). Successor to spec 034 / issue 173 / PR 181.
 - Branch: feat/tui-per-call-commit
-- Status: PLAN
-- Started: 2026-08-27T02:58:00Z  |  Updated: 2026-08-27T03:08:37Z
+- Status: EXECUTE
+- Started: 2026-08-27T02:58:00Z  |  Updated: 2026-08-27T03:12:00Z
 
 ## Model config
 | role              | model   |
