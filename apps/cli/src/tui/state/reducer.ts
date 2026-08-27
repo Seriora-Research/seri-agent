@@ -15,6 +15,7 @@ import {
 } from "../util/format";
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
 import {
+  recordCall,
   recordDenial,
   recordResult,
   renderToolActivity,
@@ -614,13 +615,16 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         },
       };
     // Tool-call/result/permission-denied do not push a transcript line here. Stats accumulate
-    // on `toolActivity` and flush as muted compact lines on done/error. pendingTool is set for
-    // every tool name so the live status slot (app.tsx) can show the in-flight call.
+    // on `toolActivity` and flush as muted compact lines on done (not error: loop.ts yields
+    // error and continues). pendingTool is set for every tool name so the live status slot
+    // (app.tsx) can show the in-flight call. recordCall on tool-call so a thrown execute
+    // (tool-call then error, no tool-result) still has a settled line to flush.
     case "tool-call":
       return {
         ...flushStreaming(state),
         status: `Running ${event.name}…`,
         pendingTool: { name: event.name, args: event.args },
+        toolActivity: recordCall(state.toolActivity, event.name, event.args),
       };
     case "tool-result":
       return {
@@ -687,10 +691,12 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         pendingTool: undefined,
       };
     // `state.turn` is deliberately left untouched here — see `"turn-ended"`'s own comment
-    // (TuiAction) for why only that action, not this event, ends a turn.
+    // (TuiAction) for why only that action, not this event, ends a turn. toolActivity is
+    // also left in place: an error is not turn-end, and flushing here would drop calls
+    // that arrive after the error and erase a thrown tool-call that never got a result.
     case "error":
       return {
-        ...pushLine(flushToolActivity(state), event.error),
+        ...pushLine(state, event.error),
         status: "",
         pendingTool: undefined,
       };

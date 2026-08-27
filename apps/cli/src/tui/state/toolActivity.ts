@@ -4,7 +4,7 @@
 // name. `dispatch_subagents` is never aggregated: each call stays its own entry so the
 // per-call task/token line from `toolResultLine` is kept.
 import path from "node:path";
-import { toolResultLine } from "../../cli/output";
+import { escapeControlChars, toolResultLine } from "../../cli/output";
 import type { DispatchResult } from "../../subagents/dispatch";
 import type { GlobResult } from "../../tools/glob";
 import type { GrepResult } from "../../tools/grep";
@@ -18,6 +18,9 @@ export type ToolActivityEntry = {
   singleLine: string;
   detailLines: string[];
   anomalyLines: string[];
+  // True after recordCall until the matching recordResult/recordDenial settles it.
+  // Without this, wiring recordCall on tool-call would double-count every successful call.
+  open?: boolean;
 };
 
 export const TOOL_LABELS: Record<string, { verb: string; noun: string }> = {
@@ -49,6 +52,12 @@ function cap(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+// Escape first so a live status line (app.tsx reads summarizeArgs directly) never paints a
+// raw ESC/BEL, then cap so the escaped form is what the 60-char budget measures.
+function display(text: string): string {
+  return escapeControlChars(text);
+}
+
 // cwd-relative when the path is inside the process cwd; otherwise the original string
 // (a relative() that walks out via `..` is not a useful display path).
 export function trimPath(p: string): string {
@@ -64,13 +73,19 @@ export function summarizeArgs(name: string, args: unknown): string {
   const command = str(fields.command);
   const labels = TOOL_LABELS[name];
   if (name === "bash" || name === "powershell") {
-    return `${labels.verb} ${command === undefined ? "" : cap(command, COMMAND_CAP)}`.trimEnd();
+    return `${labels.verb} ${command === undefined ? "" : cap(display(command), COMMAND_CAP)}`.trimEnd();
   }
   if (name === "grep" || name === "glob") {
-    return `${labels.verb} ${pattern ?? (filePath === undefined ? "" : trimPath(filePath))}`.trimEnd();
+    const needle =
+      pattern !== undefined
+        ? display(pattern)
+        : filePath === undefined
+          ? ""
+          : display(trimPath(filePath));
+    return `${labels.verb} ${needle}`.trimEnd();
   }
   if (name === "read_file" || name === "write_file") {
-    return `${labels.verb} ${filePath === undefined ? "" : trimPath(filePath)}`.trimEnd();
+    return `${labels.verb} ${filePath === undefined ? "" : display(trimPath(filePath))}`.trimEnd();
   }
   if (name === "edit") return labels.verb;
   if (name === "dispatch_subagents") return "Dispatched subagents";
@@ -118,7 +133,7 @@ export function detailLinesForResult(name: string, result: unknown): string[] {
   } else {
     return [];
   }
-  const shown = paths.slice(0, DETAIL_PATH_CAP).map(trimPath);
+  const shown = paths.slice(0, DETAIL_PATH_CAP).map((p) => display(trimPath(p)));
   const extra = paths.length - shown.length;
   if (truncated || extra > 0) {
     shown.push(extra > 0 ? `…${extra} more` : "…more");
@@ -137,7 +152,7 @@ function stderrSnippet(stderr: string | undefined): string | undefined {
   if (stderr === undefined || stderr.length === 0) return undefined;
   const first = stderr.split(/\r?\n/, 1)[0] ?? "";
   if (first.length === 0) return undefined;
-  return cap(first, STDERR_CAP);
+  return cap(display(first), STDERR_CAP);
 }
 
 function dispatchCounts(result: unknown): { ran: number; total: number } | undefined {
@@ -193,7 +208,17 @@ export function anomalyLineForDenial(reason: "blocked" | "declined"): string {
 }
 
 function emptyEntry(name: string): ToolActivityEntry {
-  return { name, count: 0, singleLine: "", detailLines: [], anomalyLines: [] };
+  return { name, count: 0, singleLine: "", detailLines: [], anomalyLines: [], open: false };
+}
+
+function settleCount(entry: ToolActivityEntry): number {
+  return entry.open ? entry.count : entry.count + 1;
+}
+
+// success_check: exactly one TREE_BRANCH per name-group. Keep the first anomaly.
+function appendAnomaly(existing: string[], anomaly: string | undefined): string[] {
+  if (anomaly === undefined || existing.length >= 1) return existing;
+  return [...existing, anomaly];
 }
 
 function mapEntry(
@@ -228,15 +253,23 @@ export function recordCall(
   name: string,
   args: unknown,
 ): ToolActivityEntry[] {
+  // dispatch_subagents is never aggregated; its settled line comes from recordResult's
+  // toolResultLine. Recording the call here would append a second alwaysAppend entry.
+  if (name === "dispatch_subagents") return entries;
   return mapEntry(
     entries,
     name,
-    (entry) => ({
-      ...entry,
-      count: entry.count + 1,
-      singleLine: entry.singleLine.length > 0 ? entry.singleLine : summarizeArgs(name, args),
-    }),
-    name === "dispatch_subagents",
+    (entry) => {
+      const count = entry.count + 1;
+      return {
+        ...entry,
+        count,
+        open: true,
+        singleLine: entry.singleLine.length > 0 ? entry.singleLine : summarizeArgs(name, args),
+        detailLines: count > 1 ? [] : entry.detailLines,
+      };
+    },
+    false,
   );
 }
 
@@ -252,15 +285,16 @@ export function recordResult(
     entries,
     name,
     (entry) => {
-      const count = entry.count + 1;
+      const count = settleCount(entry);
       return {
         ...entry,
         count,
+        open: false,
         singleLine: settledSingleLine(name, args, result),
         // Per-call grep/glob hits only survive on a single-call group; a repeat drops them
         // back to a bare aggregate count, same as every other tool.
         detailLines: count === 1 ? details : [],
-        anomalyLines: anomaly === undefined ? entry.anomalyLines : [...entry.anomalyLines, anomaly],
+        anomalyLines: appendAnomaly(entry.anomalyLines, anomaly),
       };
     },
     name === "dispatch_subagents",
@@ -278,9 +312,10 @@ export function recordDenial(
     name,
     (entry) => ({
       ...entry,
-      count: entry.count + 1,
+      count: settleCount(entry),
+      open: false,
       singleLine: entry.singleLine.length > 0 ? entry.singleLine : (labels?.verb ?? name),
-      anomalyLines: [...entry.anomalyLines, anomalyLineForDenial(reason)],
+      anomalyLines: appendAnomaly(entry.anomalyLines, anomalyLineForDenial(reason)),
     }),
     name === "dispatch_subagents",
   );
@@ -301,8 +336,9 @@ function cappedSubLines(lines: string[]): string[] {
 
 export function renderToolActivity(entries: ToolActivityEntry[]): string[] {
   return entries.map((entry) => {
-    const subs = cappedSubLines([...entry.detailLines, ...entry.anomalyLines]);
-    if (subs.length === 0) return aggregateLine(entry);
-    return [aggregateLine(entry), ...subs.map((line) => `${TREE_BRANCH}${line}`)].join("\n");
+    const main = display(aggregateLine(entry));
+    const subs = cappedSubLines([...entry.detailLines, ...entry.anomalyLines].map(display));
+    if (subs.length === 0) return main;
+    return [main, ...subs.map((line) => `${TREE_BRANCH}${line}`)].join("\n");
   });
 }
