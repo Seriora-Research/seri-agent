@@ -31,3 +31,8 @@
 - DECISION: in-place aggregation is for EVERY 034 grouped tool name, not only read_file. TOOL_LABELS (`read_file`, `grep`, `glob`, `bash`, `powershell`, `write_file`, `edit`) all update one line in place. `dispatch_subagents` stays `alwaysAppend`. Do not special-case Read.
 - App tests must include at least one non-read same-name case (two bash results before done → one `Ran 2 shell commands`).
 - skip: War Room VERIFY opens the PR later.
+
+## 2026-08-27T03:20:00Z EXECUTE (live-paint)
+- Path taken: live-paint `renderLiveToolActivity` inside the native scrollbox after `TranscriptList` (full `.map()`, not a virtualizer). Did not mutate `TranscriptEntry`.
+- Open-entry filter is name-agnostic (every TOOL_LABELS group). Negative control: 5 App tests failed at 7ef9731 (no `Read a.txt` / `Read 2 files` / `Ran 2 shell commands` / `Searched TODO` until done).
+- skip: War Room VERIFY opens the PR later.
