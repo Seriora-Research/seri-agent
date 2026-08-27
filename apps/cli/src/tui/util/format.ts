@@ -272,19 +272,20 @@ export function estimateTokens(text: string): number {
   return Buffer.byteLength(text.replace(/\s+/g, ""), "utf8") / 4;
 }
 
-// `printUsage`'s exact "N in, M out" wording (cli/output.ts) for a reconciled count, `printCost`'s
-// `~`-prefixed estimated convention (cli/output.ts) whenever `progress.exact` is false or
-// `progress.hasGap` is set — see `TokenProgress`'s own comment for why both must hold before this
-// ever drops the `~`. The output total sums three parts — reconciled, carried-over from a past
-// call's own stranded estimate, and the currently-streaming call's own live estimate — see
-// `TokenProgress`'s own comment for why those are kept separate rather than merged eagerly.
+// TUI-only fragment shared by live TurnStatus and the settled done line. Input is ↑, output is ↓
+// (the same glyphs the TUI already uses for list navigation). `printUsage` on the non-interactive
+// path keeps "N in, M out" — this helper does not feed that line. `printCost`'s `~` convention
+// still applies whenever `progress.exact` is false or `progress.hasGap` is set — see
+// `TokenProgress`'s own comment for why both must hold before this ever drops the `~`, and why
+// it prefixes BOTH numbers together. The output total sums three parts — reconciled, carried-over
+// from a past call's own stranded estimate, and the currently-streaming call's own live estimate.
 export function formatTokenProgress(progress: TokenProgress): string {
   const inTokens = Math.round(progress.reconciledInputTokens + progress.liveInputEstimate);
   const outTokens = Math.round(
     progress.reconciledOutputTokens + progress.carriedOutputEstimate + progress.liveOutputEstimate,
   );
   const exact = progress.exact && !progress.hasGap;
-  return exact ? `${inTokens} in, ${outTokens} out` : `~${inTokens} in, ~${outTokens} out`;
+  return exact ? `${inTokens} ↑, ${outTokens} ↓` : `~${inTokens} ↑, ~${outTokens} ↓`;
 }
 
 export function formatDoneLine(
@@ -306,7 +307,7 @@ export function formatDoneLine(
       return _unhandled;
     }
   }
-  return tokens === undefined ? `(${head})` : `(${head} · ${formatTokenProgress(tokens)})`;
+  return tokens === undefined ? head : `${head} · ${formatTokenProgress(tokens)}`;
 }
 
 // One row's worth of columns (name, provider, context, cost, route), space-joined — the picker's

@@ -64,16 +64,16 @@ describe("formatTokenProgress", () => {
   }
 
   test("omits ~ when exact and no gap", () => {
-    expect(formatTokenProgress(progress())).toBe("10 in, 20 out");
+    expect(formatTokenProgress(progress())).toBe("10 ↑, 20 ↓");
   });
 
   test("prefixes both with ~ when still an estimate", () => {
-    expect(formatTokenProgress(progress({ exact: false }))).toBe("~10 in, ~20 out");
+    expect(formatTokenProgress(progress({ exact: false }))).toBe("~10 ↑, ~20 ↓");
   });
 
   test("adds the live output estimate on top of the reconciled total", () => {
     expect(formatTokenProgress(progress({ exact: false, liveOutputEstimate: 5 }))).toBe(
-      "~10 in, ~25 out",
+      "~10 ↑, ~25 ↓",
     );
   });
 
@@ -85,19 +85,19 @@ describe("formatTokenProgress", () => {
       formatTokenProgress(
         progress({ exact: false, carriedOutputEstimate: 8, liveOutputEstimate: 5 }),
       ),
-    ).toBe("~10 in, ~33 out");
+    ).toBe("~10 ↑, ~33 ↓");
   });
 
   test("adds the live input estimate on top of the reconciled total", () => {
     expect(formatTokenProgress(progress({ exact: false, liveInputEstimate: 7 }))).toBe(
-      "~17 in, ~20 out",
+      "~17 ↑, ~20 ↓",
     );
   });
 
   // A sticky gap earlier in the turn must keep showing `~` even once the most recent
   // reconciliation was itself complete (`exact: true`) — see `TokenProgress`'s own comment.
   test("prefixes both with ~ when hasGap is set, even though exact is true", () => {
-    expect(formatTokenProgress(progress({ exact: true, hasGap: true }))).toBe("~10 in, ~20 out");
+    expect(formatTokenProgress(progress({ exact: true, hasGap: true }))).toBe("~10 ↑, ~20 ↓");
   });
 });
 
@@ -127,41 +127,41 @@ describe("formatDoneLine", () => {
       name: "happy + exact",
       reason: "no-tool-call",
       tokens: exact,
-      expected: `(done · ${formatTokenProgress(exact)})`,
+      expected: `done · ${formatTokenProgress(exact)}`,
     },
     {
       name: "happy + gap/~",
       reason: "no-tool-call",
       tokens: gap,
-      expected: `(done · ${formatTokenProgress(gap)})`,
+      expected: `done · ${formatTokenProgress(gap)}`,
     },
     {
       name: "aborted + totals",
       reason: "aborted",
       tokens: exact,
-      expected: `(done: aborted · ${formatTokenProgress(exact)})`,
+      expected: `done: aborted · ${formatTokenProgress(exact)}`,
     },
     {
       name: "max-iterations + totals",
       reason: "max-iterations",
       tokens: exact,
-      expected: `(done: max-iterations · ${formatTokenProgress(exact)})`,
+      expected: `done: max-iterations · ${formatTokenProgress(exact)}`,
     },
     {
       name: "repeated-denials + totals",
       reason: "repeated-denials",
       tokens: exact,
-      expected: `(done: repeated-denials · ${formatTokenProgress(exact)})`,
+      expected: `done: repeated-denials · ${formatTokenProgress(exact)}`,
     },
     {
       name: "happy missing tokens",
       reason: "no-tool-call",
-      expected: "(done)",
+      expected: "done",
     },
     {
       name: "aborted missing tokens",
       reason: "aborted",
-      expected: "(done: aborted)",
+      expected: "done: aborted",
     },
   ];
 
@@ -170,9 +170,13 @@ describe("formatDoneLine", () => {
       const line = formatDoneLine(row.reason, row.tokens);
       expect(line).toBe(row.expected);
       expect(line).not.toContain("no-tool-call");
+      expect(line).not.toContain("(");
+      expect(line).not.toContain(")");
       if (row.tokens !== undefined) {
         expect(line).toContain(" \u00B7 ");
         expect(line).not.toContain(" - ");
+        expect(line).toContain("↑");
+        expect(line).toContain("↓");
       } else {
         expect(line).not.toContain("\u00B7");
       }
