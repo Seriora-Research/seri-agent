@@ -10,6 +10,7 @@ import type {
   SetupProviderRow,
 } from "../../src/tui/state/commands";
 import { initialTuiState, type TuiState, tuiReducer } from "../../src/tui/state/reducer";
+import { renderLiveToolActivity } from "../../src/tui/state/toolActivity";
 import { TREE_BRANCH } from "../../src/tui/theme/theme";
 import { estimateTokens, formatTokenProgress, type TokenProgress } from "../../src/tui/util/format";
 
@@ -309,6 +310,7 @@ describe("tuiReducer: loop-event", () => {
     expect(state.pendingTool).toBeUndefined();
     expect(state.transcript).toEqual([]);
     expect(state.toolActivity).toHaveLength(1);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Read a.txt"]);
   });
 
   test("a single successful tool-result followed by done produces one muted entry with no raw JSON", () => {
@@ -334,6 +336,38 @@ describe("tuiReducer: loop-event", () => {
     expect(toolLines).toHaveLength(1);
     expect(toolLines[0].text).toBe("Read 2 files");
     expect(toolLines[0].muted).toBe(true);
+  });
+
+  test("after two same-name results and before done, live render is one Read 2 files line", () => {
+    let state = apply(undefined, { type: "tool-call", name: "read_file", args: { path: "a.txt" } });
+    state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Read a.txt"]);
+    expect(state.transcript.filter((e) => e.muted)).toEqual([]);
+
+    state = apply(state, { type: "tool-call", name: "read_file", args: { path: "b.txt" } });
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Read a.txt"]);
+
+    state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Read 2 files"]);
+    expect(state.transcript.filter((e) => e.muted)).toEqual([]);
+  });
+
+  test("after two same-name bash results and before done, live render is one Ran 2 shell commands", () => {
+    const ok = {
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      timedOut: false,
+    };
+    let state = apply(undefined, { type: "tool-call", name: "bash", args: { command: "echo a" } });
+    state = apply(state, { type: "tool-result", name: "bash", result: ok });
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Ran echo a"]);
+    state = apply(state, { type: "tool-call", name: "bash", args: { command: "echo b" } });
+    state = apply(state, { type: "tool-result", name: "bash", result: ok });
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Ran 2 shell commands"]);
+    expect(state.transcript.filter((e) => e.muted)).toEqual([]);
   });
 
   test("a failing bash result followed by done produces a TREE_BRANCH-prefixed anomaly line", () => {
