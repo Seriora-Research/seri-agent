@@ -12,3 +12,10 @@
 - STATE.md Status → PLAN. Plan checklist filled from the six ordered EXECUTE steps.
 - Do not promote to `docs/specs/034-tui-tool-transcript/` until Lionel approves (Handler).
 - Next: human approval, then EXECUTE.
+
+## 2026-08-27T03:08:37Z PLAN (rewrite)
+- DECISION: keep name-aggregation, live in-place update, do not drop Read 2 files. Lionel rejected the prior plan's drop-aggregation architecture.
+- Rewrote `feature-plan.md`: live-paint `renderToolActivity(state.toolActivity)` inside the native scrollbox after `TranscriptList` (full `.map()`, not a virtualizer). Reducer still no `pushLine` on tool-result/permission-denied; still flush on done/turn-ended; error non-flush.
+- Goal Audit confirmed_goal / success_check updated in STATE.md. Status remains PLAN. Checklist replaced to match the new ordered steps.
+- Do not promote to `docs/specs/034-tui-tool-transcript/` until Lionel approves (Handler).
+- Next: human approval, then EXECUTE.

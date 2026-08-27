@@ -1,9 +1,9 @@
 # Loop State — tui-per-call-commit
 - Mode: feature
-- Task: issue #182 — TUI commits tool-call/result lines per-call (real-time), not at turn end. Successor to spec 034 / issue 173 / PR 181.
+- Task: issue #182 — TUI shows aggregated tool-call/result lines in real time as calls settle (Claude Code in-place update). Successor to spec 034 / issue 173 / PR 181.
 - Branch: feat/tui-per-call-commit
 - Status: PLAN
-- Started: 2026-08-27T02:58:00Z  |  Updated: 2026-08-27T03:06:12Z
+- Started: 2026-08-27T02:58:00Z  |  Updated: 2026-08-27T03:08:37Z
 
 ## Model config
 | role              | model   |
@@ -20,16 +20,16 @@
 ## Goal Audit
 - triggers_fired: [T3]
 - tier: 3
-- resolution: DECISION: Lionel confirmed per-call over spec 034 turn-end (War Room 2026-08-26). Keep 034 visual language (muted compact lines, trimPath, TREE_BRANCH, write_file/edit box, plain CLI untouched). Reverse only the commit point.
-- confirmed_goal: The TUI commits each tool-call/result as a compact muted transcript line immediately when that call settles (tool-result or permission-denied), so the user can see what the agent is doing in real time. The live pending line remains for the in-flight call. write_file/edit approval box and plain CLI are unchanged.
-- success_check: A turn of two sequential tools produces two muted transcript entries BEFORE the done/Cooked-for marker, each appearing when that call's tool-result is applied (reducer: after tool-result and before done, transcript already contains the muted line). Not a single flush at turn end.
+- resolution: DECISION: keep name-aggregation, live in-place update, do not drop Read 2 files. Lionel rejected Scout's drop-aggregation plan (War Room 2026-08-27). Keep 034 visual language and aggregation; close only the visibility gap (live-paint `toolActivity` inside the scrollbox). Transcript persistence still flushes on done/turn-ended; error does not flush.
+- confirmed_goal: TUI shows aggregated tool-call/result lines in real time as calls settle, Claude Code style: same-name calls update one line in place; the user can see what the agent is doing mid-turn. Live pending slot remains for the in-flight call. write_file/edit box and plain CLI unchanged.
+- success_check: After two sequential same-name tool-results and BEFORE done, exactly one muted aggregated line is visible (`Read 2 files` or equivalent). After a first result, that line is already visible (not empty until done). A mid-turn scroll/view includes it.
 
 ## Plan checklist
-- [ ] Rewrite reducer tests RED for per-call (assert muted line on tool-result before done; two calls → two lines; no aggregate).
-- [ ] Change `tool-result` / `permission-denied` in `applyLoopEvent` to immediate muted `pushLine`; keep `recordCall` + leftover flush on `done`/`turn-ended`; `error` non-flush.
-- [ ] Simplify `toolActivity.ts`: no name-aggregation; count===1 render only; keep helpers.
+- [ ] App tests RED: after first `tool-result` before `done`, frame shows `Read a.txt`; after two same-name results, one `Read 2 files`.
+- [ ] Paint settled `renderToolActivity` inside the scrollbox after `TranscriptList`; open-entry filter; `pendingTool` unchanged.
+- [ ] Reducer: comment-only. Add selector tests for live `toolActivity` before `done`. Do not `pushLine` on result/denied. Keep aggregation pins.
 - [ ] Update `docs/design/tui.md`.
-- [ ] Fix remaining unit tests (`toolActivity.test.ts`, App comments).
+- [ ] Keep `toolActivity.test.ts` aggregation tests; add helper tests only if a live-view mapper is extracted.
 - [ ] Run lint, typecheck, full `apps/cli` test; record exit codes.
 
 ## Gate results (latest)
