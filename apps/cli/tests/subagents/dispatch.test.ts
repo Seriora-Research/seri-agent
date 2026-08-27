@@ -56,9 +56,16 @@ function usageEvent(inputTokens?: number, outputTokens?: number): LoopEvent {
   return { type: "usage", usage };
 }
 
+type ChildEventPayload = {
+  childId: string;
+  role: string;
+  goal: string;
+  event: LoopEvent | { type: "child-started" };
+};
+
 function makeRuntime(
   fake: (opts: RunLoopOpts) => AsyncGenerator<LoopEvent>,
-  overrides: Partial<SubagentRuntime & { system: string }> = {},
+  overrides: Partial<SubagentRuntime & { system: string; onChildEvent?: (payload: ChildEventPayload) => void }> = {},
 ): SubagentRuntime & { system: string } {
   const catalog: ModelCatalog = { fetchedAt: "", entries: [] };
   return {
@@ -189,6 +196,114 @@ describe("dispatch_subagents", () => {
     expect(result.results[1].usage).toEqual({ inputTokens: 3, outputTokens: 2, totalTokens: 5 });
     expect(result.results[2].usage).toEqual({});
     expect(result.totalUsage).toEqual({ inputTokens: 13, outputTokens: 7, totalTokens: 20 });
+  });
+
+  test("onChildEvent forwards child-started, tool-call, and done for two explore children", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [
+        { type: "tool-call", name: "read_file", args: { path: "foo.ts" } },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    const forwarded: ChildEventPayload[] = [];
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        onChildEvent: (payload) => forwarded.push(payload),
+      }),
+    );
+    await dispatchTool.execute(
+      {
+        tasks: [
+          { role: "explore", goal: "find a" },
+          { role: "explore", goal: "find b" },
+        ],
+      },
+      dispatchOpts("t1"),
+    );
+
+    const byId = new Map<string, ChildEventPayload[]>();
+    for (const payload of forwarded) {
+      const list = byId.get(payload.childId) ?? [];
+      list.push(payload);
+      byId.set(payload.childId, list);
+    }
+    expect([...byId.keys()].sort()).toEqual(["t1:0", "t1:1"]);
+
+    const childA = byId.get("t1:0")!;
+    const childB = byId.get("t1:1")!;
+    expect(childA.map((p) => p.event.type)).toEqual(["child-started", "tool-call", "done"]);
+    expect(childB.map((p) => p.event.type)).toEqual(["child-started", "tool-call", "done"]);
+    expect(childA[0]).toMatchObject({ role: "explore", goal: "find a" });
+    expect(childB[0]).toMatchObject({ role: "explore", goal: "find b" });
+    expect(childA[1].event).toEqual({
+      type: "tool-call",
+      name: "read_file",
+      args: { path: "foo.ts" },
+    });
+    expect(childB[1].event).toEqual({
+      type: "tool-call",
+      name: "read_file",
+      args: { path: "foo.ts" },
+    });
+  });
+
+  test("runSubagent without child never invokes onChildEvent", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [
+        { type: "tool-call", name: "read_file", args: { path: "foo.ts" } },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    const forwarded: ChildEventPayload[] = [];
+    await runSubagent({
+      tools: buildRoleToolSet("explore"),
+      system: "irrelevant",
+      messages: [{ role: "user", content: "go" }],
+      runtime: makeRuntime(fake, {
+        onChildEvent: (payload) => forwarded.push(payload),
+      }),
+    });
+    expect(forwarded).toEqual([]);
+  });
+
+  test("overflow tasks emit no onChildEvent payloads", async () => {
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [
+        { type: "tool-call", name: "read_file", args: { path: "foo.ts" } },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    const forwarded: ChildEventPayload[] = [];
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        onChildEvent: (payload) => forwarded.push(payload),
+      }),
+    );
+    const result = (await dispatchTool.execute(
+      {
+        tasks: Array.from({ length: 4 }, (_, i) => ({
+          role: "explore" as const,
+          goal: `task ${i}`,
+        })),
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(calls).toHaveLength(3);
+    expect(result.results).toHaveLength(4);
+    expect(result.results[3].summary).toContain("3-task limit");
+    expect(result.results[3].doneReason).toBeUndefined();
+
+    const childIds = [...new Set(forwarded.map((p) => p.childId))].sort();
+    expect(childIds).toEqual(["t1:0", "t1:1", "t1:2"]);
+    expect(forwarded.some((p) => p.childId === "t1:3")).toBe(false);
+    for (const id of childIds) {
+      expect(forwarded.filter((p) => p.childId === id).map((p) => p.event.type)).toEqual([
+        "child-started",
+        "tool-call",
+        "done",
+      ]);
+    }
   });
 
   test("onChildUsage is forwarded once per child usage event, with its cost", async () => {
