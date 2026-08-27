@@ -139,6 +139,25 @@ export function loadReasoningEffortConfig(config: Record<string, string>): strin
   return configValue("SERI_REASONING_EFFORT", config);
 }
 
+export const DEFAULT_TRAJECTORY_RETENTION_DAYS = 30;
+
+export type TrajectoryConfig = { enabled: boolean; retentionDays: number };
+
+function parseRetentionDays(value: string | undefined): number {
+  if (value === undefined) return DEFAULT_TRAJECTORY_RETENTION_DAYS;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_TRAJECTORY_RETENTION_DAYS;
+  return parsed;
+}
+
+export function loadTrajectoryConfig(configDir?: string): TrajectoryConfig {
+  const config = loadConfig(configDir);
+  return {
+    enabled: configBoolean(configValue("SERI_TRAJECTORY_ENABLED", config)),
+    retentionDays: parseRetentionDays(configValue("SERI_TRAJECTORY_RETENTION_DAYS", config)),
+  };
+}
+
 // Mirrors provider/defaults.ts's persistDefaultModel: called only from runTui's own per-turn
 // confirm-then-persist tracking (cli.ts), after a turn using this tier has actually succeeded —
 // never from /effort's own handler directly, and never for the non-persisting --effort CLI flag.

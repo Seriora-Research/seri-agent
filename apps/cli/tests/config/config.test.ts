@@ -6,6 +6,7 @@ import { getConfigDir, setProfileOverride } from "../../src/config/paths";
 import {
   getApiKey,
   loadConfig,
+  loadTrajectoryConfig,
   loadVerifyConfig,
   setConfigValue,
   setConfigValues,
@@ -157,5 +158,35 @@ describe("loadVerifyConfig", () => {
   test("any other value leaves it on, so a typo cannot silently disable the check", () => {
     process.env.SERI_VERIFY_ENABLED = "no";
     expect(loadVerifyConfig().enabled).toBe(true);
+  });
+});
+
+describe("loadTrajectoryConfig", () => {
+  const originalEnabled = process.env.SERI_TRAJECTORY_ENABLED;
+  const originalDays = process.env.SERI_TRAJECTORY_RETENTION_DAYS;
+
+  afterEach(() => {
+    restoreEnv("SERI_TRAJECTORY_ENABLED", originalEnabled);
+    restoreEnv("SERI_TRAJECTORY_RETENTION_DAYS", originalDays);
+  });
+
+  test("enabled with a 30-day window when nothing is configured", () => {
+    delete process.env.SERI_TRAJECTORY_ENABLED;
+    delete process.env.SERI_TRAJECTORY_RETENTION_DAYS;
+    expect(loadTrajectoryConfig()).toEqual({ enabled: true, retentionDays: 30 });
+  });
+
+  test('turns off on exactly "false"', () => {
+    delete process.env.SERI_TRAJECTORY_ENABLED;
+    process.env.SERI_TRAJECTORY_ENABLED = "false";
+    expect(loadTrajectoryConfig().enabled).toBe(false);
+  });
+
+  test("non-positive or unparseable retention days fall back to 30", () => {
+    delete process.env.SERI_TRAJECTORY_RETENTION_DAYS;
+    process.env.SERI_TRAJECTORY_RETENTION_DAYS = "0";
+    expect(loadTrajectoryConfig().retentionDays).toBe(30);
+    process.env.SERI_TRAJECTORY_RETENTION_DAYS = "nope";
+    expect(loadTrajectoryConfig().retentionDays).toBe(30);
   });
 });

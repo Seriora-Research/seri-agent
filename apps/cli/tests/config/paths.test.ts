@@ -9,6 +9,7 @@ import {
   getConfigDir,
   getMemoriesDir,
   getPendingDir,
+  getTrajectoriesDir,
   getReservedProfileNames,
   profileNameError,
   resolveProfile,
@@ -208,12 +209,13 @@ describe("profileNameError", () => {
       "bin",
       "memories",
       "pending",
+      "trajectories",
     ];
     expect([...getReservedProfileNames()].sort()).toEqual([...expected].sort());
   });
 
   // Stage 6b: memories/ and pending/ join the reserved set the same way sessions/checkpoints did.
-  test.each(["memories", "pending"])("%s is reserved", (name) => {
+  test.each(["memories", "pending", "trajectories"])("%s is reserved", (name) => {
     expect(profileNameError(name)).toBeDefined();
   });
 
@@ -289,16 +291,18 @@ describe("resolveProfile precedence (D1)", () => {
   });
 });
 
-describe("getMemoriesDir / getPendingDir", () => {
+describe("getMemoriesDir / getPendingDir / getTrajectoriesDir", () => {
   test("join under getConfigDir() by default", () => {
     setPlatform("linux");
     process.env.HOME = "/home/test";
     expect(getMemoriesDir()).toBe(join(getConfigDir(), "memories"));
     expect(getPendingDir()).toBe(join(getConfigDir(), "pending"));
+    expect(getTrajectoriesDir()).toBe(join(getConfigDir(), "trajectories"));
   });
 
   test("honour an explicit configDir argument", () => {
     expect(getMemoriesDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "memories"));
     expect(getPendingDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "pending"));
+    expect(getTrajectoriesDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "trajectories"));
   });
 });
