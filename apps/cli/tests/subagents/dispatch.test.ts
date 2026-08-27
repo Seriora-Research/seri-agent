@@ -7,6 +7,7 @@ import { runLoop as realRunLoop } from "../../src/loop/loop";
 import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
 import {
   createDispatchTool,
+  type ChildEventPayload,
   type DispatchResult,
   runSubagent,
   type SubagentRuntime,
@@ -56,16 +57,9 @@ function usageEvent(inputTokens?: number, outputTokens?: number): LoopEvent {
   return { type: "usage", usage };
 }
 
-type ChildEventPayload = {
-  childId: string;
-  role: string;
-  goal: string;
-  event: LoopEvent | { type: "child-started" };
-};
-
 function makeRuntime(
   fake: (opts: RunLoopOpts) => AsyncGenerator<LoopEvent>,
-  overrides: Partial<SubagentRuntime & { system: string; onChildEvent?: (payload: ChildEventPayload) => void }> = {},
+  overrides: Partial<SubagentRuntime & { system: string }> = {},
 ): SubagentRuntime & { system: string } {
   const catalog: ModelCatalog = { fetchedAt: "", entries: [] };
   return {

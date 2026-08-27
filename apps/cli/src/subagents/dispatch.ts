@@ -31,6 +31,13 @@ export type SubagentUsage = {
   totalTokens?: number;
 };
 
+export type ChildEventPayload = {
+  childId: string;
+  role: SubagentRole;
+  goal: string;
+  event: LoopEvent | { type: "child-started" };
+};
+
 export type SubagentTask = { role: SubagentRole; goal: string };
 
 export type SubagentResult = SubagentTask & {
@@ -65,6 +72,8 @@ export type SubagentRuntime = {
   // double or a future caller with no write ledger is still a valid OnBeforeMutation without it.
   checkpointer?: OnBeforeMutation & { onAfterMutation?: OnAfterMutation };
   onChildUsage?: (usage: LanguageModelUsage, cost: CostReport | undefined) => void;
+  // TUI live panel; archivist omits child.
+  onChildEvent?: (payload: ChildEventPayload) => void;
   maxIterations?: number;
 };
 
@@ -106,15 +115,39 @@ function fallbackSummary(
   return lastError ?? "produced no summary";
 }
 
+function shouldForwardChildEvent(event: LoopEvent): boolean {
+  switch (event.type) {
+    case "tool-call":
+    case "tool-result":
+    case "text-delta":
+    case "permission-denied":
+    case "error":
+    case "done":
+      return true;
+    case "usage":
+    case "compacted":
+    case "messages-updated":
+    case "retry":
+    case "tool-allowed":
+      return false;
+    default: {
+      const _exhaustive: never = event;
+      return _exhaustive;
+    }
+  }
+}
+
 // Drives a child runLoop to completion and derives everything from its events — runLoop's own
 // `return`s are bare (loop.ts), so nothing here is a return value. The Phase-2 seam: the archivist
 // calls this directly with its own ToolSet and transcript, never through the tool below.
+
 export async function runSubagent(opts: {
   tools: ToolSet;
   system: string;
   messages: ModelMessage[];
   runtime: SubagentRuntime;
   signal?: AbortSignal;
+  child?: { id: string; role: SubagentRole; goal: string };
 }): Promise<{
   summary: string;
   // True when `summary` is fallbackSummary's own generic filler ("produced no summary", "stopped
@@ -177,6 +210,14 @@ export async function runSubagent(opts: {
     } else if (event.type === "done") {
       doneReason = event.reason;
     }
+    if (opts.child && runtime.onChildEvent && shouldForwardChildEvent(event)) {
+      runtime.onChildEvent({
+        childId: opts.child.id,
+        role: opts.child.role,
+        goal: opts.child.goal,
+        event,
+      });
+    }
   }
 
   const summary = segment.trim();
@@ -237,13 +278,21 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
         runtime.checkpointer(context);
       }
 
-      function runOne(task: SubagentTask) {
+      function runOne(task: SubagentTask, index: number) {
+        const childId = `${options.toolCallId}:${index}`;
+        runtime.onChildEvent?.({
+          childId,
+          role: task.role,
+          goal: task.goal,
+          event: { type: "child-started" },
+        });
         return runSubagent({
           tools: buildRoleToolSet(task.role, runtime.checkpointer?.onAfterMutation),
           system: joinTiers(runtime.system, roleAddendum(task.role)),
           messages: [{ role: "user", content: task.goal }],
           runtime,
           signal: options.abortSignal,
+          child: { id: childId, role: task.role, goal: task.goal },
         });
       }
 
@@ -264,10 +313,10 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
         .filter((i) => roleMutatesFilesystem(runnable[i].role));
       await Promise.all([
         ...readerIdx.map(async (i) => {
-          settled[i] = await runOne(runnable[i]);
+          settled[i] = await runOne(runnable[i], i);
         }),
         (async () => {
-          for (const i of writerIdx) settled[i] = await runOne(runnable[i]);
+          for (const i of writerIdx) settled[i] = await runOne(runnable[i], i);
         })(),
       ]);
 
