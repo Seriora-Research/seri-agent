@@ -540,16 +540,68 @@ describe("tuiReducer: loop-event", () => {
     });
   });
 
-  test("done flushes streamed text, reports the reason, and clears status", () => {
+  test("done flushes streamed text and clears status", () => {
     let state = apply(undefined, { type: "text-delta", text: "the answer" });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
     expect(state.transcript).toEqual([
       { role: "assistant", text: "the answer" },
-      { role: "system", text: "(done: no-tool-call)" },
+      { role: "system", text: "(done)" },
     ]);
     expect(state.streaming).toBe("");
     expect(state.status).toBe("");
+  });
+
+  test("done without turn-started does not invent token totals", () => {
+    const aborted = apply(undefined, { type: "done", reason: "aborted" });
+    expect(aborted.transcript.at(-1)).toEqual({ role: "system", text: "(done: aborted)" });
+  });
+
+  test("done with exact usage keeps token totals and hides no-tool-call", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "turn-started",
+      startedAt: 1,
+      inputEstimate: 0,
+    });
+    state = apply(state, { type: "usage", usage: usageOf(123, 45) });
+    const tokens = state.turn?.tokens;
+    expect(tokens).toBeDefined();
+    state = apply(state, { type: "done", reason: "no-tool-call" });
+
+    const line = state.transcript.at(-1)?.text ?? "";
+    expect(line).toBe(`(done · ${formatTokenProgress(tokens!)})`);
+    expect(line).not.toContain("no-tool-call");
+  });
+
+  test("aborted with exact usage keeps the reason and the same token fragment", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "turn-started",
+      startedAt: 1,
+      inputEstimate: 0,
+    });
+    state = apply(state, { type: "usage", usage: usageOf(123, 45) });
+    const fragment = formatTokenProgress(state.turn!.tokens);
+    state = apply(state, { type: "done", reason: "aborted" });
+
+    const line = state.transcript.at(-1)?.text ?? "";
+    expect(line).toBe(`(done: aborted · ${fragment})`);
+    expect(line).toContain(fragment);
+  });
+
+  test("max-iterations and repeated-denials keep the reason plus totals", () => {
+    for (const reason of ["max-iterations", "repeated-denials"] as const) {
+      let state = tuiReducer(initialTuiState(session()), {
+        type: "turn-started",
+        startedAt: 1,
+        inputEstimate: 0,
+      });
+      state = apply(state, { type: "usage", usage: usageOf(123, 45) });
+      const fragment = formatTokenProgress(state.turn!.tokens);
+      state = apply(state, { type: "done", reason });
+
+      const line = state.transcript.at(-1)?.text ?? "";
+      expect(line).toBe(`(done: ${reason} · ${fragment})`);
+    }
   });
 
   test("messages-updated is a no-op on the transcript", () => {

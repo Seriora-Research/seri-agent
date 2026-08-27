@@ -9,6 +9,7 @@ import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
 import {
   estimateTokens,
+  formatDoneLine,
   type TokenProgress,
   type TranscriptEntry,
   type TranscriptRole,
@@ -714,7 +715,7 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
       return { ...state, session: { ...state.session, messages: event.messages } };
     case "done":
       return {
-        ...pushLine(flushToolActivity(state), `(done: ${event.reason})`),
+        ...pushLine(flushToolActivity(state), formatDoneLine(event.reason, state.turn?.tokens)),
         status: "",
         pendingTool: undefined,
       };

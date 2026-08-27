@@ -291,22 +291,22 @@ export function formatDoneLine(
   reason: Extract<LoopEvent, { type: "done" }>["reason"],
   tokens?: TokenProgress,
 ): string {
-  let line: string;
+  let head: string;
   switch (reason) {
     case "no-tool-call":
-      line = "(done)";
+      head = "done";
       break;
     case "aborted":
     case "max-iterations":
     case "repeated-denials":
-      line = `(done: ${reason})`;
+      head = `done: ${reason}`;
       break;
     default: {
       const _unhandled: never = reason;
       return _unhandled;
     }
   }
-  return tokens === undefined ? line : `${line} · ${formatTokenProgress(tokens)}`;
+  return tokens === undefined ? `(${head})` : `(${head} · ${formatTokenProgress(tokens)})`;
 }
 
 // One row's worth of columns (name, provider, context, cost, route), space-joined — the picker's
