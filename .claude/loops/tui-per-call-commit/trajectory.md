@@ -35,4 +35,5 @@
 ## 2026-08-27T03:20:00Z EXECUTE (live-paint)
 - Path taken: live-paint `renderLiveToolActivity` inside the native scrollbox after `TranscriptList` (full `.map()`, not a virtualizer). Did not mutate `TranscriptEntry`.
 - Open-entry filter is name-agnostic (every TOOL_LABELS group). Negative control: 5 App tests failed at 7ef9731 (no `Read a.txt` / `Read 2 files` / `Ran 2 shell commands` / `Searched TODO` until done).
+- Gates: lint 0, typecheck 0, `bun run --cwd apps/cli test` 0 (1726 pass), `bun test` 0 (2193 pass).
 - skip: War Room VERIFY opens the PR later.

@@ -3,7 +3,7 @@
 - Task: issue #182 — TUI shows aggregated tool-call/result lines in real time as calls settle (Claude Code in-place update). Successor to spec 034 / issue 173 / PR 181.
 - Branch: feat/tui-per-call-commit
 - Status: EXECUTE
-- Started: 2026-08-27T02:58:00Z  |  Updated: 2026-08-27T03:12:00Z
+- Started: 2026-08-27T02:58:00Z  |  Updated: 2026-08-27T03:25:00Z
 
 ## Model config
 | role              | model   |
@@ -30,14 +30,15 @@
 - [x] Reducer: comment-only. Add selector tests for live `toolActivity` before `done`. Do not `pushLine` on result/denied. Keep aggregation pins.
 - [x] Update `docs/design/tui.md`.
 - [x] Keep `toolActivity.test.ts` aggregation tests; add helper tests only if a live-view mapper is extracted.
-- [ ] Run lint, typecheck, full `apps/cli` test; record exit codes.
+- [x] Run lint, typecheck, full `apps/cli` test; record exit codes.
 
 ## Gate results (latest)
 | gate      | command | exit | notes |
 |-----------|---------|------|-------|
-| lint      |         |      |       |
-| typecheck |         |      |       |
-| tests     |         |      |       |
+| lint      | `bun run --cwd apps/cli lint` (`tsc --noEmit`) | 0 | |
+| typecheck | `bun run --cwd apps/cli typecheck` (`tsc --noEmit`) | 0 | |
+| tests     | `bun run --cwd apps/cli test` | 0 | 1726 pass, 20 skip, 0 fail |
+| tests     | `bun test` (repo root) | 0 | 2193 pass, 28 skip, 0 fail |
 
 ## Manual test
 - verdict: SKIPPED
