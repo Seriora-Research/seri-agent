@@ -1685,16 +1685,19 @@ type ChildViewProbe = {
 function panel(state: TuiState): {
   subagents: ChildViewProbe[];
   subagentPanelFocus: boolean;
+  subagentPanelSelectedId: string | undefined;
   pendingChildView: string | undefined;
 } {
   const extra = state as TuiState & {
     subagents?: ChildViewProbe[];
     subagentPanelFocus?: boolean;
+    subagentPanelSelectedId?: string;
     pendingChildView?: string;
   };
   return {
     subagents: extra.subagents ?? [],
     subagentPanelFocus: extra.subagentPanelFocus ?? false,
+    subagentPanelSelectedId: extra.subagentPanelSelectedId,
     pendingChildView: extra.pendingChildView,
   };
 }
@@ -1762,7 +1765,27 @@ describe("tuiReducer: subagent-child-event", () => {
     expect(state.streaming).toBe("");
   });
 
-  test("parent dispatch_subagents tool-result with no overlay clears subagents and focus", () => {
+  test("six child-started rows stay on the roster", () => {
+    let state = initialTuiState(session());
+    for (let i = 0; i < 6; i++) {
+      state = tuiReducer(
+        state,
+        childEvent(`t1:${i}`, "explore", `find ${i}`, { type: "child-started" }),
+      );
+    }
+
+    expect(panel(state).subagents).toHaveLength(6);
+    expect(panel(state).subagents.map((c) => c.id)).toEqual([
+      "t1:0",
+      "t1:1",
+      "t1:2",
+      "t1:3",
+      "t1:4",
+      "t1:5",
+    ]);
+  });
+
+  test("parent dispatch_subagents tool-result with no overlay keeps subagents", () => {
     let state = initialTuiState(session());
     state = tuiReducer(
       state,
@@ -1778,11 +1801,11 @@ describe("tuiReducer: subagent-child-event", () => {
       },
     });
 
-    expect(panel(state).subagents).toEqual([]);
-    expect(panel(state).subagentPanelFocus).toBe(false);
+    expect(panel(state).subagents).toHaveLength(1);
+    expect(panel(state).subagents[0]?.id).toBe("t1:0");
   });
 
-  test("parent dispatch_subagents tool-result with overlay keeps that child and drops the rest", () => {
+  test("parent dispatch_subagents tool-result with a child view keeps every child", () => {
     let state = initialTuiState(session());
     state = tuiReducer(
       state,
@@ -1805,15 +1828,19 @@ describe("tuiReducer: subagent-child-event", () => {
       },
     });
 
-    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0"]);
-    expect(panel(state).subagents.some((c) => c.id === "t1:1")).toBe(false);
+    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0", "t1:1"]);
+    expect(panel(state).pendingChildView).toBe("t1:0");
   });
 
-  test("overlay-close after parent dispatch flush drops the held child", () => {
+  test("overlay-close after parent dispatch flush only clears the child view", () => {
     let state = initialTuiState(session());
     state = tuiReducer(
       state,
       childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:1", "explore", "find b", { type: "child-started" }),
     );
     state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
     state = tuiReducer(state, {
@@ -1821,17 +1848,82 @@ describe("tuiReducer: subagent-child-event", () => {
       event: {
         type: "tool-result",
         name: "dispatch_subagents",
-        result: { results: [{ doneReason: "no-tool-call" }], totalUsage: {} },
+        result: {
+          results: [{ doneReason: "no-tool-call" }, { doneReason: "no-tool-call" }],
+          totalUsage: {},
+        },
       },
     });
-    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0"]);
+    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0", "t1:1"]);
     expect(panel(state).pendingChildView).toBe("t1:0");
 
     state = tuiReducer(state, { type: "subagent-overlay-close" });
 
+    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0", "t1:1"]);
+    expect(panel(state).pendingChildView).toBeUndefined();
+  });
+
+  test("turn-started clears the roster and the child view", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
+    state = tuiReducer(state, { type: "subagent-panel-focus" });
+    state = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
+
     expect(panel(state).subagents).toEqual([]);
     expect(panel(state).pendingChildView).toBeUndefined();
     expect(panel(state).subagentPanelFocus).toBe(false);
+    expect(panel(state).subagentPanelSelectedId).toBeUndefined();
+  });
+
+  test("transcript-cleared clears the roster and the child view", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
+    state = tuiReducer(state, { type: "subagent-panel-focus" });
+    state = tuiReducer(state, { type: "transcript-cleared" });
+
+    expect(panel(state).subagents).toEqual([]);
+    expect(panel(state).pendingChildView).toBeUndefined();
+    expect(panel(state).subagentPanelFocus).toBe(false);
+    expect(panel(state).subagentPanelSelectedId).toBeUndefined();
+  });
+
+  test("subagent-panel-focus with no selected id defaults to main", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(state, { type: "subagent-panel-focus" });
+
+    expect(panel(state).subagentPanelFocus).toBe(true);
+    expect(panel(state).subagentPanelSelectedId).toBe("main");
+  });
+
+  test("overlay-close after selecting main restores the parent view and keeps children", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:1", "explore", "find b", { type: "child-started" }),
+    );
+    state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
+    state = tuiReducer(state, { type: "subagent-panel-select", id: "main" });
+    state = tuiReducer(state, { type: "subagent-overlay-close" });
+
+    expect(panel(state).pendingChildView).toBeUndefined();
+    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0", "t1:1"]);
+    expect(panel(state).subagentPanelSelectedId).toBe("main");
   });
 
   test("two explore children store the raw role, not a numbered label", () => {
