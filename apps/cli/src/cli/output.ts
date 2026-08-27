@@ -13,6 +13,7 @@ import type { LoopEvent } from "../loop/loop";
 import type { ArchivistReport } from "../memory/archivist";
 import type { CostReport } from "../provider/cost";
 import type { DispatchResult } from "../subagents/dispatch";
+import { ARCHIVIST_MARK } from "../tui/theme/theme";
 import { type CheckOutcome, writeFileVerification } from "../verify/outcome";
 
 // stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
@@ -433,25 +434,30 @@ function costFragment(cost: CostReport): string {
 // The archivist's usage/cost are reported on their own line, deliberately never summed into
 // printUsage/printCost's own totals (driveLoop's own comment on why: folding them in would
 // silently change what cli.test.ts's existing "(tokens: …)" assertions mean). Takes no sink
-// callback — cli.ts's two call sites (console.log for the non-interactive path,
-// pushTranscriptLine for the TUI) each just wrap the returned string themselves.
+// callback — the non-interactive path console.logs `archivistLine`; the TUI pushes
+// `archivistStatsLine` as one muted system entry and the summary (when defined) as a second
+// muted markdown entry, rather than wrapping this whole string.
 //
 // `report.summary` — the model's own explanation of what it did or decided, its only deliverable
 // (subagents/dispatch.ts's own description: "each subagent's final assistant message is its only
 // deliverable") — used to be computed and paid for but never shown anywhere. Appended as its own
 // line, rather than folded inline with the stats line, when defined: undoPlanLines' own sink
 // already carries multi-line content (a git diff) as one transcript entry the same way, so this
-// is not a new shape for either render path. `undefined` (ArchivistReport's own comment on why)
+// is not a new shape for the CLI path. `undefined` (ArchivistReport's own comment on why)
 // means the child produced no real closing text of its own — runSubagent's own generic
 // fallbackSummary filler, not the model's own explanation — so nothing is appended for those:
 // showing that filler on every line would be noise, not signal.
-export function archivistLine(report: ArchivistReport): string {
+export function archivistStatsLine(report: ArchivistReport): string {
   const tokenParts: string[] = [];
   if (report.usage.inputTokens !== undefined) tokenParts.push(`${report.usage.inputTokens} in`);
   if (report.usage.outputTokens !== undefined) tokenParts.push(`${report.usage.outputTokens} out`);
   const tokens = tokenParts.length > 0 ? `, tokens: ${tokenParts.join(", ")}` : "";
   const cost = report.cost === undefined ? "" : `, ${costFragment(report.cost)}`;
   const calls = `${report.toolCallsMade} tool call${report.toolCallsMade === 1 ? "" : "s"}`;
-  const stats = `(archivist: ${report.trigger} trigger, ${calls}${tokens}${cost})`;
+  return `${ARCHIVIST_MARK}(archivist: ${report.trigger} trigger, ${calls}${tokens}${cost})`;
+}
+
+export function archivistLine(report: ArchivistReport): string {
+  const stats = archivistStatsLine(report);
   return report.summary === undefined ? stats : `${stats}\n  ${report.summary}`;
 }

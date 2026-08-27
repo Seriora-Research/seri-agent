@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { archivistLine, printCost, toolResultLine, USAGE } from "../../src/cli/output";
+import {
+  archivistLine,
+  archivistStatsLine,
+  printCost,
+  toolResultLine,
+  USAGE,
+} from "../../src/cli/output";
 import type { ArchivistReport } from "../../src/memory/archivist";
+import { ARCHIVIST_MARK } from "../../src/tui/theme/theme";
 
 function captureLog(fn: () => void): string[] {
   const lines: string[] = [];
@@ -83,6 +90,8 @@ describe("archivistLine", () => {
     const line = archivistLine(archivistReport({ summary: "recorded that this repo uses pnpm" }));
     expect(line).toContain("recorded that this repo uses pnpm");
     expect(line).toContain("archivist: tool-count trigger");
+    expect(line).toContain("\n  ");
+    expect(line.startsWith(ARCHIVIST_MARK)).toBe(true);
   });
 
   // Coordinator refinement, same round: runSubagent's own generic fallbackSummary filler
@@ -93,8 +102,16 @@ describe("archivistLine", () => {
   // to say.
   test("appends nothing when summary is undefined (the child produced only fallback filler)", () => {
     const line = archivistLine(archivistReport({ summary: undefined }));
-    expect(line).toBe("(archivist: tool-count trigger, 1 tool call, tokens: 100 in, 20 out)");
+    expect(line).toBe(
+      `${ARCHIVIST_MARK}(archivist: tool-count trigger, 1 tool call, tokens: 100 in, 20 out)`,
+    );
     expect(line).not.toContain("\n");
+  });
+
+  test("archivistStatsLine equals the undefined-summary archivistLine (mark + stats, no newline)", () => {
+    const report = archivistReport({ summary: undefined });
+    expect(archivistStatsLine(report)).toBe(archivistLine(report));
+    expect(archivistStatsLine(report)).not.toContain("\n");
   });
 });
 
