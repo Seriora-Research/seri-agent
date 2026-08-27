@@ -180,14 +180,15 @@ export type TuiState = {
   route: ResolvedRoute | undefined;
   // See `"config-updated"`'s own comment, below, for what this is and why.
   config: Record<string, string>;
-  // In-memory live rows for the current dispatch. Cleared on the parent dispatch tool-result
-  // unless an overlay is holding one child. Not session JSON.
+  // In-memory live rows for the current turn. Survives the parent dispatch tool-result
+  // and parent done so the roster stays inspectable. Cleared on transcript-cleared
+  // (`/clear`) and turn-started (the next user submit). Not session JSON.
   subagents: ChildView[];
   subagentPanelFocus: boolean;
+  // Marker only: `"main"` or a child id. `pendingChildView` is whose transcript fills
+  // the scrollbox (`undefined` = parent). Arrows never change `pendingChildView`.
   subagentPanelSelectedId: string | undefined;
   pendingChildView: string | undefined;
-  // Parent dispatch already flushed. Remaining subagents exist only to feed the open overlay.
-  subagentsHeldForOverlay: boolean;
 };
 
 export type ChildView = {
@@ -221,6 +222,18 @@ const EMPTY_TRANSCRIPT: Readonly<Pick<TuiState, "transcript" | "streaming" | "to
     toolActivity: Object.freeze([] as ToolActivityEntry[]) as ToolActivityEntry[],
   });
 
+const EMPTY_ROSTER: Readonly<
+  Pick<
+    TuiState,
+    "subagents" | "subagentPanelFocus" | "subagentPanelSelectedId" | "pendingChildView"
+  >
+> = Object.freeze({
+  subagents: Object.freeze([] as ChildView[]) as ChildView[],
+  subagentPanelFocus: false,
+  subagentPanelSelectedId: undefined,
+  pendingChildView: undefined,
+});
+
 export function initialTuiState(
   session: SessionState<ModelMessage>,
   opts?: { showSplash?: boolean; route?: ResolvedRoute; config?: Record<string, string> },
@@ -244,11 +257,7 @@ export function initialTuiState(
     pendingPermissions: undefined,
     pendingEffort: undefined,
     pendingSplash: opts?.showSplash ?? false,
-    subagents: [],
-    subagentPanelFocus: false,
-    subagentPanelSelectedId: undefined,
-    pendingChildView: undefined,
-    subagentsHeldForOverlay: false,
+    ...EMPTY_ROSTER,
   };
 }
 
@@ -388,8 +397,6 @@ export type TuiAction =
 // exists at all. Lives here, not cli.ts, since it is built from TuiAction, declared right above.
 export type Dispatch = (action: TuiAction) => void;
 
-const MAX_LIVE_SUBAGENTS = 3;
-
 function emptyChild(id: string, role: ChildEventPayload["role"], goal: string): ChildView {
   return {
     id,
@@ -466,7 +473,6 @@ function applyChildEvent(
 ): TuiState {
   if (action.event.type === "child-started") {
     if (state.subagents.some((child) => child.id === action.childId)) return state;
-    if (state.subagents.length >= MAX_LIVE_SUBAGENTS) return state;
     return {
       ...state,
       subagents: [...state.subagents, emptyChild(action.childId, action.role, action.goal)],
@@ -503,6 +509,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return {
         ...state,
         ...EMPTY_TRANSCRIPT,
+        ...EMPTY_ROSTER,
       };
     case "loop-event":
       return applyLoopEvent(state, action.event);
@@ -625,6 +632,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "turn-started":
       return {
         ...state,
+        ...EMPTY_ROSTER,
         turn: {
           startedAt: action.startedAt,
           tokens: {
@@ -649,7 +657,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return {
         ...state,
         subagentPanelFocus: true,
-        subagentPanelSelectedId: state.subagentPanelSelectedId ?? state.subagents[0]?.id,
+        subagentPanelSelectedId: state.subagentPanelSelectedId ?? "main",
       };
     case "subagent-panel-blur":
       return { ...state, subagentPanelFocus: false };
@@ -658,16 +666,6 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "subagent-overlay-open":
       return { ...state, pendingChildView: action.id, subagentPanelFocus: false };
     case "subagent-overlay-close":
-      if (state.subagentsHeldForOverlay) {
-        return {
-          ...state,
-          pendingChildView: undefined,
-          subagents: [],
-          subagentPanelFocus: false,
-          subagentPanelSelectedId: undefined,
-          subagentsHeldForOverlay: false,
-        };
-      }
       return { ...state, pendingChildView: undefined };
     default: {
       const _exhaustive: never = action;
@@ -810,8 +808,8 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         pendingTool: { name: event.name, args: event.args },
         toolActivity: recordCall(state.toolActivity, event.name, event.args),
       };
-    case "tool-result": {
-      const settled: TuiState = {
+    case "tool-result":
+      return {
         ...state,
         toolActivity: recordResult(
           state.toolActivity,
@@ -822,23 +820,6 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         status: "",
         pendingTool: undefined,
       };
-      if (event.name !== "dispatch_subagents") return settled;
-      if (settled.pendingChildView !== undefined) {
-        return {
-          ...settled,
-          subagents: settled.subagents.filter((child) => child.id === settled.pendingChildView),
-          subagentPanelFocus: false,
-          subagentsHeldForOverlay: true,
-        };
-      }
-      return {
-        ...settled,
-        subagents: [],
-        subagentPanelFocus: false,
-        subagentPanelSelectedId: undefined,
-        subagentsHeldForOverlay: false,
-      };
-    }
     case "permission-denied":
       return {
         ...state,
