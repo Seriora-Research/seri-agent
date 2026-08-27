@@ -10,6 +10,7 @@ import type { PermissionMode } from "../../src/gate/gate";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { App, type AppProps } from "../../src/tui/app";
+import { childWindowOffset } from "../../src/tui/components/SubagentPanel";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";
 import type { Dispatch } from "../../src/tui/state/reducer";
 import { ARCHIVIST_MARK, theme } from "../../src/tui/theme/theme";
@@ -4129,6 +4130,16 @@ describe("App", () => {
   });
 
   describe("subagent panel", () => {
+    test("childWindowOffset keeps the first three children until the marker would leave the window", () => {
+      const ids = ["a", "b", "c", "d", "e", "f"];
+      expect(childWindowOffset("main", ids)).toBe(0);
+      expect(childWindowOffset(undefined, ids)).toBe(0);
+      expect(childWindowOffset("a", ids)).toBe(0);
+      expect(childWindowOffset("c", ids)).toBe(0);
+      expect(childWindowOffset("d", ids)).toBe(1);
+      expect(childWindowOffset("f", ids)).toBe(3);
+    });
+
     function childEvent(
       childId: string,
       role: ChildEventPayload["role"],
