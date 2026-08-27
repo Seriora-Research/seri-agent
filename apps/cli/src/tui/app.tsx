@@ -58,6 +58,7 @@ import { appliedReasoningEffort, resolveReasoningEffort } from "../provider/reas
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 import { ApprovalBox } from "./components/ApprovalBox";
+import { ChildTranscript } from "./components/ChildTranscript";
 import { InputBox } from "./components/InputBox";
 import { ModelPicker } from "./components/ModelPicker";
 import { SubagentPanel } from "./components/SubagentPanel";
@@ -284,6 +285,7 @@ export function App({
   const indicatorText = MODE_LABEL[displayMode];
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
+  const childTranscriptRef = useRef<ScrollBoxRenderable>(null);
   // The scrollbox's own measured height (this file's own header comment explains why it needs a
   // definite number, not `flexGrow`) — `null` only for the frames before OpenTUI's own layout pass
   // has fired `onSizeChange` at least once on the wrapping box below; `FALLBACK_CHROME_ROWS` is a
@@ -374,6 +376,7 @@ export function App({
     state.pendingConfig === undefined &&
     state.pendingPermissions === undefined &&
     state.pendingEffort === undefined &&
+    state.pendingChildView === undefined &&
     !state.pendingSplash;
 
   // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
@@ -439,6 +442,17 @@ export function App({
   // (`viewportRows - reserved - 1`), which no longer has a `viewportRows`/`reserved` pair to compute
   // it from now that scroll position lives on the scrollbox itself.
   useKeyboard((key) => {
+    // Overlay first, above the noPanelOpen gate: while a child transcript is open those keys
+    // must move that scrollbox, not the parent transcript sitting behind it.
+    if (state.pendingChildView !== undefined) {
+      const childEl = childTranscriptRef.current;
+      if (!childEl) return;
+      if (key.name === "pageup") childEl.scrollBy(-1, "viewport");
+      else if (key.name === "pagedown") childEl.scrollBy(1, "viewport");
+      else if (key.name === "home") childEl.scrollBy(-1, "content");
+      else if (key.name === "end") childEl.scrollBy(1, "content");
+      return;
+    }
     if (!noPanelOpen) return;
     const el = transcriptRef.current;
     if (!el) return;
@@ -563,10 +577,11 @@ export function App({
       {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
       is waiting on, and answering it (not typing a task or slash command) is the only input that
       means anything until it clears. Extended to a third state for /model, a fourth for /setup,
-      four more for /login /signup, /config, /permissions and /effort: each is the same kind of
-      "only this input means anything right now" question, checked in this same order (approval,
-      /model, /setup, /login /signup, /config, /permissions, /effort, then InputBox). Every branch
-      here — including AuthPanel/ConfigPanel/PermissionsPanel/EffortPanel — is a real, wired OpenTUI
+      four more for /login /signup, /config, /permissions and /effort, plus a read-only child
+      transcript overlay: each is the same kind of "only this input means anything right now"
+      question, checked in this same order (approval, /model, /setup, /login /signup, /config,
+      /permissions, /effort, overlay, then InputBox). Every branch here — including
+      AuthPanel/ConfigPanel/PermissionsPanel/EffortPanel — is a real, wired OpenTUI
       component; state/handlers.ts and cli.ts dispatch auth-requested/config-requested/
       permissions-requested/effort-requested. */}
       {state.pendingApproval !== undefined ? (
@@ -621,12 +636,24 @@ export function App({
           onSignup={onSplashSignup}
           onContinue={onSplashContinue}
         />
+      ) : state.pendingChildView !== undefined ? (
+        <ChildTranscript
+          child={state.subagents.find((row) => row.id === state.pendingChildView)}
+          dispatch={dispatch}
+          scrollRef={childTranscriptRef}
+        />
       ) : (
         <InputBox
           onSubmit={onSubmit}
           onQuit={onQuit}
           prefill={state.pendingInputPrefill}
           onPrefillConsumed={() => dispatch({ type: "input-prefill-consumed" })}
+          onEmptyDown={
+            state.subagents.length > 0
+              ? () => dispatch({ type: "subagent-panel-focus" })
+              : undefined
+          }
+          inert={state.subagentPanelFocus}
         />
       )}
       {state.subagents.length > 0 && (

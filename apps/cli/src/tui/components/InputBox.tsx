@@ -25,6 +25,8 @@ export function InputBox({
   onQuit,
   prefill,
   onPrefillConsumed,
+  onEmptyDown,
+  inert,
 }: {
   onSubmit?: (value: string) => void;
   onQuit?: () => void;
@@ -33,6 +35,11 @@ export function InputBox({
   // re-applied on a later mount because `onPrefillConsumed` clears it in the same tick.
   prefill?: string;
   onPrefillConsumed?: () => void;
+  // Down on an empty value only — App uses this to move focus onto live subagent rows. A
+  // non-empty value keeps Down inert so it cannot insert a CSI sequence or steal a half-typed line.
+  onEmptyDown?: () => void;
+  // When true, this handler no-ops so the focused subagent rows own every key until Esc blurs.
+  inert?: boolean;
 }) {
   const [value, setValue] = useState(prefill ?? "");
   // The current input value at all times, kept in sync synchronously on every keystroke.
@@ -76,6 +83,11 @@ export function InputBox({
   }
 
   useKeyboard((key) => {
+    if (inert) return;
+    if (key.name === "down" && pendingValueRef.current === "") {
+      onEmptyDown?.();
+      return;
+    }
     if (isEnter(key)) {
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current);
@@ -121,6 +133,7 @@ export function InputBox({
   // there; everything after becomes the new input value, awaiting its own Enter rather than being
   // silently swallowed or further auto-split.
   usePaste((event) => {
+    if (inert) return;
     const text = decodePasteBytes(event.bytes);
     const split = splitAtTerminator(text);
     if (split === null) {

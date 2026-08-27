@@ -4259,6 +4259,10 @@ describe("App", () => {
       expect(panelBand(setup.captureCharFrame()).band).toContain("> ");
 
       setup.mockInput.pressEscape();
+      // A bare Escape byte is ambiguous with the start of a longer ANSI sequence (an arrow key,
+      // say), so OpenTUI's own parser holds it for a short disambiguation window before treating it
+      // as a standalone Escape keypress — longer than the plain macrotask tick `flush()` waits.
+      await new Promise((resolve) => setTimeout(resolve, 30));
       await flush(setup);
       const afterBlur = setup.captureCharFrame();
       expect(panelBand(afterBlur).band).not.toContain("> ");
@@ -4293,6 +4297,7 @@ describe("App", () => {
       expect(overlay).toContain("explore");
 
       setup.mockInput.pressEscape();
+      await new Promise((resolve) => setTimeout(resolve, 30));
       await flush(setup);
       const afterEsc = setup.captureCharFrame();
       expect(afterEsc).toContain("─");
