@@ -1276,6 +1276,191 @@ describe("App", () => {
     expect(span?.fg.equals(parseColor(theme.muted))).toBe(true);
   });
 
+  function countNeedle(frame: string, needle: string): number {
+    return frame.split(needle).length - 1;
+  }
+
+  function bashOk() {
+    return {
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      timedOut: false,
+    };
+  }
+
+  describe("live aggregated tool activity", () => {
+    test("after a read_file result and before done, the frame shows the compact settled line", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-result", name: "read_file", result: "ok" },
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Read a.txt");
+      expect(frame).not.toContain("Running read_file…");
+      expect(frame).not.toContain("(done:");
+      const spans = setup.captureSpans();
+      const line = spans.lines.find((l) => l.spans.some((s) => s.text.includes("Read a.txt")));
+      const span = line?.spans.find((s) => s.text.includes("Read a.txt"));
+      expect(span, "no span found containing Read a.txt").toBeDefined();
+      expect(span?.fg.equals(parseColor(theme.muted))).toBe(true);
+    });
+
+    test("two sequential same-name read_file results before done show one Read 2 files", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-result", name: "read_file", result: "ok" },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "read_file", args: { path: "b.txt" } },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-result", name: "read_file", result: "ok" },
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(countNeedle(frame, "Read 2 files")).toBe(1);
+      expect(frame).not.toContain("Read a.txt");
+      expect(frame).not.toContain("Read b.txt");
+      expect(frame).not.toContain("(done:");
+    });
+
+    // Lionel: in-place aggregation is every TOOL_LABELS name, not a Read special-case.
+    test("two sequential same-name bash results before done show one Ran 2 shell commands", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "bash", args: { command: "echo a" } },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-result", name: "bash", result: bashOk() },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "bash", args: { command: "echo b" } },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-result", name: "bash", result: bashOk() },
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(countNeedle(frame, "Ran 2 shell commands")).toBe(1);
+      expect(frame).not.toContain("Ran echo a");
+      expect(frame).not.toContain("Ran echo b");
+      expect(frame).not.toContain("(done:");
+    });
+
+    test("grep then read_file before done shows two live groups", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "grep", args: { pattern: "TODO" } },
+      });
+      dispatch({
+        type: "loop-event",
+        event: {
+          type: "tool-result",
+          name: "grep",
+          result: { mode: "files_with_matches", files: ["a.ts"], truncated: false },
+        },
+      });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("Searched TODO");
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-result", name: "read_file", result: "ok" },
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Searched TODO");
+      expect(frame).toContain("Read a.txt");
+      expect(frame).not.toContain("(done:");
+    });
+
+    test("after done, Read 2 files appears once from the flushed transcript", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-result", name: "read_file", result: "ok" },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "read_file", args: { path: "b.txt" } },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-result", name: "read_file", result: "ok" },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "done", reason: "no-tool-call" },
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(countNeedle(frame, "Read 2 files")).toBe(1);
+      expect(frame).toContain("(done:");
+    });
+
+    test("a mid-turn error does not flush; live paint still shows the settled group", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-result", name: "read_file", result: "ok" },
+      });
+      dispatch({
+        type: "loop-event",
+        event: { type: "error", error: "compaction failed" },
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Read a.txt");
+      expect(frame).toContain("compaction failed");
+      expect(frame).not.toContain("(done:");
+    });
+  });
+
   // Ctrl-D calls the onQuit prop directly — app.tsx wires it through to InputBox unconditionally,
   // so this is the same trigger runTui's own quit() attaches to.
   test("Ctrl-D calls onQuit", async () => {
