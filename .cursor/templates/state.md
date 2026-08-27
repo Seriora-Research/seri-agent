@@ -16,7 +16,6 @@
 | implementer      | inherit |
 | reviewer-verifier | inherit |
 | test-runner      | inherit |
-| retro            | inherit |
 
 ## Goal Audit
 - triggers_fired: <[T1,T2,...] | none>
@@ -37,10 +36,6 @@
 
 ## Reviewer verdict
 <APPROVE | REQUEST-CHANGES + reasons>
-
-## Retro
-- status: <NOT_RUN | NO_LESSON | PROPOSED>
-- proposal: <path under .cursor/lessons/proposed/, or "n/a">
 
 ## Open questions / blockers
 -

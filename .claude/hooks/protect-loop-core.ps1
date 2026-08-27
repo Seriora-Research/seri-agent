@@ -27,7 +27,7 @@ if (-not $active) { exit 0 }
 
 $norm = $file -replace '\\', '/'
 if ($norm -match '\.claude/hooks/|\.claude/settings\.json$|\.claude/agents/|\.claude/skills/|\.claude/templates/') {
-  Write-Error "BLOCKED: $file defines loop enforcement/behavior and cannot be edited while a loop is active ($active). Propose changes via the retro subagent into .claude/lessons/proposed/, or edit it outside any active loop."
+  Write-Error "BLOCKED: $file defines loop enforcement/behavior and cannot be edited while a loop is active ($active). Edit it outside any active loop."
   exit 2
 }
 

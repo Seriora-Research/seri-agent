@@ -12,6 +12,5 @@
   "planner": "inherit",
   "implementer": "inherit",
   "reviewer-verifier": "inherit",
-  "test-runner": "inherit",
-  "retro": "inherit"
+  "test-runner": "inherit"
 }

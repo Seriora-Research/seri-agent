@@ -158,10 +158,10 @@ reviewer-verifier caught it.
 
 ## STATE.md is updated at every phase boundary, and the gate table is filled before VERIFY dispatches
 Treating `STATE.md` as a PLAN-phase artifact and abandoning it at EXECUTE defeats the reason the
-reviewer and retro run in separate contexts. Verified live (`stage-4-checkpoints`, 2026-08-04):
+reviewer-verifier runs in a separate context. Verified live (`stage-4-checkpoints`, 2026-08-04):
 the file was frozen at `Status: EXECUTE` with an empty Gate results table and
 `Reviewer verdict: <pending VERIFY>` while the whole of EXECUTE and VERIFY happened — so the
-retro could not verify a single VERIFY-phase claim from the repository and had only the
+reviewer could not verify a single VERIFY-phase claim from the repository and had only the
 orchestrator's prose about its own performance, which is the one thing that role exists not to
 take on trust.
 

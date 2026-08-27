@@ -67,11 +67,10 @@ that JSON are double-backslash-escaped (`\\`) — collapse with
 had the identical defect (`$CLAUDE_SUBAGENT_NAME`, `$CLAUDE_SUBAGENT_STATUS`,
 neither of which exists, and it never read stdin) and was simply not on the list
 above, which is why 671 of its 674 rows said `unknown-agent`/`unknown`. It is
-fixed now; the real fields are `agent_type` and `agent_id`. Per
-`.claude/rules/retro.md`'s dedupe rule the recurrence is the finding, not a
-duplicate bullet: **when adding a lesson that names specific files, the list is
-the weak part** — the next hook written won't be on it. Assume any hook not
-explicitly verified has this bug.
+fixed now; the real fields are `agent_type` and `agent_id`. The recurrence is
+the finding, not a duplicate bullet: **when adding a lesson that names specific
+files, the list is the weak part** — the next hook written won't be on it.
+Assume any hook not explicitly verified has this bug.
 
 **The 2026-08-06 fix's scope was narrower than it read — corrected 2026-08-13.**
 That fix repaired stdin-parsing for named top-level `Agent` tool dispatches only.
@@ -82,10 +81,8 @@ sub-steps it issues itself) fires its own `SubagentStop` event with `agent_type`
 genuinely absent from the payload, not mis-parsed — the earlier fix had no way to
 repair a field that isn't there. `log-trajectory.sh`/`.ps1` now skip appending an
 entry entirely when `agent_type` is empty, instead of writing a
-timestamp-and-opaque-id row with no other information. Confirmed against
-`.claude/agents/retro.md`'s trigger table that no retro trigger keyed on these
-rows (its evidence sources are gate tables, `DECISION:` lines, and quoted
-corrections), so nothing that was actually read is lost by dropping them.
+timestamp-and-opaque-id row with no other information. Empty `agent_type` rows
+carry no named-dispatch audit, so dropping them loses nothing that was read.
 
 **Still unfixed as of 2026-08-06:** `block-dangerous.sh` and `block-env-read.sh`
 continue to read env vars and never read stdin, so their guard logic still never runs
@@ -175,12 +172,22 @@ can silently skip.
 
 ## protect-loop-core scope
 protect-loop-core is a PreToolUse hook matched on `Write|Edit`. It only fires
-while a loop is live (a `.claude/loops/<slug>/STATE.md` whose `Status` is
-neither `DONE` nor `BLOCKED` — see `.claude/rules/retro.md`), and only blocks
-writes whose path contains `.claude/hooks/`, `.claude/settings.json`,
-`.claude/agents/`, `.claude/skills/`, or `.claude/templates/`. Everything else
-— `CLAUDE.md`, `.claude/rules/*.md`, `.claude/lessons/**`, loop artifacts, and
-ordinary project source — passes through untouched, including during EXECUTE.
-See `.claude/rules/retro.md` for why this exists: it is the hard-gate half of the
-self-improvement design, so a RETRO proposal (or any other in-loop edit) can
-never rewrite the enforcement layer that is supposed to be grading it.
+while a loop is live, and only blocks writes whose path contains
+`.claude/hooks/`, `.claude/settings.json`, `.claude/agents/`, `.claude/skills/`,
+or `.claude/templates/`. Everything else — `CLAUDE.md`, `.claude/rules/*.md`,
+`.claude/lessons/**`, loop artifacts, and ordinary project source — passes
+through untouched, including during EXECUTE.
+
+These files define how the loop grades and gates itself, so they must not be
+self-modifiable mid-run. To change them, do it in a session with no live loop.
+
+**What "live" means (corrected 2026-08-06):** a `STATE.md` directly inside
+`.claude/loops/<slug>/` whose `Status` is neither `DONE` nor `BLOCKED`.
+Archived runs under `.claude/loops/_archive/<slug>/` are excluded by depth, and
+a finished-but-unarchived run is excluded by its Status. Unreadable `Status`
+counts as live: this gate fails closed.
+
+**What it actually intercepts (corrected 2026-08-06):** the `Write` and `Edit`
+tools, which is what its `PreToolUse` matcher is wired to. It does **not**
+intercept the `Bash` tool. Treat the freeze as a guardrail against casual
+in-loop edits, not as a sandbox. Do not route around it via Bash.

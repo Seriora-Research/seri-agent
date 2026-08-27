@@ -49,7 +49,7 @@ NORM=$(printf '%s' "$FILE" | sed -e 's/\\\\/\//g' -e 's/\\/\//g')
 
 case "$NORM" in
   *.cursor/hooks/*|*.cursor/hooks.json|*.cursor/agents/*|*.cursor/skills/*|*.cursor/templates/*)
-    echo "BLOCKED: $FILE defines loop enforcement/behavior and cannot be edited while a loop is active ($ACTIVE). Propose changes via the retro subagent into .cursor/lessons/proposed/, or edit it outside any active loop." >&2
+    echo "BLOCKED: $FILE defines loop enforcement/behavior and cannot be edited while a loop is active ($ACTIVE). Edit it outside any active loop." >&2
     exit 2
     ;;
 esac
