@@ -38,7 +38,8 @@ export function InputBox({
   // Down on an empty value only — App uses this to move focus onto live subagent rows. A
   // non-empty value keeps Down inert so it cannot insert a CSI sequence or steal a half-typed line.
   onEmptyDown?: () => void;
-  // When true, this handler no-ops so the focused subagent rows own every key until Esc blurs.
+  // When true, printable keys, paste, Enter, and Ctrl-D no-op. Empty Down still calls
+  // onEmptyDown so a child view can focus the roster.
   inert?: boolean;
 }) {
   const [value, setValue] = useState(prefill ?? "");
@@ -83,7 +84,12 @@ export function InputBox({
   }
 
   useKeyboard((key) => {
-    if (inert) return;
+    if (inert) {
+      if (key.name === "down" && pendingValueRef.current === "") {
+        onEmptyDown?.();
+      }
+      return;
+    }
     if (key.name === "down" && pendingValueRef.current === "") {
       onEmptyDown?.();
       return;

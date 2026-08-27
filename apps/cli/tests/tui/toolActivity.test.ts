@@ -383,7 +383,7 @@ describe("recordCall / recordResult / recordDenial", () => {
     const result = dispatchResult(1, 1);
     let entries = recordResult([], "dispatch_subagents", {}, result);
     entries = recordResult(entries, "dispatch_subagents", {}, result);
-    expect(entries).toHaveLength(2);
+    expect(entries).toEqual([]);
   });
 
   test("recordDenial appends an anomaly line", () => {

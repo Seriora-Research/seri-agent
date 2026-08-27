@@ -10,6 +10,7 @@ import type { PermissionMode } from "../../src/gate/gate";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { App, type AppProps } from "../../src/tui/app";
+import { childWindowOffset } from "../../src/tui/components/SubagentPanel";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";
 import type { Dispatch } from "../../src/tui/state/reducer";
 import { ARCHIVIST_MARK, theme } from "../../src/tui/theme/theme";
@@ -4129,6 +4130,16 @@ describe("App", () => {
   });
 
   describe("subagent panel", () => {
+    test("childWindowOffset keeps the first three children until the marker would leave the window", () => {
+      const ids = ["a", "b", "c", "d", "e", "f"];
+      expect(childWindowOffset("main", ids)).toBe(0);
+      expect(childWindowOffset(undefined, ids)).toBe(0);
+      expect(childWindowOffset("a", ids)).toBe(0);
+      expect(childWindowOffset("c", ids)).toBe(0);
+      expect(childWindowOffset("d", ids)).toBe(1);
+      expect(childWindowOffset("f", ids)).toBe(3);
+    });
+
     function childEvent(
       childId: string,
       role: ChildEventPayload["role"],
@@ -4192,9 +4203,10 @@ describe("App", () => {
       expect(band).not.toContain("explore");
     });
 
-    test("parent dispatch tool-result hides the panel and leaves the UX settled line", async () => {
+    test("parent dispatch tool-result keeps the panel and skips the dispatch settled line", async () => {
       const { setup, dispatch } = await connect();
 
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
       startExplore(dispatch, "t1:0", "find a");
       startExplore(dispatch, "t1:1", "find b");
       await flush(setup);
@@ -4214,23 +4226,33 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(panelBand(frame).band).not.toContain("explore");
-      expect(frame).toContain("✓ Dispatched subagents done");
+      expect(panelBand(frame).band).toContain("explore");
+      expect(frame).toContain("done ·");
+      expect(frame).not.toContain("✓ Dispatched subagents done");
       expect(frame).not.toContain("read_file");
     });
 
-    test("at most three live rows render", async () => {
+    test("six live children paint main, at most three child rows, and +n", async () => {
       const { setup, dispatch } = await connect();
-      startExplore(dispatch, "t1:0", "a");
-      startExplore(dispatch, "t1:1", "b");
-      startExplore(dispatch, "t1:2", "c");
+      for (let i = 0; i < 6; i++) {
+        startExplore(dispatch, `t1:${i}`, `find ${i}`, `f${i}.ts`);
+      }
       await flush(setup);
 
-      const exploreRows = panelBand(setup.captureCharFrame())
-        .band.split("\n")
-        .filter((line) => line.includes("explore"));
+      const bandLines = panelBand(setup.captureCharFrame()).band.split("\n");
+      const exploreRows = bandLines.filter((line) => line.includes("explore"));
       expect(exploreRows.length).toBeGreaterThan(0);
       expect(exploreRows.length).toBeLessThanOrEqual(3);
+      expect(panelBand(setup.captureCharFrame()).band).toContain("main");
+      expect(panelBand(setup.captureCharFrame()).band).toMatch(/\+\d/);
+
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      for (let i = 0; i < 6; i++) {
+        setup.mockInput.pressArrow("down");
+        await flush(setup);
+      }
+      expect(panelBand(setup.captureCharFrame()).band).toContain("f5.ts");
     });
 
     test("an archivist note still renders and does not open the panel", async () => {
@@ -4281,20 +4303,23 @@ describe("App", () => {
       expect(panelBand(setup.captureCharFrame()).band).not.toContain("> ");
     });
 
-    test("Enter opens the child overlay and Esc returns to InputBox", async () => {
+    test("Enter swaps the scrollbox and Esc blurs without unmounting the roster", async () => {
       const { setup, dispatch } = await connect();
-      startExplore(dispatch, "t1:0", "find a");
+      startExplore(dispatch, "t1:0", "find UNIQUE_GOAL");
       await flush(setup);
 
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
       setup.mockInput.pressArrow("down");
       await flush(setup);
       setup.mockInput.pressEnter();
       await flush(setup);
 
-      const overlay = setup.captureCharFrame();
-      expect(overlay).not.toContain("─");
-      expect(overlay).toContain("Read");
-      expect(overlay).toContain("explore");
+      const viewing = setup.captureCharFrame();
+      expect(viewing).toContain("─");
+      expect(viewing).toContain("Read");
+      expect(viewing).toContain("explore");
+      expect(viewing).toContain("UNIQUE_GOAL");
 
       setup.mockInput.pressEscape();
       await new Promise((resolve) => setTimeout(resolve, 30));
@@ -4302,14 +4327,17 @@ describe("App", () => {
       const afterEsc = setup.captureCharFrame();
       expect(afterEsc).toContain("─");
       expect(panelBand(afterEsc).band).toContain("explore");
+      expect(afterEsc).toContain("UNIQUE_GOAL");
     });
 
-    test("Esc after overlay-kept parent flush hides the panel and cannot reopen it", async () => {
+    test("after parent flush with a child view open the roster stays and can still open a child", async () => {
       const { setup, dispatch } = await connect();
-      startExplore(dispatch, "t1:0", "find a");
-      startExplore(dispatch, "t1:1", "find b");
+      startExplore(dispatch, "t1:0", "find a", "a.ts");
+      startExplore(dispatch, "t1:1", "find b", "b.ts");
       await flush(setup);
 
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
       setup.mockInput.pressArrow("down");
       await flush(setup);
       setup.mockInput.pressEnter();
@@ -4329,9 +4357,10 @@ describe("App", () => {
       dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
       await flush(setup);
 
-      const overlay = setup.captureCharFrame();
-      expect(overlay).toContain("Read");
-      expect(overlay).toContain("✓ Dispatched subagents done");
+      const viewing = setup.captureCharFrame();
+      expect(viewing).toContain("Read");
+      expect(viewing).not.toContain("✓ Dispatched subagents done");
+      expect(panelBand(viewing).band).toContain("explore");
 
       setup.mockInput.pressEscape();
       await new Promise((resolve) => setTimeout(resolve, 30));
@@ -4339,7 +4368,7 @@ describe("App", () => {
 
       const afterEsc = setup.captureCharFrame();
       expect(afterEsc).toContain("─");
-      expect(panelBand(afterEsc).band).not.toContain("explore");
+      expect(panelBand(afterEsc).band).toContain("explore");
 
       setup.mockInput.pressArrow("down");
       await flush(setup);
@@ -4347,7 +4376,109 @@ describe("App", () => {
       await flush(setup);
       const afterReopen = setup.captureCharFrame();
       expect(afterReopen).toContain("─");
-      expect(panelBand(afterReopen).band).not.toContain("explore");
+      expect(panelBand(afterReopen).band).toContain("explore");
+    });
+
+    test("the second child is still in the frame while a child is viewed", async () => {
+      const { setup, dispatch } = await connect();
+      startExplore(dispatch, "t1:0", "find a", "alpha.ts");
+      startExplore(dispatch, "t1:1", "find b", "beta.ts");
+      await flush(setup);
+
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("─");
+      expect(frame).toContain("Read");
+      expect(frame).toContain("alpha.ts");
+      expect(panelBand(frame).band).toContain("explore");
+      expect(frame).toContain("beta.ts");
+    });
+
+    test("a live row does not paint the prompt and a long header stays one row", async () => {
+      const { setup, dispatch } = await connect();
+      const longGoal = `Your job: ${"do the thing. ".repeat(20)}`;
+      expect(longGoal.length).toBeGreaterThan(200);
+      startExplore(dispatch, "t1:0", longGoal);
+      await flush(setup);
+
+      expect(panelBand(setup.captureCharFrame()).band).not.toContain("Your job");
+
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      const headerLines = frame.split("\n").filter((line) => line.includes("Your job"));
+      expect(headerLines.length).toBeLessThanOrEqual(1);
+    });
+
+    test("two explores are both named explore with no ordinals", async () => {
+      const { setup, dispatch } = await connect();
+      startExplore(dispatch, "t1:0", "find a");
+      startExplore(dispatch, "t1:1", "find b");
+      await flush(setup);
+
+      const { band } = panelBand(setup.captureCharFrame());
+      expect(band.split("explore").length - 1).toBe(2);
+      expect(band).not.toContain("· 1");
+      expect(band).not.toContain("· 2");
+    });
+
+    test("main is in the band, Up selects it, and Enter on main restores the parent scrollbox", async () => {
+      const { setup, dispatch } = await connect();
+      startExplore(dispatch, "t1:0", "find UNIQUE_MAIN");
+      startExplore(dispatch, "t1:1", "find b");
+      await flush(setup);
+
+      expect(panelBand(setup.captureCharFrame()).band).toContain("main");
+
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("UNIQUE_MAIN");
+
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressArrow("up");
+      await flush(setup);
+      expect(panelBand(setup.captureCharFrame()).band).toContain("> main");
+
+      setup.mockInput.pressEnter();
+      await flush(setup);
+      const afterMain = setup.captureCharFrame();
+      expect(afterMain).not.toContain("UNIQUE_MAIN");
+      expect(panelBand(afterMain).band).toContain("explore");
+      expect(afterMain).toContain("─");
+    });
+
+    test("empty Down on an inert InputBox while a child is viewed focuses the roster", async () => {
+      const { setup, dispatch } = await connect();
+      startExplore(dispatch, "t1:0", "find a");
+      await flush(setup);
+
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
+      expect(panelBand(setup.captureCharFrame()).band).not.toContain("> ");
+
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      expect(panelBand(setup.captureCharFrame()).band).toContain("> ");
     });
   });
 });

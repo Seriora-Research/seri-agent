@@ -285,7 +285,6 @@ export function App({
   const indicatorText = MODE_LABEL[displayMode];
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
-  const childTranscriptRef = useRef<ScrollBoxRenderable>(null);
   // The scrollbox's own measured height (this file's own header comment explains why it needs a
   // definite number, not `flexGrow`) — `null` only for the frames before OpenTUI's own layout pass
   // has fired `onSizeChange` at least once on the wrapping box below; `FALLBACK_CHROME_ROWS` is a
@@ -361,13 +360,14 @@ export function App({
     onSessionChange?.(state.session);
   }, [state.session, onSessionChange]);
 
-  // True exactly when InputBox is the render ternary's own active branch, below — every other
-  // branch is a modal panel that owns the keyboard. The transcript box above (flexGrow/minHeight={0})
-  // still renders unconditionally regardless of which branch is active, so on a terminal taller
-  // than the open panel's own content it stays partially visible above it, not fully occluded — but
-  // PageUp/PageDown/Home/End must still not scroll it in the background while a panel is open: the
-  // user would close the panel to find the transcript scrolled and the "↑ scrolled" banner showing,
-  // with no visible keypress of theirs against the transcript to explain why.
+  // True when no modal panel owns the keyboard. Child inspect is not a modal: InputBox stays
+  // mounted and the shared scrollbox still takes PageUp/PageDown. The transcript box above
+  // (flexGrow/minHeight={0}) still renders unconditionally regardless of which branch is active,
+  // so on a terminal taller than the open panel's own content it stays partially visible above
+  // it, not fully occluded — but PageUp/PageDown/Home/End must still not scroll it in the
+  // background while a modal is open: the user would close the panel to find the transcript
+  // scrolled and the "↑ scrolled" banner showing, with no visible keypress of theirs against
+  // the transcript to explain why.
   const noPanelOpen =
     state.pendingApproval === undefined &&
     state.pendingModelPicker === undefined &&
@@ -376,7 +376,6 @@ export function App({
     state.pendingConfig === undefined &&
     state.pendingPermissions === undefined &&
     state.pendingEffort === undefined &&
-    state.pendingChildView === undefined &&
     !state.pendingSplash;
 
   // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
@@ -442,17 +441,6 @@ export function App({
   // (`viewportRows - reserved - 1`), which no longer has a `viewportRows`/`reserved` pair to compute
   // it from now that scroll position lives on the scrollbox itself.
   useKeyboard((key) => {
-    // Overlay first, above the noPanelOpen gate: while a child transcript is open those keys
-    // must move that scrollbox, not the parent transcript sitting behind it.
-    if (state.pendingChildView !== undefined) {
-      const childEl = childTranscriptRef.current;
-      if (!childEl) return;
-      if (key.name === "pageup") childEl.scrollBy(-1, "viewport");
-      else if (key.name === "pagedown") childEl.scrollBy(1, "viewport");
-      else if (key.name === "home") childEl.scrollBy(-1, "content");
-      else if (key.name === "end") childEl.scrollBy(1, "content");
-      return;
-    }
     if (!noPanelOpen) return;
     const el = transcriptRef.current;
     if (!el) return;
@@ -527,16 +515,24 @@ export function App({
           paddingLeft={width >= TRANSCRIPT_PADDING_MIN_WIDTH ? 1 : 0}
           paddingRight={width >= TRANSCRIPT_PADDING_MIN_WIDTH ? 1 : 0}
         >
-          <TranscriptList transcript={state.transcript} />
-          {/* Settled toolActivity groups, painted live inside the scrollbox so mid-turn
-          scrollback includes them. pendingTool (below) stays pinned outside. After
-          flushToolActivity, toolActivity is [] and this region unmounts in the same
-          update that pushLine's the muted transcript entries — no double paint. */}
-          {renderLiveToolActivity(state.toolActivity).map((line, index) => (
-            <text key={index} fg={theme.muted}>
-              {line}
-            </text>
-          ))}
+          {state.pendingChildView === undefined ? (
+            <>
+              <TranscriptList transcript={state.transcript} />
+              {/* Settled toolActivity groups, painted live inside the scrollbox so mid-turn
+              scrollback includes them. pendingTool (below) stays pinned outside. After
+              flushToolActivity, toolActivity is [] and this region unmounts in the same
+              update that pushLine's the muted transcript entries — no double paint. */}
+              {renderLiveToolActivity(state.toolActivity).map((line, index) => (
+                <text key={index} fg={theme.muted}>
+                  {line}
+                </text>
+              ))}
+            </>
+          ) : (
+            <ChildTranscript
+              child={state.subagents.find((row) => row.id === state.pendingChildView)}
+            />
+          )}
         </scrollbox>
         {/* Rendered as a fixed row OUTSIDE the scrollbox, directly under it, instead of as one of
         its scrollable children — a scrollbox child scrolls out of view exactly like any other row
@@ -577,10 +573,10 @@ export function App({
       {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
       is waiting on, and answering it (not typing a task or slash command) is the only input that
       means anything until it clears. Extended to a third state for /model, a fourth for /setup,
-      four more for /login /signup, /config, /permissions and /effort, plus a read-only child
-      transcript overlay: each is the same kind of "only this input means anything right now"
-      question, checked in this same order (approval, /model, /setup, /login /signup, /config,
-      /permissions, /effort, overlay, then InputBox). Every branch here — including
+      four more for /login /signup, /config, /permissions and /effort: each is the same kind of
+      "only this input means anything right now" question, checked in this same order (approval,
+      /model, /setup, /login /signup, /config, /permissions, /effort, then InputBox). Child
+      inspect keeps InputBox mounted and inert. Every branch here — including
       AuthPanel/ConfigPanel/PermissionsPanel/EffortPanel — is a real, wired OpenTUI
       component; state/handlers.ts and cli.ts dispatch auth-requested/config-requested/
       permissions-requested/effort-requested. */}
@@ -636,12 +632,6 @@ export function App({
           onSignup={onSplashSignup}
           onContinue={onSplashContinue}
         />
-      ) : state.pendingChildView !== undefined ? (
-        <ChildTranscript
-          child={state.subagents.find((row) => row.id === state.pendingChildView)}
-          dispatch={dispatch}
-          scrollRef={childTranscriptRef}
-        />
       ) : (
         <InputBox
           onSubmit={onSubmit}
@@ -653,10 +643,10 @@ export function App({
               ? () => dispatch({ type: "subagent-panel-focus" })
               : undefined
           }
-          inert={state.subagentPanelFocus}
+          inert={state.subagentPanelFocus || state.pendingChildView !== undefined}
         />
       )}
-      {state.subagents.length > 0 && state.pendingChildView === undefined && (
+      {state.subagents.length > 0 && (
         <SubagentPanel
           subagents={state.subagents}
           focused={state.subagentPanelFocus}
