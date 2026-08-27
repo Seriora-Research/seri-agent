@@ -1,6 +1,7 @@
 import { clearAuthSession, expiresAtFrom, loadAuthSession, saveAuthSession } from "./authStore";
 import { openBrowser } from "./browser";
 import { pollForToken, requestDeviceCode } from "./deviceFlow";
+import { clearUsageSnapshot } from "../usage/snapshot";
 
 export async function login(
   mode: "login" | "signup",
@@ -93,5 +94,6 @@ export function logout(
 ): void {
   const existing = loadAuthSession(configDir);
   clearAuthSession(configDir);
+  clearUsageSnapshot(configDir);
   onMessage(existing ? "Logged out." : "Not logged in.");
 }
