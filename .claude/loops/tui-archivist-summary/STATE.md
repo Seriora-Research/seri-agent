@@ -25,7 +25,7 @@
 - success_check: An ArchivistReport whose summary contains `**bold**` and `code`, applied through the TUI reducer/App, appears muted with a leading mark and does not show literal `**` in the rendered frame. archivistLine/CLI path still emits a stats prefix; output tests cover the CLI shape.
 
 ## Plan checklist
-- [ ] RED App test: additive `transcript-append` fields so the test typechecks; dispatch stats+summary with `**bold**`; assert the GREEN contract (fails on literal `**` still visible).
+- [x] RED App test: additive `transcript-append` fields so the test typechecks; dispatch stats+summary with `**bold**`; assert the GREEN contract (fails on literal `**` still visible).
 - [ ] `ARCHIVIST_MARK` + `archivistStatsLine` / `archivistLine`; update `output.test.ts`.
 - [ ] Thread `muted`/`markdown` through `pushLine` + `pushTranscriptLine`; two TUI pushes in `cli.ts`; reducer tests for the flags.
 - [ ] `TranscriptRow`: muted markdown path (GREEN the App test). Negative system line still raw.
@@ -49,4 +49,4 @@
 ## Reviewer verdict
 
 ## Open questions / blockers
-- Parallel with PR 183 (toolActivity live-paint on app.tsx TranscriptRow). This loop starts from main @ b42c547 (PR 181). Rebase onto main after 183 merges if needed.
+- None. origin/main (PR 183) merged into this branch; no TranscriptRow conflict.

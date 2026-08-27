@@ -11,7 +11,7 @@ import type { ApprovalAnswer } from "../../src/loop/loop";
 import { App, type AppProps } from "../../src/tui/app";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";
 import type { Dispatch } from "../../src/tui/state/reducer";
-import { theme } from "../../src/tui/theme/theme";
+import { ARCHIVIST_MARK, theme } from "../../src/tui/theme/theme";
 import { ListRow } from "../../src/tui/ui/ListRow";
 import {
   DEFAULT_COLUMNS,
@@ -894,6 +894,73 @@ describe("App", () => {
     expect(frame).toContain("const x = 1;");
     expect(frame).toContain("cellx");
     expect(frame).toContain("celly");
+  });
+
+  // Archivist report is a secondary system note (muted + leading mark, no assistant ●) whose
+  // summary is painted through the same <markdown> path as the assistant branch — conceal must
+  // strip ** rather than leaving the markers as literal text. Stats stay a separate plain line
+  // so "(archivist: …)" is never fed to the markdown parser.
+  test("an archivist stats+summary block is muted with a leading mark and conceals markdown markers", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({
+      type: "transcript-append",
+      line: `${ARCHIVIST_MARK}(archivist: tool-count trigger, 1 tool call)`,
+      muted: true,
+    });
+    dispatch({
+      type: "transcript-append",
+      line: "recorded **bold** fact",
+      muted: true,
+      markdown: true,
+    });
+    await flush(setup);
+    await flushMarkdown(
+      setup,
+      (frame) => frame.includes("recorded") && frame.includes("bold"),
+    );
+
+    const frame = setup.captureCharFrame();
+    expect(frame).not.toContain("**");
+    expect(frame).toContain("bold");
+    expect(frame).toContain(ARCHIVIST_MARK);
+    expect(frame).toContain("(archivist:");
+    const archivistLines = frame
+      .split("\n")
+      .filter(
+        (line) =>
+          line.includes("(archivist:") || line.includes("recorded") || line.includes("bold"),
+      );
+    expect(archivistLines.length).toBeGreaterThan(0);
+    for (const line of archivistLines) {
+      expect(line.trimStart().startsWith("●")).toBe(false);
+    }
+    const spans = setup.captureSpans();
+    const statsLine = spans.lines.find((l) => l.spans.some((s) => s.text.includes("(archivist:")));
+    const statsSpan = statsLine?.spans.find((s) => s.text.includes("(archivist:"));
+    expect(statsSpan, "no span found containing (archivist:").toBeDefined();
+    expect(statsSpan?.fg.equals(parseColor(theme.muted))).toBe(true);
+    const summaryLine = spans.lines.find((l) => l.spans.some((s) => s.text.includes("bold")));
+    const summarySpan = summaryLine?.spans.find((s) => s.text.includes("bold"));
+    if (summarySpan) {
+      expect(summarySpan.fg.equals(parseColor(theme.muted))).toBe(true);
+    }
+  });
+
+  test("a normal system line is not markdown-parsed and is not forced muted", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({ type: "transcript-append", line: "boom **not-bold**" });
+    await flush(setup);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("**not-bold**");
+    const spans = setup.captureSpans();
+    const line = spans.lines.find((l) => l.spans.some((s) => s.text.includes("**not-bold**")));
+    const span = line?.spans.find((s) => s.text.includes("**not-bold**"));
+    expect(span, "no span found containing **not-bold**").toBeDefined();
+    expect(span?.fg.equals(parseColor(theme.text))).toBe(true);
+    expect(span?.fg.equals(parseColor(theme.muted))).toBe(false);
   });
 
   // resolveTableRenderableOptions()/createTextTableRenderable() in the installed @opentui/core

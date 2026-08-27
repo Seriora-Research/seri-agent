@@ -62,3 +62,7 @@ export const WARNING_MARK = "! ";
 // ERROR_MARK/WARNING_MARK already use. Prefixed onto a tool-activity anomaly or grep/glob
 // match path at the TUI call site.
 export const TREE_BRANCH = "└ ";
+// Secondary-detail glyph, not a color — same convention as TREE_BRANCH. Prefixed onto the
+// archivist stats line inside archivistLine (shared CLI+TUI formatter), unlike WARNING_MARK
+// which stays TUI-call-site-only.
+export const ARCHIVIST_MARK = "· ";

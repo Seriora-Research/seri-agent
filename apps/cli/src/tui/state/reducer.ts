@@ -231,7 +231,14 @@ export type TuiAction =
   // `flush` defaults to true (every existing caller relies on that) — set to false by a submission
   // echo that must not fragment an in-progress streamed answer into two transcript entries (see
   // pushLine's own comment).
-  | { type: "transcript-append"; line: string; role?: TranscriptRole; flush?: boolean }
+  | {
+      type: "transcript-append";
+      line: string;
+      role?: TranscriptRole;
+      flush?: boolean;
+      muted?: boolean;
+      markdown?: boolean;
+    }
   // /clear's own action. The only action that ever SHRINKS the transcript, rather than adding to
   // it — `streaming` must be reset alongside `transcript` itself, or a stale in-progress answer
   // would keep describing content that no longer exists.

@@ -17,3 +17,8 @@
 - Promoted approved feature-plan to `docs/specs/035-tui-archivist-summary/{spec,tasks}.md`. Did not edit `docs/ROADMAP.md`.
 - STATE.md Status → EXECUTE. Six EXECUTE steps start unchecked; check off as each lands.
 - Next: ordered EXECUTE steps 1–6. skip: War Room VERIFY opens the PR later.
+
+## 2026-08-27T13:02:00Z EXECUTE step 1
+- Additive `transcript-append` `muted?`/`markdown?` on `TuiAction` (not yet threaded through `pushLine`). Exported `ARCHIVIST_MARK` so the App test can dispatch the planned stats prefix.
+- RED: `an archivist stats+summary block is muted with a leading mark and conceals markdown markers` failed at `expect(frame).not.toContain("**")`. Frame still showed `recorded **bold** fact` (TranscriptRow paints system lines as plain text). Negative control recorded.
+- Negative system-line test passed (literal `**not-bold**`, `theme.text`).
