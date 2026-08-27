@@ -101,9 +101,10 @@ export type TuiState = {
   // either string changed.
   pendingTool: { name: string; args: unknown } | undefined;
   // Per-tool-name stats for the current turn, living outside `transcript`. Updated on every
-  // tool-call/tool-result/permission-denied, flushed into the transcript as muted lines only on
-  // done, then reset. Not part of the append-only transcript until that flush. An error is not
-  // turn-end (loop.ts continues), so this accumulator is left in place across it.
+  // tool-call/tool-result/permission-denied, flushed into the transcript as muted lines on done
+  // and on turn-ended (the latter covers loop.ts's error-then-return exits that never yield
+  // done). An error LoopEvent is not turn-end (loop.ts continues), so this accumulator is left
+  // in place across it. After a real done, turn-ended's flush is a no-op on [].
   toolActivity: ToolActivityEntry[];
   // A slash command that threw (previously uncaught, straight through Ink's own input handler),
   // or input shaped like a slash command that matched nothing / failed its own accepts() guard —
@@ -497,7 +498,10 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         },
       };
     case "turn-ended":
-      return { ...state, turn: undefined };
+      // Flush first: loop.ts's mid-stream / streamText catch yields error then return with no
+      // done, so this is the only commit point for tools already recorded. After a real done
+      // the accumulator is already [], so the flush is a no-op.
+      return { ...flushToolActivity(state), turn: undefined };
   }
 }
 
