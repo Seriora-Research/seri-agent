@@ -29,7 +29,7 @@
 - [x] `ARCHIVIST_MARK` + `archivistStatsLine` / `archivistLine`; update `output.test.ts`.
 - [x] Thread `muted`/`markdown` through `pushLine` + `pushTranscriptLine`; two TUI pushes in `cli.ts`; reducer tests for the flags.
 - [x] `TranscriptRow`: muted markdown path (GREEN the App test). Negative system line still raw.
-- [ ] `docs/design/tui.md`.
+- [x] `docs/design/tui.md`.
 - [ ] lint, typecheck, full `apps/cli` tests; record exit codes.
 
 ## Gate results (latest)

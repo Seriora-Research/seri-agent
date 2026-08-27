@@ -28,3 +28,7 @@
 
 ## 2026-08-27T13:06:00Z EXECUTE step 3
 - Threaded `muted`/`markdown` through `pushLine` and `pushTranscriptLine`. TUI archivist is two pushes (muted stats, optional muted markdown summary). Reducer test pins omit-when-false. App test still RED on literal `**`.
+
+## 2026-08-27T13:08:00Z EXECUTE step 4
+- TranscriptRow paints `role === "system" && muted && markdown` via existing `<markdown fg={theme.muted}>` (no ●, no BULLET_GUTTER). `renderLiveToolActivity` unchanged.
+- GREEN: the App test that failed on literal `**` at 7571a1f now passes. Negative system line still shows `**not-bold**` at `theme.text`.
