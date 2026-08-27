@@ -446,6 +446,96 @@ describe("run (argv and usage errors)", () => {
     expect(logs.join("\n")).toContain("seri permissions");
   });
 
+  test("`usage` dispatches to usageCommand and never reaches the task path", async () => {
+    const { fake, capture } = fakeRunLoop();
+    let called = 0;
+
+    const { code } = await captureLogs(() =>
+      run(["usage"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        usageCommand: async () => {
+          called += 1;
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(called).toBe(1);
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
+  test("`usage extra` exits 2", async () => {
+    const { code } = await captureLogs(() => run(["usage", "extra"], { sessionsDir }));
+    expect(code).toBe(2);
+  });
+
+  test("`usage --detail` forwards the flag and does not mint a session", async () => {
+    const { fake, capture } = fakeRunLoop();
+    let detail: boolean | undefined;
+
+    const { code } = await captureLogs(() =>
+      run(["usage", "--detail"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        usageCommand: async (_dir, opts = {}) => {
+          detail = opts.detail;
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(detail).toBe(true);
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
+  test("`/usage --detail` rehydrates the flag parseArgs stripped from positionals", async () => {
+    const { fake, capture } = fakeRunLoop();
+    let detail: boolean | undefined;
+
+    const { code } = await captureLogs(() =>
+      run(["/usage", "--detail"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        usageCommand: async (_dir, opts = {}) => {
+          detail = opts.detail;
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(detail).toBe(true);
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
+  test("`usage` when logged out prints the BYOK copy and writes no session", async () => {
+    const { fake, capture } = fakeRunLoop();
+    const { code, logs } = await captureLogs(() =>
+      run(["usage"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("seri login");
+    expect(logs.join("\n")).toContain("BYOK");
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
+  test("`--help` output documents `seri usage`", async () => {
+    const { logs } = await captureLogs(() => run(["--help"], { sessionsDir }));
+    expect(logs.join("\n")).toContain("seri usage");
+  });
+
   // End-to-end --profile behaviour through run() itself. Deliberately does NOT pass
   // deps.sessionsDir, so the session lands wherever the path layer actually resolves against the
   // beforeEach-redirected HOME above — that is the whole point.
@@ -668,7 +758,7 @@ describe("run (login/signup/logout)", () => {
   // "Flags are flags anywhere" means --help never reaches these subcommands: seri's own USAGE wins
   // instead of the subcommand ever running. A real behaviour change from `main`, and the approved
   // design (not a defect) — pinned so it stays intentional.
-  test.each(["login", "signup", "logout"])(
+  test.each(["login", "signup", "logout", "usage"])(
     "`seri %s --help` prints seri's usage, not the subcommand",
     async (subcommand) => {
       const logs: string[] = [];
