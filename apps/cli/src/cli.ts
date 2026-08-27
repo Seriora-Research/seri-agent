@@ -30,6 +30,7 @@ import {
 } from "./checkpoint/checkpoint";
 import { projectRoot } from "./checkpoint/shadowGit";
 import { withCheckpoints } from "./checkpoint/wrapTools";
+import { commandByName, sessionMeta, type CommandMeta } from "./cli/commandCatalog";
 import {
   approvalPromptText,
   archivistLine,
@@ -73,7 +74,7 @@ import {
   observeArchivistEvent,
   resetArchivistForRewind,
 } from "./memory/archivist";
-import { decideMemoryCommand, memoryCommandAccepts } from "./memory/commands";
+import { decideMemoryCommand } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
@@ -330,15 +331,56 @@ type SlashCommand = {
     }
 );
 
-// A step count, or nothing at all.
-function isStepCount(args: string[]): boolean {
-  return args.length === 0 || (args.length === 1 && /^[1-9]\d*$/.test(args[0] ?? ""));
+function requireSessionMeta(name: string): Extract<CommandMeta, { surface: "session" }> {
+  const meta = commandByName(name);
+  if (meta === undefined || meta.surface !== "session") {
+    throw new Error(`${name} is not a session command`);
+  }
+  return meta;
 }
 
-// Commands that operate on the resume target rather than being a task for the model. One table,
-// so a new one is added in exactly one place: the dispatch in `run()` shares the resume-target
-// resolution and the error reporting. Handlers throw to report a failure; the caller turns that
-// into a message and a non-zero exit.
+function sessionSlash(
+  name: string,
+  run: Extract<SlashCommand, { needsSession?: true }>["run"],
+): [string, SlashCommand] {
+  const meta = requireSessionMeta(name);
+  if (meta.needsSession === false) {
+    throw new Error(`${name} is session-less; use sessionSlashNoSession`);
+  }
+  return [
+    name,
+    {
+      accepts: meta.accepts,
+      run,
+      ...(meta.mutatesRunState === true ? { mutatesRunState: true as const } : {}),
+      ...(meta.scopeTargetToCwd === true ? { scopeTargetToCwd: true as const } : {}),
+    },
+  ];
+}
+
+function sessionSlashNoSession(
+  name: string,
+  run: Extract<SlashCommand, { needsSession: false }>["run"],
+): [string, SlashCommand] {
+  const meta = requireSessionMeta(name);
+  if (meta.needsSession !== false) {
+    throw new Error(`${name} requires a session`);
+  }
+  return [
+    name,
+    {
+      accepts: meta.accepts,
+      needsSession: false,
+      run,
+      ...(meta.mutatesRunState === true ? { mutatesRunState: true as const } : {}),
+    },
+  ];
+}
+
+// Commands that operate on the resume target rather than being a task for the model. The name
+// list lives in commandCatalog.ts; this Map is the session slice plus each command's run.
+// Dispatch in `run()` shares resume-target resolution and error reporting. Handlers throw to
+// report a failure; the caller turns that into a message and a non-zero exit.
 //
 // A Map rather than an object literal, because an object literal inherits Object.prototype and a
 // lookup keyed on user input walks it: `SLASH_COMMANDS["toString"]` returned a function, so
@@ -348,68 +390,21 @@ function isStepCount(args: string[]): boolean {
 // object and crashed with "command is not a function". A Map has no prototype chain to walk, so
 // the hazard is gone from every call site rather than from the ones that remember Object.hasOwn.
 export const SLASH_COMMANDS = new Map<string, SlashCommand>([
-  ["/mode", { accepts: (args) => args.length === 0, run: cycleModeCommand }],
-  // `args.length <= 1`, not unconditional: an unconditional `() => true` let a genuine task
-  // starting with the string "/effort" be hijacked instead of falling through to the model (the
-  // exact hazard this table's own header comment, and /clear's, exist to prevent), and let
-  // `effortCommand` silently ignore trailing garbage past `args[0]` (`/effort auto extra`). Capped
-  // at one argument closes both.
-  //
-  // `effortCommand` (below) is registered here for the NON-INTERACTIVE path only: every form of
-  // `/effort` (bare, `<level>`, `auto`) is claimed BEFORE reaching this table on the TUI path
-  // (runTui's own onSubmit, below), which reuses `prepared.catalog`/`prepared.plan` synchronously
-  // instead of calling `effortCommand` through this entry at all. `mutatesRunState: true` is inert
-  // today for that same reason — the TUI never reaches this entry for `/effort` at all, so there
-  // is currently no in-flight turn for it to gate against. Kept anyway, at zero cost, as the one
-  // thing standing between a future change and the exact race it used to gate: if the TUI's own
-  // `args.length <= 1` interception guard (onSubmit, below) and this table's `accepts` above ever
-  // drift apart, some `/effort` invocation would fall through to `effortCommand`'s own awaited
-  // network calls (`getModelCatalog()`, `fetchAccountPlan()`) racing a still-running turn's own
-  // `messages-updated` — the same full-replace clobber every other `SLASH_COMMANDS` entry that
-  // calls `sessionUpdated()` across an `await` is already gated against.
-  ["/effort", { accepts: (args) => args.length <= 1, run: effortCommand, mutatesRunState: true }],
-  ["/undo", { accepts: isStepCount, run: undoCommand, mutatesRunState: true }],
-  // A sha and nothing else. `seri "/restore the header spacing"` is a task.
-  [
-    "/restore",
-    {
-      accepts: (args) => args.length === 1 && /^[0-9a-f]{4,40}$/.test(args[0] ?? ""),
-      run: restoreCommand,
-      mutatesRunState: true,
-    },
-  ],
-  ["/rewind", { accepts: isStepCount, run: rewindCommand, mutatesRunState: true }],
-  // Exact-and-empty, like /mode — NOT isStepCount (/rewind's own form): /clear takes no argument,
-  // so `seri "/clear the screen please"` must fall through to the model as task text rather than
-  // being hijacked as a mistyped invocation.
-  [
-    "/clear",
-    {
-      accepts: (args) => args.length === 0,
-      run: clearCommand,
-      mutatesRunState: true,
-      scopeTargetToCwd: true,
-    },
-  ],
-  [
-    "/compact",
-    { accepts: (args) => args.length === 0, run: compactCommand, mutatesRunState: true },
-  ],
-  // mutatesRunState: /memory approve|reject mutates the pending/ queue and the live memory files,
-  // and must not race the archivist staging more writes mid-turn (C-7's own comment on why that
-  // block runs before `finally` unregisters the cancel slot). Per-command, not per-subcommand
-  // (accepted deliberately — SlashCommand's own field comment explains why a read-only
-  // /memory pending shares the gate with a mutating /memory approve).
-  [
-    "/memory",
-    {
-      accepts: memoryCommandAccepts,
-      run: memoryCommand,
-      mutatesRunState: true,
-      needsSession: false,
-    },
-  ],
+  sessionSlash("/mode", cycleModeCommand),
+  sessionSlash("/effort", effortCommand),
+  sessionSlash("/undo", undoCommand),
+  sessionSlash("/restore", restoreCommand),
+  sessionSlash("/rewind", rewindCommand),
+  sessionSlash("/clear", clearCommand),
+  sessionSlash("/compact", compactCommand),
+  sessionSlashNoSession("/memory", memoryCommand),
 ]);
+
+for (const meta of sessionMeta()) {
+  if (!SLASH_COMMANDS.has(meta.name)) {
+    throw new Error(`SLASH_COMMANDS missing ${meta.name}`);
+  }
+}
 
 // MEDIUM-F: /exit is deliberately NOT a SLASH_COMMANDS entry — it used to be, with a no-op `run`
 // for the non-interactive path, but handleSlashCommand (below) resolves a resume target for
@@ -1045,7 +1040,7 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
   let maxTurns: number | undefined;
   if (maxTurnsRaw !== undefined) {
     // parseArgs accepts --max-turns abc happily (measured) — it has no numeric option type — so
-    // this check is not redundant. Same shape as isStepCount above. Validated here, right after the
+    // this check is not redundant. Same shape as /undo's `[n]` accepts. Validated here, right after the
     // parse, so a malformed value is a usage error regardless of which subcommand follows it —
     // `seri --max-turns garbage login` used to reach login with the bad flag silently ignored.
     if (!/^[1-9]\d*$/.test(maxTurnsRaw))
