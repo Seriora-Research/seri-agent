@@ -4247,5 +4247,56 @@ describe("App", () => {
       expect(frame).toContain("(archivist:");
       expect(panelBand(frame).band).not.toContain("explore");
     });
+
+    test("empty InputBox Down focuses the panel; Esc blurs", async () => {
+      const { setup, dispatch } = await connect();
+      startExplore(dispatch, "t1:0", "find a");
+      await flush(setup);
+
+      expect(panelBand(setup.captureCharFrame()).band).not.toContain("> ");
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      expect(panelBand(setup.captureCharFrame()).band).toContain("> ");
+
+      setup.mockInput.pressEscape();
+      await flush(setup);
+      const afterBlur = setup.captureCharFrame();
+      expect(panelBand(afterBlur).band).not.toContain("> ");
+      expect(afterBlur).toContain("─");
+    });
+
+    test("non-empty InputBox Down does not focus the panel", async () => {
+      const { setup, dispatch } = await connect();
+      startExplore(dispatch, "t1:0", "find a");
+      await flush(setup);
+
+      await setup.mockInput.typeText("x");
+      await flush(setup);
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      expect(panelBand(setup.captureCharFrame()).band).not.toContain("> ");
+    });
+
+    test("Enter opens the child overlay and Esc returns to InputBox", async () => {
+      const { setup, dispatch } = await connect();
+      startExplore(dispatch, "t1:0", "find a");
+      await flush(setup);
+
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      const overlay = setup.captureCharFrame();
+      expect(overlay).not.toContain("─");
+      expect(overlay).toContain("Read");
+      expect(overlay).toContain("explore");
+
+      setup.mockInput.pressEscape();
+      await flush(setup);
+      const afterEsc = setup.captureCharFrame();
+      expect(afterEsc).toContain("─");
+      expect(panelBand(afterEsc).band).toContain("explore");
+    });
   });
 });
