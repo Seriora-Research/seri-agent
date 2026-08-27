@@ -51,6 +51,7 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { useEffect, useReducer, useRef, useState } from "react";
+import { isShiftTabModeCycle } from "../cli/commandCatalog";
 import { truncateArgsDisplay } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
@@ -420,7 +421,7 @@ export function App({
   // silently mutate and persist a session field the gate is already ignoring.
   useKeyboard((key) => {
     if (!noPanelOpen) return;
-    if (key.name === "tab" && key.shift && skipPermissions !== true) onCycleMode?.();
+    if (isShiftTabModeCycle(key) && skipPermissions !== true) onCycleMode?.();
   });
 
   // A second, independent useKeyboard from InputBox's own — OpenTUI delivers the same keypress to
