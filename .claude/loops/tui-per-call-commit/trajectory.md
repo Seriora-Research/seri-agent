@@ -26,3 +26,8 @@
 - skip: War Room VERIFY opens the PR later.
 - Path (closed): live-paint `renderToolActivity` of settled `toolActivity` inside the native scrollbox after `TranscriptList` (not a virtualizer; not TranscriptEntry mutation). Reducer still no `pushLine` on tool-result/permission-denied; still flush on done/turn-ended; error does not flush. recordCall/recordResult aggregation kept.
 - Next: promote into `docs/specs/034-tui-tool-transcript/`, then RED App visibility tests, then live-paint.
+
+## 2026-08-27T03:15:00Z EXECUTE (Lionel)
+- DECISION: in-place aggregation is for EVERY 034 grouped tool name, not only read_file. TOOL_LABELS (`read_file`, `grep`, `glob`, `bash`, `powershell`, `write_file`, `edit`) all update one line in place. `dispatch_subagents` stays `alwaysAppend`. Do not special-case Read.
+- App tests must include at least one non-read same-name case (two bash results before done → one `Ran 2 shell commands`).
+- skip: War Room VERIFY opens the PR later.

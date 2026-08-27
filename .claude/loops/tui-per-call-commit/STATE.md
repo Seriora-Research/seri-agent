@@ -25,7 +25,7 @@
 - success_check: After two sequential same-name tool-results and BEFORE done, exactly one muted aggregated line is visible (`Read 2 files` or equivalent). After a first result, that line is already visible (not empty until done). A mid-turn scroll/view includes it.
 
 ## Plan checklist
-- [ ] App tests RED: after first `tool-result` before `done`, frame shows `Read a.txt`; after two same-name results, one `Read 2 files`.
+- [ ] App tests RED: after first `tool-result` before `done`, frame shows `Read a.txt`; after two same-name results, one `Read 2 files`; two bash results → one `Ran 2 shell commands`.
 - [ ] Paint settled `renderToolActivity` inside the scrollbox after `TranscriptList`; open-entry filter; `pendingTool` unchanged.
 - [ ] Reducer: comment-only. Add selector tests for live `toolActivity` before `done`. Do not `pushLine` on result/denied. Keep aggregation pins.
 - [ ] Update `docs/design/tui.md`.

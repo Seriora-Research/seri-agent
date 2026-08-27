@@ -14,7 +14,7 @@ After `flushToolActivity`, `toolActivity` is `[]`, so the live region unmounts i
 **Rejected:** find-and-update a muted `TranscriptEntry` on each settle (the path 034 rejected). Not needed: the list can show extra rows. Take mutation only if live-paint fails a scroll/sticky check in EXECUTE.
 
 ## Decisions (closed — do not reopen)
-- **Keep 034 name-aggregation.** Exact tool name, `count`, first-anomaly-only (`appendAnomaly`), grep/glob details dropped when `count>1`, `dispatch_subagents` `alwaysAppend`. Two `read_file` results mid-turn: the same place shows `Read a.txt` after the first, then `Read 2 files` after the second, **before** `done` / Cooked-for. grep then read_file: two groups, each appearing when that name first settles.
+- **Keep 034 name-aggregation.** Exact tool name, `count`, first-anomaly-only (`appendAnomaly`), grep/glob details dropped when `count>1`, `dispatch_subagents` `alwaysAppend`. In-place live update is for **every** `TOOL_LABELS` name (`read_file`, `grep`, `glob`, `bash`, `powershell`, `write_file`, `edit`) — not a Read special-case. Two `read_file` results mid-turn: the same place shows `Read a.txt` after the first, then `Read 2 files` after the second, **before** `done` / Cooked-for. Two `bash` results: `Ran echo a` then `Ran 2 shell commands`. grep then read_file: two groups, each appearing when that name first settles.
 - **Commit point for transcript persistence is still turn-end.** `tool-result` / `permission-denied` still do not `pushLine`. Flush on `done` / `turn-ended`. `error` still does not flush (`loop.ts` can continue).
 - **Visibility is real-time.** The user sees the aggregated line as soon as the first call of that group settles, and sees it update on later same-name results. Not wait-until-turn-end, and not N separate per-call transcript lines.
 - **No new TranscriptEntry variant.** Flushed lines stay `{ role: "system", text, muted: true }`. Live rows reuse the same muted paint (`theme.muted` + `TREE_BRANCH` in the string).
@@ -48,6 +48,7 @@ Streaming check: not required for this path — live paint reads `state.toolActi
 **`App.test.tsx` (primary RED):**
 - After `tool-call` + `tool-result` of `read_file` and **before** `done`: frame contains compact `Read a.txt` (live `toolActivity` paint). Status/`pendingTool` still clear (`not.toContain("Running read_file…")` at L1154–1170 stays). Do not require a muted `state.transcript` entry.
 - After two sequential same-name `read_file` results, before `done`: frame contains `Read 2 files` exactly once, not two `Read a.txt` / `Read b.txt` lines.
+- After two sequential same-name `bash` results, before `done`: frame contains `Ran 2 shell commands` exactly once (every `TOOL_LABELS` name, not a Read special-case).
 - grep then `read_file`: two live groups, each appearing after that name's first result.
 - After `done`: flushed muted transcript lines present; live region gone (no double `Read 2 files`).
 - Keep pending `read_file` unbordered muted live line (L1260) and write_file/edit box tests (L1221, L1242). After result, live slot clears; the settled aggregated line is a different row (inside the scrollbox).
