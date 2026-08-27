@@ -68,7 +68,7 @@ import { PermissionsPanel } from "./routes/config/PermissionsPanel";
 import { SetupPanel } from "./routes/setup/SetupPanel";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
-import { summarizeArgs } from "./state/toolActivity";
+import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
 import { syntaxStyle } from "./theme/syntaxStyle";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
@@ -514,6 +514,15 @@ export function App({
           paddingRight={width >= TRANSCRIPT_PADDING_MIN_WIDTH ? 1 : 0}
         >
           <TranscriptList transcript={state.transcript} />
+          {/* Settled toolActivity groups, painted live inside the scrollbox so mid-turn
+          scrollback includes them. pendingTool (below) stays pinned outside. After
+          flushToolActivity, toolActivity is [] and this region unmounts in the same
+          update that pushLine's the muted transcript entries — no double paint. */}
+          {renderLiveToolActivity(state.toolActivity).map((line, index) => (
+            <text key={index} fg={theme.muted}>
+              {line}
+            </text>
+          ))}
         </scrollbox>
         {/* Rendered as a fixed row OUTSIDE the scrollbox, directly under it, instead of as one of
         its scrollable children — a scrollbox child scrolls out of view exactly like any other row

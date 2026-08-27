@@ -1,8 +1,10 @@
 // Pure TUI tool-call/result accumulation — no Ink/React import. Live rendering reads
-// `pendingTool` (app.tsx); this module only tracks per-tool-name stats until turn-end, when
-// `renderToolActivity` turns them into muted transcript lines. Aggregation is by exact tool
-// name. `dispatch_subagents` is never aggregated: each call stays its own entry so the
-// per-call task/token line from `toolResultLine` is kept.
+// `pendingTool` (app.tsx) for the in-flight call, and `renderLiveToolActivity` of this
+// accumulator for settled groups during the turn. `renderToolActivity` is also what the
+// reducer flushes into muted transcript lines on done/turn-ended. Aggregation is by exact
+// tool name (every TOOL_LABELS entry — not a Read special-case). `dispatch_subagents` is
+// never aggregated: each call stays its own entry so the per-call task/token line from
+// `toolResultLine` is kept.
 import path from "node:path";
 import { escapeControlChars, toolResultLine } from "../../cli/output";
 import type { DispatchResult } from "../../subagents/dispatch";
@@ -341,4 +343,26 @@ export function renderToolActivity(entries: ToolActivityEntry[]): string[] {
     if (subs.length === 0) return main;
     return [main, ...subs.map((line) => `${TREE_BRANCH}${line}`)].join("\n");
   });
+}
+
+// Settled view for live paint. recordCall increments count and sets open before the result;
+// skip an open count===1 entry so the first in-flight call is only pendingTool. An open
+// follow-up (count>1) paints at count-1 so the group stays on the previous settled line
+// (Read a.txt / Ran echo a) until the next result lands as the aggregate (Read 2 files /
+// Ran 2 shell commands). Name-agnostic: every TOOL_LABELS group uses the same rule.
+export function liveToolActivity(entries: ToolActivityEntry[]): ToolActivityEntry[] {
+  const out: ToolActivityEntry[] = [];
+  for (const entry of entries) {
+    if (entry.open && entry.count === 1) continue;
+    if (entry.open && entry.count > 1) {
+      out.push({ ...entry, count: entry.count - 1, open: false });
+      continue;
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
+export function renderLiveToolActivity(entries: ToolActivityEntry[]): string[] {
+  return renderToolActivity(liveToolActivity(entries));
 }

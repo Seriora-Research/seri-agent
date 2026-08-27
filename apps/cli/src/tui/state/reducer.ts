@@ -101,10 +101,12 @@ export type TuiState = {
   // either string changed.
   pendingTool: { name: string; args: unknown } | undefined;
   // Per-tool-name stats for the current turn, living outside `transcript`. Updated on every
-  // tool-call/tool-result/permission-denied, flushed into the transcript as muted lines on done
-  // and on turn-ended (the latter covers loop.ts's error-then-return exits that never yield
-  // done). An error LoopEvent is not turn-end (loop.ts continues), so this accumulator is left
-  // in place across it. After a real done, turn-ended's flush is a no-op on [].
+  // tool-call/tool-result/permission-denied. App live-paints the settled view of this
+  // accumulator during the turn (renderLiveToolActivity). Flushed into the transcript as muted
+  // lines on done and on turn-ended (the latter covers loop.ts's error-then-return exits that
+  // never yield done). An error LoopEvent is not turn-end (loop.ts continues), so this
+  // accumulator is left in place across it — live paint still shows it. After a real done,
+  // turn-ended's flush is a no-op on [].
   toolActivity: ToolActivityEntry[];
   // A slash command that threw (previously uncaught, straight through Ink's own input handler),
   // or input shaped like a slash command that matched nothing / failed its own accepts() guard —
@@ -620,10 +622,11 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         },
       };
     // Tool-call/result/permission-denied do not push a transcript line here. Stats accumulate
-    // on `toolActivity` and flush as muted compact lines on done (not error: loop.ts yields
-    // error and continues). pendingTool is set for every tool name so the live status slot
-    // (app.tsx) can show the in-flight call. recordCall on tool-call so a thrown execute
-    // (tool-call then error, no tool-result) still has a settled line to flush.
+    // on `toolActivity` — the live-paint source during the turn (app.tsx) — and flush as muted
+    // compact lines on done (not error: loop.ts yields error and continues). pendingTool is set
+    // for every tool name so the live status slot (app.tsx) can show the in-flight call.
+    // recordCall on tool-call so a thrown execute (tool-call then error, no tool-result) still
+    // has a settled line to flush.
     case "tool-call":
       return {
         ...flushStreaming(state),
