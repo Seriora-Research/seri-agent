@@ -1981,4 +1981,127 @@ describe("tuiReducer: subagent-child-event", () => {
     expect(state.status).toBe("");
     expect(state.status).not.toContain("dispatch_subagents");
   });
+
+  test("child usage folds into the parent turn total and leaves the child row and transcript untouched", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "turn-started",
+      startedAt: 1,
+      inputEstimate: 0,
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "usage", usage: usageOf(100, 20) },
+    });
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "usage",
+        usage: usageOf(50, 10),
+      }),
+    );
+
+    expect(state.turn?.tokens).toEqual({
+      reconciledInputTokens: 150,
+      reconciledOutputTokens: 30,
+      liveInputEstimate: 0,
+      carriedOutputEstimate: 0,
+      liveOutputEstimate: 0,
+      exact: true,
+      hasGap: false,
+    });
+    expect(panel(state).subagents[0]?.id).toBe("t1:0");
+    expect(state.transcript).toEqual([]);
+  });
+
+  test("child compacted folds its usage into the parent turn without a compacted transcript line", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "turn-started",
+      startedAt: 1,
+      inputEstimate: 0,
+    });
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "compacted",
+        summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
+        evictedCount: 2,
+        usage: usageOf(60, 15),
+      }),
+    );
+
+    expect(state.turn?.tokens).toEqual({
+      reconciledInputTokens: 60,
+      reconciledOutputTokens: 15,
+      liveInputEstimate: 0,
+      carriedOutputEstimate: 0,
+      liveOutputEstimate: 0,
+      exact: true,
+      hasGap: false,
+    });
+    expect(state.transcript).toEqual([]);
+  });
+
+  test("child usage is a no-op on tokens when no turn is in flight", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "usage",
+        usage: usageOf(50, 10),
+      }),
+    );
+
+    expect(state.turn).toBeUndefined();
+  });
+
+  test("done line includes folded child usage", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "turn-started",
+      startedAt: 1,
+      inputEstimate: 0,
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "usage", usage: usageOf(100, 20) },
+    });
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "usage",
+        usage: usageOf(50, 10),
+      }),
+    );
+    const tokens = state.turn?.tokens;
+    expect(tokens).toEqual({
+      reconciledInputTokens: 150,
+      reconciledOutputTokens: 30,
+      liveInputEstimate: 0,
+      carriedOutputEstimate: 0,
+      liveOutputEstimate: 0,
+      exact: true,
+      hasGap: false,
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
+
+    expect(state.transcript.at(-1)?.text).toBe(`done · ${formatTokenProgress(tokens!)}`);
+  });
 });
