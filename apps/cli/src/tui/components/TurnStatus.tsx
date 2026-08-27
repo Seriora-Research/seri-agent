@@ -32,7 +32,7 @@ export function TurnStatus({
   // rows.
   return (
     <text fg={theme.muted} truncate wrapMode="none">
-      {formatElapsed(now - startedAt)} ({formatTokenProgress(tokenProgress)})
+      {formatElapsed(now - startedAt)} {formatTokenProgress(tokenProgress)}
     </text>
   );
 }

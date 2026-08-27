@@ -162,7 +162,7 @@ describe.skipIf(process.platform === "win32")(
         if (!match) throw new Error(`could not find CHILD_PID in ${JSON.stringify(stdoutSoFar())}`);
         childPid = Number.parseInt(match[1], 10);
 
-        // startChild already dismissed the welcome splash above. "(done" is reducer-driven
+        // startChild already dismissed the welcome splash above. "done ·" is reducer-driven
         // transcript content (reducer.ts's own `pushLine(formatDoneLine(...))`, rendered as a real
         // `<text>` element), not a bare `console.log` -- OpenTUI's renderer intercepts `console.log`
         // into its own hidden debug overlay by default (`TerminalConsoleCache.overrideConsoleMethods`
@@ -170,11 +170,11 @@ describe.skipIf(process.platform === "win32")(
         // tuiPty.test.ts's own childScript* fixtures use, e.g. "RUNLOOP_READY") no longer reaches the
         // real pty output the way it did under Ink -- confirmed live against this exact fixture and,
         // separately, against an existing unmodified tuiPty.test.ts test, so this is not specific to
-        // this file. Wait on "(done" (no internal space): OpenTUI's own incremental cell-diff
-        // redraw can skip an unchanged space cell, which is why the old waiter used the hyphenated
-        // token "no-tool-call)" instead of the full two-word form -- that skip does not apply to
-        // this needle.
-        await sawLine("(done");
+        // this file. Unique vs live TurnStatus (that row has elapsed + arrows, not the word done)
+        // and vs assistant text that merely contains "done". The space before the middle-dot is a
+        // known OpenTUI cell-diff skip risk; fixtures that already wait on RUNLOOP_DONE keep that
+        // as the reliable completion signal.
+        await sawLine("done ·");
 
         // Ctrl-D, the same graceful-quit affordance tuiPty.test.ts's own "Ctrl-D at the input box
         // quits the same way /exit does" test uses.
@@ -247,7 +247,7 @@ describe.skipIf(process.platform === "win32")(
         if (!match) throw new Error(`could not find CHILD_PID in ${JSON.stringify(stdoutSoFar())}`);
         childPid = Number.parseInt(match[1], 10);
 
-        await sawLine("(done");
+        await sawLine("done ·");
 
         // No keypress here — the injected throw (scheduled 1s after mount, above) is what ends this
         // run, not a user action. `exited` (the python3 pty wrapper's own exit) is a timing gate

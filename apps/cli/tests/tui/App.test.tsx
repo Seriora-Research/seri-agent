@@ -577,14 +577,14 @@ describe("App", () => {
     const helloIndex = lines.findIndex((line) => line.includes("hello"));
     const modeLabelIndex = lines.findIndex((line) => line.includes("approve-each mode on"));
     const turnStatusIndex = lines.findIndex(
-      (line) => line.includes(" in, ") && line.includes(" out)"),
+      (line) => line.includes(" ↑, ") && line.includes(" ↓"),
     );
 
     expect(helloIndex).toBeGreaterThanOrEqual(0);
     expect(modeLabelIndex).toBeGreaterThan(helloIndex);
     expect(turnStatusIndex).toBeGreaterThan(helloIndex);
     expect(turnStatusIndex).toBeLessThan(modeLabelIndex);
-    expect(lines[modeLabelIndex]).not.toContain(" in, ");
+    expect(lines[modeLabelIndex]).not.toContain(" ↑, ");
   });
 
   // Scroll-anchor coverage for the native `<scrollbox>` `stickyScroll`/`stickyStart="bottom"` (no
@@ -796,7 +796,7 @@ describe("App", () => {
       }
       dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
       await flush(setup);
-      expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
+      expect(setup.captureCharFrame()).toMatch(/\d+s .*↑, .*↓/);
 
       dispatch({
         type: "loop-event",
@@ -804,7 +804,7 @@ describe("App", () => {
       });
       await flush(setup);
 
-      expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
+      expect(setup.captureCharFrame()).toMatch(/\d+s .*↑, .*↓/);
     });
 
     // Acceptance criterion: TurnStatus stays visually pinned to the transcript's last line while a
@@ -823,7 +823,7 @@ describe("App", () => {
       await flush(setup);
       expect(setup.captureCharFrame()).toContain("line 0");
 
-      expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
+      expect(setup.captureCharFrame()).toMatch(/\d+s .*↑, .*↓/);
     });
 
     // Regression: `scrollboxHeight` used to floor at 1, not 0 — on a terminal short enough that
@@ -836,7 +836,7 @@ describe("App", () => {
       dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
       await flush(setup);
 
-      expect(setup.captureCharFrame()).toMatch(/\d+s \(.* in, .* out\)/);
+      expect(setup.captureCharFrame()).toMatch(/\d+s .*↑, .*↓/);
     });
   });
 
@@ -1498,7 +1498,7 @@ describe("App", () => {
 
       const frame = setup.captureCharFrame();
       expect(countNeedle(frame, "Read 2 files")).toBe(1);
-      expect(frame).toContain("(done");
+      expect(frame).toContain("done");
     });
 
     test("a mid-turn error does not flush; live paint still shows the settled group", async () => {

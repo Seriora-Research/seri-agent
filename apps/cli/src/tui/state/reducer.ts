@@ -715,7 +715,13 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
       return { ...state, session: { ...state.session, messages: event.messages } };
     case "done":
       return {
-        ...pushLine(flushToolActivity(state), formatDoneLine(event.reason, state.turn?.tokens)),
+        ...pushLine(
+          flushToolActivity(state),
+          formatDoneLine(event.reason, state.turn?.tokens),
+          "system",
+          true,
+          true,
+        ),
         status: "",
         pendingTool: undefined,
       };

@@ -79,7 +79,7 @@ describe("TurnStatus", () => {
       />,
     );
 
-    expect(setup.captureCharFrame()).toContain("~0 in, ~5 out");
+    expect(setup.captureCharFrame()).toContain("~0 ↑, ~5 ↓");
   });
 
   // `truncate`/`wrapMode="none"` (TurnStatus.tsx's own comment: app.tsx reserves exactly one row
@@ -134,7 +134,7 @@ describe("TurnStatus", () => {
       />,
     );
 
-    expect(setup.captureCharFrame()).toContain("~12 in, ~0 out");
+    expect(setup.captureCharFrame()).toContain("~12 ↑, ~0 ↓");
   });
 
   test("clears its own interval on unmount, leaving nothing running", async () => {

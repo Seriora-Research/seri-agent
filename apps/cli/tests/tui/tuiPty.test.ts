@@ -2229,7 +2229,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_READY");
       // Turn resolves right away (this script's own comment explains why) — waited for here so
       // `/undo 5` below exercises decideUndo's own throw, not MEDIUM-3's turn-in-flight gate.
-      await sawLine("(done");
+      await sawLine("done ·");
 
       // M-3: a typo'd command name matches nothing in SLASH_COMMANDS at all.
       child.stdin?.write("/mdoe");
@@ -2267,7 +2267,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       child.stdin?.write("/exit the debugger and retry");
       await sawLine("/exit the debugger and retry");
@@ -2397,7 +2397,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // onSessionChange has already run for turn 1's own messages-updated (its dispatch strictly
       // precedes "done"'s in the same driveLoop call), so liveSession already carries the turn-1
       // assistant reply before task 2 is submitted.
-      await sawLine("(done");
+      await sawLine("done ·");
 
       child.stdin?.write("a second task");
       // Reflected live in the input box's own rendered frame first, same as the raw-mode-input
@@ -2533,7 +2533,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const noticePrefix = "↻ routing ~openai/gpt-latest via openrouter on your seri plan — no";
       await sawLine(noticePrefix);
       await sawLine("configured");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       // Exactly one transcript notice for this one turn, and no console-only "⚠ routing" line
       // (prepareSession's own !isTTY-gated notice, dead on a real pty) — the same pair of checks
@@ -2560,7 +2560,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // The default model (groq.ts's own DEFAULT_MODEL) — proves the FIRST turn used it, before
       // any switch.
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       child.stdin?.write("/model");
       await sawLine("/model");
@@ -2812,7 +2812,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       child.stdin?.write("/model");
       await sawLine("/model");
@@ -2875,7 +2875,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       // Turn 1 ran on the session's own starting pair (GROQ_API_KEY configured, no reroute) — the
       // pre-condition this test needs: nothing persisted yet, so a later write is provably new.
@@ -2948,7 +2948,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       // Sabotage the NEXT persist attempt before it happens: atomicWriteFile.ts (the shared
       // write-tmp-then-rename helper writeConfig now goes through) checks the destination
@@ -3026,7 +3026,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       // Sabotaged for the rest of this run — never cleared, unlike the retry test above, since
       // this test is about how many times ONE turn attempts against a failure that never clears.
@@ -3086,7 +3086,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       child.stdin?.write("/model");
       await sawLine("/model");
@@ -3134,7 +3134,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       child.stdin?.write("/model");
       await sawLine("/model");
@@ -3234,7 +3234,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       child.stdin?.write("/exit");
       await sawLine("/exit");
@@ -3271,7 +3271,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       child.stdin?.write("\x04");
 
@@ -3367,7 +3367,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, exited, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       child.stdin?.write("a second task");
       await sawLine("a second task");
@@ -3461,7 +3461,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("/rewind: can't run while a turn is in flight.");
 
       writeFileSync(flagPath, "");
-      await sawLine("(done");
+      await sawLine("done ·");
       // Bug fixed here (macOS CI): waited on "(done: …)" but never on "Hello world" itself before
       // counting it. That first fix used `sawLine` (a raw substring check), which is not enough on
       // its own: the raw pty stream can deliver "Hello world"'s bytes before the synchronized-output
@@ -3617,7 +3617,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       // Still alive and the turn actually finished — proof the answer really unblocked
       // driveLoop's own await, not that the process just happened to still be running.
-      await sawLine("(done");
+      await sawLine("done ·");
     } finally {
       child.kill("SIGKILL");
     }
@@ -3655,7 +3655,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const noticePrefix = "↻ routing claude-sonnet-5 via anthropic (your key) — no OpenRouter key";
       await sawLine(noticePrefix);
       await sawLine("configured");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       // Exactly one transcript notice for this one turn — the per-turn cap D2's own acceptance
       // criterion names, not a re-print on every messages-updated event within it.
@@ -3710,7 +3710,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 via=or provider=openrouter");
-      await sawLine("(done");
+      await sawLine("done ·");
 
       // Absence check, safe under the raw cumulative count regardless of source.
       expect(rawOccurrences("↻ routing")).toBe(0);
@@ -4501,7 +4501,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // The fall-through: prepareSession -> runTui -> driveLoop, unchanged, now actually reached.
         await sawLine("> do a task");
         await sawLine("RUNLOOP_READY");
-        await sawLine("(done");
+        await sawLine("done ·");
 
         const modelConfig = await waitForConfig(
           join(dir, ".seri", "config.json"),
@@ -4792,7 +4792,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("> do a task");
         await sawLine("RUNLOOP_READY");
-        await sawLine("(done");
+        await sawLine("done ·");
 
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
@@ -5679,7 +5679,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const { child, exited, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        await sawLine("(done");
+        await sawLine("done ·");
 
         child.stdin?.write("/exit");
         await sawLine("/exit");
@@ -5837,7 +5837,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("RUNLOOP_READY");
         await sawLine("line-299.txt");
-        await sawLine("(done");
+        await sawLine("done ·");
 
         child.stdin?.write("\x1b[5~"); // Page Up
         // `sawInFrameTimes`, not `sawLine`, immediately before reading `lastFrame()` below — same
@@ -5860,7 +5860,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("RUNLOOP_READY");
         await sawLine("line-299.txt");
-        await sawLine("(done");
+        await sawLine("done ·");
 
         child.stdin?.write("\x1b[5~"); // Page Up
         await sawLine("↑ scrolled — End to follow");
@@ -5926,7 +5926,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("RUNLOOP_READY 1");
         await sawLine("WROTE 1");
-        await sawLine("(done");
+        await sawLine("done ·");
 
         const files1 = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
         expect(files1).toHaveLength(1);
@@ -5958,7 +5958,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("RUNLOOP_READY 2");
         await sawLine("WROTE 2");
-        await sawLine("(done");
+        await sawLine("done ·");
 
         // The new session got a real checkpoint, through a real checkpointer.
         const newRef = `refs/seri/sessions/${newId}`;
@@ -5996,7 +5996,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("RUNLOOP_READY 1");
         await sawLine("WROTE 1");
-        await sawLine("(done");
+        await sawLine("done ·");
 
         const files1 = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
         expect(files1).toHaveLength(1);
@@ -6028,7 +6028,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("RUNLOOP_READY 2");
         await sawLine("WROTE 2");
-        await sawLine("(done");
+        await sawLine("done ·");
 
         // The old session's ref did not receive a second commit — the post-/clear tool call did
         // not land there, even though /clear's own persist never succeeded.
@@ -6054,7 +6054,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("RUNLOOP_READY 1");
         await sawLine("EMITTED 1 9");
-        await sawLine("(done");
+        await sawLine("done ·");
 
         child.stdin?.write("/clear");
         await sawLine("/clear");
@@ -6071,7 +6071,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // `sawLine` here would resolve immediately against that earlier occurrence instead of
         // waiting for turn 2's own — this file's own sawLineTimes doc comment describes exactly
         // this pitfall.
-        await sawLineTimes("(done", 2);
+        await sawLineTimes("done ·", 2);
         // `archivistLine`'s own "(archivist: ..." stats line (cli/output.ts) is dispatched into
         // the transcript only when maybeRunArchivist actually returns a report — i.e. only once
         // shouldRunArchivist's own trigger fired. A bounded margin, not `sawLine`, since this half
@@ -6155,7 +6155,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         try {
           await sawLine("RUNLOOP_READY 1");
           await sawLine("WROTE 1");
-          await sawLine("(done");
+          await sawLine("done ·");
 
           child.stdin?.write("/clear");
           await sawLine("/clear");
@@ -6183,7 +6183,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         try {
           await sawLine("RUNLOOP_READY 1");
           await sawLine("WROTE 1");
-          await sawLine("(done");
+          await sawLine("done ·");
 
           const files1 = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
           expect(files1).toHaveLength(1);
@@ -6200,7 +6200,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
           child.stdin?.write("\r");
           await sawLine("RUNLOOP_READY 2");
           await sawLine("WROTE 2");
-          await sawLine("(done");
+          await sawLine("done ·");
 
           expect(loadSession<ModelMessage>(oldId, sessionsDir).messages).toEqual(preClearMessages);
         } finally {

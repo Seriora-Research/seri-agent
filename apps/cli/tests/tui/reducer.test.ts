@@ -339,10 +339,11 @@ describe("tuiReducer: loop-event", () => {
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const toolLines = state.transcript.filter((e) => e.muted);
+    const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
     expect(toolLines).toHaveLength(1);
     expect(toolLines[0]).toEqual({ role: "system", text: "Read a.txt", muted: true });
     expect(toolLines[0].text).not.toContain("{");
+    expect(state.transcript.at(-1)).toEqual({ role: "system", text: "done", muted: true });
     expect(state.toolActivity).toEqual([]);
   });
 
@@ -353,7 +354,7 @@ describe("tuiReducer: loop-event", () => {
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const toolLines = state.transcript.filter((e) => e.muted);
+    const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
     expect(toolLines).toHaveLength(1);
     expect(toolLines[0].text).toBe("Read 2 files");
     expect(toolLines[0].muted).toBe(true);
@@ -407,7 +408,7 @@ describe("tuiReducer: loop-event", () => {
     });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const toolLines = state.transcript.filter((e) => e.muted);
+    const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
     expect(toolLines).toHaveLength(1);
     expect(toolLines[0].text).toContain(TREE_BRANCH);
     expect(toolLines[0].text).toContain("exit 1");
@@ -423,7 +424,7 @@ describe("tuiReducer: loop-event", () => {
     state = apply(state, { type: "permission-denied", name: "write_file", reason: "declined" });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const toolLines = state.transcript.filter((e) => e.muted);
+    const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
     expect(toolLines).toHaveLength(1);
     expect(toolLines[0].text).toContain(TREE_BRANCH);
     expect(toolLines[0].text).toContain("declined");
@@ -453,7 +454,7 @@ describe("tuiReducer: loop-event", () => {
     state = apply(state, { type: "tool-result", name: "read_file", result: { content: "y" } });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const muted = state.transcript.filter((e) => e.muted);
+    const muted = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
     expect(muted).toHaveLength(1);
     expect(muted[0]?.text).toBe("Read 2 files");
   });
@@ -546,7 +547,7 @@ describe("tuiReducer: loop-event", () => {
 
     expect(state.transcript).toEqual([
       { role: "assistant", text: "the answer" },
-      { role: "system", text: "(done)" },
+      { role: "system", text: "done", muted: true },
     ]);
     expect(state.streaming).toBe("");
     expect(state.status).toBe("");
@@ -554,7 +555,11 @@ describe("tuiReducer: loop-event", () => {
 
   test("done without turn-started does not invent token totals", () => {
     const aborted = apply(undefined, { type: "done", reason: "aborted" });
-    expect(aborted.transcript.at(-1)).toEqual({ role: "system", text: "(done: aborted)" });
+    expect(aborted.transcript.at(-1)).toEqual({
+      role: "system",
+      text: "done: aborted",
+      muted: true,
+    });
   });
 
   test("done with exact usage keeps token totals and hides no-tool-call", () => {
@@ -569,8 +574,9 @@ describe("tuiReducer: loop-event", () => {
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
     const line = state.transcript.at(-1)?.text ?? "";
-    expect(line).toBe(`(done · ${formatTokenProgress(tokens!)})`);
+    expect(line).toBe(`done · ${formatTokenProgress(tokens!)}`);
     expect(line).not.toContain("no-tool-call");
+    expect(state.transcript.at(-1)?.muted).toBe(true);
   });
 
   test("aborted with exact usage keeps the reason and the same token fragment", () => {
@@ -584,8 +590,9 @@ describe("tuiReducer: loop-event", () => {
     state = apply(state, { type: "done", reason: "aborted" });
 
     const line = state.transcript.at(-1)?.text ?? "";
-    expect(line).toBe(`(done: aborted · ${fragment})`);
+    expect(line).toBe(`done: aborted · ${fragment}`);
     expect(line).toContain(fragment);
+    expect(state.transcript.at(-1)?.muted).toBe(true);
   });
 
   test("max-iterations and repeated-denials keep the reason plus totals", () => {
@@ -600,7 +607,7 @@ describe("tuiReducer: loop-event", () => {
       state = apply(state, { type: "done", reason });
 
       const line = state.transcript.at(-1)?.text ?? "";
-      expect(line).toBe(`(done: ${reason} · ${fragment})`);
+      expect(line).toBe(`done: ${reason} · ${fragment}`);
     }
   });
 
@@ -1467,7 +1474,7 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       hasGap: true,
     });
     expect(formatTokenProgress(state.turn?.tokens as TokenProgress)).toBe(
-      `~15 in, ~${Math.round(7 + liveEstimate)} out`,
+      `~15 ↑, ~${Math.round(7 + liveEstimate)} ↓`,
     );
   });
 
@@ -1508,7 +1515,7 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
     expect(state.turn?.tokens.reconciledOutputTokens).toBe(30);
     const displayedOutTotal = Math.round(30 + call1Estimate);
     expect(formatTokenProgress(state.turn?.tokens as TokenProgress)).toBe(
-      `~29 in, ~${displayedOutTotal} out`,
+      `~29 ↑, ~${displayedOutTotal} ↓`,
     );
   });
 
