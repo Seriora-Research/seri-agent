@@ -423,6 +423,29 @@ describe("tuiReducer: loop-event", () => {
     expect(muted.some((e) => e.text.includes("explode"))).toBe(true);
   });
 
+  // loop.ts mid-stream / streamText catch yields error then return — no done. HIGH 1 is still
+  // correct (error itself must not flush, because some errors continue), but turn-ended is the
+  // actual end of that turn and must commit whatever was already recorded.
+  test("error then turn-ended without done flushes accumulated toolActivity", () => {
+    let state = apply(undefined, {
+      type: "tool-call",
+      name: "read_file",
+      args: { path: "a.txt" },
+    });
+    state = apply(state, { type: "tool-result", name: "read_file", result: { content: "x" } });
+    state = apply(state, { type: "error", error: "stream failed" });
+
+    expect(state.toolActivity).toHaveLength(1);
+    expect(state.transcript.filter((e) => e.muted)).toEqual([]);
+
+    state = tuiReducer(state, { type: "turn-ended" });
+
+    const muted = state.transcript.filter((e) => e.muted);
+    expect(muted).toHaveLength(1);
+    expect(muted[0]?.text).toBe("Read a.txt");
+    expect(state.toolActivity).toEqual([]);
+  });
+
   test("tool-allowed still appends immediately, non-muted", () => {
     const state = apply(undefined, { type: "tool-allowed", name: "write_file" });
     expect(state.transcript.at(-1)).toEqual({
