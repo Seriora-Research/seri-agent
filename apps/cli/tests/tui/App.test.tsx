@@ -8,6 +8,7 @@ import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ReactElement, ReactNode } from "react";
 import type { PermissionMode } from "../../src/gate/gate";
 import type { ApprovalAnswer } from "../../src/loop/loop";
+import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { App, type AppProps } from "../../src/tui/app";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";
 import type { Dispatch } from "../../src/tui/state/reducer";
@@ -4124,6 +4125,127 @@ describe("App", () => {
       await flush(setup);
 
       expect(setup.captureCharFrame()).toContain("/effort — reasoning effort");
+    });
+  });
+
+  describe("subagent panel", () => {
+    function childEvent(
+      childId: string,
+      role: ChildEventPayload["role"],
+      goal: string,
+      event: ChildEventPayload["event"],
+    ) {
+      return { type: "subagent-child-event" as const, childId, role, goal, event };
+    }
+
+    function startExplore(dispatch: Dispatch, childId: string, goal: string, file = "foo.ts") {
+      dispatch(childEvent(childId, "explore", goal, { type: "child-started" }));
+      dispatch(
+        childEvent(childId, "explore", goal, {
+          type: "tool-call",
+          name: "read_file",
+          args: { path: file },
+        }),
+      );
+    }
+
+    function panelBand(frame: string): { band: string; start: number; end: number; lines: string[] } {
+      const lines = frame.split("\n");
+      const start = lines.reduce((last, line, i) => (line.includes("─") ? i : last), -1);
+      const end = lines.findIndex((line) => line.includes("approve-each mode on"));
+      return { band: lines.slice(start + 1, end).join("\n"), start, end, lines };
+    }
+
+    test("two in-flight explore children render between InputBox and the mode row", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({
+        type: "loop-event",
+        event: {
+          type: "tool-call",
+          name: "dispatch_subagents",
+          args: { tasks: [{ role: "explore", goal: "find a" }] },
+        },
+      });
+      startExplore(dispatch, "t1:0", "find a");
+      startExplore(dispatch, "t1:1", "find b");
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      const { band, start, end, lines } = panelBand(frame);
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      expect(band).toContain("explore");
+      expect(band.includes("Read") || band.includes("foo.ts")).toBe(true);
+      expect(band).not.toContain("dispatch_subagents");
+      const panelLine = lines.findIndex(
+        (line, i) => i > start && i < end && line.includes("explore"),
+      );
+      expect(panelLine).toBeGreaterThan(start);
+      expect(panelLine).toBeLessThan(end);
+    });
+
+    test("the panel is absent when there are no child events", async () => {
+      const { setup } = await connect();
+      const { band, start, end } = panelBand(setup.captureCharFrame());
+      expect(end).toBeGreaterThan(start);
+      expect(band).not.toContain("explore");
+    });
+
+    test("parent dispatch tool-result hides the panel and leaves the UX settled line", async () => {
+      const { setup, dispatch } = await connect();
+
+      startExplore(dispatch, "t1:0", "find a");
+      startExplore(dispatch, "t1:1", "find b");
+      await flush(setup);
+      expect(panelBand(setup.captureCharFrame()).band).toContain("explore");
+      dispatch({
+        type: "loop-event",
+        event: {
+          type: "tool-result",
+          name: "dispatch_subagents",
+          result: {
+            results: [{ doneReason: "no-tool-call" }, { doneReason: "no-tool-call" }],
+            totalUsage: { totalTokens: 15 },
+          },
+        },
+      });
+      dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(panelBand(frame).band).not.toContain("explore");
+      expect(frame).toContain("✓ Dispatched subagents done");
+      expect(frame).not.toContain("read_file");
+    });
+
+    test("at most three live rows render", async () => {
+      const { setup, dispatch } = await connect();
+      startExplore(dispatch, "t1:0", "a");
+      startExplore(dispatch, "t1:1", "b");
+      startExplore(dispatch, "t1:2", "c");
+      await flush(setup);
+
+      const exploreRows = panelBand(setup.captureCharFrame())
+        .band.split("\n")
+        .filter((line) => line.includes("explore"));
+      expect(exploreRows.length).toBeGreaterThan(0);
+      expect(exploreRows.length).toBeLessThanOrEqual(3);
+    });
+
+    test("an archivist note still renders and does not open the panel", async () => {
+      const { setup, dispatch } = await connect();
+      dispatch({
+        type: "transcript-append",
+        line: `${ARCHIVIST_MARK}(archivist: tool-count trigger, 1 tool call)`,
+        muted: true,
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain(ARCHIVIST_MARK);
+      expect(frame).toContain("(archivist:");
+      expect(panelBand(frame).band).not.toContain("explore");
     });
   });
 });
