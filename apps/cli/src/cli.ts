@@ -112,7 +112,7 @@ import {
   saveSession,
 } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
-import { withSubagents } from "./subagents/dispatch";
+import { type ChildEventPayload, withSubagents } from "./subagents/dispatch";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import { App } from "./tui/app";
@@ -1884,6 +1884,9 @@ async function driveLoop(
   // `createArchivistState` the moment it mints a new session id — that caller's own comment on why
   // this is a rebuild, not a reset, applies here too.
   archivistState: ArchivistState,
+  // TUI live panel; the non-interactive caller omits it. Not folded into onEvent, which stays
+  // LoopEvent only.
+  onChildEvent?: (payload: ChildEventPayload) => void,
 ): Promise<DriveLoopResult> {
   const {
     session,
@@ -1954,6 +1957,7 @@ async function driveLoop(
       usage.outputTokens = addTokens(usage.outputTokens, childUsage.outputTokens);
       cost = addCost(cost, childCost);
     },
+    onChildEvent,
   });
   // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
   // what an exit code promises a shell, which is this consumer's business, not the loop's.
@@ -2876,6 +2880,7 @@ async function runTui(
         () => {},
         tuiApprovalPrompt,
         archivistState,
+        (payload) => dispatch({ type: "subagent-child-event", ...payload }),
       );
       usage = {
         inputTokens: addTokens(usage.inputTokens, result.usage.inputTokens),

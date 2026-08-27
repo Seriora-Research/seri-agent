@@ -7,6 +7,7 @@ import { toolAllowedLine } from "../../cli/output";
 import type { LoopEvent } from "../../loop/loop";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
+import type { ChildEventPayload } from "../../subagents/dispatch";
 import {
   estimateTokens,
   formatDoneLine,
@@ -347,7 +348,8 @@ export type TuiAction =
   // compaction, an unknown tool call, a tool that threw) that all keep the turn running afterward,
   // and clearing TurnStatus's own state on any of those made a turn that was still very much in
   // progress look like it had silently died.
-  | { type: "turn-ended" };
+  | { type: "turn-ended" }
+  | ({ type: "subagent-child-event" } & ChildEventPayload);
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -519,6 +521,12 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       // done, so this is the only commit point for tools already recorded. After a real done
       // the accumulator is already [], so the flush is a no-op.
       return { ...flushToolActivity(state), turn: undefined };
+    case "subagent-child-event":
+      return state;
+    default: {
+      const _exhaustive: never = action;
+      return _exhaustive;
+    }
   }
 }
 

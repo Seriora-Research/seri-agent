@@ -272,7 +272,7 @@ export function toolResultLine(event: Extract<LoopEvent, { type: "tool-result" }
       dispatch.ran === dispatch.total
         ? `${dispatch.total} ${dispatch.total === 1 ? "task" : "tasks"}`
         : `${dispatch.ran} of ${dispatch.total} tasks`;
-    return `✓ dispatch_subagents done (${tasks}${tokens})`;
+    return `✓ Dispatched subagents done (${tasks}${tokens})`;
   }
   const verification = writeFileVerification(event.result);
   return `✓ ${event.name} done${verification === undefined ? "" : verificationSuffix(verification)}`;
