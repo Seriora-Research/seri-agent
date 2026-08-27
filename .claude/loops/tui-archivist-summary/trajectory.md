@@ -11,3 +11,9 @@
 - STATE.md Status → PLAN. Plan checklist filled from the six ordered EXECUTE steps.
 - Do not promote to `docs/specs/035-tui-archivist-summary/` until Handler says so.
 - Next: human approval, then EXECUTE.
+
+## 2026-08-27T12:59:44Z EXECUTE
+- Merged `origin/main` (PR 183 live-paint + PR 184 roadmap) into `feat/tui-archivist-summary`. No TranscriptRow conflict; both 183 `renderLiveToolActivity` and the planned muted-markdown branch remain in scope.
+- Promoted approved feature-plan to `docs/specs/035-tui-archivist-summary/{spec,tasks}.md`. Did not edit `docs/ROADMAP.md`.
+- STATE.md Status → EXECUTE. Six EXECUTE steps start unchecked; check off as each lands.
+- Next: ordered EXECUTE steps 1–6. skip: War Room VERIFY opens the PR later.

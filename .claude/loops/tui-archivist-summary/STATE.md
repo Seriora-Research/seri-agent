@@ -2,8 +2,8 @@
 - Mode: feature
 - Task: issue #175 — TUI archivist summary renders as raw markdown with no visual framing. Same design family as #173/#174.
 - Branch: feat/tui-archivist-summary
-- Status: PLAN
-- Started: 2026-08-27T12:37:00Z  |  Updated: 2026-08-27T12:44:32Z
+- Status: EXECUTE
+- Started: 2026-08-27T12:37:00Z  |  Updated: 2026-08-27T12:59:44Z
 
 ## Model config
 | role              | model   |
