@@ -3,8 +3,9 @@
 // accumulator for settled groups during the turn. `renderToolActivity` is also what the
 // reducer flushes into muted transcript lines on done/turn-ended. Aggregation is by exact
 // tool name (every TOOL_LABELS entry — not a Read special-case). `dispatch_subagents` is
-// never aggregated: each call stays its own entry so the per-call task/token line from
-// `toolResultLine` is kept.
+// never recorded here: recordCall and recordResult both early-return, so the TUI does not
+// paint a dispatch settled line. `alwaysAppend` stays on mapEntry's other callers so a
+// later regression cannot merge a dispatch row into another group.
 import path from "node:path";
 import { escapeControlChars, toolResultLine } from "../../cli/output";
 import type { DispatchResult } from "../../subagents/dispatch";
@@ -238,7 +239,7 @@ function mapEntry(
 }
 
 function settledSingleLine(name: string, args: unknown, result: unknown): string {
-  if (name === "edit" || name === "dispatch_subagents") {
+  if (name === "edit") {
     return toolResultLine({ type: "tool-result", name, result });
   }
   if (name === "write_file") {
@@ -255,8 +256,8 @@ export function recordCall(
   name: string,
   args: unknown,
 ): ToolActivityEntry[] {
-  // dispatch_subagents is never aggregated; its settled line comes from recordResult's
-  // toolResultLine. Recording the call here would append a second alwaysAppend entry.
+  // dispatch_subagents is never recorded; its TUI surface is the child roster, not a
+  // settled transcript line. Recording the call here would append a second alwaysAppend entry.
   if (name === "dispatch_subagents") return entries;
   return mapEntry(
     entries,
@@ -281,6 +282,7 @@ export function recordResult(
   args: unknown,
   result: unknown,
 ): ToolActivityEntry[] {
+  if (name === "dispatch_subagents") return entries;
   const anomaly = anomalyLineForResult(name, args, result);
   const details = detailLinesForResult(name, result);
   return mapEntry(
