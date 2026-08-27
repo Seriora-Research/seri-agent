@@ -1785,7 +1785,38 @@ describe("tuiReducer: subagent-child-event", () => {
     ]);
   });
 
-  test("parent dispatch_subagents tool-result with no overlay keeps subagents", () => {
+  test("a child done event does not clear the roster", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "done", reason: "no-tool-call" }),
+    );
+
+    expect(panel(state).subagents).toHaveLength(1);
+    expect(panel(state).subagents[0]?.id).toBe("t1:0");
+    expect(panel(state).subagents[0]?.status).toBe("done");
+  });
+
+  test("a non-dispatch tool-result does not clear the roster", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "read_file", result: "ok" },
+    });
+
+    expect(panel(state).subagents).toHaveLength(1);
+    expect(panel(state).subagents[0]?.id).toBe("t1:0");
+  });
+
+  test("parent dispatch_subagents tool-result with no overlay clears subagents", () => {
     let state = initialTuiState(session());
     state = tuiReducer(
       state,
@@ -1801,38 +1832,13 @@ describe("tuiReducer: subagent-child-event", () => {
       },
     });
 
-    expect(panel(state).subagents).toHaveLength(1);
-    expect(panel(state).subagents[0]?.id).toBe("t1:0");
+    expect(panel(state).subagents).toEqual([]);
+    expect(panel(state).subagentPanelFocus).toBe(false);
+    expect(panel(state).subagentPanelSelectedId).toBeUndefined();
+    expect(panel(state).pendingChildView).toBeUndefined();
   });
 
-  test("parent dispatch_subagents tool-result with a child view keeps every child", () => {
-    let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
-    state = tuiReducer(
-      state,
-      childEvent("t1:1", "explore", "find b", { type: "child-started" }),
-    );
-    const withOverlay = { ...state, pendingChildView: "t1:0" } as TuiState;
-    state = tuiReducer(withOverlay, {
-      type: "loop-event",
-      event: {
-        type: "tool-result",
-        name: "dispatch_subagents",
-        result: {
-          results: [{ doneReason: "no-tool-call" }, { doneReason: "no-tool-call" }],
-          totalUsage: {},
-        },
-      },
-    });
-
-    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0", "t1:1"]);
-    expect(panel(state).pendingChildView).toBe("t1:0");
-  });
-
-  test("overlay-close after parent dispatch flush only clears the child view", () => {
+  test("parent dispatch_subagents tool-result with a child view clears the roster and the view", () => {
     let state = initialTuiState(session());
     state = tuiReducer(
       state,
@@ -1843,6 +1849,7 @@ describe("tuiReducer: subagent-child-event", () => {
       childEvent("t1:1", "explore", "find b", { type: "child-started" }),
     );
     state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
+    state = tuiReducer(state, { type: "subagent-panel-focus" });
     state = tuiReducer(state, {
       type: "loop-event",
       event: {
@@ -1854,13 +1861,11 @@ describe("tuiReducer: subagent-child-event", () => {
         },
       },
     });
-    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0", "t1:1"]);
-    expect(panel(state).pendingChildView).toBe("t1:0");
 
-    state = tuiReducer(state, { type: "subagent-overlay-close" });
-
-    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0", "t1:1"]);
+    expect(panel(state).subagents).toEqual([]);
     expect(panel(state).pendingChildView).toBeUndefined();
+    expect(panel(state).subagentPanelFocus).toBe(false);
+    expect(panel(state).subagentPanelSelectedId).toBeUndefined();
   });
 
   test("turn-started clears the roster and the child view", () => {

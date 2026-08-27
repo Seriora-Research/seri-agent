@@ -4203,7 +4203,7 @@ describe("App", () => {
       expect(band).not.toContain("explore");
     });
 
-    test("parent dispatch tool-result keeps the panel and skips the dispatch settled line", async () => {
+    test("parent dispatch tool-result hides the panel and skips the dispatch settled line", async () => {
       const { setup, dispatch } = await connect();
 
       dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
@@ -4226,7 +4226,8 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(panelBand(frame).band).toContain("explore");
+      expect(panelBand(frame).band).not.toContain("explore");
+      expect(panelBand(frame).band).not.toContain("main");
       expect(frame).toContain("done ·");
       expect(frame).not.toContain("✓ Dispatched subagents done");
       expect(frame).not.toContain("read_file");
@@ -4330,7 +4331,7 @@ describe("App", () => {
       expect(afterEsc).toContain("UNIQUE_GOAL");
     });
 
-    test("after parent flush with a child view open the roster stays and can still open a child", async () => {
+    test("after parent flush with a child view open the roster unmounts and the parent transcript returns", async () => {
       const { setup, dispatch } = await connect();
       startExplore(dispatch, "t1:0", "find a", "a.ts");
       startExplore(dispatch, "t1:1", "find b", "b.ts");
@@ -4357,26 +4358,11 @@ describe("App", () => {
       dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
       await flush(setup);
 
-      const viewing = setup.captureCharFrame();
-      expect(viewing).toContain("Read");
-      expect(viewing).not.toContain("✓ Dispatched subagents done");
-      expect(panelBand(viewing).band).toContain("explore");
-
-      setup.mockInput.pressEscape();
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      await flush(setup);
-
-      const afterEsc = setup.captureCharFrame();
-      expect(afterEsc).toContain("─");
-      expect(panelBand(afterEsc).band).toContain("explore");
-
-      setup.mockInput.pressArrow("down");
-      await flush(setup);
-      setup.mockInput.pressEnter();
-      await flush(setup);
-      const afterReopen = setup.captureCharFrame();
-      expect(afterReopen).toContain("─");
-      expect(panelBand(afterReopen).band).toContain("explore");
+      const afterFlush = setup.captureCharFrame();
+      expect(afterFlush).toContain("─");
+      expect(afterFlush).not.toContain("✓ Dispatched subagents done");
+      expect(panelBand(afterFlush).band).not.toContain("explore");
+      expect(panelBand(afterFlush).band).not.toContain("main");
     });
 
     test("the second child is still in the frame while a child is viewed", async () => {
