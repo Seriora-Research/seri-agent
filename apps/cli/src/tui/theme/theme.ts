@@ -58,3 +58,7 @@ export const theme = {
 // calls and must not have this mark applied to.
 export const ERROR_MARK = "✕ ";
 export const WARNING_MARK = "! ";
+// Secondary-detail glyph, not a color — the same "weight and a mark, not color" convention
+// ERROR_MARK/WARNING_MARK already use. Prefixed onto a tool-activity anomaly or grep/glob
+// match path at the TUI call site.
+export const TREE_BRANCH = "└ ";

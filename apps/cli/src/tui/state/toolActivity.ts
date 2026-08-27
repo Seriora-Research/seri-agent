@@ -10,10 +10,7 @@ import type { GlobResult } from "../../tools/glob";
 import type { GrepResult } from "../../tools/grep";
 import type { ProcessResult } from "../../tools/spawnCollect";
 import { writeFileVerification } from "../../verify/outcome";
-
-// Secondary-detail glyph, not a color — the same "weight and a mark, not color" convention
-// ERROR_MARK/WARNING_MARK already use.
-const TREE_BRANCH = "└ ";
+import { TREE_BRANCH } from "../theme/theme";
 
 export type ToolActivityEntry = {
   name: string;
