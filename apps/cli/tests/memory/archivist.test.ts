@@ -619,6 +619,63 @@ describe("runArchivist", () => {
     expect(calls[0]?.opts.contextWindowSize).toBe(42_000);
   });
 
+  test("threads its own reasoningEffort into the child runLoop's opts.reasoningEffort", async () => {
+    const ctx = makeCtx();
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [
+        { type: "text-delta", text: "ok" },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    const state = createArchivistState(emptySession());
+    state.messages = [{ role: "user", content: "task" }];
+    state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+
+    await runArchivist({
+      state,
+      trigger: "tool-count",
+      ctx,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      contextWindow: 42_000,
+      reasoningEffort: "high",
+      signal: new AbortController().signal,
+      onWarning: () => {},
+      runLoop: fake as unknown as typeof runLoop,
+    });
+
+    expect(calls[0]?.opts.reasoningEffort).toBe("high");
+  });
+
+  test("omitting reasoningEffort leaves nested opts.reasoningEffort undefined", async () => {
+    const ctx = makeCtx();
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [
+        { type: "text-delta", text: "ok" },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    const state = createArchivistState(emptySession());
+    state.messages = [{ role: "user", content: "task" }];
+    state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+
+    await runArchivist({
+      state,
+      trigger: "tool-count",
+      ctx,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      contextWindow: 42_000,
+      signal: new AbortController().signal,
+      onWarning: () => {},
+      runLoop: fake as unknown as typeof runLoop,
+    });
+
+    expect(calls[0]?.opts.reasoningEffort).toBeUndefined();
+  });
+
   // MEDIUM finding (reviewer-verifier): runArchivist used to build its goal from the caller's
   // frozen-per-session memory snapshot. On a second archivist run in the same session (approval
   // gate off, or a mid-session /memory approve landing between two archivist runs), that snapshot
@@ -801,6 +858,7 @@ describe("the archivist provably cannot edit a file, run a command, or dispatch 
       catalog: catalogFor(),
       permissionMode: () => "auto",
       allowedTools: [],
+      reasoningEffort: undefined,
     };
     const result = await runSubagent({
       tools: { memory_write: makeMemoryWriteTool(ctx) },
