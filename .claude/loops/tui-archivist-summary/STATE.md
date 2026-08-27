@@ -2,8 +2,8 @@
 - Mode: feature
 - Task: issue #175 — TUI archivist summary renders as raw markdown with no visual framing. Same design family as #173/#174.
 - Branch: feat/tui-archivist-summary
-- Status: EXECUTE
-- Started: 2026-08-27T12:37:00Z  |  Updated: 2026-08-27T13:12:00Z
+- Status: DONE
+- Started: 2026-08-27T12:37:00Z  |  Updated: 2026-08-27T13:28:00Z
 
 ## Model config
 | role              | model   |
@@ -47,6 +47,9 @@
 - failures: none
 
 ## Reviewer verdict
+Inquisitor APPROVE (LOW only, non-blocking). Crucible: ALL GATES PASSED + manual PASS on Lionel's WSL.
 
 ## Open questions / blockers
 - None. origin/main (PR 183) merged into this branch; no TranscriptRow conflict.
+
+PR: https://github.com/lzvxck/seri-agent/pull/185

@@ -42,3 +42,6 @@
 - Negative control: App test failed on literal `**` at 7571a1f (`recorded **bold** fact`); green after TranscriptRow change (c1721f8).
 - Manual TUI: SKIPPED (no interactive TUI session on this VM).
 - skip: War Room VERIFY opens the PR later.
+
+## 2026-08-27T13:28:00Z DONE
+- Opened https://github.com/lzvxck/seri-agent/pull/185 against main. ROADMAP 035 → 🟡 PR open (#185). Status → DONE.
