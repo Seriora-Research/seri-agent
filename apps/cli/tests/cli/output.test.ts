@@ -125,7 +125,7 @@ describe("toolResultLine", () => {
         totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       },
     });
-    expect(line).toBe("✓ dispatch_subagents done (2 tasks, 15 tokens)");
+    expect(line).toBe("✓ Dispatched subagents done (2 tasks, 15 tokens)");
   });
 
   test("dispatch_subagents omits the token clause when totalTokens is undefined", () => {
@@ -134,7 +134,7 @@ describe("toolResultLine", () => {
       name: "dispatch_subagents",
       result: { results: [{ doneReason: "no-tool-call" }], totalUsage: {} },
     });
-    expect(line).toBe("✓ dispatch_subagents done (1 task)");
+    expect(line).toBe("✓ Dispatched subagents done (1 task)");
   });
 
   // A row with doneReason undefined never ran (batch-cap overflow, or a row this test itself just
@@ -148,6 +148,6 @@ describe("toolResultLine", () => {
         totalUsage: {},
       },
     });
-    expect(line).toBe("✓ dispatch_subagents done (1 of 2 tasks)");
+    expect(line).toBe("✓ Dispatched subagents done (1 of 2 tasks)");
   });
 });
