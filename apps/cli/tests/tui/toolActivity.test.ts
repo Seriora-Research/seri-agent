@@ -9,6 +9,7 @@ import {
   recordCall,
   recordDenial,
   recordResult,
+  renderLiveToolActivity,
   renderToolActivity,
   summarizeArgs,
   type ToolActivityEntry,
@@ -392,5 +393,34 @@ describe("recordCall / recordResult / recordDenial", () => {
     const branches = rendered.split("\n").filter((line) => line.startsWith(TREE_BRANCH));
     expect(entries[0].count).toBe(2);
     expect(branches).toHaveLength(1);
+  });
+});
+
+describe("renderLiveToolActivity", () => {
+  test("skips an open count===1 entry so the first in-flight call is only pendingTool", () => {
+    const entries = recordCall([], "read_file", { path: "a.txt" });
+    expect(renderLiveToolActivity(entries)).toEqual([]);
+    expect(renderToolActivity(entries)).toEqual(["Read a.txt"]);
+  });
+
+  test("open count>1 paints at count-1 until the next result lands", () => {
+    let entries = recordCall([], "read_file", { path: "a.txt" });
+    entries = recordResult(entries, "read_file", { path: "a.txt" }, { content: "x" });
+    expect(renderLiveToolActivity(entries)).toEqual(["Read a.txt"]);
+    entries = recordCall(entries, "read_file", { path: "b.txt" });
+    expect(renderLiveToolActivity(entries)).toEqual(["Read a.txt"]);
+    entries = recordResult(entries, "read_file", { path: "b.txt" }, { content: "y" });
+    expect(renderLiveToolActivity(entries)).toEqual(["Read 2 files"]);
+  });
+
+  test("same open-count filter applies to bash, not only read_file", () => {
+    const ok = proc();
+    let entries = recordCall([], "bash", { command: "echo a" });
+    entries = recordResult(entries, "bash", { command: "echo a" }, ok);
+    expect(renderLiveToolActivity(entries)).toEqual(["Ran echo a"]);
+    entries = recordCall(entries, "bash", { command: "echo b" });
+    expect(renderLiveToolActivity(entries)).toEqual(["Ran echo a"]);
+    entries = recordResult(entries, "bash", { command: "echo b" }, ok);
+    expect(renderLiveToolActivity(entries)).toEqual(["Ran 2 shell commands"]);
   });
 });

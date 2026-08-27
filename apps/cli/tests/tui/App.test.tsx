@@ -1344,7 +1344,7 @@ describe("App", () => {
       expect(frame).not.toContain("(done:");
     });
 
-    // Lionel: in-place aggregation is every TOOL_LABELS name, not a Read special-case.
+    // In-place aggregation is every TOOL_LABELS name, not a Read special-case.
     test("two sequential same-name bash results before done show one Ran 2 shell commands", async () => {
       const { setup, dispatch } = await connect();
 
