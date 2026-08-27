@@ -1,0 +1,17 @@
+{
+  "_tiers": "fastest=cheap high-volume work | balanced=code gen, research | capable=hard reasoning, judgment",
+  "_values": "Task model slugs this Cursor runner accepts, or 'inherit' to use the runner's active model. Do not pass Claude-Code-only ids.",
+  "_examples": {
+    "cursor-inherit": "{ orchestrator: inherit, reviewer-verifier: inherit }",
+    "cursor-explicit": "{ orchestrator: inherit, reviewer-verifier: inherit, explorer: inherit }"
+  },
+  "orchestrator": "inherit",
+  "env-detector": "inherit",
+  "explorer": "inherit",
+  "researcher": "inherit",
+  "planner": "inherit",
+  "implementer": "inherit",
+  "reviewer-verifier": "inherit",
+  "test-runner": "inherit",
+  "retro": "inherit"
+}

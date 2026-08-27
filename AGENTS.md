@@ -208,8 +208,9 @@ evaluate, and improve autonomous software engineering agents.
 
 ## Notes for agents
 
-- `.claude/` holds this project's own Claude Code loop/agent/skill configuration
-  (engineering-loop, retro, etc.) — it's gitignored and orthogonal to seri's own code.
+- Cursor engineering loop: `.cursor/` (skills, rules, hooks, templates). Run state
+  is `.cursor/loops/<slug>/` (gitignored). Claude Code's copy lives under `.claude/`
+  and uses `.claude/loops/` — do not mix the two on one slug.
 - `apps/cli/src/tools/rg-vendored.bin` is a vendored ripgrep binary fetched by
   `postinstall`/`vendorRipgrep.ts`; don't hand-edit it.
 - Feature work lands via a branch + PR (`main` has branch protection), not direct
