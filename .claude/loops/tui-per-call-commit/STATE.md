@@ -2,8 +2,8 @@
 - Mode: feature
 - Task: issue #182 — TUI commits tool-call/result lines per-call (real-time), not at turn end. Successor to spec 034 / issue 173 / PR 181.
 - Branch: feat/tui-per-call-commit
-- Status: INIT
-- Started: 2026-08-27T02:58:00Z  |  Updated: 2026-08-27T03:01:40Z
+- Status: PLAN
+- Started: 2026-08-27T02:58:00Z  |  Updated: 2026-08-27T03:06:12Z
 
 ## Model config
 | role              | model   |
@@ -25,7 +25,12 @@
 - success_check: A turn of two sequential tools produces two muted transcript entries BEFORE the done/Cooked-for marker, each appearing when that call's tool-result is applied (reducer: after tool-result and before done, transcript already contains the muted line). Not a single flush at turn end.
 
 ## Plan checklist
-- [ ] pending EXPLORE
+- [ ] Rewrite reducer tests RED for per-call (assert muted line on tool-result before done; two calls → two lines; no aggregate).
+- [ ] Change `tool-result` / `permission-denied` in `applyLoopEvent` to immediate muted `pushLine`; keep `recordCall` + leftover flush on `done`/`turn-ended`; `error` non-flush.
+- [ ] Simplify `toolActivity.ts`: no name-aggregation; count===1 render only; keep helpers.
+- [ ] Update `docs/design/tui.md`.
+- [ ] Fix remaining unit tests (`toolActivity.test.ts`, App comments).
+- [ ] Run lint, typecheck, full `apps/cli` test; record exit codes.
 
 ## Gate results (latest)
 | gate      | command | exit | notes |
