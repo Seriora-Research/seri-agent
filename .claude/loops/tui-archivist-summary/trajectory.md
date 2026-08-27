@@ -25,3 +25,6 @@
 
 ## 2026-08-27T13:04:00Z EXECUTE step 2
 - Extracted `archivistStatsLine`; `archivistLine` prefixes `ARCHIVIST_MARK` and still indents a defined summary. `output.test.ts` pins the mark and the stats-only equality.
+
+## 2026-08-27T13:06:00Z EXECUTE step 3
+- Threaded `muted`/`markdown` through `pushLine` and `pushTranscriptLine`. TUI archivist is two pushes (muted stats, optional muted markdown summary). Reducer test pins omit-when-false. App test still RED on literal `**`.

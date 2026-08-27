@@ -27,8 +27,8 @@
 ## Plan checklist
 - [x] RED App test: additive `transcript-append` fields so the test typechecks; dispatch stats+summary with `**bold**`; assert the GREEN contract (fails on literal `**` still visible).
 - [x] `ARCHIVIST_MARK` + `archivistStatsLine` / `archivistLine`; update `output.test.ts`.
-- [ ] Thread `muted`/`markdown` through `pushLine` + `pushTranscriptLine`; two TUI pushes in `cli.ts`; reducer tests for the flags.
-- [ ] `TranscriptRow`: muted markdown path (GREEN the App test). Negative system line still raw.
+- [x] Thread `muted`/`markdown` through `pushLine` + `pushTranscriptLine`; two TUI pushes in `cli.ts`; reducer tests for the flags.
+- [x] `TranscriptRow`: muted markdown path (GREEN the App test). Negative system line still raw.
 - [ ] `docs/design/tui.md`.
 - [ ] lint, typecheck, full `apps/cli` tests; record exit codes.
 
