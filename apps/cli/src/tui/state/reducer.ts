@@ -7,6 +7,7 @@ import { toolAllowedLine } from "../../cli/output";
 import type { LoopEvent } from "../../loop/loop";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
+import type { ChildEventPayload } from "../../subagents/dispatch";
 import {
   estimateTokens,
   formatDoneLine,
@@ -179,6 +180,25 @@ export type TuiState = {
   route: ResolvedRoute | undefined;
   // See `"config-updated"`'s own comment, below, for what this is and why.
   config: Record<string, string>;
+  // In-memory live rows for the current dispatch. Cleared on the parent dispatch tool-result
+  // unless an overlay is holding one child. Not session JSON.
+  subagents: ChildView[];
+  subagentPanelFocus: boolean;
+  subagentPanelSelectedId: string | undefined;
+  pendingChildView: string | undefined;
+  // Parent dispatch already flushed. Remaining subagents exist only to feed the open overlay.
+  subagentsHeldForOverlay: boolean;
+};
+
+export type ChildView = {
+  id: string;
+  role: ChildEventPayload["role"];
+  goal: string;
+  status: "running" | "done" | "error" | "aborted";
+  currentTool?: { name: string; args: unknown };
+  transcript: TranscriptEntry[];
+  streaming: string;
+  toolActivity: ToolActivityEntry[];
 };
 
 // What "an empty transcript" means, as a single value rather than fields independently kept
@@ -224,6 +244,11 @@ export function initialTuiState(
     pendingPermissions: undefined,
     pendingEffort: undefined,
     pendingSplash: opts?.showSplash ?? false,
+    subagents: [],
+    subagentPanelFocus: false,
+    subagentPanelSelectedId: undefined,
+    pendingChildView: undefined,
+    subagentsHeldForOverlay: false,
   };
 }
 
@@ -347,7 +372,13 @@ export type TuiAction =
   // compaction, an unknown tool call, a tool that threw) that all keep the turn running afterward,
   // and clearing TurnStatus's own state on any of those made a turn that was still very much in
   // progress look like it had silently died.
-  | { type: "turn-ended" };
+  | { type: "turn-ended" }
+  | ({ type: "subagent-child-event" } & ChildEventPayload)
+  | { type: "subagent-panel-focus" }
+  | { type: "subagent-panel-blur" }
+  | { type: "subagent-panel-select"; id: string }
+  | { type: "subagent-overlay-open"; id: string }
+  | { type: "subagent-overlay-close" };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
 // prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
@@ -356,6 +387,99 @@ export type TuiAction =
 // this — it only ever dispatched one action shape, so it no longer needs to know TuiAction
 // exists at all. Lives here, not cli.ts, since it is built from TuiAction, declared right above.
 export type Dispatch = (action: TuiAction) => void;
+
+const MAX_LIVE_SUBAGENTS = 3;
+
+function emptyChild(id: string, role: ChildEventPayload["role"], goal: string): ChildView {
+  return {
+    id,
+    role,
+    goal,
+    status: "running",
+    transcript: [],
+    streaming: "",
+    toolActivity: [],
+  };
+}
+
+function flushChildStreaming(child: ChildView): ChildView {
+  if (child.streaming.length === 0) return child;
+  return {
+    ...child,
+    transcript: [...child.transcript, { role: "assistant", text: child.streaming }],
+    streaming: "",
+  };
+}
+
+function applyChildLoopEvent(child: ChildView, event: ChildEventPayload["event"]): ChildView {
+  switch (event.type) {
+    case "child-started":
+      return child;
+    case "text-delta":
+      return { ...child, streaming: child.streaming + event.text };
+    case "tool-call": {
+      const flushed = flushChildStreaming(child);
+      return {
+        ...flushed,
+        currentTool: { name: event.name, args: event.args },
+        toolActivity: recordCall(flushed.toolActivity, event.name, event.args),
+      };
+    }
+    case "tool-result":
+      return {
+        ...child,
+        toolActivity: recordResult(
+          child.toolActivity,
+          event.name,
+          child.currentTool?.args,
+          event.result,
+        ),
+      };
+    case "permission-denied":
+      return {
+        ...child,
+        toolActivity: recordDenial(child.toolActivity, event.name, event.reason),
+      };
+    case "error":
+      return { ...child, status: "error" };
+    case "done":
+      return {
+        ...flushChildStreaming(child),
+        status: event.reason === "aborted" ? "aborted" : "done",
+      };
+    case "usage":
+    case "compacted":
+    case "messages-updated":
+    case "retry":
+    case "tool-allowed":
+      return child;
+    default: {
+      const _exhaustive: never = event;
+      return _exhaustive;
+    }
+  }
+}
+
+function applyChildEvent(
+  state: TuiState,
+  action: { type: "subagent-child-event" } & ChildEventPayload,
+): TuiState {
+  if (action.event.type === "child-started") {
+    if (state.subagents.some((child) => child.id === action.childId)) return state;
+    if (state.subagents.length >= MAX_LIVE_SUBAGENTS) return state;
+    return {
+      ...state,
+      subagents: [...state.subagents, emptyChild(action.childId, action.role, action.goal)],
+    };
+  }
+  if (!state.subagents.some((child) => child.id === action.childId)) return state;
+  return {
+    ...state,
+    subagents: state.subagents.map((child) =>
+      child.id === action.childId ? applyChildLoopEvent(child, action.event) : child,
+    ),
+  };
+}
 
 export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
   switch (action.type) {
@@ -519,6 +643,36 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       // done, so this is the only commit point for tools already recorded. After a real done
       // the accumulator is already [], so the flush is a no-op.
       return { ...flushToolActivity(state), turn: undefined };
+    case "subagent-child-event":
+      return applyChildEvent(state, action);
+    case "subagent-panel-focus":
+      return {
+        ...state,
+        subagentPanelFocus: true,
+        subagentPanelSelectedId: state.subagentPanelSelectedId ?? state.subagents[0]?.id,
+      };
+    case "subagent-panel-blur":
+      return { ...state, subagentPanelFocus: false };
+    case "subagent-panel-select":
+      return { ...state, subagentPanelSelectedId: action.id };
+    case "subagent-overlay-open":
+      return { ...state, pendingChildView: action.id, subagentPanelFocus: false };
+    case "subagent-overlay-close":
+      if (state.subagentsHeldForOverlay) {
+        return {
+          ...state,
+          pendingChildView: undefined,
+          subagents: [],
+          subagentPanelFocus: false,
+          subagentPanelSelectedId: undefined,
+          subagentsHeldForOverlay: false,
+        };
+      }
+      return { ...state, pendingChildView: undefined };
+    default: {
+      const _exhaustive: never = action;
+      return _exhaustive;
+    }
   }
 }
 
@@ -651,12 +805,13 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     case "tool-call":
       return {
         ...flushStreaming(state),
-        status: `Running ${event.name}…`,
+        // dispatch_subagents' live surface is the child panel, not a footer raw-id string.
+        status: event.name === "dispatch_subagents" ? "" : `Running ${event.name}…`,
         pendingTool: { name: event.name, args: event.args },
         toolActivity: recordCall(state.toolActivity, event.name, event.args),
       };
-    case "tool-result":
-      return {
+    case "tool-result": {
+      const settled: TuiState = {
         ...state,
         toolActivity: recordResult(
           state.toolActivity,
@@ -667,6 +822,23 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         status: "",
         pendingTool: undefined,
       };
+      if (event.name !== "dispatch_subagents") return settled;
+      if (settled.pendingChildView !== undefined) {
+        return {
+          ...settled,
+          subagents: settled.subagents.filter((child) => child.id === settled.pendingChildView),
+          subagentPanelFocus: false,
+          subagentsHeldForOverlay: true,
+        };
+      }
+      return {
+        ...settled,
+        subagents: [],
+        subagentPanelFocus: false,
+        subagentPanelSelectedId: undefined,
+        subagentsHeldForOverlay: false,
+      };
+    }
     case "permission-denied":
       return {
         ...state,

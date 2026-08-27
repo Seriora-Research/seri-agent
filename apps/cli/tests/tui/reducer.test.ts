@@ -9,8 +9,9 @@ import type {
   PermissionRow,
   SetupProviderRow,
 } from "../../src/tui/state/commands";
+import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { initialTuiState, type TuiState, tuiReducer } from "../../src/tui/state/reducer";
-import { renderLiveToolActivity } from "../../src/tui/state/toolActivity";
+import { renderLiveToolActivity, summarizeArgs } from "../../src/tui/state/toolActivity";
 import { TREE_BRANCH } from "../../src/tui/theme/theme";
 import { estimateTokens, formatTokenProgress, type TokenProgress } from "../../src/tui/util/format";
 
@@ -1668,5 +1669,224 @@ describe("tuiReducer: error does not end a turn — only turn-ended does", () =>
     state = tuiReducer(state, { type: "turn-ended" });
 
     expect(state.turn).toBeUndefined();
+  });
+});
+
+type ChildViewProbe = {
+  id: string;
+  role: string;
+  goal: string;
+  status: string;
+  currentTool?: { name: string; args: unknown };
+  streaming: string;
+  toolActivity: Array<{ anomalyLines: string[] }>;
+};
+
+function panel(state: TuiState): {
+  subagents: ChildViewProbe[];
+  subagentPanelFocus: boolean;
+  pendingChildView: string | undefined;
+} {
+  const extra = state as TuiState & {
+    subagents?: ChildViewProbe[];
+    subagentPanelFocus?: boolean;
+    pendingChildView?: string;
+  };
+  return {
+    subagents: extra.subagents ?? [],
+    subagentPanelFocus: extra.subagentPanelFocus ?? false,
+    pendingChildView: extra.pendingChildView,
+  };
+}
+
+function childEvent(
+  childId: string,
+  role: ChildEventPayload["role"],
+  goal: string,
+  event: ChildEventPayload["event"],
+) {
+  return { type: "subagent-child-event" as const, childId, role, goal, event };
+}
+
+describe("tuiReducer: subagent-child-event", () => {
+  test("child-started then child tool-call sets currentTool without touching the parent transcript", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "tool-call",
+        name: "read_file",
+        args: { path: "foo.ts" },
+      }),
+    );
+
+    const child = panel(state).subagents[0];
+    expect(child?.id).toBe("t1:0");
+    expect(child?.currentTool).toEqual({ name: "read_file", args: { path: "foo.ts" } });
+    expect(summarizeArgs(child.currentTool!.name, child.currentTool!.args)).toBe("Read foo.ts");
+    expect(state.transcript).toEqual([]);
+    expect(state.toolActivity).toEqual([]);
+    expect(state.pendingTool).toBeUndefined();
+  });
+
+  test("child text-delta accumulates on streaming and does not change currentTool", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "tool-call",
+        name: "read_file",
+        args: { path: "foo.ts" },
+      }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "text-delta", text: "Hel" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "text-delta", text: "lo" }),
+    );
+
+    const child = panel(state).subagents[0];
+    expect(child?.currentTool).toEqual({ name: "read_file", args: { path: "foo.ts" } });
+    expect(child?.streaming).toBe("Hello");
+    expect(state.streaming).toBe("");
+  });
+
+  test("parent dispatch_subagents tool-result with no overlay clears subagents and focus", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    expect(panel(state).subagents).toHaveLength(1);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: {
+        type: "tool-result",
+        name: "dispatch_subagents",
+        result: { results: [{ doneReason: "no-tool-call" }], totalUsage: {} },
+      },
+    });
+
+    expect(panel(state).subagents).toEqual([]);
+    expect(panel(state).subagentPanelFocus).toBe(false);
+  });
+
+  test("parent dispatch_subagents tool-result with overlay keeps that child and drops the rest", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:1", "explore", "find b", { type: "child-started" }),
+    );
+    const withOverlay = { ...state, pendingChildView: "t1:0" } as TuiState;
+    state = tuiReducer(withOverlay, {
+      type: "loop-event",
+      event: {
+        type: "tool-result",
+        name: "dispatch_subagents",
+        result: {
+          results: [{ doneReason: "no-tool-call" }, { doneReason: "no-tool-call" }],
+          totalUsage: {},
+        },
+      },
+    });
+
+    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0"]);
+    expect(panel(state).subagents.some((c) => c.id === "t1:1")).toBe(false);
+  });
+
+  test("overlay-close after parent dispatch flush drops the held child", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: {
+        type: "tool-result",
+        name: "dispatch_subagents",
+        result: { results: [{ doneReason: "no-tool-call" }], totalUsage: {} },
+      },
+    });
+    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0"]);
+    expect(panel(state).pendingChildView).toBe("t1:0");
+
+    state = tuiReducer(state, { type: "subagent-overlay-close" });
+
+    expect(panel(state).subagents).toEqual([]);
+    expect(panel(state).pendingChildView).toBeUndefined();
+    expect(panel(state).subagentPanelFocus).toBe(false);
+  });
+
+  test("two explore children store the raw role, not a numbered label", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:1", "explore", "find b", { type: "child-started" }),
+    );
+
+    expect(panel(state).subagents.map((c) => c.role)).toEqual(["explore", "explore"]);
+  });
+
+  test("child permission-denied records a row anomaly and does not set pendingApproval", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "tool-call",
+        name: "write_file",
+        args: { path: "a.txt", content: "x" },
+      }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "permission-denied",
+        name: "write_file",
+        reason: "blocked",
+      }),
+    );
+
+    const child = panel(state).subagents[0];
+    expect(child?.toolActivity.some((e) => e.anomalyLines.includes("blocked"))).toBe(true);
+    expect(state.pendingApproval).toBeUndefined();
+  });
+
+  test("parent tool-call dispatch_subagents leaves status empty, not a raw tool id", () => {
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "loop-event",
+      event: {
+        type: "tool-call",
+        name: "dispatch_subagents",
+        args: { tasks: [{ role: "explore", goal: "a" }] },
+      },
+    });
+
+    expect(state.status).toBe("");
+    expect(state.status).not.toContain("dispatch_subagents");
   });
 });

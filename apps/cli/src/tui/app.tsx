@@ -46,11 +46,11 @@
 // unlike Ink, where `App` itself called `useApp().exit()` on a `done` prop, OpenTUI has no such
 // hook: the three callers above own the `CliRenderer` directly and destroy it themselves once a
 // quit is ready to complete (`getTuiRenderer`/`destroyTuiRenderer`, runtime/renderer.ts).
-import { type BoxRenderable, getTreeSitterClient, type ScrollBoxRenderable } from "@opentui/core";
+import { type BoxRenderable, type ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import { memo, useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { truncateArgsDisplay } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
@@ -58,8 +58,11 @@ import { appliedReasoningEffort, resolveReasoningEffort } from "../provider/reas
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 import { ApprovalBox } from "./components/ApprovalBox";
+import { ChildTranscript } from "./components/ChildTranscript";
 import { InputBox } from "./components/InputBox";
 import { ModelPicker } from "./components/ModelPicker";
+import { SubagentPanel } from "./components/SubagentPanel";
+import { TranscriptList } from "./components/TranscriptList";
 import { TurnStatus } from "./components/TurnStatus";
 import { AuthBanner, AuthPanel } from "./routes/config/AuthPanel";
 import { ConfigPanel } from "./routes/config/ConfigPanel";
@@ -69,7 +72,6 @@ import { SetupPanel } from "./routes/setup/SetupPanel";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
 import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
-import { syntaxStyle } from "./theme/syntaxStyle";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
 import {
@@ -80,7 +82,6 @@ import {
   MODE_CYCLE_HINT,
   MODE_HINT_COLS,
   MODE_LABEL,
-  type TranscriptEntry,
 } from "./util/format";
 
 export type AppProps = {
@@ -230,7 +231,7 @@ function resolveHeight(rows: number): number {
 
 // Below this width, the transcript scrollbox's own cosmetic left/right margin (below) is dropped
 // rather than applied — empirically confirmed (narrowing the test renderer column by column) that
-// stacking it with the assistant row's bullet gutter (BULLET_GUTTER, below TranscriptRow) leaves
+// stacking it with the assistant row's bullet gutter (BULLET_GUTTER, TranscriptList.tsx) leaves
 // too little content width for `<markdown>` to render at all between widths 4-5, vs. rendering
 // fine at those same widths with the margin dropped. 20 is a wide margin above that measured
 // breakpoint, not a tuned value — any real terminal this narrow is already unusable for other
@@ -284,6 +285,7 @@ export function App({
   const indicatorText = MODE_LABEL[displayMode];
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
+  const childTranscriptRef = useRef<ScrollBoxRenderable>(null);
   // The scrollbox's own measured height (this file's own header comment explains why it needs a
   // definite number, not `flexGrow`) — `null` only for the frames before OpenTUI's own layout pass
   // has fired `onSizeChange` at least once on the wrapping box below; `FALLBACK_CHROME_ROWS` is a
@@ -374,6 +376,7 @@ export function App({
     state.pendingConfig === undefined &&
     state.pendingPermissions === undefined &&
     state.pendingEffort === undefined &&
+    state.pendingChildView === undefined &&
     !state.pendingSplash;
 
   // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
@@ -439,6 +442,17 @@ export function App({
   // (`viewportRows - reserved - 1`), which no longer has a `viewportRows`/`reserved` pair to compute
   // it from now that scroll position lives on the scrollbox itself.
   useKeyboard((key) => {
+    // Overlay first, above the noPanelOpen gate: while a child transcript is open those keys
+    // must move that scrollbox, not the parent transcript sitting behind it.
+    if (state.pendingChildView !== undefined) {
+      const childEl = childTranscriptRef.current;
+      if (!childEl) return;
+      if (key.name === "pageup") childEl.scrollBy(-1, "viewport");
+      else if (key.name === "pagedown") childEl.scrollBy(1, "viewport");
+      else if (key.name === "home") childEl.scrollBy(-1, "content");
+      else if (key.name === "end") childEl.scrollBy(1, "content");
+      return;
+    }
     if (!noPanelOpen) return;
     const el = transcriptRef.current;
     if (!el) return;
@@ -500,7 +514,7 @@ export function App({
         scrollbox directly, not an inner wrapper box: an inner box here was tried and works too,
         but padding the scrollbox itself is one prop instead of an extra element.
         Dropped below TRANSCRIPT_PADDING_MIN_WIDTH: stacked with the assistant row's own bullet
-        gutter (BULLET_GUTTER, below), this padding left as little as 0 columns of actual content
+        gutter (BULLET_GUTTER, TranscriptList.tsx), this padding left as little as 0 columns of actual content
         width at a narrow terminal — confirmed empirically to stop assistant markdown from
         rendering at all (not just narrowing it) at widths 4-5, where the bullet gutter alone
         still rendered fine. The margin is cosmetic; making it recede at extreme widths trades a
@@ -544,6 +558,7 @@ export function App({
         )}
       </box>
       {state.pendingTool !== undefined &&
+        !(state.pendingTool.name === "dispatch_subagents" && state.subagents.length > 0) &&
         (state.pendingTool.name === "write_file" || state.pendingTool.name === "edit" ? (
           <box borderStyle="single" borderColor={theme.warning}>
             {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: write_file/edit
@@ -562,10 +577,11 @@ export function App({
       {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
       is waiting on, and answering it (not typing a task or slash command) is the only input that
       means anything until it clears. Extended to a third state for /model, a fourth for /setup,
-      four more for /login /signup, /config, /permissions and /effort: each is the same kind of
-      "only this input means anything right now" question, checked in this same order (approval,
-      /model, /setup, /login /signup, /config, /permissions, /effort, then InputBox). Every branch
-      here — including AuthPanel/ConfigPanel/PermissionsPanel/EffortPanel — is a real, wired OpenTUI
+      four more for /login /signup, /config, /permissions and /effort, plus a read-only child
+      transcript overlay: each is the same kind of "only this input means anything right now"
+      question, checked in this same order (approval, /model, /setup, /login /signup, /config,
+      /permissions, /effort, overlay, then InputBox). Every branch here — including
+      AuthPanel/ConfigPanel/PermissionsPanel/EffortPanel — is a real, wired OpenTUI
       component; state/handlers.ts and cli.ts dispatch auth-requested/config-requested/
       permissions-requested/effort-requested. */}
       {state.pendingApproval !== undefined ? (
@@ -620,12 +636,32 @@ export function App({
           onSignup={onSplashSignup}
           onContinue={onSplashContinue}
         />
+      ) : state.pendingChildView !== undefined ? (
+        <ChildTranscript
+          child={state.subagents.find((row) => row.id === state.pendingChildView)}
+          dispatch={dispatch}
+          scrollRef={childTranscriptRef}
+        />
       ) : (
         <InputBox
           onSubmit={onSubmit}
           onQuit={onQuit}
           prefill={state.pendingInputPrefill}
           onPrefillConsumed={() => dispatch({ type: "input-prefill-consumed" })}
+          onEmptyDown={
+            state.subagents.length > 0
+              ? () => dispatch({ type: "subagent-panel-focus" })
+              : undefined
+          }
+          inert={state.subagentPanelFocus}
+        />
+      )}
+      {state.subagents.length > 0 && state.pendingChildView === undefined && (
+        <SubagentPanel
+          subagents={state.subagents}
+          focused={state.subagentPanelFocus}
+          selectedId={state.subagentPanelSelectedId}
+          dispatch={dispatch}
         />
       )}
       <box flexDirection="row" justifyContent="space-between">
@@ -657,96 +693,3 @@ export function App({
     </box>
   );
 }
-
-// Its own memoized component, not an inline `.map()` in App's own JSX: `state.transcript`'s
-// reference only changes on an actual append (state/reducer.ts), so `memo` here lets React skip
-// rebuilding and re-diffing the whole elements array on a render triggered by unrelated state (a
-// streamed token's `state.turn.tokens` tick, a scroll-banner flip) — not just skip the per-row
-// markdown work `TranscriptRow`'s own `memo` (below) already bails out of.
-const TranscriptList = memo(function TranscriptList({
-  transcript,
-}: {
-  transcript: TranscriptEntry[];
-}) {
-  return (
-    <>
-      {transcript.map((entry, index) => (
-        <TranscriptRow key={index} entry={entry} />
-      ))}
-    </>
-  );
-});
-
-// The `●` marker's own width plus one gutter column, reserved on the assistant markdown block
-// below via `paddingLeft` so wrapped/multi-line content never starts under the bullet — kept as
-// one named pair (glyph + derived width) instead of two independently-hardcoded numbers, so a
-// future change to the marker can't silently desync the gutter from what it's actually leaving
-// room for.
-const BULLET = "●";
-const BULLET_GUTTER = BULLET.length + 1;
-
-// One transcript entry's own render, split by role. `role === "assistant"` gets real markdown
-// (bold/headers/lists/links/tables/monochrome-syntax-highlighted code) with the `●` marker
-// rendered as an absolutely-positioned overlay (out of flex flow) rather than an in-flow row
-// sibling, so it survives a multi-line markdown block as one glyph pinned to the row's own top-left
-// corner, not repeated or lost mid-wrap: a `flexDirection="row"` sibling's cross-axis never grows
-// to fit `<markdown>`'s wrapped content (reproduced live — that shape clipped every multi-line
-// assistant message to one row), so the bullet has to sit outside that flex flow entirely for the
-// block to size itself off `<markdown>` alone. `BULLET_GUTTER` reserves the column(s) the overlay
-// paints into. `role === "user"` gets `theme.userBg`'s background band, `alignSelf="flex-start"` so
-// the box shrinks to its own wrapped content's width instead of stretching to the transcript's full
-// width (Yoga's default cross-axis behavior for a column-flex parent's children, which a plain
-// `<text bg=...>` never hit since a text node's own background already stops at its own
-// characters). A muted system entry with `markdown` set (the archivist summary) is the one
-// exception among non-assistant rows: it reuses the same `<markdown>` path, `fg={theme.muted}`,
-// and no `●` / `BULLET_GUTTER` — a secondary note, not an answer. Everything else (tool
-// calls/results/errors/done markers, and the archivist stats line) stays plain text: none of
-// those are model prose, and a tool result can legitimately contain a literal `*`/`#`/backtick that
-// must render as-is, not get parsed as markdown syntax.
-// Memoized: `TranscriptList` above re-runs on every actual transcript append, but each entry's own
-// object reference is stable across renders (state/reducer.ts only appends, never replaces existing
-// entries) — so `memo` lets React skip re-invoking this for every already-rendered row (assistant
-// rows re-parse and re-highlight markdown, the expensive case) and only render newly appended ones.
-const TranscriptRow = memo(function TranscriptRow({ entry }: { entry: TranscriptEntry }) {
-  if (entry.role === "assistant") {
-    return (
-      // minHeight={1}: without an in-flow bullet sibling, this box's height comes from `<markdown>`
-      // alone — an assistant entry whose text is whitespace-only (reachable: `pushLine`,
-      // state/reducer.ts, flushes on `state.streaming.length > 0`, which whitespace satisfies)
-      // measures to zero rows and would otherwise make the whole entry, bullet included, disappear
-      // instead of rendering a blank line the way the old row-flex layout did for free.
-      <box minHeight={1}>
-        <text fg={theme.text} position="absolute" top={0} left={0}>
-          {BULLET}
-        </text>
-        <markdown
-          paddingLeft={BULLET_GUTTER}
-          fg={theme.text}
-          content={entry.text}
-          syntaxStyle={syntaxStyle}
-          treeSitterClient={getTreeSitterClient()}
-          streaming={false}
-        />
-      </box>
-    );
-  }
-  if (entry.role === "user") {
-    return (
-      <box backgroundColor={theme.userBg} alignSelf="flex-start">
-        <text fg={theme.text}>{entry.text}</text>
-      </box>
-    );
-  }
-  if (entry.role === "system" && entry.muted && entry.markdown) {
-    return (
-      <markdown
-        fg={theme.muted}
-        content={entry.text}
-        syntaxStyle={syntaxStyle}
-        treeSitterClient={getTreeSitterClient()}
-        streaming={false}
-      />
-    );
-  }
-  return <text fg={entry.muted ? theme.muted : theme.text}>{entry.text}</text>;
-});
