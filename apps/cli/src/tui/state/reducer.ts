@@ -101,8 +101,9 @@ export type TuiState = {
   // either string changed.
   pendingTool: { name: string; args: unknown } | undefined;
   // Per-tool-name stats for the current turn, living outside `transcript`. Updated on every
-  // tool-result/permission-denied, flushed into the transcript as muted lines only on done/error,
-  // then reset. Not part of the append-only transcript until that flush.
+  // tool-call/tool-result/permission-denied, flushed into the transcript as muted lines only on
+  // done, then reset. Not part of the append-only transcript until that flush. An error is not
+  // turn-end (loop.ts continues), so this accumulator is left in place across it.
   toolActivity: ToolActivityEntry[];
   // A slash command that threw (previously uncaught, straight through Ink's own input handler),
   // or input shaped like a slash command that matched nothing / failed its own accepts() guard —
