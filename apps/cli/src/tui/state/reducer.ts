@@ -478,6 +478,18 @@ function applyChildEvent(
       subagents: [...state.subagents, emptyChild(action.childId, action.role, action.goal)],
     };
   }
+  if (action.event.type === "usage" || action.event.type === "compacted") {
+    // Billed child spend belongs on the parent turn total (TurnStatus / done line). Do not push
+    // a compacted transcript line — that line is the parent's own compaction, not the child's.
+    if (state.turn === undefined) return state;
+    return {
+      ...state,
+      turn: {
+        ...state.turn,
+        tokens: reconcileUsage(state.turn.tokens, action.event.usage),
+      },
+    };
+  }
   if (!state.subagents.some((child) => child.id === action.childId)) return state;
   return {
     ...state,

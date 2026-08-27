@@ -123,9 +123,9 @@ function shouldForwardChildEvent(event: LoopEvent): boolean {
     case "permission-denied":
     case "error":
     case "done":
-      return true;
     case "usage":
     case "compacted":
+      return true;
     case "messages-updated":
     case "retry":
     case "tool-allowed":
@@ -200,9 +200,12 @@ export async function runSubagent(opts: {
         outputTokens: event.usage.outputTokens,
         totalTokens: event.usage.totalTokens,
       });
-      // `compacted` carries no `cost` of its own (cli.ts's own comment says why), so onChildUsage
-      // — which forwards cost alongside tokens — only fires for a real `usage` event.
-      if (event.type === "usage") runtime.onChildUsage?.(event.usage, event.cost);
+      // compacted has no cost field; the run-level fold still needs the tokens so the TUI live
+      // total and printUsage match billed spend.
+      runtime.onChildUsage?.(
+        event.usage,
+        event.type === "usage" ? event.cost : undefined,
+      );
     } else if (event.type === "permission-denied") {
       deniedCount++;
     } else if (event.type === "error") {
