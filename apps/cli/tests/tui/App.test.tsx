@@ -4303,5 +4303,51 @@ describe("App", () => {
       expect(afterEsc).toContain("─");
       expect(panelBand(afterEsc).band).toContain("explore");
     });
+
+    test("Esc after overlay-kept parent flush hides the panel and cannot reopen it", async () => {
+      const { setup, dispatch } = await connect();
+      startExplore(dispatch, "t1:0", "find a");
+      startExplore(dispatch, "t1:1", "find b");
+      await flush(setup);
+
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      dispatch({
+        type: "loop-event",
+        event: {
+          type: "tool-result",
+          name: "dispatch_subagents",
+          result: {
+            results: [{ doneReason: "no-tool-call" }, { doneReason: "no-tool-call" }],
+            totalUsage: { totalTokens: 15 },
+          },
+        },
+      });
+      dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+      await flush(setup);
+
+      const overlay = setup.captureCharFrame();
+      expect(overlay).toContain("Read");
+      expect(overlay).toContain("✓ Dispatched subagents done");
+
+      setup.mockInput.pressEscape();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await flush(setup);
+
+      const afterEsc = setup.captureCharFrame();
+      expect(afterEsc).toContain("─");
+      expect(panelBand(afterEsc).band).not.toContain("explore");
+
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
+      const afterReopen = setup.captureCharFrame();
+      expect(afterReopen).toContain("─");
+      expect(panelBand(afterReopen).band).not.toContain("explore");
+    });
   });
 });

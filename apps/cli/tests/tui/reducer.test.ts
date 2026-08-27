@@ -1809,6 +1809,31 @@ describe("tuiReducer: subagent-child-event", () => {
     expect(panel(state).subagents.some((c) => c.id === "t1:1")).toBe(false);
   });
 
+  test("overlay-close after parent dispatch flush drops the held child", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: {
+        type: "tool-result",
+        name: "dispatch_subagents",
+        result: { results: [{ doneReason: "no-tool-call" }], totalUsage: {} },
+      },
+    });
+    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0"]);
+    expect(panel(state).pendingChildView).toBe("t1:0");
+
+    state = tuiReducer(state, { type: "subagent-overlay-close" });
+
+    expect(panel(state).subagents).toEqual([]);
+    expect(panel(state).pendingChildView).toBeUndefined();
+    expect(panel(state).subagentPanelFocus).toBe(false);
+  });
+
   test("two explore children store the raw role, not a numbered label", () => {
     let state = initialTuiState(session());
     state = tuiReducer(
