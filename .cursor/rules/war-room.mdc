@@ -1,0 +1,35 @@
+---
+description: War Room constraints for Cursor cloud agents. Apply on War Room EXECUTE (/poteto-mode implementer) and whenever `.claude/loops/*/STATE.md` Status is EXECUTE.
+alwaysApply: true
+---
+
+# War Room (cloud agent)
+
+You are a Cursor cloud agent working a War Room issue. Handler (Grok Bot) owns PLAN and VERIFY. You implement. You do not run the outer loop.
+
+These bans apply during War Room EXECUTE. If this session is not a War Room EXECUTE, ignore the PR/merge bans.
+
+## Spec
+- The approved plan under `.claude/loops/<slug>/` is the spec. Read it before any edit. Do not rewrite `confirmed_goal`.
+- Implement only that plan. If it is wrong or ambiguous, STOP and report. Do not improvise architecture.
+
+## Pstack
+- Use `/poteto-mode` (or the words "use poteto-mode / pstack" if slash autocomplete is missing).
+- Match **feature** or **bug fix** only (perf/refactoring/prototype if the plan says so).
+- Skip these playbooks: `opening-a-pr`, `shipping`, `babysit`, `autopilot-full`, `autopilot-stack`, `orchestrate`. When opening-a-pr would run, skip with `skip: War Room VERIFY opens the PR later`.
+- Do not start Graphite stacks unless this repo already uses Graphite.
+
+## Git
+- Unique branch: `feat/<slug>` or `fix/<slug>`. Never `main`.
+- Commit per plan step (`feat:`, `fix:`, `test:`, `refactor:`).
+- Do not open a pull request. Do not merge. Do not force-push. Do not touch `.env` or secrets.
+- Do not share a worktree or workspace with another agent.
+
+## Quality
+- Smallest change that satisfies the plan. No speculative features. Touch only what the plan requires.
+- Bugfix: failing regression test first (RED), then fix (GREEN).
+- An acceptance check must be seen to fail before it counts as passing. Record the negative control.
+- After all steps, run lint, typecheck, and the full test suite. Report exit codes. Do not open a PR when green.
+
+## Verify later
+Grok Bot Crucible then Inquisitor run VERIFY. After they pass, Handler will ask a later cloud agent to open the PR. That later launch is not EXECUTE and may open a PR. It still must not merge.
