@@ -22,3 +22,6 @@
 - Additive `transcript-append` `muted?`/`markdown?` on `TuiAction` (not yet threaded through `pushLine`). Exported `ARCHIVIST_MARK` so the App test can dispatch the planned stats prefix.
 - RED: `an archivist stats+summary block is muted with a leading mark and conceals markdown markers` failed at `expect(frame).not.toContain("**")`. Frame still showed `recorded **bold** fact` (TranscriptRow paints system lines as plain text). Negative control recorded.
 - Negative system-line test passed (literal `**not-bold**`, `theme.text`).
+
+## 2026-08-27T13:04:00Z EXECUTE step 2
+- Extracted `archivistStatsLine`; `archivistLine` prefixes `ARCHIVIST_MARK` and still indents a defined summary. `output.test.ts` pins the mark and the stats-only equality.

@@ -94,6 +94,27 @@ describe("tuiReducer: transcript-append", () => {
     expect(next.streaming).toBe("");
   });
 
+  test("lands muted and markdown flags on the entry when set, and omits them when unset", () => {
+    const state = initialTuiState(session());
+    const flagged = tuiReducer(state, {
+      type: "transcript-append",
+      line: "recorded **bold** fact",
+      muted: true,
+      markdown: true,
+    });
+    expect(flagged.transcript).toEqual([
+      { role: "system", text: "recorded **bold** fact", muted: true, markdown: true },
+    ]);
+
+    const plain = tuiReducer(state, {
+      type: "transcript-append",
+      line: "Session s1: permission mode is now auto",
+    });
+    expect(plain.transcript).toEqual([
+      { role: "system", text: "Session s1: permission mode is now auto" },
+    ]);
+  });
+
   // Design-question fix (this PR's own follow-up): echoUserInput (cli.ts) dispatches
   // transcript-append with `flush: false` for a submission REJECTED by a mid-turn gate (e.g.
   // MEDIUM-3's /rewind-while-turnInFlight check) — the model's own turn is unaffected, so echoing

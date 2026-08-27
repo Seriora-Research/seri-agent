@@ -33,6 +33,7 @@ import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
   approvalPromptText,
   archivistLine,
+  archivistStatsLine,
   printCost,
   printEvent,
   printGrantPersisted,
@@ -2112,8 +2113,12 @@ async function driveLoop(
 // A plain default-flush transcript-append, shared by tuiPresenter's own `append` below and
 // runTui's quit() — the only two places that dispatch this exact shape rather than something with
 // its own `> `/`flush: false` handling (echoUserInput, a different shape entirely, is not this).
-function pushTranscriptLine(dispatch: Dispatch, line: string): void {
-  dispatch({ type: "transcript-append", line });
+function pushTranscriptLine(
+  dispatch: Dispatch,
+  line: string,
+  opts?: { muted?: boolean; markdown?: boolean },
+): void {
+  dispatch({ type: "transcript-append", line, muted: opts?.muted, markdown: opts?.markdown });
 }
 
 // The TUI's presenter: the same `{message}`/`{plan, message}` shapes tui/commands.ts's decision
@@ -2359,9 +2364,10 @@ async function runTui(
   let refusedWithoutRunning = false;
   // Same "last turn's outcome" reasoning as doneReason/refusedWithoutRunning, just above — a turn
   // with nothing to report simply leaves this undefined again. runTurn (below) also renders every
-  // non-undefined report live into the transcript, the moment it happens, via archivistLine; this
-  // copy is what lets the FINAL resolveRunTui result carry one too, printed once more after Ink
-  // unmounts, the same way `usage`/`cost` already print again there.
+  // non-undefined report live into the transcript, the moment it happens, as a muted stats line
+  // plus an optional muted markdown summary; this copy is what lets the FINAL resolveRunTui result
+  // carry one too, printed once more after Ink unmounts, the same way `usage`/`cost` already print
+  // again there.
   let archivist: ArchivistReport | undefined;
   // This closure's own copy of DriveLoopResult.ranAnyTurn (see that field's own comment) — flipped
   // true the moment runTurn actually starts a turn (not on the early-return guard below it), so an
@@ -2880,9 +2886,13 @@ async function runTui(
       // Rendered live into the transcript the moment it happens, the same run this turn just
       // produced it in — not deferred to session end, unlike the `archivist` copy above, which only
       // feeds the FINAL resolveRunTui result (printed once more after Ink unmounts, quit()'s own
-      // comment explains why).
+      // comment explains why). Stats are a muted plain line so the markdown parser never sees
+      // "(archivist: …)"; a defined summary is a second muted markdown entry.
       if (result.archivist) {
-        pushTranscriptLine(dispatch, archivistLine(result.archivist));
+        pushTranscriptLine(dispatch, archivistStatsLine(result.archivist), { muted: true });
+        if (result.archivist.summary !== undefined) {
+          pushTranscriptLine(dispatch, result.archivist.summary, { muted: true, markdown: true });
+        }
       }
       // LOW-J: `result.cancelledBy` is deliberately not read here. The TUI never re-raises a
       // signal on a plain, individually-cancelled turn (H-3 returns it to awaiting input, not to
