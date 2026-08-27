@@ -27,8 +27,8 @@ export type ToolActivityEntry = {
 
 export const TOOL_LABELS: Record<string, { verb: string; noun: string }> = {
   read_file: { verb: "Read", noun: "files" },
-  grep: { verb: "Searched", noun: "searches" },
-  glob: { verb: "Searched", noun: "searches" },
+  grep: { verb: "Searched", noun: "files" },
+  glob: { verb: "Searched", noun: "files" },
   bash: { verb: "Ran", noun: "shell commands" },
   powershell: { verb: "Ran", noun: "shell commands" },
   write_file: { verb: "Wrote", noun: "files" },

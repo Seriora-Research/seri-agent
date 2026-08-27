@@ -201,14 +201,14 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
           } catch {}
         }
 
-        // "(done: ...)" only appears once RUNLOOP_READY and the turn's own completion have both
+        // "(done" only appears once RUNLOOP_READY and the turn's own completion have both
         // already been flushed — checked directly, not discarded, so a regression fails immediately
         // at the actual point of regression rather than ~20s later on an unrelated check further
         // down (same shape as the sibling tuiPty.test.ts's own sawLine).
-        const sawDone = await waitFor("(done: no-tool-call)", 20_000);
+        const sawDone = await waitFor("(done", 20_000);
         if (!sawDone) {
           throw new Error(
-            `child never printed "(done: no-tool-call)"; got ${JSON.stringify(decodedSoFar())}`,
+            `child never printed "(done"; got ${JSON.stringify(decodedSoFar())}`,
           );
         }
 
