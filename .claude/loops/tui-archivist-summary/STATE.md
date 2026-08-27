@@ -3,7 +3,7 @@
 - Task: issue #175 — TUI archivist summary renders as raw markdown with no visual framing. Same design family as #173/#174.
 - Branch: feat/tui-archivist-summary
 - Status: EXECUTE
-- Started: 2026-08-27T12:37:00Z  |  Updated: 2026-08-27T12:59:44Z
+- Started: 2026-08-27T12:37:00Z  |  Updated: 2026-08-27T13:12:00Z
 
 ## Model config
 | role              | model   |
@@ -30,14 +30,14 @@
 - [x] Thread `muted`/`markdown` through `pushLine` + `pushTranscriptLine`; two TUI pushes in `cli.ts`; reducer tests for the flags.
 - [x] `TranscriptRow`: muted markdown path (GREEN the App test). Negative system line still raw.
 - [x] `docs/design/tui.md`.
-- [ ] lint, typecheck, full `apps/cli` tests; record exit codes.
+- [x] lint, typecheck, full `apps/cli` tests; record exit codes.
 
 ## Gate results (latest)
 | gate      | command | exit | notes |
 |-----------|---------|------|-------|
-| lint      |         |      |       |
-| typecheck |         |      |       |
-| tests     |         |      |       |
+| lint      | `bun run --cwd apps/cli lint` (`tsc --noEmit`) | 0 | same as typecheck |
+| typecheck | `bun run typecheck` (workspace) | 0 | also `bun run --cwd apps/cli typecheck` = 0 |
+| tests     | `SERI_DISABLE_MODELS_FETCH=1 bun test` in `apps/cli` | 0 | 1730 pass, 20 skip, 0 fail. Other workspaces also 0. |
 
 ## Manual test
 - verdict: SKIPPED

@@ -32,3 +32,13 @@
 ## 2026-08-27T13:08:00Z EXECUTE step 4
 - TranscriptRow paints `role === "system" && muted && markdown` via existing `<markdown fg={theme.muted}>` (no ●, no BULLET_GUTTER). `renderLiveToolActivity` unchanged.
 - GREEN: the App test that failed on literal `**` at 7571a1f now passes. Negative system line still shows `**not-bold**` at `theme.text`.
+
+## 2026-08-27T13:09:00Z EXECUTE step 5
+- Documented the archivist block in `docs/design/tui.md` next to the tool-transcript / weight-and-a-mark passages. Did not edit `docs/ROADMAP.md`.
+
+## 2026-08-27T13:12:00Z EXECUTE step 6
+- Installed bun 1.4.0 to `~/.bun/bin` (not on PATH; see environment.md).
+- Gate: lint 0, workspace typecheck 0, `apps/cli` tests 0 (1730 pass / 20 skip / 0 fail). Remaining workspaces 0.
+- Negative control: App test failed on literal `**` at 7571a1f (`recorded **bold** fact`); green after TranscriptRow change (c1721f8).
+- Manual TUI: SKIPPED (no interactive TUI session on this VM).
+- skip: War Room VERIFY opens the PR later.

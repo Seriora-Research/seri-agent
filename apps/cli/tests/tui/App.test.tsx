@@ -915,10 +915,7 @@ describe("App", () => {
       markdown: true,
     });
     await flush(setup);
-    await flushMarkdown(
-      setup,
-      (frame) => frame.includes("recorded") && frame.includes("bold"),
-    );
+    await flushMarkdown(setup, (frame) => frame.includes("recorded") && frame.includes("bold"));
 
     const frame = setup.captureCharFrame();
     expect(frame).not.toContain("**");
