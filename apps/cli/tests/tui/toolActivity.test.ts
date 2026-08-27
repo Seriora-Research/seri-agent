@@ -314,6 +314,20 @@ describe("renderToolActivity", () => {
     expect(renderToolActivity(entries)).toEqual(["Ran 2 shell commands"]);
   });
 
+  test("grep count > 1 uses the files noun", () => {
+    const entries: ToolActivityEntry[] = [
+      { name: "grep", count: 2, singleLine: "Searched TODO", detailLines: [], anomalyLines: [] },
+    ];
+    expect(renderToolActivity(entries)).toEqual(["Searched 2 files"]);
+  });
+
+  test("glob count > 1 uses the files noun", () => {
+    const entries: ToolActivityEntry[] = [
+      { name: "glob", count: 2, singleLine: "Searched **/*.ts", detailLines: [], anomalyLines: [] },
+    ];
+    expect(renderToolActivity(entries)).toEqual(["Searched 2 files"]);
+  });
+
   test("count > 1 still attaches an anomaly line", () => {
     const entries: ToolActivityEntry[] = [
       {
