@@ -200,3 +200,16 @@ export function isTuiClaimed(meta: CommandMeta): boolean {
 export function tuiClaimedNames(): string[] {
   return COMMAND_META.filter(isTuiClaimed).map((meta) => meta.name);
 }
+
+export function assertTuiHandlers(handlers: Record<string, unknown>): void {
+  for (const name of tuiClaimedNames()) {
+    if (!(name in handlers)) {
+      throw new Error(`tuiHandlers missing ${name}`);
+    }
+  }
+}
+
+export function isShiftTabModeCycle(key: { name: string; shift: boolean }): boolean {
+  if (commandByName("/mode")?.shortcut?.chord !== "shift+tab") return false;
+  return key.name === "tab" && key.shift;
+}

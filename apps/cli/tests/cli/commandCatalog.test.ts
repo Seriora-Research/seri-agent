@@ -4,9 +4,12 @@ import { join } from "node:path";
 import { SLASH_COMMANDS } from "../../src/cli";
 import {
   COMMAND_META,
+  assertTuiHandlers,
   commandByName,
+  isShiftTabModeCycle,
   isTuiClaimed,
   sessionMeta,
+  tuiClaimedNames,
 } from "../../src/cli/commandCatalog";
 import { USAGE } from "../../src/cli/output";
 
@@ -19,6 +22,20 @@ const EXPECTED_NAMES = [
   "/clear",
   "/compact",
   "/memory",
+  "/exit",
+  "/model",
+  "/setup",
+  "/login",
+  "/signup",
+  "/logout",
+  "/config",
+  "/permissions",
+  "/max-turns",
+  "/profile",
+] as const;
+
+const EXPECTED_TUI_CLAIMED = [
+  "/effort",
   "/exit",
   "/model",
   "/setup",
@@ -86,5 +103,23 @@ describe("command catalog completeness", () => {
 
   test("/mode shortcut is shift+tab", () => {
     expect(commandByName("/mode")?.shortcut?.chord).toBe("shift+tab");
+  });
+
+  test("tuiClaimedNames is the TUI surface plus /effort", () => {
+    expect(tuiClaimedNames()).toEqual([...EXPECTED_TUI_CLAIMED]);
+  });
+
+  test("assertTuiHandlers throws when /model is missing from the Record", () => {
+    const handlers: Record<string, unknown> = Object.fromEntries(
+      EXPECTED_TUI_CLAIMED.filter((name) => name !== "/model").map((name) => [name, () => {}]),
+    );
+    expect(() => assertTuiHandlers(handlers)).toThrow("tuiHandlers missing /model");
+  });
+
+  test("isShiftTabModeCycle matches tab+shift only when /mode's chord is shift+tab", () => {
+    expect(commandByName("/mode")?.shortcut?.chord).toBe("shift+tab");
+    expect(isShiftTabModeCycle({ name: "tab", shift: true })).toBe(true);
+    expect(isShiftTabModeCycle({ name: "tab", shift: false })).toBe(false);
+    expect(isShiftTabModeCycle({ name: "enter", shift: true })).toBe(false);
   });
 });

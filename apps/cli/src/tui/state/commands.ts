@@ -1,8 +1,9 @@
-// The decision half of the decision/presentation split (research-spec) for the five slash
-// commands: each function here decides what happened and returns it, and prints nothing itself —
-// no saveSession, no console.log/print*. That is what lets the same decision serve both the
-// existing non-interactive path (console.log the message) and the TUI path (dispatch it into the
-// live transcript) from one implementation, mirroring ApprovalPrompt's two-implementation shape.
+// The decide half of slash-command handling. Registration — names, accepts, shortcuts, which
+// surface claims a name — lives in commandCatalog.ts. Each function here decides what happened
+// and returns it, and prints nothing itself — no saveSession, no console.log/print*. That is
+// what lets the same decision serve both the non-interactive path (console.log the message)
+// and the TUI path (dispatch it into the live transcript) from one implementation, mirroring
+// ApprovalPrompt's two-implementation shape.
 //
 // checkpointTarget is exported and reused by cli.ts's prepareSession — the one copy this module
 // and cli.ts both call through to, rather than cli.ts keeping its own duplicate.
