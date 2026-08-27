@@ -56,7 +56,7 @@ export const APP_CHROME_ROWS = 5;
 export const FALLBACK_CHROME_ROWS = 6;
 
 export type TranscriptRole = "user" | "assistant" | "system";
-export type TranscriptEntry = { role: TranscriptRole; text: string };
+export type TranscriptEntry = { role: TranscriptRole; text: string; muted?: boolean };
 
 // For a list-panel row rendered with `wrap="truncate-end"` (ConfigPanel, SetupPanel): that prop
 // only guards a value wider than the panel — it does nothing for a literal newline, which Ink still
