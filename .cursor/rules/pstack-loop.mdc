@@ -1,0 +1,29 @@
+---
+description: How pstack/poteto and the Cursor engineering loop share a run. Apply whenever /engineering-loop, War Room, or /poteto-mode is in play.
+alwaysApply: true
+---
+
+# pstack + engineering loop
+
+Two layers. One orchestrator per turn. Do not run `/engineering-loop` and Grok Bot Handler as dual conductors on the same slug.
+
+| Driver | PLAN | EXECUTE | VERIFY | PR |
+|---|---|---|---|---|
+| Grok Bot Handler | Handler writes `.cursor/loops/<slug>/` | Cloud agent, `/poteto-mode` | Crucible then Inquisitor | Later cloud agent, not EXECUTE |
+| `/engineering-loop` in this chat | This skill, then human gate | `poteto-agent` + Feature or Bug fix | `reviewer-verifier` Task | Same skip as War Room |
+
+pstack stays the plugin. This repo does not vendor `poteto-mode`.
+
+## EXECUTE
+
+Match **feature** or **bug fix** only (perf/refactoring/prototype if the plan says so).
+Skip `opening-a-pr`, `shipping`, `babysit`, `autopilot-full`, `autopilot-stack`, `orchestrate`.
+When opening-a-pr would run: `skip: VERIFY opens the PR later`.
+Do not start Graphite stacks unless this repo already uses Graphite.
+
+Task: `subagent_type: "poteto-agent"`. If that type is missing, `implementer` with the same skip list.
+
+## Models
+
+Loop roles: `.cursor/loop-models.json`.
+pstack roles: `/setup-pstack` → `~/.cursor/rules/pstack-models.mdc` (user-level, not this repo).

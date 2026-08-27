@@ -1,5 +1,5 @@
 ---
-description: War Room constraints for Cursor cloud agents. Apply on War Room EXECUTE (/poteto-mode implementer) and whenever `.claude/loops/*/STATE.md` Status is EXECUTE.
+description: War Room constraints for Cursor cloud agents. Apply on War Room EXECUTE (/poteto-mode implementer) and whenever `.cursor/loops/*/STATE.md` Status is EXECUTE.
 alwaysApply: true
 ---
 
@@ -10,7 +10,7 @@ You are a Cursor cloud agent working a War Room issue. Handler (Grok Bot) owns P
 These bans apply during War Room EXECUTE. If this session is not a War Room EXECUTE, ignore the PR/merge bans.
 
 ## Spec
-- The approved plan under `.claude/loops/<slug>/` is the spec. Read it before any edit. Do not rewrite `confirmed_goal`.
+- The approved plan under `.cursor/loops/<slug>/` is the spec. Read it before any edit. Do not rewrite `confirmed_goal`.
 - Implement only that plan. If it is wrong or ambiguous, STOP and report. Do not improvise architecture.
 
 ## Pstack

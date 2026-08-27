@@ -21,6 +21,12 @@ apps/cli/src/tools/rg-vendored.bin
 .claude/worktrees/
 .claude/settings.local.json
 
+# .cursor/ is tracked the same way (skills, agents, hooks, rules, templates).
+# Per-run scratch stays local.
+.cursor/loops/
+.cursor/worktrees/
+.cursor/session-id
+
 # Proposed lessons are a retro's *output awaiting a human decision*, not project knowledge.
 # `.claude/rules/retro.md` requires every proposal to pass a promotion gate before it means
 # anything; an unpromoted file in a shared checkout reads like a rule that was adopted, which is
@@ -28,6 +34,8 @@ apps/cli/src/tools/rg-vendored.bin
 # tracked there. The directory itself stays, via .gitkeep, because retro.md writes into it by path.
 .claude/lessons/proposed/*
 !.claude/lessons/proposed/.gitkeep
+.cursor/lessons/proposed/*
+!.cursor/lessons/proposed/.gitkeep
 
 # docs-tmp/ is the private half of the documentation, and it holds three different kinds of
 # thing — worth naming, because only the last one is a security boundary:
