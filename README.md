@@ -129,6 +129,7 @@ to a temporary copy.
 | `/memory pending\|diff\|approve\|reject` | review and act on staged memory writes |
 | `/memory archivist on\|off` | turn the post-turn learning pass off entirely |
 | `/login`, `/signup`, `/logout` | sign in to, create, or leave a hosted seri account |
+| `/usage [--detail]` | hosted-gateway spend vs allowance, reset date, and a burn-rate projection |
 | `/profile new <name>` | create a new profile — an isolated config/memory/session root |
 | `/max-turns <n>` | override the per-task turn budget (default 500) for the rest of the session |
 | `/exit` | end the session (or Ctrl-D) |

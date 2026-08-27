@@ -38,6 +38,8 @@ export const USAGE = `Usage:
   seri [--resume <id>] /clear     start a new session — the previous one stays resumable
   seri [--resume <id>] /memory pending | diff <id|all> | approve <id|all> | reject <id|all>
                                     | approval on|off | archivist on|off
+  seri usage [--detail]             hosted-gateway spend vs allowance (not BYOK)
+  /usage [--detail] (inside the TUI) same report as seri usage
   /exit (inside the TUI)          end the session, or Ctrl-D — not a seri subcommand: it means
                                     nothing outside a live TUI, and "seri /exit" is just a task
   /login | /signup | /logout (inside the TUI)
@@ -53,6 +55,7 @@ export const USAGE = `Usage:
   seri login | signup | logout
   seri config set|list|unset
   seri permissions list|remove <tool>
+  seri usage [--detail]
   seri --version | --help
 
 Options:
