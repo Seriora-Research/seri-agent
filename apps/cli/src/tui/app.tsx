@@ -697,7 +697,10 @@ const BULLET_GUTTER = BULLET.length + 1;
 // the box shrinks to its own wrapped content's width instead of stretching to the transcript's full
 // width (Yoga's default cross-axis behavior for a column-flex parent's children, which a plain
 // `<text bg=...>` never hit since a text node's own background already stops at its own
-// characters). Everything else (tool calls/results/errors/done markers) stays plain text: none of
+// characters). A muted system entry with `markdown` set (the archivist summary) is the one
+// exception among non-assistant rows: it reuses the same `<markdown>` path, `fg={theme.muted}`,
+// and no `●` / `BULLET_GUTTER` — a secondary note, not an answer. Everything else (tool
+// calls/results/errors/done markers, and the archivist stats line) stays plain text: none of
 // those are model prose, and a tool result can legitimately contain a literal `*`/`#`/backtick that
 // must render as-is, not get parsed as markdown syntax.
 // Memoized: `TranscriptList` above re-runs on every actual transcript append, but each entry's own
@@ -732,6 +735,17 @@ const TranscriptRow = memo(function TranscriptRow({ entry }: { entry: Transcript
       <box backgroundColor={theme.userBg} alignSelf="flex-start">
         <text fg={theme.text}>{entry.text}</text>
       </box>
+    );
+  }
+  if (entry.role === "system" && entry.muted && entry.markdown) {
+    return (
+      <markdown
+        fg={theme.muted}
+        content={entry.text}
+        syntaxStyle={syntaxStyle}
+        treeSitterClient={getTreeSitterClient()}
+        streaming={false}
+      />
     );
   }
   return <text fg={entry.muted ? theme.muted : theme.text}>{entry.text}</text>;

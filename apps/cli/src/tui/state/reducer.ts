@@ -231,7 +231,14 @@ export type TuiAction =
   // `flush` defaults to true (every existing caller relies on that) — set to false by a submission
   // echo that must not fragment an in-progress streamed answer into two transcript entries (see
   // pushLine's own comment).
-  | { type: "transcript-append"; line: string; role?: TranscriptRole; flush?: boolean }
+  | {
+      type: "transcript-append";
+      line: string;
+      role?: TranscriptRole;
+      flush?: boolean;
+      muted?: boolean;
+      markdown?: boolean;
+    }
   // /clear's own action. The only action that ever SHRINKS the transcript, rather than adding to
   // it — `streaming` must be reset alongside `transcript` itself, or a stale in-progress answer
   // would keep describing content that no longer exists.
@@ -359,7 +366,14 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     // WHILE a turn may still be streaming text — without flushing here first, a /mode or /exit
     // typed mid-stream reordered the transcript against the model's own still-in-progress answer.
     case "transcript-append":
-      return pushLine(state, action.line, action.role ?? "system", action.flush ?? true);
+      return pushLine(
+        state,
+        action.line,
+        action.role ?? "system",
+        action.flush ?? true,
+        action.muted ?? false,
+        action.markdown ?? false,
+      );
     case "transcript-cleared":
       return {
         ...state,
@@ -522,12 +536,18 @@ function pushLine(
   role: TranscriptRole = "system",
   flush = true,
   muted = false,
+  markdown = false,
 ): TuiState {
   // Computed before the `flush` branch below, not inside the `flush: true` half of it: echoUserInput
   // (cli.ts) — the only call site that ever dispatches `role: "user"` — always passes `flush: false`,
   // so a separator that only existed on the `flush: true` path would never actually fire for a real
   // user turn.
-  const entry: TranscriptEntry = muted ? { role, text: line, muted: true } : { role, text: line };
+  const entry: TranscriptEntry = {
+    role,
+    text: line,
+    ...(muted ? { muted: true } : {}),
+    ...(markdown ? { markdown: true } : {}),
+  };
   const separator: TranscriptEntry[] =
     role === "user" && state.transcript.length > 0 ? [{ role: "system", text: "" }] : [];
   if (!flush) {
