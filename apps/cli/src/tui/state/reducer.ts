@@ -186,6 +186,8 @@ export type TuiState = {
   subagentPanelFocus: boolean;
   subagentPanelSelectedId: string | undefined;
   pendingChildView: string | undefined;
+  // Parent dispatch already flushed. Remaining subagents exist only to feed the open overlay.
+  subagentsHeldForOverlay: boolean;
 };
 
 export type ChildView = {
@@ -246,6 +248,7 @@ export function initialTuiState(
     subagentPanelFocus: false,
     subagentPanelSelectedId: undefined,
     pendingChildView: undefined,
+    subagentsHeldForOverlay: false,
   };
 }
 
@@ -655,6 +658,16 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "subagent-overlay-open":
       return { ...state, pendingChildView: action.id, subagentPanelFocus: false };
     case "subagent-overlay-close":
+      if (state.subagentsHeldForOverlay) {
+        return {
+          ...state,
+          pendingChildView: undefined,
+          subagents: [],
+          subagentPanelFocus: false,
+          subagentPanelSelectedId: undefined,
+          subagentsHeldForOverlay: false,
+        };
+      }
       return { ...state, pendingChildView: undefined };
     default: {
       const _exhaustive: never = action;
@@ -815,6 +828,7 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
           ...settled,
           subagents: settled.subagents.filter((child) => child.id === settled.pendingChildView),
           subagentPanelFocus: false,
+          subagentsHeldForOverlay: true,
         };
       }
       return {
@@ -822,6 +836,7 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         subagents: [],
         subagentPanelFocus: false,
         subagentPanelSelectedId: undefined,
+        subagentsHeldForOverlay: false,
       };
     }
     case "permission-denied":

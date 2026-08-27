@@ -656,7 +656,7 @@ export function App({
           inert={state.subagentPanelFocus}
         />
       )}
-      {state.subagents.length > 0 && (
+      {state.subagents.length > 0 && state.pendingChildView === undefined && (
         <SubagentPanel
           subagents={state.subagents}
           focused={state.subagentPanelFocus}
