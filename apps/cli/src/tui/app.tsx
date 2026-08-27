@@ -68,6 +68,7 @@ import { PermissionsPanel } from "./routes/config/PermissionsPanel";
 import { SetupPanel } from "./routes/setup/SetupPanel";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
+import { summarizeArgs } from "./state/toolActivity";
 import { syntaxStyle } from "./theme/syntaxStyle";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
@@ -533,16 +534,21 @@ export function App({
           <TurnStatus key={turn.startedAt} startedAt={turn.startedAt} tokenProgress={turn.tokens} />
         )}
       </box>
-      {state.pendingTool !== undefined && (
-        <box borderStyle="single" borderColor={theme.warning}>
-          {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: pendingTool is set
-          ONLY for write_file/edit (reducer.ts), the two tools whose args carry a whole file body —
-          exactly the case the helper exists for, uncapped here otherwise. */}
-          <text fg={theme.warning}>
-            {`${state.pendingTool.name}(${truncateArgsDisplay(state.pendingTool.args)})`}
+      {state.pendingTool !== undefined &&
+        (state.pendingTool.name === "write_file" || state.pendingTool.name === "edit" ? (
+          <box borderStyle="single" borderColor={theme.warning}>
+            {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: write_file/edit
+            args carry a whole file body — exactly the case the helper exists for, uncapped
+            here otherwise. */}
+            <text fg={theme.warning}>
+              {`${state.pendingTool.name}(${truncateArgsDisplay(state.pendingTool.args)})`}
+            </text>
+          </box>
+        ) : (
+          <text fg={theme.muted}>
+            {summarizeArgs(state.pendingTool.name, state.pendingTool.args)}
           </text>
-        </box>
-      )}
+        ))}
       <ErrorLine message={state.commandError} />
       {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
       is waiting on, and answering it (not typing a task or slash command) is the only input that
@@ -719,5 +725,5 @@ const TranscriptRow = memo(function TranscriptRow({ entry }: { entry: Transcript
       </box>
     );
   }
-  return <text fg={theme.text}>{entry.text}</text>;
+  return <text fg={entry.muted ? theme.muted : theme.text}>{entry.text}</text>;
 });
