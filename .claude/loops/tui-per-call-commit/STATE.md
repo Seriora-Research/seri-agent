@@ -25,11 +25,11 @@
 - success_check: After two sequential same-name tool-results and BEFORE done, exactly one muted aggregated line is visible (`Read 2 files` or equivalent). After a first result, that line is already visible (not empty until done). A mid-turn scroll/view includes it.
 
 ## Plan checklist
-- [ ] App tests RED: after first `tool-result` before `done`, frame shows `Read a.txt`; after two same-name results, one `Read 2 files`; two bash results → one `Ran 2 shell commands`.
-- [ ] Paint settled `renderToolActivity` inside the scrollbox after `TranscriptList`; open-entry filter; `pendingTool` unchanged.
-- [ ] Reducer: comment-only. Add selector tests for live `toolActivity` before `done`. Do not `pushLine` on result/denied. Keep aggregation pins.
-- [ ] Update `docs/design/tui.md`.
-- [ ] Keep `toolActivity.test.ts` aggregation tests; add helper tests only if a live-view mapper is extracted.
+- [x] App tests RED: after first `tool-result` before `done`, frame shows `Read a.txt`; after two same-name results, one `Read 2 files`; two bash results → one `Ran 2 shell commands`.
+- [x] Paint settled `renderToolActivity` inside the scrollbox after `TranscriptList`; open-entry filter; `pendingTool` unchanged.
+- [x] Reducer: comment-only. Add selector tests for live `toolActivity` before `done`. Do not `pushLine` on result/denied. Keep aggregation pins.
+- [x] Update `docs/design/tui.md`.
+- [x] Keep `toolActivity.test.ts` aggregation tests; add helper tests only if a live-view mapper is extracted.
 - [ ] Run lint, typecheck, full `apps/cli` test; record exit codes.
 
 ## Gate results (latest)
