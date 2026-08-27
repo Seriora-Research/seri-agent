@@ -1946,6 +1946,7 @@ async function driveLoop(
     permissionMode: getPermissionMode,
     allowedTools,
     checkpointer,
+    reasoningEffort,
     // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
     // subagent tokens land in the run's own reported total instead of vanishing.
     onChildUsage: (childUsage, childCost) => {
@@ -2091,6 +2092,7 @@ async function driveLoop(
       catalog,
       signal: controller.signal,
       onWarning: printWarning,
+      reasoningEffort,
     });
   } finally {
     // In a finally, so a run that throws out of the loop does not leave the slot pointing at a

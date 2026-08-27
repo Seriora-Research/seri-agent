@@ -70,6 +70,7 @@ function makeRuntime(
     system: "PARENT SYSTEM",
     permissionMode: () => "auto",
     allowedTools: [],
+    reasoningEffort: undefined,
     ...overrides,
   };
 }
@@ -392,6 +393,7 @@ describe("dispatch_subagents", () => {
       permissionMode: () => "approve-each",
       allowedTools: [],
       maxIterations: 3,
+      reasoningEffort: undefined,
     };
 
     const result = await runSubagent({
@@ -447,6 +449,7 @@ describe("dispatch_subagents", () => {
         permissionMode: () => liveMode,
         allowedTools: ["write_file"],
         system: "PARENT SYSTEM TIERS",
+        reasoningEffort: "medium",
       }),
     );
     await dispatchTool.execute(
@@ -464,6 +467,20 @@ describe("dispatch_subagents", () => {
     expect(opts.contextWindowSize).toBe(12345);
     expect(opts.system?.startsWith("PARENT SYSTEM TIERS")).toBe(true);
     expect(opts.system).toContain('"test" subagent');
+    expect(opts.reasoningEffort).toBe("medium");
+  });
+
+  test("a default runtime leaves nested opts.reasoningEffort undefined", async () => {
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const dispatchTool = createDispatchTool(makeRuntime(fake));
+    await dispatchTool.execute(
+      { tasks: [{ role: "explore", goal: "look around" }] },
+      dispatchOpts("t1"),
+    );
+
+    expect(calls[0].opts.reasoningEffort).toBeUndefined();
   });
 
   test("a code task takes exactly one pre-dispatch checkpoint snapshot; an all-explore batch takes none", async () => {

@@ -53,6 +53,9 @@ export type SubagentRuntime = {
   modelId: string;
   catalog: ModelCatalog;
   contextWindowSize?: number;
+  // Same resolved string the parent turn already sent, not a getter: /effort cannot change
+  // mid-driveLoop, so a live read would not see a different value than this one.
+  reasoningEffort: string | undefined;
   // A getter, not a resolved value, so a dispatch started after a live /mode change sees the
   // current mode rather than the one driveLoop composed this runtime with.
   permissionMode: () => PermissionMode;
@@ -147,6 +150,7 @@ export async function runSubagent(opts: {
     modelId: runtime.modelId,
     catalog: runtime.catalog,
     contextWindowSize: runtime.contextWindowSize,
+    reasoningEffort: runtime.reasoningEffort,
   })) {
     if (event.type === "text-delta") {
       segment += event.text;

@@ -203,6 +203,7 @@ export async function runArchivist(args: {
   route: { model: string; provider: ModelProvider };
   catalog: ModelCatalog;
   contextWindow: number | undefined;
+  reasoningEffort?: string;
   signal: AbortSignal;
   onWarning: (message: string) => void;
   // Overridable only for tests (fakeChildLoop, the same seam subagents/dispatch.test.ts's own
@@ -244,6 +245,7 @@ export async function runArchivist(args: {
     contextWindowSize: args.contextWindow,
     permissionMode: () => "auto",
     allowedTools: [],
+    reasoningEffort: args.reasoningEffort,
   };
 
   let result: Awaited<ReturnType<typeof runSubagent>>;
@@ -309,6 +311,7 @@ export async function maybeRunArchivist(args: {
   catalog: ModelCatalog;
   signal: AbortSignal;
   onWarning: (message: string) => void;
+  reasoningEffort?: string;
 }): Promise<ArchivistReport | undefined> {
   if (args.signal.aborted) return undefined;
   // A truncation — compaction OR /rewind, both splice `messages` — can leave the cursor pointing
@@ -342,6 +345,7 @@ export async function maybeRunArchivist(args: {
     route: args.route,
     catalog: args.catalog,
     contextWindow: args.contextWindow,
+    reasoningEffort: args.reasoningEffort,
     signal: args.signal,
     onWarning: args.onWarning,
   });
