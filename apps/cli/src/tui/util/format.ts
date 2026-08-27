@@ -4,6 +4,7 @@
 import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@seri/model-catalog";
 import { escapeControlChars } from "../../cli/output";
 import type { PermissionMode } from "../../gate/gate";
+import type { LoopEvent } from "../../loop/loop";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "../state/commands";
 
@@ -284,6 +285,28 @@ export function formatTokenProgress(progress: TokenProgress): string {
   );
   const exact = progress.exact && !progress.hasGap;
   return exact ? `${inTokens} in, ${outTokens} out` : `~${inTokens} in, ~${outTokens} out`;
+}
+
+export function formatDoneLine(
+  reason: Extract<LoopEvent, { type: "done" }>["reason"],
+  tokens?: TokenProgress,
+): string {
+  let line: string;
+  switch (reason) {
+    case "no-tool-call":
+      line = "(done)";
+      break;
+    case "aborted":
+    case "max-iterations":
+    case "repeated-denials":
+      line = `(done: ${reason})`;
+      break;
+    default: {
+      const _unhandled: never = reason;
+      return _unhandled;
+    }
+  }
+  return tokens === undefined ? line : `${line} · ${formatTokenProgress(tokens)}`;
 }
 
 // One row's worth of columns (name, provider, context, cost, route), space-joined — the picker's

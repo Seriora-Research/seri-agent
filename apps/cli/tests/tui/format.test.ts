@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   estimateTokens,
+  formatDoneLine,
   formatElapsed,
   formatModeDetail,
   formatTokenProgress,
@@ -98,6 +99,85 @@ describe("formatTokenProgress", () => {
   test("prefixes both with ~ when hasGap is set, even though exact is true", () => {
     expect(formatTokenProgress(progress({ exact: true, hasGap: true }))).toBe("~10 in, ~20 out");
   });
+});
+
+describe("formatDoneLine", () => {
+  function progress(overrides: Partial<TokenProgress> = {}): TokenProgress {
+    return {
+      reconciledInputTokens: 10,
+      reconciledOutputTokens: 20,
+      liveInputEstimate: 0,
+      carriedOutputEstimate: 0,
+      liveOutputEstimate: 0,
+      exact: true,
+      hasGap: false,
+      ...overrides,
+    };
+  }
+
+  const exact = progress({ reconciledInputTokens: 123, reconciledOutputTokens: 45 });
+  const gap = progress({ hasGap: true });
+  const rows: Array<{
+    name: string;
+    reason: Parameters<typeof formatDoneLine>[0];
+    tokens?: TokenProgress;
+    expected: string;
+  }> = [
+    {
+      name: "happy + exact",
+      reason: "no-tool-call",
+      tokens: exact,
+      expected: `(done) · ${formatTokenProgress(exact)}`,
+    },
+    {
+      name: "happy + gap/~",
+      reason: "no-tool-call",
+      tokens: gap,
+      expected: `(done) · ${formatTokenProgress(gap)}`,
+    },
+    {
+      name: "aborted + totals",
+      reason: "aborted",
+      tokens: exact,
+      expected: `(done: aborted) · ${formatTokenProgress(exact)}`,
+    },
+    {
+      name: "max-iterations + totals",
+      reason: "max-iterations",
+      tokens: exact,
+      expected: `(done: max-iterations) · ${formatTokenProgress(exact)}`,
+    },
+    {
+      name: "repeated-denials + totals",
+      reason: "repeated-denials",
+      tokens: exact,
+      expected: `(done: repeated-denials) · ${formatTokenProgress(exact)}`,
+    },
+    {
+      name: "happy missing tokens",
+      reason: "no-tool-call",
+      expected: "(done)",
+    },
+    {
+      name: "aborted missing tokens",
+      reason: "aborted",
+      expected: "(done: aborted)",
+    },
+  ];
+
+  for (const row of rows) {
+    test(row.name, () => {
+      const line = formatDoneLine(row.reason, row.tokens);
+      expect(line).toBe(row.expected);
+      expect(line).not.toContain("no-tool-call");
+      if (row.tokens !== undefined) {
+        expect(line).toContain(" \u00B7 ");
+        expect(line).not.toContain(" - ");
+      } else {
+        expect(line).not.toContain("\u00B7");
+      }
+    });
+  }
 });
 
 describe("MODE_LABEL", () => {
