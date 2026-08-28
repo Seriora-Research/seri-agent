@@ -35,8 +35,6 @@ import {
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
 
-// undefined + n is n, not NaN, and undefined + undefined stays undefined: a run's total is the sum
-// of the calls that reported, and stays unreported if none did.
 export function addTokens(
   total: number | undefined,
   reported: number | undefined,
@@ -44,13 +42,6 @@ export function addTokens(
   return reported === undefined ? total : (total ?? 0) + reported;
 }
 
-// Same "sum what showed up" rule as addTokens, extended to a CostReport: the dollar amount sums
-// like a token count (addTokens handles that half directly), but status/source are provenance
-// tags, not numbers — VERIFY pass 2 caught that taking the most recent report's tags unconditionally
-// lets a certain turn's "actual" mask an earlier turn's "estimated"/"unknown" in the running total,
-// which is exactly the confident-looking-wrong-number failure the cost feature exists to prevent.
-// A total is never more certain than its least-certain contributor: whichever of the two reports
-// ranks weaker on COST_STATUS_RANK supplies BOTH the status and the source, not just the status.
 const COST_STATUS_RANK: Record<CostReport["status"], number> = {
   unknown: 0,
   estimated: 1,
@@ -75,38 +66,19 @@ export type DriveLoopResult = {
   doneReason: DoneReason | undefined;
   cancelledBy: NodeJS.Signals | undefined;
   usage: RunUsage;
-  // Same shape as `usage`: summed across every `usage` event this call's runLoopFn yielded, via
-  // addCost above. undefined when the run never got as far as a completed model call.
   cost: CostReport | undefined;
-  // The one fact `run()`'s exit code actually needs, not the two inputs it would otherwise have
-  // to reassemble itself: "refused at least once AND executed nothing at all" — see the tracking
-  // below for what each half means and why.
   refusedWithoutRunning: boolean;
-  // undefined on every turn that didn't trigger the archivist (the common case). Deliberately NOT
-  // folded into `usage`/`cost` above — the verify bar demands the archivist's cost be
-  // distinguishable from the main turn's, and summing it in would silently change what this file's
-  // own printUsage/printCost assertions mean.
   archivist: ArchivistReport | undefined;
-  // Always true from driveLoop's own return, below — reaching it means a turn ran, unconditionally.
-  // runTui's own resolveRunTui (quit(), further down) is the one caller that can genuinely produce
-  // `false` here: an idle TUI session the user quit without ever submitting a task never calls
-  // driveLoop at all, so its own closure copy of this flag stays at its initial `false`. Not
-  // optional — driveLoop setting it unconditionally is what makes `false` mean exactly one thing
-  // (nothing ever ran) instead of also being read as "the non-interactive caller didn't bother."
   ranAnyTurn: boolean;
 };
 
 export type DriveLoopOptions = {
-  // When set, aborting this signal aborts the same controller the loop is driven with. Direct
-  // CLI/TUI callers omit it; the daemon passes the per-turn controller so cancel is keyed by
-  // turnId rather than by process signal.
   signal?: AbortSignal;
-  // Default true: register the process SIGINT/SIGTERM cancel slot (first-cancels, second is
-  // fatal). The daemon sets this false so a Ctrl-C at `seri serve` is not stolen by an in-flight
-  // turn's slot.
   bindProcessCancel?: boolean;
-  // Default true: wrap tools with dispatch_subagents. Scheduled runs never compose that tool.
   composeSubagents?: boolean;
+  // Scheduled runs omit this child. maybeRunArchivist's only tool is memory_write, which is
+  // not in the read-only scheduled toolset. Default remains true for attended CLI and TUI.
+  runArchivist?: boolean;
 };
 
 export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
@@ -115,48 +87,6 @@ export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
   return 1;
 }
 
-// `maxTurns` is an argument rather than a field of ctx: it is neither the resume target nor where
-// its state lives, and this is the only place that reads it. `onEvent` is how it reports events —
-// driveLoop only ever calls it with the raw LoopEvent, never anything TUI-shaped: printEvent
-// directly for the non-interactive path, `(event) => dispatch({type: "loop-event", event})` for
-// the TUI one (runTui, further down), which is the one place that still needs a TuiAction at all.
-// A plain callback rather than driveLoop taking a Dispatch and wrapping every event in a
-// `loop-event` envelope itself (which is all this function ever did with one) — that used to make
-// the non-interactive path build a TUI action just so printDispatch could unwrap it again, and
-// pull TuiAction into a loop-driving path that has no other reason to know a TUI type exists. The
-// loop-driving logic itself (the `for await`, the cancellation/AbortController handling) is
-// unchanged either way.
-//
-// `getPermissionMode` is read fresh on every gate check (via the getter below), not resolved once
-// like `model`/`allowedTools`/`worktree` are — a real bug this fixes (reported live on a pty): the
-// non-interactive path's `getPermissionMode` is just `() => prepared.permissionMode`, frozen for
-// the run's whole duration exactly as before; the TUI path's reads whatever the reducer's CURRENT
-// session says, so a mid-run /mode takes effect on the very next tool call rather than only on the
-// next turn.
-//
-// `persist` is what actually writes a messages-updated session to disk — a callback rather than a
-// hardcoded `saveSession` call, because the TWO callers need different answers to "does driveLoop
-// own persistence for this session." The non-interactive path passes `(s) => saveSession(s,
-// ctx.sessionsDir)`, unchanged. The TUI path passes a no-op: even a correct merge dispatched to the
-// reducer still left a ~6ms window where this function's own direct write (using the session the
-// CURRENT turn started with) was the last word on disk, since the reducer's own onSessionChange
-// effect corrects it asynchronously, not synchronously. A crash, a fatal Ctrl-C or a SIGTERM
-// landing in that window still persisted a reverted /mode. A no-op here closes the window
-// entirely rather than narrowing it: the reducer (via App.tsx's onSessionChange) is the ONLY
-// writer on the TUI path, full stop.
-//
-// `approvalPrompt` is the other per-caller swap: this used to be hardcoded to
-// `makeApprovalPrompt(deps.createInterface)` inside this
-// function, called on EVERY path including the TUI one — but makeApprovalPrompt opens its own
-// readline.Interface on process.stdin and has its own `rl.on("SIGINT", ...)`, which on the TUI
-// path fights Ink for stdin ownership (Ink's own useInput already owns raw mode there) and races
-// signals.ts's single cancel slot with a second, independent SIGINT route. The non-interactive
-// path still passes `makeApprovalPrompt(deps.createInterface)`, unchanged; the TUI path
-// (runTui, further down) passes its own tuiApprovalPrompt — the SAME ApprovalPrompt contract
-// (loop.ts), resolved via the reducer's own pendingApproval state and a keypress instead of
-// readline.question, which is what the research spec's own "Command migration" section already
-// said a TUI would supply: "a different function of the identical signature... with zero change
-// to loop.ts/gate.ts."
 export async function driveLoop(
   prepared: PreparedRun,
   ctx: RunContext,
@@ -166,15 +96,7 @@ export async function driveLoop(
   getPermissionMode: () => PermissionMode,
   persist: (session: SessionState<ModelMessage>) => void,
   approvalPrompt: ApprovalPrompt,
-  // The tool-call counter/message cursor the archivist trigger reads and advances — one instance
-  // per SESSION, created by this function's two callers (createArchivistState), not rebuilt here,
-  // so the counter accumulates across every turn of that session rather than resetting on each
-  // driveLoop call. runTui's own copy is a `let`, not a `const`: /clear replaces it with a fresh
-  // `createArchivistState` the moment it mints a new session id — that caller's own comment on why
-  // this is a rebuild, not a reset, applies here too.
   archivistState: ArchivistState,
-  // TUI live panel; the non-interactive caller omits it. Not folded into onEvent, which stays
-  // LoopEvent only.
   onChildEvent?: (payload: ChildEventPayload) => void,
   driveOpts: DriveLoopOptions = {},
 ): Promise<DriveLoopResult> {
@@ -192,21 +114,9 @@ export async function driveLoop(
     memory,
   } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
-  // `ctx.effortFlag` (--effort) wins outright and bypasses session.reasoningEffort/config.json
-  // entirely, for this call only (ParsedArgs.effort's own comment) — otherwise the ordinary
-  // precedence chain: session override, then the SERI_REASONING_EFFORT config default. Read fresh
-  // every driveLoop call, same reasoning as `system`/`route` above: a live /effort switch or a
-  // config default written mid-session must take effect on the very next turn.
   const reasoningEffort =
     ctx.effortFlag ?? resolveReasoningEffort(session, loadConfig(ctx.configDir));
 
-  // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
-  // the consumer is the only thing that knows what a Ctrl-C means. Direct CLI/TUI callers register
-  // the process cancel slot (first press lands in signals.ts, aborts the turn, the loop unwinds
-  // far enough to yield a final messages-updated — which the body below persists, so the session
-  // left behind is resumable; the second press finds the slot empty and takes the file's untouched
-  // fatal path). An injected `signal` aborts that same controller so a daemon turn can be cancelled
-  // without touching the process slot.
   const controller = new AbortController();
   let cancelledBy: NodeJS.Signals | undefined;
   if (driveOpts.signal?.aborted) controller.abort();
@@ -224,22 +134,10 @@ export async function driveLoop(
   let doneReason: DoneReason | undefined;
   const usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
   let cost: CostReport | undefined;
-  // Hoisted so this and runLoopFn's own `system` opt below are the exact same value. Recomputed
-  // every driveLoop call (once per TUI turn, once per non-interactive process), from the RESOLVED
-  // model/provider (`route`) — never captured once at session start, so a
-  // live /model switch OR a routing-priority reroute is reflected on the very next turn instead of
-  // confabulated. `route`, not `session.model`/`.provider`: `session` carries what was REQUESTED,
-  // and a rerouted turn's system prompt/cost provenance must name the model actually being called,
-  // not the one that was asked for and silently rerouted away from.
   const system = joinTiers(
     session.systemPrompt,
     buildVolatileTier(route.model, route.provider, catalogEntry?.displayName, memory),
   );
-  // Pins are re-read every turn so a mid-session env or config change takes effect next turn, the
-  // same freshness reasoningEffort already has. A task's own model+provider pair, when complete,
-  // wins over those defaults. Construction failures warn and reuse the session model rather than
-  // failing the parent turn. Computed even when composeSubagents is false: maybeRunArchivist
-  // still needs the archivist overlay.
   const pins = parseRolePins(process.env, loadConfig(ctx.configDir));
   const configured = configuredProviders(ctx.configDir);
   type RoleOverlay = {
@@ -311,9 +209,6 @@ export async function driveLoop(
     roleOverlays.set(key, overlay);
     return overlay;
   }
-  // The one composition that enables dispatch_subagents; deleting this call (tools -> baseTools)
-  // is the whole rollback, matching withCheckpoints/withVerification's own comment in prepareSession.
-  // Scheduled runs pass composeSubagents: false so that tool never exists on the unattended path.
   const tools =
     driveOpts.composeSubagents === false
       ? baseTools
@@ -330,9 +225,6 @@ export async function driveLoop(
           checkpointer,
           reasoningEffort,
           resolveRole: (role, request) => overlayFor(role, request),
-          // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
-          // subagent tokens land in the run's own reported total instead of vanishing.
-          // Child token spend is not a parent LoopEvent, so the writer records it here.
           onChildUsage: (childUsage, childCost) => {
             usage.inputTokens = addTokens(usage.inputTokens, childUsage.inputTokens);
             usage.outputTokens = addTokens(usage.outputTokens, childUsage.outputTokens);
@@ -344,16 +236,6 @@ export async function driveLoop(
             onChildEvent?.(payload);
           },
         });
-  // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
-  // what an exit code promises a shell, which is this consumer's business, not the loop's.
-  // `permission-denied` fires on two different facts carried in its `reason` — "blocked" is a
-  // mode (read-only, say) doing exactly what the user asked, not a signal anything went wrong;
-  // "declined" is a live refusal, either an actual "no" or nobody there to ask at all. Counting
-  // "blocked" here would flip `seri --resume x "review this repo" && open report.md` to exit 1
-  // solely because a read-only session correctly refused a write probe mid-review, breaking the
-  // `&&` over a mode working as intended. Only "declined" sets `hadDenial`. `tool-call` fires only
-  // for a call that both passed the gate and had a real tool definition (the unknown-tool branch
-  // also `continue`s past it) — so `ranTool` is exactly "did anything actually run".
   let hadDenial = false;
   let ranTool = false;
   let archivist: ArchivistReport | undefined;
@@ -474,19 +356,22 @@ export async function driveLoop(
     // one-cancel-stops-everything contract every dispatch_subagents child already relies on.
     // maybeRunArchivist (memory/archivist.ts) owns the out-of-bounds cursor guard, the live
     // /memory archivist toggle read, and the trigger check — cli.ts carries none of that itself.
-    const archivistOverlay = overlayFor("archivist");
-    archivist = await maybeRunArchivist({
-      state: archivistState,
-      ctx: { configDir: ctx.configDir, worktree },
-      contextWindow: catalogEntry?.contextWindow,
-      model: archivistOverlay.model,
-      route: { model: archivistOverlay.modelId, provider: archivistOverlay.provider },
-      catalog,
-      signal: controller.signal,
-      onWarning: printWarning,
-      reasoningEffort: archivistOverlay.reasoningEffort,
-    });
-    prepared.trajectory.recordArchivist(archivist);
+    // Scheduled driveLoop passes runArchivist: false so this child never runs on a timer.
+    if (driveOpts.runArchivist !== false) {
+      const archivistOverlay = overlayFor("archivist");
+      archivist = await maybeRunArchivist({
+        state: archivistState,
+        ctx: { configDir: ctx.configDir, worktree },
+        contextWindow: catalogEntry?.contextWindow,
+        model: archivistOverlay.model,
+        route: { model: archivistOverlay.modelId, provider: archivistOverlay.provider },
+        catalog,
+        signal: controller.signal,
+        onWarning: printWarning,
+        reasoningEffort: archivistOverlay.reasoningEffort,
+      });
+      prepared.trajectory.recordArchivist(archivist);
+    }
   } finally {
     // In a finally, so a run that throws out of the loop does not leave the slot pointing at a
     // controller nothing is waiting on — a later signal would then be swallowed as a cancel of a

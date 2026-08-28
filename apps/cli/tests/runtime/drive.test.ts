@@ -180,4 +180,26 @@ describe("driveLoop options", () => {
     expect(result.doneReason).toBe("aborted");
     expect(loopSignal?.aborted).toBe(true);
   });
+
+  test("runArchivist false does not invoke the archivist child", async () => {
+    const prepared = preparedStub();
+    let recorded = 0;
+    prepared.trajectory.recordArchivist = () => {
+      recorded += 1;
+    };
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: fakeRunLoop().fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, runArchivist: false },
+    );
+    expect(recorded).toBe(0);
+  });
 });
