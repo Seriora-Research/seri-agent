@@ -137,4 +137,27 @@ describe("InputBox (OpenTUI)", () => {
     expect(setup.captureCharFrame()).toContain("> ab");
     expect(setup.captureCharFrame()).not.toContain("[A");
   });
+
+  test("inert empty Down still fires onEmptyDown", async () => {
+    const downs: number[] = [];
+    const setup = await createTestRenderer({ width: 40, height: 5 });
+    await mount(setup, <InputBox inert onEmptyDown={() => downs.push(1)} />);
+
+    setup.mockInput.pressArrow("down");
+    await settle(setup);
+
+    expect(downs).toEqual([1]);
+  });
+
+  test("inert printable key does not change the value", async () => {
+    const setup = await createTestRenderer({ width: 40, height: 5 });
+    await mount(setup, <InputBox inert />);
+
+    await setup.mockInput.typeText("x");
+    await settle(setup);
+    await sleep(THROTTLE_MS + 20);
+
+    expect(setup.captureCharFrame()).toContain("> ");
+    expect(setup.captureCharFrame()).not.toContain("> x");
+  });
 });

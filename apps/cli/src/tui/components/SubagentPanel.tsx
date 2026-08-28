@@ -1,10 +1,24 @@
 /** @jsxImportSource @opentui/react */
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
+import type { ReactNode } from "react";
 import type { ChildView, Dispatch } from "../state/reducer";
 import { summarizeArgs } from "../state/toolActivity";
 import { theme } from "../theme/theme";
 import { isEnter } from "../util/keys";
+
+const CHILD_WINDOW = 3;
+
+export function childWindowOffset(
+  selectedId: string | undefined,
+  childIds: readonly string[],
+): number {
+  if (selectedId === undefined || selectedId === "main") return 0;
+  const selectedIndex = childIds.indexOf(selectedId);
+  if (selectedIndex < 0) return 0;
+  const maxOffset = Math.max(0, childIds.length - CHILD_WINDOW);
+  return Math.min(Math.max(selectedIndex - 2, 0), maxOffset);
+}
 
 export function SubagentPanel({
   subagents,
@@ -17,6 +31,9 @@ export function SubagentPanel({
   selectedId: string | undefined;
   dispatch: Dispatch;
 }) {
+  const childIds = subagents.map((child) => child.id);
+  const walkIds = ["main", ...childIds];
+
   useKeyboard((key) => {
     if (!focused) return;
     if (key.name === "escape") {
@@ -24,13 +41,17 @@ export function SubagentPanel({
       return;
     }
     if (isEnter(key)) {
-      if (selectedId !== undefined) dispatch({ type: "subagent-overlay-open", id: selectedId });
+      if (selectedId === undefined || selectedId === "main") {
+        dispatch({ type: "subagent-overlay-close" });
+        return;
+      }
+      dispatch({ type: "subagent-overlay-open", id: selectedId });
       return;
     }
-    const index = subagents.findIndex((child) => child.id === selectedId);
+    const index = Math.max(0, walkIds.indexOf(selectedId ?? "main"));
     if (key.name === "down") {
-      const next = subagents[Math.min(Math.max(index, 0) + 1, subagents.length - 1)];
-      if (next !== undefined) dispatch({ type: "subagent-panel-select", id: next.id });
+      const next = walkIds[Math.min(index + 1, walkIds.length - 1)];
+      if (next !== undefined) dispatch({ type: "subagent-panel-select", id: next });
       return;
     }
     if (key.name === "up") {
@@ -38,28 +59,29 @@ export function SubagentPanel({
         dispatch({ type: "subagent-panel-blur" });
         return;
       }
-      dispatch({ type: "subagent-panel-select", id: subagents[index - 1].id });
+      dispatch({ type: "subagent-panel-select", id: walkIds[index - 1] });
     }
   });
 
+  const offset = childWindowOffset(selectedId, childIds);
+  const visible = subagents.slice(offset, offset + CHILD_WINDOW);
+  const overflow = subagents.length - (offset + CHILD_WINDOW);
+
   return (
     <box flexDirection="column">
-      {subagents.map((child) => (
-        <SubagentRow
-          key={child.id}
-          child={child}
-          siblings={subagents}
-          selected={focused && child.id === selectedId}
-        />
+      <RosterRow selected={focused && (selectedId === undefined || selectedId === "main")}>
+        <text attributes={TextAttributes.BOLD} flexShrink={0}>
+          main
+        </text>
+      </RosterRow>
+      {visible.map((child) => (
+        <SubagentRow key={child.id} child={child} selected={focused && child.id === selectedId} />
       ))}
+      {overflow > 0 && (
+        <text fg={theme.muted}>{`  +${overflow}`}</text>
+      )}
     </box>
   );
-}
-
-function roleLabel(child: ChildView, siblings: ChildView[]): string {
-  const sameRole = siblings.filter((row) => row.role === child.role);
-  if (sameRole.length < 2) return child.role;
-  return `${child.role} · ${sameRole.findIndex((row) => row.id === child.id) + 1}`;
 }
 
 function denialSuffix(child: ChildView): string | undefined {
@@ -72,30 +94,36 @@ function denialSuffix(child: ChildView): string | undefined {
   return undefined;
 }
 
-function SubagentRow({
-  child,
-  siblings,
+function RosterRow({
   selected,
+  children,
 }: {
-  child: ChildView;
-  siblings: ChildView[];
   selected: boolean;
+  children: ReactNode;
 }) {
+  return (
+    <box flexDirection="row">
+      <text flexShrink={0}>{selected ? "> " : "  "}</text>
+      {children}
+    </box>
+  );
+}
+
+function SubagentRow({ child, selected }: { child: ChildView; selected: boolean }) {
   const tool =
     child.currentTool === undefined
       ? undefined
       : summarizeArgs(child.currentTool.name, child.currentTool.args);
   const suffix = denialSuffix(child);
-  const rest = [child.goal, tool, suffix].filter((part) => part !== undefined && part.length > 0);
+  const rest = [tool, suffix].filter((part) => part !== undefined && part.length > 0);
   return (
-    <box flexDirection="row">
-      <text flexShrink={0}>{selected ? "> " : "  "}</text>
+    <RosterRow selected={selected}>
       <text attributes={TextAttributes.BOLD} flexShrink={0}>
-        {roleLabel(child, siblings)}
+        {child.role}
       </text>
       <text fg={theme.muted} truncate wrapMode="none">
         {rest.length === 0 ? "" : ` ${rest.join("  ")}`}
       </text>
-    </box>
+    </RosterRow>
   );
 }

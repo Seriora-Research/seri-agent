@@ -329,6 +329,82 @@ describe("dispatch_subagents", () => {
     expect(forwarded[0].cost).toBeUndefined();
   });
 
+  test("onChildEvent forwards usage and compacted", async () => {
+    const compacted: LoopEvent = {
+      type: "compacted",
+      summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
+      evictedCount: 1,
+      usage: {
+        inputTokens: 8,
+        inputTokenDetails: {
+          noCacheTokens: undefined,
+          cacheReadTokens: undefined,
+          cacheWriteTokens: undefined,
+        },
+        outputTokens: 2,
+        outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+        totalTokens: 10,
+      },
+    };
+    const { fake } = fakeChildLoop(() => ({
+      events: [usageEvent(10, 5), compacted, { type: "done", reason: "no-tool-call" }],
+    }));
+    const forwarded: ChildEventPayload[] = [];
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        onChildEvent: (payload) => forwarded.push(payload),
+      }),
+    );
+    await dispatchTool.execute(
+      { tasks: [{ role: "explore", goal: "a" }] },
+      dispatchOpts("t1"),
+    );
+
+    expect(forwarded.map((p) => p.event.type)).toEqual([
+      "child-started",
+      "usage",
+      "compacted",
+      "done",
+    ]);
+  });
+
+  test("onChildUsage is forwarded for a child compacted event, with no cost", async () => {
+    const compacted: LoopEvent = {
+      type: "compacted",
+      summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
+      evictedCount: 1,
+      usage: {
+        inputTokens: 8,
+        inputTokenDetails: {
+          noCacheTokens: undefined,
+          cacheReadTokens: undefined,
+          cacheWriteTokens: undefined,
+        },
+        outputTokens: 2,
+        outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+        totalTokens: 10,
+      },
+    };
+    const { fake } = fakeChildLoop(() => ({
+      events: [compacted, { type: "done", reason: "no-tool-call" }],
+    }));
+    const forwarded: { usage: LanguageModelUsage; cost: unknown }[] = [];
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        onChildUsage: (usage, cost) => forwarded.push({ usage, cost }),
+      }),
+    );
+    await dispatchTool.execute(
+      { tasks: [{ role: "explore", goal: "a" }] },
+      dispatchOpts("t1"),
+    );
+
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0].usage.inputTokens).toBe(8);
+    expect(forwarded[0].usage.outputTokens).toBe(2);
+    expect(forwarded[0].cost).toBeUndefined();
+  });
+
   test("every child gets the exact same AbortSignal handed to execute", async () => {
     const { fake, calls } = fakeChildLoop(() => ({
       events: [{ type: "done", reason: "no-tool-call" }],

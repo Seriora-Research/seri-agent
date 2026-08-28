@@ -29,11 +29,9 @@
 #    event with `agent_type` genuinely absent from the payload, not mis-parsed. Writing
 #    "unknown-agent" for those rows carries zero information beyond a timestamp and an
 #    opaque id, and crowded out the named rows that are actually informative (measured
-#    83-89% of all subagent: lines across four loops). retro's own trigger table
-#    (.claude/agents/retro.md) never keys on these rows — its evidence sources are gate
-#    tables, `DECISION:` lines and quoted corrections — so skipping them loses nothing
-#    it uses. Fixed by not appending an entry at all when `agent_type` is empty, instead
-#    of defaulting to the string "unknown-agent".
+#    83-89% of all subagent: lines across four loops). Skipping them loses nothing the
+#    named-dispatch audit uses. Fixed by not appending an entry at all when
+#    `agent_type` is empty, instead of defaulting to the string "unknown-agent".
 set -uo pipefail
 
 PAYLOAD=$(cat)

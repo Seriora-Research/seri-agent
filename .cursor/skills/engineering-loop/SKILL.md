@@ -203,31 +203,7 @@ matching clause:
 ## 7. OUTPUT & MEMORY
 - Produce the mode-specific deliverable (spec / PR-ready summary / fix report).
 - Append a final `trajectory.md` entry with commit SHAs and the goal outcome.
-
-## 8. RETRO (self-improvement, all modes, best-effort)
-Dispatch the `retro` subagent (Task `subagent_type: "retro"`) — a FRESH
-context, never the orchestrator's own — to review this run's `trajectory.md`,
-`STATE.md`, and git history for evidenced, recurring mistakes worth fixing in
-the loop itself (not the code). This mirrors why VERIFY (§5) uses a separate
-reviewer-verifier instead of letting the implementer grade itself: a model
-reflecting on its own run in its own context has the same blind spots that
-produced the run.
-
-- retro has no Write/Edit tool. It returns proposed lessons as text, or
-  exactly `NO LESSON THIS RUN` if no trigger fired — see
-  `.cursor/agents/retro.md` for the evidence-gated trigger table. Do not treat
-  silence as a failure; a clean run producing no lesson is the common case.
-- **Promotion gate** (see `.cursor/rules/retro.mdc`):
-  - Interactive runs: present each proposed lesson and STOP for human approval
-    before writing anything to `CLAUDE.md` or `.cursor/rules/*.mdc`.
-  - Unattended `/goal` runs: NEVER auto-promote. Write the proposal to
-    `.cursor/lessons/proposed/<slug>-<timestamp>.md` and note it in the final
-    `trajectory.md` entry for a human to review later. This holds regardless
-    of how capable the model driving this run is — self-improvement that
-    writes to its own governing files without a human or separate-context
-    gate is exactly the failure mode this design avoids.
 - `.cursor/hooks/*`, `.cursor/hooks.json`, `.cursor/agents/*`,
   `.cursor/skills/*`, and `.cursor/templates/*` are frozen by
-  `protect-loop-core` for the entire duration of any active loop — not just
-  during RETRO. Neither retro nor the orchestrator can write to them from
-  inside a run, promoted or not. This is a hard gate, not an instruction.
+  `protect-loop-core` while a loop is live. Do not write those paths from
+  inside a run.

@@ -31,6 +31,13 @@ import {
 import { projectRoot } from "./checkpoint/shadowGit";
 import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
+  assertTuiHandlers,
+  commandByName,
+  isTuiClaimed,
+  sessionMeta,
+  type CommandMeta,
+} from "./cli/commandCatalog";
+import {
   approvalPromptText,
   archivistLine,
   archivistStatsLine,
@@ -73,7 +80,7 @@ import {
   observeArchivistEvent,
   resetArchivistForRewind,
 } from "./memory/archivist";
-import { decideMemoryCommand, memoryCommandAccepts } from "./memory/commands";
+import { decideMemoryCommand } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
 import { runUsageCommand as runUsageCommandReal } from "./usage/command";
@@ -336,15 +343,58 @@ type SlashCommand = {
     }
 );
 
-// A step count, or nothing at all.
-function isStepCount(args: string[]): boolean {
-  return args.length === 0 || (args.length === 1 && /^[1-9]\d*$/.test(args[0] ?? ""));
+function requireSessionMeta(name: string): Extract<CommandMeta, { surface: "session" }> {
+  const meta = commandByName(name);
+  if (meta === undefined || meta.surface !== "session") {
+    throw new Error(`${name} is not a session command`);
+  }
+  return meta;
 }
 
-// Commands that operate on the resume target rather than being a task for the model. One table,
-// so a new one is added in exactly one place: the dispatch in `run()` shares the resume-target
-// resolution and the error reporting. Handlers throw to report a failure; the caller turns that
-// into a message and a non-zero exit.
+function sessionSlash(
+  name: string,
+  run: Extract<SlashCommand, { needsSession?: true }>["run"],
+): [string, SlashCommand] {
+  const meta = requireSessionMeta(name);
+  if (meta.needsSession === false) {
+    throw new Error(`${name} is session-less; use sessionSlashNoSession`);
+  }
+  return [
+    name,
+    {
+      accepts: meta.accepts,
+      run,
+      ...(meta.mutatesRunState === true ? { mutatesRunState: true as const } : {}),
+      ...(meta.scopeTargetToCwd === true ? { scopeTargetToCwd: true as const } : {}),
+      ...(meta.readsDetailFlag === true ? { readsDetailFlag: true as const } : {}),
+    },
+  ];
+}
+
+function sessionSlashNoSession(
+  name: string,
+  run: Extract<SlashCommand, { needsSession: false }>["run"],
+): [string, SlashCommand] {
+  const meta = requireSessionMeta(name);
+  if (meta.needsSession !== false) {
+    throw new Error(`${name} requires a session`);
+  }
+  return [
+    name,
+    {
+      accepts: meta.accepts,
+      needsSession: false,
+      run,
+      ...(meta.mutatesRunState === true ? { mutatesRunState: true as const } : {}),
+      ...(meta.readsDetailFlag === true ? { readsDetailFlag: true as const } : {}),
+    },
+  ];
+}
+
+// Commands that operate on the resume target rather than being a task for the model. The name
+// list lives in commandCatalog.ts; this Map is the session slice plus each command's run.
+// Dispatch in `run()` shares resume-target resolution and error reporting. Handlers throw to
+// report a failure; the caller turns that into a message and a non-zero exit.
 //
 // A Map rather than an object literal, because an object literal inherits Object.prototype and a
 // lookup keyed on user input walks it: `SLASH_COMMANDS["toString"]` returned a function, so
@@ -354,77 +404,22 @@ function isStepCount(args: string[]): boolean {
 // object and crashed with "command is not a function". A Map has no prototype chain to walk, so
 // the hazard is gone from every call site rather than from the ones that remember Object.hasOwn.
 export const SLASH_COMMANDS = new Map<string, SlashCommand>([
-  ["/mode", { accepts: (args) => args.length === 0, run: cycleModeCommand }],
-  // `args.length <= 1`, not unconditional: an unconditional `() => true` let a genuine task
-  // starting with the string "/effort" be hijacked instead of falling through to the model (the
-  // exact hazard this table's own header comment, and /clear's, exist to prevent), and let
-  // `effortCommand` silently ignore trailing garbage past `args[0]` (`/effort auto extra`). Capped
-  // at one argument closes both.
-  //
-  // `effortCommand` (below) is registered here for the NON-INTERACTIVE path only: every form of
-  // `/effort` (bare, `<level>`, `auto`) is claimed BEFORE reaching this table on the TUI path
-  // (runTui's own onSubmit, below), which reuses `prepared.catalog`/`prepared.plan` synchronously
-  // instead of calling `effortCommand` through this entry at all. `mutatesRunState: true` is inert
-  // today for that same reason — the TUI never reaches this entry for `/effort` at all, so there
-  // is currently no in-flight turn for it to gate against. Kept anyway, at zero cost, as the one
-  // thing standing between a future change and the exact race it used to gate: if the TUI's own
-  // `args.length <= 1` interception guard (onSubmit, below) and this table's `accepts` above ever
-  // drift apart, some `/effort` invocation would fall through to `effortCommand`'s own awaited
-  // network calls (`getModelCatalog()`, `fetchAccountPlan()`) racing a still-running turn's own
-  // `messages-updated` — the same full-replace clobber every other `SLASH_COMMANDS` entry that
-  // calls `sessionUpdated()` across an `await` is already gated against.
-  ["/effort", { accepts: (args) => args.length <= 1, run: effortCommand, mutatesRunState: true }],
-  ["/undo", { accepts: isStepCount, run: undoCommand, mutatesRunState: true }],
-  // A sha and nothing else. `seri "/restore the header spacing"` is a task.
-  [
-    "/restore",
-    {
-      accepts: (args) => args.length === 1 && /^[0-9a-f]{4,40}$/.test(args[0] ?? ""),
-      run: restoreCommand,
-      mutatesRunState: true,
-    },
-  ],
-  ["/rewind", { accepts: isStepCount, run: rewindCommand, mutatesRunState: true }],
-  // Exact-and-empty, like /mode — NOT isStepCount (/rewind's own form): /clear takes no argument,
-  // so `seri "/clear the screen please"` must fall through to the model as task text rather than
-  // being hijacked as a mistyped invocation.
-  [
-    "/clear",
-    {
-      accepts: (args) => args.length === 0,
-      run: clearCommand,
-      mutatesRunState: true,
-      scopeTargetToCwd: true,
-    },
-  ],
-  [
-    "/compact",
-    { accepts: (args) => args.length === 0, run: compactCommand, mutatesRunState: true },
-  ],
-  // mutatesRunState: /memory approve|reject mutates the pending/ queue and the live memory files,
-  // and must not race the archivist staging more writes mid-turn (C-7's own comment on why that
-  // block runs before `finally` unregisters the cancel slot). Per-command, not per-subcommand
-  // (accepted deliberately — SlashCommand's own field comment explains why a read-only
-  // /memory pending shares the gate with a mutating /memory approve).
-  [
-    "/memory",
-    {
-      accepts: memoryCommandAccepts,
-      run: memoryCommand,
-      mutatesRunState: true,
-      needsSession: false,
-    },
-  ],
-  [
-    "/usage",
-    {
-      accepts: (args) => args.length === 0 || (args.length === 1 && args[0] === "--detail"),
-      run: usageCommand,
-      needsSession: false,
-      readsDetailFlag: true,
-    },
-  ],
+  sessionSlash("/mode", cycleModeCommand),
+  sessionSlash("/effort", effortCommand),
+  sessionSlash("/undo", undoCommand),
+  sessionSlash("/restore", restoreCommand),
+  sessionSlash("/rewind", rewindCommand),
+  sessionSlash("/clear", clearCommand),
+  sessionSlash("/compact", compactCommand),
+  sessionSlashNoSession("/memory", memoryCommand),
+  sessionSlashNoSession("/usage", usageCommand),
 ]);
+
+for (const meta of sessionMeta()) {
+  if (!SLASH_COMMANDS.has(meta.name)) {
+    throw new Error(`SLASH_COMMANDS missing ${meta.name}`);
+  }
+}
 
 // MEDIUM-F: /exit is deliberately NOT a SLASH_COMMANDS entry — it used to be, with a no-op `run`
 // for the non-interactive path, but handleSlashCommand (below) resolves a resume target for
@@ -1076,7 +1071,7 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
   let maxTurns: number | undefined;
   if (maxTurnsRaw !== undefined) {
     // parseArgs accepts --max-turns abc happily (measured) — it has no numeric option type — so
-    // this check is not redundant. Same shape as isStepCount above. Validated here, right after the
+    // this check is not redundant. Same shape as /undo's `[n]` accepts. Validated here, right after the
     // parse, so a malformed value is a usage error regardless of which subcommand follows it —
     // `seri --max-turns garbage login` used to reach login with the bad flag silently ignored.
     if (!/^[1-9]\d*$/.test(maxTurnsRaw))
@@ -3066,55 +3061,18 @@ async function runTui(
     }
   }
 
-  // H-1: a decision function throwing (e.g. `/undo 5` with fewer checkpoints than that) used to
-  // escape straight out of Ink's own input handler — mirrors handleSlashCommand's existing
-  // try/catch (the non-interactive path already has one) rather than leaving the TUI path with
-  // none. M-3: input shaped like a slash command that matches nothing, or matches one but fails
-  // its own accepts() guard, gets the same visible feedback instead of silently vanishing —
-  // genuinely free-form text (H-3) is the only thing that becomes a new task, and only when it
-  // is not shaped like a slash command at all. HIGH-1/MEDIUM-F: /exit is intercepted here, before
-  // the generic SLASH_COMMANDS dispatch, since quitting is runTui's own business, not a
-  // session-decision function's — it is not in that table at all (see the table's own comment).
-  // MEDIUM-D: an EXACT match only, `args.length === 0`, the same discipline every SLASH_COMMANDS
-  // entry's own accepts() already applies — `/exit the debugger and retry` is a task whose first
-  // word happens to be /exit, not a request to quit, and used to be hijacked into one.
-  // `async`, not just for `command.run`'s own sake: cycleModeCommand/rewindCommand are `async`
-  // now (SlashCommand.run's own comment), and the try/catch below has to `await` the call to
-  // still catch a later rejection — a bare synchronous call, unawaited, would let a failure past
-  // this function's own return and surface as an unhandled rejection instead of a command-error.
-  async function onSubmit(value: string): Promise<void> {
-    if (reactDispatch === undefined) return;
-    const trimmed = value.trim();
-    if (trimmed.length === 0) return;
-    // Deliberately unconditional and before every branch below (not per-branch, and not moved
-    // below the /exit/unrecognized-command guards): a rejected submission — invalid args, an
-    // unrecognized command, /exit with arguments — still gets its typed text echoed here, so the
-    // command-error it produces has an antecedent that scrolls with it instead of a floating
-    // error with nothing to explain it. Do not sink this below the guards.
-    echoUserInput(value);
-    const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
-    if (name === "/exit") {
-      if (args.length > 0) {
-        dispatch({ type: "command-error", message: "/exit: invalid arguments." });
-        return;
-      }
+  // Claimed TUI names (and /effort, which is session but tuiClaimsFirst) run from this Record
+  // before the SLASH_COMMANDS / turnInFlight gate. Panel commands stay legal mid-turn. Missing a
+  // catalog name here is a load-time throw, not a silent fallthrough into effortCommand or a task.
+  type TuiHandler = (args: string[]) => void | Promise<void>;
+  const tuiHandlers: Record<string, TuiHandler> = {
+    "/exit": async () => {
       await quit();
-      return;
-    }
-    // /model, like /exit just above, is intercepted here rather than added to SLASH_COMMANDS: it
-    // opens a live, selectable picker, which means nothing on the non-interactive path
-    // SLASH_COMMANDS also serves (handleSlashCommand has no screen to render a picker onto), so it
-    // is not in that table at all (mirrors that table's own comment on why /exit isn't either).
-    if (name === "/model") {
-      if (args.length > 0) {
-        dispatch({ type: "command-error", message: "/model: invalid arguments." });
-        return;
-      }
-      // Bug fixed here (code-review, PR #73, same class as resolveRoute's own fix above):
-      // configuredProviders reads config.json via a bare JSON.parse — a corrupted file threw
-      // synchronously, and onSubmit has no caller-side .catch() (InputBox's own useInput handler
-      // calls it fire-and-forget), so that became an unhandled rejection instead of a visible
-      // command-error the same way every other failure in this function degrades.
+    },
+    "/model": () => {
+      // configuredProviders reads config.json via a bare JSON.parse — a corrupted file throws
+      // synchronously, and onSubmit has no caller-side .catch() (InputBox calls it fire-and-forget),
+      // so this must be a visible command-error the same way every other failure here degrades.
       try {
         dispatch({
           type: "model-picker-requested",
@@ -3141,22 +3099,13 @@ async function runTui(
           message: messageOf(err),
         });
       }
-      return;
-    }
-    // /effort, like /model just above, is intercepted here for EVERY form (bare, `<level>`,
-    // `auto`), not just the bare, picker-opening one. Left to fall through to the generic
-    // SLASH_COMMANDS dispatch below instead, `<level>`/`auto` would hit `effortCommand`, which
-    // `await`s two real network calls before its own `sessionUpdated()` — a window where a
-    // different already-in-flight turn could complete and have its `session-updated` dispatch (a
-    // full replace, not a merge) silently discarded by `effortCommand`'s later one. Claiming
-    // `<level>`/`auto` here closes that race at its root: `prepared.catalog`/`prepared.plan` are
-    // already resolved (the same values /model's own interception above reuses), so
-    // `applyEffortCommand` below resolves synchronously — no `await` sits between reading
-    // `liveState.session` and dispatching the result.
-    //
-    // `decideEffortOpen` still owns the bare form: route resolution, legal-tier lookup, and the
-    // current-tier-highlighted `selected` index for EffortPanel.
-    if (name === "/effort" && args.length <= 1) {
+    },
+    // Claim every form (bare, `<level>`, `auto`). Fallthrough to SLASH_COMMANDS would hit
+    // effortCommand, which awaits two network calls before sessionUpdated() — a window where an
+    // in-flight turn's session-updated (a full replace, not a merge) can be discarded by
+    // effortCommand's later one. prepared.catalog / prepared.plan are already resolved, so
+    // applyEffortCommand is synchronous between reading liveState.session and dispatching.
+    "/effort": async (args) => {
       try {
         if (args.length === 0) {
           const opened = decideEffortOpen(
@@ -3189,16 +3138,8 @@ async function runTui(
           message: messageOf(err),
         });
       }
-      return;
-    }
-    // /setup, like /model just above, is intercepted here rather than added to SLASH_COMMANDS: it
-    // opens a live panel with nothing to render on the non-interactive path either.
-    if (name === "/setup") {
-      if (args.length > 0) {
-        dispatch({ type: "command-error", message: "/setup: invalid arguments." });
-        return;
-      }
-      // Same fix as /model just above: decideSetupOpen also reads config.json unguarded.
+    },
+    "/setup": () => {
       try {
         dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
       } catch (err) {
@@ -3207,49 +3148,29 @@ async function runTui(
           message: messageOf(err),
         });
       }
-      return;
-    }
-    // /login, /signup and /logout, like /model and /setup just above: intercepted here rather than
-    // added to SLASH_COMMANDS, since they drive the blocking pendingAuth panel (createAuthHandlers,
-    // tui/handlers.ts) rather than anything the non-interactive path has a screen for.
-    if (name === "/login" || name === "/signup") {
-      if (args.length > 0) {
-        dispatch({ type: "command-error", message: `${name}: invalid arguments.` });
-        return;
-      }
-      await onLogin(name === "/signup" ? "signup" : "login");
-      // PreparedRun.plan's own comment: onLogin resolves the same way on success and failure (its
-      // own try/catch degrades to a rendered auth-step, never a rejection), so this always
-      // re-fetches — on a failed/abandoned attempt loadAuthSession still finds nothing and
-      // fetchAccountPlan's own login guard short-circuits back to null, the same value `prepared.
-      // plan` already held; on success this is what makes a freshly-logged-in plan visible to
-      // resolveRoute/`/model` without waiting for the next `seri` restart.
+    },
+    "/login": async () => {
+      await onLogin("login");
+      // onLogin resolves the same way on success and failure (its try/catch degrades to a rendered
+      // auth-step, never a rejection), so this always re-fetches — a failed/abandoned attempt still
+      // finds nothing and fetchAccountPlan short-circuits to null; on success this is what makes a
+      // freshly-logged-in plan visible to resolveRoute / /model without waiting for a restart.
       prepared.plan = await fetchAccountPlan(configDir);
-      return;
-    }
-    if (name === "/logout") {
-      if (args.length > 0) {
-        dispatch({ type: "command-error", message: "/logout: invalid arguments." });
-        return;
-      }
+    },
+    "/signup": async () => {
+      await onLogin("signup");
+      prepared.plan = await fetchAccountPlan(configDir);
+    },
+    "/logout": async () => {
       await onLogout();
       // Cleared directly rather than re-fetched: fetchAccountPlan would return null here anyway
-      // (its own login guard sees no session once logout succeeds), and if logout itself somehow
-      // failed, null is still the fail-closed answer PreparedRun.plan's own comment already commits
-      // to — never let a stale paid plan keep resolveRoute/`/model` showing "provided" after the
-      // user asked to log out.
+      // (its login guard sees no session once logout succeeds), and if logout itself somehow
+      // failed, null is still the fail-closed answer PreparedRun.plan already commits to — never
+      // let a stale paid plan keep resolveRoute / /model showing "provided" after the user asked
+      // to log out.
       prepared.plan = null;
-      return;
-    }
-    // /config and /permissions, like /login, /signup and /logout just above: intercepted here rather
-    // than added to SLASH_COMMANDS, since they drive blocking panels the non-interactive path has
-    // no screen for.
-    if (name === "/config") {
-      if (args.length > 0) {
-        dispatch({ type: "command-error", message: "/config: invalid arguments." });
-        return;
-      }
-      // Same fix as /model and /setup above: decideConfigOpen also reads config.json unguarded.
+    },
+    "/config": () => {
       try {
         dispatch({ type: "config-requested", rows: decideConfigOpen(configDir) });
       } catch (err) {
@@ -3258,19 +3179,11 @@ async function runTui(
           message: messageOf(err),
         });
       }
-      return;
-    }
-    if (name === "/permissions") {
-      if (args.length > 0) {
-        dispatch({ type: "command-error", message: "/permissions: invalid arguments." });
-        return;
-      }
-      // Unlike /config just above (decideConfigOpen's loadConfig genuinely throws via
-      // JSON.parse), decidePermissionsOpen's loadGrants never throws for a malformed store — it
-      // degrades to an empty list and reports through onWarning instead (/code-review, round 3:
-      // this call previously dropped that callback, so a corrupted permissions.yaml opened as a
-      // silently-empty panel with no indication anything was wrong). `ctx.permissionsDir`, not
-      // `configDir` — see createPermissionsHandlers' own comment (tui/handlers.ts).
+    },
+    "/permissions": () => {
+      // decidePermissionsOpen's loadGrants never throws for a malformed store — it degrades to an
+      // empty list and reports through onWarning. Dropping that callback opened a silently-empty
+      // panel. ctx.permissionsDir, not configDir — see createPermissionsHandlers (tui/handlers.ts).
       try {
         dispatch({
           type: "permissions-requested",
@@ -3286,12 +3199,9 @@ async function runTui(
           message: messageOf(err),
         });
       }
-      return;
-    }
-    // /max-turns and /profile new (Stage E, feature-plan.md): one-shot commands, no panel and no
-    // new reducer state — they confirm via transcript-append or fail via command-error, same as
-    // every other interception in this chain.
-    if (name === "/max-turns") {
+    },
+    // One-shot, no panel: confirm via transcript-append, fail via command-error.
+    "/max-turns": (args) => {
       try {
         liveMaxTurns = decideMaxTurns(args);
         dispatch({
@@ -3304,18 +3214,16 @@ async function runTui(
           message: messageOf(err),
         });
       }
-      return;
-    }
-    if (name === "/profile") {
+    },
+    "/profile": (args) => {
       try {
         const { dir, name: profileName } = decideProfileCreate(args);
         // This directory will hold auth.json/config.json/permissions.yaml once the profile is
         // used, so it is owner-only like every other secrets-holding directory this codebase
         // creates (ensureOwnerOnlyDir, atomicWriteFile.ts). `created` comes from the mkdir call
-        // itself (code-review round 3) rather than a separate `existsSync(dir)` probe beforehand
-        // — a probe-then-create pair races two concurrent `/profile new work` invocations into
-        // both observing "doesn't exist yet" and both claiming "created" for a directory only one
-        // of them actually made.
+        // itself rather than a separate existsSync(dir) probe beforehand — a probe-then-create
+        // pair races two concurrent `/profile new work` invocations into both observing "doesn't
+        // exist yet" and both claiming "created" for a directory only one of them actually made.
         const created = ensureOwnerOnlyDir(dir);
         dispatch({
           type: "transcript-append",
@@ -3330,6 +3238,43 @@ async function runTui(
           message: messageOf(err),
         });
       }
+    },
+  };
+  assertTuiHandlers(tuiHandlers);
+
+  // H-1: a decision function throwing (e.g. `/undo 5` with fewer checkpoints than that) used to
+  // escape straight out of Ink's own input handler — mirrors handleSlashCommand's existing
+  // try/catch (the non-interactive path already has one) rather than leaving the TUI path with
+  // none. M-3: input shaped like a slash command that matches nothing, or matches one but fails
+  // its own accepts() guard, gets the same visible feedback instead of silently vanishing —
+  // genuinely free-form text (H-3) is the only thing that becomes a new task, and only when it
+  // is not shaped like a slash command at all. TUI-claimed names (and /effort via tuiClaimsFirst)
+  // run from tuiHandlers above before SLASH_COMMANDS, so /exit is not a session-decision function
+  // and /effort never awaits effortCommand's catalog/plan fetch. `async` because
+  // cycleModeCommand/rewindCommand are async (SlashCommand.run's own comment), and the try/catch
+  // below has to await the call to still catch a later rejection.
+  async function onSubmit(value: string): Promise<void> {
+    if (reactDispatch === undefined) return;
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return;
+    // Deliberately unconditional and before every branch below (not per-branch, and not moved
+    // below the /exit/unrecognized-command guards): a rejected submission — invalid args, an
+    // unrecognized command, /exit with arguments — still gets its typed text echoed here, so the
+    // command-error it produces has an antecedent that scrolls with it instead of a floating
+    // error with nothing to explain it. Do not sink this below the guards.
+    echoUserInput(value);
+    const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
+    const spec = commandByName(name);
+    if (spec !== undefined && isTuiClaimed(spec)) {
+      if (!spec.accepts(args)) {
+        dispatch({ type: "command-error", message: `${name}: invalid arguments.` });
+        return;
+      }
+      const handler = tuiHandlers[name];
+      if (handler === undefined) {
+        throw new Error(`tuiHandlers missing ${name}`);
+      }
+      await handler(args);
       return;
     }
     const command = SLASH_COMMANDS.get(name);

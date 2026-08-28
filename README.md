@@ -126,6 +126,7 @@ to a temporary copy.
 | `/permissions` | view or revoke tools you've permanently approved |
 | `/undo [n]`, `/rewind [n]`, `/restore <sha>` | step back through checkpoints |
 | `/clear` | start a new session (clears the conversation) — the previous one stays recoverable with `seri --resume <id>` |
+| `/compact` | summarize older messages in this session so the conversation fits the context window |
 | `/memory pending\|diff\|approve\|reject` | review and act on staged memory writes |
 | `/memory archivist on\|off` | turn the post-turn learning pass off entirely |
 | `/login`, `/signup`, `/logout` | sign in to, create, or leave a hosted seri account |

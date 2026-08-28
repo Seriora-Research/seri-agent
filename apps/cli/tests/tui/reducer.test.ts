@@ -1685,16 +1685,19 @@ type ChildViewProbe = {
 function panel(state: TuiState): {
   subagents: ChildViewProbe[];
   subagentPanelFocus: boolean;
+  subagentPanelSelectedId: string | undefined;
   pendingChildView: string | undefined;
 } {
   const extra = state as TuiState & {
     subagents?: ChildViewProbe[];
     subagentPanelFocus?: boolean;
+    subagentPanelSelectedId?: string;
     pendingChildView?: string;
   };
   return {
     subagents: extra.subagents ?? [],
     subagentPanelFocus: extra.subagentPanelFocus ?? false,
+    subagentPanelSelectedId: extra.subagentPanelSelectedId,
     pendingChildView: extra.pendingChildView,
   };
 }
@@ -1762,7 +1765,58 @@ describe("tuiReducer: subagent-child-event", () => {
     expect(state.streaming).toBe("");
   });
 
-  test("parent dispatch_subagents tool-result with no overlay clears subagents and focus", () => {
+  test("six child-started rows stay on the roster", () => {
+    let state = initialTuiState(session());
+    for (let i = 0; i < 6; i++) {
+      state = tuiReducer(
+        state,
+        childEvent(`t1:${i}`, "explore", `find ${i}`, { type: "child-started" }),
+      );
+    }
+
+    expect(panel(state).subagents).toHaveLength(6);
+    expect(panel(state).subagents.map((c) => c.id)).toEqual([
+      "t1:0",
+      "t1:1",
+      "t1:2",
+      "t1:3",
+      "t1:4",
+      "t1:5",
+    ]);
+  });
+
+  test("a child done event does not clear the roster", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "done", reason: "no-tool-call" }),
+    );
+
+    expect(panel(state).subagents).toHaveLength(1);
+    expect(panel(state).subagents[0]?.id).toBe("t1:0");
+    expect(panel(state).subagents[0]?.status).toBe("done");
+  });
+
+  test("a non-dispatch tool-result does not clear the roster", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "read_file", result: "ok" },
+    });
+
+    expect(panel(state).subagents).toHaveLength(1);
+    expect(panel(state).subagents[0]?.id).toBe("t1:0");
+  });
+
+  test("parent dispatch_subagents tool-result with no overlay clears subagents", () => {
     let state = initialTuiState(session());
     state = tuiReducer(
       state,
@@ -1780,9 +1834,11 @@ describe("tuiReducer: subagent-child-event", () => {
 
     expect(panel(state).subagents).toEqual([]);
     expect(panel(state).subagentPanelFocus).toBe(false);
+    expect(panel(state).subagentPanelSelectedId).toBeUndefined();
+    expect(panel(state).pendingChildView).toBeUndefined();
   });
 
-  test("parent dispatch_subagents tool-result with overlay keeps that child and drops the rest", () => {
+  test("parent dispatch_subagents tool-result with a child view clears the roster and the view", () => {
     let state = initialTuiState(session());
     state = tuiReducer(
       state,
@@ -1792,8 +1848,9 @@ describe("tuiReducer: subagent-child-event", () => {
       state,
       childEvent("t1:1", "explore", "find b", { type: "child-started" }),
     );
-    const withOverlay = { ...state, pendingChildView: "t1:0" } as TuiState;
-    state = tuiReducer(withOverlay, {
+    state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
+    state = tuiReducer(state, { type: "subagent-panel-focus" });
+    state = tuiReducer(state, {
       type: "loop-event",
       event: {
         type: "tool-result",
@@ -1805,33 +1862,73 @@ describe("tuiReducer: subagent-child-event", () => {
       },
     });
 
-    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0"]);
-    expect(panel(state).subagents.some((c) => c.id === "t1:1")).toBe(false);
+    expect(panel(state).subagents).toEqual([]);
+    expect(panel(state).pendingChildView).toBeUndefined();
+    expect(panel(state).subagentPanelFocus).toBe(false);
+    expect(panel(state).subagentPanelSelectedId).toBeUndefined();
   });
 
-  test("overlay-close after parent dispatch flush drops the held child", () => {
+  test("turn-started clears the roster and the child view", () => {
     let state = initialTuiState(session());
     state = tuiReducer(
       state,
       childEvent("t1:0", "explore", "find a", { type: "child-started" }),
     );
     state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
-    state = tuiReducer(state, {
-      type: "loop-event",
-      event: {
-        type: "tool-result",
-        name: "dispatch_subagents",
-        result: { results: [{ doneReason: "no-tool-call" }], totalUsage: {} },
-      },
-    });
-    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0"]);
-    expect(panel(state).pendingChildView).toBe("t1:0");
-
-    state = tuiReducer(state, { type: "subagent-overlay-close" });
+    state = tuiReducer(state, { type: "subagent-panel-focus" });
+    state = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
 
     expect(panel(state).subagents).toEqual([]);
     expect(panel(state).pendingChildView).toBeUndefined();
     expect(panel(state).subagentPanelFocus).toBe(false);
+    expect(panel(state).subagentPanelSelectedId).toBeUndefined();
+  });
+
+  test("transcript-cleared clears the roster and the child view", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
+    state = tuiReducer(state, { type: "subagent-panel-focus" });
+    state = tuiReducer(state, { type: "transcript-cleared" });
+
+    expect(panel(state).subagents).toEqual([]);
+    expect(panel(state).pendingChildView).toBeUndefined();
+    expect(panel(state).subagentPanelFocus).toBe(false);
+    expect(panel(state).subagentPanelSelectedId).toBeUndefined();
+  });
+
+  test("subagent-panel-focus with no selected id defaults to main", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(state, { type: "subagent-panel-focus" });
+
+    expect(panel(state).subagentPanelFocus).toBe(true);
+    expect(panel(state).subagentPanelSelectedId).toBe("main");
+  });
+
+  test("overlay-close after selecting main restores the parent view and keeps children", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:1", "explore", "find b", { type: "child-started" }),
+    );
+    state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
+    state = tuiReducer(state, { type: "subagent-panel-select", id: "main" });
+    state = tuiReducer(state, { type: "subagent-overlay-close" });
+
+    expect(panel(state).pendingChildView).toBeUndefined();
+    expect(panel(state).subagents.map((c) => c.id)).toEqual(["t1:0", "t1:1"]);
+    expect(panel(state).subagentPanelSelectedId).toBe("main");
   });
 
   test("two explore children store the raw role, not a numbered label", () => {
@@ -1888,5 +1985,128 @@ describe("tuiReducer: subagent-child-event", () => {
 
     expect(state.status).toBe("");
     expect(state.status).not.toContain("dispatch_subagents");
+  });
+
+  test("child usage folds into the parent turn total and leaves the child row and transcript untouched", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "turn-started",
+      startedAt: 1,
+      inputEstimate: 0,
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "usage", usage: usageOf(100, 20) },
+    });
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "usage",
+        usage: usageOf(50, 10),
+      }),
+    );
+
+    expect(state.turn?.tokens).toEqual({
+      reconciledInputTokens: 150,
+      reconciledOutputTokens: 30,
+      liveInputEstimate: 0,
+      carriedOutputEstimate: 0,
+      liveOutputEstimate: 0,
+      exact: true,
+      hasGap: false,
+    });
+    expect(panel(state).subagents[0]?.id).toBe("t1:0");
+    expect(state.transcript).toEqual([]);
+  });
+
+  test("child compacted folds its usage into the parent turn without a compacted transcript line", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "turn-started",
+      startedAt: 1,
+      inputEstimate: 0,
+    });
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "compacted",
+        summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
+        evictedCount: 2,
+        usage: usageOf(60, 15),
+      }),
+    );
+
+    expect(state.turn?.tokens).toEqual({
+      reconciledInputTokens: 60,
+      reconciledOutputTokens: 15,
+      liveInputEstimate: 0,
+      carriedOutputEstimate: 0,
+      liveOutputEstimate: 0,
+      exact: true,
+      hasGap: false,
+    });
+    expect(state.transcript).toEqual([]);
+  });
+
+  test("child usage is a no-op on tokens when no turn is in flight", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "usage",
+        usage: usageOf(50, 10),
+      }),
+    );
+
+    expect(state.turn).toBeUndefined();
+  });
+
+  test("done line includes folded child usage", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "turn-started",
+      startedAt: 1,
+      inputEstimate: 0,
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "usage", usage: usageOf(100, 20) },
+    });
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "usage",
+        usage: usageOf(50, 10),
+      }),
+    );
+    const tokens = state.turn?.tokens;
+    expect(tokens).toEqual({
+      reconciledInputTokens: 150,
+      reconciledOutputTokens: 30,
+      liveInputEstimate: 0,
+      carriedOutputEstimate: 0,
+      liveOutputEstimate: 0,
+      exact: true,
+      hasGap: false,
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
+
+    expect(state.transcript.at(-1)?.text).toBe(`done · ${formatTokenProgress(tokens!)}`);
   });
 });
