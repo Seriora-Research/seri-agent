@@ -52,6 +52,7 @@ describe("SessionDatabase", () => {
     expect(pragmas.foreignKeys).toBe(1);
     expect(pragmas.journalMode).toBe("wal");
     expect(pragmas.busyTimeout).toBeGreaterThan(0);
+    expect(pragmas.userVersion).toBe(2);
     const raw = new Database(join(configDir, DATABASE_FILENAME));
     const version = (raw.query("PRAGMA user_version").get() as { user_version: number }).user_version;
     expect(version).toBeGreaterThan(0);

@@ -249,9 +249,12 @@ export class SessionDatabase {
       this.database.exec("PRAGMA journal_mode = WAL");
       this.database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
       this.migrate();
+      // LIMIT 1, not 0: SQLite can skip MATCH when the limit is zero, so a missing FTS5 build
+      // would not throw. A hyphenated token is FTS column syntax (`fts-probe` means column
+      // `probe`), so the probe string has to be a bare term.
       this.database
-        .query("SELECT rowid FROM session_fts WHERE session_fts MATCH ? LIMIT 0")
-        .all("fts-probe");
+        .query("SELECT rowid FROM session_fts WHERE session_fts MATCH ? LIMIT 1")
+        .all("probe");
       if (this.database.query("PRAGMA foreign_key_check").all().length > 0) {
         throw new Error("SQLite foreign-key integrity check failed");
       }
@@ -474,7 +477,11 @@ export class SessionDatabase {
     const messages = this.database
       .query("SELECT id, seq, json FROM messages WHERE session_id = ? ORDER BY seq")
       .all(state.id) as MessageRow[];
-    const encoded = state.messages.map((message) => JSON.stringify(message));
+    const encoded = state.messages.map((message) => {
+      const json = JSON.stringify(message);
+      if (json === undefined) throw new Error("Session messages must be JSON-serializable");
+      return json;
+    });
     let commonPrefix = 0;
     while (
       commonPrefix < messages.length &&
