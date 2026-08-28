@@ -24,6 +24,16 @@ describe("buildRoleToolSet", () => {
     expect(Object.keys(plan).sort()).toEqual(["glob", "grep", "read_file"]);
   });
 
+  test("oracle is exactly the read-only set and has no write_file/edit/bash/powershell", () => {
+    const tools = buildRoleToolSet("oracle");
+    expect(Object.keys(tools).sort()).toEqual(["glob", "grep", "read_file"]);
+    expect(tools.write_file).toBeUndefined();
+    expect(tools.edit).toBeUndefined();
+    expect(tools.bash).toBeUndefined();
+    expect(tools.powershell).toBeUndefined();
+    expect(tools[DISPATCH_TOOL_NAME]).toBeUndefined();
+  });
+
   test("test adds bash/powershell to the read-only set and has no write_file/edit", () => {
     const tools = buildRoleToolSet("test");
     expect(Object.keys(tools).sort()).toEqual(["bash", "glob", "grep", "powershell", "read_file"]);
@@ -89,6 +99,13 @@ describe("roleAddendum", () => {
     expect(roleAddendum("plan")).toMatch(/cannot write/i);
     expect(roleAddendum("test")).toMatch(/cannot fix/i);
   });
+
+  test("oracle is an advisor, not an explorer, and cannot write or run commands", () => {
+    const text = roleAddendum("oracle");
+    expect(text).toMatch(/senior engineer|advis/i);
+    expect(text).toMatch(/cannot write/i);
+    expect(text).not.toMatch(/report what you find/i);
+  });
 });
 
 describe("roleMutatesFilesystem", () => {
@@ -98,6 +115,10 @@ describe("roleMutatesFilesystem", () => {
   test("explore and plan do not mutate the filesystem", () => {
     expect(roleMutatesFilesystem("explore")).toBe(false);
     expect(roleMutatesFilesystem("plan")).toBe(false);
+  });
+
+  test("oracle does not mutate the filesystem", () => {
+    expect(roleMutatesFilesystem("oracle")).toBe(false);
   });
 
   test("code and test both mutate the filesystem", () => {

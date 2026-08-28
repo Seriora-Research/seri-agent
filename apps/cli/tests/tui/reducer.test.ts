@@ -10,6 +10,7 @@ import type {
   SetupProviderRow,
 } from "../../src/tui/state/commands";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
+import { rosterModelSuffix } from "../../src/tui/components/SubagentPanel";
 import { initialTuiState, type TuiState, tuiReducer } from "../../src/tui/state/reducer";
 import { renderLiveToolActivity, summarizeArgs } from "../../src/tui/state/toolActivity";
 import { TREE_BRANCH } from "../../src/tui/theme/theme";
@@ -1680,6 +1681,9 @@ type ChildViewProbe = {
   currentTool?: { name: string; args: unknown };
   streaming: string;
   toolActivity: Array<{ anomalyLines: string[] }>;
+  model?: string;
+  provider?: string;
+  inherited?: boolean;
 };
 
 function panel(state: TuiState): {
@@ -1707,8 +1711,9 @@ function childEvent(
   role: ChildEventPayload["role"],
   goal: string,
   event: ChildEventPayload["event"],
+  extra?: Pick<ChildEventPayload, "model" | "provider" | "inherited">,
 ) {
-  return { type: "subagent-child-event" as const, childId, role, goal, event };
+  return { type: "subagent-child-event" as const, childId, role, goal, event, ...extra };
 }
 
 describe("tuiReducer: subagent-child-event", () => {
@@ -1731,6 +1736,33 @@ describe("tuiReducer: subagent-child-event", () => {
     expect(state.transcript).toEqual([]);
     expect(state.toolActivity).toEqual([]);
     expect(state.pendingTool).toBeUndefined();
+  });
+
+  test("child-started copies the actual model pair when the child did not inherit", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent(
+        "t1:0",
+        "oracle",
+        "advise",
+        { type: "child-started" },
+        { model: "claude-sonnet-5", provider: "anthropic", inherited: false },
+      ),
+    );
+    const child = panel(state).subagents[0];
+    expect(child?.role).toBe("oracle");
+    expect(child?.model).toBe("claude-sonnet-5");
+    expect(child?.provider).toBe("anthropic");
+    expect(child?.inherited).toBe(false);
+  });
+
+  test("rosterModelSuffix shows the model only when the child did not inherit", () => {
+    expect(rosterModelSuffix({ inherited: false, model: "claude-sonnet-5" })).toBe(
+      "claude-sonnet-5",
+    );
+    expect(rosterModelSuffix({ inherited: true, model: "solo-model" })).toBeUndefined();
+    expect(rosterModelSuffix({ inherited: undefined, model: "solo-model" })).toBeUndefined();
   });
 
   test("child text-delta accumulates on streaming and does not change currentTool", () => {

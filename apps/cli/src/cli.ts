@@ -128,6 +128,16 @@ import {
 } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { type ChildEventPayload, withSubagents } from "./subagents/dispatch";
+import {
+  effortForChild,
+  parseRolePins,
+  pinFromTask,
+  realizedRoute,
+  resolveChildRoute,
+  roleConstructionWarning,
+  type RoutableRole,
+  type TaskRouteRequest,
+} from "./subagents/routes";
 import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
@@ -2053,6 +2063,81 @@ async function driveLoop(
     session.systemPrompt,
     buildVolatileTier(route.model, route.provider, catalogEntry?.displayName, memory),
   );
+  // Pins are re-read every turn so a mid-session env or config change takes effect next turn, the
+  // same freshness reasoningEffort already has. A task's own model+provider pair, when complete,
+  // wins over those defaults. Construction failures warn and reuse the session model rather than
+  // failing the parent turn.
+  const pins = parseRolePins(process.env, loadConfig(ctx.configDir));
+  const configured = configuredProviders(ctx.configDir);
+  type RoleOverlay = {
+    model: LanguageModel;
+    provider: ModelProvider;
+    modelId: string;
+    contextWindowSize: number | undefined;
+    reasoningEffort: string | undefined;
+    inherited: boolean;
+  };
+  const roleOverlays = new Map<string, RoleOverlay>();
+  function overlayKey(role: RoutableRole, request: TaskRouteRequest | undefined): string {
+    const pin = pinFromTask(request);
+    const effort =
+      typeof request?.effort === "string" && request.effort.length > 0 ? request.effort : "";
+    if (pin === undefined && effort.length === 0) return role;
+    return `${role}:${pin?.provider ?? ""}:${pin?.model ?? ""}:${effort}`;
+  }
+  function overlayFor(role: RoutableRole, request?: TaskRouteRequest): RoleOverlay {
+    const key = overlayKey(role, request);
+    const cached = roleOverlays.get(key);
+    if (cached !== undefined) return cached;
+    const intended = resolveChildRoute(
+      role,
+      route,
+      pins,
+      request,
+      catalog,
+      configured,
+      prepared.plan,
+    );
+    const samePair = intended.model === route.model && intended.provider === route.provider;
+    let childModel = model;
+    let constructed = intended.inherited || samePair;
+    if (!constructed) {
+      try {
+        childModel = dispatchModel(
+          {
+            model: intended.model,
+            provider: intended.provider,
+            rerouted: intended.rerouted,
+            viaGateway: intended.viaGateway,
+          },
+          session.id,
+          ctx.configDir,
+          deps,
+        );
+        constructed = true;
+      } catch (err) {
+        printWarning(roleConstructionWarning(role, intended, messageOf(err)));
+        constructed = false;
+      }
+    }
+    const actual = realizedRoute(intended, route, constructed);
+    const overlay: RoleOverlay = {
+      model: actual.inherited ? model : childModel,
+      provider: actual.provider,
+      modelId: actual.model,
+      contextWindowSize: actual.inherited
+        ? catalogEntry?.contextWindow
+        : findCatalogEntry(catalog, actual.model, actual.provider)?.contextWindow,
+      reasoningEffort: effortForChild(
+        { provider: route.provider, modelId: route.model, reasoningEffort },
+        { provider: actual.provider, modelId: actual.model },
+        request?.effort,
+      ),
+      inherited: actual.inherited,
+    };
+    roleOverlays.set(key, overlay);
+    return overlay;
+  }
   // The one composition that enables dispatch_subagents; deleting this call (tools -> baseTools)
   // is the whole rollback, matching withCheckpoints/withVerification's own comment in prepareSession.
   const tools = withSubagents(baseTools, {
@@ -2067,6 +2152,7 @@ async function driveLoop(
     allowedTools,
     checkpointer,
     reasoningEffort,
+    resolveRole: (role, request) => overlayFor(role, request),
     // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
     // subagent tokens land in the run's own reported total instead of vanishing.
     // Child token spend is not a parent LoopEvent, so the writer records it here.
@@ -2211,16 +2297,17 @@ async function driveLoop(
     // one-cancel-stops-everything contract every dispatch_subagents child already relies on.
     // maybeRunArchivist (memory/archivist.ts) owns the out-of-bounds cursor guard, the live
     // /memory archivist toggle read, and the trigger check — cli.ts carries none of that itself.
+    const archivistOverlay = overlayFor("archivist");
     archivist = await maybeRunArchivist({
       state: archivistState,
       ctx: { configDir: ctx.configDir, worktree },
       contextWindow: catalogEntry?.contextWindow,
-      model,
-      route,
+      model: archivistOverlay.model,
+      route: { model: archivistOverlay.modelId, provider: archivistOverlay.provider },
       catalog,
       signal: controller.signal,
       onWarning: printWarning,
-      reasoningEffort,
+      reasoningEffort: archivistOverlay.reasoningEffort,
     });
     prepared.trajectory.recordArchivist(archivist);
   } finally {
