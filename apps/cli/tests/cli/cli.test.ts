@@ -44,17 +44,17 @@ type RunLoopOpts = Parameters<typeof runLoop>[0];
 // it says on the tin — console.log-based, the same shape production's now-deleted consolePresenter
 // used to have before the launch-only argv refactor removed its only caller (handleSlashCommand).
 // `session` backs `currentSession()`, read only by /compact.
-function testPresenter(
-  dirs: { sessionsDir: string },
-  session?: SessionState<ModelMessage>,
-) {
+function testPresenter(dirs: { sessionsDir: string }, session?: SessionState<ModelMessage>) {
   return {
     message: (text: string) => console.log(text),
     onPlan: (plan: Parameters<typeof undoPlanLines>[0]) => undoPlanLines(plan),
     restore: ({
       plan,
       message,
-    }: { plan: Parameters<typeof recoveryLines>[0]; message: string }) => {
+    }: {
+      plan: Parameters<typeof recoveryLines>[0];
+      message: string;
+    }) => {
       console.log(message);
       if (plan.restored.length > 0 || plan.deleted.length > 0) recoveryLines(plan);
     },
@@ -4257,14 +4257,15 @@ describe("run (/compact)", () => {
     });
 
     await getCompact().run(
-        session,
-        [],
-        { sessionsDir, checkpointsDir, configDir },
-        testPresenter({ sessionsDir }, session),
-        {
-      authConfigDir: configDir,
-      getGroqModel: () => model,
-    });
+      session,
+      [],
+      { sessionsDir, checkpointsDir, configDir },
+      testPresenter({ sessionsDir }, session),
+      {
+        authConfigDir: configDir,
+        getGroqModel: () => model,
+      },
+    );
 
     const sigintListeners = process.listeners("SIGINT");
     const sigtermListeners = process.listeners("SIGTERM");

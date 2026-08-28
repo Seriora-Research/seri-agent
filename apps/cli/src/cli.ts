@@ -661,11 +661,7 @@ async function memoryCommand(
   for (const line of lines) presenter.message(line);
 }
 
-function trajectoryCommand(
-  args: string[],
-  dirs: CommandDirs,
-  presenter: CommandPresenter,
-): void {
+function trajectoryCommand(args: string[], dirs: CommandDirs, presenter: CommandPresenter): void {
   const currentlyEnabled =
     dirs.trajectory?.isEnabled() ?? loadTrajectoryConfig(dirs.configDir).enabled;
   const decided = decideTrajectoryCommand(args, currentlyEnabled);
