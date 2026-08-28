@@ -36,12 +36,14 @@ export const PROVIDER_DISPLAY_NAMES: Record<ModelProvider, string> = {
 // message — tuiMissingKeyMessage, below — without matching on this text.
 export type MissingKeyError = Error & { missingKeyProvider: ModelProvider };
 
-// Default missing-key copy for prepareSession and the non-interactive path. Export the env var,
-// or run `/setup` in the TUI. Tests assert this string verbatim.
+// Default missing-key copy for prepareSession and the non-interactive path — reachable before the
+// TUI ever mounts (or without one at all), so unlike tuiMissingKeyMessage this can't point at
+// /setup, and can't assume a POSIX shell (`export` is not a PowerShell builtin). Tests assert this
+// string verbatim.
 export function missingKeyError(provider: ModelProvider): MissingKeyError {
   const keyName = PROVIDER_API_KEY_NAMES[provider];
   const error = new Error(
-    `${keyName} is not set. Export ${keyName} or run /setup.`,
+    `${keyName} is not set. Set it as an environment variable and re-run.`,
   ) as MissingKeyError;
   error.missingKeyProvider = provider;
   return error;

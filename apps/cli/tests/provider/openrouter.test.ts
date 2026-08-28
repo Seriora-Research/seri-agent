@@ -31,7 +31,7 @@ afterEach(() => {
 describe("getOpenRouterModel", () => {
   test("throws a clear error when OPENROUTER_API_KEY is unset", () => {
     expect(() => getOpenRouterModel("openai/gpt-oss-120b", "test-session-id")).toThrow(
-      "OPENROUTER_API_KEY is not set. Export OPENROUTER_API_KEY or run /setup.",
+      "OPENROUTER_API_KEY is not set. Set it as an environment variable and re-run.",
     );
   });
 

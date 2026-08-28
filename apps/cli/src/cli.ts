@@ -888,6 +888,10 @@ type ParsedArgs = {
   positionals: string[];
   maxTurns: number | undefined;
   skipPermissions: boolean;
+  // True when positionals[0] came from AFTER a `--` terminator: `seri -- serve` means the task
+  // text "serve", not the daemon verb — AGENTS.md's "`--` is the documented escape for a task
+  // that contains what looks like a flag" applies to verbs too, not just `--foo`-shaped words.
+  verbEscaped: boolean;
 };
 
 // One convention across every handler below, so `run` reads as the sequence it is: a `number` is
@@ -897,16 +901,28 @@ type ParsedArgs = {
 function parseCliArgs(argv: string[]): ParsedArgs | number {
   let values: ParsedArgs["values"];
   let positionals: string[];
+  let tokens: Array<{ kind: string; index?: number }>;
   try {
-    ({ values, positionals } = parseArgs({
+    ({ values, positionals, tokens } = parseArgs({
       args: argv,
       strict: true,
       allowPositionals: true,
       options: PARSE_OPTIONS,
+      tokens: true,
     }));
   } catch (err) {
     return usageError(messageOf(err));
   }
+
+  // A bare `--` before the first positional means EVERYTHING from there on, including the first
+  // word, is task text — not just the flag-shaped ones. Without this, `seri -- serve` started the
+  // daemon and `seri -- exec` returned an exec usage error, both silently ignoring the escape.
+  const terminatorIndex = tokens.find((t) => t.kind === "option-terminator")?.index;
+  const firstPositionalIndex = tokens.find((t) => t.kind === "positional")?.index;
+  const verbEscaped =
+    terminatorIndex !== undefined &&
+    firstPositionalIndex !== undefined &&
+    terminatorIndex < firstPositionalIndex;
 
   // Set here, before any validation below that can return a usage error early: every call to
   // parseCliArgs must reset the override to what THIS invocation's flag says (undefined if none),
@@ -941,9 +957,12 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
   // the form `--resume`'s old optional-value parsing used to cycle the most recent session's mode)
   // looks for a session literally named "/mode" and fails with "session not found" instead — a
   // silent behaviour change rather than a loud one. Caught here as a usage error naming the fix.
+  // The fix is NOT `seri --continue /mode`: under launch-only argv that positional is task text,
+  // not a slash dispatch — the fix is to resume with `--continue`/`--resume <id>` and then type
+  // the slash command once the TUI is up.
   if (values.resume !== undefined && SLASH_COMMANDS.has(values.resume)) {
     return usageError(
-      `--resume ${values.resume} looks for a session named "${values.resume}". Did you mean: seri --continue ${values.resume}`,
+      `--resume ${values.resume} looks for a session named "${values.resume}". Slash commands only run inside the TUI: resume with seri --continue, then type ${values.resume}.`,
     );
   }
 
@@ -952,6 +971,7 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     positionals,
     maxTurns,
     skipPermissions: values["dangerously-skip-permissions"] === true,
+    verbEscaped,
   };
 }
 
@@ -2466,7 +2486,7 @@ async function runTui(
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const parsed = parseCliArgs(argv);
   if (typeof parsed === "number") return parsed;
-  const { values, positionals, maxTurns, skipPermissions } = parsed;
+  const { values, positionals, maxTurns, skipPermissions, verbEscaped } = parsed;
   // The override is already set — parseCliArgs does it before any of its own validation can
   // short-circuit with a usage error (see the comment there). Nothing to do here except rely on
   // it having happened before handleInfoFlags, runSelftest and all seven getConfigDir() consumers.
@@ -2525,10 +2545,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     return usageError("No task given.");
   }
 
-  const serve = await handleServeCommand(positionals, deps);
+  const serve = verbEscaped ? undefined : await handleServeCommand(positionals, deps);
   if (serve !== undefined) return serve;
 
-  const exec = await handleExecCommand(positionals, deps);
+  const exec = verbEscaped ? undefined : await handleExecCommand(positionals, deps);
   if (exec !== undefined) return exec;
 
   if (isTTY) {

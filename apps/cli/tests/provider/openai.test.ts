@@ -31,7 +31,7 @@ afterEach(() => {
 describe("getOpenAIModel", () => {
   test("throws a clear error when OPENAI_API_KEY is unset", () => {
     expect(() => getOpenAIModel("gpt-5")).toThrow(
-      "OPENAI_API_KEY is not set. Export OPENAI_API_KEY or run /setup.",
+      "OPENAI_API_KEY is not set. Set it as an environment variable and re-run.",
     );
   });
 

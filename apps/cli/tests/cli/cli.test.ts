@@ -3637,9 +3637,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
 
     expect(logs.join("\n")).toContain("restored a.txt");
     expect(logs.join("\n")).toMatch(/The state this replaced is commit [0-9a-f]{40}\./);
-    expect(logs.join("\n")).toMatch(
-      new RegExp(`seri --resume ${SESSION_ID} then /restore [0-9a-f]{40}`),
-    );
+    expect(logs.join("\n")).toMatch(/\/restore [0-9a-f]{40}/);
   }, 15_000);
 
   test("/undo writes a checkpoint record with op pre-undo", async () => {

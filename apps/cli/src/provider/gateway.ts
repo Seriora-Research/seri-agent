@@ -49,8 +49,11 @@ export function getGatewayModel(
   }
 
   // Checked here only to fail fast with a clear message before constructing anything — the
-  // credential actually used per-request is re-read fresh inside authedFetch.
-  if (!loadAuthSession(configDir)) throw new Error("Not logged in. Run /login");
+  // credential actually used per-request is re-read fresh inside authedFetch. This can fire before
+  // the TUI ever mounts (prepareSession resolves the route pre-mount), so the message can't tell
+  // the user to run /login right now — it names where that command lives instead.
+  if (!loadAuthSession(configDir))
+    throw new Error("Not logged in. Run /login inside the TUI, or configure a provider API key.");
 
   const fetchFn = deps.fetchFn ?? fetch;
   const refreshSession = deps.refreshSession ?? refreshSessionReal;

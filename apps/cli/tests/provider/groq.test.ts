@@ -31,7 +31,7 @@ afterEach(() => {
 describe("getGroqModel", () => {
   test("throws a clear error when GROQ_API_KEY is unset", () => {
     expect(() => getGroqModel(DEFAULT_MODEL)).toThrow(
-      "GROQ_API_KEY is not set. Export GROQ_API_KEY or run /setup.",
+      "GROQ_API_KEY is not set. Set it as an environment variable and re-run.",
     );
   });
 
