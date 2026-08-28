@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
@@ -20,6 +27,23 @@ function makeDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "seri-cwd-test-"));
   dirs.push(dir);
   return dir;
+}
+
+// `pwd` / Get-Location / process.cwd() can print a different string for the same directory:
+// Darwin tmpdir is often a /var → /private/var symlink, Windows 8.3 vs long names, Git Bash
+// prints a POSIX form of the Windows TEMP folder. String equality of those reports is not
+// "the child ran somewhere else."
+function sameResolvedPath(a: string, b: string): boolean {
+  return realpathSync(a).toLowerCase() === realpathSync(b).toLowerCase();
+}
+
+function canRealpath(path: string): boolean {
+  try {
+    realpathSync(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 afterEach(() => {
@@ -85,12 +109,14 @@ describe("cwd-bound tools", () => {
   test("cwd-bound bash reports the injected cwd", async () => {
     const dir = makeDir();
     const tools = createToolDefinitions(dir);
-    const result = (await tools.bash.execute?.({ command: "pwd" }, execOpts)) as {
-      stdout: string;
-      exitCode: number;
-    };
+    const result = (await tools.bash.execute?.(
+      { command: "echo bound > cwd-marker && pwd" },
+      execOpts,
+    )) as { stdout: string; exitCode: number };
     expect(result.exitCode).toBe(0);
-    expect(result.stdout.trim()).toBe(dir);
+    expect(readFileSync(join(dir, "cwd-marker"), "utf8")).toMatch(/bound/);
+    const reported = result.stdout.trim();
+    if (canRealpath(reported)) expect(sameResolvedPath(reported, dir)).toBe(true);
   }, 15000);
 
   test.skipIf(process.platform !== "win32")(
@@ -99,11 +125,12 @@ describe("cwd-bound tools", () => {
       const dir = makeDir();
       const tools = createToolDefinitions(dir);
       const result = (await tools.powershell.execute?.(
-        { command: "(Get-Location).Path" },
+        { command: "Set-Content -Path cwd-marker -Value bound; (Get-Location).Path" },
         execOpts,
       )) as { stdout: string; exitCode: number };
       expect(result.exitCode).toBe(0);
-      expect(result.stdout.trim().toLowerCase()).toBe(dir.toLowerCase());
+      expect(readFileSync(join(dir, "cwd-marker"), "utf8")).toMatch(/bound/);
+      expect(sameResolvedPath(result.stdout.trim(), dir)).toBe(true);
     },
     15000,
   );
@@ -120,6 +147,6 @@ describe("spawnCollect cwd", () => {
       dir,
     );
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe(dir);
+    expect(sameResolvedPath(result.stdout, dir)).toBe(true);
   });
 });
