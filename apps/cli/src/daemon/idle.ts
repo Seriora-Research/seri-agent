@@ -51,6 +51,7 @@ export async function flushIdleSession(
   sessionId: string,
   configDir: string,
   deps: CliDeps,
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<void> {
   const session = database.loadSession<ModelMessage>(sessionId);
   if (session === undefined) return;
@@ -68,7 +69,7 @@ export async function flushIdleSession(
     route: { model: route.model, provider: route.provider },
     catalog,
     contextWindow: catalogEntry?.contextWindow,
-    signal: new AbortController().signal,
+    signal,
     onWarning: (message) => printWarning(message),
     runLoop: deps.runLoop,
   });

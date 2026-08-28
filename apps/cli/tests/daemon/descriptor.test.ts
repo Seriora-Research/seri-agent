@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDaemonDescriptorPath, getDaemonLockPath } from "../../src/config/paths";
@@ -102,5 +102,25 @@ describe("daemon descriptor and lock", () => {
     });
     await daemon.stop();
     expect(readDaemonDescriptorFile(configDir)).toBeUndefined();
+  });
+
+  test("a truncated descriptor is treated as absent", () => {
+    const configDir = makeDir();
+    writeFileSync(getDaemonDescriptorPath(configDir), "{not json");
+    expect(readDaemonDescriptorFile(configDir)).toBeUndefined();
+    expect(() => removeOwnedDescriptor(configDir, "any")).not.toThrow();
+  });
+
+  test("a failed descriptor write releases the lock so a later start can proceed", async () => {
+    const configDir = makeDir();
+    mkdirSync(getDaemonDescriptorPath(configDir));
+    await expect(
+      startDaemon({
+        configDir,
+        executeTurn: async () => ({ exitCode: 0 }),
+      }),
+    ).rejects.toThrow();
+    const lock = acquireDaemonLock(configDir);
+    lock.release();
   });
 });

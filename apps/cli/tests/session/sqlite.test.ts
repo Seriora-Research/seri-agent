@@ -240,6 +240,16 @@ test("SQLite sessions export as legacy JSONL without changing the database", () 
   );
 });
 
+test("a trajectory whose only line is truncated is a failed import", () => {
+  const dir = join(configDir, "trajectories");
+  mkdirSync(dir);
+  const path = join(dir, "torn-header.jsonl");
+  writeFileSync(path, '{"kind":"header"');
+  withDatabase((database) => {
+    expect(database.importLegacyTrajectories(dir).failedPaths).toEqual([path]);
+  });
+}, 20_000);
+
 test("search results are scoped to the database for one active profile", () => {
   const otherConfig = mkdtempSync(join(tmpdir(), "seri-sqlite-other-profile-"));
   try {

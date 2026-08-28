@@ -87,7 +87,23 @@ export function writeDaemonDescriptor(configDir: string, descriptor: DaemonDescr
 export function readDaemonDescriptorFile(configDir: string): DaemonDescriptor | undefined {
   const path = getDaemonDescriptorPath(configDir);
   if (!existsSync(path)) return undefined;
-  return JSON.parse(readFileSync(path, "utf8")) as DaemonDescriptor;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("endpoint" in parsed) ||
+    !("token" in parsed) ||
+    typeof parsed.endpoint !== "string" ||
+    typeof parsed.token !== "string"
+  ) {
+    return undefined;
+  }
+  return parsed as DaemonDescriptor;
 }
 
 export function removeOwnedDescriptor(configDir: string, token: string): void {

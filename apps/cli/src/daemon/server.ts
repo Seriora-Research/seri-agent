@@ -34,7 +34,7 @@ export type StartDaemonOptions = {
   now?: () => number;
   tickMs?: number;
   idleMs?: number;
-  onIdleFlush?: (sessionId: string) => Promise<void>;
+  onIdleFlush?: (sessionId: string, signal: AbortSignal) => Promise<void>;
 };
 
 function unauthorized(): Response {
@@ -150,7 +150,8 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
     });
   const onIdleFlush =
     opts.onIdleFlush ??
-    ((sessionId: string) => flushIdleSession(database, sessionId, opts.configDir, deps));
+    ((sessionId: string, signal: AbortSignal) =>
+      flushIdleSession(database, sessionId, opts.configDir, deps, signal));
   const manager = new DaemonSessionManager(database, executeTurn, {
     idleMs: opts.idleMs,
     onIdleFlush,
@@ -290,8 +291,16 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
     pid: process.pid,
     startedAt: new Date().toISOString(),
   };
-  writeDaemonDescriptor(opts.configDir, descriptor);
-  scheduler.start();
+  try {
+    writeDaemonDescriptor(opts.configDir, descriptor);
+    scheduler.start();
+  } catch (error) {
+    scheduler.stop();
+    server.stop(true);
+    database.close();
+    lock.release();
+    throw error;
+  }
 
   return {
     endpoint,

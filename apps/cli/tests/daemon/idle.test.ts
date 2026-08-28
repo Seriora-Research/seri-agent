@@ -246,4 +246,47 @@ describe("idle archivist flush", () => {
       database.close();
     }
   });
+
+  test("daemon stop aborts an in-flight idle flush", async () => {
+    const flushStarted = Promise.withResolvers<void>();
+    let aborted = false;
+    const daemon = await startDaemon({
+      configDir: makeDir(),
+      idleMs: 20,
+      executeTurn: async (input) => {
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        return { exitCode: 0 };
+      },
+      onIdleFlush: async (_sessionId, signal) => {
+        flushStarted.resolve();
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            aborted = true;
+            resolve();
+            return;
+          }
+          signal.addEventListener("abort", () => {
+            aborted = true;
+            resolve();
+          });
+        });
+      },
+    });
+    stop = daemon.stop;
+    const response = await fetch(`${daemon.endpoint}/v1/turns`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${daemon.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ task: "hi" }),
+    });
+    await response.text();
+    await flushStarted.promise;
+    const began = Date.now();
+    await daemon.stop();
+    stop = undefined;
+    expect(aborted).toBe(true);
+    expect(Date.now() - began).toBeLessThan(2000);
+  });
 });

@@ -337,7 +337,8 @@ function parseLegacyTrajectory(path: string): {
     }
     rows.push({ seq: record.seq, json });
   }
-  return { sessionId: sessionId as string, rows };
+  if (sessionId === undefined) throw new Error("trajectory header is missing");
+  return { sessionId, rows };
 }
 
 function errorMessage(error: unknown): string {

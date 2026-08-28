@@ -45,6 +45,7 @@ export function createRunScheduled(opts: {
       storeDir: checkpointsDir,
       worktree: session.cwd,
       sessionId: session.id,
+      cwd: session.cwd,
       onWarning,
     });
     const prepared = {

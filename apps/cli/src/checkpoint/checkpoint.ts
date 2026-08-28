@@ -285,7 +285,11 @@ export function createCheckpointer(opts: {
   sessionId: string;
   onWarning: (message: string) => void;
   gitAvailable?: () => boolean;
+  // Session cwd, not process.cwd(). write_file resolves relative paths against this directory;
+  // the ledger and gitignore scope checks have to use the same absolute path the tool wrote.
+  cwd?: string;
 }): Checkpointer {
+  const sessionCwd = opts.cwd ?? process.cwd();
   const gitAvailable = opts.gitAvailable ?? isGitAvailable;
   const gitDir = gitDirOf(opts.storeDir);
   const scopeCache = new Map<string, PathScope>();
@@ -347,17 +351,16 @@ export function createCheckpointer(opts: {
   // ZERO records in the log and every later edit unprotected. Reading exit 128 as "outside" would
   // fix that case and break another, because git also exits 128 with "not a git repository" for a
   // store that is genuinely broken, which must still latch off.
-  // A relative path is resolved against process.cwd(), because that is what the tool itself does
-  // with it — writeFile.ts passes the declared path straight to node:fs. Resolving it against the
-  // worktree instead put the answer under a different file whenever the two differ: `seri --resume
-  // <id>` run from `repo/packages/api` resolved a declared "secrets.txt" to `repo/secrets.txt`,
-  // so a root-anchored `/secrets.txt` in .gitignore warned that a file "is gitignored, so /undo
-  // cannot restore it" about a file that had in fact been checkpointed — and silence for a
-  // genuinely ignored one was just as easy. isIgnored is handed the absolute path for the same
-  // reason: run() sets cwd to the worktree, so a relative path would be anchored there a second
-  // time.
+  // A relative path is resolved against the session cwd, because that is what write_file does
+  // with it (resolveAgainstCwd in the tool factory). Resolving it against the worktree instead put
+  // the answer under a different file whenever the two differ: `seri --resume <id>` run from
+  // `repo/packages/api` resolved a declared "secrets.txt" to `repo/secrets.txt`, so a
+  // root-anchored `/secrets.txt` in .gitignore warned that a file "is gitignored, so /undo cannot
+  // restore it" about a file that had in fact been checkpointed — and silence for a genuinely
+  // ignored one was just as easy. isIgnored is handed the absolute path for the same reason: run()
+  // sets cwd to the worktree, so a relative path would be anchored there a second time.
   function scopeOf(path: string): PathScope {
-    const absolute = resolve(path);
+    const absolute = isAbsolute(path) ? path : resolve(sessionCwd, path);
     const inside = relative(opts.worktree, absolute);
     if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return "outside";
     return isIgnored(gitDir, opts.worktree, absolute) ? "ignored" : "checkpointed";
@@ -521,10 +524,9 @@ export function createCheckpointer(opts: {
     const path = (context.args as { path?: unknown }).path;
     if (typeof path !== "string") return;
     try {
-      // Resolved against process.cwd(), same as scopeOf above and for the identical reason:
-      // writeFile.ts hands the declared path straight to node:fs, so that is the absolute path
-      // that is actually on disk and the one filterSafeToDelete must be able to find again.
-      const absolute = resolve(path);
+      // Same absolute path write_file landed: session cwd, not process.cwd(), and not the
+      // worktree. A daemon session's cwd can differ from both.
+      const absolute = isAbsolute(path) ? path : resolve(sessionCwd, path);
       recordWrite(opts.storeDir, absolute, readFileSync(absolute, "utf8"));
     } catch {}
   };

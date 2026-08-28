@@ -43,14 +43,17 @@ export const DEFAULT_IDLE_MS = 5 * 60 * 1000;
 
 export type SessionManagerOptions = {
   idleMs?: number;
-  onIdleFlush?: (sessionId: string) => Promise<void>;
+  onIdleFlush?: (sessionId: string, signal: AbortSignal) => Promise<void>;
 };
 
 export class DaemonSessionManager {
   private readonly sessions = new Map<string, SessionHandle>();
   private readonly turns = new Map<string, TurnHandle>();
   private readonly idleMs: number;
-  private readonly onIdleFlush: ((sessionId: string) => Promise<void>) | undefined;
+  private readonly onIdleFlush:
+    | ((sessionId: string, signal: AbortSignal) => Promise<void>)
+    | undefined;
+  private readonly shutdown = new AbortController();
   readonly evictedSessionIds: string[] = [];
 
   constructor(
@@ -147,6 +150,7 @@ export class DaemonSessionManager {
   }
 
   cancelAll(): void {
+    this.shutdown.abort();
     for (const turnId of this.turns.keys()) this.cancelTurn(turnId);
     for (const handle of this.sessions.values()) {
       if (handle.idleTimer !== undefined) clearTimeout(handle.idleTimer);
@@ -237,6 +241,7 @@ export class DaemonSessionManager {
       handle.pendingApproval = undefined;
       this.database.finishTurn(turnId, new Date().toISOString());
       handle.subscribers.clear();
+      this.turns.delete(turnId);
       this.armIdle(session.id);
     }
   }
@@ -259,7 +264,7 @@ export class DaemonSessionManager {
     handle.tail = handle.tail
       .then(async () => {
         if (handle.generation !== generation) return;
-        await this.onIdleFlush?.(sessionId);
+        await this.onIdleFlush?.(sessionId, this.shutdown.signal);
         if (handle.generation !== generation) return;
         this.sessions.delete(sessionId);
         this.evictedSessionIds.push(sessionId);

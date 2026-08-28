@@ -225,7 +225,7 @@ export type CliDeps = {
   startDaemon?: typeof startDaemonReal;
   executeTurn?: ExecuteTurn;
   runScheduled?: RunScheduled;
-  onIdleFlush?: (sessionId: string) => Promise<void>;
+  onIdleFlush?: (sessionId: string, signal: AbortSignal) => Promise<void>;
   waitForServe?: () => Promise<void>;
   fetch?: typeof fetch;
   // The directory holding permissions.yaml. Deliberately NOT reusing `authConfigDir`: that name is
@@ -1242,8 +1242,23 @@ async function handleExecCommand(
     fetch: deps.fetch,
   });
   let exitCode: 0 | 1 = 1;
+  let turnId: string | undefined;
+  let cancelRequested = false;
+  const unregisterCancel = onSignalCancel(() => {
+    cancelRequested = true;
+    if (turnId !== undefined) void client.cancel(turnId);
+  });
   try {
     for await (const event of client.startTurn({ task, cwd: process.cwd() })) {
+      turnId = event.turnId;
+      if (cancelRequested) {
+        await client.cancel(turnId);
+        cancelRequested = false;
+      }
+      if (event.event.type === "approval-request" && typeof event.event.requestId === "string") {
+        await client.approve(turnId, event.event.requestId, "no");
+        continue;
+      }
       if (isLoopDaemonEvent(event.event)) printEvent(event.event.value as LoopEvent);
       if (event.event.type === "turn-complete" && "exitCode" in event.event) {
         const code = event.event.exitCode;
@@ -1253,6 +1268,8 @@ async function handleExecCommand(
   } catch (err) {
     console.error(messageOf(err));
     return 1;
+  } finally {
+    unregisterCancel();
   }
   return exitCode;
 }

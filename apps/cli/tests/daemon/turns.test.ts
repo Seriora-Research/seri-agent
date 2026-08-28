@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DaemonClient, type DaemonEvent, isLoopDaemonEvent } from "@seri/daemon-client";
 import { type ExecuteTurn, startDaemon } from "../../src/daemon/server";
+import { DaemonSessionManager } from "../../src/daemon/sessionManager";
+import { SessionDatabase } from "../../src/session/database";
 
 let dirs: string[] = [];
 let stop: (() => Promise<void>) | undefined;
@@ -209,5 +211,33 @@ describe("daemon turns", () => {
       collect(client.startTurn({ task: "t2", sessionId })),
     ]);
     expect(maxConcurrent).toBe(1);
+  });
+
+  test("finished turn handles are dropped once events are persisted", async () => {
+    const configDir = makeDir();
+    const database = new SessionDatabase(configDir);
+    const manager = new DaemonSessionManager(
+      database,
+      async (input) => {
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        return { exitCode: 0 };
+      },
+      { idleMs: 0 },
+    );
+    try {
+      const started = await manager.startTurn({ task: "done" });
+      await new Promise<void>((resolve) => {
+        started.subscribe((event) => {
+          if (event.event.type === "turn-complete") resolve();
+        });
+      });
+      await manager.waitForIdle();
+      expect(manager.getTurn(started.turnId)).toBeUndefined();
+      expect(database.hasTurn(started.turnId)).toBe(true);
+    } finally {
+      manager.cancelAll();
+      await manager.waitForIdle();
+      database.close();
+    }
   });
 });

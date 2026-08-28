@@ -143,18 +143,22 @@ export async function* iterateSse(response: Response): AsyncGenerator<DaemonEven
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  try {
     while (true) {
-      const boundary = buffer.indexOf("\n\n");
-      if (boundary === -1) break;
-      const block = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const event = parseSseBlock(block);
-      if (event !== undefined) yield event;
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      while (true) {
+        const boundary = buffer.indexOf("\n\n");
+        if (boundary === -1) break;
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const event = parseSseBlock(block);
+        if (event !== undefined) yield event;
+      }
     }
+  } finally {
+    await reader.cancel().catch(() => {});
   }
 }
 

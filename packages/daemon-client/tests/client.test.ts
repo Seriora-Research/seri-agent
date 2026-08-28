@@ -61,4 +61,28 @@ describe("daemon-client", () => {
     expect(isKnownDaemonEvent(collected[1]!.event)).toBe(false);
     expect(collected[1]!.event.type).toBe("future-field");
   });
+
+  test("cancels the response reader when the consumer stops iterating", async () => {
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const event = {
+      v: 1,
+      sessionId: "s",
+      turnId: "t",
+      seq: 1,
+      event: { type: "loop", value: { type: "text-delta", text: "a" } },
+    };
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    for await (const item of iterateSse(new Response(stream))) {
+      if (item.seq === 1) break;
+    }
+    expect(cancelled).toBe(true);
+  });
 });

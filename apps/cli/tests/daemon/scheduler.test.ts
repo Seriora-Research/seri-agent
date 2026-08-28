@@ -15,6 +15,7 @@ import { SessionDatabase } from "../../src/session/database";
 
 let dirs: string[] = [];
 let stop: (() => Promise<void>) | undefined;
+let openDatabases: SessionDatabase[] = [];
 
 function makeDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "seri-sched-"));
@@ -22,11 +23,25 @@ function makeDir(): string {
   return dir;
 }
 
+function openDatabase(configDir: string): SessionDatabase {
+  const database = new SessionDatabase(configDir);
+  openDatabases.push(database);
+  return database;
+}
+
 afterEach(async () => {
   if (stop !== undefined) {
     await stop();
     stop = undefined;
   }
+  for (const database of openDatabases) {
+    try {
+      database.close();
+    } catch {
+      // already closed
+    }
+  }
+  openDatabases = [];
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
   dirs = [];
 });
@@ -77,7 +92,7 @@ describe("schedule validation", () => {
 describe("Scheduler", () => {
   test("every firing gets a fresh session whose only user message is the scheduled task", async () => {
     const configDir = makeDir();
-    const database = new SessionDatabase(configDir);
+    const database = openDatabase(configDir);
     const seen: ScheduledRunInput[] = [];
     let now = 1_000_000;
     const scheduler = new Scheduler(
@@ -118,12 +133,11 @@ describe("Scheduler", () => {
     const runs = database.listScheduleRuns(seen[0]!.scheduleId);
     expect(runs[0]?.response).toBe("ok");
     expect(runs[0]?.sessionId).toBe(seen[0]!.session.id);
-    database.close();
   });
 
   test("two ticks cannot claim one firing twice", async () => {
     const configDir = makeDir();
-    const database = new SessionDatabase(configDir);
+    const database = openDatabase(configDir);
     const now = 5_000_000;
     let started = 0;
     const hold = Promise.withResolvers<void>();
@@ -157,12 +171,11 @@ describe("Scheduler", () => {
     hold.resolve();
     await ticks;
     expect(database.listScheduleRuns(created.id)).toHaveLength(1);
-    database.close();
   });
 
   test("startup advances missed intervals without catch-up", async () => {
     const configDir = makeDir();
-    const database = new SessionDatabase(configDir);
+    const database = openDatabase(configDir);
     let now = 10_000;
     const fired: string[] = [];
     const scheduler = new Scheduler(
@@ -186,12 +199,11 @@ describe("Scheduler", () => {
     expect(fired).toEqual([]);
     const skipped = database.getSchedule(created.id);
     expect(skipped?.nextRunAtMs).toBeGreaterThan(now);
-    database.close();
   });
 
   test("startup clears a crashed running claim so the next due tick can fire", async () => {
     const configDir = makeDir();
-    const database = new SessionDatabase(configDir);
+    const database = openDatabase(configDir);
     let now = 20_000;
     const fired: string[] = [];
     const scheduler = new Scheduler(
@@ -217,7 +229,6 @@ describe("Scheduler", () => {
     now = afterClaim!.nextRunAtMs!;
     await scheduler.tick();
     expect(fired).toEqual([created.id]);
-    database.close();
   });
 });
 

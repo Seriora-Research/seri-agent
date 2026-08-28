@@ -5,8 +5,10 @@ import { join } from "node:path";
 import pkg from "../../package.json";
 import { run, SLASH_COMMANDS } from "../../src/cli";
 import { getBaseConfigDir, getConfigDir, setProfileOverride } from "../../src/config/paths";
+import { writeDaemonDescriptor } from "../../src/daemon/descriptor";
 import { DATABASE_FILENAME } from "../../src/session/database";
 import { listSessionIds } from "../../src/session/session";
+import { deliverSignal } from "../../src/signals";
 import { fakeRunLoop } from "./fakeRunLoop";
 
 describe("run", () => {
@@ -881,5 +883,136 @@ describe("run (serve / exec)", () => {
       }
     })();
     expect(code).toBe(2);
+  });
+
+  test("`seri exec` answers an approval-request with no", async () => {
+    writeDaemonDescriptor(getConfigDir(), {
+      v: 1,
+      endpoint: "http://127.0.0.1:9",
+      token: "t",
+      pid: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const approvals: unknown[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url =
+        input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      if (url.pathname === "/v1/turns") {
+        const events = [
+          {
+            v: 1,
+            sessionId: "s",
+            turnId: "turn-1",
+            seq: 1,
+            event: {
+              type: "approval-request",
+              requestId: "r1",
+              toolName: "write_file",
+              args: { path: "a.txt" },
+            },
+          },
+          {
+            v: 1,
+            sessionId: "s",
+            turnId: "turn-1",
+            seq: 2,
+            event: { type: "turn-complete", exitCode: 0 },
+          },
+        ];
+        return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+          status: 200,
+        });
+      }
+      if (url.pathname.includes("/approvals/")) {
+        approvals.push(JSON.parse(String(init?.body)));
+        return Response.json({ ok: true });
+      }
+      return new Response("no", { status: 404 });
+    }) as unknown as typeof fetch;
+    const originalError = console.error;
+    const originalLog = console.log;
+    console.error = () => {};
+    console.log = () => {};
+    let code: number;
+    try {
+      code = await run(["exec", "write"], { fetch: fetchImpl, authConfigDir: getConfigDir() });
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
+    expect(code).toBe(0);
+    expect(approvals).toEqual([{ answer: "no" }]);
+  });
+
+  test("`seri exec` cancels the daemon turn on the first SIGINT", async () => {
+    writeDaemonDescriptor(getConfigDir(), {
+      v: 1,
+      endpoint: "http://127.0.0.1:9",
+      token: "t",
+      pid: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const encoder = new TextEncoder();
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const firstEvent = Promise.withResolvers<void>();
+    let cancelled = false;
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url =
+        input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      if (url.pathname === "/v1/turns") {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              streamController = controller;
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    v: 1,
+                    sessionId: "s",
+                    turnId: "turn-1",
+                    seq: 1,
+                    event: { type: "loop", value: { type: "text-delta", text: "x" } },
+                  })}\n\n`,
+                ),
+              );
+              firstEvent.resolve();
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.pathname.endsWith("/cancel")) {
+        cancelled = true;
+        streamController?.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              v: 1,
+              sessionId: "s",
+              turnId: "turn-1",
+              seq: 2,
+              event: { type: "turn-complete", exitCode: 1 },
+            })}\n\n`,
+          ),
+        );
+        streamController?.close();
+        return Response.json({ ok: true });
+      }
+      return new Response("no", { status: 404 });
+    }) as unknown as typeof fetch;
+    const originalError = console.error;
+    const originalLog = console.log;
+    console.error = () => {};
+    console.log = () => {};
+    try {
+      const running = run(["exec", "go"], { fetch: fetchImpl, authConfigDir: getConfigDir() });
+      await firstEvent.promise;
+      await Bun.sleep(20);
+      deliverSignal("SIGINT");
+      expect(await running).toBe(1);
+      expect(cancelled).toBe(true);
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
   });
 });
