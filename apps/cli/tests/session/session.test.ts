@@ -1,6 +1,5 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import * as fs from "node:fs";
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { foldsCase } from "../../src/caseFold";
@@ -12,409 +11,128 @@ import {
   saveSession,
 } from "../../src/session/session";
 
+let configDir: string;
 let sessionsDir: string;
 
 beforeEach(() => {
-  sessionsDir = mkdtempSync(join(tmpdir(), "seri-session-test-"));
+  configDir = mkdtempSync(join(tmpdir(), "seri-session-test-"));
+  sessionsDir = join(configDir, "sessions");
 });
 
 afterEach(() => {
-  rmSync(sessionsDir, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
 });
 
-describe("saveSession / loadSession", () => {
-  test("round-trips a session exactly", () => {
+describe("SQLite session persistence helpers", () => {
+  test("round-trips every header field and mixed message content exactly", () => {
     const state: SessionState = {
       id: "abc123",
       cwd: "C:\\repo",
       systemPrompt: "You are seri, a coding agent.",
       permissionMode: "approve-each",
+      model: "claude-sonnet-4-5",
+      provider: "anthropic",
+      reasoningEffort: "high",
       messages: [
         { role: "user", content: "do the thing" },
-        { role: "assistant", content: "on it" },
-        { role: "tool", content: { name: "bash", result: "ok" } },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "on it" },
+            { type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "pwd" } },
+          ],
+        },
+        { role: "tool", content: [{ type: "tool-result", output: { type: "text", value: "ok" } }] },
       ],
     };
 
     saveSession(state, sessionsDir);
 
     expect(loadSession("abc123", sessionsDir)).toEqual(state);
+    expect(existsSync(join(configDir, "seri.db"))).toBe(true);
+    expect(existsSync(join(sessionsDir, "abc123.jsonl"))).toBe(false);
   });
 
-  test("creates sessionsDir if it doesn't exist yet", () => {
-    const freshDir = join(sessionsDir, "nested", "sessions");
-    const state: SessionState = {
-      id: "s1",
-      cwd: ".",
-      systemPrompt: "",
+  test("appends messages, updates only the header, and shrinks to the supplied state", () => {
+    const initial: SessionState = {
+      id: "changes",
+      cwd: "/old",
+      systemPrompt: "system",
       permissionMode: "auto",
-      messages: [],
+      messages: [{ n: 1 }],
     };
+    saveSession(initial, sessionsDir);
+    saveSession({ ...initial, messages: [...initial.messages, { n: 2 }, { n: 3 }] }, sessionsDir);
+    expect(loadSession("changes", sessionsDir).messages).toEqual([{ n: 1 }, { n: 2 }, { n: 3 }]);
 
-    saveSession(state, freshDir);
+    saveSession(
+      {
+        ...initial,
+        cwd: "/new",
+        permissionMode: "approve-each",
+        messages: [{ n: 1 }, { n: 2 }, { n: 3 }],
+      },
+      sessionsDir,
+    );
+    expect(loadSession("changes", sessionsDir)).toMatchObject({
+      cwd: "/new",
+      permissionMode: "approve-each",
+      messages: [{ n: 1 }, { n: 2 }, { n: 3 }],
+    });
 
-    expect(loadSession("s1", freshDir)).toEqual(state);
+    const shrunk: SessionState = {
+      ...initial,
+      cwd: "/new",
+      permissionMode: "approve-each",
+      messages: [{ n: 1 }],
+    };
+    saveSession(shrunk, sessionsDir);
+    expect(loadSession("changes", sessionsDir)).toEqual(shrunk);
   });
 
-  test("loadSession throws a clear error for a missing id", () => {
+  test("throws the existing missing-session error", () => {
     expect(() => loadSession("missing", sessionsDir)).toThrow(
       `Session "missing" not found in ${sessionsDir}`,
     );
   });
-});
 
-describe("saveSession (JSONL append-only persistence)", () => {
-  test("the first save for an id is a full write, and every save after it appends only the new messages", () => {
-    const writeSpy = spyOn(fs, "writeFileSync");
-    const appendSpy = spyOn(fs, "appendFileSync");
-
-    const state: SessionState = {
-      id: "hot-path",
-      cwd: ".",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [],
-    };
-    saveSession(state, sessionsDir);
-    expect(writeSpy).toHaveBeenCalledTimes(1);
-    expect(appendSpy).toHaveBeenCalledTimes(0);
-
-    state.messages.push({ role: "user", content: "hi" });
-    saveSession(state, sessionsDir);
-    expect(writeSpy).toHaveBeenCalledTimes(1);
-    expect(appendSpy).toHaveBeenCalledTimes(1);
-
-    state.messages.push({ role: "assistant", content: "hello" });
-    saveSession(state, sessionsDir);
-    expect(writeSpy).toHaveBeenCalledTimes(1);
-    expect(appendSpy).toHaveBeenCalledTimes(2);
-
-    expect(loadSession("hot-path", sessionsDir)).toEqual(state);
-
-    writeSpy.mockRestore();
-    appendSpy.mockRestore();
-  });
-
-  // The full-rewrite path goes through atomicWriteFile.ts's shared helper rather than a locally
-  // reimplemented temp-file + rename, which is what gives session saves the same orphaned-tmp-file
-  // sweep config.json/memory/permissions writes already have — a session save interrupted by a
-  // killed process previously left a `.<id>.jsonl.<pid>.tmp` file in sessionsDir forever, and a
-  // session transcript is exactly the kind of content (pasted secrets, full conversation) that
-  // orphan shouldn't sit on disk indefinitely.
-  test("a full-rewrite save sweeps a stale tmp file left behind by a dead process", () => {
-    const target = join(sessionsDir, "swept.jsonl");
-    const stalePath = `${target}.999999999.deadbeef.tmp`;
-    writeFileSync(stalePath, "orphaned content");
-
-    saveSession(
-      { id: "swept", cwd: ".", systemPrompt: "", permissionMode: "auto", messages: [] },
-      sessionsDir,
-    );
-
-    expect(fs.existsSync(stalePath)).toBe(false);
-  });
-
-  test("does nothing when a save repeats the same header and the same message count", () => {
-    const state: SessionState = {
-      id: "no-op",
-      cwd: ".",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [{ role: "user", content: "hi" }],
-    };
-    saveSession(state, sessionsDir);
-
-    const writeSpy = spyOn(fs, "writeFileSync");
-    const appendSpy = spyOn(fs, "appendFileSync");
-    saveSession(state, sessionsDir);
-
-    expect(writeSpy).toHaveBeenCalledTimes(0);
-    expect(appendSpy).toHaveBeenCalledTimes(0);
-
-    writeSpy.mockRestore();
-    appendSpy.mockRestore();
-  });
-
-  test("a shrink (as /rewind produces) triggers a full rewrite with the correct final content", () => {
-    const state: SessionState = {
-      id: "shrink",
-      cwd: ".",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [{ n: 1 }, { n: 2 }, { n: 3 }],
-    };
-    saveSession(state, sessionsDir);
-
-    const writeSpy = spyOn(fs, "writeFileSync");
-    const appendSpy = spyOn(fs, "appendFileSync");
-    const shrunk: SessionState = { ...state, messages: state.messages.slice(0, 1) };
-    saveSession(shrunk, sessionsDir);
-
-    expect(writeSpy).toHaveBeenCalledTimes(1);
-    expect(appendSpy).toHaveBeenCalledTimes(0);
-    // Not just "a rewrite happened" — the append log genuinely cannot shrink, so this also proves
-    // the rewrite produced the right file rather than one still carrying the trimmed messages.
-    expect(loadSession("shrink", sessionsDir)).toEqual(shrunk);
-
-    writeSpy.mockRestore();
-    appendSpy.mockRestore();
-  });
-
-  test("a header-only change (e.g. /mode) triggers a full rewrite rather than a stale header", () => {
-    const state: SessionState = {
-      id: "header-change",
-      cwd: ".",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [{ n: 1 }],
-    };
-    saveSession(state, sessionsDir);
-
-    const writeSpy = spyOn(fs, "writeFileSync");
-    const appendSpy = spyOn(fs, "appendFileSync");
-    const changed: SessionState = { ...state, permissionMode: "approve-each" };
-    saveSession(changed, sessionsDir);
-
-    expect(writeSpy).toHaveBeenCalledTimes(1);
-    expect(appendSpy).toHaveBeenCalledTimes(0);
-    expect(loadSession("header-change", sessionsDir)).toEqual(changed);
-
-    writeSpy.mockRestore();
-    appendSpy.mockRestore();
-  });
-
-  test("loadSession seeds save tracking, so a resumed session appends new messages instead of duplicating them", () => {
-    // Written directly rather than through saveSession, to simulate a session on disk that this
-    // process has never called saveSession for — the only way persistedCounts/persistedHeaders can
-    // be unseeded for an id whose file already exists.
-    const header = { id: "resumed", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
-    writeFileSync(
-      join(sessionsDir, "resumed.jsonl"),
-      `${JSON.stringify(header)}\n${JSON.stringify({ n: 1 })}\n`,
-    );
-
-    const loaded = loadSession<{ n: number }>("resumed", sessionsDir);
-    expect(loaded.messages).toEqual([{ n: 1 }]);
-
-    const writeSpy = spyOn(fs, "writeFileSync");
-    const appendSpy = spyOn(fs, "appendFileSync");
-    saveSession({ ...loaded, messages: [...loaded.messages, { n: 2 }] }, sessionsDir);
-
-    expect(appendSpy).toHaveBeenCalledTimes(1);
-    expect(writeSpy).toHaveBeenCalledTimes(0);
-    expect(loadSession("resumed", sessionsDir).messages).toEqual([{ n: 1 }, { n: 2 }]);
-
-    writeSpy.mockRestore();
-    appendSpy.mockRestore();
-  });
-
-  // A torn appendFileSync write (process killed, disk full) leaves a malformed trailing line —
-  // simulated here by writing the header and one good message, then a hand-truncated fragment of a
-  // second that never closes its JSON.
-  test("loadSession drops a truncated trailing line instead of throwing and losing the whole session", () => {
+  test("imports a torn legacy session and reports the dropped tail", () => {
     const header = { id: "torn", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
+    mkdirSync(sessionsDir);
     writeFileSync(
       join(sessionsDir, "torn.jsonl"),
-      `${JSON.stringify(header)}\n${JSON.stringify({ n: 1 })}\n{"n": 2, "text": "unfinis`,
+      `${JSON.stringify(header)}\n${JSON.stringify({ n: 1 })}\n{"n":2`,
     );
+    let truncated = 0;
 
-    const loaded = loadSession<{ n: number }>("torn", sessionsDir);
+    const loaded = loadSession("torn", sessionsDir, () => truncated++);
+
     expect(loaded.messages).toEqual([{ n: 1 }]);
-  });
-
-  test("loadSession calls onTruncated only when a line was actually dropped", () => {
-    const header = { id: "torn3", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
-    writeFileSync(
-      join(sessionsDir, "torn3.jsonl"),
-      `${JSON.stringify(header)}\n${JSON.stringify({ n: 1 })}\n{"n": 2, "text": "unfinis`,
-    );
-    let calls = 0;
-    loadSession<{ n: number }>("torn3", sessionsDir, () => {
-      calls++;
-    });
-    expect(calls).toBe(1);
-
-    const clean = { id: "clean", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
-    writeFileSync(
-      join(sessionsDir, "clean.jsonl"),
-      `${JSON.stringify(clean)}\n${JSON.stringify({ n: 1 })}\n`,
-    );
-    let cleanCalls = 0;
-    loadSession<{ n: number }>("clean", sessionsDir, () => {
-      cleanCalls++;
-    });
-    expect(cleanCalls).toBe(0);
-  });
-
-  test("a load that dropped a truncated line forces a full rewrite on the next save, not an append onto the fragment", () => {
-    const header = { id: "torn2", cwd: ".", systemPrompt: "", permissionMode: "auto" as const };
-    writeFileSync(
-      join(sessionsDir, "torn2.jsonl"),
-      `${JSON.stringify(header)}\n${JSON.stringify({ n: 1 })}\n{"n": 2, "text": "unfinis`,
-    );
-
-    const loaded = loadSession<{ n: number }>("torn2", sessionsDir);
-
-    const writeSpy = spyOn(fs, "writeFileSync");
-    const appendSpy = spyOn(fs, "appendFileSync");
-    saveSession({ ...loaded, messages: [...loaded.messages, { n: 3 }] }, sessionsDir);
-
-    expect(appendSpy).toHaveBeenCalledTimes(0);
-    expect(writeSpy).toHaveBeenCalledTimes(1);
-    expect(loadSession("torn2", sessionsDir).messages).toEqual([{ n: 1 }, { n: 3 }]);
-
-    writeSpy.mockRestore();
-    appendSpy.mockRestore();
-  });
-
-  test("falls back to a full rewrite when the file was deleted out of band, instead of appending onto nothing", () => {
-    const state: SessionState = {
-      id: "deleted",
-      cwd: ".",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [{ n: 1 }],
-    };
-    saveSession(state, sessionsDir);
-    fs.rmSync(join(sessionsDir, "deleted.jsonl"));
-
-    const grown: SessionState = { ...state, messages: [...state.messages, { n: 2 }] };
-    saveSession(grown, sessionsDir);
-
-    // A headerless append here would leave loadSession misparsing the first message as the header,
-    // silently returning id/cwd/permissionMode all undefined instead of the real session.
-    expect(loadSession("deleted", sessionsDir)).toEqual(grown);
-  });
-
-  // Two `seri --resume`d processes sharing a session id: the appended line is written directly
-  // rather than through a second saveSession call, since a real second process would have its own
-  // independent, unseeded persistedSizes/persistedCounts with no way to know about this one's.
-  test("falls back to a full rewrite instead of appending past a line another process wrote since the last save", () => {
-    const state: SessionState = {
-      id: "concurrent",
-      cwd: ".",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [{ n: 1 }],
-    };
-    saveSession(state, sessionsDir);
-
-    fs.appendFileSync(join(sessionsDir, "concurrent.jsonl"), `${JSON.stringify({ n: 99 })}\n`);
-
-    const writeSpy = spyOn(fs, "writeFileSync");
-    const appendSpy = spyOn(fs, "appendFileSync");
-    saveSession({ ...state, messages: [...state.messages, { n: 2 }] }, sessionsDir);
-
-    // An append here would land after {n:99} — not byte-level corruption, but a message from a
-    // process this one never observed silently becoming part of its own transcript.
-    expect(appendSpy).toHaveBeenCalledTimes(0);
-    expect(writeSpy).toHaveBeenCalledTimes(1);
-    // The rewrite is last-writer-wins over {n:99}, same failure mode this format's full-overwrite
-    // predecessor had — a lost message, not an interleaved one.
-    expect(loadSession("concurrent", sessionsDir).messages).toEqual([{ n: 1 }, { n: 2 }]);
-
-    writeSpy.mockRestore();
-    appendSpy.mockRestore();
-  });
-
-  // Pins the path-keyed bookkeeping (persistedCounts/persistedHeaders/persistedSizes, all keyed by
-  // the full `<sessionsDir>/<id>.jsonl` path) against a second id sharing the same sessionsDir — the
-  // scenario `/clear` introduces: a fresh session saved into the same dir the old one still lives in.
-  test("saving a second id in the same sessionsDir leaves the first session's file byte-identical", () => {
-    const first: SessionState = {
-      id: "session-a",
-      cwd: ".",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [{ n: 1 }, { n: 2 }, { n: 3 }],
-    };
-    saveSession(first, sessionsDir);
-    const snapshot = fs.readFileSync(join(sessionsDir, "session-a.jsonl"));
-
-    const second: SessionState = {
-      id: "session-b",
-      cwd: ".",
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [],
-    };
-    saveSession(second, sessionsDir);
-
-    expect(fs.readFileSync(join(sessionsDir, "session-a.jsonl"))).toEqual(snapshot);
-    const bContent = fs.readFileSync(join(sessionsDir, "session-b.jsonl"), "utf8");
-    expect(bContent.split("\n").filter(Boolean)).toHaveLength(1);
-
-    // Saving under A again still appends correctly — B's save did not corrupt A's bookkeeping.
-    const grownFirst = { ...first, messages: [...first.messages, { n: 4 }] };
-    const writeSpy = spyOn(fs, "writeFileSync");
-    const appendSpy = spyOn(fs, "appendFileSync");
-    saveSession(grownFirst, sessionsDir);
-
-    expect(appendSpy).toHaveBeenCalledTimes(1);
-    expect(writeSpy).toHaveBeenCalledTimes(0);
-    expect(loadSession("session-a", sessionsDir)).toEqual(grownFirst);
-
-    writeSpy.mockRestore();
-    appendSpy.mockRestore();
+    expect(truncated).toBe(1);
   });
 });
 
-describe("findMostRecentSession", () => {
-  test("returns the id of the most recently modified session", () => {
+describe("recent SQLite sessions", () => {
+  test("returns the most recently saved session", () => {
     saveSession(
-      { id: "first", cwd: ".", systemPrompt: "", permissionMode: "auto", messages: [] },
+      { id: "first", cwd: "/a", systemPrompt: "", permissionMode: "auto", messages: [] },
       sessionsDir,
     );
     saveSession(
-      { id: "second", cwd: ".", systemPrompt: "", permissionMode: "auto", messages: [] },
+      { id: "second", cwd: "/b", systemPrompt: "", permissionMode: "auto", messages: [] },
       sessionsDir,
-    );
-    saveSession(
-      { id: "third", cwd: ".", systemPrompt: "", permissionMode: "auto", messages: [] },
-      sessionsDir,
-    );
-
-    // Explicit mtimes rather than relying on real-time gaps between writes, which can be
-    // too small to distinguish on a fast filesystem.
-    const base = new Date("2026-01-01T00:00:00Z");
-    utimesSync(join(sessionsDir, "first.jsonl"), base, base);
-    utimesSync(
-      join(sessionsDir, "second.jsonl"),
-      new Date(base.getTime() + 60_000),
-      new Date(base.getTime() + 60_000),
-    );
-    utimesSync(
-      join(sessionsDir, "third.jsonl"),
-      new Date(base.getTime() + 30_000),
-      new Date(base.getTime() + 30_000),
     );
 
     expect(findMostRecentSession(sessionsDir)).toBe("second");
   });
 
-  test("returns undefined for an empty directory", () => {
-    expect(findMostRecentSession(sessionsDir)).toBeUndefined();
-  });
-
-  test("returns undefined for a non-existent directory", () => {
-    expect(findMostRecentSession(join(sessionsDir, "does-not-exist"))).toBeUndefined();
-  });
-});
-
-describe("findMostRecentSessionForCwd", () => {
-  test("returns the most recently modified session recorded from that cwd, ignoring a more-recently-touched one from elsewhere", () => {
+  test("returns the newest session for one cwd", () => {
     saveSession(
       { id: "here-1", cwd: "/project/a", systemPrompt: "", permissionMode: "auto", messages: [] },
       sessionsDir,
     );
     saveSession(
-      {
-        id: "elsewhere",
-        cwd: "/project/b",
-        systemPrompt: "",
-        permissionMode: "auto",
-        messages: [],
-      },
+      { id: "elsewhere", cwd: "/project/b", systemPrompt: "", permissionMode: "auto", messages: [] },
       sessionsDir,
     );
     saveSession(
@@ -422,73 +140,40 @@ describe("findMostRecentSessionForCwd", () => {
       sessionsDir,
     );
 
-    const base = new Date("2026-01-01T00:00:00Z");
-    utimesSync(join(sessionsDir, "here-1.jsonl"), base, base);
-    utimesSync(
-      join(sessionsDir, "here-2.jsonl"),
-      new Date(base.getTime() + 30_000),
-      new Date(base.getTime() + 30_000),
-    );
-    // Newest overall, but from a different cwd — must not win.
-    utimesSync(
-      join(sessionsDir, "elsewhere.jsonl"),
-      new Date(base.getTime() + 60_000),
-      new Date(base.getTime() + 60_000),
-    );
-
     expect(findMostRecentSessionForCwd(sessionsDir, "/project/a")).toBe("here-2");
   });
 
-  test("returns undefined when no session matches the given cwd", () => {
-    saveSession(
-      { id: "only", cwd: "/project/a", systemPrompt: "", permissionMode: "auto", messages: [] },
-      sessionsDir,
-    );
-
-    expect(findMostRecentSessionForCwd(sessionsDir, "/project/b")).toBeUndefined();
-  });
-
-  test("returns undefined for an empty directory", () => {
+  test("returns undefined when the database has no matching session", () => {
+    expect(findMostRecentSession(sessionsDir)).toBeUndefined();
     expect(findMostRecentSessionForCwd(sessionsDir, "/project/a")).toBeUndefined();
   });
 
-  test("returns undefined for a non-existent directory", () => {
-    expect(
-      findMostRecentSessionForCwd(join(sessionsDir, "does-not-exist"), "/project/a"),
-    ).toBeUndefined();
-  });
-
-  // A candidate whose header line can't be parsed (corrupted, or not a session file at all) is
-  // skipped rather than thrown on — the same "don't let one bad file break a directory-wide scan"
-  // posture findMostRecentSession's own plain stat-only scan already has by construction.
-  test("skips a session whose header line is not valid JSON instead of throwing", () => {
+  (foldsCase() ? test : test.skip)("matches cwd case-insensitively on a case-folding filesystem", () => {
     saveSession(
-      { id: "good", cwd: "/project/a", systemPrompt: "", permissionMode: "auto", messages: [] },
+      { id: "cased", cwd: "/Project/Cased", systemPrompt: "", permissionMode: "auto", messages: [] },
       sessionsDir,
     );
-    writeFileSync(join(sessionsDir, "corrupt.jsonl"), "not json at all\n");
 
-    expect(findMostRecentSessionForCwd(sessionsDir, "/project/a")).toBe("good");
+    expect(findMostRecentSessionForCwd(sessionsDir, "/project/cased")).toBe("cased");
   });
+});
 
-  // foldsCase()'s own doc comment: NTFS/APFS are case-insensitive, so a cwd recorded under one
-  // casing must still match a query in another's — only true on the platforms where the
-  // filesystem itself would treat the two paths as the same directory.
-  (foldsCase() ? test : test.skip)(
-    "matches cwd case-insensitively on a case-folding filesystem",
-    () => {
-      saveSession(
-        {
-          id: "cased",
-          cwd: "/Project/Cased",
-          systemPrompt: "",
-          permissionMode: "auto",
-          messages: [],
-        },
-        sessionsDir,
-      );
+test("separate profile roots never see each other's sessions", () => {
+  const parent = mkdtempSync(join(tmpdir(), "seri-profile-session-test-"));
+  const first = join(parent, "first", "sessions");
+  const second = join(parent, "second", "sessions");
+  try {
+    saveSession(
+      { id: "only-first", cwd: ".", systemPrompt: "", permissionMode: "auto", messages: [] },
+      first,
+    );
 
-      expect(findMostRecentSessionForCwd(sessionsDir, "/project/cased")).toBe("cased");
-    },
-  );
+    expect(findMostRecentSession(second)).toBeUndefined();
+    expect(() => loadSession("only-first", second)).toThrow(
+      `Session "only-first" not found in ${second}`,
+    );
+    expect(readdirSync(join(parent, "first"))).toContain("seri.db");
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
 });
