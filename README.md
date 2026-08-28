@@ -115,7 +115,7 @@ that resolved pair unless you pin one. Pins are a coupled `MODEL` + `PROVIDER` p
 rule as `SERI_MODEL` / `SERI_PROVIDER` — a model without a valid provider from the same source
 is ignored, not mixed with the session provider:
 
-```
+```sh
 seri config set SERI_ROLE_ORACLE_MODEL claude-sonnet-5
 seri config set SERI_ROLE_ORACLE_PROVIDER anthropic
 seri config set SERI_ROLE_ARCHIVIST_MODEL llama-3.3-70b-versatile

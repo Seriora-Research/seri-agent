@@ -54,7 +54,7 @@ export function parseRolePins(
   const pins: Partial<Record<RoutableRole, RolePin>> = {};
   for (const role of ROUTABLE_ROLES) {
     const fromEnv = pinFromSource(env, role);
-    if (env[pinKeys(role).model]) {
+    if (env[pinKeys(role).model] !== undefined) {
       if (fromEnv !== undefined) pins[role] = fromEnv;
       continue;
     }

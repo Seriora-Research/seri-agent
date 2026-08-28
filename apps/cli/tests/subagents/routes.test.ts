@@ -126,6 +126,17 @@ describe("parseRolePins", () => {
     );
     expect(pins.oracle).toBeUndefined();
   });
+
+  test("an empty env model does not fall through to a complete config pair", () => {
+    const pins = parseRolePins(
+      { SERI_ROLE_ORACLE_MODEL: "" },
+      {
+        SERI_ROLE_ORACLE_MODEL: "claude-sonnet-5",
+        SERI_ROLE_ORACLE_PROVIDER: "anthropic",
+      },
+    );
+    expect(pins.oracle).toBeUndefined();
+  });
 });
 
 describe("resolveRoleRoute", () => {
