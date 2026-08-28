@@ -42,23 +42,20 @@ const MIGRATIONS = [
         tokenize = 'unicode61'
       );
 
-      CREATE TRIGGER messages_ai AFTER INSERT ON messages
-      WHEN new.search_text IS NOT NULL BEGIN
+      CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
         INSERT INTO session_fts(rowid, search_text) VALUES (new.id, new.search_text);
       END;
 
-      CREATE TRIGGER messages_ad AFTER DELETE ON messages
-      WHEN old.search_text IS NOT NULL BEGIN
+      CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
         INSERT INTO session_fts(session_fts, rowid, search_text)
         VALUES ('delete', old.id, old.search_text);
       END;
 
-      CREATE TRIGGER messages_au AFTER UPDATE ON messages
-      WHEN old.search_text IS NOT NULL OR new.search_text IS NOT NULL BEGIN
+      CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
         INSERT INTO session_fts(session_fts, rowid, search_text)
-        SELECT 'delete', old.id, old.search_text WHERE old.search_text IS NOT NULL;
+        VALUES ('delete', old.id, old.search_text);
         INSERT INTO session_fts(rowid, search_text)
-        SELECT new.id, new.search_text WHERE new.search_text IS NOT NULL;
+        VALUES (new.id, new.search_text);
       END;
 
       CREATE TABLE legacy_imports (
