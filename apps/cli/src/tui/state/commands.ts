@@ -48,8 +48,14 @@ import {
   resolveSessionRoute,
 } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
+import type { TrajectoryWriter } from "../../trajectory/writer";
 
-export type CommandDirs = { sessionsDir: string; checkpointsDir: string; configDir: string };
+export type CommandDirs = {
+  sessionsDir: string;
+  checkpointsDir: string;
+  configDir: string;
+  trajectory?: TrajectoryWriter;
+};
 
 // The session records the directory seri was started in, which is not necessarily the project —
 // resolving the root here rather than at each call site is what keeps the live run and the three
@@ -527,7 +533,7 @@ export function decideRewind(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
-): { next: SessionState<ModelMessage>; message: string; recordBarrier: () => void } {
+): { next: SessionState<ModelMessage>; message: string; recordBarrier: () => boolean } {
   const { storeDir } = checkpointTarget(session, dirs);
   const { rewindTo } = rewindConversation({ storeDir, sessionId: session.id, steps: steps(args) });
   // Clamped, because an anchor can outlive the array it indexed: a previous /rewind truncated the
@@ -554,8 +560,10 @@ export function decideRewind(
   // only then `appendBarrier`. Returned as a closure instead, for the caller (cli.ts's
   // rewindCommand) to call AFTER `presenter.sessionUpdated(next)` — restoring that same order, so
   // a barrier is never durably recorded while the truncation it describes still isn't.
-  const recordBarrier = (): void => {
-    if (dropped > 0) appendBarrier(storeDir, session.id, "rewind");
+  const recordBarrier = (): boolean => {
+    if (dropped === 0) return false;
+    appendBarrier(storeDir, session.id, "rewind");
+    return true;
   };
   return {
     next,
