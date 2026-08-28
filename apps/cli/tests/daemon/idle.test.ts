@@ -8,6 +8,8 @@ import { setConfigValue } from "../../src/config/config";
 import { getPendingDir } from "../../src/config/paths";
 import { flushIdleArchivist } from "../../src/daemon/idle";
 import { startDaemon } from "../../src/daemon/server";
+import { DaemonSessionManager } from "../../src/daemon/sessionManager";
+import type { DaemonEvent } from "@seri/daemon-client";
 import type { MemoryContext } from "../../src/memory/store";
 import { makeMemoryWriteTool } from "../../src/memory/tool";
 import { SessionDatabase } from "../../src/session/database";
@@ -138,5 +140,61 @@ describe("idle archivist flush", () => {
     });
     expect(database.getArchivistCursor("sess-idle")).toBe(1);
     database.close();
+  });
+
+  test("a turn that starts during idle flush is not evicted off a new handle", async () => {
+    const configDir = makeDir();
+    const database = new SessionDatabase(configDir);
+    database.saveSession({
+      id: "sess-race",
+      cwd: configDir,
+      systemPrompt: "",
+      permissionMode: "approve-each",
+      messages: [],
+    });
+    const flushStarted = Promise.withResolvers<void>();
+    let flushEndedWhileTurnTwoRunning = false;
+    let turnTwoRunning = false;
+    const manager = new DaemonSessionManager(
+      database,
+      async (input) => {
+        if (input.task === "two") {
+          turnTwoRunning = true;
+          await Bun.sleep(80);
+          turnTwoRunning = false;
+        }
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        return { exitCode: 0 };
+      },
+      {
+        idleMs: 20,
+        onIdleFlush: async () => {
+          flushStarted.resolve();
+          await Bun.sleep(50);
+          if (turnTwoRunning) flushEndedWhileTurnTwoRunning = true;
+        },
+      },
+    );
+
+    async function completeTurn(task: string): Promise<void> {
+      const started = await manager.startTurn({ task, sessionId: "sess-race" });
+      await new Promise<void>((resolve) => {
+        started.subscribe((event: DaemonEvent) => {
+          if (event.event.type === "turn-complete") resolve();
+        });
+      });
+    }
+
+    try {
+      await completeTurn("one");
+      await flushStarted.promise;
+      await completeTurn("two");
+      expect(flushEndedWhileTurnTwoRunning).toBe(false);
+      expect(manager.evictedSessionIds).not.toContain("sess-race");
+    } finally {
+      manager.cancelAll();
+      await manager.waitForIdle();
+      database.close();
+    }
   });
 });

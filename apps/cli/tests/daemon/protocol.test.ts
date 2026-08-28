@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ExecuteTurn, startDaemon } from "../../src/daemon/server";
+import { SessionDatabase } from "../../src/session/database";
 
 let dirs: string[] = [];
 let stop: (() => Promise<void>) | undefined;
@@ -77,5 +78,67 @@ describe("daemon protocol auth", () => {
       body: "{",
     });
     expect(malformedWithAuth.status).toBe(400);
+  });
+});
+
+describe("daemon startup imports legacy JSONL", () => {
+  test("a JSONL-only sessionId is loadable on the first POST /v1/turns", async () => {
+    const configDir = makeDir();
+    const sessionsDir = join(configDir, "sessions");
+    mkdirSync(sessionsDir);
+    const header = {
+      id: "legacy-sess",
+      cwd: configDir,
+      systemPrompt: "",
+      permissionMode: "approve-each",
+    };
+    const jsonl = join(sessionsDir, "legacy-sess.jsonl");
+    writeFileSync(
+      jsonl,
+      `${JSON.stringify(header)}\n${JSON.stringify({ role: "user", content: "old fact" })}\n`,
+    );
+    const snapshot = readFileSync(jsonl);
+    const trajectoriesDir = join(configDir, "trajectories");
+    mkdirSync(trajectoriesDir);
+    const trajHeader = {
+      v: 1,
+      kind: "header",
+      sessionId: "legacy-sess",
+      cwd: configDir,
+      startedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const trajPath = join(trajectoriesDir, "legacy-sess.jsonl");
+    writeFileSync(trajPath, `${JSON.stringify(trajHeader)}\n`);
+    const trajSnapshot = readFileSync(trajPath);
+
+    const daemon = await startDaemon({
+      configDir,
+      idleMs: 0,
+      executeTurn: idleTurn,
+    });
+    stop = daemon.stop;
+
+    const response = await fetch(`${daemon.endpoint}/v1/turns`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${daemon.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ task: "continue", sessionId: "legacy-sess" }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+
+    const probe = new SessionDatabase(configDir);
+    try {
+      expect(probe.loadSession("legacy-sess")?.messages).toEqual([
+        { role: "user", content: "old fact" },
+      ]);
+      expect(probe.readTrajectory("legacy-sess")).toEqual([trajHeader]);
+    } finally {
+      probe.close();
+    }
+    expect(readFileSync(jsonl)).toEqual(snapshot);
+    expect(readFileSync(trajPath)).toEqual(trajSnapshot);
   });
 });

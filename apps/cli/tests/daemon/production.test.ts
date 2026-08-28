@@ -83,6 +83,16 @@ describe("production daemon wiring", () => {
     );
     expect(read).toBe("session-copy");
     expect(process.cwd()).not.toBe(work);
+    const sessionId = events[0]?.sessionId;
+    expect(sessionId).toBeDefined();
+    const probe = new SessionDatabase(configDir);
+    try {
+      const stored = probe.loadSession(sessionId!);
+      expect(stored).toBeDefined();
+      expect(probe.getArchivistCursor(sessionId!)).toBe(stored!.messages.length);
+    } finally {
+      probe.close();
+    }
   });
 
   test("default runScheduled calls runLoop with only the read-only tools", async () => {
