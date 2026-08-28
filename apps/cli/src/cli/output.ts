@@ -26,54 +26,14 @@ export const USAGE = `Usage:
   seri                            (in a terminal) open the TUI with an empty input box
   seri --continue [task]          continue the most recent session
   seri --resume <id> [task]       continue that session
-  seri [--resume <id>] /mode      cycle the permission mode
-  seri [--resume <id>] /effort [level|auto]
-                                    show, set to <level>, or clear (auto) this session's
-                                    reasoning-effort override — legal levels depend on the model
-  /model (inside the TUI)         open the model picker — not a seri subcommand, same reasoning
-                                    as /exit below: there is no picker to open outside a live TUI
-  /setup (inside the TUI)         add, replace or remove a provider API key — not a seri
-                                    subcommand; seri config set is the non-interactive equivalent
-  seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha> | /compact
-  seri [--resume <id>] /clear     start a new session — the previous one stays resumable
-  seri [--resume <id>] /memory pending | diff <id|all> | approve <id|all> | reject <id|all>
-                                    | approval on|off | archivist on|off
-  seri /trajectory [on|off]         show or set local trajectory recording (default on)
-  seri usage [--detail]             hosted-gateway spend vs allowance (not BYOK)
-  /usage [--detail] (inside the TUI) same report as seri usage
-  /exit (inside the TUI)          end the session, or Ctrl-D — not a seri subcommand: it means
-                                    nothing outside a live TUI, and "seri /exit" is just a task
-  /login | /signup | /logout (inside the TUI)
-                                    sign in, create an account, or sign out — not seri
-                                    subcommands; seri login | signup | logout below is the
-                                    non-interactive equivalent
-  /config (inside the TUI)        view or edit non-provider settings — not a seri subcommand;
-                                    seri config set|list|unset below is the non-interactive
-                                    equivalent
-  /permissions (inside the TUI)   view or revoke permanently approved tools — not a seri
-                                    subcommand; seri permissions list|remove <tool> below is the
-                                    non-interactive equivalent
-  seri login | signup | logout
   seri serve                      start the foreground loopback daemon for this profile
   seri exec <task>                run one task through an already-running daemon
-  seri config set|list|unset
-  seri permissions list|remove <tool>
-  seri usage [--detail]
   seri --version | --help
 
 Options:
   --max-turns <n>                 stop after n model turns (default 500)
-  /max-turns <n> (inside the TUI) override --max-turns for the rest of the session, taking
-                                    effect on the next turn — not a seri subcommand
-  --effort <level>                set the reasoning effort for this run only, e.g. low, medium,
-                                    high (never saved; SERI_REASONING_EFFORT sets a persistent
-                                    default) (non-interactive runs only — use /effort inside the TUI)
   --profile <name>                use the named profile's config, auth, permissions, sessions
                                     and checkpoints (or SERI_PROFILE; the flag wins)
-  /profile new <name> (inside the TUI)
-                                    create a new profile's directory — not a seri subcommand;
-                                    does not switch the running session's profile, restart with
-                                    --profile <name> or SERI_PROFILE to use it
   --dangerously-skip-permissions  run every tool with no approval prompt (attended use only)
   --                              everything after this is the task, flags included:
                                     seri -- fix the --help output`;
@@ -152,7 +112,7 @@ export function printWarning(message: string, sink: (line: string) => void = con
 // never claim a persistence that the store refused (a non-persistable name, an unparseable file).
 export function printGrantPersisted(name: string, worktree: string): void {
   console.log(
-    `  saved for ${worktree} — undo with: seri permissions remove ${escapeControlChars(name)}`,
+    `  saved for ${worktree} — undo with /permissions (remove ${escapeControlChars(name)})`,
   );
 }
 
@@ -164,7 +124,7 @@ export function printPreApproved(
   sink: (line: string) => void = console.log,
 ): void {
   sink(
-    `Pre-approved without asking: ${tools.map(escapeControlChars).join(", ")} — seri permissions list`,
+    `Pre-approved without asking: ${tools.map(escapeControlChars).join(", ")} — /permissions`,
   );
 }
 

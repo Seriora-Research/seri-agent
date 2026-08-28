@@ -160,7 +160,7 @@ export function loadTrajectoryConfig(configDir?: string): TrajectoryConfig {
 
 // Mirrors provider/defaults.ts's persistDefaultModel: called only from runTui's own per-turn
 // confirm-then-persist tracking (cli.ts), after a turn using this tier has actually succeeded —
-// never from /effort's own handler directly, and never for the non-persisting --effort CLI flag.
+// never from /effort's own handler directly.
 export function persistDefaultReasoningEffort(tier: string, configDir?: string): void {
   setConfigValue("SERI_REASONING_EFFORT", tier, configDir);
 }

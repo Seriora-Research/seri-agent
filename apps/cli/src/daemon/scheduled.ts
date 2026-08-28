@@ -74,8 +74,6 @@ export function createRunScheduled(opts: {
       checkpointsDir,
       permissionsDir: opts.configDir,
       configDir: opts.configDir,
-      effortFlag: undefined,
-      detailFlag: false,
       cwd: session.cwd,
     };
 

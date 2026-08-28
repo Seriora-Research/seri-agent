@@ -50,7 +50,7 @@ export function getGatewayModel(
 
   // Checked here only to fail fast with a clear message before constructing anything — the
   // credential actually used per-request is re-read fresh inside authedFetch.
-  if (!loadAuthSession(configDir)) throw new Error("Not logged in. Run: seri login");
+  if (!loadAuthSession(configDir)) throw new Error("Not logged in. Run /login");
 
   const fetchFn = deps.fetchFn ?? fetch;
   const refreshSession = deps.refreshSession ?? refreshSessionReal;

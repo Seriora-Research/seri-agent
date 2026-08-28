@@ -21,7 +21,7 @@ export const PROVIDER_API_KEY_NAMES: Record<ModelProvider, string> = {
 
 // Human-facing labels — for TUI-facing messages that are purely informational (tuiMissingKeyMessage
 // below, cli.ts's rerouteNotice). Never for an instruction that embeds the literal env var name as
-// something to type or unset (missingKeyError's `seri config set` command, /setup's own
+// something to type or unset (missingKeyError's export/${keyName} instruction, /setup's own
 // envShadowReason "unset it in your shell"): there, PROVIDER_API_KEY_NAMES's raw constant IS the
 // thing the user has to act on, and humanizing it would make the instruction un-actionable.
 export const PROVIDER_DISPLAY_NAMES: Record<ModelProvider, string> = {
@@ -36,14 +36,12 @@ export const PROVIDER_DISPLAY_NAMES: Record<ModelProvider, string> = {
 // message — tuiMissingKeyMessage, below — without matching on this text.
 export type MissingKeyError = Error & { missingKeyProvider: ModelProvider };
 
-// The exact legacy message every provider file threw inline before this refactor — byte-for-byte,
-// since cli.test.ts and each provider's own test assert it verbatim. Still correct as the DEFAULT
-// message: the non-interactive/piped path (cli.ts's prepareSession, and driveLoop's own callers)
-// has no TUI to point at, so "run this shell command" stays the only actionable instruction there.
+// Default missing-key copy for prepareSession and the non-interactive path. Export the env var,
+// or run `/setup` in the TUI. Tests assert this string verbatim.
 export function missingKeyError(provider: ModelProvider): MissingKeyError {
   const keyName = PROVIDER_API_KEY_NAMES[provider];
   const error = new Error(
-    `${keyName} is not set. Run: seri config set ${keyName} <your-key>`,
+    `${keyName} is not set. Export ${keyName} or run /setup.`,
   ) as MissingKeyError;
   error.missingKeyProvider = provider;
   return error;

@@ -37,7 +37,7 @@ export function projectKey(worktree: string): string {
 }
 
 export type Grants = {
-  // Kept apart rather than pre-merged: `seri permissions list` has to show WHICH tier an entry is
+  // Kept apart rather than pre-merged: `/permissions` has to show WHICH tier an entry is
   // in, because that is what tells a user where to edit, and a merged array cannot say.
   readonly global: readonly string[];
   readonly project: readonly string[];
@@ -49,8 +49,7 @@ export type Grants = {
 const TEMPLATE = `# seri — tools approved permanently, so seri stops asking.
 #
 # Written when you answer "a" at an approval prompt, and safe to edit by hand.
-#   seri permissions list            what is in effect right now
-#   seri permissions remove <tool>   revoke it
+#   /permissions                     what is in effect right now; revoke from there
 #
 # Only write_file and edit may appear here. bash and powershell are refused, on read as well as on
 # write: a grant keyed on a tool NAME says nothing about what a shell command will do, so an entry
@@ -236,9 +235,8 @@ export function rememberGrant(
 // `scope` is required, not defaulted: "project" is for a caller (the TUI's /permissions panel)
 // that only ever showed the project-tier entry as removable — a tool granted in both tiers must
 // keep its global pre-approval when removed from there, or the removal contradicts what the row
-// told the user. `seri permissions remove <tool>` (permissions/commands.ts) wants "both": its own
-// message already reports each tier it actually touched, so there is nothing left for it to
-// contradict.
+// told the user. `/permissions` remove uses "both" when the user asked to stop auto-approving a
+// tool entirely; its message reports each tier it actually touched.
 export function forgetGrant(
   configDir: string,
   worktree: string,

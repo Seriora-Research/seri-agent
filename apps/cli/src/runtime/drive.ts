@@ -195,13 +195,7 @@ export async function driveLoop(
     memory,
   } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
-  // `ctx.effortFlag` (--effort) wins outright and bypasses session.reasoningEffort/config.json
-  // entirely, for this call only (ParsedArgs.effort's own comment) — otherwise the ordinary
-  // precedence chain: session override, then the SERI_REASONING_EFFORT config default. Read fresh
-  // every driveLoop call, same reasoning as `system`/`route` above: a live /effort switch or a
-  // config default written mid-session must take effect on the very next turn.
-  const reasoningEffort =
-    ctx.effortFlag ?? resolveReasoningEffort(session, loadConfig(ctx.configDir));
+  const reasoningEffort = resolveReasoningEffort(session, loadConfig(ctx.configDir));
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
   // the consumer is the only thing that knows what a Ctrl-C means. Direct CLI/TUI callers register
