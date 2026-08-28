@@ -38,6 +38,22 @@ async function settle(setup: TestRendererSetup): Promise<void> {
   await setup.renderOnce();
 }
 
+// `useEffect` can land later than a fixed settle pass count when the runner is busy. Poll a
+// real macrotick (settle) instead of the renderer's scheduler: OpenTUI's waitFor stops as soon
+// as the scheduler reports idle, which can happen before React has run the passive effect that
+// publishes the host setter. Do not use Date.now() as a deadline here — the key tests mock it.
+async function waitUntil(
+  setup: TestRendererSetup,
+  pred: () => boolean,
+  label: string,
+): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    if (pred()) return;
+    await settle(setup);
+  }
+  throw new Error(label);
+}
+
 async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
   createRoot(setup.renderer).render(node);
   await settle(setup); // commits the mount
@@ -202,19 +218,26 @@ describe("TurnStatus: the key app.tsx supplies decides whether a new turn re-mou
     try {
       nowSpy.mockReturnValue(100_000);
       root.render(<TurnStatusHost withKey onReady={(fn) => (setStartedAt = fn)} />);
-      await settle(setup);
+      await waitUntil(
+        setup,
+        () => setStartedAt !== undefined,
+        "TurnStatusHost never called onReady",
+      );
       setStartedAt?.(100_000);
-      await settle(setup);
-      await settle(setup);
-      expect(setup.captureCharFrame()).toContain("0s");
+      await waitUntil(
+        setup,
+        () => setup.captureCharFrame().includes("0s"),
+        "first turn never rendered 0s",
+      );
 
       // The next turn, with a genuinely different startedAt.
       nowSpy.mockReturnValue(500);
       setStartedAt?.(500);
-      await settle(setup);
-      await settle(setup);
-
-      expect(setup.captureCharFrame()).toContain("0s");
+      await waitUntil(
+        setup,
+        () => setup.captureCharFrame().includes("0s"),
+        "remounted turn never rendered 0s",
+      );
     } finally {
       nowSpy.mockRestore();
     }
@@ -232,20 +255,27 @@ describe("TurnStatus: the key app.tsx supplies decides whether a new turn re-mou
     try {
       nowSpy.mockReturnValue(100_000);
       root.render(<TurnStatusHost withKey={false} onReady={(fn) => (setStartedAt = fn)} />);
-      await settle(setup);
+      await waitUntil(
+        setup,
+        () => setStartedAt !== undefined,
+        "TurnStatusHost never called onReady",
+      );
       setStartedAt?.(100_000);
-      await settle(setup);
-      await settle(setup);
-      expect(setup.captureCharFrame()).toContain("0s");
+      await waitUntil(
+        setup,
+        () => setup.captureCharFrame().includes("0s"),
+        "first turn never rendered 0s",
+      );
 
       nowSpy.mockReturnValue(500);
       setStartedAt?.(500);
-      await settle(setup);
-      await settle(setup);
-
       // The reused instance's `now` is still 100_000 (the first mount's value, never re-initialized)
       // against the new `startedAt` of 500 — a 99_500ms elapsed ("1m 39s"), not "0s".
-      expect(setup.captureCharFrame()).toContain("1m 39s");
+      await waitUntil(
+        setup,
+        () => setup.captureCharFrame().includes("1m 39s"),
+        "stale now never rendered 1m 39s",
+      );
     } finally {
       nowSpy.mockRestore();
     }
