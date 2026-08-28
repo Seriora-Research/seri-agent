@@ -2244,8 +2244,8 @@ describe("run (task invocation)", () => {
       const dispatch = opts.tools[DISPATCH_TOOL_NAME];
       if (dispatch?.execute !== undefined) {
         await dispatch.execute(
-          { tasks: [{ role: "explore", goal: "look around" }] },
-          { toolCallId: "t1", messages: opts.messages, abortSignal: opts.signal },
+          { tasks: [{ role: "explore" as const, goal: "look around" }] },
+          { toolCallId: "t1", messages: opts.messages, context: {}, abortSignal: opts.signal },
         );
         yield { type: "done" as const, reason: "no-tool-call" as const };
         return opts.messages;
