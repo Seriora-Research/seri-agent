@@ -15,6 +15,7 @@ import {
   roleMutatesFilesystem,
   type SubagentRole,
 } from "./roles";
+import type { TaskRouteRequest } from "./routes";
 
 // Hermes' own parallel-batch cap (research-spec.md's Sources) — tasks past this per dispatch_subagents
 // call are returned as not-run rows instead of being run, so the model can re-dispatch the rest.
@@ -43,7 +44,13 @@ export type ChildEventPayload = {
   inherited?: boolean;
 };
 
-export type SubagentTask = { role: SubagentRole; goal: string };
+export type SubagentTask = {
+  role: SubagentRole;
+  goal: string;
+  model?: string;
+  provider?: string;
+  effort?: string;
+};
 
 export type SubagentResult = SubagentTask & {
   summary: string;
@@ -86,9 +93,13 @@ export type SubagentRuntime = {
   onChildEvent?: (payload: ChildEventPayload) => void;
   maxIterations?: number;
   // Optional overlay: when set, each dispatched child gets this role's model/provider/effort
-  // instead of the runtime defaults. Omitted, every child shares the runtime (tests, callers
-  // that have already resolved the pair onto this object).
-  resolveRole?: (role: SubagentRole) => {
+  // instead of the runtime defaults. The optional request is the task's own pair; omitted,
+  // every child shares the runtime (tests, callers that have already resolved the pair onto
+  // this object).
+  resolveRole?: (
+    role: SubagentRole,
+    request?: TaskRouteRequest,
+  ) => {
     model: LanguageModel;
     provider: ModelProvider;
     modelId: string;
@@ -274,10 +285,25 @@ const DISPATCH_DESCRIPTION =
   `never fixes anything. Subagents cannot dispatch further subagents — this is a one-level ` +
   `tool. Up to ${MAX_TASKS_PER_DISPATCH} tasks run per call; extra tasks come back as not-run ` +
   `rows so you can re-dispatch them. Each subagent's final assistant message is its only ` +
-  `deliverable, returned here as that task's summary.`;
+  `deliverable, returned here as that task's summary. When the user names a model for a child, ` +
+  `pass that task's model and provider together: provider is one of groq, openrouter, anthropic, ` +
+  `openai, google; model is that provider's id (OpenRouter: the OpenRouter slug). Optional ` +
+  `effort is a reasoning tier for that child (for example "high"). A model without a valid ` +
+  `provider is ignored. Tasks that omit these fields inherit the session route. A pair that ` +
+  `cannot be constructed falls back to the session model.`;
 
 const inputSchema = z.object({
-  tasks: z.array(z.object({ role: z.enum(DISPATCHABLE_ROLES), goal: z.string().min(1) })).min(1),
+  tasks: z
+    .array(
+      z.object({
+        role: z.enum(DISPATCHABLE_ROLES),
+        goal: z.string().min(1),
+        model: z.string().optional(),
+        provider: z.string().optional(),
+        effort: z.string().optional(),
+      }),
+    )
+    .min(1),
 });
 
 // `system` (the parent's own composed stable+context+volatile tiers; runOne appends the role
@@ -310,12 +336,16 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
         runtime.checkpointer(context);
       }
 
-      function roleIdentity(role: SubagentRole): {
+      function taskRequest(task: SubagentTask): TaskRouteRequest {
+        return { model: task.model, provider: task.provider, effort: task.effort };
+      }
+
+      function roleIdentity(task: SubagentTask): {
         model: string;
         provider: ModelProvider;
         inherited: boolean;
       } {
-        const overlay = runtime.resolveRole?.(role);
+        const overlay = runtime.resolveRole?.(task.role, taskRequest(task));
         return {
           model: overlay?.modelId ?? runtime.modelId,
           provider: overlay?.provider ?? runtime.provider,
@@ -323,8 +353,8 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
         };
       }
 
-      function runtimeFor(role: SubagentRole): SubagentRuntime {
-        const overlay = runtime.resolveRole?.(role);
+      function runtimeFor(task: SubagentTask): SubagentRuntime {
+        const overlay = runtime.resolveRole?.(task.role, taskRequest(task));
         if (overlay === undefined) return runtime;
         return {
           ...runtime,
@@ -338,7 +368,7 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
 
       function runOne(task: SubagentTask, index: number) {
         const childId = `${options.toolCallId}:${index}`;
-        const identity = roleIdentity(task.role);
+        const identity = roleIdentity(task);
         runtime.onChildEvent?.({
           childId,
           role: task.role,
@@ -350,7 +380,7 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
           tools: buildRoleToolSet(task.role, runtime.checkpointer?.onAfterMutation),
           system: joinTiers(runtime.system, roleAddendum(task.role)),
           messages: [{ role: "user", content: task.goal }],
-          runtime: runtimeFor(task.role),
+          runtime: runtimeFor(task),
           signal: options.abortSignal,
           child: { id: childId, role: task.role, goal: task.goal, ...identity },
         });
@@ -382,7 +412,7 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
       ]);
 
       const results: SubagentResult[] = runnable.map((task, index) => {
-        const identity = roleIdentity(task.role);
+        const identity = roleIdentity(task);
         return {
           role: task.role,
           goal: task.goal,

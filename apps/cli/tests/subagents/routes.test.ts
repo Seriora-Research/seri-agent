@@ -7,9 +7,12 @@ import { loadConfig, setConfigValue } from "../../src/config/config";
 import {
   ROUTABLE_ROLES,
   type RoutableRole,
+  effortForChild,
   effortForRole,
   parseRolePins,
+  pinFromTask,
   realizedRoute,
+  resolveChildRoute,
   resolveRoleRoute,
 } from "../../src/subagents/routes";
 import { DISPATCHABLE_ROLES } from "../../src/subagents/roles";
@@ -256,6 +259,103 @@ describe("effortForRole", () => {
     expect(
       effortForRole(parentEffort, { provider: "groq", modelId: "other-model" }),
     ).toBeUndefined();
+  });
+});
+
+describe("pinFromTask", () => {
+  test("a complete task pair is a pin", () => {
+    expect(pinFromTask({ model: "claude-sonnet-5", provider: "anthropic" })).toEqual({
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+    });
+  });
+
+  test("a model without a provider is incomplete, not mixed with anything", () => {
+    expect(pinFromTask({ model: "claude-sonnet-5" })).toBeUndefined();
+    expect(pinFromTask({ model: "claude-sonnet-5", provider: "not-a-provider" })).toBeUndefined();
+    expect(pinFromTask({ model: "", provider: "anthropic" })).toBeUndefined();
+    expect(pinFromTask(undefined)).toBeUndefined();
+  });
+});
+
+describe("resolveChildRoute", () => {
+  const rolePin = { oracle: { model: "solo-model", provider: "groq" as const } };
+
+  test("a complete task pair wins over a role pin", () => {
+    const route = resolveChildRoute(
+      "oracle",
+      parent,
+      rolePin,
+      { model: "claude-sonnet-5", provider: "anthropic" },
+      catalog,
+      new Set(["anthropic", "groq"]),
+      null,
+    );
+    expect(route).toEqual({
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      viaGateway: false,
+      rerouted: false,
+      inherited: false,
+    });
+  });
+
+  test("a task model without a provider falls through to the role pin", () => {
+    const route = resolveChildRoute(
+      "oracle",
+      parent,
+      { oracle: { model: "claude-sonnet-5", provider: "anthropic" } },
+      { model: "shared-model", effort: "high" },
+      catalog,
+      new Set(["anthropic"]),
+      null,
+    );
+    expect(route.model).toBe("claude-sonnet-5");
+    expect(route.provider).toBe("anthropic");
+    expect(route.inherited).toBe(false);
+  });
+
+  test("no task pair and no role pin inherits the parent", () => {
+    const route = resolveChildRoute(
+      "oracle",
+      parent,
+      {},
+      { effort: "high" },
+      catalog,
+      new Set(),
+      null,
+    );
+    expect(route).toMatchObject({
+      model: "solo-model",
+      provider: "groq",
+      inherited: true,
+    });
+  });
+});
+
+describe("effortForChild", () => {
+  const parentEffort = {
+    provider: "groq" as const,
+    modelId: "solo-model",
+    reasoningEffort: "medium" as const,
+  };
+
+  test("an explicit effort is forwarded even when the pair differs", () => {
+    expect(
+      effortForChild(parentEffort, { provider: "anthropic", modelId: "claude-sonnet-5" }, "high"),
+    ).toBe("high");
+  });
+
+  test("omitted effort on a different pair is still undefined", () => {
+    expect(
+      effortForChild(parentEffort, { provider: "anthropic", modelId: "claude-sonnet-5" }),
+    ).toBeUndefined();
+  });
+
+  test("empty effort string does not override inherit-iff", () => {
+    expect(effortForChild(parentEffort, { provider: "groq", modelId: "solo-model" }, "")).toBe(
+      "medium",
+    );
   });
 });
 

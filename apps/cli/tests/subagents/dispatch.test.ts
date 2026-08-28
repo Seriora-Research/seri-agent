@@ -782,6 +782,125 @@ describe("dispatch_subagents", () => {
     expect(started?.inherited).toBe(false);
   });
 
+  test("resolveRole receives the task's model, provider, and effort", async () => {
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const childModel = new MockLanguageModelV4({});
+    const requests: unknown[] = [];
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        provider: "groq",
+        modelId: "parent-model",
+        reasoningEffort: "medium",
+        resolveRole: (role, request) => {
+          requests.push({ role, request });
+          return {
+            model: childModel,
+            provider: "anthropic",
+            modelId: "claude-sonnet-5",
+            reasoningEffort: request?.effort,
+            inherited: false,
+          };
+        },
+      }),
+    );
+    const result = (await dispatchTool.execute(
+      {
+        tasks: [
+          {
+            role: "oracle",
+            goal: "advise",
+            model: "claude-sonnet-5",
+            provider: "anthropic",
+            effort: "high",
+          },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(requests).toContainEqual({
+      role: "oracle",
+      request: { model: "claude-sonnet-5", provider: "anthropic", effort: "high" },
+    });
+    expect(calls[0].opts.modelId).toBe("claude-sonnet-5");
+    expect(calls[0].opts.reasoningEffort).toBe("high");
+    expect(result.results[0].inherited).toBe(false);
+  });
+
+  test("two tasks with the same role and different models get two overlays", async () => {
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        resolveRole: (_role, request) => ({
+          model: new MockLanguageModelV4({}),
+          provider: request?.provider === "anthropic" ? "anthropic" : "openai",
+          modelId: request?.model ?? "missing",
+          reasoningEffort: request?.effort,
+          inherited: false,
+        }),
+      }),
+    );
+    const result = (await dispatchTool.execute(
+      {
+        tasks: [
+          { role: "oracle", goal: "a", model: "claude-sonnet-5", provider: "anthropic" },
+          { role: "oracle", goal: "b", model: "gpt-5", provider: "openai", effort: "high" },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    const ids = calls.map((c) => c.opts.modelId);
+    expect(ids).toContain("claude-sonnet-5");
+    expect(ids).toContain("gpt-5");
+    expect(calls.find((c) => c.opts.modelId === "gpt-5")?.opts.reasoningEffort).toBe("high");
+    expect(result.results.map((r) => r.model)).toEqual(["claude-sonnet-5", "gpt-5"]);
+  });
+
+  test("overflow rows omit model/provider/inherited even when the overflow task named a pair", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        resolveRole: () => ({
+          model: new MockLanguageModelV4({}),
+          provider: "anthropic",
+          modelId: "claude-sonnet-5",
+          reasoningEffort: "high",
+          inherited: false,
+        }),
+      }),
+    );
+    const result = (await dispatchTool.execute(
+      {
+        tasks: [
+          { role: "explore", goal: "one" },
+          { role: "explore", goal: "two" },
+          { role: "explore", goal: "three" },
+          {
+            role: "oracle",
+            goal: "overflow",
+            model: "claude-sonnet-5",
+            provider: "anthropic",
+            effort: "high",
+          },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results[3].doneReason).toBeUndefined();
+    expect(result.results[3].model).toBeUndefined();
+    expect(result.results[3].provider).toBeUndefined();
+    expect(result.results[3].inherited).toBeUndefined();
+    expect(result.results[3].effort).toBeUndefined();
+  });
+
   test("a hostile oracle calling write_file/edit/bash/powershell/dispatch_subagents gets Unknown tool and writes nothing", async () => {
     const distinctivePath = join(tmpdir(), `seri-oracle-hostile-${Date.now()}.txt`);
     const model = new MockLanguageModelV4({

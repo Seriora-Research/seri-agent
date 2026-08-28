@@ -9,6 +9,12 @@ export type RoutableRole = (typeof ROUTABLE_ROLES)[number];
 
 export type RolePin = { model: string; provider: ModelProvider };
 
+export type TaskRouteRequest = {
+  model?: string;
+  provider?: string;
+  effort?: string;
+};
+
 export type RoleRoute = {
   model: string;
   provider: ModelProvider;
@@ -57,6 +63,36 @@ export function parseRolePins(
   return pins;
 }
 
+export function pinFromTask(request: TaskRouteRequest | undefined): RolePin | undefined {
+  if (request === undefined) return undefined;
+  if (typeof request.model !== "string" || request.model.length === 0) return undefined;
+  if (typeof request.provider !== "string" || !isModelProvider(request.provider)) return undefined;
+  return { model: request.model, provider: request.provider };
+}
+
+export function resolveChildRoute(
+  role: RoutableRole,
+  parent: ResolvedRoute,
+  pins: Partial<Record<RoutableRole, RolePin>>,
+  request: TaskRouteRequest | undefined,
+  catalog: ModelCatalog,
+  configured: ReadonlySet<ModelProvider>,
+  plan: Plan | null,
+): RoleRoute {
+  const taskPin = pinFromTask(request);
+  if (taskPin !== undefined) {
+    const resolved = resolveRoute(catalog, taskPin, configured, plan);
+    return {
+      model: resolved.model,
+      provider: resolved.provider,
+      viaGateway: resolved.viaGateway,
+      rerouted: resolved.rerouted,
+      inherited: false,
+    };
+  }
+  return resolveRoleRoute(role, parent, pins, catalog, configured, plan);
+}
+
 export function resolveRoleRoute(
   role: RoutableRole,
   parent: ResolvedRoute,
@@ -93,6 +129,15 @@ export function effortForRole(
     return parent.reasoningEffort;
   }
   return undefined;
+}
+
+export function effortForChild(
+  parent: { provider: ModelProvider; modelId: string; reasoningEffort: string | undefined },
+  child: { provider: ModelProvider; modelId: string },
+  requested?: string,
+): string | undefined {
+  if (typeof requested === "string" && requested.length > 0) return requested;
+  return effortForRole(parent, child);
 }
 
 // Construction lives at the compose site. When it fails, the child runs the parent pair and
