@@ -211,7 +211,8 @@ function parseLegacyTrajectory(path: string): {
       if (index === parts.length - 1 && !endedWithNewline) break;
       throw error;
     }
-    if (typeof value !== "object" || value === null) throw new Error("trajectory record is invalid");
+    if (typeof value !== "object" || value === null)
+      throw new Error("trajectory record is invalid");
     const record = value as Record<string, unknown>;
     if (index === 0) {
       if (record.kind !== "header" || typeof record.sessionId !== "string") {
@@ -271,20 +272,21 @@ export class SessionDatabase {
     this.database.close();
   }
 
-  getPragmas(): { foreignKeys: number; journalMode: string; busyTimeout: number; userVersion: number } {
+  getPragmas(): {
+    foreignKeys: number;
+    journalMode: string;
+    busyTimeout: number;
+    userVersion: number;
+  } {
     return {
-      foreignKeys: (
-        this.database.query("PRAGMA foreign_keys").get() as { foreign_keys: number }
-      ).foreign_keys,
-      journalMode: (
-        this.database.query("PRAGMA journal_mode").get() as { journal_mode: string }
-      ).journal_mode,
-      busyTimeout: (
-        this.database.query("PRAGMA busy_timeout").get() as { timeout: number }
-      ).timeout,
-      userVersion: (
-        this.database.query("PRAGMA user_version").get() as { user_version: number }
-      ).user_version,
+      foreignKeys: (this.database.query("PRAGMA foreign_keys").get() as { foreign_keys: number })
+        .foreign_keys,
+      journalMode: (this.database.query("PRAGMA journal_mode").get() as { journal_mode: string })
+        .journal_mode,
+      busyTimeout: (this.database.query("PRAGMA busy_timeout").get() as { timeout: number })
+        .timeout,
+      userVersion: (this.database.query("PRAGMA user_version").get() as { user_version: number })
+        .user_version,
     };
   }
 
@@ -293,9 +295,9 @@ export class SessionDatabase {
   }
 
   loadSession<TMessage = unknown>(id: string): SessionState<TMessage> | undefined {
-    const header = this.database.query("SELECT * FROM sessions WHERE id = ?").get(id) as
-      | SessionRow
-      | null;
+    const header = this.database
+      .query("SELECT * FROM sessions WHERE id = ?")
+      .get(id) as SessionRow | null;
     if (header === null) return undefined;
     const messages = this.database
       .query("SELECT json FROM messages WHERE session_id = ? ORDER BY seq")
@@ -356,7 +358,9 @@ export class SessionDatabase {
   importLegacySessions(sessionsDir: string): LegacySessionImportResult {
     const result: LegacySessionImportResult = { truncatedSessionIds: [], failedPaths: [] };
     if (!existsSync(sessionsDir)) return result;
-    for (const name of readdirSync(sessionsDir).filter((entry) => entry.endsWith(".jsonl")).sort()) {
+    for (const name of readdirSync(sessionsDir)
+      .filter((entry) => entry.endsWith(".jsonl"))
+      .sort()) {
       const path = join(sessionsDir, name);
       const stat = statSync(path);
       const size = stat.size;
@@ -387,7 +391,9 @@ export class SessionDatabase {
   importLegacyTrajectories(trajectoriesDir: string): { failedPaths: string[] } {
     const result = { failedPaths: [] as string[] };
     if (!existsSync(trajectoriesDir)) return result;
-    for (const name of readdirSync(trajectoriesDir).filter((entry) => entry.endsWith(".jsonl")).sort()) {
+    for (const name of readdirSync(trajectoriesDir)
+      .filter((entry) => entry.endsWith(".jsonl"))
+      .sort()) {
       const path = join(trajectoriesDir, name);
       const stat = statSync(path);
       const size = stat.size;
@@ -426,9 +432,7 @@ export class SessionDatabase {
   ): TrajectoryRecord {
     return this.database.transaction(() => {
       this.database
-        .query(
-          "INSERT OR IGNORE INTO trajectory_records(session_id, seq, json) VALUES (?, 0, ?)",
-        )
+        .query("INSERT OR IGNORE INTO trajectory_records(session_id, seq, json) VALUES (?, 0, ?)")
         .run(header.sessionId, JSON.stringify(header));
       const nextSeq =
         (
@@ -453,9 +457,8 @@ export class SessionDatabase {
   }
 
   private migrate(): void {
-    const current = (
-      this.database.query("PRAGMA user_version").get() as { user_version: number }
-    ).user_version;
+    const current = (this.database.query("PRAGMA user_version").get() as { user_version: number })
+      .user_version;
     if (current > CURRENT_SCHEMA_VERSION) {
       throw new Error(
         `SQLite schema version ${current} is newer than this seri binary supports (${CURRENT_SCHEMA_VERSION})`,
@@ -471,9 +474,9 @@ export class SessionDatabase {
   }
 
   private writeSession(state: SessionState, importedAtMs?: number): void {
-    const existing = this.database.query("SELECT * FROM sessions WHERE id = ?").get(state.id) as
-      | SessionRow
-      | null;
+    const existing = this.database
+      .query("SELECT * FROM sessions WHERE id = ?")
+      .get(state.id) as SessionRow | null;
     const messages = this.database
       .query("SELECT id, seq, json FROM messages WHERE session_id = ? ORDER BY seq")
       .all(state.id) as MessageRow[];

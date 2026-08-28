@@ -2135,7 +2135,7 @@ async function runTui(
   // always answered "did the run just now finish, and how."
   let usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
   let cost: CostReport | undefined;
-  let doneReason: DoneReason | undefined;
+  let doneReason: DriveLoopResult["doneReason"];
   let refusedWithoutRunning = false;
   // Same "last turn's outcome" reasoning as doneReason/refusedWithoutRunning, just above — a turn
   // with nothing to report simply leaves this undefined again. runTurn (below) also renders every

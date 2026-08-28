@@ -54,7 +54,8 @@ describe("SessionDatabase", () => {
     expect(pragmas.busyTimeout).toBeGreaterThan(0);
     expect(pragmas.userVersion).toBe(2);
     const raw = new Database(join(configDir, DATABASE_FILENAME));
-    const version = (raw.query("PRAGMA user_version").get() as { user_version: number }).user_version;
+    const version = (raw.query("PRAGMA user_version").get() as { user_version: number })
+      .user_version;
     expect(version).toBeGreaterThan(0);
     raw.exec(`PRAGMA user_version = ${version + 1}`);
     raw.close();
@@ -65,9 +66,11 @@ describe("SessionDatabase", () => {
   test("append and header updates retain message row ids while shrink removes only the tail", () => {
     withDatabase((database) => database.saveSession(state("changes", [{ n: 1 }])));
     const first = new Database(join(configDir, DATABASE_FILENAME));
-    const firstId = (first.query("SELECT id FROM messages WHERE session_id = 'changes'").get() as {
-      id: number;
-    }).id;
+    const firstId = (
+      first.query("SELECT id FROM messages WHERE session_id = 'changes'").get() as {
+        id: number;
+      }
+    ).id;
     first.close();
 
     withDatabase((database) => {
@@ -136,7 +139,9 @@ describe("SessionDatabase", () => {
           "/one",
         ),
       );
-      database.saveSession(state("other", [{ role: "assistant", content: "bounded-token" }], "/two"));
+      database.saveSession(
+        state("other", [{ role: "assistant", content: "bounded-token" }], "/two"),
+      );
 
       expect(database.searchSessions("bounded-token", { limit: 500 })).toHaveLength(50);
       expect(database.searchSessions("bounded-token", { cwd: "/two" })).toMatchObject([
@@ -191,7 +196,9 @@ describe("legacy session migration", () => {
 
     const raw = new Database(join(configDir, DATABASE_FILENAME));
     expect(
-      raw.query("SELECT COUNT(*) AS count FROM messages WHERE session_id IN ('clean', 'torn')").get(),
+      raw
+        .query("SELECT COUNT(*) AS count FROM messages WHERE session_id IN ('clean', 'torn')")
+        .get(),
     ).toEqual({ count: 2 });
     const failure = raw
       .query("SELECT error FROM legacy_imports WHERE path = ?")
@@ -203,7 +210,9 @@ describe("legacy session migration", () => {
 });
 
 test("SQLite sessions export as legacy JSONL without changing the database", () => {
-  withDatabase((database) => database.saveSession(state("exported", [{ role: "user", content: "hi" }])));
+  withDatabase((database) =>
+    database.saveSession(state("exported", [{ role: "user", content: "hi" }])),
+  );
   const outputDir = join(configDir, "rollback");
 
   const paths = exportSessionsToJsonl(configDir, outputDir);
@@ -238,9 +247,7 @@ test("search results are scoped to the database for one active profile", () => {
     );
     const other = new SessionDatabase(otherConfig);
     try {
-      other.saveSession(
-        state("second-profile", [{ role: "user", content: "different text" }]),
-      );
+      other.saveSession(state("second-profile", [{ role: "user", content: "different text" }]));
       expect(other.searchSessions("isolated-keyword")).toEqual([] as SessionSearchResult[]);
     } finally {
       other.close();

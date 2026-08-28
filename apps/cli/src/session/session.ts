@@ -66,9 +66,8 @@ export function findMostRecentSessionForCwd(sessionsDir: string, cwd: string): s
   return withDatabase(sessionsDir, (database) => {
     database.importLegacySessions(sessionsDir);
     const target = normalizedCwd(cwd);
-    return database
-      .listSessionsByRecent()
-      .find((session) => normalizedCwd(session.cwd) === target)?.id;
+    return database.listSessionsByRecent().find((session) => normalizedCwd(session.cwd) === target)
+      ?.id;
   });
 }
 

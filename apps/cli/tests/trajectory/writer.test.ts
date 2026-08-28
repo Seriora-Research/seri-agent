@@ -177,7 +177,9 @@ test("legacy trajectory JSONL imports once and remains byte-identical", () => {
 
     const raw = new Database(join(configDir, DATABASE_FILENAME));
     expect(
-      raw.query("SELECT COUNT(*) AS count FROM trajectory_records WHERE session_id = 'legacy'").get(),
+      raw
+        .query("SELECT COUNT(*) AS count FROM trajectory_records WHERE session_id = 'legacy'")
+        .get(),
     ).toEqual({ count: 2 });
     raw.close();
     expect(readFileSync(path)).toEqual(snapshot);

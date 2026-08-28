@@ -5,11 +5,7 @@ import type { CliDeps, PreparedRun, RunContext } from "../cli";
 import { loadConfig } from "../config/config";
 import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
-import {
-  type ApprovalPrompt,
-  type LoopEvent,
-  runLoop as runLoopReal,
-} from "../loop/loop";
+import { type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "../loop/loop";
 import {
   type ArchivistReport,
   type ArchivistState,
@@ -28,7 +24,10 @@ type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
 
 // undefined + n is n, not NaN, and undefined + undefined stays undefined: a run's total is the sum
 // of the calls that reported, and stays unreported if none did.
-export function addTokens(total: number | undefined, reported: number | undefined): number | undefined {
+export function addTokens(
+  total: number | undefined,
+  reported: number | undefined,
+): number | undefined {
   return reported === undefined ? total : (total ?? 0) + reported;
 }
 

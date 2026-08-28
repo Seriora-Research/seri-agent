@@ -44,12 +44,12 @@ const _attendedOk: RunPolicy = {
   allowedTools: ["bash"],
 };
 
-// @ts-expect-error scheduled runs cannot carry an approval prompt
 const _scheduledApproval: RunPolicy = {
   origin: "scheduled",
   permissionMode: "read-only",
   allowedTools: [],
-  approvalPrompt: async () => "yes",
+  // @ts-expect-error scheduled runs cannot carry an approval prompt
+  approvalPrompt: async () => "once",
 };
 
 // @ts-expect-error scheduled permission mode is only read-only

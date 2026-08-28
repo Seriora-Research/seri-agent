@@ -39,7 +39,12 @@ describe("SQLite session persistence helpers", () => {
           role: "assistant",
           content: [
             { type: "text", text: "on it" },
-            { type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "pwd" } },
+            {
+              type: "tool-call",
+              toolCallId: "call-1",
+              toolName: "bash",
+              input: { command: "pwd" },
+            },
           ],
         },
         { role: "tool", content: [{ type: "tool-result", output: { type: "text", value: "ok" } }] },
@@ -132,7 +137,13 @@ describe("recent SQLite sessions", () => {
       sessionsDir,
     );
     saveSession(
-      { id: "elsewhere", cwd: "/project/b", systemPrompt: "", permissionMode: "auto", messages: [] },
+      {
+        id: "elsewhere",
+        cwd: "/project/b",
+        systemPrompt: "",
+        permissionMode: "auto",
+        messages: [],
+      },
       sessionsDir,
     );
     saveSession(
@@ -148,14 +159,23 @@ describe("recent SQLite sessions", () => {
     expect(findMostRecentSessionForCwd(sessionsDir, "/project/a")).toBeUndefined();
   });
 
-  (foldsCase() ? test : test.skip)("matches cwd case-insensitively on a case-folding filesystem", () => {
-    saveSession(
-      { id: "cased", cwd: "/Project/Cased", systemPrompt: "", permissionMode: "auto", messages: [] },
-      sessionsDir,
-    );
+  (foldsCase() ? test : test.skip)(
+    "matches cwd case-insensitively on a case-folding filesystem",
+    () => {
+      saveSession(
+        {
+          id: "cased",
+          cwd: "/Project/Cased",
+          systemPrompt: "",
+          permissionMode: "auto",
+          messages: [],
+        },
+        sessionsDir,
+      );
 
-    expect(findMostRecentSessionForCwd(sessionsDir, "/project/cased")).toBe("cased");
-  });
+      expect(findMostRecentSessionForCwd(sessionsDir, "/project/cased")).toBe("cased");
+    },
+  );
 });
 
 test("separate profile roots never see each other's sessions", () => {
