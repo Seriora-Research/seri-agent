@@ -35,16 +35,31 @@ type TurnHandle = {
 
 type SessionHandle = {
   tail: Promise<void>;
+  idleTimer: ReturnType<typeof setTimeout> | undefined;
+};
+
+export const DEFAULT_IDLE_MS = 5 * 60 * 1000;
+
+export type SessionManagerOptions = {
+  idleMs?: number;
+  onIdleFlush?: (sessionId: string) => Promise<void>;
 };
 
 export class DaemonSessionManager {
   private readonly sessions = new Map<string, SessionHandle>();
   private readonly turns = new Map<string, TurnHandle>();
+  private readonly idleMs: number;
+  private readonly onIdleFlush: ((sessionId: string) => Promise<void>) | undefined;
+  readonly evictedSessionIds: string[] = [];
 
   constructor(
     private readonly database: SessionDatabase,
     private readonly executeTurn: ExecuteTurn,
-  ) {}
+    opts: SessionManagerOptions = {},
+  ) {
+    this.idleMs = opts.idleMs ?? DEFAULT_IDLE_MS;
+    this.onIdleFlush = opts.onIdleFlush;
+  }
 
   getTurn(turnId: string): TurnHandle | undefined {
     return this.turns.get(turnId);
@@ -71,6 +86,10 @@ export class DaemonSessionManager {
     this.database.insertTurn(turnId, session.id, new Date().toISOString());
 
     const sessionHandle = this.sessionHandle(session.id);
+    if (sessionHandle.idleTimer !== undefined) {
+      clearTimeout(sessionHandle.idleTimer);
+      sessionHandle.idleTimer = undefined;
+    }
     const started = Promise.withResolvers<void>();
     const gate = Promise.withResolvers<void>();
     sessionHandle.tail = sessionHandle.tail.then(async () => {
@@ -129,6 +148,10 @@ export class DaemonSessionManager {
 
   cancelAll(): void {
     for (const turnId of this.turns.keys()) this.cancelTurn(turnId);
+    for (const handle of this.sessions.values()) {
+      if (handle.idleTimer !== undefined) clearTimeout(handle.idleTimer);
+      handle.idleTimer = undefined;
+    }
   }
 
   waitForIdle(): Promise<void> {
@@ -138,7 +161,7 @@ export class DaemonSessionManager {
   private sessionHandle(sessionId: string): SessionHandle {
     const existing = this.sessions.get(sessionId);
     if (existing !== undefined) return existing;
-    const created = { tail: Promise.resolve() };
+    const created = { tail: Promise.resolve(), idleTimer: undefined };
     this.sessions.set(sessionId, created);
     return created;
   }
@@ -214,7 +237,27 @@ export class DaemonSessionManager {
       handle.pendingApproval = undefined;
       this.database.finishTurn(turnId, new Date().toISOString());
       handle.subscribers.clear();
+      this.armIdle(session.id);
     }
+  }
+
+  private armIdle(sessionId: string): void {
+    if (this.idleMs <= 0) return;
+    const handle = this.sessions.get(sessionId);
+    if (handle === undefined) return;
+    if (handle.idleTimer !== undefined) clearTimeout(handle.idleTimer);
+    handle.idleTimer = setTimeout(() => {
+      void this.flushIdle(sessionId);
+    }, this.idleMs);
+  }
+
+  private async flushIdle(sessionId: string): Promise<void> {
+    const handle = this.sessions.get(sessionId);
+    if (handle === undefined) return;
+    handle.idleTimer = undefined;
+    await this.onIdleFlush?.(sessionId);
+    this.sessions.delete(sessionId);
+    this.evictedSessionIds.push(sessionId);
   }
 
   private onSubscriberGone(handle: TurnHandle): void {

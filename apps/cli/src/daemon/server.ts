@@ -8,6 +8,7 @@ import {
   writeDaemonDescriptor,
 } from "./descriptor";
 import { approvalBodySchema, turnRequestSchema } from "./protocol";
+import { type RunScheduled, Scheduler, ScheduleValidationError } from "./scheduler";
 import { DaemonSessionManager, type ExecuteTurn, SessionNotFoundError } from "./sessionManager";
 
 export type { ExecuteTurn, ExecuteTurnInput } from "./sessionManager";
@@ -16,12 +17,18 @@ export type StartedDaemon = {
   endpoint: string;
   token: string;
   pid: number;
+  scheduler: Scheduler;
   stop: () => Promise<void>;
 };
 
 export type StartDaemonOptions = {
   configDir: string;
   executeTurn: ExecuteTurn;
+  runScheduled?: RunScheduled;
+  now?: () => number;
+  tickMs?: number;
+  idleMs?: number;
+  onIdleFlush?: (sessionId: string) => Promise<void>;
 };
 
 function unauthorized(): Response {
@@ -113,7 +120,16 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
     lock.release();
     throw error;
   }
-  const manager = new DaemonSessionManager(database, opts.executeTurn);
+  const manager = new DaemonSessionManager(database, opts.executeTurn, {
+    idleMs: opts.idleMs,
+    onIdleFlush: opts.onIdleFlush,
+  });
+  const scheduler = new Scheduler(
+    database,
+    opts.runScheduled ?? (async () => ({ response: "" })),
+    opts.now,
+    opts.tickMs,
+  );
 
   let server: ReturnType<typeof Bun.serve>;
   try {
@@ -194,8 +210,41 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
           });
         }
 
-        if (path === "/v1/schedules" || path.startsWith("/v1/schedules/")) {
-          return json(501, { error: "schedules are not implemented" });
+        if (req.method === "POST" && path === "/v1/schedules") {
+          let body: unknown;
+          try {
+            body = await req.json();
+          } catch {
+            return json(400, { error: "invalid json" });
+          }
+          try {
+            const created = scheduler.create(body);
+            return json(201, created);
+          } catch (error) {
+            if (error instanceof ScheduleValidationError) {
+              return json(400, { error: error.message });
+            }
+            throw error;
+          }
+        }
+
+        if (req.method === "GET" && path === "/v1/schedules") {
+          return json(200, { schedules: database.listSchedules() });
+        }
+
+        const scheduleRunsMatch = path.match(/^\/v1\/schedules\/([^/]+)\/runs$/);
+        if (req.method === "GET" && scheduleRunsMatch !== null) {
+          const id = decodeURIComponent(scheduleRunsMatch[1]!);
+          if (database.getSchedule(id) === undefined)
+            return json(404, { error: "schedule not found" });
+          return json(200, { runs: database.listScheduleRuns(id) });
+        }
+
+        const scheduleMatch = path.match(/^\/v1\/schedules\/([^/]+)$/);
+        if (req.method === "DELETE" && scheduleMatch !== null) {
+          const id = decodeURIComponent(scheduleMatch[1]!);
+          if (!database.disableSchedule(id)) return json(404, { error: "schedule not found" });
+          return json(200, { ok: true });
         }
 
         return json(404, { error: "not found" });
@@ -216,12 +265,15 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
     startedAt: new Date().toISOString(),
   };
   writeDaemonDescriptor(opts.configDir, descriptor);
+  scheduler.start();
 
   return {
     endpoint,
     token,
     pid: process.pid,
+    scheduler,
     stop: async () => {
+      scheduler.stop();
       server.stop(true);
       manager.cancelAll();
       await manager.waitForIdle();

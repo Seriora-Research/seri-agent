@@ -53,6 +53,8 @@ export const USAGE = `Usage:
                                     subcommand; seri permissions list|remove <tool> below is the
                                     non-interactive equivalent
   seri login | signup | logout
+  seri serve                      start the foreground loopback daemon for this profile
+  seri exec <task>                run one task through an already-running daemon
   seri config set|list|unset
   seri permissions list|remove <tool>
   seri usage [--detail]

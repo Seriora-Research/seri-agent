@@ -5,6 +5,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
 import { flushSync } from "@opentui/react";
+import { DaemonClient, isLoopDaemonEvent } from "@seri/daemon-client";
 import {
   findCatalogEntry,
   type ModelCatalog,
@@ -16,7 +17,7 @@ import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "a
 import { createElement } from "react";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
-import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
+import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
@@ -32,10 +33,10 @@ import { projectRoot } from "./checkpoint/shadowGit";
 import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
   assertTuiHandlers,
+  type CommandMeta,
   commandByName,
   isTuiClaimed,
   sessionMeta,
-  type CommandMeta,
 } from "./cli/commandCatalog";
 import {
   approvalPromptText,
@@ -69,6 +70,13 @@ import {
   resolveProfile,
   setProfileOverride,
 } from "./config/paths";
+import { readDaemonDescriptorFile } from "./daemon/descriptor";
+import {
+  defaultExecuteTurn,
+  type ExecuteTurn,
+  type StartedDaemon,
+  startDaemon as startDaemonReal,
+} from "./daemon/server";
 import { messageOf } from "./errors";
 import type { PermissionMode } from "./gate/gate";
 import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
@@ -90,7 +98,6 @@ import {
 import { decideMemoryCommand } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
-import { runUsageCommand as runUsageCommandReal } from "./usage/command";
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
 import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
@@ -118,6 +125,7 @@ import {
   resolveSessionRoute,
 } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
+import { addCost, addTokens, type DriveLoopResult, driveLoop } from "./runtime/drive";
 import { awaitsReply } from "./session/awaitsReply";
 import {
   findMostRecentSession,
@@ -128,30 +136,34 @@ import {
 } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { withSubagents } from "./subagents/dispatch";
-import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
+import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
 import { App } from "./tui/app";
 import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
 import { runWelcomeSplash } from "./tui/routes/setup/welcomeSplash";
 import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";
-import { addCost, addTokens, driveLoop, type DriveLoopResult } from "./runtime/drive";
+import { runUsageCommand as runUsageCommandReal } from "./usage/command";
+
 export { addCost, addTokens };
+
 import {
   bindSession,
   createSessionTrajectory,
   dirs,
   fatalDuringTui,
   gatewayNotice,
+  type PreMountMessage,
+  type PreparedRun,
   prepareSession,
+  type RunSession,
   rerouteNotice,
   resolveModelRoute,
   runStart,
-  type PreparedRun,
-  type PreMountMessage,
-  type RunSession,
 } from "./runtime/prepare";
-export type { PreparedRun, PreMountMessage, RunSession };
+
+export type { PreMountMessage, PreparedRun, RunSession };
+
 import {
   type CommandDirs,
   checkpointTarget,
@@ -205,6 +217,10 @@ export type CliDeps = {
   configCommand?: typeof configCommandReal;
   permissionsCommand?: typeof permissionsCommandReal;
   usageCommand?: typeof runUsageCommandReal;
+  startDaemon?: typeof startDaemonReal;
+  executeTurn?: ExecuteTurn;
+  waitForServe?: () => Promise<void>;
+  fetch?: typeof fetch;
   // The directory holding permissions.yaml. Deliberately NOT reusing `authConfigDir`: that name is
   // already stretched across auth AND `seri config`, and a third consumer that is neither would
   // make it mean nothing. Same shape as sessionsDir/checkpointsDir, defaulting to getConfigDir().
@@ -1134,6 +1150,74 @@ async function handleUsageCommand(
     console.error(messageOf(err));
     return 1;
   }
+}
+
+async function handleServeCommand(
+  positionals: string[],
+  deps: CliDeps,
+): Promise<number | undefined> {
+  if (positionals[0] !== "serve") return undefined;
+  if (positionals.length !== 1) {
+    return usageError("seri serve takes no arguments");
+  }
+  const configDir = deps.authConfigDir ?? getConfigDir();
+  const start = deps.startDaemon ?? startDaemonReal;
+  try {
+    const daemon: StartedDaemon = await start({
+      configDir,
+      executeTurn: deps.executeTurn ?? defaultExecuteTurn,
+    });
+    console.log(`seri daemon listening on ${daemon.endpoint}`);
+    try {
+      if (deps.waitForServe !== undefined) await deps.waitForServe();
+      else {
+        await new Promise<void>((resolve) => {
+          process.once("SIGINT", () => resolve());
+          process.once("SIGTERM", () => resolve());
+        });
+      }
+    } finally {
+      await daemon.stop();
+    }
+    return 0;
+  } catch (err) {
+    console.error(messageOf(err));
+    return 1;
+  }
+}
+
+async function handleExecCommand(
+  positionals: string[],
+  deps: CliDeps,
+): Promise<number | undefined> {
+  if (positionals[0] !== "exec") return undefined;
+  const task = positionals.slice(1).join(" ").trim();
+  if (task.length === 0) return usageError("seri exec requires a task");
+  const configDir = deps.authConfigDir ?? getConfigDir();
+  const descriptor = readDaemonDescriptorFile(configDir);
+  if (descriptor === undefined) {
+    console.error("no daemon is running for this profile — start one with seri serve");
+    return 1;
+  }
+  const client = new DaemonClient({
+    endpoint: descriptor.endpoint,
+    token: descriptor.token,
+    fetch: deps.fetch,
+  });
+  let exitCode: 0 | 1 = 1;
+  try {
+    for await (const event of client.startTurn({ task })) {
+      if (isLoopDaemonEvent(event.event)) printEvent(event.event.value as LoopEvent);
+      if (event.event.type === "turn-complete" && "exitCode" in event.event) {
+        const code = event.event.exitCode;
+        if (code === 0 || code === 1) exitCode = code;
+      }
+    }
+  } catch (err) {
+    console.error(messageOf(err));
+    return 1;
+  }
+  return exitCode;
 }
 
 // --effort is scoped to the non-interactive path only — a TTY run's `--effort` must not reach
@@ -2700,6 +2784,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   const usageHandled = await handleUsageCommand(positionals, deps, detail);
   if (usageHandled !== undefined) return usageHandled;
+
+  const serve = await handleServeCommand(positionals, deps);
+  if (serve !== undefined) return serve;
+
+  const exec = await handleExecCommand(positionals, deps);
+  if (exec !== undefined) return exec;
 
   // Before prepareSession, never after: a bare `/undo` must act on the resume target rather than
   // mint a session to act on.

@@ -6,8 +6,8 @@ import { edit } from "../tools/edit";
 import { glob } from "../tools/glob";
 import { grep } from "../tools/grep";
 import { runPowerShell } from "../tools/powershell";
-import { MAX_FILE_RESULTS, MAX_RESULTS } from "../tools/runRipgrep";
 import { readFile } from "../tools/readFile";
+import { MAX_FILE_RESULTS, MAX_RESULTS } from "../tools/runRipgrep";
 import { writeFile } from "../tools/writeFile";
 
 // Relative paths resolve against the session cwd, not process.cwd(). A daemon hosts concurrent
@@ -148,6 +148,15 @@ export type ToolName = keyof typeof toolDefinitions;
 export const READ_ONLY_TOOL_NAMES: readonly ToolName[] = (
   Object.keys(toolDefinitions) as ToolName[]
 ).filter((name) => !WRITE_TOOL_NAMES.includes(name));
+
+export function createScheduledToolDefinitions(cwd: string) {
+  const all = createToolDefinitions(cwd);
+  return {
+    read_file: all.read_file,
+    grep: all.grep,
+    glob: all.glob,
+  };
+}
 
 // Not a key of toolDefinitions, and that absence IS the one-level subagent recursion guard
 // (subagents/roles.ts): every subagent's ToolSet is built by picking names out of

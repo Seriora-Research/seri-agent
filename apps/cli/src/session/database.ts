@@ -167,6 +167,68 @@ export type SessionSearchResult = {
   cwd: string;
 };
 
+type ScheduleRow = {
+  id: string;
+  task: string;
+  cwd: string;
+  timing_json: string;
+  next_run_at_ms: number | null;
+  enabled: number;
+  running: number;
+  created_at: string;
+};
+
+type ScheduleRunRow = {
+  id: string;
+  schedule_id: string;
+  session_id: string;
+  status: string;
+  response: string | null;
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+};
+
+export type ScheduleRecord = {
+  id: string;
+  task: string;
+  cwd: string;
+  timing: { kind: "once"; at: string } | { kind: "interval"; everySeconds: number };
+  nextRunAtMs: number | null;
+  enabled: boolean;
+  running: boolean;
+  createdAt: string;
+};
+
+export type ScheduleRunRecord = {
+  id: string;
+  scheduleId: string;
+  sessionId: string;
+  status: string;
+  response: string | null;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+};
+
+function scheduleFromRow(row: ScheduleRow): ScheduleRecord {
+  return {
+    id: row.id,
+    task: row.task,
+    cwd: row.cwd,
+    timing: JSON.parse(row.timing_json) as ScheduleRecord["timing"],
+    nextRunAtMs: row.next_run_at_ms,
+    enabled: row.enabled === 1,
+    running: row.running === 1,
+    createdAt: row.created_at,
+  };
+}
+
+export function advanceInterval(nextRunAtMs: number, everyMs: number, nowMs: number): number {
+  if (nextRunAtMs > nowMs) return nextRunAtMs;
+  return nextRunAtMs + (Math.floor((nowMs - nextRunAtMs) / everyMs) + 1) * everyMs;
+}
+
 export type LegacySessionImportResult = {
   truncatedSessionIds: string[];
   failedPaths: string[];
@@ -533,6 +595,173 @@ export class SessionDatabase {
         .query("SELECT json FROM daemon_events WHERE turn_id = ? AND seq > ? ORDER BY seq")
         .all(turnId, afterSeq) as { json: string }[]
     ).map((row) => JSON.parse(row.json));
+  }
+
+  getArchivistCursor(sessionId: string): number {
+    const row = this.database
+      .query("SELECT archivist_cursor FROM sessions WHERE id = ?")
+      .get(sessionId) as { archivist_cursor: number } | null;
+    return row?.archivist_cursor ?? 0;
+  }
+
+  setArchivistCursor(sessionId: string, cursor: number): void {
+    this.database
+      .query("UPDATE sessions SET archivist_cursor = ? WHERE id = ?")
+      .run(cursor, sessionId);
+  }
+
+  insertSchedule(row: {
+    id: string;
+    task: string;
+    cwd: string;
+    timingJson: string;
+    nextRunAtMs: number | null;
+    enabled: number;
+    createdAt: string;
+  }): void {
+    this.database
+      .query(
+        `INSERT INTO schedules(id, task, cwd, timing_json, next_run_at_ms, enabled, running, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+      )
+      .run(row.id, row.task, row.cwd, row.timingJson, row.nextRunAtMs, row.enabled, row.createdAt);
+  }
+
+  listSchedules(): ScheduleRecord[] {
+    return (
+      this.database.query("SELECT * FROM schedules ORDER BY created_at").all() as ScheduleRow[]
+    ).map(scheduleFromRow);
+  }
+
+  getSchedule(id: string): ScheduleRecord | undefined {
+    const row = this.database
+      .query("SELECT * FROM schedules WHERE id = ?")
+      .get(id) as ScheduleRow | null;
+    return row === null ? undefined : scheduleFromRow(row);
+  }
+
+  disableSchedule(id: string): boolean {
+    const existing = this.getSchedule(id);
+    if (existing === undefined) return false;
+    this.database
+      .query("UPDATE schedules SET enabled = 0, next_run_at_ms = NULL WHERE id = ?")
+      .run(id);
+    return true;
+  }
+
+  listDueSchedules(nowMs: number): ScheduleRecord[] {
+    return (
+      this.database
+        .query(
+          `SELECT * FROM schedules
+            WHERE enabled = 1 AND running = 0 AND next_run_at_ms IS NOT NULL AND next_run_at_ms <= ?
+            ORDER BY next_run_at_ms, id`,
+        )
+        .all(nowMs) as ScheduleRow[]
+    ).map(scheduleFromRow);
+  }
+
+  skipMissedSchedules(nowMs: number): void {
+    this.database.transaction(() => {
+      for (const schedule of this.listEnabledSchedules()) {
+        if (schedule.nextRunAtMs === null || schedule.nextRunAtMs > nowMs) continue;
+        if (schedule.timing.kind === "once") {
+          this.database
+            .query("UPDATE schedules SET enabled = 0, next_run_at_ms = NULL WHERE id = ?")
+            .run(schedule.id);
+          continue;
+        }
+        this.database
+          .query("UPDATE schedules SET next_run_at_ms = ? WHERE id = ?")
+          .run(
+            advanceInterval(schedule.nextRunAtMs, schedule.timing.everySeconds * 1000, nowMs),
+            schedule.id,
+          );
+      }
+    })();
+  }
+
+  claimSchedule(id: string, nowMs: number): ScheduleRecord | undefined {
+    return this.database.transaction(() => {
+      const row = this.database
+        .query(
+          `SELECT * FROM schedules
+            WHERE id = ? AND enabled = 1 AND running = 0
+              AND next_run_at_ms IS NOT NULL AND next_run_at_ms <= ?`,
+        )
+        .get(id, nowMs) as ScheduleRow | null;
+      if (row === null) return undefined;
+      const schedule = scheduleFromRow(row);
+      if (schedule.timing.kind === "once") {
+        this.database
+          .query(
+            "UPDATE schedules SET running = 1, enabled = 0, next_run_at_ms = NULL WHERE id = ?",
+          )
+          .run(id);
+      } else {
+        this.database
+          .query("UPDATE schedules SET running = 1, next_run_at_ms = ? WHERE id = ?")
+          .run(
+            advanceInterval(schedule.nextRunAtMs!, schedule.timing.everySeconds * 1000, nowMs),
+            id,
+          );
+      }
+      return this.getSchedule(id);
+    })();
+  }
+
+  clearScheduleRunning(id: string): void {
+    this.database.query("UPDATE schedules SET running = 0 WHERE id = ?").run(id);
+  }
+
+  insertScheduleRun(row: {
+    id: string;
+    scheduleId: string;
+    sessionId: string;
+    status: string;
+    response: string | null;
+    error: string | null;
+    startedAt: string;
+    finishedAt: string | null;
+  }): void {
+    this.database
+      .query(
+        `INSERT INTO schedule_runs(id, schedule_id, session_id, status, response, error, started_at, finished_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        row.id,
+        row.scheduleId,
+        row.sessionId,
+        row.status,
+        row.response,
+        row.error,
+        row.startedAt,
+        row.finishedAt,
+      );
+  }
+
+  listScheduleRuns(scheduleId: string): ScheduleRunRecord[] {
+    return (
+      this.database
+        .query("SELECT * FROM schedule_runs WHERE schedule_id = ? ORDER BY started_at")
+        .all(scheduleId) as ScheduleRunRow[]
+    ).map((row) => ({
+      id: row.id,
+      scheduleId: row.schedule_id,
+      sessionId: row.session_id,
+      status: row.status,
+      response: row.response,
+      error: row.error,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at,
+    }));
+  }
+
+  private listEnabledSchedules(): ScheduleRecord[] {
+    return (
+      this.database.query("SELECT * FROM schedules WHERE enabled = 1").all() as ScheduleRow[]
+    ).map(scheduleFromRow);
   }
 
   private migrate(): void {
