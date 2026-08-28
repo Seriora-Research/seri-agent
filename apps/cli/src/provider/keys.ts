@@ -21,9 +21,9 @@ export const PROVIDER_API_KEY_NAMES: Record<ModelProvider, string> = {
 
 // Human-facing labels — for TUI-facing messages that are purely informational (tuiMissingKeyMessage
 // below, cli.ts's rerouteNotice). Never for an instruction that embeds the literal env var name as
-// something to type or unset (missingKeyError's export/${keyName} instruction, /setup's own
-// envShadowReason "unset it in your shell"): there, PROVIDER_API_KEY_NAMES's raw constant IS the
-// thing the user has to act on, and humanizing it would make the instruction un-actionable.
+// something to type or unset (missingKeyError's own instruction, /setup's own envShadowReason
+// "unset it in your shell"): there, PROVIDER_API_KEY_NAMES's raw constant IS the thing the user has
+// to act on, and humanizing it would make the instruction un-actionable.
 export const PROVIDER_DISPLAY_NAMES: Record<ModelProvider, string> = {
   groq: "Groq",
   openrouter: "OpenRouter",

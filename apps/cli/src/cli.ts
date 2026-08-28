@@ -21,7 +21,6 @@ import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFi
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
-import { getWorkosClientId } from "./auth/deviceFlow";
 import {
   appendBarrier,
   type Checkpointer,
@@ -236,47 +235,41 @@ export type CliDeps = {
 
 // The presentation half of the decision/presentation split (research-spec) for /mode, /undo,
 // /restore and /rewind: the DECISION is one of the pure functions in tui/commands.ts (Phase 2) —
-// this is only how the result is shown, with two implementations mirroring ApprovalPrompt's own
-// two-implementation shape. consolePresenter (below) is what every command used, inline, before
-// this refactor — console.log, byte-for-byte unchanged; tuiPresenter (near the TUI entry point
-// further down) dispatches into the live transcript instead. `restore` mirrors what /undo and
-// /restore return (`{plan, message}` — RestoreResult is a RestorePlan plus the recovery commit);
-// `sessionUpdated` is only ever called by /mode and /rewind, the two commands that actually change
-// the session — /undo and /restore never touch it, so they never call it. `onPlan` is /undo and
-// /restore's own pre-mutation report (output.ts's own documented guarantee on undoPlanLines:
-// "before the restore happens, not after") — threaded through to decideUndo/decideRestore
-// (tui/commands.ts) rather than folded into `restore`, which only ever sees the FINAL result.
+// this is only how the result is shown. tuiPresenter (near the TUI entry point further down) is
+// the sole implementation now — the console.log-based consolePresenter this interface used to have
+// a second implementation for was deleted once the non-interactive slash dispatch it backed
+// (handleSlashCommand) was removed by the launch-only argv refactor; every command is reached only
+// through the TUI. `restore` mirrors what /undo and /restore return (`{plan, message}` —
+// RestoreResult is a RestorePlan plus the recovery commit); `sessionUpdated` is only ever called by
+// /mode and /rewind, the two commands that actually change the session — /undo and /restore never
+// touch it, so they never call it. `onPlan` is /undo and /restore's own pre-mutation report
+// (output.ts's own documented guarantee on undoPlanLines: "before the restore happens, not after")
+// — threaded through to decideUndo/decideRestore (tui/commands.ts) rather than folded into
+// `restore`, which only ever sees the FINAL result.
 //
-// `sessionUpdated` OWNS persistence, not optional: it is the only thing that ever calls
-// saveSession on the non-interactive path (consolePresenter's own implementation) or, on the TUI
-// path, the only thing that dispatches session-updated at all — the reducer's own onSessionChange
-// effect is what actually persists there. Before this, cycleModeCommand/rewindCommand called
-// saveSession directly AND called sessionUpdated, the exact "caller keeps its own copy" shape
-// MEDIUM-1 was opened to eliminate for driveLoop, left standing here — not a live race (nothing
-// else wrote in between on either path), but the same shape as a bug five rounds went into
-// closing does not get to stand next to a comment (driveLoop's own, and this file's) claiming the
-// reducer is the ONLY writer on the TUI path.
+// `sessionUpdated` OWNS persistence, not optional: it is the only thing that dispatches
+// session-updated — the reducer's own onSessionChange effect is what actually persists.
+// cycleModeCommand/rewindCommand used to call saveSession directly AND call sessionUpdated, the
+// exact "caller keeps its own copy" shape MEDIUM-1 was opened to eliminate for driveLoop, left
+// standing here — not a live race (nothing else wrote in between), but the same shape as a bug
+// five rounds went into closing does not get to stand next to a comment (driveLoop's own, and this
+// file's) claiming the reducer is the ONLY writer on the TUI path.
 //
-// Returns `Promise<void>`, genuinely awaitable — not just typed that way for form. On the
-// non-interactive path (consolePresenter) the underlying saveSession call is already
-// synchronous, so the promise settles immediately either way. On the TUI path (tuiPresenter) it
-// does NOT settle until the reducer's own onSessionChange effect actually runs and persists that
-// session — the fix for a real gap found by code review: rewindCommand used to call
-// `recordBarrier()` right after `sessionUpdated(next)` on the strength of a comment claiming the
-// truncation was "already persisted by this point," true on the non-interactive path but not on
-// the TUI path, where sessionUpdated only ever dispatched (persistence was, and still is, effect-
-// driven — see onSessionChange's own comment). A crash/kill in that window could leave a barrier
-// durably recorded pointing at a truncation that never reached disk, exactly what finding 9 was
-// supposed to prevent. Making this awaitable — not adding a second writer, the effect is still
-// the only one — is what lets a caller that needs the ordering (rewindCommand) actually get it.
+// Returns `Promise<void>`, genuinely awaitable — not just typed that way for form. It does NOT
+// settle until the reducer's own onSessionChange effect actually runs and persists that session —
+// the fix for a real gap found by code review: rewindCommand used to call `recordBarrier()` right
+// after `sessionUpdated(next)` on the strength of a comment claiming the truncation was "already
+// persisted by this point," which was never true here — sessionUpdated only ever dispatched
+// (persistence was, and still is, effect-driven — see onSessionChange's own comment). A crash/kill
+// in that window could leave a barrier durably recorded pointing at a truncation that never reached
+// disk, exactly what finding 9 was supposed to prevent. Making this awaitable is what lets a caller
+// that needs the ordering (rewindCommand) actually get it.
 type CommandPresenter = {
   message: (text: string) => void;
   onPlan: (plan: RestorePlan) => void;
   restore: (result: { plan: RestoreResult; message: string }) => void;
   sessionUpdated: (next: SessionState<ModelMessage>) => Promise<void>;
-  // /clear's own hook: wipes whatever is rendering the transcript. Only meaningful where something
-  // is actually rendered — the non-interactive path has no live transcript to wipe (consolePresenter's
-  // own no-op below).
+  // /clear's own hook: wipes whatever is rendering the transcript.
   transcriptCleared: () => void;
   // Reports a compaction summarizer round-trip's real token spend, which does not flow through
   // driveLoop's own usage fold (compactCommand never runs inside driveLoop) and would otherwise be
@@ -286,20 +279,17 @@ type CommandPresenter = {
   // (loop.ts's comment on `"compacted" has no cost of its own`).
   usageAccrued: (usage: LanguageModelUsage) => void;
   // /compact's own cancellation report — the SIGINT-exit-code contract (run()'s own comment on why
-  // it re-raises rather than exiting plainly) applies to a cancelled /compact too, but only on the
-  // non-interactive path: consolePresenter re-raises the signal after reporting, matching
-  // driveLoop's own re-raise; tuiPresenter only appends a transcript line, matching the LOW-J
-  // precedent (a per-turn cancel returns control to the input prompt, not to process death).
+  // it re-raises rather than exiting plainly) applies to a cancelled /compact too; tuiPresenter only
+  // appends a transcript line, matching the LOW-J precedent (a per-turn cancel returns control to
+  // the input prompt, not to process death).
   cancelled: (signal: NodeJS.Signals) => void;
   // /compact's own hook, read at persist time rather than trusted from its caller's pre-await
   // snapshot: compactCommand holds two real awaits (the catalog/plan fetch, the summarizer's own
   // round trip) between reading `session` and building its result, and /mode is deliberately NOT
   // gated by `turnInFlight` while /compact runs (SlashCommand's own comment on why /mode is exempt)
   // — so a /mode change landed mid-compact would otherwise be overwritten when /compact spreads
-  // its own stale `session` back out. consolePresenter has nothing else running concurrently to
-  // race, so it just echoes back whatever it was constructed with; tuiPresenter reads runTui's own
-  // `liveState.session` (this file's own comment on why that, not a closure, is the live source of
-  // truth on the TUI path).
+  // its own stale `session` back out. tuiPresenter reads runTui's own `liveState.session` (this
+  // file's own comment on why that, not a closure, is the live source of truth on the TUI path).
   currentSession: () => SessionState<ModelMessage>;
 };
 
@@ -334,7 +324,7 @@ type SlashCommand = {
         session: SessionState<ModelMessage>,
         args: string[],
         dirs: CommandDirs,
-        presenter?: CommandPresenter,
+        presenter: CommandPresenter,
         deps?: CliDeps,
       ) => void | Promise<void>;
     }
@@ -343,7 +333,7 @@ type SlashCommand = {
       run: (
         args: string[],
         dirs: CommandDirs,
-        presenter?: CommandPresenter,
+        presenter: CommandPresenter,
         deps?: CliDeps,
       ) => void | Promise<void>;
     }
@@ -426,49 +416,11 @@ for (const meta of sessionMeta()) {
   }
 }
 
-// The non-interactive presenter: exactly what every command printed inline before this refactor
-// (console.log, plus undoPlanLines/recoveryLines — via their own default console.log sink — for
-// /undo and /restore) — used when a session command runs without a TUI presenter. A factory, not a
-// plain object, because `sessionUpdated` now owns persistence (CommandPresenter's own comment) and
-// needs `dirs` to call saveSession with — closed over here rather than threaded through a second
-// way. `onPlan` is what makes the console path print the plan BEFORE undoFiles/restoreCommit
-// mutate anything, restoring output.ts's own documented guarantee.
-function consolePresenter(
-  dirs: CommandDirs,
-  // Only /compact ever calls `.currentSession()`, and only compactCommand's own default parameter
-  // (below) passes one — every other command's `consolePresenter(dirs)` call site omits it and
-  // never invokes the field, so the cast in `currentSession` below is safe by construction, the
-  // same shape as compactCommand's own `cancelledSignal` cast.
-  session?: SessionState<ModelMessage>,
-): CommandPresenter {
-  return {
-    message: (text) => console.log(text),
-    onPlan: (plan) => undoPlanLines(plan),
-    restore: ({ plan, message }) => {
-      console.log(message);
-      if (plan.restored.length > 0 || plan.deleted.length > 0) recoveryLines(plan);
-    },
-    // Trivially awaitable: saveSession is already synchronous, so this settles on the same tick
-    // it is called — `async` only to satisfy CommandPresenter's own contract (its comment).
-    sessionUpdated: async (next) => saveSession(next, dirs.sessionsDir),
-    // Explicit no-op, not an ANSI screen-clear: the user's own scrollback is not seri's to erase,
-    // and clearing it would corrupt piped/redirected output.
-    transcriptCleared: () => {},
-    usageAccrued: (usage) =>
-      printUsage({ inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }),
-    cancelled: (signal) => {
-      console.log("Compaction cancelled.");
-      raiseSignal(signal);
-    },
-    currentSession: () => session as SessionState<ModelMessage>,
-  };
-}
-
 async function cycleModeCommand(
   session: SessionState<ModelMessage>,
   _args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): Promise<void> {
   const { next, message } = decideModeCycle(session);
   // Awaited even though /mode has nothing of its own to sequence after sessionUpdated (unlike
@@ -514,7 +466,7 @@ async function effortCommand(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): Promise<void> {
   if (args[0] === "auto") {
     await applyEffortResult(session, resolveEffortCommand(args, [], undefined), presenter);
@@ -546,7 +498,7 @@ function undoCommand(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): void {
   presenter.restore(decideUndo(session, args, dirs, presenter.onPlan));
   dirs.trajectory?.recordCheckpoint({ op: "pre-undo" });
@@ -559,7 +511,7 @@ function restoreCommand(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): void {
   presenter.restore(decideRestore(session, args, dirs, presenter.onPlan));
   dirs.trajectory?.recordCheckpoint({ op: "pre-undo" });
@@ -569,7 +521,7 @@ async function rewindCommand(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): Promise<void> {
   const { next, message, recordBarrier } = decideRewind(session, args, dirs);
   // Awaited — genuinely, not just called and moved on from. Code review found the previous
@@ -598,7 +550,7 @@ async function compactCommand(
   session: SessionState<ModelMessage>,
   _args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs, session),
+  presenter: CommandPresenter,
   deps: CliDeps = {},
 ): Promise<void> {
   const evictBoundary = findSafeEvictionBoundary(
@@ -689,7 +641,7 @@ async function clearCommand(
   session: SessionState<ModelMessage>,
   _args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): Promise<void> {
   const { next, message } = decideClear(session);
   await presenter.sessionUpdated(next);
@@ -703,7 +655,7 @@ async function clearCommand(
 async function memoryCommand(
   args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): Promise<void> {
   const { lines } = decideMemoryCommand(args, { configDir: dirs.configDir });
   for (const line of lines) presenter.message(line);
@@ -712,7 +664,7 @@ async function memoryCommand(
 function trajectoryCommand(
   args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): void {
   const currentlyEnabled =
     dirs.trajectory?.isEnabled() ?? loadTrajectoryConfig(dirs.configDir).enabled;
@@ -732,7 +684,7 @@ function trajectoryCommand(
 async function usageCommand(
   args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
   deps?: CliDeps,
 ): Promise<void> {
   const fn = deps?.usageCommand ?? runUsageCommandReal;
@@ -899,6 +851,14 @@ type ParsedArgs = {
 // called in is the behaviour — each was a guard clause inside one function before, and the three
 // orderings that are load-bearing are named at their call sites.
 function parseCliArgs(argv: string[]): ParsedArgs | number {
+  // Reset before the parse attempt, not just after a successful one: parseArgs itself can throw
+  // (an unknown flag, a value-taking option with none) before `values.profile` is ever known, and
+  // that early return used to skip the reset below entirely — a PREVIOUS invocation's --profile
+  // stayed active for this one. bun test runs many run() calls in a single process, and a future
+  // fixed-process TUI/REPL loop will too, so every path out of this function must leave a correct
+  // override, not just the one that reaches line 932.
+  setProfileOverride(undefined);
+
   let values: ParsedArgs["values"];
   let positionals: string[];
   let tokens: Array<{ kind: string; index?: number }>;
@@ -960,7 +920,10 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
   // The fix is NOT `seri --continue /mode`: under launch-only argv that positional is task text,
   // not a slash dispatch — the fix is to resume with `--continue`/`--resume <id>` and then type
   // the slash command once the TUI is up.
-  if (values.resume !== undefined && SLASH_COMMANDS.has(values.resume)) {
+  // commandByName, not SLASH_COMMANDS.has: SLASH_COMMANDS is only the session-scoped slice —
+  // TUI-only commands like /setup, /login, /config, /permissions and /model hit this same
+  // "looks for a session literally named ..." trap and need the same guard.
+  if (values.resume !== undefined && commandByName(values.resume) !== undefined) {
     return usageError(
       `--resume ${values.resume} looks for a session named "${values.resume}". Slash commands only run inside the TUI: resume with seri --continue, then type ${values.resume}.`,
     );
@@ -1186,9 +1149,8 @@ export function tuiPresenter(
     },
     transcriptCleared: () => dispatch({ type: "transcript-cleared" }),
     usageAccrued: onUsageAccrued,
-    // No signal re-raise, unlike consolePresenter: matches the LOW-J precedent (runTurn's own
-    // comment) that a per-turn cancel on the TUI path returns control to the input prompt rather
-    // than killing the process.
+    // No signal re-raise: matches the LOW-J precedent (runTurn's own comment) that a per-turn
+    // cancel on the TUI path returns control to the input prompt rather than killing the process.
     cancelled: () => append("Compaction cancelled."),
     currentSession: getSession,
   };

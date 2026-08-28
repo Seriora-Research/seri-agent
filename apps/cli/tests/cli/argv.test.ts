@@ -251,6 +251,41 @@ describe("run (argv and usage errors)", () => {
     });
   });
 
+  // The verb-dispatch counterpart of the flag-escaping tests above: `--` has to shield "serve" and
+  // "exec" themselves, not just flag-shaped words after them, or `seri -- serve` starts the daemon
+  // instead of sending "serve" as task text — the bug this pins (round 1/2 of PR 210's review).
+  test.each(["serve", "exec"])(
+    "`seri -- %s` sends the verb as task text instead of dispatching it",
+    async (verb) => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+
+      const { fake, capture } = fakeRunLoop();
+
+      const { code } = await captureLogs(() =>
+        run(["--", verb], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      );
+
+      expect(code).toBe(0);
+      expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: verb });
+    },
+  );
+
+  test("`seri exec do-it` still dispatches exec when it comes before `--`", async () => {
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["exec", "--", "do-it"]);
+    } finally {
+      console.error = originalError;
+    }
+    // No daemon running: reaches handleExecCommand's own "no daemon" exit, proving "exec" (before
+    // `--`) was dispatched rather than folded into task text.
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("no daemon is running");
+  });
+
   test("bare seri prints usage instead of exiting silently", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 

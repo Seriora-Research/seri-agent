@@ -15,7 +15,7 @@ import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/check
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
 import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS, tuiPresenter } from "../../src/cli";
-import { USAGE } from "../../src/cli/output";
+import { recoveryLines, undoPlanLines, USAGE, printUsage } from "../../src/cli/output";
 import { loadConfig, setConfigValue } from "../../src/config/config";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
 import { loadGrants, permissionsPath, projectKey } from "../../src/permissions/store";
@@ -29,7 +29,7 @@ import {
   type SessionState,
   saveSession,
 } from "../../src/session/session";
-import { deliverSignal, onSignalCancel } from "../../src/signals";
+import { deliverSignal, onSignalCancel, raiseSignal } from "../../src/signals";
 import type { CheckOutcome } from "../../src/verify/run";
 import {
   createTrajectoryWriter,
@@ -39,6 +39,36 @@ import {
 import { fakeRunLoop } from "./fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
+
+// A presenter for tests that don't care about presentation, only that a command ran and did what
+// it says on the tin — console.log-based, the same shape production's now-deleted consolePresenter
+// used to have before the launch-only argv refactor removed its only caller (handleSlashCommand).
+// `session` backs `currentSession()`, read only by /compact.
+function testPresenter(
+  dirs: { sessionsDir: string },
+  session?: SessionState<ModelMessage>,
+) {
+  return {
+    message: (text: string) => console.log(text),
+    onPlan: (plan: Parameters<typeof undoPlanLines>[0]) => undoPlanLines(plan),
+    restore: ({
+      plan,
+      message,
+    }: { plan: Parameters<typeof recoveryLines>[0]; message: string }) => {
+      console.log(message);
+      if (plan.restored.length > 0 || plan.deleted.length > 0) recoveryLines(plan);
+    },
+    sessionUpdated: async (next: SessionState<ModelMessage>) => saveSession(next, dirs.sessionsDir),
+    transcriptCleared: () => {},
+    usageAccrued: (usage: LanguageModelUsage) =>
+      printUsage({ inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }),
+    cancelled: (signal: NodeJS.Signals) => {
+      console.log("Compaction cancelled.");
+      raiseSignal(signal);
+    },
+    currentSession: () => session as SessionState<ModelMessage>,
+  };
+}
 
 async function invokeSlash(
   name: string,
@@ -53,12 +83,13 @@ async function invokeSlash(
 ): Promise<void> {
   const command = SLASH_COMMANDS.get(name);
   if (command === undefined) throw new Error(`${name} is not registered`);
+  const presenter = testPresenter(dirs, session);
   if (command.needsSession === false) {
-    await command.run(args, dirs);
+    await command.run(args, dirs, presenter);
     return;
   }
   if (session === undefined) throw new Error(`${name} needs a session`);
-  await command.run(session, args, dirs);
+  await command.run(session, args, dirs, presenter);
 }
 
 describe("run (task invocation)", () => {
@@ -4044,10 +4075,16 @@ describe("run (/compact)", () => {
     const originalLog = console.log;
     console.log = (msg: string) => logs.push(String(msg));
     try {
-      await getCompact().run(session, [], { sessionsDir, checkpointsDir, configDir }, undefined, {
-        authConfigDir: configDir,
-        getGroqModel: () => model,
-      });
+      await getCompact().run(
+        session,
+        [],
+        { sessionsDir, checkpointsDir, configDir },
+        testPresenter({ sessionsDir }, session),
+        {
+          authConfigDir: configDir,
+          getGroqModel: () => model,
+        },
+      );
     } finally {
       console.log = originalLog;
     }
@@ -4081,10 +4118,16 @@ describe("run (/compact)", () => {
     const originalLog = console.log;
     console.log = (msg: string) => logs.push(String(msg));
     try {
-      await getCompact().run(session, [], { sessionsDir, checkpointsDir, configDir }, undefined, {
-        authConfigDir: configDir,
-        getGroqModel: () => model,
-      });
+      await getCompact().run(
+        session,
+        [],
+        { sessionsDir, checkpointsDir, configDir },
+        testPresenter({ sessionsDir }, session),
+        {
+          authConfigDir: configDir,
+          getGroqModel: () => model,
+        },
+      );
     } finally {
       console.log = originalLog;
     }
@@ -4213,7 +4256,12 @@ describe("run (/compact)", () => {
       }),
     });
 
-    await getCompact().run(session, [], { sessionsDir, checkpointsDir, configDir }, undefined, {
+    await getCompact().run(
+        session,
+        [],
+        { sessionsDir, checkpointsDir, configDir },
+        testPresenter({ sessionsDir }, session),
+        {
       authConfigDir: configDir,
       getGroqModel: () => model,
     });
