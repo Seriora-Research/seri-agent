@@ -326,30 +326,11 @@ type SlashCommand = {
   // place") — a future command that mutates run state can't get silently left ungated by being
   // added here and nowhere else.
   mutatesRunState?: true;
-  // Whether the bare (no `--resume`) form must resolve within the CURRENT process's cwd rather
-  // than the plain most-recent-mtime pick across every project sharing `sessionsDir` — set only on
-  // /clear, which mints a brand-new session carrying the resolved one's `cwd` forward verbatim
-  // (decideClear's own comment). /undo, /rewind and /restore deliberately keep the plain lookup:
-  // they act on the resolved session's OWN recorded cwd regardless of where the terminal currently
-  // sits, so a cross-project pick there is not the same
-  // hazard it is for /clear. A field on this same table, not a name check in onSubmit —
-  // this table's own comment above on why a second, table-external check is what lets a future
-  // command with the same need go unhandled by construction rather than by remembering to add it.
   scopeTargetToCwd?: true;
-  // /usage accepts an optional `--detail` token on the slash line (TUI input), not a process flag.
   readsDetailFlag?: true;
 } & (
   | {
-      // Session-required commands: `run` operates on a resumed session, so onSubmit
-      // resolves one — the live TUI session — before calling
-      // it, and shows "No session to run <name> against" when none exists.
       needsSession?: true;
-      // `presenter` is optional and defaults to consolePresenter at each command's own definition
-      // (below) — argv never calls these; the TUI entry
-      // point's does. `void | Promise<void>`, not just `void`: cycleModeCommand/rewindCommand are
-      // `async` now (they await presenter.sessionUpdated's own promise — CommandPresenter's own
-      // comment), undo/restoreCommand are not and never need to be. Both call sites await this
-      // either way, a no-op for the ones that were never async.
       run: (
         session: SessionState<ModelMessage>,
         args: string[],
@@ -359,11 +340,6 @@ type SlashCommand = {
       ) => void | Promise<void>;
     }
   | {
-      // /memory, /trajectory, /usage: I/O is keyed on configDir (or the hosted gateway), never on
-      // a session — routing them through the session-required branch meant TUI `/memory pending`
-      // on a fresh profile failed with "No session to run /memory against". This variant's `run`
-      // drops the session parameter entirely rather than accepting one it would never read, so
-      // onSubmit can skip session resolution for it by construction, not by convention.
       needsSession: false;
       run: (
         args: string[],
@@ -424,7 +400,6 @@ function sessionSlashNoSession(
 
 // Commands that operate on the resume target rather than being a task for the model. The name
 // list lives in commandCatalog.ts; this Map is the session slice plus each command's run.
-// The TUI's onSubmit looks this table up. Argv never does: a positional `/foo` is prompt text.
 //
 // A Map rather than an object literal, because an object literal inherits Object.prototype and a
 // lookup keyed on user input walks it: `SLASH_COMMANDS["toString"]` returned a function, so
@@ -451,10 +426,6 @@ for (const meta of sessionMeta()) {
     throw new Error(`SLASH_COMMANDS missing ${meta.name}`);
   }
 }
-
-// /exit is deliberately NOT a SLASH_COMMANDS entry. It only means anything to a live TUI (there
-// is nothing to "exit" in a process that is about to end anyway), so it is intercepted solely in
-// runTui's own onSubmit. A positional `seri /exit` is prompt text, same as any other `/foo`.
 
 // The non-interactive presenter: exactly what every command printed inline before this refactor
 // (console.log, plus undoPlanLines/recoveryLines — via their own default console.log sink — for
@@ -510,18 +481,6 @@ async function cycleModeCommand(
   presenter.message(message);
 }
 
-// Shared by both `/effort` callers (this file's own non-interactive `effortCommand` below, and the
-// TUI's `onSubmit` interception further down) so they can never silently disagree about what a
-// `<level>`/`auto` form resolves to — only how `catalog`/`plan` were obtained (awaited fresh here by
-// `effortCommand`, already resolved and reused by the TUI) differs between them.
-//
-// Legal tiers are resolved against the model this session is CURRENTLY routed to
-// (resolveSessionRoute/resolveLegalReasoningTiers), not a static per-model catalog lookup: the same
-// model id can resolve to different catalog entries — and thus different legal tiers — depending on
-// which route it's actually reached through, so routing.ts's own resolveLegalReasoningTiers keys off
-// the resolved route, not the raw model id. A stale/missing `plan` mis-resolves a gateway route the
-// same way a stale route id would: routing.ts's own gateway branch changes route.model/route.provider
-// to the gateway entry, which resolveLegalReasoningTiers is keyed on.
 async function applyEffortResult(
   session: SessionState<ModelMessage>,
   result: EffortCommandResult,
@@ -550,11 +509,6 @@ async function applyEffortCommand(
   await applyEffortResult(session, result, presenter);
 }
 
-// /effort's TUI path (runTui's own onSubmit, below) claims every form of `/effort` — bare,
-// `<level>`, `auto` — before it ever reaches this table, resolving `<level>`/`auto` synchronously
-// off `prepared.catalog`/`prepared.plan` instead of calling this function. This function remains as
-// the SLASH_COMMANDS fallback (TUI claims first). There is no argv slash path.
-//
 // `auto` skips both fetches entirely: resolveEffortCommand ignores `legalTiers`/`current` for that
 // form, so awaiting `getModelCatalog()`/`fetchAccountPlan()` first would just be discarded latency.
 async function effortCommand(
@@ -1221,13 +1175,6 @@ export function tuiPresenter(
   };
 }
 
-// `boolean | number` mirrors this file's own established convention for a check that's usually a
-// plain result but sometimes an exit code (prepareSession returns `T | number` for the identical
-// reason) — callers check `typeof result === "number"` and return it directly on a throw. Used once, by
-// run()'s own guided-setup gate, to decide whether to mount runGuidedSetup at all — no re-check
-// after it returns (round 4): that fell through to prepareSession's own identical
-// configuredProviders/missing-key handling instead, rather than duplicating this corrupted-config
-// try/catch and its error-formatting a second time.
 function checkZeroKeysConfigured(configDir: string): boolean | number {
   try {
     return configuredProviders(configDir).size === 0;
@@ -1244,9 +1191,7 @@ function checkZeroKeysConfigured(configDir: string): boolean | number {
 // see CliDeps.isTTY's own comment for why that reads a passed-in flag, not a live
 // process.stdout.isTTY). Drives the SAME driveLoop the non-interactive path uses for the initial
 // task already appended to `prepared.session.messages` by prepareSession — only how it reports
-// events differs. Slash commands typed into the TUI's input box reuse the exact same command
-// functions (cycleModeCommand etc.) the non-interactive path uses, via tuiPresenter instead of
-// consolePresenter — one decision function, two presentations, per the research spec.
+// events differs.
 //
 // `ink`/`react` used to be imported lazily here rather than at this file's top level: Ink's own
 // reconciler.js had a module-load-time check — `if (process.env['DEV'] === 'true') { …; await
@@ -2237,17 +2182,6 @@ async function runTui(
   };
   assertTuiHandlers(tuiHandlers);
 
-  // H-1: a decision function throwing (e.g. `/undo 5` with fewer checkpoints than that) used to
-  // escape straight out of Ink's own input handler. Caught here so the TUI path has a try/catch
-  // around command.run. Input shaped like a slash command that matches nothing, or matches one but
-  // fails
-  // its own accepts() guard, gets the same visible feedback instead of silently vanishing —
-  // genuinely free-form text (H-3) is the only thing that becomes a new task, and only when it
-  // is not shaped like a slash command at all. TUI-claimed names (and /effort via tuiClaimsFirst)
-  // run from tuiHandlers above before SLASH_COMMANDS, so /exit is not a session-decision function
-  // and /effort never awaits effortCommand's catalog/plan fetch. `async` because
-  // cycleModeCommand/rewindCommand are async (SlashCommand.run's own comment), and the try/catch
-  // below has to await the call to still catch a later rejection.
   async function onSubmit(value: string): Promise<void> {
     if (reactDispatch === undefined) return;
     const trimmed = value.trim();
@@ -2298,8 +2232,6 @@ async function runTui(
       dispatch({ type: "command-error", message: `${name}: invalid arguments.` });
       return;
     }
-    // MEDIUM-3: gated by the command's own mutatesRunState (SlashCommand's own comment explains
-    // what it means and why /mode never sets it).
     if (turnInFlight && command.mutatesRunState === true) {
       dispatch({
         type: "command-error",
@@ -2565,8 +2497,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     resumeId: values.resume,
     // Trimmed once, here, not at each push/echo site: an untrimmed value (`seri "   "`) used to
     // read as non-empty (a bare `.length > 0` check) while the push site's OWN separate `.trim()`
-    // then persisted an empty-content message anyway — the exact bug this whole stage exists to
-    // prevent, reintroduced by a whitespace-only task. One trim, at construction, means every later
+    // then persisted an empty-content message anyway — a whitespace-only task. One trim, at construction, means every later
     // reader of `ctx.taskText` (runStart, the push, the echo) agrees on what "empty" means.
     taskText: positionals.join(" ").trim(),
     sessionsDir: deps.sessionsDir ?? join(getConfigDir(), "sessions"),
@@ -2601,28 +2532,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const exec = await handleExecCommand(positionals, deps);
   if (exec !== undefined) return exec;
 
-  // Open 2 (BYOK-KEY-STORAGE-AND-SETUP.md): a genuinely blank config must not hard-exit before the
-  // TUI ever mounts. Gated on isTTY FIRST (code-review finding): the non-interactive path is the
-  // common case and never uses this check's result, so checking isTTY before reading config.json
-  // at all avoids a wasted read/parse on every piped/CI invocation — prepareSession's own
-  // configuredProviders call moments later is the one that actually needs it on that path.
-  //
-  // No re-check after runGuidedSetup returns (thermo-nuclear finding, round 4; invariant updated by
-  // byok-guided-setup-default-model): a re-check here used to `return 1` directly on a still-empty
-  // config, silently — every other `return 1` in this file is preceded by a `console.error`, and
-  // this bare one discarded the exact message the user needs. Falling through unconditionally
-  // instead means a DECLINE (no key ever added) routes into prepareSession's own catch below, which
-  // throws/prints missingKeyError's own default message (env var + /setup) — the SAME code path
-  // (not just the same exit code) the
-  // non-interactive missing-key exit already uses. A COMPLETED guided setup is different: it now
-  // persists SERI_MODEL/SERI_PROVIDER before `runGuidedSetup` returns (its own mandatory model
-  // picker), so the same unconditional fall-through instead lands `prepareSession`'s
-  // `resolveDefaultModel` read on that freshly-written pair rather than the groq-only fallback —
-  // which is the actual fix this loop exists to ship.
-  // Ahead of both the zero-key gate below and the normal prompt, on every interactive launch —
-  // not gated behind any first-run/"seen it" flag or file. A separate, earlier isTTY gate rather
-  // than a branch inside the block below, so a corrected zeroKeysConfigured/runGuidedSetup diff
-  // never also has to account for this mount.
   if (isTTY) {
     // Wrapped, unlike the rest of this function's own `return N` early exits: `run()` has never had
     // a top-level `.catch` (its only caller, `import.meta.main`, does

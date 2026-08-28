@@ -3218,8 +3218,6 @@ describe("run (/clear)", () => {
     expect(clear.accepts(["the", "screen", "please"])).toBe(false);
     expect(clear.accepts(["3"])).toBe(false);
     expect(clear.mutatesRunState).toBe(true);
-    // /clear is the only command that mints a new session from the resolved cwd; /undo, /rewind
-    // and /restore must not set this field.
     expect(clear.scopeTargetToCwd).toBe(true);
     for (const name of [
       "/undo",

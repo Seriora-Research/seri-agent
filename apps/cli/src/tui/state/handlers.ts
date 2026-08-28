@@ -633,9 +633,8 @@ export function createPermissionsHandlers(opts: {
       // loadGrants/forgetGrant do NOT throw on a malformed permissions.yaml — they degrade to an
       // empty/no-op result and an optional `onWarning` callback instead (permissions/store.ts's own
       // comment: the file is hand-editable, so a caller must not risk overwriting content it could
-      // not make sense of). The non-interactive removeCommand (permissions/commands.ts) already
-      // treats that as a real failure, not a silent no-op — `warned` and the branch on `result`
-      // below mirror it, instead of unconditionally claiming "Removed".
+      // not make sense of). `warned` and the branch on `result` below must not unconditionally
+      // claim "Removed".
       //
       // scope: "project": a tool granted in BOTH tiers still renders as a single
       // "persisted"/removable row (decidePermissionsOpen, tui/commands.ts) — the global grant is
@@ -673,12 +672,7 @@ export function createPermissionsHandlers(opts: {
       // `removable` re-check above and this 'y' press can already have cleared the project entry
       // by the time forgetGrant runs, independently of whether the tool is still globally granted
       // — gating this check on result.project would report "was not permanently approved" even
-      // while the tool stayed auto-approved globally, the exact false claim removeCommand's own
-      // comment (permissions/commands.ts) refuses to make for the non-interactive path. Not
-      // try/catch-guarded, on purpose: loadGrants cannot
-      // throw (store.ts's own readStore degrades every failure mode to a status instead), and this
-      // file already carries guards on that call that can't fire — not adding another rather than
-      // resolving the standing one.
+      // while the tool stayed auto-approved globally.
       const stillGlobal = loadGrants(permissionsDir, worktree).global.includes(confirmedTool);
       let line: string;
       if (result.project && stillGlobal) {

@@ -47,18 +47,6 @@ export function appliedReasoningEffort(
   return tier !== undefined && legalTiersFor(entry).includes(tier) ? tier : undefined;
 }
 
-// Session override wins, falling back to the config default — used by /effort's own decision
-// (resolveEffortCommand and decideEffortOpen, tui/state/commands.ts) and by driveLoop.
-// Lives here, not in
-// tui/state/commands.ts: this module, not that one, is the established canonical home for
-// reasoning-effort resolution — its own sibling `appliedReasoningEffort` above already lives here,
-// and driveLoop (a shared, non-TUI-specific path) has no reason to import a "tui/state" module for
-// a function with nothing TUI-specific about it. A minimal structural session type, not
-// `SessionState<ModelMessage>`: the only field this reads is `reasoningEffort`, and importing
-// session.ts here for that one field would pull a session/message dependency into a module that has
-// none today (matches resolveSessionRoute's own minimal-shape parameter, routing.ts). The TUI
-// header's own `effortTier` (app.tsx) calls this too, against `state.session`/`state.config` — the
-// same rule, one place, rather than the two independent copies an earlier version of this file had.
 export function resolveReasoningEffort(
   session: { reasoningEffort?: string },
   config: Record<string, string>,
@@ -70,12 +58,6 @@ export type EffortCommandResult =
   | { changed: false; message: string }
   | { changed: true; reasoningEffort: string | undefined; message: string };
 
-// The shared arg-parsing/validation/resolution logic behind every /effort form (bare, `<level>`,
-// `auto`) — cli.ts's own effortCommand (the non-interactive path, awaiting its own catalog/plan/
-// route) and runTui's onSubmit interception (the TUI path, reusing prepared.catalog/prepared.plan
-// synchronously, with no `await` between reading the live session and dispatching the result) both
-// call this with an already-resolved `legalTiers`/`current` pair; only how those two are obtained
-// differs between the two callers, not the decision itself.
 export function resolveEffortCommand(
   args: string[],
   legalTiers: string[],
