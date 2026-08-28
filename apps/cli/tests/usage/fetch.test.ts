@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AUTH_FILENAME } from "../../src/auth/authStore";
@@ -122,5 +122,35 @@ describe("fetchUsageReport", () => {
       now: new Date("2026-08-16T12:00:00.000Z"),
     });
     expect(failed.status).toBe("error");
+  });
+
+  test("a snapshot dated in the future is not used", async () => {
+    seedAuth();
+    writeUsageSnapshot(configDir, {
+      fetchedAt: "2026-08-16T13:00:00.000Z",
+      report,
+    });
+    const fetchFn = (async () => new Response("no", { status: 503 })) as unknown as typeof fetch;
+    const failed = await fetchUsageReport(configDir, {
+      fetchFn,
+      refreshSession: refreshNeverCalled,
+      now: new Date("2026-08-16T12:00:00.000Z"),
+    });
+    expect(failed.status).toBe("error");
+  });
+
+  test("a 200 still returns ok when the snapshot cannot be written", async () => {
+    seedAuth();
+    mkdirSync(join(configDir, USAGE_SNAPSHOT_FILENAME));
+    const fetchFn = (async () =>
+      new Response(JSON.stringify(report), { status: 200 })) as unknown as typeof fetch;
+
+    const result = await fetchUsageReport(configDir, {
+      fetchFn,
+      refreshSession: refreshNeverCalled,
+      now: new Date("2026-08-16T12:00:00.000Z"),
+    });
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") expect(result.report).toEqual(report);
   });
 });

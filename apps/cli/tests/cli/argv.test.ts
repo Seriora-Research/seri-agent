@@ -514,6 +514,28 @@ describe("run (argv and usage errors)", () => {
     expect(readdirSync(sessionsDir)).toEqual([]);
   });
 
+  test("`--detail` without usage exits 2 and does not reach the task path", async () => {
+    const { fake, capture } = fakeRunLoop();
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["--detail", "do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      });
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(code).toBe(2);
+    expect(errors.join("\n")).toContain("--detail is only valid with usage");
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
   test("`usage` when logged out prints the BYOK copy and writes no session", async () => {
     const { fake, capture } = fakeRunLoop();
     const { code, logs } = await captureLogs(() =>

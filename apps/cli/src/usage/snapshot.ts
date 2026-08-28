@@ -43,5 +43,6 @@ export function clearUsageSnapshot(configDir: string): void {
 export function snapshotIsFresh(snapshot: UsageSnapshot, now: Date = new Date()): boolean {
   const fetched = Date.parse(snapshot.fetchedAt);
   if (!Number.isFinite(fetched)) return false;
-  return now.getTime() - fetched < USAGE_SNAPSHOT_TTL_MS;
+  const ageMs = now.getTime() - fetched;
+  return ageMs >= 0 && ageMs < USAGE_SNAPSHOT_TTL_MS;
 }

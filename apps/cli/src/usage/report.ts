@@ -36,57 +36,77 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function isModel(value: unknown): value is UsageReport["models"][number] {
-  if (value === null || typeof value !== "object") return false;
-  const row = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
   return (
-    typeof row.modelId === "string" &&
-    isFiniteNumber(row.costUsd) &&
-    isFiniteNumber(row.requests) &&
-    isFiniteNumber(row.inputTokens) &&
-    isFiniteNumber(row.outputTokens) &&
-    isFiniteNumber(row.cacheReadTokens) &&
-    typeof row.upstreamRoute === "string" &&
-    isFiniteNumber(row.share)
+    typeof value.modelId === "string" &&
+    isFiniteNumber(value.costUsd) &&
+    isFiniteNumber(value.requests) &&
+    isFiniteNumber(value.inputTokens) &&
+    isFiniteNumber(value.outputTokens) &&
+    isFiniteNumber(value.cacheReadTokens) &&
+    typeof value.upstreamRoute === "string" &&
+    isFiniteNumber(value.share)
+  );
+}
+
+function isWindow(value: unknown): value is UsageReport["window"] {
+  if (!isRecord(value)) return false;
+  return (
+    (value.kind === "utc_day" || value.kind === "utc_month") &&
+    typeof value.start === "string" &&
+    typeof value.end === "string"
+  );
+}
+
+function isQuota(value: unknown): value is UsageReport["quota"] {
+  if (!isRecord(value)) return false;
+  return (
+    (value.metric === "requests" || value.metric === "usd") &&
+    isFiniteNumber(value.used) &&
+    isFiniteNumber(value.included) &&
+    isFiniteNumber(value.remaining)
+  );
+}
+
+function isCache(value: unknown): value is UsageReport["cache"] {
+  if (!isRecord(value)) return false;
+  return (
+    isFiniteNumber(value.inputTokens) &&
+    isFiniteNumber(value.cacheReadTokens) &&
+    isFiniteNumber(value.hitRate)
+  );
+}
+
+function isDay(value: unknown): value is UsageReport["days"][number] {
+  if (!isRecord(value)) return false;
+  return typeof value.date === "string" && isFiniteNumber(value.requests) && isFiniteNumber(value.costUsd);
+}
+
+function isSession(value: unknown): value is UsageReport["sessions"][number] {
+  if (!isRecord(value)) return false;
+  return (
+    (value.sessionId === null || typeof value.sessionId === "string") &&
+    isFiniteNumber(value.requests) &&
+    isFiniteNumber(value.costUsd)
   );
 }
 
 export function parseUsageReport(body: unknown): UsageReport | null {
-  if (body === null || typeof body !== "object") return null;
-  const o = body as Record<string, unknown>;
-  if (typeof o.generatedAt !== "string") return null;
-  if (o.plan !== null && !isPlan(o.plan)) return null;
-  const window = o.window as Record<string, unknown> | undefined;
-  if (
-    window === undefined ||
-    (window.kind !== "utc_day" && window.kind !== "utc_month") ||
-    typeof window.start !== "string" ||
-    typeof window.end !== "string"
-  ) {
-    return null;
-  }
-  const quota = o.quota as Record<string, unknown> | undefined;
-  if (
-    quota === undefined ||
-    (quota.metric !== "requests" && quota.metric !== "usd") ||
-    !isFiniteNumber(quota.used) ||
-    !isFiniteNumber(quota.included) ||
-    !isFiniteNumber(quota.remaining)
-  ) {
-    return null;
-  }
-  if (!isFiniteNumber(o.requestsToday) || !isFiniteNumber(o.dailyRequestCap)) return null;
-  if (o.hitAt !== null && typeof o.hitAt !== "string") return null;
-  if (!Array.isArray(o.models) || !o.models.every(isModel)) return null;
-  const cache = o.cache as Record<string, unknown> | undefined;
-  if (
-    cache === undefined ||
-    !isFiniteNumber(cache.inputTokens) ||
-    !isFiniteNumber(cache.cacheReadTokens) ||
-    !isFiniteNumber(cache.hitRate)
-  ) {
-    return null;
-  }
-  if (!Array.isArray(o.days) || !Array.isArray(o.sessions)) return null;
-  return o as UsageReport;
+  if (!isRecord(body)) return null;
+  if (typeof body.generatedAt !== "string") return null;
+  if (body.plan !== null && !isPlan(body.plan)) return null;
+  if (!isWindow(body.window)) return null;
+  if (!isQuota(body.quota)) return null;
+  if (!isFiniteNumber(body.requestsToday) || !isFiniteNumber(body.dailyRequestCap)) return null;
+  if (body.hitAt !== null && typeof body.hitAt !== "string") return null;
+  if (!Array.isArray(body.models) || !body.models.every(isModel)) return null;
+  if (!isCache(body.cache)) return null;
+  if (!Array.isArray(body.days) || !body.days.every(isDay)) return null;
+  if (!Array.isArray(body.sessions) || !body.sessions.every(isSession)) return null;
+  return body as UsageReport;
 }

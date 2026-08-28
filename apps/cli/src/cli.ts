@@ -1067,6 +1067,17 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
   // runs many run() calls in a single process, and a future fixed-process TUI/REPL loop will too.
   setProfileOverride(values.profile);
 
+  // PARSE_OPTIONS.detail is declared globally because parseArgs is strict and flags are flags
+  // in any position (`seri usage --detail` / `seri --detail usage`). Rejected here unless the
+  // first positional is usage or /usage, so `seri --detail` cannot open a TUI whose later
+  // `/usage` inherits detailFlag, and a task token `--detail` is not silently stripped.
+  if (values.detail === true) {
+    const cmd = positionals[0];
+    if (cmd !== "usage" && cmd !== "/usage") {
+      return usageError("--detail is only valid with usage");
+    }
+  }
+
   const maxTurnsRaw = values["max-turns"];
   let maxTurns: number | undefined;
   if (maxTurnsRaw !== undefined) {

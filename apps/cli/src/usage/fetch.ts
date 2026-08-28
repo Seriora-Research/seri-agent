@@ -36,8 +36,9 @@ export async function fetchUsageReport(
   const refreshSession = deps.refreshSession ?? refreshSessionReal;
   const now = deps.now ?? new Date();
 
+  let report: UsageReport | null = null;
   try {
-    const report = await fetchWithTimeout(
+    report = await fetchWithTimeout(
       authedFetch(configDir, fetchFn, refreshSession),
       `${gatewayBaseUrl(configDir)}/usage`,
       deps.timeoutMs ?? USAGE_TIMEOUT_MS,
@@ -46,12 +47,17 @@ export async function fetchUsageReport(
         return parseUsageReport(await response.json());
       },
     );
-    if (report !== null) {
-      writeUsageSnapshot(configDir, { fetchedAt: now.toISOString(), report });
-      return { status: "ok", report };
-    }
   } catch {
     // Fall through to the snapshot. A timeout or network error is not a crash.
+  }
+
+  if (report !== null) {
+    try {
+      writeUsageSnapshot(configDir, { fetchedAt: now.toISOString(), report });
+    } catch {
+      // Snapshot is best-effort. A live report still prints.
+    }
+    return { status: "ok", report };
   }
 
   const snapshot: UsageSnapshot | undefined = readUsageSnapshot(configDir);

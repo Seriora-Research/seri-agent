@@ -45,14 +45,20 @@ export async function runUsageCommand(configDir: string, opts: RunUsageOpts = {}
   if (result.status === "error") {
     throw new Error(result.message);
   }
-  const catalog = await getCatalog();
+  let cachePriceByModel = new Map<string, CachePrice>();
+  try {
+    cachePriceByModel = cachePrices(await getCatalog());
+  } catch {
+    // Cache-dollar savings are catalog-estimated and optional; a catalog
+    // failure must not hide a successfully fetched ledger report.
+  }
   const staleFrom = result.status === "stale" ? result.fetchedAt : undefined;
   presentLines(
     presenter,
     formatUsageReport(result.report, {
       detail,
       staleFrom,
-      cachePriceByModel: cachePrices(catalog),
+      cachePriceByModel,
     }),
   );
 }

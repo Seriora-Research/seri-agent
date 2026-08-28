@@ -63,6 +63,18 @@ describe("runUsageCommand", () => {
       }),
     ).rejects.toThrow("Could not load hosted usage");
   });
+
+  test("a catalog failure still prints the fetched report", async () => {
+    const lines: string[] = [];
+    await runUsageCommand(configDir, {
+      presenter: { message: (text) => lines.push(text) },
+      fetchUsage: async () => ({ status: "ok", report }),
+      getCatalog: async () => {
+        throw new Error("catalog fetch failed");
+      },
+    });
+    expect(lines.join("\n")).toContain("Hosted gateway  (Pro)");
+  });
 });
 
 describe("logout", () => {
