@@ -379,11 +379,7 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
           ...identity,
         });
         return runSubagent({
-          tools: buildRoleToolSet(
-            task.role,
-            runtime.checkpointer?.onAfterMutation,
-            runtime.cwd,
-          ),
+          tools: buildRoleToolSet(task.role, runtime.checkpointer?.onAfterMutation, runtime.cwd),
           system: joinTiers(runtime.system, roleAddendum(task.role)),
           messages: [{ role: "user", content: task.goal }],
           runtime: runtimeFor(task),

@@ -1,6 +1,6 @@
 import { findCatalogEntry, type ModelProvider } from "@seri/model-catalog";
 import type { LanguageModel, ModelMessage } from "ai";
-import { joinTiers, buildVolatileTier } from "../agents/systemPrompt";
+import { buildVolatileTier, joinTiers } from "../agents/systemPrompt";
 import { appendBarrier } from "../checkpoint/checkpoint";
 import type { CliDeps, PreparedRun, RunContext } from "../cli";
 import { printGrantPersisted, printWarning, type RunUsage } from "../cli/output";
@@ -26,10 +26,10 @@ import {
   effortForChild,
   parseRolePins,
   pinFromTask,
+  type RoutableRole,
   realizedRoute,
   resolveChildRoute,
   roleConstructionWarning,
-  type RoutableRole,
   type TaskRouteRequest,
 } from "../subagents/routes";
 
