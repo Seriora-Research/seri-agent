@@ -31,8 +31,7 @@ function estimatedCacheSavedUsd(
     const price = prices.get(model.modelId);
     if (price === undefined) continue;
     priced = true;
-    saved +=
-      (model.cacheReadTokens * (price.inputPerMTok - price.cacheReadPerMTok)) / 1_000_000;
+    saved += (model.cacheReadTokens * (price.inputPerMTok - price.cacheReadPerMTok)) / 1_000_000;
   }
   return priced ? saved : undefined;
 }
@@ -57,9 +56,7 @@ export function formatUsageReport(report: UsageReport, opts: FormatUsageOpts = {
 
   const planLabel = report.plan[0]?.toUpperCase() + report.plan.slice(1);
   lines.push(`Hosted gateway  (${planLabel})`);
-  lines.push(
-    `Window  ${dateOnly(report.window.start)} → ${dateOnly(report.window.end)} UTC`,
-  );
+  lines.push(`Window  ${dateOnly(report.window.start)} → ${dateOnly(report.window.end)} UTC`);
 
   if (report.quota.metric === "usd") {
     lines.push(
@@ -90,10 +87,7 @@ export function formatUsageReport(report: UsageReport, opts: FormatUsageOpts = {
     lines.push("", "Models");
     for (const model of report.models) {
       const route = opts.detail === true ? `  ${model.upstreamRoute}` : "";
-      const amount =
-        report.quota.metric === "usd"
-          ? usd(model.costUsd)
-          : `${model.requests} req`;
+      const amount = report.quota.metric === "usd" ? usd(model.costUsd) : `${model.requests} req`;
       lines.push(`  ${model.modelId}  ${amount}  (${pct(model.share)})${route}`);
     }
   }

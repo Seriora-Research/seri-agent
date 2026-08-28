@@ -84,7 +84,11 @@ function isCache(value: unknown): value is UsageReport["cache"] {
 
 function isDay(value: unknown): value is UsageReport["days"][number] {
   if (!isRecord(value)) return false;
-  return typeof value.date === "string" && isFiniteNumber(value.requests) && isFiniteNumber(value.costUsd);
+  return (
+    typeof value.date === "string" &&
+    isFiniteNumber(value.requests) &&
+    isFiniteNumber(value.costUsd)
+  );
 }
 
 function isSession(value: unknown): value is UsageReport["sessions"][number] {

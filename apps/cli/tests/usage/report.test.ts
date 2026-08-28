@@ -33,7 +33,9 @@ describe("parseUsageReport", () => {
   });
 
   test("malformed days or sessions rows return null", () => {
-    expect(parseUsageReport({ ...validBody(), days: [{ date: 1, requests: 1, costUsd: 1 }] })).toBeNull();
+    expect(
+      parseUsageReport({ ...validBody(), days: [{ date: 1, requests: 1, costUsd: 1 }] }),
+    ).toBeNull();
     expect(
       parseUsageReport({
         ...validBody(),

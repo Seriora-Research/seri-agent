@@ -79,9 +79,7 @@ describe("formatUsageReport", () => {
       ],
     };
     const withPrice = formatUsageReport(pricey, {
-      cachePriceByModel: new Map([
-        ["openai/gpt-4o", { inputPerMTok: 5, cacheReadPerMTok: 0.5 }],
-      ]),
+      cachePriceByModel: new Map([["openai/gpt-4o", { inputPerMTok: 5, cacheReadPerMTok: 0.5 }]]),
     });
     expect(withPrice).toContain("est. $0.45 saved");
   });

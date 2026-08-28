@@ -58,7 +58,10 @@ describe("runUsageCommand", () => {
   test("a fetch error throws the user-facing message", async () => {
     await expect(
       runUsageCommand(configDir, {
-        fetchUsage: async () => ({ status: "error", message: "Could not load hosted usage. Try again in a moment." }),
+        fetchUsage: async () => ({
+          status: "error",
+          message: "Could not load hosted usage. Try again in a moment.",
+        }),
         getCatalog: async () => ({ fetchedAt: "", entries: [] }),
       }),
     ).rejects.toThrow("Could not load hosted usage");
