@@ -114,7 +114,7 @@ Subagent roles (`explore`, `plan`, `code`, `test`, `oracle`) inherit the session
 `(provider, model)` unless a task names a different pair. Ask the parent to dispatch and name
 the child model in the prompt — there is no `seri config` subcommand for this:
 
-```
+```text
 Dispatch an oracle to review the permission gate. Use anthropic / claude-sonnet-5 at high.
 ```
 
