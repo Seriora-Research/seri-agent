@@ -27,6 +27,8 @@ import { applyWrite, loadMemory, type MemoryContext } from "../../src/memory/sto
 import { makeMemoryWriteTool } from "../../src/memory/tool";
 import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
 import { runSubagent, type SubagentRuntime } from "../../src/subagents/dispatch";
+import { DISPATCHABLE_ROLES } from "../../src/subagents/roles";
+import { parseRolePins, resolveRoleRoute } from "../../src/subagents/routes";
 import { streamResult, usage as usageChunk } from "../loop/fixtures";
 import { fakeChildLoop } from "../subagents/fakeChildLoop";
 
@@ -467,6 +469,140 @@ describe("maybeRunArchivist", () => {
 
     expect(report?.trigger).toBe("tool-count");
     expect(s.toolCallsSinceRun).toBe(0);
+  });
+
+  test("nested runLoop uses the routed model's catalog window, not the parent trigger window", async () => {
+    const ctx = makeCtx();
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [
+        { type: "text-delta", text: "ok" },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    const catalog: ModelCatalog = {
+      fetchedAt: "",
+      entries: [
+        {
+          id: "cheap-model",
+          provider: "groq",
+          displayName: "Cheap",
+          family: null,
+          contextWindow: 8_000,
+          maxOutputTokens: 1_024,
+          toolCall: true,
+          reasoning: false,
+          pricing: undefined,
+        },
+      ],
+    };
+    const s = createArchivistState(emptySession());
+    s.messages = [{ role: "user", content: "task" }];
+    s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+
+    await maybeRunArchivist({
+      state: s,
+      ctx,
+      contextWindow: 100_000,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "cheap-model", provider: "groq" },
+      catalog,
+      signal: new AbortController().signal,
+      onWarning: () => {},
+      runLoop: fake as unknown as typeof runLoop,
+    });
+
+    expect(calls[0]?.opts.contextWindowSize).toBe(8_000);
+    expect(calls[0]?.opts.modelId).toBe("cheap-model");
+  });
+
+  test("an env archivist pin is the pair nested runLoop sees, and archivist is still not dispatchable", async () => {
+    expect((DISPATCHABLE_ROLES as readonly string[]).includes("archivist")).toBe(false);
+
+    const originalModel = process.env.SERI_ROLE_ARCHIVIST_MODEL;
+    const originalProvider = process.env.SERI_ROLE_ARCHIVIST_PROVIDER;
+    process.env.SERI_ROLE_ARCHIVIST_MODEL = "cheap-model";
+    process.env.SERI_ROLE_ARCHIVIST_PROVIDER = "groq";
+    try {
+      const pins = parseRolePins(process.env, {});
+      expect(pins.archivist).toEqual({ model: "cheap-model", provider: "groq" });
+
+      const parent = {
+        model: "test-model",
+        provider: "groq" as const,
+        rerouted: false,
+        viaGateway: false,
+      };
+      const catalog: ModelCatalog = {
+        fetchedAt: "",
+        entries: [
+          {
+            id: "test-model",
+            provider: "groq",
+            displayName: "Test",
+            family: null,
+            contextWindow: 100_000,
+            maxOutputTokens: 1_024,
+            toolCall: true,
+            reasoning: false,
+            pricing: undefined,
+          },
+          {
+            id: "cheap-model",
+            provider: "groq",
+            displayName: "Cheap",
+            family: null,
+            contextWindow: 8_000,
+            maxOutputTokens: 1_024,
+            toolCall: true,
+            reasoning: false,
+            pricing: undefined,
+          },
+        ],
+      };
+      const resolved = resolveRoleRoute(
+        "archivist",
+        parent,
+        pins,
+        catalog,
+        new Set(["groq"]),
+        null,
+      );
+      expect(resolved.inherited).toBe(false);
+      expect(resolved.model).toBe("cheap-model");
+
+      const ctx = makeCtx();
+      const { fake, calls } = fakeChildLoop(() => ({
+        events: [
+          { type: "text-delta", text: "ok" },
+          { type: "done", reason: "no-tool-call" },
+        ],
+      }));
+      const s = createArchivistState(emptySession());
+      s.messages = [{ role: "user", content: "task" }];
+      s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+
+      // Inherit would be parent.model ("test-model"). The env pin must be what
+      // nested runLoop sees, or this is just the existing hardcoded-route test.
+      await maybeRunArchivist({
+        state: s,
+        ctx,
+        contextWindow: 100_000,
+        model: new MockLanguageModelV4({ doStream: [] }),
+        route: { model: resolved.model, provider: resolved.provider },
+        catalog,
+        signal: new AbortController().signal,
+        onWarning: () => {},
+        runLoop: fake as unknown as typeof runLoop,
+      });
+
+      expect(calls[0]?.opts.modelId).toBe("cheap-model");
+      expect(calls[0]?.opts.provider).toBe("groq");
+    } finally {
+      if (originalModel === undefined) delete process.env.SERI_ROLE_ARCHIVIST_MODEL;
+      else process.env.SERI_ROLE_ARCHIVIST_MODEL = originalModel;
+      if (originalProvider === undefined) delete process.env.SERI_ROLE_ARCHIVIST_PROVIDER;
+      else process.env.SERI_ROLE_ARCHIVIST_PROVIDER = originalProvider;
+    }
   });
 });
 

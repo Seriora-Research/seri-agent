@@ -91,8 +91,6 @@ import {
   type ArchivistReport,
   type ArchivistState,
   createArchivistState,
-  maybeRunArchivist,
-  observeArchivistEvent,
   resetArchivistForRewind,
 } from "./memory/archivist";
 import { decideMemoryCommand } from "./memory/commands";
@@ -141,7 +139,6 @@ import {
   saveSession,
 } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
-import { withSubagents } from "./subagents/dispatch";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";

@@ -110,6 +110,28 @@ whichever configured provider reaches the same model — native providers prefer
 aggregator like OpenRouter — and says so once in the transcript. An explicit `/model` pick always
 wins over this if its own provider has a key.
 
+Subagent roles (`explore`, `plan`, `code`, `test`, `oracle`) inherit the session
+`(provider, model)` unless a task names a different pair. Ask the parent to dispatch and name
+the child model in the prompt — there is no `seri config` subcommand for this:
+
+```text
+Dispatch an oracle to review the permission gate. Use anthropic / claude-sonnet-5 at high.
+```
+
+The parent fills that task's `model`, `provider`, and optional `effort` on `dispatch_subagents`.
+`provider` is one of `groq`, `openrouter`, `anthropic`, `openai`, `google`; `model` is that
+provider's id (OpenRouter: the OpenRouter slug). A model without a valid provider is ignored, not
+mixed with the session provider. A pair that cannot be constructed warns and falls back to the
+session model rather than failing the turn.
+
+`oracle` is a read-only advisor seat (it cannot write or run commands). Naming a stronger model
+on the task is how it escalates; omitted, it still runs in isolated context on the session model.
+
+Optional env defaults `SERI_ROLE_<ROLE>_MODEL` + `SERI_ROLE_<ROLE>_PROVIDER` apply when a task
+omits the pair (scripts, and the hidden archivist, which cannot be dispatched). `/effort` on the
+session still copies onto a child only when that child actually runs the same pair, unless the
+task itself names `effort`.
+
 The first search of each release unpacks its bundled ripgrep to `~/.seri/rg/<key>/`. Deleting that
 directory is safe — the next search writes it again — and a run that cannot write there falls back
 to a temporary copy.

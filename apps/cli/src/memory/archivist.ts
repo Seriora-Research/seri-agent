@@ -1,4 +1,4 @@
-import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
+import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "ai";
 import { loadMemoryConfig } from "../config/config";
 import {
@@ -14,7 +14,7 @@ import { type LoadedMemory, loadMemory, type MemoryContext, renderMemoryTier } f
 import { makeMemoryWriteTool } from "./tool";
 
 // The archivist's ENTIRE system prompt, not an addendum composed onto a parent's the way
-// subagents/roles.ts's four DISPATCHABLE_ROLES are: the archivist has no coding-agent identity to
+// subagents/roles.ts's dispatchable roles are: the archivist has no coding-agent identity to
 // inherit — its only job is deciding what belongs in memory and writing it with memory_write, so
 // runArchivist passes this directly as runSubagent's `system`, never joinTiers'd with anything
 // else. Lives here, not roles.ts: it is memory-specific prose no dispatchable role composes.
@@ -231,10 +231,11 @@ export async function runArchivist(args: {
   // live file already has.
   const goal = buildArchivistGoal(transcript, loadMemory(args.ctx), args.trigger);
   // The archivist is not dispatched through subagents/roles.ts's buildRoleToolSet: that seam
-  // exists for the four DISPATCHABLE_ROLES the model-facing dispatch_subagents tool can name, and
+  // exists for the DISPATCHABLE_ROLES the model-facing dispatch_subagents tool can name, and
   // the archivist is deliberately unreachable from the model — it never appears in
   // DISPATCHABLE_ROLES, is dispatched directly by this function via runSubagent, and needs
-  // exactly one tool, so the ToolSet is simplest built inline.
+  // exactly one tool, so the ToolSet is simplest built inline. The (model, provider) pair on
+  // `runtime` is whatever the caller already resolved; this function does not parse role pins.
   const tools: ToolSet = {
     memory_write: makeMemoryWriteTool(args.ctx, { forceStage: args.forceStage === true }),
   };
@@ -318,6 +319,8 @@ export async function maybeRunArchivist(args: {
   signal: AbortSignal;
   onWarning: (message: string) => void;
   reasoningEffort?: string;
+  // Overridable only for tests (fakeChildLoop). Production callers omit it.
+  runLoop?: typeof runLoop;
 }): Promise<ArchivistReport | undefined> {
   if (args.signal.aborted) return undefined;
   // A truncation — compaction OR /rewind, both splice `messages` — can leave the cursor pointing
@@ -343,6 +346,10 @@ export async function maybeRunArchivist(args: {
   );
   if (!trigger) return undefined;
 
+  // Trigger math is the parent transcript vs the parent window (`args.contextWindow`). Nested
+  // compaction belongs to the model this pass actually calls, which may differ when the caller
+  // routed the archivist onto another pair.
+  const childEntry = findCatalogEntry(args.catalog, args.route.model, args.route.provider);
   return runArchivist({
     state: args.state,
     trigger,
@@ -350,9 +357,10 @@ export async function maybeRunArchivist(args: {
     model: args.model,
     route: args.route,
     catalog: args.catalog,
-    contextWindow: args.contextWindow,
+    contextWindow: childEntry?.contextWindow ?? args.contextWindow,
     reasoningEffort: args.reasoningEffort,
     signal: args.signal,
     onWarning: args.onWarning,
+    runLoop: args.runLoop,
   });
 }
