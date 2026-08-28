@@ -3,12 +3,14 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ModelProvider } from "@seri/model-catalog";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
+import { DATABASE_FILENAME } from "../config/paths";
 import type { PermissionMode } from "../gate/gate";
 import type { TrajectoryHeader, TrajectoryRecord } from "../trajectory/schema";
 import type { SessionState } from "./session";
 
-export const DATABASE_FILENAME = "seri.db";
-const CURRENT_SCHEMA_VERSION = 2;
+export { DATABASE_FILENAME };
+
+const CURRENT_SCHEMA_VERSION = 3;
 const BUSY_TIMEOUT_MS = 5_000;
 
 // Production layout is `<configDir>/sessions` and `<configDir>/trajectories`. Tests inject a
@@ -84,6 +86,47 @@ const MIGRATIONS = [
         seq INTEGER NOT NULL,
         json TEXT NOT NULL,
         PRIMARY KEY(session_id, seq)
+      );
+    `,
+  },
+  {
+    version: 3,
+    sql: `
+      CREATE TABLE turns (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+
+      CREATE TABLE daemon_events (
+        turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        json TEXT NOT NULL,
+        PRIMARY KEY(turn_id, seq)
+      );
+
+      CREATE TABLE schedules (
+        id TEXT PRIMARY KEY,
+        task TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        timing_json TEXT NOT NULL,
+        next_run_at_ms INTEGER,
+        enabled INTEGER NOT NULL,
+        running INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE schedule_runs (
+        id TEXT PRIMARY KEY,
+        schedule_id TEXT NOT NULL REFERENCES schedules(id),
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        status TEXT NOT NULL,
+        response TEXT,
+        error TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT
       );
     `,
   },
@@ -453,6 +496,42 @@ export class SessionDatabase {
       this.database
         .query("SELECT json FROM trajectory_records WHERE session_id = ? ORDER BY seq")
         .all(sessionId) as { json: string }[]
+    ).map((row) => JSON.parse(row.json));
+  }
+
+  insertTurn(id: string, sessionId: string, startedAt: string): void {
+    this.database
+      .query(
+        "INSERT INTO turns(id, session_id, status, started_at, finished_at) VALUES (?, ?, 'running', ?, NULL)",
+      )
+      .run(id, sessionId, startedAt);
+  }
+
+  hasTurn(id: string): boolean {
+    return (
+      (this.database.query("SELECT id FROM turns WHERE id = ?").get(id) as {
+        id: string;
+      } | null) !== null
+    );
+  }
+
+  finishTurn(id: string, finishedAt: string): void {
+    this.database
+      .query("UPDATE turns SET status = 'complete', finished_at = ? WHERE id = ?")
+      .run(finishedAt, id);
+  }
+
+  appendDaemonEvent(turnId: string, seq: number, event: unknown): void {
+    this.database
+      .query("INSERT INTO daemon_events(turn_id, seq, json) VALUES (?, ?, ?)")
+      .run(turnId, seq, JSON.stringify(event));
+  }
+
+  listDaemonEventsAfter(turnId: string, afterSeq: number): unknown[] {
+    return (
+      this.database
+        .query("SELECT json FROM daemon_events WHERE turn_id = ? AND seq > ? ORDER BY seq")
+        .all(turnId, afterSeq) as { json: string }[]
     ).map((row) => JSON.parse(row.json));
   }
 
