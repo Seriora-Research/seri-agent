@@ -3,7 +3,7 @@ import { basename, dirname, join } from "node:path";
 import type { LanguageModelUsage } from "ai";
 import type { LoopEvent } from "../loop/loop";
 import type { CostReport } from "../provider/cost";
-import { DATABASE_FILENAME, SessionDatabase } from "../session/database";
+import { configDirForStore, DATABASE_FILENAME, SessionDatabase } from "../session/database";
 import type { ChildEventPayload } from "../subagents/dispatch";
 import { writeFileVerification } from "../verify/outcome";
 import { pruneTrajectories } from "./prune";
@@ -50,7 +50,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function readTrajectory(path: string): unknown[] {
   const trajectoriesDir = dirname(path);
-  const configDir = dirname(trajectoriesDir);
+  const configDir = configDirForStore(trajectoriesDir, "trajectories");
   if (existsSync(join(configDir, DATABASE_FILENAME))) {
     const database = new SessionDatabase(configDir);
     try {
@@ -110,7 +110,7 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
         model: opts.model,
         provider: opts.provider,
       };
-      const database = new SessionDatabase(dirname(opts.dir));
+      const database = new SessionDatabase(configDirForStore(opts.dir, "trajectories"));
       try {
         database.importLegacyTrajectories(opts.dir);
         database.appendTrajectory(header, {

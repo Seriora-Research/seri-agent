@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { ModelProvider } from "@seri/model-catalog";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import type { PermissionMode } from "../gate/gate";
@@ -10,6 +10,14 @@ import type { SessionState } from "./session";
 export const DATABASE_FILENAME = "seri.db";
 const CURRENT_SCHEMA_VERSION = 2;
 const BUSY_TIMEOUT_MS = 5_000;
+
+// Production layout is `<configDir>/sessions` and `<configDir>/trajectories`. Tests inject a
+// throwaway directory as the store itself; using dirname of that would chmod the system temp
+// root. Only peel off the layout leaf when it is actually present.
+export function configDirForStore(dir: string, layoutLeaf: "sessions" | "trajectories"): string {
+  const resolved = resolve(dir);
+  return basename(resolved) === layoutLeaf ? dirname(resolved) : resolved;
+}
 
 const MIGRATIONS = [
   {

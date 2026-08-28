@@ -1,8 +1,9 @@
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { ModelProvider } from "@seri/model-catalog";
 import { foldsCase } from "../caseFold";
 import type { PermissionMode } from "../gate/gate";
 import {
+  configDirForStore,
   SessionDatabase,
   type SessionSearchOptions,
   type SessionSearchResult,
@@ -19,12 +20,8 @@ export type SessionState<TMessage = unknown> = {
   messages: TMessage[];
 };
 
-function configDirFromSessionsDir(sessionsDir: string): string {
-  return dirname(resolve(sessionsDir));
-}
-
 function withDatabase<T>(sessionsDir: string, fn: (database: SessionDatabase) => T): T {
-  const database = new SessionDatabase(configDirFromSessionsDir(sessionsDir));
+  const database = new SessionDatabase(configDirForStore(sessionsDir, "sessions"));
   try {
     return fn(database);
   } finally {
@@ -83,5 +80,12 @@ export function searchSessions(
   return withDatabase(sessionsDir, (database) => {
     database.importLegacySessions(sessionsDir);
     return database.searchSessions(query, options);
+  });
+}
+
+export function listSessionIds(sessionsDir: string): string[] {
+  return withDatabase(sessionsDir, (database) => {
+    database.importLegacySessions(sessionsDir);
+    return database.listSessionsByRecent().map((session) => session.id);
   });
 }

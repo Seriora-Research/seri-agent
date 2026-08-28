@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   DATABASE_FILENAME,
   SessionDatabase,
+  configDirForStore,
   type SessionSearchResult,
 } from "../../src/session/database";
 import { exportSessionsToJsonl } from "../../src/session/export";
@@ -246,4 +247,12 @@ test("search results are scoped to the database for one active profile", () => {
   } finally {
     rmSync(otherConfig, { recursive: true, force: true });
   }
+});
+
+test("configDirForStore peels a layout leaf and leaves an injected store directory intact", () => {
+  const profile = join(tmpdir(), "seri-profile-layout");
+  expect(configDirForStore(join(profile, "sessions"), "sessions")).toBe(profile);
+  expect(configDirForStore(join(profile, "trajectories"), "trajectories")).toBe(profile);
+  const injected = join(tmpdir(), "seri-cli-test-sessions-abc");
+  expect(configDirForStore(injected, "sessions")).toBe(injected);
 });
