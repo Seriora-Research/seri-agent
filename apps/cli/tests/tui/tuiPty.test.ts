@@ -3072,6 +3072,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       expect(rawOccurrences("could not save the default model:")).toBe(1);
       expect(existsSync(join(configDir, "config.json"))).toBe(false);
     } finally {
+      // rmSync of this describe's tmpdir needs write permission on .seri to unlink files that
+      // landed there before the sabotage (session start writes under the profile root). The
+      // sibling retry test restores 0o700 in the test body; this one leaves the dir unwritable
+      // for the rest of the run, so restore here.
+      try {
+        chmodSync(join(dir, ".seri"), 0o700);
+      } catch {}
       child.kill("SIGKILL");
     }
   }, 60_000);
