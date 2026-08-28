@@ -265,4 +265,28 @@ describe("createTrajectoryWriter", () => {
       rmSync(parent, { recursive: true, force: true });
     }
   });
+
+  test("setEnabled(false) stops appending; setEnabled(true) continues seq without a second header", () => {
+    const parent = mkdtempSync(join(tmpdir(), "seri-traj-toggle-"));
+    const dir = join(parent, "trajectories");
+    try {
+      const writer = createTrajectoryWriter(writerOpts(dir));
+      writer.recordLoopEvent({ type: "done", reason: "no-tool-call" });
+      writer.setEnabled(false);
+      writer.recordLoopEvent({ type: "retry", attempt: 1 });
+      writer.setEnabled(true);
+      writer.recordLoopEvent({ type: "retry", attempt: 2 });
+      const lines = readTrajectory(join(dir, "sess-1.jsonl"));
+      expect(lines.filter((line) => (line as { kind: string }).kind === "header")).toHaveLength(1);
+      expect(lines.map((line) => (line as { kind: string }).kind)).toEqual([
+        "header",
+        "done",
+        "retry",
+      ]);
+      expect(lines[2]).toMatchObject({ kind: "retry", seq: 2, attempt: 2 });
+      expect(writer.isEnabled()).toBe(true);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
 });

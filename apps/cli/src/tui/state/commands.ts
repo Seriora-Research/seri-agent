@@ -454,6 +454,25 @@ export function decideMaxTurns(args: string[]): number {
   return Number(raw);
 }
 
+export function decideTrajectoryCommand(
+  args: string[],
+  currentlyEnabled: boolean,
+): { enabled?: boolean; message: string } {
+  if (args.length === 0) {
+    return {
+      message: currentlyEnabled ? "Trajectory recording is on." : "Trajectory recording is off.",
+    };
+  }
+  if (args.length !== 1 || (args[0] !== "on" && args[0] !== "off")) {
+    throw new Error("Usage: /trajectory [on|off]");
+  }
+  const enabled = args[0] === "on";
+  return {
+    enabled,
+    message: enabled ? "Trajectory recording is on." : "Trajectory recording is off.",
+  };
+}
+
 // /profile new's own decision: validates the name and returns where its directory WOULD live —
 // this function does not create it, that is the caller's job. Returns `name` alongside `dir`
 // rather than making the caller reverse-engineer it via `basename(dir)`, which would be wrong

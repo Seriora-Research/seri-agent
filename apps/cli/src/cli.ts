@@ -60,6 +60,7 @@ import {
   loadTrajectoryConfig,
   loadVerifyConfig,
   persistDefaultReasoningEffort,
+  setConfigValue,
   type VerifyConfig,
 } from "./config/config";
 import {
@@ -150,6 +151,7 @@ import {
   decideRestore,
   decideRewind,
   decideSetupOpen,
+  decideTrajectoryCommand,
   decideUndo,
 } from "./tui/state/commands";
 import {
@@ -314,7 +316,7 @@ type SlashCommand = {
   readsDetailFlag?: true;
 } & (
   | {
-      // Every command but /memory: `run` operates on a resumed session, so handleSlashCommand
+      // Session-required commands: `run` operates on a resumed session, so handleSlashCommand
       // (below) resolves one — an explicit --resume id or the most recent session — before calling
       // it, and fails with "No session to run <name> against" when none exists.
       needsSession?: true;
@@ -333,14 +335,12 @@ type SlashCommand = {
       ) => void | Promise<void>;
     }
   | {
-      // /memory: decideMemoryCommand's own I/O (config.json, the pending/ queue) is keyed on
-      // configDir alone, never on a session (memoryCommand's own comment) — round-4 review finding:
-      // routing it through the session-required branch above meant `seri /memory pending` on a
-      // fresh profile, before any session had ever run, failed with "No session to run /memory
-      // against" and exited 1, the same class of bug /exit's own fix (this table's comment, below)
-      // addresses for a command that needs no session at all. This variant's `run` drops the
-      // session parameter entirely rather than accepting one it would never read, so handleSlashCommand
-      // can skip session resolution for it by construction, not by convention.
+      // /memory, /trajectory, /usage: I/O is keyed on configDir (or the hosted gateway), never on
+      // a session — routing them through the session-required branch meant `seri /memory pending`
+      // on a fresh profile failed with "No session to run /memory against" and exited 1, the same
+      // class of bug /exit's own fix (this table's comment, below) addresses. This variant's `run`
+      // drops the session parameter entirely rather than accepting one it would never read, so
+      // handleSlashCommand can skip session resolution for it by construction, not by convention.
       needsSession: false;
       run: (
         args: string[],
@@ -420,6 +420,7 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   sessionSlash("/clear", clearCommand),
   sessionSlash("/compact", compactCommand),
   sessionSlashNoSession("/memory", memoryCommand),
+  sessionSlashNoSession("/trajectory", trajectoryCommand),
   sessionSlashNoSession("/usage", usageCommand),
 ]);
 
@@ -779,6 +780,26 @@ async function memoryCommand(
 ): Promise<void> {
   const { lines } = decideMemoryCommand(args, { configDir: dirs.configDir });
   for (const line of lines) presenter.message(line);
+}
+
+function trajectoryCommand(
+  args: string[],
+  dirs: CommandDirs,
+  presenter: CommandPresenter = consolePresenter(dirs),
+): void {
+  const currentlyEnabled =
+    dirs.trajectory?.isEnabled() ?? loadTrajectoryConfig(dirs.configDir).enabled;
+  const decided = decideTrajectoryCommand(args, currentlyEnabled);
+  if (decided.enabled !== undefined) {
+    dirs.trajectory?.setEnabled(decided.enabled);
+    setConfigValue("SERI_TRAJECTORY_ENABLED", decided.enabled ? "true" : "false", dirs.configDir);
+  }
+  let message = decided.message;
+  if (decided.enabled !== undefined && process.env.SERI_TRAJECTORY_ENABLED !== undefined) {
+    message +=
+      " SERI_TRAJECTORY_ENABLED in the environment will still win the next time you start seri.";
+  }
+  presenter.message(message);
 }
 
 async function usageCommand(
@@ -1368,7 +1389,7 @@ async function handleSlashCommand(ctx: RunContext, deps: CliDeps): Promise<numbe
       ? ["--detail"]
       : commandArgs;
 
-  // needsSession: false (today, /memory and /usage — SlashCommand's own comment) skips resume-target
+  // needsSession: false (/memory, /trajectory, /usage) skips resume-target
   // resolution entirely: nothing below it reads a session, so requiring one to already exist would
   // only make the command fail on a fresh profile for no reason.
   if (command.needsSession === false) {
