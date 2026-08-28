@@ -2176,6 +2176,25 @@ describe("run (task invocation)", () => {
     }
   });
 
+  test("`/trajectory off` persists and a later turn creates no trajectories directory", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const original = process.env.SERI_TRAJECTORY_ENABLED;
+    delete process.env.SERI_TRAJECTORY_ENABLED;
+    const { fake } = fakeRunLoop();
+    try {
+      const { code, logs } = await captureLogs(() => run(["/trajectory", "off"], { sessionsDir }));
+      expect(code).toBe(0);
+      expect(logs).toContain("Trajectory recording is off.");
+      expect(loadConfig(getConfigDir()).SERI_TRAJECTORY_ENABLED).toBe("false");
+      await captureLogs(() =>
+        run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      );
+      expect(existsSync(getTrajectoriesDir(getConfigDir()))).toBe(false);
+    } finally {
+      restoreEnv("SERI_TRAJECTORY_ENABLED", original);
+    }
+  });
+
   test("an injected near-miss edit error writes edit_outcome near_miss", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const { fake } = fakeRunLoop([
@@ -3174,7 +3193,16 @@ describe("run (/clear)", () => {
     // handleSlashCommand's bare-invocation resolution reads this field, not a `name === "/clear"`
     // check (SlashCommand's own comment on why) — /undo, /rewind and /restore must NOT set it.
     expect(clear.scopeTargetToCwd).toBe(true);
-    for (const name of ["/undo", "/rewind", "/restore", "/mode", "/memory", "/compact", "/usage"]) {
+    for (const name of [
+      "/undo",
+      "/rewind",
+      "/restore",
+      "/mode",
+      "/memory",
+      "/compact",
+      "/trajectory",
+      "/usage",
+    ]) {
       const command = SLASH_COMMANDS.get(name);
       if (command === undefined) throw new Error(`${name} is not registered`);
       expect(command.scopeTargetToCwd).toBeUndefined();
@@ -3449,6 +3477,20 @@ describe("run (/usage)", () => {
     expect(usage.needsSession).toBe(false);
     expect(usage.readsDetailFlag).toBe(true);
     expect(usage.mutatesRunState).toBeUndefined();
+  });
+});
+
+describe("run (/trajectory)", () => {
+  test("is registered, needs no session, and accepts only [] or on|off", () => {
+    const trajectory = SLASH_COMMANDS.get("/trajectory");
+    if (trajectory === undefined) throw new Error("/trajectory is not registered");
+    expect(trajectory.accepts([])).toBe(true);
+    expect(trajectory.accepts(["on"])).toBe(true);
+    expect(trajectory.accepts(["off"])).toBe(true);
+    expect(trajectory.accepts(["please"])).toBe(false);
+    expect(trajectory.accepts(["off", "now"])).toBe(false);
+    expect(trajectory.needsSession).toBe(false);
+    expect(trajectory.mutatesRunState).toBeUndefined();
   });
 });
 

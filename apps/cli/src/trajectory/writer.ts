@@ -26,6 +26,8 @@ export type TrajectoryWriter = {
   recordArchivist: (
     report: { usage: LanguageModelUsage; cost: CostReport | undefined } | undefined,
   ) => void;
+  setEnabled: (enabled: boolean) => void;
+  isEnabled: () => boolean;
 };
 
 type WriterOpts = {
@@ -77,29 +79,28 @@ export function readTrajectory(path: string): unknown[] {
 
 export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
   const now = opts.now ?? (() => new Date());
+  let enabled = opts.enabled;
   let lastWritePath: string | undefined;
   let header: TrajectoryHeader | undefined;
   const parent: TrajectoryActor = { type: "parent" };
 
-  const noop: TrajectoryWriter = {
-    recordLoopEvent: () => {},
-    recordChildUsage: () => {},
-    recordChildEvent: () => {},
-    recordCheckpoint: () => {},
-    recordArchivist: () => {},
-  };
-  if (!opts.enabled) {
+  function pruneIfPresent(keepSessionId?: string): void {
     try {
       if (existsSync(opts.dir)) {
-        pruneTrajectories(opts.dir, { now: now(), retentionDays: opts.retentionDays });
+        pruneTrajectories(opts.dir, {
+          now: now(),
+          retentionDays: opts.retentionDays,
+          ...(keepSessionId !== undefined ? { keepSessionId } : {}),
+        });
       }
     } catch (err) {
       opts.onWarning(`could not prune trajectories: ${messageOf(err)}`);
     }
-    return noop;
   }
+  if (!enabled) pruneIfPresent(opts.sessionId);
 
   function writeRecord(kind: TrajectoryKind, actor: TrajectoryActor = parent): void {
+    if (!enabled) return;
     try {
       header ??= {
         v: TRAJECTORY_SCHEMA_VERSION,
@@ -252,5 +253,10 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
         { type: "archivist" },
       );
     },
+    setEnabled: (next) => {
+      enabled = next;
+      if (!next) pruneIfPresent(opts.sessionId);
+    },
+    isEnabled: () => enabled,
   };
 }

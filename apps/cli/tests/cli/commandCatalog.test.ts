@@ -22,6 +22,7 @@ const EXPECTED_NAMES = [
   "/clear",
   "/compact",
   "/memory",
+  "/trajectory",
   "/usage",
   "/exit",
   "/model",
@@ -58,6 +59,7 @@ const EXPECTED_SESSION = [
   "/clear",
   "/compact",
   "/memory",
+  "/trajectory",
   "/usage",
 ] as const;
 

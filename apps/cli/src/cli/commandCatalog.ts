@@ -96,6 +96,15 @@ export const COMMAND_META: readonly CommandMeta[] = [
     needsSession: false,
   },
   {
+    name: "/trajectory",
+    surface: "session",
+    description: "show or set local trajectory recording for this profile",
+    argsUsage: "[on|off]",
+    accepts: (args) =>
+      args.length === 0 || (args.length === 1 && (args[0] === "on" || args[0] === "off")),
+    needsSession: false,
+  },
+  {
     name: "/usage",
     surface: "session",
     description: "hosted-gateway spend vs allowance",

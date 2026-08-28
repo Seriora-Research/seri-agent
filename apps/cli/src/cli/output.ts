@@ -38,6 +38,7 @@ export const USAGE = `Usage:
   seri [--resume <id>] /clear     start a new session — the previous one stays resumable
   seri [--resume <id>] /memory pending | diff <id|all> | approve <id|all> | reject <id|all>
                                     | approval on|off | archivist on|off
+  seri /trajectory [on|off]         show or set local trajectory recording (default on)
   seri usage [--detail]             hosted-gateway spend vs allowance (not BYOK)
   /usage [--detail] (inside the TUI) same report as seri usage
   /exit (inside the TUI)          end the session, or Ctrl-D — not a seri subcommand: it means
