@@ -37,7 +37,7 @@ import {
 } from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { CheckOutcome } from "../../src/verify/run";
-import { readTrajectory } from "../../src/trajectory/writer";
+import { createTrajectoryWriter, readTrajectory, type TrajectoryWriter } from "../../src/trajectory/writer";
 import { fakeRunLoop } from "./fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
@@ -45,7 +45,12 @@ type RunLoopOpts = Parameters<typeof runLoop>[0];
 async function invokeSlash(
   name: string,
   args: string[],
-  dirs: { sessionsDir: string; checkpointsDir: string; configDir: string },
+  dirs: {
+    sessionsDir: string;
+    checkpointsDir: string;
+    configDir: string;
+    trajectory?: TrajectoryWriter;
+  },
   session?: SessionState<ModelMessage>,
 ): Promise<void> {
   const command = SLASH_COMMANDS.get(name);
@@ -3552,11 +3557,24 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     sDir: string = sessionsDir,
     cDir: string = checkpointsDir,
   ): Promise<void> {
+    const session = loadSession<ModelMessage>(SESSION_ID, sDir);
+    const trajectory = createTrajectoryWriter({
+      dir: getTrajectoriesDir(getConfigDir()),
+      sessionId: SESSION_ID,
+      cwd: session.cwd,
+      enabled: true,
+      retentionDays: 14,
+    });
     return invokeSlash(
       name,
       args,
-      { sessionsDir: sDir, checkpointsDir: cDir, configDir: getConfigDir() },
-      loadSession<ModelMessage>(SESSION_ID, sDir),
+      {
+        sessionsDir: sDir,
+        checkpointsDir: cDir,
+        configDir: getConfigDir(),
+        trajectory,
+      },
+      session,
     );
   }
 
