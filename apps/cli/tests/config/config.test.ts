@@ -189,4 +189,10 @@ describe("loadTrajectoryConfig", () => {
     process.env.SERI_TRAJECTORY_RETENTION_DAYS = "nope";
     expect(loadTrajectoryConfig().retentionDays).toBe(30);
   });
+
+  test("parses exponent-form retention days as the full integer, not parseInt's prefix", () => {
+    delete process.env.SERI_TRAJECTORY_RETENTION_DAYS;
+    process.env.SERI_TRAJECTORY_RETENTION_DAYS = "1e3";
+    expect(loadTrajectoryConfig().retentionDays).toBe(1000);
+  });
 });

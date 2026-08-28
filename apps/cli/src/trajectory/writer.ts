@@ -1,4 +1,4 @@
-import { appendFileSync as appendFileSyncReal, existsSync, readFileSync } from "node:fs";
+import { appendFileSync as appendFileSyncReal, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LanguageModelUsage } from "ai";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
@@ -61,6 +61,39 @@ export function readTrajectory(path: string): unknown[] {
     });
 }
 
+function maxSeqOf(value: unknown): number {
+  if (!isRecord(value) || typeof value.seq !== "number" || !Number.isFinite(value.seq)) return 0;
+  return value.seq;
+}
+
+function recoverExistingFile(path: string): { seq: number; present: boolean } {
+  if (!existsSync(path)) return { seq: 0, present: false };
+  const raw = readFileSync(path, "utf8");
+  if (raw.length === 0) return { seq: 0, present: false };
+  const parts = raw.split("\n");
+  const kept: string[] = [];
+  let seq = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const line = parts[i]!;
+    const isLast = i === parts.length - 1;
+    if (line === "" && isLast) break;
+    try {
+      seq = Math.max(seq, maxSeqOf(JSON.parse(line)));
+      kept.push(line);
+    } catch {
+      if (isLast || (i === parts.length - 2 && parts[parts.length - 1] === "")) break;
+      kept.push(line);
+    }
+  }
+  if (kept.length === 0) {
+    writeFileSync(path, "");
+    return { seq: 0, present: false };
+  }
+  const rewritten = `${kept.join("\n")}\n`;
+  if (rewritten !== raw) writeFileSync(path, rewritten);
+  return { seq, present: true };
+}
+
 export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
   const now = opts.now ?? (() => new Date());
   const append = opts.appendFileSync ?? appendFileSyncReal;
@@ -77,7 +110,16 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
     recordCheckpoint: () => {},
     recordArchivist: () => {},
   };
-  if (!opts.enabled) return noop;
+  if (!opts.enabled) {
+    try {
+      if (existsSync(opts.dir)) {
+        pruneTrajectories(opts.dir, { now: now(), retentionDays: opts.retentionDays });
+      }
+    } catch (err) {
+      opts.onWarning(`could not prune trajectories: ${messageOf(err)}`);
+    }
+    return noop;
+  }
 
   function writeRecord(kind: TrajectoryKind, actor: TrajectoryActor = parent): void {
     try {
@@ -88,16 +130,20 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
           retentionDays: opts.retentionDays,
           keepSessionId: opts.sessionId,
         });
-        const header: TrajectoryHeader = {
-          v: TRAJECTORY_SCHEMA_VERSION,
-          kind: "header",
-          sessionId: opts.sessionId,
-          cwd: opts.cwd,
-          startedAt: now().toISOString(),
-          model: opts.model,
-          provider: opts.provider,
-        };
-        append(path, `${JSON.stringify(header)}\n`);
+        const existing = recoverExistingFile(path);
+        seq = existing.seq;
+        if (!existing.present) {
+          const header: TrajectoryHeader = {
+            v: TRAJECTORY_SCHEMA_VERSION,
+            kind: "header",
+            sessionId: opts.sessionId,
+            cwd: opts.cwd,
+            startedAt: now().toISOString(),
+            model: opts.model,
+            provider: opts.provider,
+          };
+          append(path, `${JSON.stringify(header)}\n`);
+        }
         opened = true;
       }
       seq += 1;
@@ -207,6 +253,7 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
     recordChildEvent: (payload) => {
       if (payload.event.type === "child-started") return;
       if (payload.event.type === "text-delta") return;
+      if (payload.event.type === "usage") return;
       recordLoopEvent(payload.event, {
         type: "child",
         childId: payload.childId,

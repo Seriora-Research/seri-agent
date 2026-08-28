@@ -30,11 +30,16 @@ describe("pruneTrajectories", () => {
   });
 
   test("missing directory returns an empty list", () => {
-    expect(
-      pruneTrajectories(join(tmpdir(), "seri-traj-missing-dir-does-not-exist"), {
-        now: new Date(),
-        retentionDays: 30,
-      }),
-    ).toEqual([]);
+    const parent = mkdtempSync(join(tmpdir(), "seri-traj-missing-"));
+    try {
+      expect(
+        pruneTrajectories(join(parent, "missing"), {
+          now: new Date(),
+          retentionDays: 30,
+        }),
+      ).toEqual([]);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
   });
 });

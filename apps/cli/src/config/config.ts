@@ -145,8 +145,8 @@ export type TrajectoryConfig = { enabled: boolean; retentionDays: number };
 
 function parseRetentionDays(value: string | undefined): number {
   if (value === undefined) return DEFAULT_TRAJECTORY_RETENTION_DAYS;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_TRAJECTORY_RETENTION_DAYS;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return DEFAULT_TRAJECTORY_RETENTION_DAYS;
   return parsed;
 }
 
