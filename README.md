@@ -151,6 +151,7 @@ to a temporary copy.
 | `/compact` | summarize older messages in this session so the conversation fits the context window |
 | `/memory pending\|diff\|approve\|reject` | review and act on staged memory writes |
 | `/memory archivist on\|off` | turn the post-turn learning pass off entirely |
+| `/trajectory [on\|off]` | show or turn local trajectory recording on or off (default on; persists for the profile) |
 | `/login`, `/signup`, `/logout` | sign in to, create, or leave a hosted seri account |
 | `/usage [--detail]` | hosted-gateway spend vs allowance, reset date, and a burn-rate projection |
 | `/profile new <name>` | create a new profile — an isolated config/memory/session root |

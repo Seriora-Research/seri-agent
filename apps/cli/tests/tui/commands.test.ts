@@ -39,6 +39,7 @@ import {
   decideRestore,
   decideRewind,
   decideSetupOpen,
+  decideTrajectoryCommand,
   decideUndo,
   KNOWN_CONFIG_KEYS,
 } from "../../src/tui/state/commands";
@@ -1121,6 +1122,33 @@ describe("decideMaxTurns", () => {
     expect(() => decideMaxTurns(["abc"])).toThrow();
     expect(() => decideMaxTurns([])).toThrow();
     expect(() => decideMaxTurns(["1", "2"])).toThrow();
+  });
+});
+
+describe("decideTrajectoryCommand", () => {
+  test("bare invocation reports the current state and does not request a change", () => {
+    expect(decideTrajectoryCommand([], true)).toEqual({
+      message: "Trajectory recording is on.",
+    });
+    expect(decideTrajectoryCommand([], false)).toEqual({
+      message: "Trajectory recording is off.",
+    });
+  });
+
+  test("on and off return the requested enabled flag", () => {
+    expect(decideTrajectoryCommand(["off"], true)).toEqual({
+      enabled: false,
+      message: "Trajectory recording is off.",
+    });
+    expect(decideTrajectoryCommand(["on"], false)).toEqual({
+      enabled: true,
+      message: "Trajectory recording is on.",
+    });
+  });
+
+  test("throws on extra or unknown arguments", () => {
+    expect(() => decideTrajectoryCommand(["off", "please"], true)).toThrow();
+    expect(() => decideTrajectoryCommand(["maybe"], true)).toThrow();
   });
 });
 
