@@ -1,35 +1,41 @@
 ---
-description: War Room constraints for Cursor cloud agents. Apply on War Room EXECUTE (/poteto-mode implementer) and whenever `.cursor/loops/*/STATE.md` Status is EXECUTE.
+description: War Room constraints for Cursor cloud agents. Apply on War Room work and whenever `.cursor/loops/*/STATE.md` is in play.
 alwaysApply: true
 ---
 
 # War Room (cloud agent)
 
-You are a Cursor cloud agent working a War Room issue. Handler (Grok Bot) owns PLAN and VERIFY. You implement. You do not run the outer loop.
+You implement with `/poteto-mode` as the conductor, including opening the PR.
+You do not merge. You do not run a second outer loop alongside Handler.
 
-These bans apply during War Room EXECUTE. If this session is not a War Room EXECUTE, ignore the PR/merge bans.
-
-## Spec
-- The approved plan under `.cursor/loops/<slug>/` is the spec. Read it before any edit. Do not rewrite `confirmed_goal`.
-- Implement only that plan. If it is wrong or ambiguous, STOP and report. Do not improvise architecture.
+If an approved plan exists under `.cursor/loops/<slug>/`, that plan is the spec.
+Read it before any edit. Do not rewrite `confirmed_goal`. If it is wrong or
+ambiguous, STOP and report. Do not improvise architecture.
 
 ## Pstack
-- Use `/poteto-mode` (or the words "use poteto-mode / pstack" if slash autocomplete is missing).
+
+- Use `/poteto-mode` (or the words "use poteto-mode / pstack" if slash autocomplete
+  is missing).
 - Match **feature** or **bug fix** only (perf/refactoring/prototype if the plan says so).
-- Skip these playbooks: `opening-a-pr`, `shipping`, `babysit`, `autopilot-full`, `autopilot-stack`, `orchestrate`. When opening-a-pr would run, skip with `skip: War Room VERIFY opens the PR later`.
-- Do not start Graphite stacks unless this repo already uses Graphite.
+- **Run** `opening-a-pr`. Before it: `/blast-radius`, `/deslop`, `/interrogate`,
+  `/no-comments` as in `.cursor/rules/pstack-loop.mdc`.
+- Skip `shipping` (no merge). Skip `autopilot-stack` / Graphite unless this repo
+  already uses Graphite. Skip `orchestrate` unless the user asked for a multi-PR program.
+- Handler must not open a second PR for the same branch.
 
 ## Git
-- Unique branch: `feat/<slug>` or `fix/<slug>`. Never `main`.
+
+- Unique branch: `feat/<slug>` or `fix/<slug>` in War Room worktrees; cloud agents
+  follow the branch name the environment assigned.
 - Commit per plan step (`feat:`, `fix:`, `test:`, `refactor:`).
-- Do not open a pull request. Do not merge. Do not force-push. Do not touch `.env` or secrets.
+- Open the pull request when the playbook says to. Do not merge. Do not force-push.
+  Do not touch `.env` or secrets.
 - Do not share a worktree or workspace with another agent.
 
 ## Quality
-- Smallest change that satisfies the plan. No speculative features. Touch only what the plan requires.
-- Bugfix: failing regression test first (RED), then fix (GREEN).
-- An acceptance check must be seen to fail before it counts as passing. Record the negative control.
-- After all steps, run lint, typecheck, and the full test suite. Report exit codes. Do not open a PR when green.
 
-## Verify later
-Grok Bot Crucible then Inquisitor run VERIFY. After they pass, Handler will ask a later cloud agent to open the PR. That later launch is not EXECUTE and may open a PR. It still must not merge.
+- Smallest change that satisfies the plan. No speculative features.
+- Bugfix: failing regression test first (RED), then fix (GREEN).
+- An acceptance check must be seen to fail before it counts as passing. Record the
+  negative control.
+- After all steps, run lint, typecheck, and the full test suite. Report exit codes.

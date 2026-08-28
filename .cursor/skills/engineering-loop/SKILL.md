@@ -99,7 +99,7 @@ and a Tier 4 block needs authority to halt the whole loop.
   ```
   `success_check` is mandatory even when no trigger fired — restate the task's
   own acceptance criterion concretely. It becomes the canonical input to the
-  STOP CONDITION (§6) and to the reviewer-verifier in VERIFY (§5).
+  STOP CONDITION (§6).
 - A `preToolUse` gate hook (`.cursor/hooks/goal-audit-gate.*`) blocks writes of
   the mode plan files (`feature-plan.md` / `bugfix-report.md` / `research-spec.md`)
   under `.cursor/loops/` until this block exists with a non-empty `success_check`.
@@ -151,8 +151,9 @@ Line numbers break on the first edit of the target — every existing
 is the evidence for this rule, not a hypothetical.
 
 ## 4. EXECUTE (feature, bugfix only — research stops after PLAN)
-Read `.cursor/rules/pstack-loop.mdc` before dispatch. EXECUTE is pstack, not a
-second copy of this orchestrator.
+Read `.cursor/rules/pstack-loop.mdc` before dispatch. EXECUTE is pstack, including
+Opening a PR. This skill is the overlay (Goal Audit, plan, spec promotion), not a
+second conductor.
 
 - **bugfix**: FIRST a FAILING regression test that reproduces the bug; confirm
   it fails; THEN fix; confirm it passes. If the Goal Audit raised T5, this is
@@ -163,21 +164,18 @@ second copy of this orchestrator.
   check off its box in `docs/specs/<NNN>-<slug>/tasks.md` (§3b).
 - Dispatch Task `subagent_type: "poteto-agent"` (isolation: own workspace,
   not shared). If `poteto-agent` is unavailable, dispatch `implementer` with
-  the same plan and skip list. Cap at 3 parallel workers.
-- Skip `opening-a-pr` / `shipping` / `babysit` / `orchestrate` /
-  `autopilot-*`. VERIFY (this skill or Grok Bot) opens the PR later.
+  the same plan. Cap at 3 parallel workers.
+- **Run** `opening-a-pr`. Before it: `/blast-radius`, `/deslop`, `/interrogate`,
+  `/no-comments`. Skip `shipping` / `orchestrate` / `autopilot-*`. `babysit`
+  only if the user asked.
 
 ## 5. VERIFY (feature, bugfix; research uses a self-checklist)
 1. Run the deterministic gates yourself (or via the `verify-gate` skill):
    lint, typecheck, full test suite. Record exit codes. The Stop/verify-gate
    hook is not wired — same as Claude Code after 2026-08-21.
-2. Dispatch the `reviewer-verifier` subagent (Task
-   `subagent_type: "reviewer-verifier"`, SEPARATE context, read-only + tests).
-   Pass it `confirmed_goal` and `success_check` from the `## Goal Audit` block
-   in STATE.md as the acceptance criterion it grades against, in addition to
-   the plan and gate output. It reports CRITICAL / HIGH / MEDIUM / LOW. It
-   must NOT edit code.
-3. Write the verdict and gate results to STATE.md and `trajectory.md`.
+2. The PR and pstack review (`/interrogate`, `/no-comments`) already ran in
+   EXECUTE. Do **not** dispatch `reviewer-verifier` unless the user asked.
+3. Write gate results and the PR URL to STATE.md and `trajectory.md`.
 4. Update this spec's row in `docs/ROADMAP.md` — state, and the PR number once
    one is open. **`docs/ROADMAP.md` is the single source of stage state**: do
    not restate a stage's status in `docs/ARCHITECTURE.md`, in a spec body, or
@@ -194,8 +192,7 @@ matching clause:
   `docs/specs/<NNN>-<slug>/research.md` per §3b; or stop after 15 turns."
 - **feature**: "Lint, typecheck, and the full test suite pass (shown via their
   exit codes in the transcript), git status is clean, every box in
-  `docs/specs/<NNN>-<slug>/tasks.md` is checked, and the reviewer-verifier
-  reported no CRITICAL or HIGH findings; or stop after 30 turns."
+  `docs/specs/<NNN>-<slug>/tasks.md` is checked, and a PR is open; or stop after 30 turns."
 - **bugfix**: "The new regression test that previously failed now passes, the
   full suite is green, no other test file was modified, and lint+typecheck are
   clean; or stop after 20 turns."

@@ -17,13 +17,10 @@ orchestrator fast-forward-merging it into local `main` and pushing `main` direct
 permission). Confirmed with the user afterward this shouldn't be the normal path going
 forward.
 
-**How to apply:** For engineering-loop feature/bugfix work, EXECUTE still dispatches
-implementer(s) in isolated worktrees as before, and VERIFY (gates, reviewer-verifier,
-thermo-nuclear, live e2e where applicable) still happens before anything is proposed for
-merge — none of that changes. What changes is the landing step: push the verified
-branch to `origin` and open a PR against `main` rather than merging locally. Naming: a
-descriptive branch name derived from the loop's slug (e.g. `hesper-stage-4-checkpoints`)
-is reasonable; ask if unsure.
+**How to apply:** On Cursor, feature/bugfix work is pstack (`/poteto-mode`), including
+Opening a PR — see `.cursor/rules/pstack-loop.mdc`. Gates still run. Default review is
+`/interrogate` + `/no-comments`, plus `/blast-radius` before the PR. Push the branch
+and open the PR; do not merge locally.
 
 ## PR review: `/code-review` stays the default; `@claude` in PRs is now also set up
 Considered and explicitly rejected (user directive, 2026-08-02): the official Claude
@@ -40,14 +37,10 @@ user's Claude Pro/Max subscription instead of separate API usage. Set up in this
 `CLAUDE_CODE_OAUTH_TOKEN`, GitHub App installed. This is a manually-triggered mention
 workflow, not an auto-review-every-PR one.
 
-`/code-review` (run by the orchestrator, in-session) remains the default for loop
-verification — no bot, no repo secret to manage there. The `@claude` mention workflow is
-an ad hoc supplementary path (e.g. tagging `@claude` on a PR from GitHub's UI, off-session)
-in addition to, not instead of, the existing reviewer-verifier/thermo-nuclear passes
-already run during a loop's VERIFY phase.
+Default in-session review on Cursor is pstack `/interrogate` (and `/no-comments` before
+the PR). `/code-review` remains available as a user-triggered pass. The `@claude`
+mention workflow is an ad hoc supplementary path.
 
-**Open, not yet resolved:** whether the orchestrator merges a PR itself once
-gates + reviewer-verifier + thermo-nuclear + `/code-review` all pass, or always leaves
-the actual GitHub merge for the human. Default until told otherwise: do NOT merge PRs
-yourself — open them, verify them, then stop and hand off. Check this file for whether
-that's been settled explicitly before assuming otherwise.
+**Open, not yet resolved:** whether the conductor merges a PR itself once gates +
+review pass, or always leaves GitHub merge for the human. Default until told
+otherwise: do NOT merge PRs yourself — open them, then stop and hand off.
