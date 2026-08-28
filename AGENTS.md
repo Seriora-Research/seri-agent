@@ -177,11 +177,10 @@ visibly different line for each. API keys resolve from env var first, then
 `apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`. A non-default profile
 (`--profile <name>` or `SERI_PROFILE`, the flag wins) puts config.json, auth.json,
 permissions.yaml, sessions/ and checkpoints/ under `<root>/<profile>/` instead; the vendored
-`rg/` cache stays shared across every profile. `seri config
-set|list|unset` (`apps/cli/src/config/commands.ts`) manages that file; it's written
+`rg/` cache stays shared across every profile. `/setup` and `/config` write that file; it's written
 owner-only and via write-then-rename, since it holds API keys and a partial write
-would break every later command's `loadConfig`. `list` masks values and flags any
-shadowed by an env var, because `getApiKey` prefers `process.env`.
+would break every later command's `loadConfig`. Masked values and env-shadow flags live in
+`/setup` rows, because `getApiKey` prefers `process.env`.
 
 # Seri Code Review Guidelines
 

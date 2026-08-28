@@ -216,9 +216,8 @@ export type CliDeps = {
   onIdleFlush?: (sessionId: string, signal: AbortSignal) => Promise<void>;
   waitForServe?: () => Promise<void>;
   fetch?: typeof fetch;
-  // The directory holding permissions.yaml. Deliberately NOT reusing `authConfigDir`: that name is
-  // already stretched across auth AND `seri config`, and a third consumer that is neither would
-  // make it mean nothing. Same shape as sessionsDir/checkpointsDir, defaulting to getConfigDir().
+  // The directory holding permissions.yaml. Not `authConfigDir`: that name already covers auth
+  // and TUI `/config`. Same shape as sessionsDir/checkpointsDir, defaulting to getConfigDir().
   permissionsDir?: string;
   grep?: typeof grepReal;
   createInterface?: () => Interface;

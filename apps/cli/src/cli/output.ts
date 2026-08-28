@@ -18,8 +18,6 @@ import { type CheckOutcome, writeFileVerification } from "../verify/outcome";
 
 // stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
 // parseArgs rejects, or no task given — is a usage error: printed to stderr, exit 2.
-// config/commands.ts's own usage error also exits 2, keeping the convention uniform across every
-// subcommand rather than half-adopted on just this one.
 // `--selftest` is left out on purpose — cli.ts calls it an undocumented build-verification flag.
 export const USAGE = `Usage:
   seri <task>                     send a task to the model
