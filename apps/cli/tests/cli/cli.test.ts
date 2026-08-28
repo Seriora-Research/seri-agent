@@ -463,16 +463,12 @@ describe("run (task invocation)", () => {
     expect(code).toBe(0);
     expect(capture()).toBeDefined();
     expect(capture()?.permissionMode).toBe("approve-each");
-    // The same tool set, with only the filesystem-mutating tools wrapped for checkpointing, plus
-    // dispatch_subagents — driveLoop's own withSubagents composition, not part of toolDefinitions.
+    // Cwd-bound tools (one factory per session directory), with filesystem-mutating tools wrapped
+    // for checkpointing, plus dispatch_subagents from driveLoop's withSubagents composition.
     expect(Object.keys(capture()?.tools ?? {})).toEqual([
       ...Object.keys(toolDefinitions),
       "dispatch_subagents",
     ]);
-    expect(capture()?.tools.read_file).toBe(toolDefinitions.read_file);
-    expect(capture()?.tools.grep).toBe(toolDefinitions.grep);
-    expect(capture()?.tools.glob).toBe(toolDefinitions.glob);
-    expect(capture()?.tools.edit).toBe(toolDefinitions.edit);
     expect(capture()?.tools.write_file).not.toBe(toolDefinitions.write_file);
     expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "write hello.txt" });
     expect(capture()?.messages).toHaveLength(1);
