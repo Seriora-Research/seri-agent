@@ -110,6 +110,23 @@ whichever configured provider reaches the same model — native providers prefer
 aggregator like OpenRouter — and says so once in the transcript. An explicit `/model` pick always
 wins over this if its own provider has a key.
 
+Subagent roles (`explore`, `plan`, `code`, `test`, `oracle`) and the hidden archivist inherit
+that resolved pair unless you pin one. Pins are a coupled `MODEL` + `PROVIDER` pair, the same
+rule as `SERI_MODEL` / `SERI_PROVIDER` — a model without a valid provider from the same source
+is ignored, not mixed with the session provider:
+
+```
+seri config set SERI_ROLE_ORACLE_MODEL claude-sonnet-5
+seri config set SERI_ROLE_ORACLE_PROVIDER anthropic
+seri config set SERI_ROLE_ARCHIVIST_MODEL llama-3.3-70b-versatile
+seri config set SERI_ROLE_ARCHIVIST_PROVIDER groq
+```
+
+`oracle` is a read-only advisor seat on `dispatch_subagents` (it cannot write or run commands).
+Pinning it is how it becomes a stronger model than the session; unpinned, it still runs in
+isolated context on the session model. A pin that cannot be constructed warns and falls back to
+the session model rather than failing the turn.
+
 The first search of each release unpacks its bundled ripgrep to `~/.seri/rg/<key>/`. Deleting that
 directory is safe — the next search writes it again — and a run that cannot write there falls back
 to a temporary copy.

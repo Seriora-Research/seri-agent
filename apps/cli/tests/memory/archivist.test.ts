@@ -468,6 +468,50 @@ describe("maybeRunArchivist", () => {
     expect(report?.trigger).toBe("tool-count");
     expect(s.toolCallsSinceRun).toBe(0);
   });
+
+  test("nested runLoop uses the routed model's catalog window, not the parent trigger window", async () => {
+    const ctx = makeCtx();
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [
+        { type: "text-delta", text: "ok" },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    const catalog: ModelCatalog = {
+      fetchedAt: "",
+      entries: [
+        {
+          id: "cheap-model",
+          provider: "groq",
+          displayName: "Cheap",
+          family: null,
+          contextWindow: 8_000,
+          maxOutputTokens: 1_024,
+          toolCall: true,
+          reasoning: false,
+          pricing: undefined,
+        },
+      ],
+    };
+    const s = createArchivistState(emptySession());
+    s.messages = [{ role: "user", content: "task" }];
+    s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+
+    await maybeRunArchivist({
+      state: s,
+      ctx,
+      contextWindow: 100_000,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "cheap-model", provider: "groq" },
+      catalog,
+      signal: new AbortController().signal,
+      onWarning: () => {},
+      runLoop: fake as unknown as typeof runLoop,
+    });
+
+    expect(calls[0]?.opts.contextWindowSize).toBe(8_000);
+    expect(calls[0]?.opts.modelId).toBe("cheap-model");
+  });
 });
 
 describe("buildArchivistGoal", () => {

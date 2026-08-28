@@ -200,6 +200,9 @@ export type ChildView = {
   transcript: TranscriptEntry[];
   streaming: string;
   toolActivity: ToolActivityEntry[];
+  model?: string;
+  provider?: ModelProvider;
+  inherited?: boolean;
 };
 
 // What "an empty transcript" means, as a single value rather than fields independently kept
@@ -397,7 +400,12 @@ export type TuiAction =
 // exists at all. Lives here, not cli.ts, since it is built from TuiAction, declared right above.
 export type Dispatch = (action: TuiAction) => void;
 
-function emptyChild(id: string, role: ChildEventPayload["role"], goal: string): ChildView {
+function emptyChild(
+  id: string,
+  role: ChildEventPayload["role"],
+  goal: string,
+  route?: Pick<ChildEventPayload, "model" | "provider" | "inherited">,
+): ChildView {
   return {
     id,
     role,
@@ -406,6 +414,9 @@ function emptyChild(id: string, role: ChildEventPayload["role"], goal: string): 
     transcript: [],
     streaming: "",
     toolActivity: [],
+    model: route?.model,
+    provider: route?.provider,
+    inherited: route?.inherited,
   };
 }
 
@@ -475,7 +486,7 @@ function applyChildEvent(
     if (state.subagents.some((child) => child.id === action.childId)) return state;
     return {
       ...state,
-      subagents: [...state.subagents, emptyChild(action.childId, action.role, action.goal)],
+      subagents: [...state.subagents, emptyChild(action.childId, action.role, action.goal, action)],
     };
   }
   if (action.event.type === "usage" || action.event.type === "compacted") {

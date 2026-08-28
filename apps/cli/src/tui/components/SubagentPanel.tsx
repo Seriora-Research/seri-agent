@@ -9,6 +9,16 @@ import { isEnter } from "../util/keys";
 
 const CHILD_WINDOW = 3;
 
+export function rosterModelSuffix(child: {
+  inherited?: boolean;
+  model?: string;
+}): string | undefined {
+  if (child.inherited === false && child.model !== undefined && child.model.length > 0) {
+    return child.model;
+  }
+  return undefined;
+}
+
 export function childWindowOffset(
   selectedId: string | undefined,
   childIds: readonly string[],
@@ -107,7 +117,8 @@ function SubagentRow({ child, selected }: { child: ChildView; selected: boolean 
       ? undefined
       : summarizeArgs(child.currentTool.name, child.currentTool.args);
   const suffix = denialSuffix(child);
-  const rest = [tool, suffix].filter((part) => part !== undefined && part.length > 0);
+  const model = rosterModelSuffix(child);
+  const rest = [model, tool, suffix].filter((part) => part !== undefined && part.length > 0);
   return (
     <RosterRow selected={selected}>
       <text attributes={TextAttributes.BOLD} flexShrink={0}>
