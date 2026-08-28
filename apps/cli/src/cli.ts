@@ -1246,7 +1246,7 @@ async function handleExecCommand(
   let cancelRequested = false;
   const unregisterCancel = onSignalCancel(() => {
     cancelRequested = true;
-    if (turnId !== undefined) void client.cancel(turnId);
+    if (turnId !== undefined) void client.cancel(turnId).catch(() => {});
   });
   try {
     for await (const event of client.startTurn({ task, cwd: process.cwd() })) {

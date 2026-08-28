@@ -129,37 +129,38 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
   const sessionsDir = deps.sessionsDir ?? join(opts.configDir, "sessions");
   const checkpointsDir = deps.checkpointsDir ?? join(opts.configDir, "checkpoints");
   const permissionsDir = deps.permissionsDir ?? opts.configDir;
-  database.importLegacySessions(sessionsDir);
-  database.importLegacyTrajectories(join(opts.configDir, "trajectories"));
-  const executeTurn =
-    opts.executeTurn ??
-    createAttendedExecuteTurn({
-      configDir: opts.configDir,
-      sessionsDir,
-      checkpointsDir,
-      permissionsDir,
-      deps,
-      database,
-    });
-  const runScheduled =
-    opts.runScheduled ??
-    createRunScheduled({
-      configDir: opts.configDir,
-      sessionsDir,
-      deps,
-    });
-  const onIdleFlush =
-    opts.onIdleFlush ??
-    ((sessionId: string, signal: AbortSignal) =>
-      flushIdleSession(database, sessionId, opts.configDir, deps, signal));
-  const manager = new DaemonSessionManager(database, executeTurn, {
-    idleMs: opts.idleMs,
-    onIdleFlush,
-  });
-  const scheduler = new Scheduler(database, runScheduled, opts.now, opts.tickMs);
-
+  let scheduler: Scheduler;
+  let manager: DaemonSessionManager;
   let server: ReturnType<typeof Bun.serve>;
   try {
+    database.importLegacySessions(sessionsDir);
+    database.importLegacyTrajectories(join(opts.configDir, "trajectories"));
+    const executeTurn =
+      opts.executeTurn ??
+      createAttendedExecuteTurn({
+        configDir: opts.configDir,
+        sessionsDir,
+        checkpointsDir,
+        permissionsDir,
+        deps,
+        database,
+      });
+    const runScheduled =
+      opts.runScheduled ??
+      createRunScheduled({
+        configDir: opts.configDir,
+        sessionsDir,
+        deps,
+      });
+    const onIdleFlush =
+      opts.onIdleFlush ??
+      ((sessionId: string, signal: AbortSignal) =>
+        flushIdleSession(database, sessionId, opts.configDir, deps, signal));
+    manager = new DaemonSessionManager(database, executeTurn, {
+      idleMs: opts.idleMs,
+      onIdleFlush,
+    });
+    scheduler = new Scheduler(database, runScheduled, opts.now, opts.tickMs);
     server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,

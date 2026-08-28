@@ -246,10 +246,18 @@ export class DaemonSessionManager {
     }
   }
 
+  private sessionHasLiveTurn(sessionId: string): boolean {
+    for (const handle of this.turns.values()) {
+      if (handle.sessionId === sessionId && !handle.finished) return true;
+    }
+    return false;
+  }
+
   private armIdle(sessionId: string): void {
     if (this.idleMs <= 0) return;
     const handle = this.sessions.get(sessionId);
     if (handle === undefined) return;
+    if (this.sessionHasLiveTurn(sessionId)) return;
     if (handle.idleTimer !== undefined) clearTimeout(handle.idleTimer);
     handle.idleTimer = setTimeout(() => {
       void this.flushIdle(sessionId);

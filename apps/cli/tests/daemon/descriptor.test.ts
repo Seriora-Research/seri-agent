@@ -123,4 +123,17 @@ describe("daemon descriptor and lock", () => {
     const lock = acquireDaemonLock(configDir);
     lock.release();
   });
+
+  test("a failed legacy import releases the lock so a later start can proceed", async () => {
+    const configDir = makeDir();
+    writeFileSync(join(configDir, "sessions"), "not a directory");
+    await expect(
+      startDaemon({
+        configDir,
+        executeTurn: async () => ({ exitCode: 0 }),
+      }),
+    ).rejects.toThrow();
+    const lock = acquireDaemonLock(configDir);
+    lock.release();
+  });
 });

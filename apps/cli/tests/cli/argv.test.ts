@@ -1015,4 +1015,73 @@ describe("run (serve / exec)", () => {
       console.log = originalLog;
     }
   });
+
+  test("`seri exec` SIGINT cancel network failure does not become an unhandled rejection", async () => {
+    writeDaemonDescriptor(getConfigDir(), {
+      v: 1,
+      endpoint: "http://127.0.0.1:9",
+      token: "t",
+      pid: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const encoder = new TextEncoder();
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const firstEvent = Promise.withResolvers<void>();
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url =
+        input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      if (url.pathname === "/v1/turns") {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              streamController = controller;
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    v: 1,
+                    sessionId: "s",
+                    turnId: "turn-1",
+                    seq: 1,
+                    event: { type: "loop", value: { type: "text-delta", text: "x" } },
+                  })}\n\n`,
+                ),
+              );
+              firstEvent.resolve();
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.pathname.endsWith("/cancel")) {
+        streamController?.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              v: 1,
+              sessionId: "s",
+              turnId: "turn-1",
+              seq: 2,
+              event: { type: "turn-complete", exitCode: 1 },
+            })}\n\n`,
+          ),
+        );
+        streamController?.close();
+        return new Response("no", { status: 500 });
+      }
+      return new Response("no", { status: 404 });
+    }) as unknown as typeof fetch;
+    const originalError = console.error;
+    const originalLog = console.log;
+    console.error = () => {};
+    console.log = () => {};
+    try {
+      const running = run(["exec", "go"], { fetch: fetchImpl, authConfigDir: getConfigDir() });
+      await firstEvent.promise;
+      await Bun.sleep(20);
+      deliverSignal("SIGINT");
+      expect(await running).toBe(1);
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
+  });
 });

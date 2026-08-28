@@ -247,6 +247,63 @@ describe("idle archivist flush", () => {
     }
   });
 
+  test("idle delay starts after the last queued turn, not after an earlier turn in the same session", async () => {
+    const configDir = makeDir();
+    const database = new SessionDatabase(configDir);
+    database.saveSession({
+      id: "sess-queue",
+      cwd: configDir,
+      systemPrompt: "",
+      permissionMode: "approve-each",
+      messages: [],
+    });
+    const holdFirst = Promise.withResolvers<void>();
+    let secondEndedAt = 0;
+    let flushedAt = 0;
+    const manager = new DaemonSessionManager(
+      database,
+      async (input) => {
+        if (input.task === "one") await holdFirst.promise;
+        if (input.task === "two") await Bun.sleep(40);
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        if (input.task === "two") secondEndedAt = Date.now();
+        return { exitCode: 0 };
+      },
+      {
+        idleMs: 50,
+        onIdleFlush: async () => {
+          flushedAt = Date.now();
+        },
+      },
+    );
+
+    try {
+      const first = await manager.startTurn({ task: "one", sessionId: "sess-queue" });
+      const firstDone = new Promise<void>((resolve) => {
+        first.subscribe((event: DaemonEvent) => {
+          if (event.event.type === "turn-complete") resolve();
+        });
+      });
+      const second = await manager.startTurn({ task: "two", sessionId: "sess-queue" });
+      const secondDone = new Promise<void>((resolve) => {
+        second.subscribe((event: DaemonEvent) => {
+          if (event.event.type === "turn-complete") resolve();
+        });
+      });
+      holdFirst.resolve();
+      await firstDone;
+      await secondDone;
+      const deadline = Date.now() + 400;
+      while (flushedAt === 0 && Date.now() < deadline) await Bun.sleep(10);
+      expect(flushedAt).toBeGreaterThan(0);
+      expect(flushedAt - secondEndedAt).toBeGreaterThanOrEqual(40);
+    } finally {
+      manager.cancelAll();
+      await manager.waitForIdle();
+      database.close();
+    }
+  });
+
   test("daemon stop aborts an in-flight idle flush", async () => {
     const flushStarted = Promise.withResolvers<void>();
     let aborted = false;
