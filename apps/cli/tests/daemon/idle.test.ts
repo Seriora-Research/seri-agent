@@ -197,4 +197,53 @@ describe("idle archivist flush", () => {
       database.close();
     }
   });
+
+  test("an idle flush throw does not permanently hang the next turn", async () => {
+    const configDir = makeDir();
+    const database = new SessionDatabase(configDir);
+    database.saveSession({
+      id: "sess-poison",
+      cwd: configDir,
+      systemPrompt: "",
+      permissionMode: "approve-each",
+      messages: [],
+    });
+    const manager = new DaemonSessionManager(
+      database,
+      async (input) => {
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        return { exitCode: 0 };
+      },
+      {
+        idleMs: 15,
+        onIdleFlush: async () => {
+          throw new Error("idle route failed");
+        },
+      },
+    );
+
+    async function completeTurn(task: string): Promise<void> {
+      const started = await manager.startTurn({ task, sessionId: "sess-poison" });
+      await new Promise<void>((resolve) => {
+        started.subscribe((event: DaemonEvent) => {
+          if (event.event.type === "turn-complete") resolve();
+        });
+      });
+    }
+
+    try {
+      await completeTurn("one");
+      await Bun.sleep(40);
+      const second = completeTurn("two");
+      const timedOut = await Promise.race([
+        second.then(() => "ok"),
+        Bun.sleep(1000).then(() => "timeout"),
+      ]);
+      expect(timedOut).toBe("ok");
+    } finally {
+      manager.cancelAll();
+      await manager.waitForIdle();
+      database.close();
+    }
+  });
 });

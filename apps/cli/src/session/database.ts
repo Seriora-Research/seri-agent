@@ -663,6 +663,7 @@ export class SessionDatabase {
 
   skipMissedSchedules(nowMs: number): void {
     this.database.transaction(() => {
+      this.database.query("UPDATE schedules SET running = 0").run();
       for (const schedule of this.listEnabledSchedules()) {
         if (schedule.nextRunAtMs === null || schedule.nextRunAtMs > nowMs) continue;
         if (schedule.timing.kind === "once") {

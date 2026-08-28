@@ -92,15 +92,13 @@ export class DaemonSessionManager {
       clearTimeout(sessionHandle.idleTimer);
       sessionHandle.idleTimer = undefined;
     }
-    const started = Promise.withResolvers<void>();
     const gate = Promise.withResolvers<void>();
-    sessionHandle.tail = sessionHandle.tail.then(async () => {
-      started.resolve();
-      await gate.promise;
-      await this.runTurn(turnId, handle, session, request.task, request.permissionMode);
-    });
-    sessionHandle.tail.catch(() => {});
-    await started.promise;
+    sessionHandle.tail = sessionHandle.tail
+      .then(async () => {
+        await gate.promise;
+        await this.runTurn(turnId, handle, session, request.task, request.permissionMode);
+      })
+      .catch(() => {});
 
     return {
       turnId,
@@ -258,14 +256,15 @@ export class DaemonSessionManager {
     if (handle === undefined) return;
     handle.idleTimer = undefined;
     const generation = handle.generation;
-    handle.tail = handle.tail.then(async () => {
-      if (handle.generation !== generation) return;
-      await this.onIdleFlush?.(sessionId);
-      if (handle.generation !== generation) return;
-      this.sessions.delete(sessionId);
-      this.evictedSessionIds.push(sessionId);
-    });
-    handle.tail.catch(() => {});
+    handle.tail = handle.tail
+      .then(async () => {
+        if (handle.generation !== generation) return;
+        await this.onIdleFlush?.(sessionId);
+        if (handle.generation !== generation) return;
+        this.sessions.delete(sessionId);
+        this.evictedSessionIds.push(sessionId);
+      })
+      .catch(() => {});
   }
 
   private onSubscriberGone(handle: TurnHandle): void {

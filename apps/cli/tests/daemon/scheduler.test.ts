@@ -188,6 +188,37 @@ describe("Scheduler", () => {
     expect(skipped?.nextRunAtMs).toBeGreaterThan(now);
     database.close();
   });
+
+  test("startup clears a crashed running claim so the next due tick can fire", async () => {
+    const configDir = makeDir();
+    const database = new SessionDatabase(configDir);
+    let now = 20_000;
+    const fired: string[] = [];
+    const scheduler = new Scheduler(
+      database,
+      async (input) => {
+        fired.push(input.scheduleId);
+        return { response: "ran" };
+      },
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "interval",
+      cwd: configDir,
+      timing: { kind: "interval", everySeconds: 60 },
+      allowModelReads: true,
+    });
+    now = 80_000;
+    const claimed = database.claimSchedule(created.id, now);
+    expect(claimed?.running).toBe(true);
+    const afterClaim = database.getSchedule(created.id);
+    scheduler.start();
+    scheduler.stop();
+    now = afterClaim!.nextRunAtMs!;
+    await scheduler.tick();
+    expect(fired).toEqual([created.id]);
+    database.close();
+  });
 });
 
 describe("daemon schedule routes", () => {

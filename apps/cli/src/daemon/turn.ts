@@ -74,7 +74,7 @@ export function createAttendedExecuteTurn(opts: {
         composeSubagents: true,
       },
     );
-    opts.database.setArchivistCursor(input.sessionId, archivistState.messages.length);
+    opts.database.setArchivistCursor(input.sessionId, archivistState.messageCursor);
     return { exitCode: exitCodeFromDriveResult(result) };
   };
 }

@@ -89,7 +89,10 @@ describe("production daemon wiring", () => {
     try {
       const stored = probe.loadSession(sessionId!);
       expect(stored).toBeDefined();
-      expect(probe.getArchivistCursor(sessionId!)).toBe(stored!.messages.length);
+      // A no-tool-call turn does not run the archivist. The cursor must stay at the
+      // unarchived prefix, not jump to messages.length (that would make idle flush a no-op).
+      expect(probe.getArchivistCursor(sessionId!)).toBe(0);
+      expect(stored!.messages.length).toBeGreaterThan(0);
     } finally {
       probe.close();
     }

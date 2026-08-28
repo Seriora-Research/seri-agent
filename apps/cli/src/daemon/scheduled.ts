@@ -103,7 +103,6 @@ export function createRunScheduled(opts: {
     } catch (caught) {
       return { error: caught instanceof Error ? caught.message : String(caught) };
     }
-    saveSession(input.session, opts.sessionsDir);
     if (error !== undefined) return { error };
     return { response };
   };
