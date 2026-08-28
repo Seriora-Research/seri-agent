@@ -791,8 +791,8 @@ function trajectoryCommand(
     dirs.trajectory?.isEnabled() ?? loadTrajectoryConfig(dirs.configDir).enabled;
   const decided = decideTrajectoryCommand(args, currentlyEnabled);
   if (decided.enabled !== undefined) {
-    dirs.trajectory?.setEnabled(decided.enabled);
     setConfigValue("SERI_TRAJECTORY_ENABLED", decided.enabled ? "true" : "false", dirs.configDir);
+    dirs.trajectory?.setEnabled(decided.enabled);
   }
   let message = decided.message;
   if (decided.enabled !== undefined && process.env.SERI_TRAJECTORY_ENABLED !== undefined) {

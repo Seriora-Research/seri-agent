@@ -266,6 +266,47 @@ describe("createTrajectoryWriter", () => {
     }
   });
 
+  test("a disabled start keeps this session's jsonl so later enable resumes it", () => {
+    const parent = mkdtempSync(join(tmpdir(), "seri-traj-keep-session-"));
+    const dir = join(parent, "trajectories");
+    mkdirSync(dir);
+    const path = join(dir, "sess-1.jsonl");
+    const stale = join(dir, "other.jsonl");
+    const header = JSON.stringify({
+      v: 1,
+      kind: "header",
+      sessionId: "sess-1",
+      cwd: "/tmp",
+      startedAt: "t",
+    });
+    const done = JSON.stringify({
+      v: 1,
+      ts: "t",
+      seq: 1,
+      sessionId: "sess-1",
+      actor: { type: "parent" },
+      kind: "done",
+      reason: "no-tool-call",
+    });
+    writeFileSync(path, `${header}\n${done}\n`);
+    writeFileSync(stale, "{}\n");
+    const now = new Date("2026-08-27T00:00:00Z");
+    const day = 24 * 60 * 60 * 1000;
+    utimesSync(path, new Date(now.getTime() - 31 * day), new Date(now.getTime() - 31 * day));
+    utimesSync(stale, new Date(now.getTime() - 31 * day), new Date(now.getTime() - 31 * day));
+    try {
+      const writer = createTrajectoryWriter(writerOpts(dir, { enabled: false, now: () => now }));
+      expect(readdirSync(dir)).toEqual(["sess-1.jsonl"]);
+      writer.setEnabled(true);
+      writer.recordLoopEvent({ type: "retry", attempt: 1 });
+      const lines = readTrajectory(path);
+      expect(lines.filter((line) => (line as { kind: string }).kind === "header")).toHaveLength(1);
+      expect(lines[2]).toMatchObject({ kind: "retry", seq: 2 });
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   test("setEnabled(false) stops appending; setEnabled(true) continues seq without a second header", () => {
     const parent = mkdtempSync(join(tmpdir(), "seri-traj-toggle-"));
     const dir = join(parent, "trajectories");

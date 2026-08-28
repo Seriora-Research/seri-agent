@@ -126,7 +126,7 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
       opts.onWarning(`could not prune trajectories: ${messageOf(err)}`);
     }
   }
-  if (!enabled) pruneIfPresent();
+  if (!enabled) pruneIfPresent(opts.sessionId);
 
   function writeRecord(kind: TrajectoryKind, actor: TrajectoryActor = parent): void {
     if (!enabled) return;
