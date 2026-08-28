@@ -1,7 +1,11 @@
-import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
+import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type { LanguageModel, ModelMessage } from "ai";
+import type { CliDeps } from "../cli";
+import { printWarning } from "../cli/output";
 import { type ArchivistReport, createArchivistState, runArchivist } from "../memory/archivist";
 import type { MemoryContext } from "../memory/store";
+import { resolveDefaultModel } from "../provider/defaults";
+import { resolveModelRoute } from "../runtime/prepare";
 import type { SessionDatabase } from "../session/database";
 import type { SessionState } from "../session/session";
 
@@ -40,4 +44,32 @@ export async function flushIdleArchivist(args: {
 
 export function sessionMemoryContext(session: SessionState, configDir: string): MemoryContext {
   return { configDir, worktree: session.cwd };
+}
+
+export async function flushIdleSession(
+  database: SessionDatabase,
+  sessionId: string,
+  configDir: string,
+  deps: CliDeps,
+): Promise<void> {
+  const session = database.loadSession<ModelMessage>(sessionId);
+  if (session === undefined) return;
+  const requested =
+    session.model === undefined
+      ? resolveDefaultModel(configDir)
+      : { model: session.model, provider: session.provider };
+  const { model, route, catalog } = await resolveModelRoute(requested, configDir, sessionId, deps);
+  const catalogEntry = findCatalogEntry(catalog, route.model, route.provider);
+  await flushIdleArchivist({
+    database,
+    sessionId,
+    ctx: sessionMemoryContext(session, configDir),
+    model,
+    route: { model: route.model, provider: route.provider },
+    catalog,
+    contextWindow: catalogEntry?.contextWindow,
+    signal: new AbortController().signal,
+    onWarning: (message) => printWarning(message),
+    runLoop: deps.runLoop,
+  });
 }

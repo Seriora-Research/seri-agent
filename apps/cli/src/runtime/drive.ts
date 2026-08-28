@@ -83,6 +83,25 @@ export type DriveLoopResult = {
   ranAnyTurn: boolean;
 };
 
+export type DriveLoopOptions = {
+  // When set, aborting this signal aborts the same controller the loop is driven with. Direct
+  // CLI/TUI callers omit it; the daemon passes the per-turn controller so cancel is keyed by
+  // turnId rather than by process signal.
+  signal?: AbortSignal;
+  // Default true: register the process SIGINT/SIGTERM cancel slot (first-cancels, second is
+  // fatal). The daemon sets this false so a Ctrl-C at `seri serve` is not stolen by an in-flight
+  // turn's slot.
+  bindProcessCancel?: boolean;
+  // Default true: wrap tools with dispatch_subagents. Scheduled runs never compose that tool.
+  composeSubagents?: boolean;
+};
+
+export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
+  if (!result.ranAnyTurn) return 0;
+  if (result.doneReason === "no-tool-call") return result.refusedWithoutRunning ? 1 : 0;
+  return 1;
+}
+
 // `maxTurns` is an argument rather than a field of ctx: it is neither the resume target nor where
 // its state lives, and this is the only place that reads it. `onEvent` is how it reports events —
 // driveLoop only ever calls it with the raw LoopEvent, never anything TUI-shaped: printEvent
@@ -144,6 +163,7 @@ export async function driveLoop(
   // TUI live panel; the non-interactive caller omits it. Not folded into onEvent, which stays
   // LoopEvent only.
   onChildEvent?: (payload: ChildEventPayload) => void,
+  driveOpts: DriveLoopOptions = {},
 ): Promise<DriveLoopResult> {
   const {
     session,
@@ -168,16 +188,25 @@ export async function driveLoop(
     ctx.effortFlag ?? resolveReasoningEffort(session, loadConfig(ctx.configDir));
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
-  // the consumer is the only thing that knows what a Ctrl-C means. The first press lands in
-  // signals.ts's cancel slot, aborts the turn, and the loop unwinds far enough to yield a final
-  // messages-updated — which the body below persists, so the session left behind is resumable. The
-  // second press finds the slot empty and takes the file's untouched fatal path.
+  // the consumer is the only thing that knows what a Ctrl-C means. Direct CLI/TUI callers register
+  // the process cancel slot (first press lands in signals.ts, aborts the turn, the loop unwinds
+  // far enough to yield a final messages-updated — which the body below persists, so the session
+  // left behind is resumable; the second press finds the slot empty and takes the file's untouched
+  // fatal path). An injected `signal` aborts that same controller so a daemon turn can be cancelled
+  // without touching the process slot.
   const controller = new AbortController();
   let cancelledBy: NodeJS.Signals | undefined;
-  const unregisterCancel = onSignalCancel((signal) => {
-    cancelledBy = signal;
-    controller.abort();
-  });
+  if (driveOpts.signal?.aborted) controller.abort();
+  else {
+    driveOpts.signal?.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  const unregisterCancel =
+    driveOpts.bindProcessCancel === false
+      ? () => {}
+      : onSignalCancel((signal) => {
+          cancelledBy = signal;
+          controller.abort();
+        });
 
   let doneReason: DoneReason | undefined;
   const usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
@@ -195,32 +224,36 @@ export async function driveLoop(
   );
   // The one composition that enables dispatch_subagents; deleting this call (tools -> baseTools)
   // is the whole rollback, matching withCheckpoints/withVerification's own comment in prepareSession.
-  const tools = withSubagents(baseTools, {
-    runLoop: runLoopFn,
-    model,
-    provider: route.provider,
-    modelId: route.model,
-    catalog,
-    contextWindowSize: catalogEntry?.contextWindow,
-    system,
-    permissionMode: getPermissionMode,
-    allowedTools,
-    checkpointer,
-    reasoningEffort,
-    // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
-    // subagent tokens land in the run's own reported total instead of vanishing.
-    // Child token spend is not a parent LoopEvent, so the writer records it here.
-    onChildUsage: (childUsage, childCost) => {
-      usage.inputTokens = addTokens(usage.inputTokens, childUsage.inputTokens);
-      usage.outputTokens = addTokens(usage.outputTokens, childUsage.outputTokens);
-      cost = addCost(cost, childCost);
-      prepared.trajectory.recordChildUsage(childUsage, childCost);
-    },
-    onChildEvent: (payload) => {
-      prepared.trajectory.recordChildEvent(payload);
-      onChildEvent?.(payload);
-    },
-  });
+  // Scheduled runs pass composeSubagents: false so that tool never exists on the unattended path.
+  const tools =
+    driveOpts.composeSubagents === false
+      ? baseTools
+      : withSubagents(baseTools, {
+          runLoop: runLoopFn,
+          model,
+          provider: route.provider,
+          modelId: route.model,
+          catalog,
+          contextWindowSize: catalogEntry?.contextWindow,
+          system,
+          permissionMode: getPermissionMode,
+          allowedTools,
+          checkpointer,
+          reasoningEffort,
+          // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
+          // subagent tokens land in the run's own reported total instead of vanishing.
+          // Child token spend is not a parent LoopEvent, so the writer records it here.
+          onChildUsage: (childUsage, childCost) => {
+            usage.inputTokens = addTokens(usage.inputTokens, childUsage.inputTokens);
+            usage.outputTokens = addTokens(usage.outputTokens, childUsage.outputTokens);
+            cost = addCost(cost, childCost);
+            prepared.trajectory.recordChildUsage(childUsage, childCost);
+          },
+          onChildEvent: (payload) => {
+            prepared.trajectory.recordChildEvent(payload);
+            onChildEvent?.(payload);
+          },
+        });
   // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
   // what an exit code promises a shell, which is this consumer's business, not the loop's.
   // `permission-denied` fires on two different facts carried in its `reason` — "blocked" is a

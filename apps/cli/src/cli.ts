@@ -71,8 +71,8 @@ import {
   setProfileOverride,
 } from "./config/paths";
 import { readDaemonDescriptorFile } from "./daemon/descriptor";
+import type { RunScheduled } from "./daemon/scheduler";
 import {
-  defaultExecuteTurn,
   type ExecuteTurn,
   type StartedDaemon,
   startDaemon as startDaemonReal,
@@ -125,7 +125,13 @@ import {
   resolveSessionRoute,
 } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
-import { addCost, addTokens, type DriveLoopResult, driveLoop } from "./runtime/drive";
+import {
+  addCost,
+  addTokens,
+  type DriveLoopResult,
+  driveLoop,
+  exitCodeFromDriveResult,
+} from "./runtime/drive";
 import { awaitsReply } from "./session/awaitsReply";
 import {
   findMostRecentSession,
@@ -219,6 +225,8 @@ export type CliDeps = {
   usageCommand?: typeof runUsageCommandReal;
   startDaemon?: typeof startDaemonReal;
   executeTurn?: ExecuteTurn;
+  runScheduled?: RunScheduled;
+  onIdleFlush?: (sessionId: string) => Promise<void>;
   waitForServe?: () => Promise<void>;
   fetch?: typeof fetch;
   // The directory holding permissions.yaml. Deliberately NOT reusing `authConfigDir`: that name is
@@ -1165,7 +1173,10 @@ async function handleServeCommand(
   try {
     const daemon: StartedDaemon = await start({
       configDir,
-      executeTurn: deps.executeTurn ?? defaultExecuteTurn,
+      executeTurn: deps.executeTurn,
+      runScheduled: deps.runScheduled,
+      onIdleFlush: deps.onIdleFlush,
+      deps,
     });
     console.log(`seri daemon listening on ${daemon.endpoint}`);
     try {
@@ -1206,7 +1217,7 @@ async function handleExecCommand(
   });
   let exitCode: 0 | 1 = 1;
   try {
-    for await (const event of client.startTurn({ task })) {
+    for await (const event of client.startTurn({ task, cwd: process.cwd() })) {
       if (isLoopDaemonEvent(event.event)) printEvent(event.event.value as LoopEvent);
       if (event.event.type === "turn-complete" && "exitCode" in event.event) {
         const code = event.event.exitCode;
@@ -1253,6 +1264,9 @@ export type RunContext = CommandDirs & {
   // site.
   effortFlag: string | undefined;
   detailFlag: boolean;
+  // Explicit working directory for a new session. Direct CLI/TUI callers pass process.cwd(); the
+  // daemon passes the session's stored cwd and never calls process.chdir.
+  cwd: string;
 };
 
 // A slash command always operates on the resume target — an explicit --resume id, or the most
@@ -2754,6 +2768,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // TTY invocation of `--effort` is simply inert, the same as it doing nothing at all.
     effortFlag: resolveEffortFlag(effort, isTTY),
     detailFlag: detail,
+    cwd: process.cwd(),
   };
 
   // Bare `seri` in a TTY mounts the TUI directly (idle, empty input box) instead of printing
@@ -2981,9 +2996,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // `undefined` for that session, and that mapping would otherwise fall through to the final
   // `return 1` and call an idle session the user simply closed a failure. `ranAnyTurn` is always
   // `true` on the non-interactive path (DriveLoopResult's own comment), where this never fires.
-  if (!ranAnyTurn) return 0;
-  if (doneReason === "no-tool-call") return refusedWithoutRunning ? 1 : 0;
-  return 1;
+  return exitCodeFromDriveResult(runResult);
 }
 
 if (import.meta.main) {

@@ -28,7 +28,7 @@ import { configuredProviders, PROVIDER_DISPLAY_NAMES } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
 import { appliedReasoningEffort } from "../provider/reasoning";
 import { type ResolvedRoute, resolveLegalReasoningTiers, resolveRoute } from "../provider/routing";
-import { toolDefinitions } from "../provider/tools";
+import { createToolDefinitions } from "../provider/tools";
 import {
   findMostRecentSession,
   loadSession,
@@ -99,6 +99,7 @@ export function loadOrCreateSession(
   sessionsDir: string,
   loadAgentsFileFn: typeof loadAgentsFileReal,
   configDir: string,
+  cwd: string,
   onTruncated: () => void = () => {},
 ): { session: RunSession; modelRecorded: boolean } {
   if (resuming) {
@@ -162,8 +163,8 @@ export function loadOrCreateSession(
   return {
     session: {
       id: randomUUID(),
-      cwd: process.cwd(),
-      systemPrompt: buildSystemPrompt(loadAgentsFileFn(process.cwd())),
+      cwd,
+      systemPrompt: buildSystemPrompt(loadAgentsFileFn(cwd)),
       // approve-each, not read-only: on native Windows the OS sandbox is not enforced
       // (docs/ARCHITECTURE.md:417), so the permission gate is the whole Base layer and a default
       // that does not ask is a default that writes unattended. read-only was tried and measured —
@@ -411,6 +412,7 @@ export function buildCheckpointedTools(opts: {
   storeDir: string;
   worktree: string;
   sessionId: string;
+  cwd: string;
   verifyConfig: VerifyConfig;
   onWarning: (message: string) => void;
   onCheckpoint?: (entry: { op: "snapshot"; tool: string; toolCallId: string }) => void;
@@ -424,7 +426,7 @@ export function buildCheckpointedTools(opts: {
     { onAfterMutation: live.onAfterMutation, invalidate: live.invalidate },
   );
   const tools = withVerification(
-    withCheckpoints(toolDefinitions, checkpointer, checkpointer.onAfterMutation),
+    withCheckpoints(createToolDefinitions(opts.cwd), checkpointer, checkpointer.onAfterMutation),
     opts.verifyConfig,
   );
   return { checkpointer, tools };
@@ -448,6 +450,7 @@ export function bindSession(
     storeDir: prepared.storeDir,
     worktree: prepared.worktree,
     sessionId: session.id,
+    cwd: session.cwd,
     verifyConfig: prepared.verifyConfig,
     onWarning,
     onCheckpoint: (entry) => trajectory.recordCheckpoint(entry),
@@ -503,6 +506,7 @@ export async function prepareSession(
       ctx.sessionsDir,
       loadAgentsFileFn,
       configDir,
+      ctx.cwd,
       () =>
         printWarning(
           "the last message in this session's saved history was incomplete (an interrupted save) and has been dropped — everything before it is intact",
@@ -635,16 +639,16 @@ export async function prepareSession(
       printPreApproved(allowedTools, isTTY ? emit : undefined);
     }
 
-    // `write_file`, `bash` and `powershell` write relative to process.cwd(), while the snapshot
-    // covers the project root. Anywhere inside the project is fine — that is the whole point of
-    // resolving the root, and it is why a subdirectory launch no longer trips this. What is left is
-    // a genuine cross-project resume: it would snapshot one project while the tools edit another,
-    // and a later /undo would run its removal pass in the ORIGINAL project, deleting untracked
-    // files a human made there. Said out loud rather than left to be discovered by the deletion.
-    const inProject = relative(worktree, process.cwd());
+    // Tools resolve relative paths against the session cwd, while the snapshot covers the project
+    // root. Anywhere inside the project is fine — that is the whole point of resolving the root,
+    // and it is why a subdirectory launch no longer trips this. What is left is a genuine
+    // cross-project resume: it would snapshot one project while the tools edit another, and a later
+    // /undo would run its removal pass in the ORIGINAL project, deleting untracked files a human
+    // made there. Said out loud rather than left to be discovered by the deletion.
+    const inProject = relative(worktree, session.cwd);
     if (inProject === ".." || inProject.startsWith(`..${sep}`) || isAbsolute(inProject)) {
       printWarning(
-        `this session's files are checkpointed under ${worktree}, but tools run in ${process.cwd()} — /undo will act on ${worktree}`,
+        `this session's files are checkpointed under ${worktree}, but tools run in ${session.cwd} — /undo will act on ${worktree}`,
         warnSink,
       );
     }
@@ -666,6 +670,7 @@ export async function prepareSession(
       storeDir,
       worktree,
       sessionId: session.id,
+      cwd: session.cwd,
       verifyConfig,
       onWarning: printWarning,
       onCheckpoint: (entry) => trajectory.recordCheckpoint(entry),

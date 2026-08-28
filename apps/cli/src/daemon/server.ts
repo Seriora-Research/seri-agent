@@ -1,5 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { join } from "node:path";
 import type { DaemonDescriptor, DaemonEvent, PublicLoopEvent } from "@seri/daemon-client";
+import type { CliDeps } from "../cli";
 import { SessionDatabase } from "../session/database";
 import {
   type AcquiredDaemonLock,
@@ -7,9 +9,12 @@ import {
   removeOwnedDescriptor,
   writeDaemonDescriptor,
 } from "./descriptor";
+import { flushIdleSession } from "./idle";
 import { approvalBodySchema, turnRequestSchema } from "./protocol";
+import { createRunScheduled } from "./scheduled";
 import { type RunScheduled, Scheduler, ScheduleValidationError } from "./scheduler";
 import { DaemonSessionManager, type ExecuteTurn, SessionNotFoundError } from "./sessionManager";
+import { createAttendedExecuteTurn } from "./turn";
 
 export type { ExecuteTurn, ExecuteTurnInput } from "./sessionManager";
 
@@ -23,8 +28,9 @@ export type StartedDaemon = {
 
 export type StartDaemonOptions = {
   configDir: string;
-  executeTurn: ExecuteTurn;
+  executeTurn?: ExecuteTurn;
   runScheduled?: RunScheduled;
+  deps?: CliDeps;
   now?: () => number;
   tickMs?: number;
   idleMs?: number;
@@ -120,16 +126,37 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
     lock.release();
     throw error;
   }
-  const manager = new DaemonSessionManager(database, opts.executeTurn, {
+  const deps: CliDeps = {
+    ...opts.deps,
+    authConfigDir: opts.deps?.authConfigDir ?? opts.configDir,
+  };
+  const sessionsDir = deps.sessionsDir ?? join(opts.configDir, "sessions");
+  const checkpointsDir = deps.checkpointsDir ?? join(opts.configDir, "checkpoints");
+  const permissionsDir = deps.permissionsDir ?? opts.configDir;
+  const executeTurn =
+    opts.executeTurn ??
+    createAttendedExecuteTurn({
+      configDir: opts.configDir,
+      sessionsDir,
+      checkpointsDir,
+      permissionsDir,
+      deps,
+    });
+  const runScheduled =
+    opts.runScheduled ??
+    createRunScheduled({
+      configDir: opts.configDir,
+      sessionsDir,
+      deps,
+    });
+  const onIdleFlush =
+    opts.onIdleFlush ??
+    ((sessionId: string) => flushIdleSession(database, sessionId, opts.configDir, deps));
+  const manager = new DaemonSessionManager(database, executeTurn, {
     idleMs: opts.idleMs,
-    onIdleFlush: opts.onIdleFlush,
+    onIdleFlush,
   });
-  const scheduler = new Scheduler(
-    database,
-    opts.runScheduled ?? (async () => ({ response: "" })),
-    opts.now,
-    opts.tickMs,
-  );
+  const scheduler = new Scheduler(database, runScheduled, opts.now, opts.tickMs);
 
   let server: ReturnType<typeof Bun.serve>;
   try {
