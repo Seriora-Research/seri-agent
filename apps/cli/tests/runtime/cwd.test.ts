@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
 import { createToolDefinitions, toolDefinitions } from "../../src/provider/tools";
+import { isBashAvailable } from "../../src/tools/bash";
 import { spawnCollect } from "../../src/tools/spawnCollect";
 import type { GlobResult } from "../../src/tools/glob";
 import type { GrepResult } from "../../src/tools/grep";
@@ -99,18 +100,22 @@ describe("cwd-bound tools", () => {
     expect(readFileSync(join(dir, "out.txt"), "utf8")).toBe("written");
   });
 
-  test("cwd-bound bash reports the injected cwd", async () => {
-    const dir = makeDir();
-    const tools = createToolDefinitions(dir);
-    const result = (await tools.bash.execute?.(
-      { command: "echo bound > cwd-marker && pwd" },
-      execOpts,
-    )) as { stdout: string; exitCode: number };
-    expect(result.exitCode).toBe(0);
-    expect(readFileSync(join(dir, "cwd-marker"), "utf8")).toMatch(/bound/);
-    const reported = result.stdout.trim();
-    if (canRealpath(reported)) expect(sameResolvedPath(reported, dir)).toBe(true);
-  }, 15000);
+  test.skipIf(!isBashAvailable())(
+    "cwd-bound bash reports the injected cwd",
+    async () => {
+      const dir = makeDir();
+      const tools = createToolDefinitions(dir);
+      const result = (await tools.bash.execute?.(
+        { command: "echo bound > cwd-marker && pwd" },
+        execOpts,
+      )) as { stdout: string; exitCode: number };
+      expect(result.exitCode).toBe(0);
+      expect(readFileSync(join(dir, "cwd-marker"), "utf8")).toMatch(/bound/);
+      const reported = result.stdout.trim();
+      if (canRealpath(reported)) expect(sameResolvedPath(reported, dir)).toBe(true);
+    },
+    15000,
+  );
 
   test.skipIf(process.platform !== "win32")(
     "cwd-bound powershell reports the injected cwd",

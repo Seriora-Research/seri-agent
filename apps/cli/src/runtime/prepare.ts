@@ -664,14 +664,16 @@ export async function prepareSession(
     // Resolved once, here — PreparedRun's own comment on `verifyConfig` explains why a later
     // /clear rebind (bindSession) must reuse this value rather than calling loadVerifyConfig again.
     const verifyConfig = loadVerifyConfig(configDir);
-    const trajectory = createSessionTrajectory(session, configDir, printWarning);
+    const trajectory = createSessionTrajectory(session, configDir, (msg) =>
+      printWarning(msg, warnSink),
+    );
     const { checkpointer, tools } = buildCheckpointedTools({
       storeDir,
       worktree,
       sessionId: session.id,
       cwd: session.cwd,
       verifyConfig,
-      onWarning: printWarning,
+      onWarning: (msg) => printWarning(msg, warnSink),
       onCheckpoint: (entry) => trajectory.recordCheckpoint(entry),
     });
 
