@@ -156,3 +156,11 @@ export function realizedRoute(
     inherited: true,
   };
 }
+
+export function roleConstructionWarning(
+  role: RoutableRole,
+  intended: { provider: ModelProvider; model: string },
+  detail: string,
+): string {
+  return `role "${role}" could not use ${intended.provider}/${intended.model} (${detail}); using the session model instead.`;
+}

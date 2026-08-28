@@ -134,6 +134,7 @@ import {
   pinFromTask,
   realizedRoute,
   resolveChildRoute,
+  roleConstructionWarning,
   type RoutableRole,
   type TaskRouteRequest,
 } from "./subagents/routes";
@@ -2115,9 +2116,7 @@ async function driveLoop(
         );
         constructed = true;
       } catch (err) {
-        printWarning(
-          `role "${role}" could not use ${intended.provider}/${intended.model} (${messageOf(err)}); using the session model instead.`,
-        );
+        printWarning(roleConstructionWarning(role, intended, messageOf(err)));
         constructed = false;
       }
     }

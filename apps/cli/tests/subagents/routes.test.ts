@@ -14,6 +14,7 @@ import {
   realizedRoute,
   resolveChildRoute,
   resolveRoleRoute,
+  roleConstructionWarning,
 } from "../../src/subagents/routes";
 import { DISPATCHABLE_ROLES } from "../../src/subagents/roles";
 
@@ -377,6 +378,25 @@ describe("realizedRoute", () => {
       viaGateway: false,
       inherited: true,
     });
+    const warning = roleConstructionWarning("oracle", intended, "ANTHROPIC_API_KEY is not set");
+    expect(warning).toContain('role "oracle" could not use');
+    expect(warning).toContain("anthropic/claude-sonnet-5");
+    expect(warning).toContain("ANTHROPIC_API_KEY is not set");
+  });
+
+  test("the construction-failure warning names the role, not a generic construction failed", () => {
+    const intended = {
+      model: "claude-sonnet-5",
+      provider: "anthropic" as const,
+      viaGateway: false,
+      rerouted: false,
+      inherited: false,
+    };
+    const warning = roleConstructionWarning("plan", intended, "boom");
+    // Negative control: a message that only names the pair would still contain
+    // anthropic/claude-sonnet-5; the role quote is what makes fail-open attributable.
+    expect(warning).toContain('role "plan" could not use');
+    expect(warning).not.toContain('role "oracle"');
   });
 
   test("a successful construct keeps the intended pair", () => {
