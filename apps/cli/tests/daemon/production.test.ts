@@ -6,7 +6,7 @@ import { resetCatalogCache } from "@seri/model-catalog";
 import { DaemonClient } from "@seri/daemon-client";
 import { MockLanguageModelV4 } from "ai/test";
 import { startDaemon } from "../../src/daemon/server";
-import { READ_ONLY_TOOL_NAMES } from "../../src/provider/tools";
+import { DISPATCH_TOOL_NAME, READ_ONLY_TOOL_NAMES } from "../../src/provider/tools";
 import { SessionDatabase } from "../../src/session/database";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 import { streamResult, textOnlyChunks } from "../loop/fixtures";
@@ -134,6 +134,8 @@ describe("production daemon wiring", () => {
     const names = Object.keys(capture()?.tools ?? {}).sort();
     expect(names).toEqual([...READ_ONLY_TOOL_NAMES].sort());
     expect(names.includes("write_file")).toBe(false);
+    expect(DISPATCH_TOOL_NAME in (capture()?.tools ?? {})).toBe(false);
+    expect(capture()?.system).toContain("You are powered by the model named");
     expect(capture()?.permissionMode).toBe("read-only");
     const runs = (await client.scheduleRuns(created.id)) as { runs: { response: string }[] };
     expect(runs.runs[0]?.response).toBe("ok");
