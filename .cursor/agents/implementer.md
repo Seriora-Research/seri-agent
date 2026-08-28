@@ -8,8 +8,8 @@ isolation: worktree
 
 You implement the approved plan exactly. Start with `/poteto-mode` (or the
 words "use poteto-mode / pstack"). Match **feature** or **bug fix** only.
-Skip `opening-a-pr`, `shipping`, `babysit`, `orchestrate`, `autopilot-*`.
-When opening-a-pr would run: `skip: VERIFY opens the PR later`.
+Run `opening-a-pr` (blast-radius, deslop, interrogate, no-comments first).
+Skip `shipping`, `orchestrate`, `autopilot-*`. `babysit` only if the user asked.
 
 Before writing any code, re-read
 `.cursor/rules/code-quality.mdc` — simplicity, surgical changes, and goal-driven

@@ -1,29 +1,51 @@
 ---
-description: How pstack/poteto and the Cursor engineering loop share a run. Apply whenever /engineering-loop, War Room, or /poteto-mode is in play.
+description: pstack/poteto-mode is the conductor for feature and bugfix work. Apply whenever /poteto-mode, War Room, or /engineering-loop is in play.
 alwaysApply: true
 ---
 
-# pstack + engineering loop
+# pstack is the conductor
 
-Two layers. One orchestrator per turn. Do not run `/engineering-loop` and Grok Bot Handler as dual conductors on the same slug.
+[`docs/decisions/0010-pstack-is-the-conductor.md`](../../docs/decisions/0010-pstack-is-the-conductor.md).
+The pstack plugin stays a plugin. This repo does not vendor `poteto-mode`.
 
-| Driver | PLAN | EXECUTE | VERIFY | PR |
-|---|---|---|---|---|
-| Grok Bot Handler | Handler writes `.cursor/loops/<slug>/` | Cloud agent, `/poteto-mode` | Crucible then Inquisitor | Later cloud agent, not EXECUTE |
-| `/engineering-loop` in this chat | This skill, then human gate | `poteto-agent` + Feature or Bug fix | `reviewer-verifier` Task | Same skip as War Room |
+One conductor per slug. Do not run `/engineering-loop` and `/poteto-mode` as dual
+orchestrators on the same work.
 
-pstack stays the plugin. This repo does not vendor `poteto-mode`.
+## Default path
 
-## EXECUTE
+1. Once per machine: `/setup-pstack` (models in `~/.cursor/rules/pstack-models.mdc`).
+2. `/poteto-mode` matching **feature** or **bug fix** (research/plan/perf/refactoring/prototype
+   only when the task is that).
+3. **Opening a PR runs.** Do not skip it.
+4. Repo overlay, in order, before the PR exists:
+   - `/blast-radius` — run the code; prove what else can break. The PR body's "Blast Radius"
+     heading is not this skill.
+   - `/deslop` before commit (cursor-team-kit, not pstack).
+   - `/interrogate` when the design is contested, and again as Opening a PR requires.
+   - `/no-comments` before review.
+5. Skip `shipping` (do not merge). Skip `autopilot-stack` / Graphite unless this repo
+   already uses Graphite. Skip `orchestrate` unless the user asked for a multi-PR program.
+6. `babysit` only if the user asked to take CI and review threads to merge-ready (still
+   no merge).
+7. Autonomous phrasing ("going to bed", "run until done", "don't stop") is allowed. Pause
+   on irreversible writes (force-push, deploy, data deletion).
 
-Match **feature** or **bug fix** only (perf/refactoring/prototype if the plan says so).
-Skip `opening-a-pr`, `shipping`, `babysit`, `autopilot-full`, `autopilot-stack`, `orchestrate`.
-When opening-a-pr would run: `skip: VERIFY opens the PR later`.
-Do not start Graphite stacks unless this repo already uses Graphite.
+Task dispatch: `subagent_type: "poteto-agent"`. If that type is missing, `implementer`
+with the same playbook match and the same skip list (`shipping`, Graphite, `orchestrate`).
 
-Task: `subagent_type: "poteto-agent"`. If that type is missing, `implementer` with the same skip list.
+## Seri overlay (not a second loop)
+
+Before pstack EXECUTE, still do:
+
+- Goal Audit (`challenge-the-goal`) in the main context
+- Human-approved plan when the work needs a spec
+- Promote the approved plan to `docs/specs/<NNN>-<slug>/` (research/feature)
+
+`/engineering-loop` is that overlay plus a poteto-agent dispatch that **includes**
+opening-a-pr. After the PR is open, do not dispatch `reviewer-verifier` unless the user
+asked. Gates (lint, typecheck, tests) still run.
 
 ## Models
 
-Loop roles: `.cursor/loop-models.json`.
-pstack roles: `/setup-pstack` → `~/.cursor/rules/pstack-models.mdc` (user-level, not this repo).
+Loop-role overrides: `.cursor/loop-models.json`.
+pstack roles: `/setup-pstack` → `~/.cursor/rules/pstack-models.mdc` (user-level).

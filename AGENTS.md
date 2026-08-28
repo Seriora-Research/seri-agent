@@ -208,9 +208,11 @@ evaluate, and improve autonomous software engineering agents.
 
 ## Notes for agents
 
-- Cursor engineering loop: `.cursor/` (skills, rules, hooks, templates). Run state
-  is `.cursor/loops/<slug>/` (gitignored). Claude Code's copy lives under `.claude/`
-  and uses `.claude/loops/` — do not mix the two on one slug.
+- Conductor is pstack (`/poteto-mode`): Feature or Bug fix, including Opening a PR.
+  Overlay (Goal Audit, spec promotion) lives in `.cursor/` (skills, rules, hooks,
+  templates). Run state is `.cursor/loops/<slug>/` (gitignored). Claude Code's copy
+  lives under `.claude/` — do not mix the two on one slug. See
+  `.cursor/rules/pstack-loop.mdc` and `docs/decisions/0010-pstack-is-the-conductor.md`.
 - `apps/cli/src/tools/rg-vendored.bin` is a vendored ripgrep binary fetched by
   `postinstall`/`vendorRipgrep.ts`; don't hand-edit it.
 - Feature work lands via a branch + PR (`main` has branch protection), not direct

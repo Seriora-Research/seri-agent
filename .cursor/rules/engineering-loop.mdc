@@ -80,12 +80,10 @@ them to type it"). The orchestrator dispatching the *subagent* is not the same a
 the user running the *skill*, even though both end up doing the same review — the
 point of this rule is who decides WHEN it runs, not merely that it eventually does.
 
-**How to apply:** VERIFY still ends with reviewer-verifier's verdict written to
-STATE.md/trajectory.md, same as before. Do not go further on your own. If a
-thermo-nuclear pass seems warranted (large diff, structural risk, reviewer-verifier
-flagged maintainability concerns), *say so to the user* and let them decide whether
-to run it — do not decide for them by dispatching it. If they do run it, the existing
-2-passes-per-loop cap still applies.
+**How to apply:** VERIFY records gate results and the PR URL. Do not dispatch
+`reviewer-verifier` or thermo-nuclear unless the user asked. If a thermo-nuclear
+pass seems warranted (large diff, structural risk), *say so to the user* and let
+them decide. If they do run it, the existing 2-passes-per-loop cap still applies.
 
 ## Rename/rebrand loops: the naming vocabulary is elicited, never derived
 For any rename or rebrand, the Goal Audit must produce a **user-confirmed table mapping
