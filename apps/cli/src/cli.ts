@@ -90,6 +90,7 @@ import {
 import { decideMemoryCommand } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
+import { runUsageCommand as runUsageCommandReal } from "./usage/command";
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
 import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
@@ -186,6 +187,7 @@ export type CliDeps = {
   logout?: typeof logoutReal;
   configCommand?: typeof configCommandReal;
   permissionsCommand?: typeof permissionsCommandReal;
+  usageCommand?: typeof runUsageCommandReal;
   // The directory holding permissions.yaml. Deliberately NOT reusing `authConfigDir`: that name is
   // already stretched across auth AND `seri config`, and a third consumer that is neither would
   // make it mean nothing. Same shape as sessionsDir/checkpointsDir, defaulting to getConfigDir().
@@ -306,6 +308,10 @@ type SlashCommand = {
   // this table's own comment above on why a second, table-external check is what lets a future
   // command with the same need go unhandled by construction rather than by remembering to add it.
   scopeTargetToCwd?: true;
+  // /usage is the only command that consumes PARSE_OPTIONS.detail. `seri /usage --detail` has
+  // --detail stripped from positionals (flags are flags in any position), so handleSlashCommand
+  // rehydrates it from RunContext.detailFlag when this is set.
+  readsDetailFlag?: true;
 } & (
   | {
       // Every command but /memory: `run` operates on a resumed session, so handleSlashCommand
@@ -368,6 +374,7 @@ function sessionSlash(
       run,
       ...(meta.mutatesRunState === true ? { mutatesRunState: true as const } : {}),
       ...(meta.scopeTargetToCwd === true ? { scopeTargetToCwd: true as const } : {}),
+      ...(meta.readsDetailFlag === true ? { readsDetailFlag: true as const } : {}),
     },
   ];
 }
@@ -387,6 +394,7 @@ function sessionSlashNoSession(
       needsSession: false,
       run,
       ...(meta.mutatesRunState === true ? { mutatesRunState: true as const } : {}),
+      ...(meta.readsDetailFlag === true ? { readsDetailFlag: true as const } : {}),
     },
   ];
 }
@@ -412,6 +420,7 @@ export const SLASH_COMMANDS = new Map<string, SlashCommand>([
   sessionSlash("/clear", clearCommand),
   sessionSlash("/compact", compactCommand),
   sessionSlashNoSession("/memory", memoryCommand),
+  sessionSlashNoSession("/usage", usageCommand),
 ]);
 
 for (const meta of sessionMeta()) {
@@ -772,6 +781,19 @@ async function memoryCommand(
   for (const line of lines) presenter.message(line);
 }
 
+async function usageCommand(
+  args: string[],
+  dirs: CommandDirs,
+  presenter: CommandPresenter = consolePresenter(dirs),
+  deps?: CliDeps,
+): Promise<void> {
+  const fn = deps?.usageCommand ?? runUsageCommandReal;
+  await fn(dirs.configDir, {
+    detail: args[0] === "--detail",
+    presenter,
+  });
+}
+
 // `model`/`provider` are optional on SessionState so that sessions written before either field
 // existed still load, but every session this function hands back has the `model` key — which is
 // what lets the rest of the run stop asking, and getModel drop a default parameter for it.
@@ -1005,6 +1027,7 @@ const PARSE_OPTIONS = {
   "dangerously-skip-permissions": { type: "boolean" },
   profile: { type: "string" },
   effort: { type: "string" },
+  detail: { type: "boolean" },
 } as const;
 
 type ParsedArgs = {
@@ -1018,6 +1041,7 @@ type ParsedArgs = {
     "dangerously-skip-permissions"?: boolean;
     profile?: string;
     effort?: string;
+    detail?: boolean;
   };
   positionals: string[];
   maxTurns: number | undefined;
@@ -1026,6 +1050,7 @@ type ParsedArgs = {
   // isn't resolved yet at this point in `run()` — validated in prepareSession, once `route`/
   // `catalog` are available, the same deferred-validation shape as everything else route-dependent.
   effort: string | undefined;
+  detail: boolean;
 };
 
 // One convention across every handler below, so `run` reads as the sequence it is: a `number` is
@@ -1052,6 +1077,17 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
   // PREVIOUS successful run()'s --profile leaked into the next in-process run() call — bun test
   // runs many run() calls in a single process, and a future fixed-process TUI/REPL loop will too.
   setProfileOverride(values.profile);
+
+  // PARSE_OPTIONS.detail is declared globally because parseArgs is strict and flags are flags
+  // in any position (`seri usage --detail` / `seri --detail usage`). Rejected here unless the
+  // first positional is usage or /usage, so `seri --detail` cannot open a TUI whose later
+  // `/usage` inherits detailFlag, and a task token `--detail` is not silently stripped.
+  if (values.detail === true) {
+    const cmd = positionals[0];
+    if (cmd !== "usage" && cmd !== "/usage") {
+      return usageError("--detail is only valid with usage");
+    }
+  }
 
   const maxTurnsRaw = values["max-turns"];
   let maxTurns: number | undefined;
@@ -1091,6 +1127,7 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     maxTurns,
     skipPermissions: values["dangerously-skip-permissions"] === true,
     effort: values.effort,
+    detail: values.detail === true,
   };
 }
 
@@ -1205,6 +1242,25 @@ function handlePermissionsCommand(positionals: string[], deps: CliDeps): number 
   }
 }
 
+async function handleUsageCommand(
+  positionals: string[],
+  deps: CliDeps,
+  detail: boolean,
+): Promise<number | undefined> {
+  if (positionals[0] !== "usage") return undefined;
+  if (positionals.length > 1) {
+    return usageError("usage takes no arguments — pass --detail as a flag");
+  }
+  const fn = deps.usageCommand ?? runUsageCommandReal;
+  try {
+    await fn(deps.authConfigDir ?? getConfigDir(), { detail });
+    return 0;
+  } catch (err) {
+    console.error(messageOf(err));
+    return 1;
+  }
+}
+
 // --effort is scoped to the non-interactive path only — a TTY run's `--effort` must not reach
 // driveLoop at all, or it (a) applies to
 // EVERY turn of the whole session, not "this single invocation", and (b) permanently outranks a
@@ -1237,6 +1293,7 @@ type RunContext = CommandDirs & {
   // `ctx`'s own construction (`run()`, gated on `!isTTY`), not re-checked here or at either read
   // site.
   effortFlag: string | undefined;
+  detailFlag: boolean;
 };
 
 function dirs(ctx: RunContext, trajectory?: TrajectoryWriter): CommandDirs {
@@ -1306,12 +1363,17 @@ async function handleSlashCommand(ctx: RunContext, deps: CliDeps): Promise<numbe
   const command = SLASH_COMMANDS.get(name);
   if (command === undefined || !command.accepts(commandArgs)) return undefined;
 
-  // needsSession: false (today, only /memory — SlashCommand's own comment) skips resume-target
+  const args =
+    command.readsDetailFlag === true && ctx.detailFlag && commandArgs.length === 0
+      ? ["--detail"]
+      : commandArgs;
+
+  // needsSession: false (today, /memory and /usage — SlashCommand's own comment) skips resume-target
   // resolution entirely: nothing below it reads a session, so requiring one to already exist would
   // only make the command fail on a fresh profile for no reason.
   if (command.needsSession === false) {
     try {
-      await command.run(commandArgs, dirs(ctx), undefined, deps);
+      await command.run(args, dirs(ctx), undefined, deps);
       return 0;
     } catch (err) {
       console.error(messageOf(err));
@@ -3551,7 +3613,7 @@ async function runTui(
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const parsed = parseCliArgs(argv);
   if (typeof parsed === "number") return parsed;
-  const { values, positionals, maxTurns, skipPermissions, effort } = parsed;
+  const { values, positionals, maxTurns, skipPermissions, effort, detail } = parsed;
   // The override is already set — parseCliArgs does it before any of its own validation can
   // short-circuit with a usage error (see the comment there). Nothing to do here except rely on
   // it having happened before handleInfoFlags, runSelftest and all seven getConfigDir() consumers.
@@ -3597,6 +3659,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // own --effort validation and driveLoop's own resolution both skip it identically, for free — a
     // TTY invocation of `--effort` is simply inert, the same as it doing nothing at all.
     effortFlag: resolveEffortFlag(effort, isTTY),
+    detailFlag: detail,
   };
 
   // Bare `seri` in a TTY mounts the TUI directly (idle, empty input box) instead of printing
@@ -3624,6 +3687,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   const permissions = handlePermissionsCommand(positionals, deps);
   if (permissions !== undefined) return permissions;
+
+  const usageHandled = await handleUsageCommand(positionals, deps, detail);
+  if (usageHandled !== undefined) return usageHandled;
 
   // Before prepareSession, never after: a bare `/undo` must act on the resume target rather than
   // mint a session to act on.

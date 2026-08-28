@@ -75,7 +75,11 @@ export function summarizeResult(name: string, result: unknown): SummarizeResult 
   if (name === "glob" && isRecord(result) && Array.isArray(result.files)) {
     return capJson({ hits: result.files.length, truncated: result.truncated === true });
   }
-  if ((name === "bash" || name === "powershell") && isRecord(result) && typeof result.exitCode === "number") {
+  if (
+    (name === "bash" || name === "powershell") &&
+    isRecord(result) &&
+    typeof result.exitCode === "number"
+  ) {
     return capJson({
       stdoutBytes: byteLengthOf(result.stdout) ?? 0,
       stderrBytes: byteLengthOf(result.stderr) ?? 0,

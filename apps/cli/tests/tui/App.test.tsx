@@ -578,9 +578,7 @@ describe("App", () => {
     const lines = setup.captureCharFrame().split("\n");
     const helloIndex = lines.findIndex((line) => line.includes("hello"));
     const modeLabelIndex = lines.findIndex((line) => line.includes("approve-each mode on"));
-    const turnStatusIndex = lines.findIndex(
-      (line) => line.includes(" ↑, ") && line.includes(" ↓"),
-    );
+    const turnStatusIndex = lines.findIndex((line) => line.includes(" ↑, ") && line.includes(" ↓"));
 
     expect(helloIndex).toBeGreaterThanOrEqual(0);
     expect(modeLabelIndex).toBeGreaterThan(helloIndex);
@@ -4160,7 +4158,12 @@ describe("App", () => {
       );
     }
 
-    function panelBand(frame: string): { band: string; start: number; end: number; lines: string[] } {
+    function panelBand(frame: string): {
+      band: string;
+      start: number;
+      end: number;
+      lines: string[];
+    } {
       const lines = frame.split("\n");
       const start = lines.reduce((last, line, i) => (line.includes("─") ? i : last), -1);
       const end = lines.findIndex((line) => line.includes("approve-each mode on"));

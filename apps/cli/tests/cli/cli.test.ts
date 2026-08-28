@@ -3197,7 +3197,7 @@ describe("run (/clear)", () => {
     // handleSlashCommand's bare-invocation resolution reads this field, not a `name === "/clear"`
     // check (SlashCommand's own comment on why) — /undo, /rewind and /restore must NOT set it.
     expect(clear.scopeTargetToCwd).toBe(true);
-    for (const name of ["/undo", "/rewind", "/restore", "/mode", "/memory", "/compact"]) {
+    for (const name of ["/undo", "/rewind", "/restore", "/mode", "/memory", "/compact", "/usage"]) {
       const command = SLASH_COMMANDS.get(name);
       if (command === undefined) throw new Error(`${name} is not registered`);
       expect(command.scopeTargetToCwd).toBeUndefined();
@@ -3467,6 +3467,20 @@ describe("run (/clear)", () => {
 
     expect(code).toBe(1);
     expect(errors.join("\n")).toContain("No session to run /clear against.");
+  });
+});
+
+describe("run (/usage)", () => {
+  test("is registered, needs no session, and accepts only [] or --detail", () => {
+    const usage = SLASH_COMMANDS.get("/usage");
+    if (usage === undefined) throw new Error("/usage is not registered");
+    expect(usage.accepts([])).toBe(true);
+    expect(usage.accepts(["--detail"])).toBe(true);
+    expect(usage.accepts(["please"])).toBe(false);
+    expect(usage.accepts(["--detail", "extra"])).toBe(false);
+    expect(usage.needsSession).toBe(false);
+    expect(usage.readsDetailFlag).toBe(true);
+    expect(usage.mutatesRunState).toBeUndefined();
   });
 });
 

@@ -22,6 +22,7 @@ const EXPECTED_NAMES = [
   "/clear",
   "/compact",
   "/memory",
+  "/usage",
   "/exit",
   "/model",
   "/setup",
@@ -57,6 +58,7 @@ const EXPECTED_SESSION = [
   "/clear",
   "/compact",
   "/memory",
+  "/usage",
 ] as const;
 
 const README = readFileSync(join(import.meta.dir, "../../../../README.md"), "utf8");

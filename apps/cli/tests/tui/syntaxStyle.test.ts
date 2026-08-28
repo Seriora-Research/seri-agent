@@ -21,10 +21,9 @@ describe("syntaxStyle: monochrome compliance", () => {
     for (const [name, style] of styles) {
       expect(style.bg, `${name}'s own bg`).toBeUndefined();
       if (style.fg !== undefined) {
-        expect(
-          [mutedColor.toString(), codeColor.toString()],
-          `${name}'s own fg`,
-        ).toContain(style.fg.toString());
+        expect([mutedColor.toString(), codeColor.toString()], `${name}'s own fg`).toContain(
+          style.fg.toString(),
+        );
       }
     }
   });

@@ -1,4 +1,9 @@
-import { appendFileSync as appendFileSyncReal, existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync as appendFileSyncReal,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import type { LanguageModelUsage } from "ai";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
@@ -23,7 +28,9 @@ export type TrajectoryWriter = {
   recordChildUsage: (usage: LanguageModelUsage, cost: CostReport | undefined) => void;
   recordChildEvent: (payload: ChildEventPayload) => void;
   recordCheckpoint: (entry: { op: CheckpointOp; tool?: string; toolCallId?: string }) => void;
-  recordArchivist: (report: { usage: LanguageModelUsage; cost: CostReport | undefined } | undefined) => void;
+  recordArchivist: (
+    report: { usage: LanguageModelUsage; cost: CostReport | undefined } | undefined,
+  ) => void;
 };
 
 type WriterOpts = {
@@ -164,12 +171,21 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
   function recordLoopEvent(event: LoopEvent, actor: TrajectoryActor = parent): void {
     if (event.type === "text-delta" || event.type === "messages-updated") return;
     if (event.type === "tool-call") {
-      if (event.name === "write_file" && isRecord(event.args) && typeof event.args.path === "string") {
+      if (
+        event.name === "write_file" &&
+        isRecord(event.args) &&
+        typeof event.args.path === "string"
+      ) {
         lastWritePath = event.args.path;
       }
       const summarized = summarizeArgs(event.name, event.args);
       writeRecord(
-        { kind: "tool_call", name: event.name, args: summarized.value, argsElided: summarized.elided },
+        {
+          kind: "tool_call",
+          name: event.name,
+          args: summarized.value,
+          argsElided: summarized.elided,
+        },
         actor,
       );
       return;
@@ -185,7 +201,8 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
         },
         actor,
       );
-      const verification = event.name === "write_file" ? writeFileVerification(event.result) : undefined;
+      const verification =
+        event.name === "write_file" ? writeFileVerification(event.result) : undefined;
       if (verification !== undefined) {
         writeRecord(
           { kind: "check_result", path: lastWritePath ?? "", outcome: verification },

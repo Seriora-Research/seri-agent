@@ -1714,10 +1714,7 @@ function childEvent(
 describe("tuiReducer: subagent-child-event", () => {
   test("child-started then child tool-call sets currentTool without touching the parent transcript", () => {
     let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
     state = tuiReducer(
       state,
       childEvent("t1:0", "explore", "find a", {
@@ -1738,10 +1735,7 @@ describe("tuiReducer: subagent-child-event", () => {
 
   test("child text-delta accumulates on streaming and does not change currentTool", () => {
     let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
     state = tuiReducer(
       state,
       childEvent("t1:0", "explore", "find a", {
@@ -1787,10 +1781,7 @@ describe("tuiReducer: subagent-child-event", () => {
 
   test("a child done event does not clear the roster", () => {
     let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
     state = tuiReducer(
       state,
       childEvent("t1:0", "explore", "find a", { type: "done", reason: "no-tool-call" }),
@@ -1803,10 +1794,7 @@ describe("tuiReducer: subagent-child-event", () => {
 
   test("a non-dispatch tool-result does not clear the roster", () => {
     let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
     state = tuiReducer(state, {
       type: "loop-event",
       event: { type: "tool-result", name: "read_file", result: "ok" },
@@ -1818,10 +1806,7 @@ describe("tuiReducer: subagent-child-event", () => {
 
   test("parent dispatch_subagents tool-result with no overlay clears subagents", () => {
     let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
     expect(panel(state).subagents).toHaveLength(1);
     state = tuiReducer(state, {
       type: "loop-event",
@@ -1840,14 +1825,8 @@ describe("tuiReducer: subagent-child-event", () => {
 
   test("parent dispatch_subagents tool-result with a child view clears the roster and the view", () => {
     let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
-    state = tuiReducer(
-      state,
-      childEvent("t1:1", "explore", "find b", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
+    state = tuiReducer(state, childEvent("t1:1", "explore", "find b", { type: "child-started" }));
     state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
     state = tuiReducer(state, { type: "subagent-panel-focus" });
     state = tuiReducer(state, {
@@ -1870,10 +1849,7 @@ describe("tuiReducer: subagent-child-event", () => {
 
   test("turn-started clears the roster and the child view", () => {
     let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
     state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
     state = tuiReducer(state, { type: "subagent-panel-focus" });
     state = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
@@ -1886,10 +1862,7 @@ describe("tuiReducer: subagent-child-event", () => {
 
   test("transcript-cleared clears the roster and the child view", () => {
     let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
     state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
     state = tuiReducer(state, { type: "subagent-panel-focus" });
     state = tuiReducer(state, { type: "transcript-cleared" });
@@ -1902,10 +1875,7 @@ describe("tuiReducer: subagent-child-event", () => {
 
   test("subagent-panel-focus with no selected id defaults to main", () => {
     let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
     state = tuiReducer(state, { type: "subagent-panel-focus" });
 
     expect(panel(state).subagentPanelFocus).toBe(true);
@@ -1914,14 +1884,8 @@ describe("tuiReducer: subagent-child-event", () => {
 
   test("overlay-close after selecting main restores the parent view and keeps children", () => {
     let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
-    state = tuiReducer(
-      state,
-      childEvent("t1:1", "explore", "find b", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
+    state = tuiReducer(state, childEvent("t1:1", "explore", "find b", { type: "child-started" }));
     state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
     state = tuiReducer(state, { type: "subagent-panel-select", id: "main" });
     state = tuiReducer(state, { type: "subagent-overlay-close" });
@@ -1933,24 +1897,15 @@ describe("tuiReducer: subagent-child-event", () => {
 
   test("two explore children store the raw role, not a numbered label", () => {
     let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
-    state = tuiReducer(
-      state,
-      childEvent("t1:1", "explore", "find b", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
+    state = tuiReducer(state, childEvent("t1:1", "explore", "find b", { type: "child-started" }));
 
     expect(panel(state).subagents.map((c) => c.role)).toEqual(["explore", "explore"]);
   });
 
   test("child permission-denied records a row anomaly and does not set pendingApproval", () => {
     let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
     state = tuiReducer(
       state,
       childEvent("t1:0", "explore", "find a", {
@@ -1997,10 +1952,7 @@ describe("tuiReducer: subagent-child-event", () => {
       type: "loop-event",
       event: { type: "usage", usage: usageOf(100, 20) },
     });
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
     state = tuiReducer(
       state,
       childEvent("t1:0", "explore", "find a", {
@@ -2028,10 +1980,7 @@ describe("tuiReducer: subagent-child-event", () => {
       startedAt: 1,
       inputEstimate: 0,
     });
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
     state = tuiReducer(
       state,
       childEvent("t1:0", "explore", "find a", {
@@ -2056,10 +2005,7 @@ describe("tuiReducer: subagent-child-event", () => {
 
   test("child usage is a no-op on tokens when no turn is in flight", () => {
     let state = initialTuiState(session());
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
     state = tuiReducer(
       state,
       childEvent("t1:0", "explore", "find a", {
@@ -2081,10 +2027,7 @@ describe("tuiReducer: subagent-child-event", () => {
       type: "loop-event",
       event: { type: "usage", usage: usageOf(100, 20) },
     });
-    state = tuiReducer(
-      state,
-      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
-    );
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
     state = tuiReducer(
       state,
       childEvent("t1:0", "explore", "find a", {
