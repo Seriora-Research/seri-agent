@@ -28,6 +28,22 @@ async function settle(setup: TestRendererSetup): Promise<void> {
   await setup.renderOnce();
 }
 
+// One settle after pressEnter can return before useKeyboard delivers the key, so `answers`
+// stays []. Poll a macrotick instead of a fixed pass count. OpenTUI's waitFor is the wrong
+// helper: it stops when the scheduler reports idle, which can happen before the handler runs.
+async function waitUntil(
+  setup: TestRendererSetup,
+  pred: () => boolean,
+  label: string,
+): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    if (pred()) return;
+    await settle(setup);
+  }
+  if (pred()) return;
+  throw new Error(label);
+}
+
 async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
   mountedRenderers.push(setup);
   createRoot(setup.renderer).render(node);
@@ -66,7 +82,7 @@ describe("ApprovalBox (OpenTUI)", () => {
     await mountBox(setup, (a) => answers.push(a));
 
     setup.mockInput.pressKey("y");
-    await settle(setup);
+    await waitUntil(setup, () => answers.length > 0, "y never answered");
 
     expect(answers).toEqual(["once"]);
   });
@@ -77,7 +93,7 @@ describe("ApprovalBox (OpenTUI)", () => {
     await mountBox(setup, (a) => answers.push(a));
 
     setup.mockInput.pressKey("a");
-    await settle(setup);
+    await waitUntil(setup, () => answers.length > 0, "a never answered");
 
     expect(answers).toEqual(["always"]);
   });
@@ -88,7 +104,7 @@ describe("ApprovalBox (OpenTUI)", () => {
     await mountBox(setup, (a) => answers.push(a), undefined, false);
 
     setup.mockInput.pressKey("a");
-    await settle(setup);
+    await waitUntil(setup, () => answers.length > 0, "a never answered");
 
     expect(answers).toEqual(["no"]);
   });
@@ -99,7 +115,7 @@ describe("ApprovalBox (OpenTUI)", () => {
     await mountBox(setup, (a) => answers.push(a));
 
     setup.mockInput.pressEnter();
-    await settle(setup);
+    await waitUntil(setup, () => answers.length > 0, "Enter never answered");
 
     expect(answers).toEqual(["no"]);
   });
@@ -110,7 +126,7 @@ describe("ApprovalBox (OpenTUI)", () => {
     await mountBox(setup, (a) => answers.push(a));
 
     setup.mockInput.pressKey("z");
-    await settle(setup);
+    await waitUntil(setup, () => answers.length > 0, "z never answered");
 
     expect(answers).toEqual(["no"]);
   });
@@ -139,7 +155,7 @@ describe("ApprovalBox (OpenTUI)", () => {
     );
 
     setup.mockInput.pressKey("d", { ctrl: true });
-    await settle(setup);
+    await waitUntil(setup, () => quit, "Ctrl-D never called onQuit");
 
     expect(quit).toBe(true);
     expect(answers).toEqual([]);
