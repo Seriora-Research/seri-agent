@@ -51,6 +51,7 @@ async function waitUntil(
     if (pred()) return;
     await settle(setup);
   }
+  if (pred()) return;
   throw new Error(label);
 }
 
