@@ -61,36 +61,32 @@ function sseResponse(
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      let closed = false;
+      const closeOnce = () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          return;
+        }
+      };
       const send = (event: DaemonEvent) => {
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
         } catch {
           return;
         }
-        if (event.event.type === "turn-complete") {
-          try {
-            controller.close();
-          } catch {
-            // already closed
-          }
-        }
+        if (event.event.type === "turn-complete") closeOnce();
       };
       const unsubscribe = subscribe(send);
       if (unsubscribe === undefined) {
-        try {
-          controller.close();
-        } catch {
-          // already closed
-        }
+        closeOnce();
         return;
       }
       const onAbort = () => {
         unsubscribe();
-        try {
-          controller.close();
-        } catch {
-          // already closed
-        }
+        closeOnce();
       };
       if (signal.aborted) {
         onAbort();
