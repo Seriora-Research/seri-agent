@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
@@ -52,10 +52,16 @@ describe("buildRoleToolSet", () => {
     }
   });
 
-  test("each tool definition is the same object reference as toolDefinitions', not wrapped when no onAfterMutation is given", () => {
-    const tools = buildRoleToolSet("code");
-    for (const [name, definition] of Object.entries(tools)) {
-      expect(definition).toBe(toolDefinitions[name as keyof typeof toolDefinitions]);
+  test("explore read_file resolves relative paths against the session cwd, not process.cwd", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "seri-role-cwd-"));
+    writeFileSync(join(dir, "note.txt"), "session-copy");
+    try {
+      const tools = buildRoleToolSet("explore", undefined, dir);
+      const read = await tools.read_file?.execute?.({ path: "note.txt" }, execOpts());
+      expect(read).toBe("session-copy");
+      expect(process.cwd()).not.toBe(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -66,9 +72,6 @@ describe("buildRoleToolSet", () => {
   test("write_file is recorded via onAfterMutation when one is provided, with no other tool wrapped", async () => {
     const calls: MutationContext[] = [];
     const tools = buildRoleToolSet("code", (context) => calls.push(context));
-
-    expect(tools.read_file).toBe(toolDefinitions.read_file);
-    expect(tools.write_file).not.toBe(toolDefinitions.write_file);
 
     const root = mkdtempSync(join(tmpdir(), "seri-role-tools-test-"));
     const path = join(root, "a.txt");

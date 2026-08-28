@@ -332,6 +332,7 @@ export async function driveLoop(
           allowedTools,
           checkpointer,
           reasoningEffort,
+          cwd: worktree,
           resolveRole: (role, request) => overlayFor(role, request),
           // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
           // subagent tokens land in the run's own reported total instead of vanishing.
