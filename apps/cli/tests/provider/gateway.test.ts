@@ -107,7 +107,7 @@ describe("getGatewayModel — BYOK guard", () => {
 describe("getGatewayModel — login requirement", () => {
   test("throws a login-required error when no auth.json exists", () => {
     expect(() => getGatewayModel("some-model", "openrouter", "session-1", tmpRoot)).toThrow(
-      /seri login/,
+      /\/login/,
     );
   });
 });

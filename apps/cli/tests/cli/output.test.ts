@@ -22,9 +22,11 @@ function captureLog(fn: () => void): string[] {
 }
 
 describe("USAGE", () => {
-  test("documents /setup and its non-interactive equivalent", () => {
-    expect(USAGE).toContain("/setup");
-    expect(USAGE).toContain("seri config set");
+  test("documents serve and exec, not argv config or login", () => {
+    expect(USAGE).toContain("seri serve");
+    expect(USAGE).toContain("seri exec");
+    expect(USAGE).not.toContain("seri config");
+    expect(USAGE).not.toContain("/setup");
   });
 });
 

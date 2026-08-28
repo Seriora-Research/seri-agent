@@ -4713,7 +4713,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         const { stdout } = await exited;
         expect(stdout).toContain("EXIT_CODE 1");
         expect(stdout).toContain(
-          "GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>",
+          "GROQ_API_KEY is not set. Export GROQ_API_KEY or run /setup.",
         );
         expect(stdout).not.toContain("Pick a default model to continue.");
       } finally {
@@ -4937,7 +4937,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // message a non-interactive missing-key run does — this assertion is the negative
         // control: it fails against that old silent `return 1`.
         expect(stdout).toContain(
-          "GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>",
+          "GROQ_API_KEY is not set. Export GROQ_API_KEY or run /setup.",
         );
       } finally {
         child.kill("SIGKILL");

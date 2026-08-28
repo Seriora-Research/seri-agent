@@ -80,8 +80,6 @@ function unusedCtx(configDir: string) {
     checkpointsDir: join(configDir, "checkpoints"),
     permissionsDir: configDir,
     configDir,
-    effortFlag: undefined,
-    detailFlag: false,
     cwd: configDir,
   };
 }

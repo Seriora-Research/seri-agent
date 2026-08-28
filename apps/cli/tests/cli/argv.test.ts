@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../../package.json";
-import { run, SLASH_COMMANDS } from "../../src/cli";
+import { run } from "../../src/cli";
 import { getBaseConfigDir, getConfigDir, setProfileOverride } from "../../src/config/paths";
 import { writeDaemonDescriptor } from "../../src/daemon/descriptor";
 import { DATABASE_FILENAME } from "../../src/session/database";
@@ -137,10 +137,12 @@ describe("run (argv and usage errors)", () => {
       expect(code).toBe(0);
       const usage = logs.join("\n");
       expect(usage).toContain("Usage:");
-      // The usage text restates the SLASH_COMMANDS table, whose whole point is that a command is
-      // defined in one place. `toContain("Usage:")` alone let every advertised line be deleted, so
-      // the half of the text that has a table behind it is checked against the table.
-      for (const name of SLASH_COMMANDS.keys()) expect(usage).toContain(name);
+      expect(usage).toContain("seri serve");
+      expect(usage).toContain("seri exec");
+      expect(usage).not.toContain("seri config");
+      expect(usage).not.toContain("seri login");
+      expect(usage).not.toContain("seri usage");
+      expect(usage).not.toContain("seri permissions");
       expect(capture()).toBeUndefined();
       expect(readdirSync(sessionsDir)).toEqual([]);
     },
@@ -410,11 +412,8 @@ describe("run (argv and usage errors)", () => {
     expect(logs.join("\n")).toContain("--dangerously-skip-permissions");
   });
 
-  // 26. seri permissions list dispatches to permissionsCommand and never falls through to the task
-  // path — the same shape as the config-subcommand test, and for the same reason: a fall-through
-  // would mint a session whose first message is the command text.
-  test("`permissions list` dispatches to permissionsCommand and never reaches the task path", async () => {
-    const calls: string[][] = [];
+  test("`permissions list` is a task, not an argv verb", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
     const { fake, capture } = fakeRunLoop();
 
     const { code } = await captureLogs(() =>
@@ -422,35 +421,29 @@ describe("run (argv and usage errors)", () => {
         runLoop: fake,
         loadAgentsFile: () => "",
         sessionsDir,
-        permissionsCommand: (args) => {
-          calls.push(args);
-          return 3;
-        },
       }),
     );
 
-    expect(code).toBe(3);
-    expect(calls).toEqual([["list"]]);
-    expect(capture()).toBeUndefined();
-    expect(readdirSync(sessionsDir)).toEqual([]);
+    expect(code).toBe(0);
+    expect(capture()?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "permissions list",
+    });
   });
 
-  // 27. An unknown permissions subcommand is the real command's own exit code, not a task-path
-  // fall-through.
-  test("`permissions bogus` exits 2", async () => {
-    const { code } = await captureLogs(() => run(["permissions", "bogus"], { sessionsDir }));
-
-    expect(code).toBe(2);
-  });
-
-  // 28. Pins the USAGE edit.
-  test("`--help` output documents `seri permissions`", async () => {
+  test("`--help` output does not document argv config, login, usage, or permissions", async () => {
     const { logs } = await captureLogs(() => run(["--help"], { sessionsDir }));
-
-    expect(logs.join("\n")).toContain("seri permissions");
+    const text = logs.join("\n");
+    expect(text).toContain("seri serve");
+    expect(text).toContain("seri exec");
+    expect(text).not.toContain("seri config");
+    expect(text).not.toContain("seri login");
+    expect(text).not.toContain("seri usage");
+    expect(text).not.toContain("seri permissions");
   });
 
-  test("`usage` dispatches to usageCommand and never reaches the task path", async () => {
+  test("`usage` is a task, not an argv verb", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
     const { fake, capture } = fakeRunLoop();
     let called = 0;
 
@@ -466,59 +459,11 @@ describe("run (argv and usage errors)", () => {
     );
 
     expect(code).toBe(0);
-    expect(called).toBe(1);
-    expect(capture()).toBeUndefined();
-    expect(readdirSync(sessionsDir)).toEqual([]);
+    expect(called).toBe(0);
+    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "usage" });
   });
 
-  test("`usage extra` exits 2", async () => {
-    const { code } = await captureLogs(() => run(["usage", "extra"], { sessionsDir }));
-    expect(code).toBe(2);
-  });
-
-  test("`usage --detail` forwards the flag and does not mint a session", async () => {
-    const { fake, capture } = fakeRunLoop();
-    let detail: boolean | undefined;
-
-    const { code } = await captureLogs(() =>
-      run(["usage", "--detail"], {
-        runLoop: fake,
-        loadAgentsFile: () => "",
-        sessionsDir,
-        usageCommand: async (_dir, opts = {}) => {
-          detail = opts.detail;
-        },
-      }),
-    );
-
-    expect(code).toBe(0);
-    expect(detail).toBe(true);
-    expect(capture()).toBeUndefined();
-    expect(readdirSync(sessionsDir)).toEqual([]);
-  });
-
-  test("`/usage --detail` rehydrates the flag parseArgs stripped from positionals", async () => {
-    const { fake, capture } = fakeRunLoop();
-    let detail: boolean | undefined;
-
-    const { code } = await captureLogs(() =>
-      run(["/usage", "--detail"], {
-        runLoop: fake,
-        loadAgentsFile: () => "",
-        sessionsDir,
-        usageCommand: async (_dir, opts = {}) => {
-          detail = opts.detail;
-        },
-      }),
-    );
-
-    expect(code).toBe(0);
-    expect(detail).toBe(true);
-    expect(capture()).toBeUndefined();
-    expect(readdirSync(sessionsDir)).toEqual([]);
-  });
-
-  test("`--detail` without usage exits 2 and does not reach the task path", async () => {
+  test("`--detail` is an unknown option", async () => {
     const { fake, capture } = fakeRunLoop();
     const errors: string[] = [];
     const originalError = console.error;
@@ -535,31 +480,9 @@ describe("run (argv and usage errors)", () => {
     }
 
     expect(code).toBe(2);
-    expect(errors.join("\n")).toContain("--detail is only valid with usage");
+    expect(errors.join("\n")).toMatch(/detail/i);
     expect(capture()).toBeUndefined();
     expect(readdirSync(sessionsDir)).toEqual([]);
-  });
-
-  test("`usage` when logged out prints the BYOK copy and writes no session", async () => {
-    const { fake, capture } = fakeRunLoop();
-    const { code, logs } = await captureLogs(() =>
-      run(["usage"], {
-        runLoop: fake,
-        loadAgentsFile: () => "",
-        sessionsDir,
-      }),
-    );
-
-    expect(code).toBe(0);
-    expect(logs.join("\n")).toContain("seri login");
-    expect(logs.join("\n")).toContain("BYOK");
-    expect(capture()).toBeUndefined();
-    expect(readdirSync(sessionsDir)).toEqual([]);
-  });
-
-  test("`--help` output documents `seri usage`", async () => {
-    const { logs } = await captureLogs(() => run(["--help"], { sessionsDir }));
-    expect(logs.join("\n")).toContain("seri usage");
   });
 
   // End-to-end --profile behaviour through run() itself. Deliberately does NOT pass
@@ -687,83 +610,83 @@ describe("run (argv and usage errors)", () => {
 });
 
 describe("run (login/signup/logout)", () => {
+  const originalKey = process.env.GROQ_API_KEY;
+  const originalHome = process.env.HOME;
+  let sessionsDir: string;
+  let tmpConfigRoot: string;
+
+  beforeEach(() => {
+    sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-login-sessions-"));
+    tmpConfigRoot = mkdtempSync(join(tmpdir(), "seri-cli-test-login-config-"));
+    process.env.HOME = tmpConfigRoot;
+    process.env.GROQ_API_KEY = "fake-test-key";
+  });
+
+  afterEach(() => {
+    if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = originalKey;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    rmSync(sessionsDir, { recursive: true, force: true });
+    rmSync(tmpConfigRoot, { recursive: true, force: true });
+  });
+
   const failIfCalled = (name: string) => () => {
     throw new Error(`${name} should not be called`);
   };
 
-  test("`seri login` calls deps.login with mode 'login' and never touches the model/loop/session code", async () => {
-    let captured: [string, string, string] | undefined;
+  test("`seri login` is a task whose user message is login", async () => {
+    const { fake, capture } = fakeRunLoop();
+    let loginCalled = false;
     const code = await run(["login"], {
-      login: async (mode, clientId, configDir) => {
-        captured = [mode, clientId, configDir];
+      runLoop: fake,
+      loadAgentsFile: () => "",
+      sessionsDir,
+      login: async () => {
+        loginCalled = true;
       },
-      authConfigDir: "fake-config-dir",
-      getGroqModel: failIfCalled("getGroqModel"),
-      loadAgentsFile: failIfCalled("loadAgentsFile"),
     });
 
     expect(code).toBe(0);
-    expect(captured?.[0]).toBe("login");
-    expect(captured?.[2]).toBe("fake-config-dir");
+    expect(loginCalled).toBe(false);
+    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "login" });
   });
 
-  test("`seri signup` calls deps.login with mode 'signup'", async () => {
-    let capturedMode: string | undefined;
+  test("`seri signup` is a task whose user message is signup", async () => {
+    const { fake, capture } = fakeRunLoop();
+    let loginCalled = false;
     const code = await run(["signup"], {
-      login: async (mode) => {
-        capturedMode = mode;
+      runLoop: fake,
+      loadAgentsFile: () => "",
+      sessionsDir,
+      login: async () => {
+        loginCalled = true;
       },
-      authConfigDir: "fake-config-dir",
-      getGroqModel: failIfCalled("getGroqModel"),
-      loadAgentsFile: failIfCalled("loadAgentsFile"),
     });
 
     expect(code).toBe(0);
-    expect(capturedMode).toBe("signup");
+    expect(loginCalled).toBe(false);
+    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "signup" });
   });
 
-  test("deps.login throwing returns a non-zero exit code instead of an unhandled rejection", async () => {
-    const errors: string[] = [];
-    const originalError = console.error;
-    console.error = (msg: string) => errors.push(String(msg));
-
-    let code: number;
-    try {
-      code = await run(["login"], {
-        login: async () => {
-          throw new Error("device code request failed: 429");
-        },
-        authConfigDir: "fake-config-dir",
-        getGroqModel: failIfCalled("getGroqModel"),
-        loadAgentsFile: failIfCalled("loadAgentsFile"),
-      });
-    } finally {
-      console.error = originalError;
-    }
-
-    expect(code).not.toBe(0);
-    expect(errors).toEqual(["device code request failed: 429"]);
-  });
-
-  test("`seri logout` calls deps.logout and never touches the model/loop/session code", async () => {
-    let capturedConfigDir: string | undefined;
+  test("`seri logout` is a task whose user message is logout", async () => {
+    const { fake, capture } = fakeRunLoop();
+    let logoutCalled = false;
     const code = await run(["logout"], {
-      logout: (configDir) => {
-        capturedConfigDir = configDir;
+      runLoop: fake,
+      loadAgentsFile: () => "",
+      sessionsDir,
+      logout: () => {
+        logoutCalled = true;
       },
-      authConfigDir: "fake-config-dir",
-      getGroqModel: failIfCalled("getGroqModel"),
-      loadAgentsFile: failIfCalled("loadAgentsFile"),
     });
 
     expect(code).toBe(0);
-    expect(capturedConfigDir).toBe("fake-config-dir");
+    expect(logoutCalled).toBe(false);
+    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "logout" });
   });
 
-  // Validated right after the parse (cli.ts), before any subcommand dispatch: `--max-turns garbage
-  // login` used to reach login with the malformed flag silently ignored, while the same flag on a
-  // task correctly exited 2.
-  test("`seri --max-turns garbage login` is a usage error; login is never reached", async () => {
+  test("`seri --max-turns garbage login` is a usage error", async () => {
     const errors: string[] = [];
     const originalError = console.error;
     console.error = (msg: string) => errors.push(String(msg));
@@ -771,7 +694,6 @@ describe("run (login/signup/logout)", () => {
     try {
       code = await run(["--max-turns", "garbage", "login"], {
         login: failIfCalled("login"),
-        authConfigDir: "fake-config-dir",
         getGroqModel: failIfCalled("getGroqModel"),
         loadAgentsFile: failIfCalled("loadAgentsFile"),
       });
@@ -783,11 +705,8 @@ describe("run (login/signup/logout)", () => {
     expect(errors.join("\n")).toContain("--max-turns");
   });
 
-  // "Flags are flags anywhere" means --help never reaches these subcommands: seri's own USAGE wins
-  // instead of the subcommand ever running. A real behaviour change from `main`, and the approved
-  // design (not a defect) — pinned so it stays intentional.
   test.each(["login", "signup", "logout", "usage"])(
-    "`seri %s --help` prints seri's usage, not the subcommand",
+    "`seri %s --help` prints seri's usage",
     async (subcommand) => {
       const logs: string[] = [];
       const originalLog = console.log;
@@ -797,7 +716,6 @@ describe("run (login/signup/logout)", () => {
         code = await run([subcommand, "--help"], {
           login: failIfCalled("login"),
           logout: failIfCalled("logout"),
-          authConfigDir: "fake-config-dir",
           getGroqModel: failIfCalled("getGroqModel"),
           loadAgentsFile: failIfCalled("loadAgentsFile"),
         });

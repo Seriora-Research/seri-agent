@@ -69,19 +69,19 @@ describe("PROVIDER_DISPLAY_NAMES", () => {
 describe("missingKeyError", () => {
   test("produces the exact legacy message for every provider", () => {
     expect(missingKeyError("groq").message).toBe(
-      "GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>",
+      "GROQ_API_KEY is not set. Export GROQ_API_KEY or run /setup.",
     );
     expect(missingKeyError("openrouter").message).toBe(
-      "OPENROUTER_API_KEY is not set. Run: seri config set OPENROUTER_API_KEY <your-key>",
+      "OPENROUTER_API_KEY is not set. Export OPENROUTER_API_KEY or run /setup.",
     );
     expect(missingKeyError("anthropic").message).toBe(
-      "ANTHROPIC_API_KEY is not set. Run: seri config set ANTHROPIC_API_KEY <your-key>",
+      "ANTHROPIC_API_KEY is not set. Export ANTHROPIC_API_KEY or run /setup.",
     );
     expect(missingKeyError("openai").message).toBe(
-      "OPENAI_API_KEY is not set. Run: seri config set OPENAI_API_KEY <your-key>",
+      "OPENAI_API_KEY is not set. Export OPENAI_API_KEY or run /setup.",
     );
     expect(missingKeyError("google").message).toBe(
-      "GOOGLE_GENERATIVE_AI_API_KEY is not set. Run: seri config set GOOGLE_GENERATIVE_AI_API_KEY <your-key>",
+      "GOOGLE_GENERATIVE_AI_API_KEY is not set. Export GOOGLE_GENERATIVE_AI_API_KEY or run /setup.",
     );
   });
 });

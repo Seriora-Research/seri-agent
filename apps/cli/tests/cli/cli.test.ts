@@ -17,7 +17,6 @@ import { recordWrite } from "../../src/checkpoint/writeLedger";
 import {
   addCost,
   chooseInterfaceOutput,
-  resolveEffortFlag,
   run,
   SLASH_COMMANDS,
   tuiPresenter,
@@ -42,6 +41,22 @@ import { readTrajectory } from "../../src/trajectory/writer";
 import { fakeRunLoop } from "./fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
+
+async function invokeSlash(
+  name: string,
+  args: string[],
+  dirs: { sessionsDir: string; checkpointsDir: string; configDir: string },
+  session?: SessionState<ModelMessage>,
+): Promise<void> {
+  const command = SLASH_COMMANDS.get(name);
+  if (command === undefined) throw new Error(`${name} is not registered`);
+  if (command.needsSession === false) {
+    await command.run(args, dirs);
+    return;
+  }
+  if (session === undefined) throw new Error(`${name} needs a session`);
+  await command.run(session, args, dirs);
+}
 
 describe("run (task invocation)", () => {
   const originalKey = process.env.GROQ_API_KEY;
@@ -2004,10 +2019,8 @@ describe("run (task invocation)", () => {
   // session and persists `set GROQ_API_KEY gsk_live_…` — the user's key, in full — as the task text
   // in the session JSON. So the empty sessions dir is asserted alongside the exit code, which on
   // its own cannot tell "config list succeeded" from "config was never handled".
-  test("a config subcommand returns configCommand's exit code and never reaches the task path", async () => {
+  test("`config set` is a task, not an argv verb", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
-
-    const calls: { args: string[]; configDir: string }[] = [];
     const { fake, capture } = fakeRunLoop();
 
     const { code } = await captureLogs(() =>
@@ -2016,21 +2029,14 @@ describe("run (task invocation)", () => {
         loadAgentsFile: () => "",
         sessionsDir,
         authConfigDir: tmpConfigRoot,
-        configCommand: (args, configDir) => {
-          calls.push({ args, configDir });
-          // Not 0: the task path exits 0 too, so only a code no other path produces distinguishes
-          // "configCommand's answer was returned" from "something else answered".
-          return 2;
-        },
       }),
     );
 
-    expect(code).toBe(2);
-    expect(calls).toEqual([
-      { args: ["set", "GROQ_API_KEY", "gsk_live_secret"], configDir: tmpConfigRoot },
-    ]);
-    expect(capture()).toBeUndefined();
-    expect(listSessionIds(sessionsDir)).toEqual([]);
+    expect(code).toBe(0);
+    expect(capture()?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "config set GROQ_API_KEY gsk_live_secret",
+    });
   });
 
   // A task whose first word happens to name an Object.prototype member is an ordinary task, and it
@@ -2176,21 +2182,64 @@ describe("run (task invocation)", () => {
     }
   });
 
-  test("`/trajectory off` persists and a later turn creates no trajectories directory", async () => {
+  test("`/trajectory off` via argv without a key does not persist via the slash handler", async () => {
+    const original = process.env.SERI_TRAJECTORY_ENABLED;
+    const originalKey = process.env.GROQ_API_KEY;
+    delete process.env.SERI_TRAJECTORY_ENABLED;
+    delete process.env.GROQ_API_KEY;
+    try {
+      const { code, logs } = await captureLogs(() => run(["/trajectory", "off"], { sessionsDir }));
+      expect(code).not.toBe(0);
+      expect(logs).not.toContain("Trajectory recording is off.");
+      expect(loadConfig(getConfigDir()).SERI_TRAJECTORY_ENABLED).toBeUndefined();
+      expect(listSessionIds(sessionsDir)).toEqual([]);
+    } finally {
+      restoreEnv("SERI_TRAJECTORY_ENABLED", original);
+      restoreEnv("GROQ_API_KEY", originalKey);
+    }
+  });
+
+  test("`/trajectory off` via argv with a fake loop is a task", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const original = process.env.SERI_TRAJECTORY_ENABLED;
     delete process.env.SERI_TRAJECTORY_ENABLED;
-    const { fake } = fakeRunLoop();
+    const { fake, capture } = fakeRunLoop();
     try {
-      const { code, logs } = await captureLogs(() => run(["/trajectory", "off"], { sessionsDir }));
+      const { code, logs } = await captureLogs(() =>
+        run(["/trajectory", "off"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+          sessionsDir,
+        }),
+      );
       expect(code).toBe(0);
+      expect(logs).not.toContain("Trajectory recording is off.");
+      expect(loadConfig(getConfigDir()).SERI_TRAJECTORY_ENABLED).toBeUndefined();
+      expect(capture()?.messages.at(-1)).toEqual({
+        role: "user",
+        content: "/trajectory off",
+      });
+    } finally {
+      restoreEnv("SERI_TRAJECTORY_ENABLED", original);
+    }
+  });
+
+  test("SLASH_COMMANDS /trajectory off still persists", async () => {
+    const original = process.env.SERI_TRAJECTORY_ENABLED;
+    delete process.env.SERI_TRAJECTORY_ENABLED;
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    try {
+      await invokeSlash("/trajectory", ["off"], {
+        sessionsDir,
+        checkpointsDir: join(tmpConfigRoot, "checkpoints"),
+        configDir: getConfigDir(),
+      });
       expect(logs).toContain("Trajectory recording is off.");
       expect(loadConfig(getConfigDir()).SERI_TRAJECTORY_ENABLED).toBe("false");
-      await captureLogs(() =>
-        run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
-      );
-      expect(existsSync(getTrajectoriesDir(getConfigDir()))).toBe(false);
     } finally {
+      console.log = originalLog;
       restoreEnv("SERI_TRAJECTORY_ENABLED", original);
     }
   });
@@ -2691,9 +2740,11 @@ describe("run (/mode)", () => {
     rmSync(sessionsDir, { recursive: true, force: true });
   });
 
-  test("`--continue /mode` cycles the most-recent session's mode", async () => {
+  test("`/mode` via argv is a task and does not cycle the mode", async () => {
+    const originalKey = process.env.GROQ_API_KEY;
+    process.env.GROQ_API_KEY = "fake-test-key";
     const existing: SessionState = {
-      id: "abc",
+      id: "def",
       cwd: ".",
       systemPrompt: "",
       permissionMode: "read-only",
@@ -2701,18 +2752,56 @@ describe("run (/mode)", () => {
     };
     saveSession(existing, sessionsDir);
 
-    const code = await run(["--continue", "/mode"], { sessionsDir });
+    const { fake, capture } = fakeRunLoop();
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      const code = await run(["/mode"], {
+        sessionsDir,
+        runLoop: fake,
+        loadAgentsFile: () => "",
+      });
+      expect(code).toBe(0);
+    } finally {
+      console.log = originalLog;
+      if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+      else process.env.GROQ_API_KEY = originalKey;
+    }
 
-    expect(code).toBe(0);
-    expect(listSessionIds(sessionsDir)).toHaveLength(1);
-    expect(loadSession("abc", sessionsDir).permissionMode).toBe("approve-each");
+    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "/mode" });
+    expect(listSessionIds(sessionsDir).length).toBeGreaterThanOrEqual(1);
+    expect(loadSession("def", sessionsDir).permissionMode).toBe("read-only");
   });
 
-  // Pins the hazard the --resume/--continue split introduces in place of the misparse defect the
-  // test above used to guard: --resume now takes a session id, so `--resume /mode` would look for
-  // a session literally named "/mode" instead of cycling the most recent one. Guarded rather than
-  // left to fail as "session not found": a slash-command name after --resume is a usage error that
-  // names --continue as the fix.
+  test("`/mode` via SLASH_COMMANDS still cycles", async () => {
+    const existing: SessionState = {
+      id: "def",
+      cwd: ".",
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [],
+    };
+    saveSession(existing, sessionsDir);
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    try {
+      await invokeSlash(
+        "/mode",
+        [],
+        { sessionsDir, checkpointsDir: join(sessionsDir, "ck"), configDir: getConfigDir() },
+        loadSession("def", sessionsDir),
+      );
+    } finally {
+      console.log = originalLog;
+    }
+    expect(loadSession("def", sessionsDir).permissionMode).toBe("approve-each");
+  });
+
+  // Pins the hazard the --resume/--continue split introduces: --resume now takes a session id, so
+  // `--resume /mode` would look for a session literally named "/mode". Guarded rather than left to
+  // fail as "session not found": a slash-command name after --resume is a usage error that names
+  // --continue as the fix.
   test("`--resume /mode` is a usage error naming --continue, not a session-not-found lookup", async () => {
     const existing: SessionState = {
       id: "abc",
@@ -2775,43 +2864,6 @@ describe("run (/mode)", () => {
       content: "/mode is broken, fix it",
     });
     expect(loadSession("ghi", sessionsDir).permissionMode).toBe("read-only");
-  });
-
-  test("bare `/mode` (no --resume) cycles the most-recent session instead of creating a new orphan session", async () => {
-    const existing: SessionState = {
-      id: "def",
-      cwd: ".",
-      systemPrompt: "",
-      permissionMode: "read-only",
-      messages: [],
-    };
-    saveSession(existing, sessionsDir);
-
-    const code = await run(["/mode"], { sessionsDir });
-
-    expect(code).toBe(0);
-    expect(listSessionIds(sessionsDir)).toHaveLength(1);
-    expect(loadSession("def", sessionsDir).permissionMode).toBe("approve-each");
-  });
-});
-
-// --effort must never apply on a TTY run — resolveEffortFlag is the one
-// place that scoping lives (RunContext.effortFlag's own construction, cli.ts). Unit-tested
-// directly rather than through a full `run()` call with `isTTY: true`, which would mount a real
-// TUI (getTuiRenderer) this test environment cannot always drive (tuiPtyWindows.test.ts's own
-// pre-existing ConPTY failures).
-describe("resolveEffortFlag", () => {
-  test("passes the flag through on the non-interactive path", () => {
-    expect(resolveEffortFlag("high", false)).toBe("high");
-  });
-
-  test("drops the flag entirely on a TTY run", () => {
-    expect(resolveEffortFlag("high", true)).toBeUndefined();
-  });
-
-  test("no flag given stays undefined on either path", () => {
-    expect(resolveEffortFlag(undefined, false)).toBeUndefined();
-    expect(resolveEffortFlag(undefined, true)).toBeUndefined();
   });
 });
 
@@ -2890,8 +2942,8 @@ describe("run (/effort)", () => {
     });
   }
 
-  function seedSession(id: string, overrides: Partial<SessionState> = {}): SessionState {
-    const session: SessionState = {
+  function seedSession(id: string, overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
+    const session: SessionState<ModelMessage> = {
       id,
       cwd: ".",
       systemPrompt: "",
@@ -2906,13 +2958,14 @@ describe("run (/effort)", () => {
   }
 
   test("/effort <level> on a session with that tier legal sets session.reasoningEffort", async () => {
-    seedSession("eff-1");
+    const session = seedSession("eff-1");
 
-    const code = await withReasoningFetch(() =>
-      run(["--continue", "/effort", "medium"], { sessionsDir }),
-    );
+    await withReasoningFetch(() => invokeSlash("/effort", ["medium"], {
+      sessionsDir,
+      checkpointsDir: join(tmpConfigRoot, "checkpoints"),
+      configDir: getConfigDir(),
+    }, session));
 
-    expect(code).toBe(0);
     expect(loadSession("eff-1", sessionsDir).reasoningEffort).toBe("medium");
   });
 
@@ -2922,129 +2975,69 @@ describe("run (/effort)", () => {
     const logs: string[] = [];
     const originalLog = console.log;
     console.log = (msg: string) => logs.push(String(msg));
-    let code: number;
     try {
-      code = await withReasoningFetch(() =>
-        run(["--continue", "/effort", "extreme"], { sessionsDir }),
+      await withReasoningFetch(() =>
+        invokeSlash("/effort", ["extreme"], {
+          sessionsDir,
+          checkpointsDir: join(tmpConfigRoot, "checkpoints"),
+          configDir: getConfigDir(),
+        }, loadSession("eff-2", sessionsDir)),
       );
     } finally {
       console.log = originalLog;
     }
 
-    expect(code).toBe(0);
     expect(loadSession("eff-2", sessionsDir).reasoningEffort).toBeUndefined();
     expect(logs.some((line) => line.includes("low, medium, high"))).toBe(true);
   });
 
   test("/effort auto clears session.reasoningEffort", async () => {
-    seedSession("eff-3", { reasoningEffort: "high" });
+    const session = seedSession("eff-3", { reasoningEffort: "high" });
 
-    const code = await withReasoningFetch(() =>
-      run(["--continue", "/effort", "auto"], { sessionsDir }),
+    await withReasoningFetch(() =>
+      invokeSlash("/effort", ["auto"], {
+        sessionsDir,
+        checkpointsDir: join(tmpConfigRoot, "checkpoints"),
+        configDir: getConfigDir(),
+      }, session),
     );
 
-    expect(code).toBe(0);
     expect(loadSession("eff-3", sessionsDir).reasoningEffort).toBeUndefined();
   });
 
   test("a model with no reasoningOptions: /effort reports no tiers available rather than erroring", async () => {
-    seedSession("eff-4", { model: "plain-model" });
+    const session = seedSession("eff-4", { model: "plain-model" });
 
     const logs: string[] = [];
     const originalLog = console.log;
     console.log = (msg: string) => logs.push(String(msg));
-    let code: number;
     try {
-      code = await withReasoningFetch(() => run(["--continue", "/effort"], { sessionsDir }));
+      await withReasoningFetch(() =>
+        invokeSlash("/effort", [], {
+          sessionsDir,
+          checkpointsDir: join(tmpConfigRoot, "checkpoints"),
+          configDir: getConfigDir(),
+        }, session),
+      );
     } finally {
       console.log = originalLog;
     }
 
-    expect(code).toBe(0);
     expect(logs.some((line) => line.includes("no reasoning-effort tiers available"))).toBe(true);
   });
 
-  test("--effort <level> on the non-interactive path is passed to runLoop and never written to config.json", async () => {
-    seedSession("eff-5");
-    const { fake, capture } = fakeRunLoop();
-    const configDir = getConfigDir();
-    expect(loadConfig(configDir).SERI_REASONING_EFFORT).toBeUndefined();
-
-    const code = await withReasoningFetch(() =>
-      run(["--continue", "--effort", "high", "another task"], {
-        sessionsDir,
-        runLoop: fake,
-        loadAgentsFile: () => "",
-      }),
-    );
-
-    expect(code).toBe(0);
-    expect(capture()?.reasoningEffort).toBe("high");
-    expect(loadConfig(configDir).SERI_REASONING_EFFORT).toBeUndefined();
-
-    // A second, later invocation with no --effort flag falls back to the config default (still
-    // unset here), not the prior invocation's flag value.
-    const { fake: fake2, capture: capture2 } = fakeRunLoop();
-    const code2 = await withReasoningFetch(() =>
-      run(["--continue", "yet another task"], {
-        sessionsDir,
-        runLoop: fake2,
-        loadAgentsFile: () => "",
-      }),
-    );
-    expect(code2).toBe(0);
-    expect(capture2()?.reasoningEffort).toBeUndefined();
-  });
-
-  test("--effort with a tier not legal for the resolved model fails the run rather than being silently ignored", async () => {
-    seedSession("eff-6");
-
+  test("`--effort` is an unknown option", async () => {
     const errors: string[] = [];
     const originalError = console.error;
     console.error = (msg: string) => errors.push(String(msg));
     let code: number;
     try {
-      code = await withReasoningFetch(() =>
-        run(["--continue", "--effort", "extreme", "a", "task"], {
-          sessionsDir,
-          loadAgentsFile: () => "",
-        }),
-      );
+      code = await run(["--effort", "high", "a", "task"], { sessionsDir });
     } finally {
       console.error = originalError;
     }
-
-    expect(code).not.toBe(0);
-    expect(errors.some((line) => line.includes("Invalid --effort value"))).toBe(true);
-  });
-
-  // `--effort` wins outright over `session.reasoningEffort` (driveLoop's own `??` chain) — the
-  // dropped-tier warning must key off which one the turn actually ran with, not the raw session
-  // field underneath it. A stale/illegal session override sitting unused must not be reported as
-  // dropped when a valid `--effort` flag is what the turn is actually using.
-  test("--effort overrides a stale, illegal session.reasoningEffort without printing a drop warning", async () => {
-    seedSession("eff-6b", { reasoningEffort: "xhigh" });
-    const { fake, capture } = fakeRunLoop();
-
-    const errors: string[] = [];
-    const originalError = console.error;
-    console.error = (msg: string) => errors.push(String(msg));
-    let code: number;
-    try {
-      code = await withReasoningFetch(() =>
-        run(["--continue", "--effort", "high", "another task"], {
-          sessionsDir,
-          runLoop: fake,
-          loadAgentsFile: () => "",
-        }),
-      );
-    } finally {
-      console.error = originalError;
-    }
-
-    expect(code).toBe(0);
-    expect(capture()?.reasoningEffort).toBe("high");
-    expect(errors.some((line) => line.includes("isn't legal for the current model"))).toBe(false);
+    expect(code).toBe(2);
+    expect(errors.join("\n")).toMatch(/effort/i);
   });
 
   // effortCommand's own resolveRoute() call must thread `plan`, or a
@@ -3112,15 +3105,22 @@ describe("run (/effort)", () => {
     const logs: string[] = [];
     const originalLog = console.log;
     console.log = (msg: string) => logs.push(String(msg));
-    let code: number;
     try {
-      code = await run(["--continue", "/effort"], { sessionsDir });
+      await invokeSlash(
+        "/effort",
+        [],
+        {
+          sessionsDir,
+          checkpointsDir: join(tmpConfigRoot, "checkpoints"),
+          configDir: getConfigDir(),
+        },
+        loadSession("eff-7", sessionsDir),
+      );
     } finally {
       console.log = originalLog;
       globalThis.fetch = realFetch;
     }
 
-    expect(code).toBe(0);
     expect(logs.some((line) => line.includes("low, medium, high"))).toBe(true);
     expect(logs.some((line) => /Legal tiers for the current model: low\./.test(line))).toBe(false);
   });
@@ -3335,9 +3335,7 @@ describe("run (/clear)", () => {
     expect(calls).toEqual(["sessionUpdated", "transcriptCleared", "message"]);
   });
 
-  test("`--resume <id> /clear` starts a new session, leaving the old one byte-identical", async () => {
-    // Its own isolated cwd, not ".": decideClear rebuilds systemPrompt from cwd's AGENTS.md (see
-    // that test below), and "." would resolve against wherever the test process actually runs.
+  test("`/clear` via SLASH_COMMANDS starts a new session, leaving the old one byte-identical", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "seri-cli-test-clear-cwd-"));
     const existing: SessionState = {
       id: "old-session",
@@ -3357,15 +3355,18 @@ describe("run (/clear)", () => {
     const logs: string[] = [];
     const originalLog = console.log;
     console.log = (msg: string) => logs.push(String(msg));
-    let code: number;
     try {
-      code = await run(["--resume", "old-session", "/clear"], { sessionsDir });
+      await invokeSlash(
+        "/clear",
+        [],
+        { sessionsDir, checkpointsDir: sessionsDir, configDir: getConfigDir() },
+        loadSession("old-session", sessionsDir),
+      );
     } finally {
       console.log = originalLog;
       rmSync(cwd, { recursive: true, force: true });
     }
 
-    expect(code).toBe(0);
     expect(loadSession("old-session", sessionsDir)).toEqual(before);
 
     const ids = listSessionIds(sessionsDir);
@@ -3376,8 +3377,6 @@ describe("run (/clear)", () => {
     const loaded = loadSession(newId, sessionsDir);
     expect(loaded.messages).toEqual([]);
     expect(loaded.cwd).toBe(existing.cwd);
-    // NOT existing.systemPrompt: decideClear's own comment explains why it is the one field
-    // rebuilt rather than carried over.
     expect(loaded.systemPrompt).toBe(buildSystemPrompt(loadAgentsFile(cwd)));
     expect(loaded.systemPrompt).not.toBe(existing.systemPrompt);
     expect(loaded.permissionMode).toBe(existing.permissionMode);
@@ -3388,7 +3387,8 @@ describe("run (/clear)", () => {
     expect(logs.join("\n")).toContain("old-session");
   });
 
-  test("bare `/clear` (no --resume) starts a new session from the most-recent one in this cwd", async () => {
+  test("argv `/clear` is a task and does not mint via the slash handler", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
     const existing: SessionState = {
       id: "recent-session",
       cwd: process.cwd(),
@@ -3397,72 +3397,23 @@ describe("run (/clear)", () => {
       messages: [{ role: "user", content: "hi" }],
     };
     saveSession(existing, sessionsDir);
-
-    const code = await run(["/clear"], { sessionsDir });
-
-    expect(code).toBe(0);
-    expect(listSessionIds(sessionsDir)).toHaveLength(2);
+    const { fake, capture } = fakeRunLoop();
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      const code = await run(["/clear"], {
+        sessionsDir,
+        runLoop: fake,
+        loadAgentsFile: () => "",
+      });
+      expect(code).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "/clear" });
     expect(loadSession("recent-session", sessionsDir).messages).toEqual([
       { role: "user", content: "hi" },
     ]);
-  });
-
-  // Negative control for the cwd scoping above: without it, this test's "other-project" session
-  // (touched more recently, but from a directory nothing here is standing in) is exactly what
-  // `findMostRecentSession`'s plain mtime pick would return instead — a bare `/clear` would then
-  // mint a new session carrying THAT project's `cwd` forward, per decideClear's own comment.
-  test("bare `/clear` ignores a more-recent session from a different project's cwd", async () => {
-    const otherProjectCwd = mkdtempSync(join(tmpdir(), "seri-cli-test-clear-other-cwd-"));
-    const here: SessionState = {
-      id: "here-session",
-      cwd: process.cwd(),
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [{ role: "user", content: "here" }],
-    };
-    const elsewhere: SessionState = {
-      id: "elsewhere-session",
-      cwd: otherProjectCwd,
-      systemPrompt: "",
-      permissionMode: "auto",
-      messages: [{ role: "user", content: "elsewhere" }],
-    };
-    saveSession(here, sessionsDir);
-    // Saved second so it is strictly more recent; /clear must still mint from here because of cwd.
-    saveSession(elsewhere, sessionsDir);
-
-    try {
-      const code = await run(["/clear"], { sessionsDir });
-      expect(code).toBe(0);
-    } finally {
-      rmSync(otherProjectCwd, { recursive: true, force: true });
-    }
-
-    // "here-session" got the new session minted against it, not the more-recently-touched
-    // "elsewhere-session": both remain untouched (2 originals + 1 new = 3) and "here-session"'s own
-    // messages are unchanged (/clear never mutates the resolved session, only creates a new one).
-    expect(listSessionIds(sessionsDir)).toHaveLength(3);
-    expect(loadSession("here-session", sessionsDir).messages).toEqual([
-      { role: "user", content: "here" },
-    ]);
-    expect(loadSession("elsewhere-session", sessionsDir).messages).toEqual([
-      { role: "user", content: "elsewhere" },
-    ]);
-  });
-
-  test("errors when no session exists to clear", async () => {
-    const errors: string[] = [];
-    const originalError = console.error;
-    console.error = (msg: string) => errors.push(String(msg));
-    let code: number;
-    try {
-      code = await run(["/clear"], { sessionsDir });
-    } finally {
-      console.error = originalError;
-    }
-
-    expect(code).toBe(1);
-    expect(errors.join("\n")).toContain("No session to run /clear against.");
   });
 });
 
@@ -3515,18 +3466,41 @@ describe("run (/memory)", () => {
   // (this test's own case: sessionsDir starts empty), failed with "No session to run /memory
   // against." and exited 1. needsSession: false on /memory's own SlashCommand table row is what
   // lets it skip that resolution and reach decideMemoryCommand directly.
-  test("`/memory pending` runs with no session at all, on a fresh profile", async () => {
-    const logs: string[] = [];
+  test("`/memory pending` via argv is a task", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop();
     const originalLog = console.log;
-    console.log = (msg: string) => logs.push(String(msg));
+    console.log = () => {};
     let code: number;
     try {
-      code = await run(["/memory", "pending"], { sessionsDir, authConfigDir: configDir });
+      code = await run(["/memory", "pending"], {
+        sessionsDir,
+        authConfigDir: configDir,
+        runLoop: fake,
+        loadAgentsFile: () => "",
+      });
     } finally {
       console.log = originalLog;
     }
 
     expect(code).toBe(0);
+    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "/memory pending" });
+  });
+
+  test("SLASH_COMMANDS /memory pending still runs with no session", async () => {
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    try {
+      await invokeSlash("/memory", ["pending"], {
+        sessionsDir,
+        checkpointsDir: sessionsDir,
+        configDir,
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
     expect(logs.join("\n")).toContain("No staged memory writes.");
     expect(listSessionIds(sessionsDir)).toHaveLength(0);
   });
@@ -3572,6 +3546,20 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     );
   }
 
+  function slashCall(
+    name: string,
+    args: string[],
+    sDir: string = sessionsDir,
+    cDir: string = checkpointsDir,
+  ): Promise<void> {
+    return invokeSlash(
+      name,
+      args,
+      { sessionsDir: sDir, checkpointsDir: cDir, configDir: getConfigDir() },
+      loadSession<ModelMessage>(SESSION_ID, sDir),
+    );
+  }
+
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "seri-cli-checkpoint-"));
     sessionsDir = join(root, "sessions");
@@ -3598,41 +3586,33 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
   test("`--continue /undo` dispatches against the most-recent session", async () => {
     seed();
 
-    const code = await run(["--continue", "/undo", "2"], { sessionsDir, checkpointsDir });
-
-    expect(errors).toEqual([]);
-    expect(code).toBe(0);
+    await slashCall("/undo", ["2"]);
     expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
   }, 15_000);
 
   test("`--continue /rewind` dispatches against the most-recent session", async () => {
     seed();
 
-    const code = await run(["--continue", "/rewind"], { sessionsDir, checkpointsDir });
-
-    expect(errors).toEqual([]);
-    expect(code).toBe(0);
+    await slashCall("/rewind", []);
     expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toHaveLength(3);
   }, 15_000);
 
   test("/undo reports the diff, the restored path and the command that recovers what it replaced", async () => {
     seed();
 
-    await run(["--resume", SESSION_ID, "/undo", "2"], { sessionsDir, checkpointsDir });
+    await slashCall("/undo", ["2"]);
 
     expect(logs.join("\n")).toContain("restored a.txt");
     expect(logs.join("\n")).toMatch(/The state this replaced is commit [0-9a-f]{40}\./);
     expect(logs.join("\n")).toMatch(
-      new RegExp(`seri --resume ${SESSION_ID} /restore [0-9a-f]{40}`),
+      new RegExp(`seri --resume ${SESSION_ID} then /restore [0-9a-f]{40}`),
     );
   }, 15_000);
 
   test("/undo writes a checkpoint record with op pre-undo", async () => {
     seed();
 
-    const code = await run(["--resume", SESSION_ID, "/undo", "2"], { sessionsDir, checkpointsDir });
-
-    expect(code).toBe(0);
+    await slashCall("/undo", ["2"]);
     const lines = readTrajectory(join(getTrajectoriesDir(getConfigDir()), `${SESSION_ID}.jsonl`));
     const checkpoint = lines.find((line) => (line as { kind?: string }).kind === "checkpoint") as
       | { op: string }
@@ -3667,18 +3647,12 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       sessionsDir,
     );
 
-    await run(["--resume", SESSION_ID, "/undo"], { sessionsDir, checkpointsDir });
+    await slashCall("/undo", []);
     expect(existsSync(join(workTree, "old.ts"))).toBe(true);
     expect(existsSync(join(workTree, "new.ts"))).toBe(false);
 
-    const recovery = logs.join("\n").match(/seri --resume \S+ (\/restore [0-9a-f]{40})/)?.[1] ?? "";
-    const code = await run(["--resume", SESSION_ID, ...recovery.split(" ")], {
-      sessionsDir,
-      checkpointsDir,
-    });
-
-    expect(errors).toEqual([]);
-    expect(code).toBe(0);
+    const sha = logs.join("\n").match(/\/restore ([0-9a-f]{40})/)?.[1] ?? "";
+    await slashCall("/restore", [sha]);
     expect(existsSync(join(workTree, "old.ts"))).toBe(false);
     expect(readFileSync(join(workTree, "new.ts"), "utf8")).toBe("new\n");
   }, 20_000);
@@ -3688,10 +3662,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
 
     // Resolving to the most recent session and failing on the sha is the proof: taken as a session
     // id, "/restore" would have failed to load a session instead.
-    const code = await run(["--continue", "/restore", "deadbeef"], { sessionsDir, checkpointsDir });
-
-    expect(code).toBe(1);
-    expect(errors.join("\n")).toContain("deadbeef is not a checkpoint");
+    await expect(slashCall("/restore", ["deadbeef"])).rejects.toThrow(/deadbeef is not a checkpoint/);
   }, 15_000);
 
   test("a rewind invalidates the anchors recorded before it, instead of slicing into a rebuilt array", async () => {
@@ -3726,7 +3697,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       sessionsDir,
     );
 
-    await run(["--resume", SESSION_ID, "/rewind", "2"], { sessionsDir, checkpointsDir });
+    await slashCall("/rewind", ["2"]);
     expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toHaveLength(5);
 
     // The resume: five more messages, and the two anchors that run would record against them.
@@ -3735,13 +3706,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     saveSession(resumed, sessionsDir);
     for (const anchor of [6, 8]) record(anchor);
 
-    const code = await run(["--resume", SESSION_ID, "/rewind", "3"], {
-      sessionsDir,
-      checkpointsDir,
-    });
-
-    expect(code).toBe(1);
-    expect(errors.join("\n")).toContain("since the last rewind");
+    await expect(slashCall("/rewind", ["3"])).rejects.toThrow(/since the last rewind/);
     expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toHaveLength(10);
   }, 30_000);
 
@@ -3749,12 +3714,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     seed();
     const before = readFileSync(join(workTree, "a.txt"));
 
-    const code = await run(["--resume", SESSION_ID, "/rewind", "2"], {
-      sessionsDir,
-      checkpointsDir,
-    });
-
-    expect(code).toBe(0);
+    await slashCall("/rewind", ["2"]);
     expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toEqual(
       messages.slice(0, 1),
     );
@@ -3763,8 +3723,8 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
 
   test("/undo then /rewind lands on the same anchor as /rewind then /undo", async () => {
     seed();
-    await run(["--resume", SESSION_ID, "/undo", "2"], { sessionsDir, checkpointsDir });
-    await run(["--resume", SESSION_ID, "/rewind", "2"], { sessionsDir, checkpointsDir });
+    await slashCall("/undo", ["2"]);
+    await slashCall("/rewind", ["2"]);
     const undoFirst = {
       file: readFileSync(join(workTree, "a.txt"), "utf8"),
       messages: loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages,
@@ -3795,14 +3755,8 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
         sessionsDir2,
       );
 
-      await run(["--resume", SESSION_ID, "/rewind", "2"], {
-        sessionsDir: sessionsDir2,
-        checkpointsDir: checkpointsDir2,
-      });
-      await run(["--resume", SESSION_ID, "/undo", "2"], {
-        sessionsDir: sessionsDir2,
-        checkpointsDir: checkpointsDir2,
-      });
+      await slashCall("/rewind", ["2"], sessionsDir2, checkpointsDir2);
+      await slashCall("/undo", ["2"], sessionsDir2, checkpointsDir2);
 
       expect(readFileSync(join(workTree2, "a.txt"), "utf8")).toBe(undoFirst.file);
       expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir2).messages).toEqual(
@@ -3836,9 +3790,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       sessionsDir,
     );
 
-    const code = await run(["--resume", SESSION_ID, "/rewind"], { sessionsDir, checkpointsDir });
-
-    expect(code).toBe(0);
+    await slashCall("/rewind", []);
     expect(loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages).toHaveLength(2);
     expect(logs.join("\n")).toContain("dropped 0 message(s), 2 remain");
   }, 30_000);
@@ -3846,11 +3798,9 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
   test("a repeated /undo says nothing changed instead of reporting a second undo", async () => {
     seed();
 
-    await run(["--resume", SESSION_ID, "/undo"], { sessionsDir, checkpointsDir });
+    await slashCall("/undo", []);
     logs.length = 0;
-    const code = await run(["--resume", SESSION_ID, "/undo"], { sessionsDir, checkpointsDir });
-
-    expect(code).toBe(0);
+    await slashCall("/undo", []);
     expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("after\n");
     expect(logs.join("\n")).toContain("Already at checkpoint 1; no file changed.");
     expect(logs.join("\n")).not.toContain("Undid to checkpoint");
