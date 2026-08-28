@@ -36,6 +36,11 @@ export type ChildEventPayload = {
   role: SubagentRole;
   goal: string;
   event: LoopEvent | { type: "child-started" };
+  // Present on every forwarded event for a child that actually started. Overflow rows never
+  // emit events, so a missing pair here cannot be confused with "not run".
+  model?: string;
+  provider?: ModelProvider;
+  inherited?: boolean;
 };
 
 export type SubagentTask = { role: SubagentRole; goal: string };
@@ -47,12 +52,17 @@ export type SubagentResult = SubagentTask & {
   // undefined for a row that never ran (the batch-cap overflow rows below) — output.ts's own
   // renderer uses this to tell "ran" apart from "not run" without a second flag.
   doneReason: DoneReason | undefined;
+  // Actual pair the nested runLoop called. Omitted on overflow rows so a not-run task cannot
+  // invent a route.
+  model?: string;
+  provider?: ModelProvider;
+  inherited?: boolean;
 };
 
 export type DispatchResult = { results: SubagentResult[]; totalUsage: SubagentUsage };
 
-// The seam Phase 2's archivist reuses directly (runSubagent + this type), per the plan's own
-// hand-off note — stable across both phases.
+// The seam the archivist reuses directly (runSubagent + this type) — it is a routing target, not
+// a dispatchable role, so it never goes through createDispatchTool.
 export type SubagentRuntime = {
   runLoop: typeof runLoop;
   model: LanguageModel;
@@ -75,6 +85,17 @@ export type SubagentRuntime = {
   // TUI live panel; archivist omits child.
   onChildEvent?: (payload: ChildEventPayload) => void;
   maxIterations?: number;
+  // Optional overlay: when set, each dispatched child gets this role's model/provider/effort
+  // instead of the runtime defaults. Omitted, every child shares the runtime (tests, callers
+  // that have already resolved the pair onto this object).
+  resolveRole?: (role: SubagentRole) => {
+    model: LanguageModel;
+    provider: ModelProvider;
+    modelId: string;
+    contextWindowSize?: number;
+    reasoningEffort: string | undefined;
+    inherited: boolean;
+  };
 };
 
 // Sum what showed up, like cli.ts's own addTokens — not imported from there because cli.ts
@@ -138,8 +159,8 @@ function shouldForwardChildEvent(event: LoopEvent): boolean {
 }
 
 // Drives a child runLoop to completion and derives everything from its events — runLoop's own
-// `return`s are bare (loop.ts), so nothing here is a return value. The Phase-2 seam: the archivist
-// calls this directly with its own ToolSet and transcript, never through the tool below.
+// `return`s are bare (loop.ts), so nothing here is a return value. The archivist calls this
+// directly with its own ToolSet and transcript, never through the tool below.
 
 export async function runSubagent(opts: {
   tools: ToolSet;
@@ -147,7 +168,14 @@ export async function runSubagent(opts: {
   messages: ModelMessage[];
   runtime: SubagentRuntime;
   signal?: AbortSignal;
-  child?: { id: string; role: SubagentRole; goal: string };
+  child?: {
+    id: string;
+    role: SubagentRole;
+    goal: string;
+    model?: string;
+    provider?: ModelProvider;
+    inherited?: boolean;
+  };
 }): Promise<{
   summary: string;
   // True when `summary` is fallbackSummary's own generic filler ("produced no summary", "stopped
@@ -216,6 +244,9 @@ export async function runSubagent(opts: {
         role: opts.child.role,
         goal: opts.child.goal,
         event,
+        model: opts.child.model,
+        provider: opts.child.provider,
+        inherited: opts.child.inherited,
       });
     }
   }
@@ -236,13 +267,14 @@ export async function runSubagent(opts: {
 const DISPATCH_DESCRIPTION =
   `Run one or more subagents in parallel on separate goals, each with its own limited tool ` +
   `access. Roles — "explore": read-only (read_file, grep, glob), reports findings. "plan": the ` +
-  `same read-only tools, reasons toward a change and describes it, never writes it. "code": every ` +
-  `tool including write_file/edit/bash/powershell, makes the change. "test": read-only tools plus ` +
-  `bash/powershell, runs the project's own checks and reports a verdict, never fixes anything. ` +
-  `Subagents cannot dispatch further subagents — this is a one-level tool. Up to ` +
-  `${MAX_TASKS_PER_DISPATCH} tasks run per call; extra tasks come back as not-run rows so you can ` +
-  `re-dispatch them. Each subagent's final assistant message is its only deliverable, returned ` +
-  `here as that task's summary.`;
+  `same read-only tools, reasons toward a change and describes it, never writes it. "oracle": ` +
+  `the same read-only tools, advises as a senior engineer, never writes or runs commands. ` +
+  `"code": every tool including write_file/edit/bash/powershell, makes the change. "test": ` +
+  `read-only tools plus bash/powershell, runs the project's own checks and reports a verdict, ` +
+  `never fixes anything. Subagents cannot dispatch further subagents — this is a one-level ` +
+  `tool. Up to ${MAX_TASKS_PER_DISPATCH} tasks run per call; extra tasks come back as not-run ` +
+  `rows so you can re-dispatch them. Each subagent's final assistant message is its only ` +
+  `deliverable, returned here as that task's summary.`;
 
 const inputSchema = z.object({
   tasks: z.array(z.object({ role: z.enum(DISPATCHABLE_ROLES), goal: z.string().min(1) })).min(1),
@@ -278,32 +310,61 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
         runtime.checkpointer(context);
       }
 
+      function roleIdentity(role: SubagentRole): {
+        model: string;
+        provider: ModelProvider;
+        inherited: boolean;
+      } {
+        const overlay = runtime.resolveRole?.(role);
+        return {
+          model: overlay?.modelId ?? runtime.modelId,
+          provider: overlay?.provider ?? runtime.provider,
+          inherited: overlay?.inherited ?? true,
+        };
+      }
+
+      function runtimeFor(role: SubagentRole): SubagentRuntime {
+        const overlay = runtime.resolveRole?.(role);
+        if (overlay === undefined) return runtime;
+        return {
+          ...runtime,
+          model: overlay.model,
+          provider: overlay.provider,
+          modelId: overlay.modelId,
+          contextWindowSize: overlay.contextWindowSize,
+          reasoningEffort: overlay.reasoningEffort,
+        };
+      }
+
       function runOne(task: SubagentTask, index: number) {
         const childId = `${options.toolCallId}:${index}`;
+        const identity = roleIdentity(task.role);
         runtime.onChildEvent?.({
           childId,
           role: task.role,
           goal: task.goal,
           event: { type: "child-started" },
+          ...identity,
         });
         return runSubagent({
           tools: buildRoleToolSet(task.role, runtime.checkpointer?.onAfterMutation),
           system: joinTiers(runtime.system, roleAddendum(task.role)),
           messages: [{ role: "user", content: task.goal }],
-          runtime,
+          runtime: runtimeFor(task.role),
           signal: options.abortSignal,
-          child: { id: childId, role: task.role, goal: task.goal },
+          child: { id: childId, role: task.role, goal: task.goal, ...identity },
         });
       }
 
-      // Readers (explore/plan) run concurrently with each other and with the writer chain below —
-      // this is the fan-out the stage exists for. Writers (any role holding a mutating tool: code,
-      // test) run one at a time, in call order: one filesystem, one writer at a time. This is what
-      // makes a `code` child's write through bash/powershell safe by construction, not by tracking
-      // which path a call touched — no per-path check could see through an arbitrary shell command
-      // anyway. Trade-off, accepted deliberately: two `code` tasks writing to different paths no
-      // longer run concurrently either; the prior per-path mechanism's own remedy for the one case
-      // it caught was discarding a full child run, which was already a bad trade.
+      // Readers (explore/plan/oracle) run concurrently with each other and with the writer chain
+      // below — this is the fan-out the dispatch exists for. Writers (any role holding a mutating
+      // tool: code, test) run one at a time, in call order: one filesystem, one writer at a time.
+      // This is what makes a `code` child's write through bash/powershell safe by construction, not
+      // by tracking which path a call touched — no per-path check could see through an arbitrary
+      // shell command anyway. Trade-off, accepted deliberately: two `code` tasks writing to
+      // different paths no longer run concurrently either; the prior per-path mechanism's own
+      // remedy for the one case it caught was discarding a full child run, which was already a bad
+      // trade.
       const settled: Awaited<ReturnType<typeof runOne>>[] = new Array(runnable.length);
       const readerIdx = runnable
         .map((_, i) => i)
@@ -320,14 +381,18 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
         })(),
       ]);
 
-      const results: SubagentResult[] = runnable.map((task, index) => ({
-        role: task.role,
-        goal: task.goal,
-        summary: settled[index].summary,
-        usage: settled[index].usage,
-        toolCallsMade: settled[index].toolCallsMade,
-        doneReason: settled[index].doneReason,
-      }));
+      const results: SubagentResult[] = runnable.map((task, index) => {
+        const identity = roleIdentity(task.role);
+        return {
+          role: task.role,
+          goal: task.goal,
+          summary: settled[index].summary,
+          usage: settled[index].usage,
+          toolCallsMade: settled[index].toolCallsMade,
+          doneReason: settled[index].doneReason,
+          ...identity,
+        };
+      });
 
       for (const task of overflow) {
         results.push({

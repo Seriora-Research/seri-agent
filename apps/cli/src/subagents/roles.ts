@@ -7,17 +7,20 @@ import {
   toolDefinitions,
 } from "../provider/tools";
 
-export type SubagentRole = "explore" | "plan" | "code" | "test";
+export type SubagentRole = "explore" | "plan" | "code" | "test" | "oracle";
 
 // A tuple, not the SubagentRole union directly, so z.enum(DISPATCHABLE_ROLES) (dispatch.ts) can
-// type its own input schema off this array. Phase 2's archivist role must stay unreachable from
-// the model: it must not be added here even if SubagentRole itself grows to include it.
-export const DISPATCHABLE_ROLES = ["explore", "plan", "code", "test"] as const;
+// type its own input schema off this array. The archivist is a routing target, not a parent-callable
+// role: it must not be added here even if a future RoutableRole list grows to include it.
+export const DISPATCHABLE_ROLES = ["explore", "plan", "code", "test", "oracle"] as const;
 
-// `plan` shares `explore`'s array by reference: read access is identical between the two roles.
+// `plan` and `oracle` share `explore`'s array by reference: read access is identical among the
+// three. Oracle is still a distinct seat — isolated context and a different addendum — not a
+// second explorer.
 const ROLE_TOOL_NAMES: Record<SubagentRole, readonly ToolName[]> = {
   explore: READ_ONLY_TOOL_NAMES,
   plan: READ_ONLY_TOOL_NAMES,
+  oracle: READ_ONLY_TOOL_NAMES,
   test: [...READ_ONLY_TOOL_NAMES, "bash", "powershell"],
   code: Object.keys(toolDefinitions) as ToolName[],
 };
@@ -53,6 +56,7 @@ export function roleMutatesFilesystem(role: SubagentRole): boolean {
 const ROLE_JOB: Record<SubagentRole, string> = {
   explore: "read the codebase and report what you find in text. You cannot write or run commands.",
   plan: "reason toward a change and describe it in text. You cannot write it — that is a separate role.",
+  oracle: "advise as a senior engineer. You cannot write or run commands.",
   code: "read, write and run commands to make the change.",
   test: "run the project's own checks and report a verdict in text. You cannot fix what fails.",
 };

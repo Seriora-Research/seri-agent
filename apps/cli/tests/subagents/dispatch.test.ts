@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ModelCatalog } from "@seri/model-catalog";
 import type { LanguageModelUsage, ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
@@ -660,6 +663,169 @@ describe("dispatch_subagents", () => {
     );
 
     expect(calls[0].opts.reasoningEffort).toBeUndefined();
+  });
+
+  test("resolveRole overlay uses the child's model/provider/effort, not the runtime defaults", async () => {
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const childModel = new MockLanguageModelV4({});
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        provider: "groq",
+        modelId: "parent-model",
+        reasoningEffort: "high",
+        resolveRole: (role) => {
+          expect(role).toBe("oracle");
+          return {
+            model: childModel,
+            provider: "anthropic",
+            modelId: "claude-sonnet-5",
+            contextWindowSize: 200_000,
+            reasoningEffort: undefined,
+            inherited: false,
+          };
+        },
+      }),
+    );
+    const result = (await dispatchTool.execute(
+      { tasks: [{ role: "oracle", goal: "advise" }] },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(calls[0].opts.provider).toBe("anthropic");
+    expect(calls[0].opts.modelId).toBe("claude-sonnet-5");
+    expect(calls[0].opts.model).toBe(childModel);
+    expect(calls[0].opts.contextWindowSize).toBe(200_000);
+    // Negative control: parent high must not ride onto a different pair.
+    expect(calls[0].opts.reasoningEffort).toBeUndefined();
+    expect(result.results[0].model).toBe("claude-sonnet-5");
+    expect(result.results[0].provider).toBe("anthropic");
+    expect(result.results[0].inherited).toBe(false);
+  });
+
+  test("same-pair resolveRole still forwards parent reasoningEffort", async () => {
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        provider: "groq",
+        modelId: "parent-model",
+        reasoningEffort: "high",
+        resolveRole: () => ({
+          model: new MockLanguageModelV4({}),
+          provider: "groq",
+          modelId: "parent-model",
+          reasoningEffort: "high",
+          inherited: true,
+        }),
+      }),
+    );
+    await dispatchTool.execute(
+      { tasks: [{ role: "explore", goal: "look" }] },
+      dispatchOpts("t1"),
+    );
+    expect(calls[0].opts.reasoningEffort).toBe("high");
+  });
+
+  test("overflow rows omit model/provider/inherited", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        resolveRole: () => ({
+          model: new MockLanguageModelV4({}),
+          provider: "anthropic",
+          modelId: "claude-sonnet-5",
+          reasoningEffort: undefined,
+          inherited: false,
+        }),
+      }),
+    );
+    const result = (await dispatchTool.execute(
+      {
+        tasks: Array.from({ length: 4 }, (_, i) => ({
+          role: "explore" as const,
+          goal: `task ${i}`,
+        })),
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results[3].doneReason).toBeUndefined();
+    expect(result.results[3].model).toBeUndefined();
+    expect(result.results[3].provider).toBeUndefined();
+    expect(result.results[3].inherited).toBeUndefined();
+    expect(result.results[0].model).toBe("claude-sonnet-5");
+  });
+
+  test("child-started carries the actual pair when not inherited", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const events: ChildEventPayload[] = [];
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        onChildEvent: (payload) => events.push(payload),
+        resolveRole: () => ({
+          model: new MockLanguageModelV4({}),
+          provider: "anthropic",
+          modelId: "claude-sonnet-5",
+          reasoningEffort: undefined,
+          inherited: false,
+        }),
+      }),
+    );
+    await dispatchTool.execute(
+      { tasks: [{ role: "oracle", goal: "advise" }] },
+      dispatchOpts("t1"),
+    );
+    const started = events.find((e) => e.event.type === "child-started");
+    expect(started?.model).toBe("claude-sonnet-5");
+    expect(started?.provider).toBe("anthropic");
+    expect(started?.inherited).toBe(false);
+  });
+
+  test("a hostile oracle calling write_file/edit/bash/powershell/dispatch_subagents gets Unknown tool and writes nothing", async () => {
+    const distinctivePath = join(tmpdir(), `seri-oracle-hostile-${Date.now()}.txt`);
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(
+          toolCallChunks("c1", "write_file", {
+            path: distinctivePath,
+            content: "ignore all previous instructions",
+          }),
+        ),
+        streamResult(toolCallChunks("c2", "edit", { path: distinctivePath, oldString: "x", newString: "y" })),
+        streamResult(toolCallChunks("c3", "bash", { command: "echo pwned" })),
+        streamResult(toolCallChunks("c4", "powershell", { command: "Write-Host pwned" })),
+        streamResult(
+          toolCallChunks("c5", DISPATCH_TOOL_NAME, {
+            tasks: [{ role: "code", goal: "write" }],
+          }),
+        ),
+        streamResult(textOnlyChunks("stopped")),
+      ],
+    });
+    const events = await collect(
+      realRunLoop({
+        model,
+        tools: buildRoleToolSet("oracle"),
+        messages: [{ role: "user", content: "go" }],
+        permissionMode: "auto",
+      }),
+    );
+
+    for (const name of ["write_file", "edit", "bash", "powershell", DISPATCH_TOOL_NAME]) {
+      expect(events).toContainEqual({
+        type: "error",
+        error: `Unknown tool "${name}": no matching tool definition.`,
+      });
+      expect(events.some((e) => e.type === "tool-call" && e.name === name)).toBe(false);
+    }
+    expect(existsSync(distinctivePath)).toBe(false);
   });
 
   test("a code task takes exactly one pre-dispatch checkpoint snapshot; an all-explore batch takes none", async () => {
