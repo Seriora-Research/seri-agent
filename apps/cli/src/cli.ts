@@ -57,11 +57,18 @@ import { configCommand as configCommandReal } from "./config/commands";
 import {
   loadConfig,
   loadReasoningEffortConfig,
+  loadTrajectoryConfig,
   loadVerifyConfig,
   persistDefaultReasoningEffort,
   type VerifyConfig,
 } from "./config/config";
-import { getConfigDir, profileNameError, resolveProfile, setProfileOverride } from "./config/paths";
+import {
+  getConfigDir,
+  getTrajectoriesDir,
+  profileNameError,
+  resolveProfile,
+  setProfileOverride,
+} from "./config/paths";
 import { messageOf } from "./errors";
 import type { PermissionMode } from "./gate/gate";
 import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
@@ -121,6 +128,7 @@ import {
 } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { type ChildEventPayload, withSubagents } from "./subagents/dispatch";
+import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import { App } from "./tui/app";
@@ -572,6 +580,7 @@ function undoCommand(
   presenter: CommandPresenter = consolePresenter(dirs),
 ): void {
   presenter.restore(decideUndo(session, args, dirs, presenter.onPlan));
+  dirs.trajectory?.recordCheckpoint({ op: "pre-undo" });
 }
 
 // The other end of what /undo and /restore print: put the worktree back to a commit this session
@@ -584,6 +593,7 @@ function restoreCommand(
   presenter: CommandPresenter = consolePresenter(dirs),
 ): void {
   presenter.restore(decideRestore(session, args, dirs, presenter.onPlan));
+  dirs.trajectory?.recordCheckpoint({ op: "pre-undo" });
 }
 
 async function rewindCommand(
@@ -607,7 +617,7 @@ async function rewindCommand(
   // error, rather than silently swallowing it the way driveLoop's compaction-barrier warning
   // does, is the more honest signal: the barrier itself did not land, and a later /rewind may not
   // be able to cross this point.
-  recordBarrier();
+  if (recordBarrier()) dirs.trajectory?.recordCheckpoint({ op: "rewind-barrier" });
   presenter.message(message);
 }
 
@@ -717,6 +727,7 @@ async function compactCommand(
   const { storeDir } = checkpointTarget(session, dirs);
   try {
     appendBarrier(storeDir, session.id, "compaction");
+    dirs.trajectory?.recordCheckpoint({ op: "compaction-barrier" });
   } catch (err) {
     // Warn-and-continue, matching driveLoop's own identical compaction-barrier catch (its own
     // comment: this is the one checkpoint call deliberately outside the degrade-never-fail policy
@@ -1285,12 +1296,31 @@ type RunContext = CommandDirs & {
   detailFlag: boolean;
 };
 
-function dirs(ctx: RunContext): CommandDirs {
+function dirs(ctx: RunContext, trajectory?: TrajectoryWriter): CommandDirs {
   return {
     sessionsDir: ctx.sessionsDir,
     checkpointsDir: ctx.checkpointsDir,
     configDir: ctx.configDir,
+    ...(trajectory !== undefined ? { trajectory } : {}),
   };
+}
+
+function createSessionTrajectory(
+  session: { id: string; cwd: string; model?: string; provider?: string },
+  configDir: string,
+  onWarning: (message: string) => void,
+): TrajectoryWriter {
+  const cfg = loadTrajectoryConfig(configDir);
+  return createTrajectoryWriter({
+    dir: getTrajectoriesDir(configDir),
+    sessionId: session.id,
+    cwd: session.cwd,
+    model: session.model,
+    provider: session.provider,
+    enabled: cfg.enabled,
+    retentionDays: cfg.retentionDays,
+    onWarning,
+  });
 }
 
 // The three ways a run can begin, all derived from the same two RunContext fields (`resuming`,
@@ -1370,7 +1400,13 @@ async function handleSlashCommand(ctx: RunContext, deps: CliDeps): Promise<numbe
         "the last message in this session's saved history was incomplete (an interrupted save) and has been dropped — everything before it is intact",
       ),
     );
-    await command.run(loaded, commandArgs, dirs(ctx), undefined, deps);
+    await command.run(
+      loaded,
+      commandArgs,
+      dirs(ctx, createSessionTrajectory(loaded, ctx.configDir, printWarning)),
+      undefined,
+      deps,
+    );
     return 0;
   } catch (err) {
     console.error(messageOf(err));
@@ -1464,6 +1500,10 @@ type PreparedRun = {
   // the session-keyed checkpointer/tools/archivistState, rather than carrying the old session's
   // memory forward.
   memory: LoadedMemory;
+  // Append-only jsonl for this session id. Rebound in bindSession the same way checkpointer/tools
+  // are: /clear mints a new id, so a writer closed over the old one would keep appending to a
+  // file nothing resumes. Disabled config still yields a no-op writer (no mkdir).
+  trajectory: TrajectoryWriter;
   // Startup notices (session-created, permission warnings, pre-approved tools, the cross-project
   // checkpoint mismatch) that prepareSession would otherwise print directly. On the TUI path they
   // are queued here instead: prepareSession runs after runWelcomeSplash has already created the
@@ -1548,8 +1588,16 @@ function buildCheckpointedTools(opts: {
   sessionId: string;
   verifyConfig: VerifyConfig;
   onWarning: (message: string) => void;
+  onCheckpoint?: (entry: { op: "snapshot"; tool: string; toolCallId: string }) => void;
 }): { checkpointer: Checkpointer; tools: ToolSet } {
-  const checkpointer = createCheckpointer(opts);
+  const live = createCheckpointer(opts);
+  const checkpointer = Object.assign(
+    (context: Parameters<Checkpointer>[0]) => {
+      live(context);
+      opts.onCheckpoint?.({ op: "snapshot", tool: context.tool, toolCallId: context.toolCallId });
+    },
+    { onAfterMutation: live.onAfterMutation, invalidate: live.invalidate },
+  );
   const tools = withVerification(
     withCheckpoints(toolDefinitions, checkpointer, checkpointer.onAfterMutation),
     opts.verifyConfig,
@@ -1558,29 +1606,32 @@ function buildCheckpointedTools(opts: {
 }
 
 // Everything scoped to a session id, rebound in one place — the checkpointer/tools pair,
-// PreparedRun.session, PreparedRun.memory, and the archivist's own counter/cursor, none of which
-// stay valid once `session` is a conceptually different conversation (/clear's own case). Adding a
-// session-scoped field to PreparedRun means updating this function, not hunting for the assignment
-// site in runTui. Returns the new ArchivistState rather than assigning it directly: `archivistState`
-// is a bare `let` in runTui, not a PreparedRun field, so the caller still does that one assignment
-// itself.
+// PreparedRun.session, PreparedRun.memory, PreparedRun.trajectory, and the archivist's own
+// counter/cursor, none of which stay valid once `session` is a conceptually different conversation
+// (/clear's own case). Adding a session-scoped field to PreparedRun means updating this function,
+// not hunting for the assignment site in runTui. Returns the new ArchivistState rather than
+// assigning it directly: `archivistState` is a bare `let` in runTui, not a PreparedRun field, so
+// the caller still does that one assignment itself.
 function bindSession(
   prepared: PreparedRun,
   session: RunSession,
   configDir: string,
   onWarning: (message: string) => void,
 ): ArchivistState {
+  const trajectory = createSessionTrajectory(session, configDir, onWarning);
   const { checkpointer, tools } = buildCheckpointedTools({
     storeDir: prepared.storeDir,
     worktree: prepared.worktree,
     sessionId: session.id,
     verifyConfig: prepared.verifyConfig,
     onWarning,
+    onCheckpoint: (entry) => trajectory.recordCheckpoint(entry),
   });
   prepared.checkpointer = checkpointer;
   prepared.tools = tools;
   prepared.memory = loadMemory({ configDir, worktree: prepared.worktree });
   prepared.session = session;
+  prepared.trajectory = trajectory;
   return createArchivistState(session);
 }
 
@@ -1785,12 +1836,14 @@ async function prepareSession(
     // Resolved once, here — PreparedRun's own comment on `verifyConfig` explains why a later
     // /clear rebind (bindSession) must reuse this value rather than calling loadVerifyConfig again.
     const verifyConfig = loadVerifyConfig(configDir);
+    const trajectory = createSessionTrajectory(session, configDir, printWarning);
     const { checkpointer, tools } = buildCheckpointedTools({
       storeDir,
       worktree,
       sessionId: session.id,
       verifyConfig,
       onWarning: printWarning,
+      onCheckpoint: (entry) => trajectory.recordCheckpoint(entry),
     });
 
     // Loaded once, here, alongside everything else this function resolves once per run — this is
@@ -1812,6 +1865,7 @@ async function prepareSession(
       checkpointer,
       verifyConfig,
       memory,
+      trajectory,
       preMountMessages,
     };
   } catch (err) {
@@ -2015,12 +2069,17 @@ async function driveLoop(
     reasoningEffort,
     // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
     // subagent tokens land in the run's own reported total instead of vanishing.
+    // Child token spend is not a parent LoopEvent, so the writer records it here.
     onChildUsage: (childUsage, childCost) => {
       usage.inputTokens = addTokens(usage.inputTokens, childUsage.inputTokens);
       usage.outputTokens = addTokens(usage.outputTokens, childUsage.outputTokens);
       cost = addCost(cost, childCost);
+      prepared.trajectory.recordChildUsage(childUsage, childCost);
     },
-    onChildEvent,
+    onChildEvent: (payload) => {
+      prepared.trajectory.recordChildEvent(payload);
+      onChildEvent?.(payload);
+    },
   });
   // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
   // what an exit code promises a shell, which is this consumer's business, not the loop's.
@@ -2078,6 +2137,7 @@ async function driveLoop(
       // it (memory/archivist.ts's own comment on observeArchivistEvent), so nothing else in this
       // loop mutates archivistState directly.
       observeArchivistEvent(archivistState, event);
+      prepared.trajectory.recordLoopEvent(event);
       if (event.type === "messages-updated") {
         // `persist` (this function's own comment above explains the two callers) is the ONLY
         // write for this event now — MEDIUM-1: driveLoop used to ALSO call saveSession directly
@@ -2105,6 +2165,7 @@ async function driveLoop(
       if (event.type === "compacted") {
         try {
           appendBarrier(storeDir, session.id, "compaction");
+          prepared.trajectory.recordCheckpoint({ op: "compaction-barrier" });
         } catch (err) {
           printWarning(
             `could not record the compaction barrier, so /rewind may not be able to cross this point: ${messageOf(err)}`,
@@ -2161,6 +2222,7 @@ async function driveLoop(
       onWarning: printWarning,
       reasoningEffort,
     });
+    prepared.trajectory.recordArchivist(archivist);
   } finally {
     // In a finally, so a run that throws out of the loop does not leave the slot pointing at a
     // controller nothing is waiting on — a later signal would then be swallowed as a cancel of a
@@ -3348,7 +3410,7 @@ async function runTui(
       if (command.needsSession === false) {
         await command.run(
           args,
-          dirs(ctx),
+          dirs(ctx, prepared.trajectory),
           tuiPresenter(dispatch, awaitNextPersist, () => liveState.session, foldUsage),
           deps,
         );
@@ -3356,7 +3418,7 @@ async function runTui(
         await command.run(
           liveState.session,
           args,
-          dirs(ctx),
+          dirs(ctx, prepared.trajectory),
           tuiPresenter(dispatch, awaitNextPersist, () => liveState.session, foldUsage),
           deps,
         );

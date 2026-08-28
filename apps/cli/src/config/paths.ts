@@ -19,6 +19,7 @@ export const DEFAULT_PROFILE = "default";
 // own header comment already applies to CONFIG_FILENAME/AUTH_FILENAME/PERMISSIONS_FILENAME.
 export const MEMORIES_DIRNAME = "memories";
 export const PENDING_DIRNAME = "pending";
+export const TRAJECTORIES_DIRNAME = "trajectories";
 
 // The full names of every sibling a profile directory would collide with under the default root.
 // The three file-backed entries are read from the file that owns them (config.json, auth.json,
@@ -50,6 +51,7 @@ export function getReservedProfileNames(): ReadonlySet<string> {
     "bin",
     MEMORIES_DIRNAME,
     PENDING_DIRNAME,
+    TRAJECTORIES_DIRNAME,
   ]);
   return reservedProfileNames;
 }
@@ -148,4 +150,8 @@ export function getMemoriesDir(configDir: string = getConfigDir()): string {
 
 export function getPendingDir(configDir: string = getConfigDir()): string {
   return join(configDir, PENDING_DIRNAME);
+}
+
+export function getTrajectoriesDir(configDir: string = getConfigDir()): string {
+  return join(configDir, TRAJECTORIES_DIRNAME);
 }

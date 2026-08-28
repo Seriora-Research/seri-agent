@@ -19,7 +19,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { saveAuthSession } from "../../src/auth/authStore";
-import { getConfigDir } from "../../src/config/paths";
+import { getConfigDir, getTrajectoriesDir } from "../../src/config/paths";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
@@ -38,10 +38,11 @@ import { loadGrants, permissionsPath, projectKey } from "../../src/permissions/s
 import type { CostReport } from "../../src/provider/cost";
 import { getGroqModel } from "../../src/provider/groq";
 import { configuredProviders, PROVIDER_API_KEY_NAMES } from "../../src/provider/keys";
-import { toolDefinitions } from "../../src/provider/tools";
+import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
 import { loadSession, type SessionState, saveSession } from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { CheckOutcome } from "../../src/verify/run";
+import { readTrajectory } from "../../src/trajectory/writer";
 import { fakeRunLoop } from "./fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
@@ -2138,6 +2139,134 @@ describe("run (task invocation)", () => {
     expect(code).toBe(0);
     expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "/exit" });
   });
+
+  function latestSessionId(): string {
+    return readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
+  }
+
+  function trajectoryLines(sessionId: string): unknown[] {
+    return readTrajectory(join(getTrajectoriesDir(getConfigDir()), `${sessionId}.jsonl`));
+  }
+
+  function trajectoryKinds(sessionId: string): string[] {
+    return trajectoryLines(sessionId).map((line) => (line as { kind: string }).kind);
+  }
+
+  test("an injected turn writes header, summarized tool_result, usage, and done", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const cost: CostReport = {
+      amountUsd: 0.001,
+      status: "estimated",
+      source: "provider_models_api",
+    };
+    const { fake } = fakeRunLoop([
+      { type: "tool-call", name: "read_file", args: { path: "a.ts" } },
+      { type: "tool-result", name: "read_file", result: "hello" },
+      usageEvent(10, 4, cost),
+      { type: "done", reason: "no-tool-call" },
+    ]);
+
+    await captureLogs(() =>
+      run(["read", "a.ts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    const sessionId = latestSessionId();
+    expect(trajectoryKinds(sessionId)).toEqual([
+      "header",
+      "tool_call",
+      "tool_result",
+      "usage",
+      "done",
+    ]);
+    const resultLine = trajectoryLines(sessionId).find(
+      (line) => (line as { kind?: string }).kind === "tool_result",
+    ) as { result: unknown };
+    expect(resultLine.result).toEqual({ bytes: 5 });
+  });
+
+  test("SERI_TRAJECTORY_ENABLED=false creates no trajectories directory", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const original = process.env.SERI_TRAJECTORY_ENABLED;
+    process.env.SERI_TRAJECTORY_ENABLED = "false";
+    const { fake } = fakeRunLoop();
+    try {
+      await captureLogs(() =>
+        run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      );
+      expect(existsSync(getTrajectoriesDir(getConfigDir()))).toBe(false);
+    } finally {
+      restoreEnv("SERI_TRAJECTORY_ENABLED", original);
+    }
+  });
+
+  test("an injected near-miss edit error writes edit_outcome near_miss", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake } = fakeRunLoop([
+      {
+        type: "error",
+        error: "Could not find the specified text to replace in a.ts",
+      },
+      { type: "done", reason: "no-tool-call" },
+    ]);
+
+    await captureLogs(() =>
+      run(["edit", "a.ts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    const outcome = trajectoryLines(latestSessionId()).find(
+      (line) => (line as { kind?: string }).kind === "edit_outcome",
+    ) as { status: string };
+    expect(outcome.status).toBe("near_miss");
+  });
+
+  test("done reason aborted is recorded", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake } = fakeRunLoop([{ type: "done", reason: "aborted" }]);
+
+    await captureLogs(() =>
+      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    const done = trajectoryLines(latestSessionId()).find(
+      (line) => (line as { kind?: string }).kind === "done",
+    ) as { reason: string };
+    expect(done.reason).toBe("aborted");
+  });
+
+  test("child token spend is recorded as usage source child", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const childCost: CostReport = {
+      amountUsd: 0.002,
+      status: "estimated",
+      source: "provider_models_api",
+    };
+    async function* fake(opts: RunLoopOpts) {
+      const dispatch = opts.tools[DISPATCH_TOOL_NAME];
+      if (dispatch?.execute !== undefined) {
+        await dispatch.execute(
+          { tasks: [{ role: "explore" as const, goal: "look around" }] },
+          { toolCallId: "t1", messages: opts.messages, context: {}, abortSignal: opts.signal },
+        );
+        yield { type: "done" as const, reason: "no-tool-call" as const };
+        return opts.messages;
+      }
+      yield usageEvent(7, 3, childCost);
+      yield { type: "done" as const, reason: "no-tool-call" as const };
+      return opts.messages;
+    }
+
+    await captureLogs(() =>
+      run(["dispatch"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    const childUsage = trajectoryLines(latestSessionId()).find(
+      (line) =>
+        (line as { kind?: string; source?: string }).kind === "usage" &&
+        (line as { source?: string }).source === "child",
+    ) as { source: string; usage: { inputTokens?: number } } | undefined;
+    expect(childUsage?.source).toBe("child");
+    expect(childUsage?.usage.inputTokens).toBe(7);
+  });
 });
 
 // cli-tui-stage-b-bare-seri, feature-plan.md Stage B: covers the non-interactive path only — bare
@@ -3401,6 +3530,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     { role: "user", content: "two" },
     { role: "assistant", content: [{ type: "text", text: "b" }] },
   ];
+  const originalHome = process.env.HOME;
 
   let root: string;
   let sessionsDir: string;
@@ -3438,6 +3568,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
     checkpointsDir = join(root, "checkpoints");
     workTree = join(root, "work");
     mkdirSync(workTree, { recursive: true });
+    process.env.HOME = root;
     logs = [];
     errors = [];
     originalLog = console.log;
@@ -3449,6 +3580,8 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
   afterEach(() => {
     console.log = originalLog;
     console.error = originalError;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -3483,6 +3616,19 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       new RegExp(`seri --resume ${SESSION_ID} /restore [0-9a-f]{40}`),
     );
   }, 15_000);
+
+  test("/undo writes a checkpoint record with op pre-undo", async () => {
+    seed();
+
+    const code = await run(["--resume", SESSION_ID, "/undo", "2"], { sessionsDir, checkpointsDir });
+
+    expect(code).toBe(0);
+    const lines = readTrajectory(join(getTrajectoriesDir(getConfigDir()), `${SESSION_ID}.jsonl`));
+    const checkpoint = lines.find((line) => (line as { kind?: string }).kind === "checkpoint") as
+      | { op: string }
+      | undefined;
+    expect(checkpoint?.op).toBe("pre-undo");
+  });
 
   test("the recovery command /undo prints puts back exactly the state it replaced", async () => {
     // The case the printed git incantation got wrong. `read-tree` + `checkout-index -a -f` is
