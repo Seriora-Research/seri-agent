@@ -107,6 +107,8 @@ export type SubagentRuntime = {
     reasoningEffort: string | undefined;
     inherited: boolean;
   };
+  // Session worktree. Children must not fall back to process.cwd().
+  cwd?: string;
 };
 
 // Sum what showed up, like cli.ts's own addTokens — not imported from there because cli.ts
@@ -377,7 +379,7 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
           ...identity,
         });
         return runSubagent({
-          tools: buildRoleToolSet(task.role, runtime.checkpointer?.onAfterMutation),
+          tools: buildRoleToolSet(task.role, runtime.checkpointer?.onAfterMutation, runtime.cwd),
           system: joinTiers(runtime.system, roleAddendum(task.role)),
           messages: [{ role: "user", content: task.goal }],
           runtime: runtimeFor(task),

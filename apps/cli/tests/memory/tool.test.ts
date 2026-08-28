@@ -111,6 +111,23 @@ describe("makeMemoryWriteTool", () => {
     expect(loadMemoryFile("user", ctx).text).toContain("prefers tabs");
   });
 
+  test("forceStage stages even when the approval gate is off", async () => {
+    const ctx = makeCtx();
+    setConfigValue("SERI_MEMORY_APPROVAL", "false", ctx.configDir);
+    const toolDef = makeMemoryWriteTool(ctx, { forceStage: true });
+    const result = (await callTool(toolDef, {
+      scope: "user",
+      action: "add",
+      content: "idle must stage",
+      reason: "idle flush",
+      durable: true,
+    })) as { staged: boolean };
+    expect(result.staged).toBe(true);
+    expect(loadMemoryFile("user", ctx).text).toBe("");
+    const pendingDir = join(getPendingDir(ctx.configDir), "user");
+    expect(readdirSync(pendingDir).filter((f) => f.endsWith(".pending"))).toHaveLength(1);
+  });
+
   test("an injection-scan-tripping write reaches neither the live file nor the pending queue, and the credential rejection never carries the matched secret", async () => {
     const ctx = makeCtx();
     const toolDef = makeMemoryWriteTool(ctx);

@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type { ToolExecutionOptions } from "ai";
 import {
   appendBarrier,
@@ -35,7 +35,7 @@ import {
   writeTree,
 } from "../../src/checkpoint/shadowGit";
 import { type MutationContext, withCheckpoints } from "../../src/checkpoint/wrapTools";
-import { recordWrite } from "../../src/checkpoint/writeLedger";
+import { loadLedger, recordWrite } from "../../src/checkpoint/writeLedger";
 import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
 import { getCachedEol, setCachedEol } from "../../src/tools/eolCache";
@@ -133,6 +133,22 @@ describe("checkpointStoreDir", () => {
 });
 
 describe("createCheckpointer (git absent)", () => {
+  test("records a relative write_file path against the session cwd, not process.cwd()", () => {
+    const cwd = join(root, "session-cwd");
+    mkdirSync(cwd);
+    mkdirSync(storeDir);
+    writeFileSync(join(cwd, "note.txt"), "daemon wrote this\n");
+    const snapshot = checkpointer({ cwd, gitAvailable: () => false });
+    snapshot.onAfterMutation({
+      tool: "write_file",
+      toolCallId: "c1",
+      args: { path: "note.txt" },
+      rewindTo: 1,
+    });
+    expect(loadLedger(storeDir)[join(cwd, "note.txt")]).toMatch(/^[0-9a-f]{64}$/);
+    expect(loadLedger(storeDir)[resolve("note.txt")]).toBeUndefined();
+  });
+
   test("warns once, creates no store, and never throws", () => {
     const snapshot = checkpointer({ gitAvailable: () => false });
 

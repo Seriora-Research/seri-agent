@@ -74,7 +74,7 @@ export function filterSafeToDelete(
   candidateRelativePaths: string[],
 ): string[] {
   // A case-insensitive filesystem with a case-variant declared path, or a symlinked project root
-  // where realpath resolution differs from process.cwd() (recordWrite's own resolve() call site),
+  // where realpath resolution differs from the session cwd the ledger keyed the write under,
   // can make this exact-string join miss an entry that IS on disk. Always degrades in the safe
   // direction: a miss here fails the `expected === undefined` check below, so the file is preserved
   // and reported via RestorePlan.preserved rather than silently deleted — a known, accepted

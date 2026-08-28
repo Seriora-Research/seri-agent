@@ -5,6 +5,10 @@ import { join } from "node:path";
 import pkg from "../../package.json";
 import { run, SLASH_COMMANDS } from "../../src/cli";
 import { getBaseConfigDir, getConfigDir, setProfileOverride } from "../../src/config/paths";
+import { writeDaemonDescriptor } from "../../src/daemon/descriptor";
+import { DATABASE_FILENAME } from "../../src/session/database";
+import { listSessionIds } from "../../src/session/session";
+import { deliverSignal } from "../../src/signals";
 import { fakeRunLoop } from "./fakeRunLoop";
 
 describe("run", () => {
@@ -579,7 +583,8 @@ describe("run (argv and usage errors)", () => {
 
       expect(capture()).toBeDefined();
       const base = getBaseConfigDir();
-      expect(readdirSync(join(base, "work", "sessions"))).toHaveLength(1);
+      expect(listSessionIds(join(base, "work", "sessions"))).toHaveLength(1);
+      expect(existsSync(join(base, "work", DATABASE_FILENAME))).toBe(true);
       expect(existsSync(join(base, "sessions"))).toBe(false);
     });
 
@@ -594,7 +599,7 @@ describe("run (argv and usage errors)", () => {
 
       expect(capture()).toBeDefined();
       const base = getBaseConfigDir();
-      expect(readdirSync(join(base, "work", "sessions"))).toHaveLength(1);
+      expect(listSessionIds(join(base, "work", "sessions"))).toHaveLength(1);
       expect(existsSync(join(base, "sessions"))).toBe(false);
     });
 
@@ -611,7 +616,7 @@ describe("run (argv and usage errors)", () => {
 
       expect(capture()).toBeDefined();
       const base = getBaseConfigDir();
-      expect(readdirSync(join(base, "work", "sessions"))).toHaveLength(1);
+      expect(listSessionIds(join(base, "work", "sessions"))).toHaveLength(1);
       expect(existsSync(join(base, "envd"))).toBe(false);
     });
 
@@ -645,7 +650,8 @@ describe("run (argv and usage errors)", () => {
 
       expect(capture()).toBeDefined();
       const base = getBaseConfigDir();
-      expect(readdirSync(join(base, "sessions"))).toHaveLength(1);
+      expect(listSessionIds(join(base, "sessions"))).toHaveLength(1);
+      expect(existsSync(join(base, DATABASE_FILENAME))).toBe(true);
       expect(existsSync(join(base, "default"))).toBe(false);
     });
 
@@ -803,4 +809,279 @@ describe("run (login/signup/logout)", () => {
       expect(logs.join("\n")).toContain("Usage:");
     },
   );
+});
+
+describe("run (serve / exec)", () => {
+  const originalHome = process.env.HOME;
+  let tmpConfigRoot: string;
+
+  beforeEach(() => {
+    tmpConfigRoot = mkdtempSync(join(tmpdir(), "seri-cli-daemon-"));
+    process.env.HOME = tmpConfigRoot;
+  });
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    rmSync(tmpConfigRoot, { recursive: true, force: true });
+  });
+
+  test("`seri serve` starts the daemon and waits until waitForServe resolves", async () => {
+    let started = false;
+    let stopped = false;
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    try {
+      const code = await run(["serve"], {
+        startDaemon: async () => {
+          started = true;
+          return {
+            endpoint: "http://127.0.0.1:9",
+            token: "t",
+            pid: 1,
+            scheduler: { stop() {}, start() {}, tick: async () => {}, create: () => ({}) } as never,
+            stop: async () => {
+              stopped = true;
+            },
+          };
+        },
+        waitForServe: async () => {},
+      });
+      expect(code).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+    expect(started).toBe(true);
+    expect(stopped).toBe(true);
+    expect(logs.join("\n")).toContain("http://127.0.0.1:9");
+  });
+
+  test("`seri exec` without a running daemon exits 1", async () => {
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["exec", "ready"]);
+    } finally {
+      console.error = originalError;
+    }
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("no daemon is running");
+  });
+
+  test("`seri exec` without a task is a usage error", async () => {
+    const { code } = await (async () => {
+      const errors: string[] = [];
+      const originalError = console.error;
+      console.error = (msg: string) => errors.push(String(msg));
+      try {
+        return { code: await run(["exec"]), errors };
+      } finally {
+        console.error = originalError;
+      }
+    })();
+    expect(code).toBe(2);
+  });
+
+  test("`seri exec` answers an approval-request with no", async () => {
+    writeDaemonDescriptor(getConfigDir(), {
+      v: 1,
+      endpoint: "http://127.0.0.1:9",
+      token: "t",
+      pid: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const approvals: unknown[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url =
+        input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      if (url.pathname === "/v1/turns") {
+        const events = [
+          {
+            v: 1,
+            sessionId: "s",
+            turnId: "turn-1",
+            seq: 1,
+            event: {
+              type: "approval-request",
+              requestId: "r1",
+              toolName: "write_file",
+              args: { path: "a.txt" },
+            },
+          },
+          {
+            v: 1,
+            sessionId: "s",
+            turnId: "turn-1",
+            seq: 2,
+            event: { type: "turn-complete", exitCode: 0 },
+          },
+        ];
+        return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+          status: 200,
+        });
+      }
+      if (url.pathname.includes("/approvals/")) {
+        approvals.push(JSON.parse(String(init?.body)));
+        return Response.json({ ok: true });
+      }
+      return new Response("no", { status: 404 });
+    }) as unknown as typeof fetch;
+    const originalError = console.error;
+    const originalLog = console.log;
+    console.error = () => {};
+    console.log = () => {};
+    let code: number;
+    try {
+      code = await run(["exec", "write"], { fetch: fetchImpl, authConfigDir: getConfigDir() });
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
+    expect(code).toBe(0);
+    expect(approvals).toEqual([{ answer: "no" }]);
+  });
+
+  test("`seri exec` cancels the daemon turn on the first SIGINT", async () => {
+    writeDaemonDescriptor(getConfigDir(), {
+      v: 1,
+      endpoint: "http://127.0.0.1:9",
+      token: "t",
+      pid: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const encoder = new TextEncoder();
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const firstEvent = Promise.withResolvers<void>();
+    let cancelled = false;
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url =
+        input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      if (url.pathname === "/v1/turns") {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              streamController = controller;
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    v: 1,
+                    sessionId: "s",
+                    turnId: "turn-1",
+                    seq: 1,
+                    event: { type: "loop", value: { type: "text-delta", text: "x" } },
+                  })}\n\n`,
+                ),
+              );
+              firstEvent.resolve();
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.pathname.endsWith("/cancel")) {
+        cancelled = true;
+        streamController?.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              v: 1,
+              sessionId: "s",
+              turnId: "turn-1",
+              seq: 2,
+              event: { type: "turn-complete", exitCode: 1 },
+            })}\n\n`,
+          ),
+        );
+        streamController?.close();
+        return Response.json({ ok: true });
+      }
+      return new Response("no", { status: 404 });
+    }) as unknown as typeof fetch;
+    const originalError = console.error;
+    const originalLog = console.log;
+    console.error = () => {};
+    console.log = () => {};
+    try {
+      const running = run(["exec", "go"], { fetch: fetchImpl, authConfigDir: getConfigDir() });
+      await firstEvent.promise;
+      await Bun.sleep(20);
+      deliverSignal("SIGINT");
+      expect(await running).toBe(1);
+      expect(cancelled).toBe(true);
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
+  });
+
+  test("`seri exec` SIGINT cancel network failure does not become an unhandled rejection", async () => {
+    writeDaemonDescriptor(getConfigDir(), {
+      v: 1,
+      endpoint: "http://127.0.0.1:9",
+      token: "t",
+      pid: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const encoder = new TextEncoder();
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const firstEvent = Promise.withResolvers<void>();
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url =
+        input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      if (url.pathname === "/v1/turns") {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              streamController = controller;
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    v: 1,
+                    sessionId: "s",
+                    turnId: "turn-1",
+                    seq: 1,
+                    event: { type: "loop", value: { type: "text-delta", text: "x" } },
+                  })}\n\n`,
+                ),
+              );
+              firstEvent.resolve();
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.pathname.endsWith("/cancel")) {
+        streamController?.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              v: 1,
+              sessionId: "s",
+              turnId: "turn-1",
+              seq: 2,
+              event: { type: "turn-complete", exitCode: 1 },
+            })}\n\n`,
+          ),
+        );
+        streamController?.close();
+        return new Response("no", { status: 500 });
+      }
+      return new Response("no", { status: 404 });
+    }) as unknown as typeof fetch;
+    const originalError = console.error;
+    const originalLog = console.log;
+    console.error = () => {};
+    console.log = () => {};
+    try {
+      const running = run(["exec", "go"], { fetch: fetchImpl, authConfigDir: getConfigDir() });
+      await firstEvent.promise;
+      await Bun.sleep(20);
+      deliverSignal("SIGINT");
+      expect(await running).toBe(1);
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
+  });
 });

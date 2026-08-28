@@ -1,6 +1,7 @@
 import type { ToolSet } from "ai";
 import { type OnAfterMutation, withMutationRecording } from "../checkpoint/wrapTools";
 import {
+  createToolDefinitions,
   FS_MUTATING_TOOL_NAMES,
   READ_ONLY_TOOL_NAMES,
   type ToolName,
@@ -37,9 +38,14 @@ const ROLE_TOOL_NAMES: Record<SubagentRole, readonly ToolName[]> = {
 // caller has one — this is the write-ledger half only (see wrapTools.ts's own comment on why the
 // two halves are separable): a subagent's write_file still needs to be recorded so a later /undo
 // can prove it safe to delete, even though nothing about the pre-mutation snapshot applies here.
-export function buildRoleToolSet(role: SubagentRole, onAfterMutation?: OnAfterMutation): ToolSet {
+export function buildRoleToolSet(
+  role: SubagentRole,
+  onAfterMutation?: OnAfterMutation,
+  cwd = process.cwd(),
+): ToolSet {
+  const definitions = createToolDefinitions(cwd);
   const tools = Object.fromEntries(
-    ROLE_TOOL_NAMES[role].map((name) => [name, toolDefinitions[name]]),
+    ROLE_TOOL_NAMES[role].map((name) => [name, definitions[name]]),
   ) as ToolSet;
   return onAfterMutation === undefined ? tools : withMutationRecording(tools, onAfterMutation);
 }

@@ -60,10 +60,13 @@ export type ArchivistState = {
 
 // messageCursor starts at the CURRENT length: a resumed session does not re-archive history a
 // previous process already saw or declined to save.
-export function createArchivistState(session: SessionState<ModelMessage>): ArchivistState {
+export function createArchivistState(
+  session: SessionState<ModelMessage>,
+  messageCursor = session.messages.length,
+): ArchivistState {
   return {
     toolCallsSinceRun: 0,
-    messageCursor: session.messages.length,
+    messageCursor,
     messages: session.messages,
     lastInputTokens: undefined,
   };
@@ -105,7 +108,7 @@ export function observeArchivistEvent(state: ArchivistState, event: LoopEvent): 
   if (event.type === "compacted") state.messageCursor = 0;
 }
 
-export type ArchivistTrigger = "tool-count" | "near-compaction";
+export type ArchivistTrigger = "tool-count" | "near-compaction" | "idle-timeout";
 
 // `enabled` (the /memory archivist on|off toggle) is checked FIRST and short-circuits before
 // either trigger is evaluated — a disabled archivist reports no trigger even when both conditions
@@ -206,6 +209,7 @@ export async function runArchivist(args: {
   reasoningEffort?: string;
   signal: AbortSignal;
   onWarning: (message: string) => void;
+  forceStage?: boolean;
   // Overridable only for tests (fakeChildLoop, the same seam subagents/dispatch.test.ts's own
   // makeRuntime already uses) — every production call (maybeRunArchivist, below) leaves this at
   // its default, the real runLoop.
@@ -232,7 +236,9 @@ export async function runArchivist(args: {
   // DISPATCHABLE_ROLES, is dispatched directly by this function via runSubagent, and needs
   // exactly one tool, so the ToolSet is simplest built inline. The (model, provider) pair on
   // `runtime` is whatever the caller already resolved; this function does not parse role pins.
-  const tools: ToolSet = { memory_write: makeMemoryWriteTool(args.ctx) };
+  const tools: ToolSet = {
+    memory_write: makeMemoryWriteTool(args.ctx, { forceStage: args.forceStage === true }),
+  };
   const runtime: SubagentRuntime = {
     runLoop: args.runLoop ?? runLoop,
     model: args.model,

@@ -20,6 +20,9 @@ export const DEFAULT_PROFILE = "default";
 export const MEMORIES_DIRNAME = "memories";
 export const PENDING_DIRNAME = "pending";
 export const TRAJECTORIES_DIRNAME = "trajectories";
+export const DATABASE_FILENAME = "seri.db";
+export const DAEMON_DESCRIPTOR_FILENAME = "daemon.json";
+export const DAEMON_LOCK_FILENAME = "daemon.lock";
 
 // The full names of every sibling a profile directory would collide with under the default root.
 // The three file-backed entries are read from the file that owns them (config.json, auth.json,
@@ -52,6 +55,9 @@ export function getReservedProfileNames(): ReadonlySet<string> {
     MEMORIES_DIRNAME,
     PENDING_DIRNAME,
     TRAJECTORIES_DIRNAME,
+    DATABASE_FILENAME,
+    DAEMON_DESCRIPTOR_FILENAME,
+    DAEMON_LOCK_FILENAME,
   ]);
   return reservedProfileNames;
 }
@@ -154,4 +160,16 @@ export function getPendingDir(configDir: string = getConfigDir()): string {
 
 export function getTrajectoriesDir(configDir: string = getConfigDir()): string {
   return join(configDir, TRAJECTORIES_DIRNAME);
+}
+
+export function getDatabasePath(configDir: string = getConfigDir()): string {
+  return join(configDir, DATABASE_FILENAME);
+}
+
+export function getDaemonDescriptorPath(configDir: string = getConfigDir()): string {
+  return join(configDir, DAEMON_DESCRIPTOR_FILENAME);
+}
+
+export function getDaemonLockPath(configDir: string = getConfigDir()): string {
+  return join(configDir, DAEMON_LOCK_FILENAME);
 }

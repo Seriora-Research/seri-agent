@@ -42,7 +42,7 @@ const DESCRIPTION =
 // configDir/worktree, which toolDefinitions' tools never do. Never added to toolDefinitions itself
 // — it reaches exactly one ToolSet, the archivist's own, built directly in memory/archivist.ts's
 // runArchivist rather than through subagents/roles.ts (the archivist is not a DISPATCHABLE_ROLE).
-export function makeMemoryWriteTool(ctx: MemoryContext) {
+export function makeMemoryWriteTool(ctx: MemoryContext, opts: { forceStage?: boolean } = {}) {
   return tool({
     description: DESCRIPTION,
     inputSchema: memoryWriteInputSchema,
@@ -72,7 +72,7 @@ export function makeMemoryWriteTool(ctx: MemoryContext) {
       // own comment on computeWrite explains why a throw is what makes that possible).
       computeWrite(loadMemoryFile(req.scope, ctx), req, today);
 
-      if (loadMemoryConfig(ctx.configDir).approvalRequired) {
+      if (opts.forceStage === true || loadMemoryConfig(ctx.configDir).approvalRequired) {
         const staged = stagePendingWrite(req, ctx, new Date());
         return {
           staged: true,

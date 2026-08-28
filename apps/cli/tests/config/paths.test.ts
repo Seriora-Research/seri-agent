@@ -4,9 +4,15 @@ import { join } from "node:path";
 import { AUTH_FILENAME } from "../../src/auth/authStore";
 import { CONFIG_FILENAME } from "../../src/config/config";
 import {
+  DATABASE_FILENAME,
+  DAEMON_DESCRIPTOR_FILENAME,
+  DAEMON_LOCK_FILENAME,
   DEFAULT_PROFILE,
   getBaseConfigDir,
   getConfigDir,
+  getDatabasePath,
+  getDaemonDescriptorPath,
+  getDaemonLockPath,
   getMemoriesDir,
   getPendingDir,
   getTrajectoriesDir,
@@ -210,6 +216,9 @@ describe("profileNameError", () => {
       "memories",
       "pending",
       "trajectories",
+      DATABASE_FILENAME,
+      DAEMON_DESCRIPTOR_FILENAME,
+      DAEMON_LOCK_FILENAME,
     ];
     expect([...getReservedProfileNames()].sort()).toEqual([...expected].sort());
   });
@@ -298,11 +307,19 @@ describe("getMemoriesDir / getPendingDir / getTrajectoriesDir", () => {
     expect(getMemoriesDir()).toBe(join(getConfigDir(), "memories"));
     expect(getPendingDir()).toBe(join(getConfigDir(), "pending"));
     expect(getTrajectoriesDir()).toBe(join(getConfigDir(), "trajectories"));
+    expect(getDatabasePath()).toBe(join(getConfigDir(), DATABASE_FILENAME));
+    expect(getDaemonDescriptorPath()).toBe(join(getConfigDir(), DAEMON_DESCRIPTOR_FILENAME));
+    expect(getDaemonLockPath()).toBe(join(getConfigDir(), DAEMON_LOCK_FILENAME));
   });
 
   test("honour an explicit configDir argument", () => {
     expect(getMemoriesDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "memories"));
     expect(getPendingDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "pending"));
     expect(getTrajectoriesDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "trajectories"));
+    expect(getDatabasePath("/tmp/some-dir")).toBe(join("/tmp/some-dir", DATABASE_FILENAME));
+    expect(getDaemonDescriptorPath("/tmp/some-dir")).toBe(
+      join("/tmp/some-dir", DAEMON_DESCRIPTOR_FILENAME),
+    );
+    expect(getDaemonLockPath("/tmp/some-dir")).toBe(join("/tmp/some-dir", DAEMON_LOCK_FILENAME));
   });
 });

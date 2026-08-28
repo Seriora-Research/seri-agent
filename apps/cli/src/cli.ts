@@ -5,6 +5,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
 import { flushSync } from "@opentui/react";
+import { DaemonClient, isLoopDaemonEvent } from "@seri/daemon-client";
 import {
   findCatalogEntry,
   type ModelCatalog,
@@ -16,7 +17,7 @@ import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "a
 import { createElement } from "react";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
-import { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
+import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
@@ -32,10 +33,10 @@ import { projectRoot } from "./checkpoint/shadowGit";
 import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
   assertTuiHandlers,
+  type CommandMeta,
   commandByName,
   isTuiClaimed,
   sessionMeta,
-  type CommandMeta,
 } from "./cli/commandCatalog";
 import {
   approvalPromptText,
@@ -70,6 +71,13 @@ import {
   resolveProfile,
   setProfileOverride,
 } from "./config/paths";
+import { readDaemonDescriptorFile } from "./daemon/descriptor";
+import type { RunScheduled } from "./daemon/scheduler";
+import {
+  type ExecuteTurn,
+  type StartedDaemon,
+  startDaemon as startDaemonReal,
+} from "./daemon/server";
 import { messageOf } from "./errors";
 import type { PermissionMode } from "./gate/gate";
 import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
@@ -84,14 +92,11 @@ import {
   type ArchivistReport,
   type ArchivistState,
   createArchivistState,
-  maybeRunArchivist,
-  observeArchivistEvent,
   resetArchivistForRewind,
 } from "./memory/archivist";
 import { decideMemoryCommand } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
 import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
-import { runUsageCommand as runUsageCommandReal } from "./usage/command";
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
 import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
@@ -119,6 +124,13 @@ import {
   resolveSessionRoute,
 } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
+import {
+  addCost,
+  addTokens,
+  type DriveLoopResult,
+  driveLoop,
+  exitCodeFromDriveResult,
+} from "./runtime/drive";
 import { awaitsReply } from "./session/awaitsReply";
 import {
   findMostRecentSession,
@@ -128,24 +140,34 @@ import {
   saveSession,
 } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
-import { type ChildEventPayload, withSubagents } from "./subagents/dispatch";
-import {
-  effortForChild,
-  parseRolePins,
-  pinFromTask,
-  realizedRoute,
-  resolveChildRoute,
-  roleConstructionWarning,
-  type RoutableRole,
-  type TaskRouteRequest,
-} from "./subagents/routes";
-import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
+import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
 import { App } from "./tui/app";
 import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
 import { runWelcomeSplash } from "./tui/routes/setup/welcomeSplash";
 import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";
+import { runUsageCommand as runUsageCommandReal } from "./usage/command";
+
+export { addCost, addTokens };
+
+import {
+  bindSession,
+  createSessionTrajectory,
+  dirs,
+  fatalDuringTui,
+  gatewayNotice,
+  type PreMountMessage,
+  type PreparedRun,
+  prepareSession,
+  type RunSession,
+  rerouteNotice,
+  resolveModelRoute,
+  runStart,
+} from "./runtime/prepare";
+
+export type { PreMountMessage, PreparedRun, RunSession };
+
 import {
   type CommandDirs,
   checkpointTarget,
@@ -200,6 +222,12 @@ export type CliDeps = {
   configCommand?: typeof configCommandReal;
   permissionsCommand?: typeof permissionsCommandReal;
   usageCommand?: typeof runUsageCommandReal;
+  startDaemon?: typeof startDaemonReal;
+  executeTurn?: ExecuteTurn;
+  runScheduled?: RunScheduled;
+  onIdleFlush?: (sessionId: string, signal: AbortSignal) => Promise<void>;
+  waitForServe?: () => Promise<void>;
+  fetch?: typeof fetch;
   // The directory holding permissions.yaml. Deliberately NOT reusing `authConfigDir`: that name is
   // already stretched across auth AND `seri config`, and a third consumer that is neither would
   // make it mean nothing. Same shape as sessionsDir/checkpointsDir, defaulting to getConfigDir().
@@ -632,46 +660,6 @@ async function rewindCommand(
   presenter.message(message);
 }
 
-// Shared by compactCommand and prepareSession (below): both resolve an already-known
-// `{model, provider}` pair into a live route and a dispatched model the exact same way —
-// configuredProviders, an independent catalog+plan fetch (run together rather than stacked,
-// prepareSession's own comment on why explains the latency reasoning), resolveRoute, dispatchModel.
-// runTui's own runTurn keeps its own inline version instead of calling this: it resolves against
-// `prepared`'s already-fetched catalog/plan on every turn rather than fetching a fresh pair each
-// time, a genuinely different shape this helper would only complicate by trying to also cover.
-async function resolveModelRoute(
-  requested: { model: string; provider: ModelProvider | undefined },
-  configDir: string,
-  sessionId: string,
-  deps: CliDeps,
-  warnSink?: (text: string) => void,
-): Promise<{
-  model: LanguageModel;
-  route: ResolvedRoute;
-  catalog: ModelCatalog;
-  plan: Plan | null;
-}> {
-  const configured = configuredProviders(configDir);
-  // `resolveDefaultModel(configDir)`'s own provider, not a hardcoded `DEFAULT_PROVIDER` — mirrors
-  // resolveSessionRoute's own defaulting (routing.ts's own comment on why): `provider` can
-  // legitimately be undefined here (no session override, no explicit /model pick), and
-  // resolveDefaultModel already resolves the correct pair for that case.
-  const requestedProvider =
-    requested.provider ?? resolveDefaultModel(configDir).provider ?? DEFAULT_PROVIDER;
-  const [catalog, plan] = await Promise.all([
-    getModelCatalog(undefined, warnSink),
-    fetchAccountPlan(configDir),
-  ]);
-  const route = resolveRoute(
-    catalog,
-    { model: requested.model, provider: requestedProvider },
-    configured,
-    plan,
-  );
-  const model = dispatchModel(route, sessionId, configDir, deps);
-  return { model, route, catalog, plan };
-}
-
 // /compact: the same findSafeEvictionBoundary/compactMessages the automatic path (loop.ts) uses,
 // run on demand. Not a pure decide-then-present function like rewindCommand's decideRewind:
 // resolving a live model and calling compactMessages are both real I/O, so this stays one `async`
@@ -823,108 +811,6 @@ async function usageCommand(
     detail: args[0] === "--detail",
     presenter,
   });
-}
-
-// `model`/`provider` are optional on SessionState so that sessions written before either field
-// existed still load, but every session this function hands back has the `model` key — which is
-// what lets the rest of the run stop asking, and getModel drop a default parameter for it.
-// `provider` can still legitimately be `undefined` here: it means no provider was ever explicitly
-// requested, not that one is missing.
-type RunSession = SessionState<ModelMessage> & {
-  model: string;
-  provider: ModelProvider | undefined;
-};
-
-// `modelRecorded` says where the model came from: true if the session file already had one, false
-// if it was just resolved from the environment and no provider call has confirmed it exists.
-// prepareSession uses it to decide whether the creation-time save may persist it — see there.
-function loadOrCreateSession(
-  resuming: boolean,
-  resumeId: string | undefined,
-  sessionsDir: string,
-  loadAgentsFileFn: typeof loadAgentsFileReal,
-  configDir: string,
-  onTruncated: () => void = () => {},
-): { session: RunSession; modelRecorded: boolean } {
-  if (resuming) {
-    const id = resumeId ?? findMostRecentSession(sessionsDir);
-    if (!id) throw new Error("No session to resume.");
-    const loaded = loadSession<ModelMessage>(id, sessionsDir, onTruncated);
-    // The two stored fields are treated differently on purpose.
-    //
-    // `systemPrompt` is rebuilt every time, never replayed: it is a product of this binary's
-    // SYSTEM_PROMPT and the project's AGENTS.md, not something the conversation decided. A session
-    // created before src/agents/systemPrompt.ts existed has the old 29-character identity line
-    // frozen into its JSON, and honouring it would resume with no tool guidance at all — the exact
-    // failure that module exists to fix, on precisely the sessions a user upgrading already has.
-    // Rebuilding also means an AGENTS.md edited since is picked up. It reads from the session's own
-    // cwd rather than the process's, so a resume launched from elsewhere still gets the project's
-    // file, resolved from where the session itself was recorded rather than wherever this resume
-    // happens to run from.
-    //
-    // Two costs of rebuilding, neither of which the old replay-the-stored-string path had, both
-    // accepted rather than guarded: this puts a readFileSync on the resume path, so an AGENTS.md
-    // that exists but cannot be read (EACCES) now fails a resume that used to run; and if the
-    // session's cwd has since been DELETED, findAgentsFile walks up from a missing directory and
-    // adopts the nearest ancestor's AGENTS.md, which may belong to an unrelated project. Falling
-    // back to the stored prompt on either is not an option worth having — the stored prompt is
-    // exactly the 29-character string this rebuild exists to stop serving.
-    //
-    // `model` is backfilled only when absent, so a session that recorded one keeps it and the
-    // environment cannot switch models under a conversation already running on one. When `model`
-    // is absent, `model`/`provider` are backfilled TOGETHER via resolveDefaultModel() — the same
-    // pair a brand-new session starts on — never independently: resolveModelId() alone can return
-    // a persisted non-groq SERI_MODEL (a successful /model pick on e.g. anthropic, per
-    // persistDefaultModel), and pairing that with a separately-hardcoded "groq" would call the
-    // wrong provider's API and fail confusingly. Note what this does NOT protect: a session
-    // written before the field existed was really running llama-3.3-70b-versatile, nothing
-    // records that, and this first resume moves it to whatever resolveDefaultModel() returns.
-    //
-    // `provider` alone can still be absent on a session that already recorded a `model` — a
-    // session written before the `provider` field existed, or one where nothing was ever
-    // explicitly picked. That's just passed through as-is: absence stays absence, since `provider`
-    // can now legitimately be `undefined` all the way through (DEFAULT_PROVIDER is applied only
-    // where a concrete provider is actually needed for routing, not backfilled here).
-    const { model, provider } =
-      loaded.model === undefined
-        ? resolveDefaultModel(configDir)
-        : { model: loaded.model, provider: loaded.provider };
-    return {
-      session: {
-        ...loaded,
-        systemPrompt: buildSystemPrompt(loadAgentsFileFn(loaded.cwd)),
-        model,
-        provider,
-      },
-      modelRecorded: loaded.model !== undefined,
-    };
-  }
-
-  // A brand-new session starts on whatever a previously successful `/model` pick persisted
-  // (resolveDefaultModel's own comment), falling back to DEFAULT_MODEL/"groq" the same way
-  // resolveModelId always has when nothing was ever picked.
-  const { model, provider } = resolveDefaultModel(configDir);
-  return {
-    session: {
-      id: randomUUID(),
-      cwd: process.cwd(),
-      systemPrompt: buildSystemPrompt(loadAgentsFileFn(process.cwd())),
-      // approve-each, not read-only: on native Windows the OS sandbox is not enforced
-      // (docs/ARCHITECTURE.md:417), so the permission gate is the whole Base layer and a default
-      // that does not ask is a default that writes unattended. read-only was tried and measured —
-      // a fresh session given a write task was blocked repeatedly and produced nothing (step 0 of
-      // the tui-ready-permissions loop: 5 denials, done: no-tool-call, no file created). This
-      // reverses docs/ARCHITECTURE.md:93's rejection of "approval for every edit" as a default;
-      // the allowlist ("always allow this tool", below) is what keeps this from being that
-      // rejected every-call mode — permanent for write_file/edit since permanent-permissions-
-      // allowlist, run-scoped for every other write tool the gate ever grows.
-      permissionMode: "approve-each",
-      model,
-      provider,
-      messages: [],
-    },
-    modelRecorded: false,
-  };
 }
 
 // One readline prompt per approval, opened and closed on demand, so a task that never
@@ -1292,6 +1178,102 @@ async function handleUsageCommand(
   }
 }
 
+async function handleServeCommand(
+  positionals: string[],
+  deps: CliDeps,
+): Promise<number | undefined> {
+  if (positionals[0] !== "serve") return undefined;
+  if (positionals.length !== 1) {
+    return usageError("seri serve takes no arguments");
+  }
+  const configDir = deps.authConfigDir ?? getConfigDir();
+  const start = deps.startDaemon ?? startDaemonReal;
+  try {
+    const daemon: StartedDaemon = await start({
+      configDir,
+      executeTurn: deps.executeTurn,
+      runScheduled: deps.runScheduled,
+      onIdleFlush: deps.onIdleFlush,
+      deps,
+    });
+    console.log(`seri daemon listening on ${daemon.endpoint}`);
+    try {
+      if (deps.waitForServe !== undefined) await deps.waitForServe();
+      else {
+        // signals.ts installs process SIGINT/SIGTERM listeners at import time. SIGTERM always
+        // takes that file's fatal path (cleanups, then re-raise) and never the cancel slot, so a
+        // `process.once("SIGTERM")` registered here would not run: the fatal listener is already
+        // first and raiseSignal removes every listener before this wait could resolve. A
+        // foreground daemon must stop the server, cancel turns, and remove its own descriptor
+        // before exiting, so this process replaces those listeners for the wait only.
+        process.removeAllListeners("SIGINT");
+        process.removeAllListeners("SIGTERM");
+        await new Promise<void>((resolve) => {
+          process.once("SIGINT", () => resolve());
+          process.once("SIGTERM", () => resolve());
+        });
+      }
+    } finally {
+      await daemon.stop();
+    }
+    return 0;
+  } catch (err) {
+    console.error(messageOf(err));
+    return 1;
+  }
+}
+
+async function handleExecCommand(
+  positionals: string[],
+  deps: CliDeps,
+): Promise<number | undefined> {
+  if (positionals[0] !== "exec") return undefined;
+  const task = positionals.slice(1).join(" ").trim();
+  if (task.length === 0) return usageError("seri exec requires a task");
+  const configDir = deps.authConfigDir ?? getConfigDir();
+  const descriptor = readDaemonDescriptorFile(configDir);
+  if (descriptor === undefined) {
+    console.error("no daemon is running for this profile — start one with seri serve");
+    return 1;
+  }
+  const client = new DaemonClient({
+    endpoint: descriptor.endpoint,
+    token: descriptor.token,
+    fetch: deps.fetch,
+  });
+  let exitCode: 0 | 1 = 1;
+  let turnId: string | undefined;
+  let cancelRequested = false;
+  const unregisterCancel = onSignalCancel(() => {
+    cancelRequested = true;
+    if (turnId !== undefined) void client.cancel(turnId).catch(() => {});
+  });
+  try {
+    for await (const event of client.startTurn({ task, cwd: process.cwd() })) {
+      turnId = event.turnId;
+      if (cancelRequested) {
+        await client.cancel(turnId);
+        cancelRequested = false;
+      }
+      if (event.event.type === "approval-request" && typeof event.event.requestId === "string") {
+        await client.approve(turnId, event.event.requestId, "no");
+        continue;
+      }
+      if (isLoopDaemonEvent(event.event)) printEvent(event.event.value as LoopEvent);
+      if (event.event.type === "turn-complete" && "exitCode" in event.event) {
+        const code = event.event.exitCode;
+        if (code === 0 || code === 1) exitCode = code;
+      }
+    }
+  } catch (err) {
+    console.error(messageOf(err));
+    return 1;
+  } finally {
+    unregisterCancel();
+  }
+  return exitCode;
+}
+
 // --effort is scoped to the non-interactive path only — a TTY run's `--effort` must not reach
 // driveLoop at all, or it (a) applies to
 // EVERY turn of the whole session, not "this single invocation", and (b) permanently outranks a
@@ -1311,7 +1293,7 @@ export function resolveEffortFlag(effort: string | undefined, isTTY: boolean): s
 // receive the resume target and the task text as well — and whatever it grew to read from them
 // would still typecheck against a signature saying it needs neither. Narrowing at the call site is
 // what keeps the callee's declared contract the true one.
-type RunContext = CommandDirs & {
+export type RunContext = CommandDirs & {
   resuming: boolean;
   resumeId: string | undefined;
   taskText: string;
@@ -1325,55 +1307,10 @@ type RunContext = CommandDirs & {
   // site.
   effortFlag: string | undefined;
   detailFlag: boolean;
+  // Explicit working directory for a new session. Direct CLI/TUI callers pass process.cwd(); the
+  // daemon passes the session's stored cwd and never calls process.chdir.
+  cwd: string;
 };
-
-function dirs(ctx: RunContext, trajectory?: TrajectoryWriter): CommandDirs {
-  return {
-    sessionsDir: ctx.sessionsDir,
-    checkpointsDir: ctx.checkpointsDir,
-    configDir: ctx.configDir,
-    ...(trajectory !== undefined ? { trajectory } : {}),
-  };
-}
-
-function createSessionTrajectory(
-  session: { id: string; cwd: string; model?: string; provider?: string },
-  configDir: string,
-  onWarning: (message: string) => void,
-): TrajectoryWriter {
-  const cfg = loadTrajectoryConfig(configDir);
-  return createTrajectoryWriter({
-    dir: getTrajectoriesDir(configDir),
-    sessionId: session.id,
-    cwd: session.cwd,
-    model: session.model,
-    provider: session.provider,
-    enabled: cfg.enabled,
-    retentionDays: cfg.retentionDays,
-    onWarning,
-  });
-}
-
-// The three ways a run can begin, all derived from the same two RunContext fields (`resuming`,
-// `taskText`) — one function rather than two independent booleans over the same inputs, which used
-// to require its own comment on the second one just to defend it against the first ("deliberately
-// NOT !hasNewTask(ctx)"). Shared by prepareSession (decides whether to push the initial user
-// message), run()'s own usage-error gate, and runTui's own connectDispatch (decides whether to echo
-// the task and whether to auto-start a turn) — one function, not the same distinction repeated at
-// every call site, so they can't silently drift out of sync with each other.
-//   "task"   — real task text was given (new session or --continue/--resume with new text): push,
-//              echo, and start a turn on it.
-//   "resume" — --continue/--resume with no new text: nothing to push or echo. Whether a turn
-//              actually starts is a separate question the session's own messages answer, not
-//              this classification alone — see session/awaitsReply.ts, and connectDispatch's use
-//              of it, below.
-//   "idle"   — no resume target and no task text (bare `seri` in a TTY): mount with nothing to do.
-type RunStart = "idle" | "task" | "resume";
-
-function runStart(ctx: RunContext): RunStart {
-  if (ctx.taskText.length > 0) return "task";
-  return ctx.resuming ? "resume" : "idle";
-}
 
 // A slash command always operates on the resume target — an explicit --resume id, or the most
 // recent session — and never creates a session just to act on it, so this is called before
@@ -1445,467 +1382,6 @@ async function handleSlashCommand(ctx: RunContext, deps: CliDeps): Promise<numbe
   }
 }
 
-// A queued startup notice, tagged with the stream it was headed for — `fatalDuringTui` routes each
-// one to `console.log`/`console.error` accordingly so a stdout-origin line (a routine "Session …
-// created.") never gets reclassified as stderr-origin (a warning) just because both funnelled
-// through the same queue. The TUI flush site (runTui's own `connectDispatch`) ignores `stream`
-// deliberately: every queued line lands in the transcript either way, regardless of which stream
-// it would have gone to on a non-TTY run.
-type PreMountMessage = { text: string; stream: "stdout" | "stderr" };
-
-// Everything the loop is driven with, resolved before the first model call so a failure to build
-// any of it is an exit code rather than a half-started turn.
-//
-// Code-review finding: `session` used to be typed as the loose `SessionState<ModelMessage>`
-// (model/provider optional) even though `prepareSession` (below) only ever builds a fully-resolved
-// `RunSession` — forcing a defensive `?? "groq"` fallback and two bare `as RunSession` casts
-// downstream to re-assert, by convention, an invariant the type already failed to state. `RunSession`
-// here means a future code path that legitimately produces a session without model/provider (an
-// import/migration path, say) is a compile error at its own call site, not a silent fallthrough.
-type PreparedRun = {
-  session: RunSession;
-  storeDir: string;
-  tools: ToolSet;
-  model: LanguageModel;
-  // Resolved here, the same way `model` is: a per-run fact the loop is driven with, carried
-  // beside the session rather than assumed equal to `session.permissionMode`. `--dangerously-
-  // skip-permissions` is the one thing that can make the two differ, and now that the value the
-  // loop actually reads lives on this object instead of being re-derived at the call site, there
-  // is no `session.permissionMode` assignment for a future edit to reach for by mistake — the
-  // session this run started from is untouched, and driveLoop never sees anything else to assign.
-  permissionMode: PermissionMode;
-  // The project checkpoints already resolved this run against — carried here rather than
-  // re-derived in driveLoop, which needs it too (rememberGrant) and would otherwise resolve the
-  // project root a second time.
-  worktree: string;
-  // Resolved once here, exactly like `permissionMode` above and for the same reason: a per-run
-  // fact the loop is driven with, carried on this object so driveLoop has nothing to re-derive and
-  // nothing to assign into `session`.
-  allowedTools: readonly string[];
-  // Loaded once here (@seri/model-catalog caches it for the rest of the process anyway) and carried
-  // on this object so runTui's own per-turn model re-resolution (runTurn, below — the /model fix)
-  // has it without loading it again every turn.
-  catalog: ModelCatalog;
-  // The catalog's own entry for `model`/`provider`, above — undefined when the catalog has no
-  // entry for this exact id/provider pair (an id typed straight into SERI_MODEL, say). driveLoop
-  // reads two fields off it: `.contextWindow` (falls back to runLoop's own
-  // DEFAULT_CONTEXT_WINDOW_SIZE when undefined, matching what every run did before this field
-  // existed) and `.displayName` (falls back to the raw id, buildVolatileTier's own job). Carrying
-  // the whole entry rather than just `contextWindow` means driveLoop needs exactly one
-  // `findCatalogEntry` call per turn instead of two identical ones for the same (modelId, provider).
-  catalogEntry: ModelCatalogEntry | undefined;
-  // The (model, provider) pair the run actually resolved to, per resolveRoute (D2/D3,
-  // feature-plan.md's multi-provider-byok-phase-2) — NOT necessarily `session.model`/`.provider`,
-  // which is what the session merely REQUESTED. runTui's own `confirmedModel`/`lastPersistedModel`
-  // must initialize from this, not from `session`: starting them from the requested pair while
-  // turn 1 actually runs on a rerouted one trips their inequality guards on turn 1 and persists a
-  // switch the session never asked for — see those variables' own comments.
-  route: ResolvedRoute;
-  // Fetched once here, at session start, and reused for the life of the run (runTurn's own
-  // per-turn resolveRoute call and the /model handler both read this instead of fetching again on
-  // every turn/picker-open) — mutated in place, not re-fetched, so a plain read anywhere else in
-  // the run always sees the current value. Null for a logged-out/BYOK-only session or on any fetch
-  // failure (accountStatus.ts's own fail-closed contract). The two exceptions that DO refresh it
-  // mid-run are the /login and /logout TUI handlers (runTui's own `onLogin`/`onLogout` call
-  // sites) — without that, a successful /login left the startup `null` in place, and a successful
-  // /logout left the previous (possibly paid) plan in place, so `resolveRoute`/`/model` could keep
-  // reflecting stale auth state after either.
-  plan: Plan | null;
-  // The same Checkpointer `tools`' own withCheckpoints was built with — driveLoop's
-  // withSubagents reuses it (as an OnBeforeMutation; Checkpointer is one, plus the two extras
-  // below) for one pre-dispatch snapshot instead of building a second one. `Checkpointer`, not
-  // `OnBeforeMutation`, so runTui's own /undo and /restore handling (its own comment near
-  // `invalidate()`'s call site) can reach `.invalidate()` on the SAME live instance, not a second
-  // one it would have no way to build.
-  checkpointer: Checkpointer;
-  // Resolved once here and passed into every buildCheckpointedTools call, including /clear's own
-  // rebind (bindSession, below) — not re-read from disk there. `/config set` documents a verify
-  // setting as taking effect "next run," not immediately (config/commands.ts's own comment); a
-  // rebind that called loadVerifyConfig() fresh would silently contradict that for anyone who
-  // toggled it mid-session and then ran /clear.
-  verifyConfig: VerifyConfig;
-  // Loaded once here, alongside everything else this object resolves once per run — "frozen per
-  // session" (renderMemoryTier's own doc comment) means loaded HERE and nowhere else; a write made
-  // mid-session takes effect next session, not this one. /clear is the one exception: it mints a
-  // conceptually new session in the same process, so bindSession (below) reloads this alongside
-  // the session-keyed checkpointer/tools/archivistState, rather than carrying the old session's
-  // memory forward.
-  memory: LoadedMemory;
-  // Append-only jsonl for this session id. Rebound in bindSession the same way checkpointer/tools
-  // are: /clear mints a new id, so a writer closed over the old one would keep appending to a
-  // file nothing resumes. Disabled config still yields a no-op writer (no mkdir).
-  trajectory: TrajectoryWriter;
-  // Startup notices (session-created, permission warnings, pre-approved tools, the cross-project
-  // checkpoint mismatch) that prepareSession would otherwise print directly. On the TUI path they
-  // are queued here instead: prepareSession runs after runWelcomeSplash has already created the
-  // shared renderer (getTuiRenderer, runtime/renderer.ts) but before runTui's own `root.render`
-  // call, so a direct console write in that gap lands on the alt-screen buffer and is gone the
-  // instant the TUI's first frame paints over it. runTui flushes this into the transcript at
-  // mount. Empty on the non-TTY path, which still writes these directly (no alt screen there). Each
-  // entry keeps the stream it was headed for — see PreMountMessage's own comment.
-  preMountMessages: PreMountMessage[];
-};
-
-// Shared by prepareSession's own non-TTY notice and runTui's runTurn (below) — the two used to
-// hand-duplicate this exact template literal (code-review finding, PR #73, round 2, item #8),
-// differing only by a leading "↻ " on the TUI path (that one repeats per turn, so the arrow marks
-// it as a live event rather than the one-time startup notice prepareSession prints).
-//
-// `requestedProvider` is a separate parameter, not `route.reason` (still exactly
-// PROVIDER_API_KEY_NAMES[requestedProvider] — resolveRoute's own return value, unchanged, and
-// still what routing.test.ts asserts directly): this notice is purely informational, no embedded
-// command, so it reads better with a display name (PROVIDER_DISPLAY_NAMES) than the raw env var
-// constant — unlike missingKeyError's message, which needs the exact name because it IS one.
-// `requestedProvider` here is literally the session's own `provider` field (itself
-// `ModelProvider | undefined`) — there is no separate field to keep in sync with it, so it cannot
-// drift out of sync with what was actually requested. `undefined` means a genuinely blank first
-// run (or resume of one), which reroutes off resolveDefaultModel's own DEFAULT_PROVIDER fallback
-// with no configured/requested provider at all — blaming a provider the user never named is worse
-// than naming none. Captured on `session` at the point the pair was resolved (resolveDefaultModel/
-// the model picker), not re-read here from config.json — see SessionState.provider's own comment
-// for why.
-function rerouteNotice(route: ResolvedRoute, requestedProvider: ModelProvider | undefined): string {
-  if (requestedProvider === undefined) {
-    return `routing ${route.model} via ${route.provider} (your key)`;
-  }
-  return `routing ${route.model} via ${route.provider} (your key) — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
-}
-
-// The gateway counterpart to rerouteNotice above: a viaGateway route is served through the
-// user's own seri plan, not a key they brought, so both the piped/non-interactive path and a live
-// TUI turn need the same "never silent" notice a BYOK reroute already gets — otherwise a run
-// consumes gateway quota with zero indication it ever left the user's own keys. Same
-// `ModelProvider | undefined` signature and the same undefined branch as rerouteNotice, for the
-// same reason: a genuinely blank first run named no provider at all, so blaming one (Groq, via
-// DEFAULT_PROVIDER) in the "no X key configured" clause would name a provider the user never
-// touched.
-function gatewayNotice(route: ResolvedRoute, requestedProvider: ModelProvider | undefined): string {
-  if (requestedProvider === undefined) {
-    return `routing ${route.model} via ${route.provider} on your seri plan`;
-  }
-  return `routing ${route.model} via ${route.provider} on your seri plan — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
-}
-
-// The one place a TTY-path failure becomes an exit code, used by every catch between
-// `runWelcomeSplash`'s own renderer creation and `runTui`'s own mount (this function's own
-// catches, and `run()`'s two try/catches around the steps on either side of `prepareSession`):
-// destroys the renderer before printing anything (undiscarded messages need the primary screen
-// restored first — the same reasoning `checkZeroKeysConfigured`'s own catch used to state on its
-// own), then flushes any `preMountMessages` queued so far ahead of the fatal message itself,
-// rather than dropping them — a queued "Session X created." or fallback-catalog warning would
-// otherwise vanish with no trace once the run is already ending here instead of ever reaching
-// runTui's own flush site (connectDispatch). Safe to call with `err` from ANY throw in this
-// window, caught or uncaught, including one before `getTuiRenderer` was ever called
-// (`destroyTuiRenderer`'s own no-op guard): this is also what closes the "stack trace printed
-// into the discarded alt-screen buffer" failure mode for a genuinely uncaught exception, since
-// `run()`'s own top-level catches route here too.
-function fatalDuringTui(err: unknown, preMountMessages: readonly PreMountMessage[] = []): number {
-  destroyTuiRenderer();
-  for (const queued of preMountMessages) {
-    (queued.stream === "stdout" ? console.log : console.error)(queued.text);
-  }
-  console.error(messageOf(err));
-  return 1;
-}
-
-// Lifts the `createCheckpointer` + `withVerification(withCheckpoints(...))` pairing out of
-// `prepareSession` so that `/clear`'s post-rebind construction (bindSession, below) and this
-// function's own startup construction cannot drift into two differently-wrapped tool sets.
-// `verifyConfig` is passed in, not re-read via `loadVerifyConfig()` here — PreparedRun's own
-// comment on its `verifyConfig` field explains why a rebind must reuse the run-start value.
-function buildCheckpointedTools(opts: {
-  storeDir: string;
-  worktree: string;
-  sessionId: string;
-  verifyConfig: VerifyConfig;
-  onWarning: (message: string) => void;
-  onCheckpoint?: (entry: { op: "snapshot"; tool: string; toolCallId: string }) => void;
-}): { checkpointer: Checkpointer; tools: ToolSet } {
-  const live = createCheckpointer(opts);
-  const checkpointer = Object.assign(
-    (context: Parameters<Checkpointer>[0]) => {
-      live(context);
-      opts.onCheckpoint?.({ op: "snapshot", tool: context.tool, toolCallId: context.toolCallId });
-    },
-    { onAfterMutation: live.onAfterMutation, invalidate: live.invalidate },
-  );
-  const tools = withVerification(
-    withCheckpoints(toolDefinitions, checkpointer, checkpointer.onAfterMutation),
-    opts.verifyConfig,
-  );
-  return { checkpointer, tools };
-}
-
-// Everything scoped to a session id, rebound in one place — the checkpointer/tools pair,
-// PreparedRun.session, PreparedRun.memory, PreparedRun.trajectory, and the archivist's own
-// counter/cursor, none of which stay valid once `session` is a conceptually different conversation
-// (/clear's own case). Adding a session-scoped field to PreparedRun means updating this function,
-// not hunting for the assignment site in runTui. Returns the new ArchivistState rather than
-// assigning it directly: `archivistState` is a bare `let` in runTui, not a PreparedRun field, so
-// the caller still does that one assignment itself.
-function bindSession(
-  prepared: PreparedRun,
-  session: RunSession,
-  configDir: string,
-  onWarning: (message: string) => void,
-): ArchivistState {
-  const trajectory = createSessionTrajectory(session, configDir, onWarning);
-  const { checkpointer, tools } = buildCheckpointedTools({
-    storeDir: prepared.storeDir,
-    worktree: prepared.worktree,
-    sessionId: session.id,
-    verifyConfig: prepared.verifyConfig,
-    onWarning,
-    onCheckpoint: (entry) => trajectory.recordCheckpoint(entry),
-  });
-  prepared.checkpointer = checkpointer;
-  prepared.tools = tools;
-  prepared.memory = loadMemory({ configDir, worktree: prepared.worktree });
-  prepared.session = session;
-  prepared.trajectory = trajectory;
-  return createArchivistState(session);
-}
-
-async function prepareSession(
-  ctx: RunContext,
-  deps: CliDeps,
-  skipPermissions: boolean,
-  isTTY: boolean,
-): Promise<PreparedRun | number> {
-  const loadAgentsFileFn = deps.loadAgentsFile ?? loadAgentsFileReal;
-  // See PreparedRun.preMountMessages' own comment: queued instead of printed on the TUI path,
-  // printed immediately (unchanged) everywhere else. Two queueing sinks, not one: `emit` is for
-  // stdout-origin lines (session-created, printPreApproved's own default), `warn` for stderr-origin
-  // ones (printWarning's three call sites, getModelCatalog's fallback warning) — collapsing both
-  // into one queue with no stream tag used to make `fatalDuringTui` print every one of them to
-  // stderr regardless of origin, reclassifying a routine notice as an error.
-  const preMountMessages: PreMountMessage[] = [];
-  const emit = isTTY
-    ? (text: string) => preMountMessages.push({ text, stream: "stdout" })
-    : console.log;
-  const warn = isTTY
-    ? (text: string) => preMountMessages.push({ text, stream: "stderr" })
-    : console.error;
-  // Passed as printWarning's own `sink` param — `undefined` on the non-TTY path keeps its existing
-  // default (console.error) exactly as before.
-  const warnSink = isTTY ? warn : undefined;
-
-  // One try wrapping everything from here through the final `return`: every fallible call in this
-  // function — loadOrCreateSession, resolveRoute/getModel, saveSession, checkpointTarget,
-  // loadGrants, createCheckpointer/loadVerifyConfig, loadMemory — shares this one catch, so nothing
-  // in here can discard `preMountMessages` by falling outside it. `configDir` is resolved in here
-  // too, not above the try: that function's own model/provider backfill, resolveDefaultModel,
-  // needs the SAME configDir routing/getModel below already use, not the ambient default — a
-  // sandboxed `authConfigDir` caller used to get session.model/session.provider read from the wrong
-  // config.json entirely; `configDir` matches `seri config`'s own resolution, so a key `/setup` or
-  // `seri config set` just wrote is picked up on the very next run. Being inside the try is what
-  // makes `run()`'s own isTTY try/catch around this function's call site provably unreachable, see
-  // that call site's own comment.
-  try {
-    const configDir = deps.authConfigDir ?? getConfigDir();
-    const { session, modelRecorded } = loadOrCreateSession(
-      ctx.resuming,
-      ctx.resumeId,
-      ctx.sessionsDir,
-      loadAgentsFileFn,
-      configDir,
-      () =>
-        printWarning(
-          "the last message in this session's saved history was incomplete (an interrupted save) and has been dropped — everything before it is intact",
-          warnSink,
-        ),
-    );
-
-    if (!ctx.resuming) emit(`Session ${session.id} created.`);
-
-    if (runStart(ctx) === "task") {
-      session.messages.push({ role: "user", content: ctx.taskText });
-    }
-
-    // D3 (feature-plan.md): resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
-    // stays a pure, environment-independent switch with its own test file.
-    // Read here, before the routing decision that needs it: `getApiKey`'s own `loadConfig` call
-    // does a bare `JSON.parse`, so a corrupted config.json throws SYNCHRONOUSLY — the same failure
-    // mode `getModel` itself already guards against below, and why this needs to be inside the try
-    // at all ("a corrupted config.json prints a clean error and exits 1," not an uncaught crash).
-    // The catalog load and the plan fetch (inside resolveModelRoute) are independent network calls,
-    // run together rather than stacked. `plan` is still fetched even when the session's own provider
-    // already has a configured key (resolveRoute's own Rule 1 would discard it for THIS route): the
-    // same `prepared.plan` also feeds /model's own gatewayCoverageInGroup predicate for every OTHER
-    // model in the catalog the user might switch to later in the session (tuiPty.test.ts's "a
-    // logged-in session's account-status fetch happens once at session start" — asserts the fetch
-    // happens even though its own fixture sets GROQ_API_KEY, the DEFAULT_PROVIDER). `accountStatus.ts`'s
-    // own login guard already skips the fetch for a BYOK-only/logged-out session. Resolved once,
-    // here, alongside the model resolution it feeds — /model (runTui's own runTurn) reuses the SAME
-    // catalog/plan on every later turn rather than reloading it (`prepared.catalog`/`.plan`, below),
-    // but @seri/model-catalog caches for the rest of the process either way (catalog.ts's own
-    // loadCatalog).
-    const { model, route, catalog, plan } = await resolveModelRoute(
-      { model: session.model, provider: session.provider },
-      configDir,
-      session.id,
-      deps,
-      warnSink,
-    );
-    // --effort's own validation, deferred to here rather than parseCliArgs (ParsedArgs.effort's
-    // own comment): legal tiers are route-dependent, and `route`/`catalog` only exist from this
-    // point on. Throws, like every other fallible call in this function, so it goes through the
-    // SAME catch below (fatalDuringTui) rather than a bespoke early return — a `return
-    // usageError(...)` here would print straight to console even mid-TTY-mount, bypassing
-    // fatalDuringTui's own preMountMessages flush and renderer teardown.
-    if (ctx.effortFlag !== undefined) {
-      const legalTiers = resolveLegalReasoningTiers(route, catalog);
-      if (!legalTiers.includes(ctx.effortFlag)) {
-        throw new Error(
-          legalTiers.length === 0
-            ? "Invalid --effort value: the resolved model has no reasoning-effort tiers available."
-            : `Invalid --effort value: ${ctx.effortFlag}. Legal tiers: ${legalTiers.join(", ")}.`,
-        );
-      }
-    }
-    // A rerouted OR gateway-served pair is never silent — the piped/non-interactive path gets
-    // the notice here, gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent
-    // into the transcript once per turn for either case, and this call ALSO runs on the TUI path
-    // (this function has no other reason to know isTTY), so without the gate a session-start
-    // reroute printed twice for the same turn: once here (before Ink even mounts) and again from
-    // runTurn. `rerouted` and `viaGateway` are mutually exclusive (routing.ts's own ResolvedRoute
-    // comment), so at most one of these ever fires. Both notices take `session.provider` directly
-    // (not resolveModelRoute's own DEFAULT_PROVIDER-defaulted copy), matching rerouteNotice's own
-    // undefined-aware contract: blaming DEFAULT_PROVIDER for a blank first run that never named one
-    // is worse than naming none.
-    if (route.rerouted && !isTTY) {
-      printWarning(rerouteNotice(route, session.provider));
-    } else if (route.viaGateway && !isTTY) {
-      printWarning(gatewayNotice(route, session.provider));
-    }
-    // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise
-    // cost and context-window come from the wrong provider's entry.
-    const catalogEntry = findCatalogEntry(catalog, route.model, route.provider);
-    // The non-interactive counterpart to runTui's own per-turn notice (runTurn, below): a session
-    // `reasoningEffort` override that the currently resolved route no longer considers legal is
-    // dropped silently by loop.ts's own re-validation gate — surfaced here so this path is never
-    // quieter than the TUI's, gated the same `!isTTY` way the reroute/gateway notices just above
-    // are (runTurn prints the TUI equivalent into the transcript instead). `ctx.effortFlag ===
-    // undefined` guards against a false positive: when `--effort` is given, it wins outright over
-    // `session.reasoningEffort` (driveLoop's own `??` chain) — the turn actually runs on the flag's
-    // tier, so a stale/illegal `session.reasoningEffort` sitting unused underneath it must not be
-    // reported as dropped.
-    if (
-      ctx.effortFlag === undefined &&
-      session.reasoningEffort !== undefined &&
-      appliedReasoningEffort(session.reasoningEffort, catalogEntry) === undefined &&
-      !isTTY
-    ) {
-      printWarning(
-        `reasoning effort "${session.reasoningEffort}" isn't legal for the current model — this turn runs without it.`,
-      );
-    }
-
-    // A model this run merely RESOLVED is deliberately left out of the file. getGroqModel accepts
-    // any string — an unknown id is not rejected here, it comes back as a provider 404 mid-run — so
-    // pinning at creation mints a session that can never succeed, and `--continue`, the obvious
-    // retry, re-reads the bad id and fails identically while a corrected SERI_MODEL is ignored.
-    // driveLoop's messages-updated save records it instead, which loop.ts only emits after a turn
-    // the provider actually answered (loop.ts:264 for text, :276 for tool calls; a failure yields
-    // `error` and no messages-updated at all), so what gets pinned is a model that demonstrably
-    // worked.
-    //
-    // opencode solves this upstream of the call, looking the id up in a provider catalog and
-    // failing with `ModelNotFoundError` plus did-you-mean suggestions before anything is stored.
-    // seri has no catalog until Stage 7a, so "pin only what answered" is the catalog-free half of
-    // that guarantee. A model the session already recorded is untouched: it earned its place the
-    // same way.
-    saveSession(modelRecorded ? session : { ...session, model: undefined }, ctx.sessionsDir);
-
-    // Checkpointing is enabled by exactly this call, which is also why rolling it back is a
-    // one-line revert: `runLoop`, the session store, the gate and every tool are unmodified, and
-    // the store lives entirely outside the user's repository.
-    const { storeDir, worktree } = checkpointTarget(session, dirs(ctx));
-
-    // Read here and nowhere else. NOTE FOR A FUTURE SCHEDULER (docs/BUILD-PLAN.md, "Unattended
-    // permission surface" open item): an unattended run must NOT copy this line. Every entry in
-    // that file was written by a human answering a live prompt in a run they were watching; that
-    // is consent for that run, not standing consent for one on a timer. Seeding a scheduled run
-    // from here is docs/ARCHITECTURE.md:202's "base safety layer disabled on a timer" arriving
-    // through a file instead of a flag.
-    const grants = loadGrants(ctx.permissionsDir, worktree, (msg) => printWarning(msg, warnSink));
-    const allowedTools = effectiveTools(grants);
-    const permissionMode = skipPermissions ? "auto" : session.permissionMode;
-    // approve-each only: in read-only the gate blocks these tools before it ever consults the
-    // allowlist (gate.ts:14), and in auto everything is allowed anyway — printing "pre-approved" in
-    // either would be a sentence the run does not honour. `isTTY ? emit : undefined`, not
-    // `warnSink`: printPreApproved's own default sink is console.log, so queueing it under the
-    // stderr-tagged `warn` would misclassify a routine notice as an error once fatalDuringTui
-    // routes by stream.
-    if (permissionMode === "approve-each" && allowedTools.length > 0) {
-      printPreApproved(allowedTools, isTTY ? emit : undefined);
-    }
-
-    // `write_file`, `bash` and `powershell` write relative to process.cwd(), while the snapshot
-    // covers the project root. Anywhere inside the project is fine — that is the whole point of
-    // resolving the root, and it is why a subdirectory launch no longer trips this. What is left is
-    // a genuine cross-project resume: it would snapshot one project while the tools edit another,
-    // and a later /undo would run its removal pass in the ORIGINAL project, deleting untracked
-    // files a human made there. Said out loud rather than left to be discovered by the deletion.
-    const inProject = relative(worktree, process.cwd());
-    if (inProject === ".." || inProject.startsWith(`..${sep}`) || isAbsolute(inProject)) {
-      printWarning(
-        `this session's files are checkpointed under ${worktree}, but tools run in ${process.cwd()} — /undo will act on ${worktree}`,
-        warnSink,
-      );
-    }
-
-    // Verification is enabled by exactly this composition, and rolling it back is deleting the
-    // outer call: `runLoop`, the gate, the session store and every tool are unmodified, and
-    // `verify/` becomes dead code rather than something that has to be unpicked.
-    //
-    // Outside withCheckpoints, not inside: the checkpoint has to be taken BEFORE the write
-    // (checkpoint/wrapTools.ts:18-22) and the check has to run AFTER it, so this is the order that
-    // puts each on the correct side. The AbortSignal the check is run with is the one runLoop hands
-    // `execute` (loop.ts:331), which is driveLoop's controller — the same Ctrl-C that stops a bash
-    // command stops a check.
-    // Resolved once, here — PreparedRun's own comment on `verifyConfig` explains why a later
-    // /clear rebind (bindSession) must reuse this value rather than calling loadVerifyConfig again.
-    const verifyConfig = loadVerifyConfig(configDir);
-    const trajectory = createSessionTrajectory(session, configDir, printWarning);
-    const { checkpointer, tools } = buildCheckpointedTools({
-      storeDir,
-      worktree,
-      sessionId: session.id,
-      verifyConfig,
-      onWarning: printWarning,
-      onCheckpoint: (entry) => trajectory.recordCheckpoint(entry),
-    });
-
-    // Loaded once, here, alongside everything else this function resolves once per run — this is
-    // what "frozen per session" means (memory/store.ts's own renderMemoryTier doc comment).
-    const memory = loadMemory({ configDir, worktree });
-
-    return {
-      session,
-      storeDir,
-      tools,
-      model,
-      permissionMode,
-      worktree,
-      allowedTools,
-      catalog,
-      catalogEntry,
-      route,
-      plan,
-      checkpointer,
-      verifyConfig,
-      memory,
-      trajectory,
-      preMountMessages,
-    };
-  } catch (err) {
-    return fatalDuringTui(err, preMountMessages);
-  }
-}
-
-type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
-
 // Shared by confirmedModel's and lastPersistedModel's own guards (both inside runTui, below) —
 // hand-duplicating `a.model !== b.model || a.provider !== b.provider` at each site was the same
 // comparison typed twice with two different variable names.
@@ -1914,439 +1390,6 @@ function modelPairChanged(
   b: { model: string; provider: ModelProvider },
 ): boolean {
   return a.model !== b.model || a.provider !== b.provider;
-}
-
-// undefined + n is n, not NaN, and undefined + undefined stays undefined: a run's total is the sum
-// of the calls that reported, and stays unreported if none did.
-function addTokens(total: number | undefined, reported: number | undefined): number | undefined {
-  return reported === undefined ? total : (total ?? 0) + reported;
-}
-
-// Same "sum what showed up" rule as addTokens, extended to a CostReport: the dollar amount sums
-// like a token count (addTokens handles that half directly), but status/source are provenance
-// tags, not numbers — VERIFY pass 2 caught that taking the most recent report's tags unconditionally
-// lets a certain turn's "actual" mask an earlier turn's "estimated"/"unknown" in the running total,
-// which is exactly the confident-looking-wrong-number failure the cost feature exists to prevent.
-// A total is never more certain than its least-certain contributor: whichever of the two reports
-// ranks weaker on COST_STATUS_RANK supplies BOTH the status and the source, not just the status.
-const COST_STATUS_RANK: Record<CostReport["status"], number> = {
-  unknown: 0,
-  estimated: 1,
-  included: 2,
-  actual: 2,
-};
-export function addCost(
-  total: CostReport | undefined,
-  next: CostReport | undefined,
-): CostReport | undefined {
-  if (next === undefined) return total;
-  if (total === undefined) return next;
-  const weaker = COST_STATUS_RANK[total.status] <= COST_STATUS_RANK[next.status] ? total : next;
-  return {
-    amountUsd: addTokens(total.amountUsd, next.amountUsd),
-    status: weaker.status,
-    source: weaker.source,
-  };
-}
-
-type DriveLoopResult = {
-  doneReason: DoneReason | undefined;
-  cancelledBy: NodeJS.Signals | undefined;
-  usage: RunUsage;
-  // Same shape as `usage`: summed across every `usage` event this call's runLoopFn yielded, via
-  // addCost above. undefined when the run never got as far as a completed model call.
-  cost: CostReport | undefined;
-  // The one fact `run()`'s exit code actually needs, not the two inputs it would otherwise have
-  // to reassemble itself: "refused at least once AND executed nothing at all" — see the tracking
-  // below for what each half means and why.
-  refusedWithoutRunning: boolean;
-  // undefined on every turn that didn't trigger the archivist (the common case). Deliberately NOT
-  // folded into `usage`/`cost` above — the verify bar demands the archivist's cost be
-  // distinguishable from the main turn's, and summing it in would silently change what this file's
-  // own printUsage/printCost assertions mean.
-  archivist: ArchivistReport | undefined;
-  // Always true from driveLoop's own return, below — reaching it means a turn ran, unconditionally.
-  // runTui's own resolveRunTui (quit(), further down) is the one caller that can genuinely produce
-  // `false` here: an idle TUI session the user quit without ever submitting a task never calls
-  // driveLoop at all, so its own closure copy of this flag stays at its initial `false`. Not
-  // optional — driveLoop setting it unconditionally is what makes `false` mean exactly one thing
-  // (nothing ever ran) instead of also being read as "the non-interactive caller didn't bother."
-  ranAnyTurn: boolean;
-};
-
-// `maxTurns` is an argument rather than a field of ctx: it is neither the resume target nor where
-// its state lives, and this is the only place that reads it. `onEvent` is how it reports events —
-// driveLoop only ever calls it with the raw LoopEvent, never anything TUI-shaped: printEvent
-// directly for the non-interactive path, `(event) => dispatch({type: "loop-event", event})` for
-// the TUI one (runTui, further down), which is the one place that still needs a TuiAction at all.
-// A plain callback rather than driveLoop taking a Dispatch and wrapping every event in a
-// `loop-event` envelope itself (which is all this function ever did with one) — that used to make
-// the non-interactive path build a TUI action just so printDispatch could unwrap it again, and
-// pull TuiAction into a loop-driving path that has no other reason to know a TUI type exists. The
-// loop-driving logic itself (the `for await`, the cancellation/AbortController handling) is
-// unchanged either way.
-//
-// `getPermissionMode` is read fresh on every gate check (via the getter below), not resolved once
-// like `model`/`allowedTools`/`worktree` are — a real bug this fixes (reported live on a pty): the
-// non-interactive path's `getPermissionMode` is just `() => prepared.permissionMode`, frozen for
-// the run's whole duration exactly as before; the TUI path's reads whatever the reducer's CURRENT
-// session says, so a mid-run /mode takes effect on the very next tool call rather than only on the
-// next turn.
-//
-// `persist` is what actually writes a messages-updated session to disk — a callback rather than a
-// hardcoded `saveSession` call, because the TWO callers need different answers to "does driveLoop
-// own persistence for this session." The non-interactive path passes `(s) => saveSession(s,
-// ctx.sessionsDir)`, unchanged. The TUI path passes a no-op: MEDIUM-1 found that even a CORRECT
-// merge dispatched to the reducer still left a ~6ms window where this function's own direct write
-// (using the session the CURRENT turn started with) was the last word on disk, since the reducer's
-// own onSessionChange effect corrects it asynchronously, not synchronously — a crash, a fatal
-// Ctrl-C or a SIGTERM landing in that window still persisted a reverted /mode. A no-op here closes
-// the window entirely rather than narrowing it: the reducer (via App.tsx's onSessionChange) is the
-// ONLY writer on the TUI path, full stop.
-//
-// `approvalPrompt` is the other per-caller swap, findings 1+5 (thermo-nuclear structural review,
-// round 6): this used to be hardcoded to `makeApprovalPrompt(deps.createInterface)` inside this
-// function, called on EVERY path including the TUI one — but makeApprovalPrompt opens its own
-// readline.Interface on process.stdin and has its own `rl.on("SIGINT", ...)`, which on the TUI
-// path fights Ink for stdin ownership (Ink's own useInput already owns raw mode there) and races
-// signals.ts's single cancel slot with a second, independent SIGINT route. The non-interactive
-// path still passes `makeApprovalPrompt(deps.createInterface)`, unchanged; the TUI path
-// (runTui, further down) passes its own tuiApprovalPrompt — the SAME ApprovalPrompt contract
-// (loop.ts), resolved via the reducer's own pendingApproval state and a keypress instead of
-// readline.question, which is what the research spec's own "Command migration" section already
-// said a TUI would supply: "a different function of the identical signature... with zero change
-// to loop.ts/gate.ts."
-async function driveLoop(
-  prepared: PreparedRun,
-  ctx: RunContext,
-  deps: CliDeps,
-  maxTurns: number | undefined,
-  onEvent: (event: LoopEvent) => void,
-  getPermissionMode: () => PermissionMode,
-  persist: (session: SessionState<ModelMessage>) => void,
-  approvalPrompt: ApprovalPrompt,
-  // The tool-call counter/message cursor the archivist trigger reads and advances — one instance
-  // per SESSION, created by this function's two callers (createArchivistState), not rebuilt here,
-  // so the counter accumulates across every turn of that session rather than resetting on each
-  // driveLoop call. runTui's own copy is a `let`, not a `const`: /clear replaces it with a fresh
-  // `createArchivistState` the moment it mints a new session id — that caller's own comment on why
-  // this is a rebuild, not a reset, applies here too.
-  archivistState: ArchivistState,
-  // TUI live panel; the non-interactive caller omits it. Not folded into onEvent, which stays
-  // LoopEvent only.
-  onChildEvent?: (payload: ChildEventPayload) => void,
-): Promise<DriveLoopResult> {
-  const {
-    session,
-    storeDir,
-    tools: baseTools,
-    model,
-    worktree,
-    allowedTools,
-    catalog,
-    catalogEntry,
-    route,
-    checkpointer,
-    memory,
-  } = prepared;
-  const runLoopFn = deps.runLoop ?? runLoopReal;
-  // `ctx.effortFlag` (--effort) wins outright and bypasses session.reasoningEffort/config.json
-  // entirely, for this call only (ParsedArgs.effort's own comment) — otherwise the ordinary
-  // precedence chain: session override, then the SERI_REASONING_EFFORT config default. Read fresh
-  // every driveLoop call, same reasoning as `system`/`route` above: a live /effort switch or a
-  // config default written mid-session must take effect on the very next turn.
-  const reasoningEffort =
-    ctx.effortFlag ?? resolveReasoningEffort(session, loadConfig(ctx.configDir));
-
-  // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
-  // the consumer is the only thing that knows what a Ctrl-C means. The first press lands in
-  // signals.ts's cancel slot, aborts the turn, and the loop unwinds far enough to yield a final
-  // messages-updated — which the body below persists, so the session left behind is resumable. The
-  // second press finds the slot empty and takes the file's untouched fatal path.
-  const controller = new AbortController();
-  let cancelledBy: NodeJS.Signals | undefined;
-  const unregisterCancel = onSignalCancel((signal) => {
-    cancelledBy = signal;
-    controller.abort();
-  });
-
-  let doneReason: DoneReason | undefined;
-  const usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
-  let cost: CostReport | undefined;
-  // Hoisted so this and runLoopFn's own `system` opt below are the exact same value. Recomputed
-  // every driveLoop call (once per TUI turn, once per non-interactive process), from the RESOLVED
-  // model/provider (`route`, D3/D4 feature-plan.md) — never captured once at session start, so a
-  // live /model switch OR a routing-priority reroute is reflected on the very next turn instead of
-  // confabulated. `route`, not `session.model`/`.provider`: `session` carries what was REQUESTED,
-  // and a rerouted turn's system prompt/cost provenance must name the model actually being called,
-  // not the one that was asked for and silently rerouted away from.
-  const system = joinTiers(
-    session.systemPrompt,
-    buildVolatileTier(route.model, route.provider, catalogEntry?.displayName, memory),
-  );
-  // Pins are re-read every turn so a mid-session env or config change takes effect next turn, the
-  // same freshness reasoningEffort already has. A task's own model+provider pair, when complete,
-  // wins over those defaults. Construction failures warn and reuse the session model rather than
-  // failing the parent turn.
-  const pins = parseRolePins(process.env, loadConfig(ctx.configDir));
-  const configured = configuredProviders(ctx.configDir);
-  type RoleOverlay = {
-    model: LanguageModel;
-    provider: ModelProvider;
-    modelId: string;
-    contextWindowSize: number | undefined;
-    reasoningEffort: string | undefined;
-    inherited: boolean;
-  };
-  const roleOverlays = new Map<string, RoleOverlay>();
-  function overlayKey(role: RoutableRole, request: TaskRouteRequest | undefined): string {
-    const pin = pinFromTask(request);
-    const effort =
-      typeof request?.effort === "string" && request.effort.length > 0 ? request.effort : "";
-    if (pin === undefined && effort.length === 0) return role;
-    return `${role}:${pin?.provider ?? ""}:${pin?.model ?? ""}:${effort}`;
-  }
-  function overlayFor(role: RoutableRole, request?: TaskRouteRequest): RoleOverlay {
-    const key = overlayKey(role, request);
-    const cached = roleOverlays.get(key);
-    if (cached !== undefined) return cached;
-    const intended = resolveChildRoute(
-      role,
-      route,
-      pins,
-      request,
-      catalog,
-      configured,
-      prepared.plan,
-    );
-    const samePair = intended.model === route.model && intended.provider === route.provider;
-    let childModel = model;
-    let constructed = intended.inherited || samePair;
-    if (!constructed) {
-      try {
-        childModel = dispatchModel(
-          {
-            model: intended.model,
-            provider: intended.provider,
-            rerouted: intended.rerouted,
-            viaGateway: intended.viaGateway,
-          },
-          session.id,
-          ctx.configDir,
-          deps,
-        );
-        constructed = true;
-      } catch (err) {
-        printWarning(roleConstructionWarning(role, intended, messageOf(err)));
-        constructed = false;
-      }
-    }
-    const actual = realizedRoute(intended, route, constructed);
-    const overlay: RoleOverlay = {
-      model: actual.inherited ? model : childModel,
-      provider: actual.provider,
-      modelId: actual.model,
-      contextWindowSize: actual.inherited
-        ? catalogEntry?.contextWindow
-        : findCatalogEntry(catalog, actual.model, actual.provider)?.contextWindow,
-      reasoningEffort: effortForChild(
-        { provider: route.provider, modelId: route.model, reasoningEffort },
-        { provider: actual.provider, modelId: actual.model },
-        request?.effort,
-      ),
-      inherited: actual.inherited,
-    };
-    roleOverlays.set(key, overlay);
-    return overlay;
-  }
-  // The one composition that enables dispatch_subagents; deleting this call (tools -> baseTools)
-  // is the whole rollback, matching withCheckpoints/withVerification's own comment in prepareSession.
-  const tools = withSubagents(baseTools, {
-    runLoop: runLoopFn,
-    model,
-    provider: route.provider,
-    modelId: route.model,
-    catalog,
-    contextWindowSize: catalogEntry?.contextWindow,
-    system,
-    permissionMode: getPermissionMode,
-    allowedTools,
-    checkpointer,
-    reasoningEffort,
-    resolveRole: (role, request) => overlayFor(role, request),
-    // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
-    // subagent tokens land in the run's own reported total instead of vanishing.
-    // Child token spend is not a parent LoopEvent, so the writer records it here.
-    onChildUsage: (childUsage, childCost) => {
-      usage.inputTokens = addTokens(usage.inputTokens, childUsage.inputTokens);
-      usage.outputTokens = addTokens(usage.outputTokens, childUsage.outputTokens);
-      cost = addCost(cost, childCost);
-      prepared.trajectory.recordChildUsage(childUsage, childCost);
-    },
-    onChildEvent: (payload) => {
-      prepared.trajectory.recordChildEvent(payload);
-      onChildEvent?.(payload);
-    },
-  });
-  // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
-  // what an exit code promises a shell, which is this consumer's business, not the loop's.
-  // `permission-denied` fires on two different facts carried in its `reason` — "blocked" is a
-  // mode (read-only, say) doing exactly what the user asked, not a signal anything went wrong;
-  // "declined" is a live refusal, either an actual "no" or nobody there to ask at all. Counting
-  // "blocked" here would flip `seri --resume x "review this repo" && open report.md` to exit 1
-  // solely because a read-only session correctly refused a write probe mid-review, breaking the
-  // `&&` over a mode working as intended. Only "declined" sets `hadDenial`. `tool-call` fires only
-  // for a call that both passed the gate and had a real tool definition (the unknown-tool branch
-  // also `continue`s past it) — so `ranTool` is exactly "did anything actually run".
-  let hadDenial = false;
-  let ranTool = false;
-  let archivist: ArchivistReport | undefined;
-  try {
-    for await (const event of runLoopFn({
-      model,
-      tools,
-      messages: session.messages,
-      // A getter, not a resolved-once value — see this function's own comment above for why.
-      // loop.ts reads `opts.permissionMode` fresh on every gate check (loop.ts's own
-      // decidePermission call), never caching it into a local at the top of the generator, which
-      // is what makes a getter here actually take effect mid-turn rather than only on the next one.
-      get permissionMode() {
-        return getPermissionMode();
-      },
-      // The seed runLoop has accepted since PR #45 and nothing produced until now. A seed, not a
-      // handle: the loop copies it (loop.ts:211) and growth comes back out as `tool-allowed`,
-      // below.
-      allowedTools,
-      approvalPrompt,
-      // Computed once above, so a live /model switch or reroute reaches subagents identically.
-      system,
-      signal: controller.signal,
-      maxIterations: maxTurns,
-      // HIGH-1: without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`
-      // / `opts.provider === "groq" && opts.modelId && opts.catalog`) never fires and every `usage`
-      // event's `cost` field is silently undefined — the run genuinely never computes a cost, no
-      // matter what cost.ts itself does. No `?? "groq"` fallback needed here (a prior version had
-      // one): `route` (PreparedRun's own field) is never optional — `resolveRoute` always returns a
-      // concrete pair. `route.model`/`.provider`, not `session.model`/`.provider`: this is the
-      // pair the call is ACTUALLY being made against (this function's own comment just above), and
-      // the two can differ from a routing-priority reroute (D2/D3) — using the requested pair here
-      // would mis-tag a rerouted call's cost report with the wrong provider's pricing branch.
-      provider: route.provider,
-      modelId: route.model,
-      catalog,
-      // The catalog's own contextWindow for whatever model this turn is actually calling — a
-      // /model switch to a provider/model with a different limit must change compaction's own
-      // math, not just which endpoint gets called (PreparedRun.catalogEntry's own comment).
-      contextWindowSize: catalogEntry?.contextWindow,
-      reasoningEffort,
-    })) {
-      // The archivist's entire view of this turn — its own module owns what each event means to
-      // it (memory/archivist.ts's own comment on observeArchivistEvent), so nothing else in this
-      // loop mutates archivistState directly.
-      observeArchivistEvent(archivistState, event);
-      prepared.trajectory.recordLoopEvent(event);
-      if (event.type === "messages-updated") {
-        // `persist` (this function's own comment above explains the two callers) is the ONLY
-        // write for this event now — MEDIUM-1: driveLoop used to ALSO call saveSession directly
-        // here, using the session THIS call started with, and rely on the TUI path's reducer to
-        // correct it moments later; that left a real, if narrow, crash/fatal-signal window where
-        // the stale write was the last one on disk. No direct saveSession call here anymore.
-        persist({ ...session, messages: event.messages });
-        onEvent(event);
-        continue;
-      }
-      if (event.type === "permission-denied" && event.reason === "declined") hadDenial = true;
-      if (event.type === "tool-call") ranTool = true;
-      // Compaction splices the whole message array, so every rewind anchor recorded before this
-      // point indexes into an array that no longer exists. The barrier is what lets `/rewind` say
-      // so instead of silently slicing garbage. A session that never checkpointed has no log, and
-      // appendBarrier no-ops rather than making this caller guess at that.
-      //
-      // Wrapped, because this is the only checkpoint call on the run path that was outside the
-      // degrade-never-fail policy every other one obeys: the checkpointer catches and latches, and
-      // the slash commands sit inside the dispatch's try. An appendFileSync that fails here —
-      // ENOSPC, EACCES, the store removed mid-session — threw straight out of this loop and killed
-      // the user's in-flight session, which is a checkpointing failure taking down the thing
-      // checkpointing exists to protect. The cost of losing a barrier is that a later /rewind may
-      // cross this compaction, so it is a warning and not silence.
-      if (event.type === "compacted") {
-        try {
-          appendBarrier(storeDir, session.id, "compaction");
-          prepared.trajectory.recordCheckpoint({ op: "compaction-barrier" });
-        } catch (err) {
-          printWarning(
-            `could not record the compaction barrier, so /rewind may not be able to cross this point: ${messageOf(err)}`,
-          );
-        }
-      }
-      // `compacted` alongside `usage` because the summariser's own round-trip is billed like any
-      // other call and was invisible to every caller until loop.ts stopped dropping it — a total
-      // that left it out would under-report exactly the calls the user never asked for. Both
-      // fields are `number | undefined` (the provider may report either, neither or both), which is
-      // what addTokens carries through to the summary instead of flattening it to a zero.
-      if (event.type === "usage" || event.type === "compacted") {
-        usage.inputTokens = addTokens(usage.inputTokens, event.usage.inputTokens);
-        usage.outputTokens = addTokens(usage.outputTokens, event.usage.outputTokens);
-      }
-      // `compacted` has no `cost` of its own (the summariser's own round-trip is billed the same
-      // as any other call, but loop.ts does not price it — see loop.ts's own `usage` event comment
-      // for the token half of the same asymmetry) — only `usage` carries one.
-      if (event.type === "usage") cost = addCost(cost, event.cost);
-      if (event.type === "done") doneReason = event.reason;
-      onEvent(event);
-      // After the dispatch above, not before: these are two lines of one message and the
-      // run-scoped fact ("approved for the rest of this run") has to come first. Wrapped for the
-      // same reason the appendBarrier call above is (see its comment): an EACCES, a full disk or a config dir
-      // removed mid-session is a failure of the thing that remembers grants, and it must not take
-      // down the user's in-flight run. Losing the grant costs one prompt next time, so it is a
-      // warning, not silence — a grant the user believes was saved and was not is the Hermes #4739
-      // failure.
-      if (event.type === "tool-allowed") {
-        try {
-          if (rememberGrant(ctx.permissionsDir, worktree, event.name, printWarning))
-            printGrantPersisted(event.name, worktree);
-        } catch (err) {
-          printWarning(
-            `could not save the permanent approval for ${event.name}, so seri will ask again next time: ${messageOf(err)}`,
-          );
-        }
-      }
-    }
-
-    // Inside the same try, before `finally` unregisters the cancel slot: the archivist's own child
-    // runLoop must share `controller.signal` while that slot is still registered, per the
-    // one-cancel-stops-everything contract every dispatch_subagents child already relies on.
-    // maybeRunArchivist (memory/archivist.ts) owns the out-of-bounds cursor guard, the live
-    // /memory archivist toggle read, and the trigger check — cli.ts carries none of that itself.
-    const archivistOverlay = overlayFor("archivist");
-    archivist = await maybeRunArchivist({
-      state: archivistState,
-      ctx: { configDir: ctx.configDir, worktree },
-      contextWindow: catalogEntry?.contextWindow,
-      model: archivistOverlay.model,
-      route: { model: archivistOverlay.modelId, provider: archivistOverlay.provider },
-      catalog,
-      signal: controller.signal,
-      onWarning: printWarning,
-      reasoningEffort: archivistOverlay.reasoningEffort,
-    });
-    prepared.trajectory.recordArchivist(archivist);
-  } finally {
-    // In a finally, so a run that throws out of the loop does not leave the slot pointing at a
-    // controller nothing is waiting on — a later signal would then be swallowed as a cancel of a
-    // turn that is no longer running instead of killing the process.
-    unregisterCancel();
-  }
-
-  return {
-    doneReason,
-    cancelledBy,
-    usage,
-    cost,
-    refusedWithoutRunning: hadDenial && !ranTool,
-    archivist,
-    ranAnyTurn: true,
-  };
 }
 
 // A plain default-flush transcript-append, shared by tuiPresenter's own `append` below and
@@ -2599,7 +1642,7 @@ async function runTui(
   // always answered "did the run just now finish, and how."
   let usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
   let cost: CostReport | undefined;
-  let doneReason: DoneReason | undefined;
+  let doneReason: DriveLoopResult["doneReason"];
   let refusedWithoutRunning = false;
   // Same "last turn's outcome" reasoning as doneReason/refusedWithoutRunning, just above — a turn
   // with nothing to report simply leaves this undefined again. runTurn (below) also renders every
@@ -3768,6 +2811,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // TTY invocation of `--effort` is simply inert, the same as it doing nothing at all.
     effortFlag: resolveEffortFlag(effort, isTTY),
     detailFlag: detail,
+    cwd: process.cwd(),
   };
 
   // Bare `seri` in a TTY mounts the TUI directly (idle, empty input box) instead of printing
@@ -3798,6 +2842,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   const usageHandled = await handleUsageCommand(positionals, deps, detail);
   if (usageHandled !== undefined) return usageHandled;
+
+  const serve = await handleServeCommand(positionals, deps);
+  if (serve !== undefined) return serve;
+
+  const exec = await handleExecCommand(positionals, deps);
+  if (exec !== undefined) return exec;
 
   // Before prepareSession, never after: a bare `/undo` must act on the resume target rather than
   // mint a session to act on.
@@ -3989,9 +3039,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // `undefined` for that session, and that mapping would otherwise fall through to the final
   // `return 1` and call an idle session the user simply closed a failure. `ranAnyTurn` is always
   // `true` on the non-interactive path (DriveLoopResult's own comment), where this never fires.
-  if (!ranAnyTurn) return 0;
-  if (doneReason === "no-tool-call") return refusedWithoutRunning ? 1 : 0;
-  return 1;
+  return exitCodeFromDriveResult(runResult);
 }
 
 if (import.meta.main) {

@@ -1,14 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
@@ -39,7 +30,12 @@ import type { CostReport } from "../../src/provider/cost";
 import { getGroqModel } from "../../src/provider/groq";
 import { configuredProviders, PROVIDER_API_KEY_NAMES } from "../../src/provider/keys";
 import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
-import { loadSession, type SessionState, saveSession } from "../../src/session/session";
+import {
+  loadSession,
+  listSessionIds,
+  type SessionState,
+  saveSession,
+} from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { CheckOutcome } from "../../src/verify/run";
 import { readTrajectory } from "../../src/trajectory/writer";
@@ -403,13 +399,6 @@ describe("run (task invocation)", () => {
     };
     saveSession(older, sessionsDir);
     saveSession(newer, sessionsDir);
-    const base = new Date("2026-01-01T00:00:00Z");
-    utimesSync(join(sessionsDir, "older.jsonl"), base, base);
-    utimesSync(
-      join(sessionsDir, "newer.jsonl"),
-      new Date(base.getTime() + 60_000),
-      new Date(base.getTime() + 60_000),
-    );
 
     const { fake, capture } = fakeRunLoop();
 
@@ -418,7 +407,7 @@ describe("run (task invocation)", () => {
     );
 
     expect(capture()?.messages).toEqual([{ role: "user", content: "new task" }]);
-    expect(readdirSync(sessionsDir)).toHaveLength(2);
+    expect(listSessionIds(sessionsDir)).toHaveLength(2);
   });
 
   // The negative control that splitting --resume into --resume <id> / --continue did not break the
@@ -441,13 +430,6 @@ describe("run (task invocation)", () => {
     };
     saveSession(older, sessionsDir);
     saveSession(newer, sessionsDir);
-    const base = new Date("2026-01-01T00:00:00Z");
-    utimesSync(join(sessionsDir, "older.jsonl"), base, base);
-    utimesSync(
-      join(sessionsDir, "newer.jsonl"),
-      new Date(base.getTime() + 60_000),
-      new Date(base.getTime() + 60_000),
-    );
 
     const { fake, capture } = fakeRunLoop();
 
@@ -481,16 +463,12 @@ describe("run (task invocation)", () => {
     expect(code).toBe(0);
     expect(capture()).toBeDefined();
     expect(capture()?.permissionMode).toBe("approve-each");
-    // The same tool set, with only the filesystem-mutating tools wrapped for checkpointing, plus
-    // dispatch_subagents — driveLoop's own withSubagents composition, not part of toolDefinitions.
+    // Cwd-bound tools (one factory per session directory), with filesystem-mutating tools wrapped
+    // for checkpointing, plus dispatch_subagents from driveLoop's withSubagents composition.
     expect(Object.keys(capture()?.tools ?? {})).toEqual([
       ...Object.keys(toolDefinitions),
       "dispatch_subagents",
     ]);
-    expect(capture()?.tools.read_file).toBe(toolDefinitions.read_file);
-    expect(capture()?.tools.grep).toBe(toolDefinitions.grep);
-    expect(capture()?.tools.glob).toBe(toolDefinitions.glob);
-    expect(capture()?.tools.edit).toBe(toolDefinitions.edit);
     expect(capture()?.tools.write_file).not.toBe(toolDefinitions.write_file);
     expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "write hello.txt" });
     expect(capture()?.messages).toHaveLength(1);
@@ -527,7 +505,7 @@ describe("run (task invocation)", () => {
     );
 
     expect(capture()?.permissionMode).toBe("approve-each");
-    const createdId = readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
+    const createdId = listSessionIds(sessionsDir)[0]!;
     expect(loadSession(createdId, sessionsDir).permissionMode).toBe("approve-each");
   });
 
@@ -561,7 +539,7 @@ describe("run (task invocation)", () => {
       }),
     );
 
-    const createdId = readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
+    const createdId = listSessionIds(sessionsDir)[0]!;
     expect(loadSession(createdId, sessionsDir).permissionMode).toBe("approve-each");
   });
 
@@ -744,7 +722,7 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], { runLoop: firstRun, loadAgentsFile: () => "", sessionsDir }),
     );
 
-    const createdId = readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
+    const createdId = listSessionIds(sessionsDir)[0]!;
     expect("allowedTools" in loadSession(createdId, sessionsDir)).toBe(false);
 
     const { fake: secondRun, capture } = fakeRunLoop();
@@ -786,10 +764,7 @@ describe("run (task invocation)", () => {
     try {
       const fresh = await captureLogs(() => run(["a", "task"], deps));
       expect(fresh.code).toBe(0);
-      const created = loadSession(
-        readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, ""),
-        sessionsDir,
-      );
+      const created = loadSession(listSessionIds(sessionsDir)[0]!, sessionsDir);
       expect(created.model).toBe("model-from-env");
       expect(asked).toEqual(["model-from-env"]);
 
@@ -875,7 +850,7 @@ describe("run (task invocation)", () => {
     // the built-in default.
     expect(firstCode).toBe(0);
     expect(askedOpenRouter).toEqual([]);
-    const firstId = readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
+    const firstId = listSessionIds(sessionsDir)[0]!;
     const firstSession = loadSession(firstId, sessionsDir);
     expect(firstSession.model).toBe("openai/gpt-oss-120b");
     // No provider was ever explicitly requested here (no SERI_PROVIDER, no /model pick), so
@@ -901,9 +876,9 @@ describe("run (task invocation)", () => {
     );
     expect(secondCode).toBe(0);
     expect(askedOpenRouter).toEqual(["picked-model"]);
-    const secondId = readdirSync(sessionsDir).find((f) => f.replace(/\.jsonl$/, "") !== firstId);
-    if (secondId === undefined) throw new Error("second session file not found");
-    const secondSession = loadSession(secondId.replace(/\.jsonl$/, ""), sessionsDir);
+    const secondId = listSessionIds(sessionsDir).find((id) => id !== firstId);
+    if (secondId === undefined) throw new Error("second session not found");
+    const secondSession = loadSession(secondId, sessionsDir);
     expect(secondSession.model).toBe("picked-model");
     expect(secondSession.provider).toBe("openrouter");
   });
@@ -934,7 +909,7 @@ describe("run (task invocation)", () => {
 
     expect(code).toBe(0);
     expect(askedAnthropic).toEqual(["claude-picked-model"]);
-    const id = readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
+    const id = listSessionIds(sessionsDir)[0]!;
     const session = loadSession(id, sessionsDir);
     expect(session.model).toBe("claude-picked-model");
     expect(session.provider).toBe("anthropic");
@@ -1053,7 +1028,7 @@ describe("run (task invocation)", () => {
       await captureLogs(() =>
         run(["a", "task"], deps([{ type: "error", error: "model_not_found" }])),
       );
-      const id = readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
+      const id = listSessionIds(sessionsDir)[0]!;
       expect(asked).toEqual(["openai/gpt-os-120b"]);
       expect("model" in loadSession(id, sessionsDir)).toBe(false);
 
@@ -2055,7 +2030,7 @@ describe("run (task invocation)", () => {
       { args: ["set", "GROQ_API_KEY", "gsk_live_secret"], configDir: tmpConfigRoot },
     ]);
     expect(capture()).toBeUndefined();
-    expect(readdirSync(sessionsDir)).toEqual([]);
+    expect(listSessionIds(sessionsDir)).toEqual([]);
   });
 
   // A task whose first word happens to name an Object.prototype member is an ordinary task, and it
@@ -2141,7 +2116,9 @@ describe("run (task invocation)", () => {
   });
 
   function latestSessionId(): string {
-    return readdirSync(sessionsDir)[0]!.replace(/\.jsonl$/, "");
+    const id = listSessionIds(sessionsDir)[0];
+    if (id === undefined) throw new Error("no session");
+    return id;
   }
 
   function trajectoryLines(sessionId: string): unknown[] {
@@ -2376,7 +2353,7 @@ describe("bare seri", () => {
 
     expect(code).toBe(2);
     expect(errors.some((line) => line.includes("No task given."))).toBe(true);
-    expect(readdirSync(sessionsDir)).toHaveLength(0);
+    expect(listSessionIds(sessionsDir)).toHaveLength(0);
   });
 
   test('`run([""], {})` with no isTTY is a usage error, not a persisted empty-content message', async () => {
@@ -2384,7 +2361,7 @@ describe("bare seri", () => {
 
     expect(code).toBe(2);
     expect(errors.some((line) => line.includes("No task given."))).toBe(true);
-    expect(readdirSync(sessionsDir)).toHaveLength(0);
+    expect(listSessionIds(sessionsDir)).toHaveLength(0);
   });
 
   test('runStart narrowing: `--continue "new task"` appends it, `--continue` alone appends nothing', async () => {
@@ -2727,7 +2704,7 @@ describe("run (/mode)", () => {
     const code = await run(["--continue", "/mode"], { sessionsDir });
 
     expect(code).toBe(0);
-    expect(readdirSync(sessionsDir)).toHaveLength(1);
+    expect(listSessionIds(sessionsDir)).toHaveLength(1);
     expect(loadSession("abc", sessionsDir).permissionMode).toBe("approve-each");
   });
 
@@ -2813,7 +2790,7 @@ describe("run (/mode)", () => {
     const code = await run(["/mode"], { sessionsDir });
 
     expect(code).toBe(0);
-    expect(readdirSync(sessionsDir)).toHaveLength(1);
+    expect(listSessionIds(sessionsDir)).toHaveLength(1);
     expect(loadSession("def", sessionsDir).permissionMode).toBe("approve-each");
   });
 });
@@ -3375,7 +3352,7 @@ describe("run (/clear)", () => {
       ],
     };
     saveSession(existing, sessionsDir);
-    const before = readFileSync(join(sessionsDir, "old-session.jsonl"));
+    const before = loadSession("old-session", sessionsDir);
 
     const logs: string[] = [];
     const originalLog = console.log;
@@ -3389,13 +3366,12 @@ describe("run (/clear)", () => {
     }
 
     expect(code).toBe(0);
-    expect(readFileSync(join(sessionsDir, "old-session.jsonl"))).toEqual(before);
+    expect(loadSession("old-session", sessionsDir)).toEqual(before);
 
-    const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
-    expect(files).toHaveLength(2);
-    const newFile = files.find((f) => f !== "old-session.jsonl");
-    if (newFile === undefined) throw new Error("no new session file appeared");
-    const newId = newFile.slice(0, -".jsonl".length);
+    const ids = listSessionIds(sessionsDir);
+    expect(ids).toHaveLength(2);
+    const newId = ids.find((id) => id !== "old-session");
+    if (newId === undefined) throw new Error("no new session appeared");
 
     const loaded = loadSession(newId, sessionsDir);
     expect(loaded.messages).toEqual([]);
@@ -3425,8 +3401,7 @@ describe("run (/clear)", () => {
     const code = await run(["/clear"], { sessionsDir });
 
     expect(code).toBe(0);
-    const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
-    expect(files).toHaveLength(2);
+    expect(listSessionIds(sessionsDir)).toHaveLength(2);
     expect(loadSession("recent-session", sessionsDir).messages).toEqual([
       { role: "user", content: "hi" },
     ]);
@@ -3453,14 +3428,8 @@ describe("run (/clear)", () => {
       messages: [{ role: "user", content: "elsewhere" }],
     };
     saveSession(here, sessionsDir);
+    // Saved second so it is strictly more recent; /clear must still mint from here because of cwd.
     saveSession(elsewhere, sessionsDir);
-    const base = new Date("2026-01-01T00:00:00Z");
-    utimesSync(join(sessionsDir, "here-session.jsonl"), base, base);
-    utimesSync(
-      join(sessionsDir, "elsewhere-session.jsonl"),
-      new Date(base.getTime() + 60_000),
-      new Date(base.getTime() + 60_000),
-    );
 
     try {
       const code = await run(["/clear"], { sessionsDir });
@@ -3472,8 +3441,7 @@ describe("run (/clear)", () => {
     // "here-session" got the new session minted against it, not the more-recently-touched
     // "elsewhere-session": both remain untouched (2 originals + 1 new = 3) and "here-session"'s own
     // messages are unchanged (/clear never mutates the resolved session, only creates a new one).
-    const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
-    expect(files).toHaveLength(3);
+    expect(listSessionIds(sessionsDir)).toHaveLength(3);
     expect(loadSession("here-session", sessionsDir).messages).toEqual([
       { role: "user", content: "here" },
     ]);
@@ -3560,7 +3528,7 @@ describe("run (/memory)", () => {
 
     expect(code).toBe(0);
     expect(logs.join("\n")).toContain("No staged memory writes.");
-    expect(readdirSync(sessionsDir)).toHaveLength(0);
+    expect(listSessionIds(sessionsDir)).toHaveLength(0);
   });
 });
 
@@ -3802,12 +3770,9 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       messages: loadSession<ModelMessage>(SESSION_ID, sessionsDir).messages,
     };
 
-    // A second, independent root rather than wiping and reusing this one: saveSession's
-    // append-only tracking is keyed by the joined `<sessionsDir>/<id>.jsonl` path, not session id
-    // (ids collide across different sessionsDirs elsewhere in this suite), and wiping
-    // `sessionsDir` out from under SESSION_ID and reusing it — rather than through
-    // saveSession/loadSession — would leave that tracking still holding a count for the path whose
-    // file the wipe had just removed.
+    // A second, independent store rather than wiping and reusing this one: SESSION_ID is reused
+    // across this suite, and mixing the two runs in one database would make the second pass
+    // update the first run's rows instead of starting from the seed.
     const root2 = mkdtempSync(join(tmpdir(), "seri-cli-checkpoint-"));
     try {
       const sessionsDir2 = join(root2, "sessions");
@@ -4119,7 +4084,7 @@ describe("run (/compact)", () => {
   test("no-op below the eviction boundary: leaves the session byte-identical, prints the no-op message, and never calls the model", async () => {
     const session = makeSession(longMessages(5));
     saveSession(session, sessionsDir);
-    const before = readFileSync(join(sessionsDir, `${SESSION_ID}.jsonl`));
+    const before = loadSession(SESSION_ID, sessionsDir);
 
     let doGenerateCalls = 0;
     const model = new MockLanguageModelV4({
@@ -4145,7 +4110,7 @@ describe("run (/compact)", () => {
     // would call the model — this is what makes that regression fail rather than pass silently.
     expect(doGenerateCalls).toBe(0);
     expect(logs).toEqual(["Not enough history to compact."]);
-    expect(readFileSync(join(sessionsDir, `${SESSION_ID}.jsonl`))).toEqual(before);
+    expect(loadSession(SESSION_ID, sessionsDir)).toEqual(before);
     expect(readLog(checkpointStoreDir(checkpointsDir, worktree), SESSION_ID)).toEqual([]);
   });
 
@@ -4163,7 +4128,7 @@ describe("run (/compact)", () => {
     seedCheckpointLog();
     const session = makeSession(longMessages(30));
     saveSession(session, sessionsDir);
-    const before = readFileSync(join(sessionsDir, `${SESSION_ID}.jsonl`));
+    const before = loadSession(SESSION_ID, sessionsDir);
 
     let resolveStarted: () => void = () => {};
     const started = new Promise<void>((resolve) => {
@@ -4228,7 +4193,7 @@ describe("run (/compact)", () => {
 
     expect(runError).toBeUndefined();
     expect(abortError?.name).toBe("AbortError");
-    expect(readFileSync(join(sessionsDir, `${SESSION_ID}.jsonl`))).toEqual(before);
+    expect(loadSession(SESSION_ID, sessionsDir)).toEqual(before);
     expect(readLog(checkpointStoreDir(checkpointsDir, worktree), SESSION_ID)).toEqual([]);
     expect(messages).toEqual(["⚙ compacting…"]);
     expect(cancelledSignal).toBe("SIGINT");
