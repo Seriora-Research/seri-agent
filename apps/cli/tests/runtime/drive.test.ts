@@ -64,6 +64,8 @@ function preparedStub(): PreparedRun {
       recordChildEvent: () => {},
       recordCheckpoint: () => {},
       recordArchivist: () => {},
+      setEnabled: () => {},
+      isEnabled: () => true,
     },
     preMountMessages: [],
   };
