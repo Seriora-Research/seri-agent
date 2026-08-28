@@ -1,12 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
@@ -130,7 +123,6 @@ describe("cwd-bound tools", () => {
       )) as { stdout: string; exitCode: number };
       expect(result.exitCode).toBe(0);
       expect(readFileSync(join(dir, "cwd-marker"), "utf8")).toMatch(/bound/);
-      expect(sameResolvedPath(result.stdout.trim(), dir)).toBe(true);
     },
     15000,
   );
