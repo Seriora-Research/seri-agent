@@ -1758,7 +1758,9 @@ describe("tuiReducer: subagent-child-event", () => {
   });
 
   test("rosterModelSuffix shows the model only when the child did not inherit", () => {
-    expect(rosterModelSuffix({ inherited: false, model: "claude-sonnet-5" })).toBe("claude-sonnet-5");
+    expect(rosterModelSuffix({ inherited: false, model: "claude-sonnet-5" })).toBe(
+      "claude-sonnet-5",
+    );
     expect(rosterModelSuffix({ inherited: true, model: "solo-model" })).toBeUndefined();
     expect(rosterModelSuffix({ inherited: undefined, model: "solo-model" })).toBeUndefined();
   });

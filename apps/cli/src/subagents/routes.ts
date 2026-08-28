@@ -3,14 +3,7 @@ import type { Plan } from "@seri/plans";
 import { isModelProvider } from "../provider/defaults";
 import { type ResolvedRoute, resolveRoute } from "../provider/routing";
 
-export const ROUTABLE_ROLES = [
-  "explore",
-  "plan",
-  "code",
-  "test",
-  "oracle",
-  "archivist",
-] as const;
+export const ROUTABLE_ROLES = ["explore", "plan", "code", "test", "oracle", "archivist"] as const;
 
 export type RoutableRole = (typeof ROUTABLE_ROLES)[number];
 

@@ -241,9 +241,7 @@ describe("effortForRole", () => {
   };
 
   test("same (provider, modelId) copies the parent string", () => {
-    expect(
-      effortForRole(parentEffort, { provider: "groq", modelId: "solo-model" }),
-    ).toBe("high");
+    expect(effortForRole(parentEffort, { provider: "groq", modelId: "solo-model" })).toBe("high");
   });
 
   test("a different pair omits effort even when the parent string is high", () => {
@@ -255,7 +253,9 @@ describe("effortForRole", () => {
   });
 
   test("same provider with a different model id still omits", () => {
-    expect(effortForRole(parentEffort, { provider: "groq", modelId: "other-model" })).toBeUndefined();
+    expect(
+      effortForRole(parentEffort, { provider: "groq", modelId: "other-model" }),
+    ).toBeUndefined();
   });
 });
 
@@ -270,9 +270,7 @@ describe("realizedRoute", () => {
       null,
     );
     expect(intended.inherited).toBe(false);
-    expect(
-      realizedRoute(intended, parent, false),
-    ).toEqual({
+    expect(realizedRoute(intended, parent, false)).toEqual({
       model: "solo-model",
       provider: "groq",
       rerouted: false,
