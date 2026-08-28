@@ -1,14 +1,9 @@
-import {
-  appendFileSync as appendFileSyncReal,
-  existsSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type { LanguageModelUsage } from "ai";
-import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import type { LoopEvent } from "../loop/loop";
 import type { CostReport } from "../provider/cost";
+import { DATABASE_FILENAME, SessionDatabase } from "../session/database";
 import type { ChildEventPayload } from "../subagents/dispatch";
 import { writeFileVerification } from "../verify/outcome";
 import { pruneTrajectories } from "./prune";
@@ -43,7 +38,6 @@ type WriterOpts = {
   retentionDays: number;
   now?: () => Date;
   onWarning: (message: string) => void;
-  appendFileSync?: (path: string, data: string) => void;
 };
 
 function messageOf(err: unknown): string {
@@ -55,6 +49,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function readTrajectory(path: string): unknown[] {
+  const trajectoriesDir = dirname(path);
+  const configDir = dirname(trajectoriesDir);
+  if (existsSync(join(configDir, DATABASE_FILENAME))) {
+    const database = new SessionDatabase(configDir);
+    try {
+      database.importLegacyTrajectories(trajectoriesDir);
+      const name = basename(path);
+      const sessionId = name.endsWith(".jsonl") ? name.slice(0, -".jsonl".length) : name;
+      return database.readTrajectory(sessionId);
+    } finally {
+      database.close();
+    }
+  }
   if (!existsSync(path)) return [];
   return readFileSync(path, "utf8")
     .split("\n")
@@ -68,46 +75,10 @@ export function readTrajectory(path: string): unknown[] {
     });
 }
 
-function maxSeqOf(value: unknown): number {
-  if (!isRecord(value) || typeof value.seq !== "number" || !Number.isFinite(value.seq)) return 0;
-  return value.seq;
-}
-
-function recoverExistingFile(path: string): { seq: number; present: boolean } {
-  if (!existsSync(path)) return { seq: 0, present: false };
-  const raw = readFileSync(path, "utf8");
-  if (raw.length === 0) return { seq: 0, present: false };
-  const parts = raw.split("\n");
-  const kept: string[] = [];
-  let seq = 0;
-  for (let i = 0; i < parts.length; i++) {
-    const line = parts[i]!;
-    const isLast = i === parts.length - 1;
-    if (line === "" && isLast) break;
-    try {
-      seq = Math.max(seq, maxSeqOf(JSON.parse(line)));
-      kept.push(line);
-    } catch {
-      if (isLast || (i === parts.length - 2 && parts[parts.length - 1] === "")) break;
-      kept.push(line);
-    }
-  }
-  if (kept.length === 0) {
-    writeFileSync(path, "");
-    return { seq: 0, present: false };
-  }
-  const rewritten = `${kept.join("\n")}\n`;
-  if (rewritten !== raw) writeFileSync(path, rewritten);
-  return { seq, present: true };
-}
-
 export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
   const now = opts.now ?? (() => new Date());
-  const append = opts.appendFileSync ?? appendFileSyncReal;
-  const path = join(opts.dir, `${opts.sessionId}.jsonl`);
-  let seq = 0;
-  let opened = false;
   let lastWritePath: string | undefined;
+  let header: TrajectoryHeader | undefined;
   const parent: TrajectoryActor = { type: "parent" };
 
   const noop: TrajectoryWriter = {
@@ -130,39 +101,28 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
 
   function writeRecord(kind: TrajectoryKind, actor: TrajectoryActor = parent): void {
     try {
-      if (!opened) {
-        ensureOwnerOnlyDir(opts.dir);
-        pruneTrajectories(opts.dir, {
-          now: now(),
-          retentionDays: opts.retentionDays,
-          keepSessionId: opts.sessionId,
-        });
-        const existing = recoverExistingFile(path);
-        seq = existing.seq;
-        if (!existing.present) {
-          const header: TrajectoryHeader = {
-            v: TRAJECTORY_SCHEMA_VERSION,
-            kind: "header",
-            sessionId: opts.sessionId,
-            cwd: opts.cwd,
-            startedAt: now().toISOString(),
-            model: opts.model,
-            provider: opts.provider,
-          };
-          append(path, `${JSON.stringify(header)}\n`);
-        }
-        opened = true;
-      }
-      seq += 1;
-      const record: TrajectoryRecord = {
+      header ??= {
         v: TRAJECTORY_SCHEMA_VERSION,
-        ts: now().toISOString(),
-        seq,
+        kind: "header",
         sessionId: opts.sessionId,
-        actor,
-        ...kind,
+        cwd: opts.cwd,
+        startedAt: now().toISOString(),
+        model: opts.model,
+        provider: opts.provider,
       };
-      append(path, `${JSON.stringify(record)}\n`);
+      const database = new SessionDatabase(dirname(opts.dir));
+      try {
+        database.importLegacyTrajectories(opts.dir);
+        database.appendTrajectory(header, {
+          v: TRAJECTORY_SCHEMA_VERSION,
+          ts: now().toISOString(),
+          sessionId: opts.sessionId,
+          actor,
+          ...kind,
+        } as Omit<TrajectoryRecord, "seq">);
+      } finally {
+        database.close();
+      }
     } catch (err) {
       opts.onWarning(`could not write trajectory: ${messageOf(err)}`);
     }

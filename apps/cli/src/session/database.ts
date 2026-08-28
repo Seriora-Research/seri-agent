@@ -4,10 +4,11 @@ import { join } from "node:path";
 import type { ModelProvider } from "@seri/model-catalog";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import type { PermissionMode } from "../gate/gate";
+import type { TrajectoryHeader, TrajectoryRecord } from "../trajectory/schema";
 import type { SessionState } from "./session";
 
 export const DATABASE_FILENAME = "seri.db";
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 const BUSY_TIMEOUT_MS = 5_000;
 
 const MIGRATIONS = [
@@ -64,6 +65,17 @@ const MIGRATIONS = [
         mtime_ms INTEGER NOT NULL,
         imported_at TEXT NOT NULL,
         error TEXT
+      );
+    `,
+  },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE trajectory_records (
+        session_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        json TEXT NOT NULL,
+        PRIMARY KEY(session_id, seq)
       );
     `,
   },
@@ -168,6 +180,50 @@ function parseLegacySession(path: string): {
     }
   }
   return { state: { ...header, messages }, truncated };
+}
+
+function parseLegacyTrajectory(path: string): {
+  sessionId: string;
+  rows: { seq: number; json: string }[];
+} {
+  const raw = readFileSync(path, "utf8");
+  const parts = raw.split("\n");
+  const endedWithNewline = parts.at(-1) === "";
+  if (endedWithNewline) parts.pop();
+  if (parts.length === 0) throw new Error("trajectory file is empty");
+
+  const rows: { seq: number; json: string }[] = [];
+  let sessionId: string | undefined;
+  for (let index = 0; index < parts.length; index++) {
+    const json = parts[index]!;
+    let value: unknown;
+    try {
+      value = JSON.parse(json);
+    } catch (error) {
+      if (index === parts.length - 1 && !endedWithNewline) break;
+      throw error;
+    }
+    if (typeof value !== "object" || value === null) throw new Error("trajectory record is invalid");
+    const record = value as Record<string, unknown>;
+    if (index === 0) {
+      if (record.kind !== "header" || typeof record.sessionId !== "string") {
+        throw new Error("trajectory header is invalid");
+      }
+      sessionId = record.sessionId;
+      rows.push({ seq: 0, json });
+      continue;
+    }
+    if (
+      record.sessionId !== sessionId ||
+      typeof record.seq !== "number" ||
+      !Number.isInteger(record.seq) ||
+      record.seq < 1
+    ) {
+      throw new Error("trajectory record sequence is invalid");
+    }
+    rows.push({ seq: record.seq, json });
+  }
+  return { sessionId: sessionId as string, rows };
 }
 
 function errorMessage(error: unknown): string {
@@ -315,6 +371,74 @@ export class SessionDatabase {
       if (parsed.truncated) result.truncatedSessionIds.push(parsed.state.id);
     }
     return result;
+  }
+
+  importLegacyTrajectories(trajectoriesDir: string): { failedPaths: string[] } {
+    const result = { failedPaths: [] as string[] };
+    if (!existsSync(trajectoriesDir)) return result;
+    for (const name of readdirSync(trajectoriesDir).filter((entry) => entry.endsWith(".jsonl")).sort()) {
+      const path = join(trajectoriesDir, name);
+      const stat = statSync(path);
+      const size = stat.size;
+      const mtimeMs = Math.trunc(stat.mtimeMs);
+      const previous = this.database
+        .query("SELECT size, mtime_ms FROM legacy_imports WHERE path = ?")
+        .get(path) as LegacyImportRow | null;
+      if (previous?.size === size && previous.mtime_ms === mtimeMs) continue;
+
+      let parsed: ReturnType<typeof parseLegacyTrajectory>;
+      try {
+        parsed = parseLegacyTrajectory(path);
+      } catch (error) {
+        this.recordLegacyImport(path, size, mtimeMs, errorMessage(error));
+        result.failedPaths.push(path);
+        continue;
+      }
+
+      this.database.transaction(() => {
+        this.database
+          .query("DELETE FROM trajectory_records WHERE session_id = ?")
+          .run(parsed.sessionId);
+        const insert = this.database.query(
+          "INSERT INTO trajectory_records(session_id, seq, json) VALUES (?, ?, ?)",
+        );
+        for (const row of parsed.rows) insert.run(parsed.sessionId, row.seq, row.json);
+        this.recordLegacyImport(path, size, mtimeMs, null);
+      })();
+    }
+    return result;
+  }
+
+  appendTrajectory(
+    header: TrajectoryHeader,
+    record: Omit<TrajectoryRecord, "seq">,
+  ): TrajectoryRecord {
+    return this.database.transaction(() => {
+      this.database
+        .query(
+          "INSERT OR IGNORE INTO trajectory_records(session_id, seq, json) VALUES (?, 0, ?)",
+        )
+        .run(header.sessionId, JSON.stringify(header));
+      const nextSeq =
+        (
+          this.database
+            .query("SELECT MAX(seq) AS seq FROM trajectory_records WHERE session_id = ?")
+            .get(header.sessionId) as { seq: number }
+        ).seq + 1;
+      const sequenced = { ...record, seq: nextSeq } as TrajectoryRecord;
+      this.database
+        .query("INSERT INTO trajectory_records(session_id, seq, json) VALUES (?, ?, ?)")
+        .run(header.sessionId, nextSeq, JSON.stringify(sequenced));
+      return sequenced;
+    })();
+  }
+
+  readTrajectory(sessionId: string): unknown[] {
+    return (
+      this.database
+        .query("SELECT json FROM trajectory_records WHERE session_id = ? ORDER BY seq")
+        .all(sessionId) as { json: string }[]
+    ).map((row) => JSON.parse(row.json));
   }
 
   private migrate(): void {
