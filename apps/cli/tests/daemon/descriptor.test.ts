@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDaemonDescriptorPath, getDaemonLockPath } from "../../src/config/paths";
@@ -42,6 +42,15 @@ describe("daemon descriptor and lock", () => {
       }),
     ).rejects.toBeInstanceOf(DaemonAlreadyRunningError);
     await first.stop();
+  });
+
+  test("acquireDaemonLock creates a missing config directory", () => {
+    const parent = makeDir();
+    const configDir = join(parent, ".seri");
+    expect(existsSync(configDir)).toBe(false);
+    const lock = acquireDaemonLock(configDir);
+    expect(existsSync(getDaemonLockPath(configDir))).toBe(true);
+    lock.release();
   });
 
   test("stale lock and descriptor are recovered when the recorded pid is dead", () => {

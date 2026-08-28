@@ -1182,6 +1182,14 @@ async function handleServeCommand(
     try {
       if (deps.waitForServe !== undefined) await deps.waitForServe();
       else {
+        // signals.ts installs process SIGINT/SIGTERM listeners at import time. SIGTERM always
+        // takes that file's fatal path (cleanups, then re-raise) and never the cancel slot, so a
+        // `process.once("SIGTERM")` registered here would not run: the fatal listener is already
+        // first and raiseSignal removes every listener before this wait could resolve. A
+        // foreground daemon must stop the server, cancel turns, and remove its own descriptor
+        // before exiting, so this process replaces those listeners for the wait only.
+        process.removeAllListeners("SIGINT");
+        process.removeAllListeners("SIGTERM");
         await new Promise<void>((resolve) => {
           process.once("SIGINT", () => resolve());
           process.once("SIGTERM", () => resolve());

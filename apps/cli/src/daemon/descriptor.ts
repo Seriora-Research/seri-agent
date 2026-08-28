@@ -1,6 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
 import type { DaemonDescriptor } from "@seri/daemon-client";
-import { atomicWriteFile } from "../atomicWriteFile";
+import { atomicWriteFile, ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { getDaemonDescriptorPath, getDaemonLockPath } from "../config/paths";
 
 export class DaemonAlreadyRunningError extends Error {
@@ -60,6 +60,7 @@ function recoverStale(configDir: string): void {
 }
 
 export function acquireDaemonLock(configDir: string): AcquiredDaemonLock {
+  ensureOwnerOnlyDir(configDir);
   const path = getDaemonLockPath(configDir);
   let fd: number;
   try {

@@ -36,35 +36,50 @@ async function waitFor(path: string, timeoutMs: number): Promise<boolean> {
 }
 
 describe.skipIf(!existsSync(bin))("compiled seri serve", () => {
-  test("binds loopback, requires the bearer, and removes the descriptor on SIGTERM", async () => {
-    const home = makeDir();
-    const descriptorPath = getDaemonDescriptorPath(join(home, ".seri"));
-    child = Bun.spawn([bin, "serve"], {
-      env: { ...process.env, HOME: home, SERI_DISABLE_MODELS_FETCH: "1" },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    expect(await waitFor(descriptorPath, 8000)).toBe(true);
-    const descriptor = JSON.parse(await Bun.file(descriptorPath).text()) as {
-      endpoint: string;
-      token: string;
-    };
-    expect(descriptor.endpoint).toContain("127.0.0.1");
-    const unauth = await fetch(`${descriptor.endpoint}/v1/health`);
-    expect(unauth.status).toBe(401);
-    const client = new DaemonClient({
-      endpoint: descriptor.endpoint,
-      token: descriptor.token,
-    });
-    const health = await client.health();
-    expect(health.v).toBe(1);
-    child.kill("SIGTERM");
-    await child.exited;
-    child = undefined;
-    const gone = Date.now() + 2000;
-    while (existsSync(descriptorPath) && Date.now() < gone) await Bun.sleep(20);
-    expect(existsSync(descriptorPath)).toBe(false);
-  });
+  test(
+    "binds loopback, requires the bearer, and removes the descriptor on SIGTERM",
+    async () => {
+      const home = makeDir();
+      const descriptorPath = getDaemonDescriptorPath(join(home, ".seri"));
+      child = Bun.spawn([bin, "serve"], {
+        env: { ...process.env, HOME: home, SERI_DISABLE_MODELS_FETCH: "1" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(await waitFor(descriptorPath, 8000)).toBe(true);
+      const descriptor = JSON.parse(await Bun.file(descriptorPath).text()) as {
+        endpoint: string;
+        token: string;
+      };
+      expect(descriptor.endpoint).toContain("127.0.0.1");
+      const unauth = await fetch(`${descriptor.endpoint}/v1/health`);
+      expect(unauth.status).toBe(401);
+      const client = new DaemonClient({
+        endpoint: descriptor.endpoint,
+        token: descriptor.token,
+      });
+      const health = await client.health();
+      expect(health.v).toBe(1);
+      const search = (await client.search("ready")) as { results: unknown[] };
+      expect(Array.isArray(search.results)).toBe(true);
+      const created = (await client.createSchedule({
+        task: "report",
+        cwd: home,
+        timing: { kind: "once", at: "2099-01-01T00:00:00.000Z" },
+        allowModelReads: true,
+      })) as { id: string };
+      const listed = (await client.listSchedules()) as { schedules: { id: string }[] };
+      expect(listed.schedules.some((row) => row.id === created.id)).toBe(true);
+      await client.disableSchedule(created.id);
+      child.kill("SIGTERM");
+      await child.exited;
+      child = undefined;
+      const gone = Date.now() + 2000;
+      while (existsSync(descriptorPath) && Date.now() < gone) await Bun.sleep(20);
+      expect(existsSync(descriptorPath)).toBe(false);
+    },
+    { timeout: 20_000 },
+  );
 
   test("seri exec without a daemon exits 1", async () => {
     const home = makeDir();
