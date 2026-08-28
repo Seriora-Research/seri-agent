@@ -3218,8 +3218,8 @@ describe("run (/clear)", () => {
     expect(clear.accepts(["the", "screen", "please"])).toBe(false);
     expect(clear.accepts(["3"])).toBe(false);
     expect(clear.mutatesRunState).toBe(true);
-    // handleSlashCommand's bare-invocation resolution reads this field, not a `name === "/clear"`
-    // check (SlashCommand's own comment on why) — /undo, /rewind and /restore must NOT set it.
+    // /clear is the only command that mints a new session from the resolved cwd; /undo, /rewind
+    // and /restore must not set this field.
     expect(clear.scopeTargetToCwd).toBe(true);
     for (const name of [
       "/undo",
@@ -3487,13 +3487,6 @@ describe("run (/memory)", () => {
     rmSync(configDir, { recursive: true, force: true });
   });
 
-  // Round-4 review finding: /memory used to be dispatched through handleSlashCommand's generic
-  // session-resolution path, which requires an existing session before running ANY command in
-  // SLASH_COMMANDS — even though decideMemoryCommand (memoryCommand's own comment) needs nothing
-  // but configDir. `seri /memory pending` on a fresh profile, before any session had ever run
-  // (this test's own case: sessionsDir starts empty), failed with "No session to run /memory
-  // against." and exited 1. needsSession: false on /memory's own SlashCommand table row is what
-  // lets it skip that resolution and reach decideMemoryCommand directly.
   test("`/memory pending` via argv is a task", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const { fake, capture } = fakeRunLoop();
@@ -3587,6 +3580,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       cwd: session.cwd,
       enabled: true,
       retentionDays: 14,
+      onWarning: () => {},
     });
     return invokeSlash(
       name,

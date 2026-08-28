@@ -1099,13 +1099,11 @@ function childScriptSetup(dir: string, extraEnv: Record<string, string> = {}): s
   ].join("\n");
 }
 
-// Stage C (cli-commands-to-tui feature-plan.md): /login, /signup and /logout's own script.
-// `login`/`logout` are faked via the SAME injection seam `handleAuthCommand` already uses for the
-// non-interactive `seri login`/`seri logout` (argv.test.ts's own "run (login/signup/logout)"
-// describe block) — the fake stands in for the real WorkOS device flow the way every other
-// runLoopFake in this file stands in for a real model round-trip, and calls the real
-// saveAuthSession/loadAuthSession/clearAuthSession (dynamically imported below) so auth.json on
-// disk is genuinely written/read/cleared, not merely asserted on captured stdout.
+// /login, /signup and /logout's own script.
+// `login`/`logout` are faked via CliDeps so the child never hits the real WorkOS device flow.
+// The fake still calls saveAuthSession/loadAuthSession/clearAuthSession (dynamically imported
+// below) so auth.json on disk is genuinely written/read/cleared, not merely asserted on captured
+// stdout.
 function childScriptAuth(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,

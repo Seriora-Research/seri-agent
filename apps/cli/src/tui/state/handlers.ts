@@ -236,9 +236,8 @@ export function createSetupHandlers(opts: {
 
 // /login, /signup and /logout's own two handlers, mirroring createSetupHandlers's exact shape
 // (dispatch/deps/configDir in). `deps.login ?? loginReal`
-// / `deps.logout ?? logoutReal` is the SAME injection seam handleAuthCommand already uses for the
-// non-interactive `seri login`/`seri logout` — so a pty test can fake the device flow here exactly
-// the way argv.test.ts already fakes it there. Every recompute-and-dispatch is wrapped so a failure
+// / `deps.logout ?? logoutReal` is the injection seam pty tests use to fake the device flow.
+// Every recompute-and-dispatch is wrapped so a failure
 // (a network error, a denied/expired device code, a bad WorkOS client id) degrades to a rendered
 // `auth-step` result rather than an unhandled rejection out of onSubmit's own fire-and-forget
 // caller (InputBox's own useInput handler) — the same "never throw/crash" contract dispatchSetupList
@@ -366,9 +365,8 @@ function verifyConfigTakesEffectNote(key: string): string {
 
 // /config's own two handlers, mirroring createSetupHandlers's exact shape
 // (dispatch/getPendingConfig/configDir in). Calls the DATA
-// functions directly — loadConfig/setConfigValue/unsetConfigValue (config/config.ts) — never
-// configCommand (config/commands.ts), which is console/exit-code shaped for the non-interactive
-// path. Every recompute-and-dispatch is wrapped in try/catch degrading to command-error: config.json
+// functions directly — loadConfig/setConfigValue/unsetConfigValue (config/config.ts).
+// Every recompute-and-dispatch is wrapped in try/catch degrading to command-error: config.json
 // can be hand-edited or corrupted mid-session, same reachable-anytime failure dispatchSetupList's
 // own comment already documents for /setup.
 export function createConfigHandlers(opts: {

@@ -71,8 +71,8 @@ export async function validateProviderKey(
   // finding): the escape hatch is for skipping the NETWORK probe in tests, not for waiving "was
   // anything even typed" — with the empty check below it, SERI_SKIP_KEY_VALIDATION=1 returned
   // `{ok: true}` for an empty key, and onSetupKeyEntered (cli.ts) has nothing else guarding
-  // against storing that empty string into config.json (setConfigValue doesn't reject empties —
-  // only configCommand's own CLI path does, config/commands.ts:22, which /setup never calls).
+  // against storing that empty string into config.json (setConfigValue does not reject empties,
+  // and /setup is the TUI writer of BYOK keys).
   if (!apiKey) {
     return { ok: false, reason: "auth", message: "API key cannot be empty." };
   }
