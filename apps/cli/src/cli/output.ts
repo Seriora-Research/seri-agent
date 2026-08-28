@@ -156,7 +156,9 @@ export function recoveryLines(
   result: RestoreResult,
   sink: (line: string) => void = console.log,
 ): void {
-  sink(`The state this replaced is commit ${result.preUndoCommit}. To get it back in this session, run:`);
+  sink(
+    `The state this replaced is commit ${result.preUndoCommit}. To get it back in this session, run:`,
+  );
   sink(`  ${result.recoverCommand}`);
 }
 
