@@ -108,27 +108,29 @@ export function printWarning(message: string, sink: (line: string) => void = con
 // The second half of what an "always" answer now does. Printed only when a grant was actually
 // written — driveLoop calls this on rememberGrant's `true`, never unconditionally — so it can
 // never claim a persistence that the store refused (a non-persistable name, an unparseable file).
+// Reachable outside the TUI (approve-each answered from a plain stdin prompt), so the undo
+// instruction names permissions.yaml directly rather than only /permissions, which isn't there.
 export function printGrantPersisted(name: string, worktree: string): void {
   console.log(
-    `  saved for ${worktree} — undo with /permissions (remove ${escapeControlChars(name)})`,
+    `  saved for ${worktree} — undo by editing permissions.yaml, or with /permissions inside the TUI (remove ${escapeControlChars(name)})`,
   );
 }
 
 // A grant the user cannot see is a grant they cannot revoke, and a grant made weeks ago in another
 // session is exactly the invisible kind. One line at the start of the run that would otherwise
-// silently skip a prompt.
+// silently skip a prompt. Same non-TTY reachability as printGrantPersisted above.
 export function printPreApproved(
   tools: readonly string[],
   sink: (line: string) => void = console.log,
 ): void {
-  sink(`Pre-approved without asking: ${tools.map(escapeControlChars).join(", ")} — /permissions`);
+  sink(
+    `Pre-approved without asking: ${tools.map(escapeControlChars).join(", ")} — permissions.yaml, or /permissions inside the TUI`,
+  );
 }
 
-// One line-shape, one place: cli.ts's consolePresenter and tuiPresenter both call this — the
-// former via its own default `console.log` sink, the latter with a sink that dispatches a
-// transcript-append action per line — instead of each hand-copying the same
-// restored/deleted/ignored template, which can drift out of sync the moment one of them changes
-// and the other does not.
+// One line-shape, one place: cli.ts's tuiPresenter calls this via a sink that dispatches a
+// transcript-append action per line, instead of hand-copying the restored/deleted/ignored
+// template inline where it could drift out of sync with this one.
 //
 // Called before the restore happens, not after. Every path here comes from git's own output, so
 // an ignored file can never appear under "restored" or "deleted"; the ones that were written and
@@ -148,11 +150,13 @@ export function undoPlanLines(plan: RestorePlan, sink: (line: string) => void = 
 }
 
 // Restoring is never the operation that loses work: the state it just replaced was committed first.
+// "in this session" because recoverCommand resolves against the live session's own ref
+// (decideRestore reads session.id) — pasted after a /clear mints a new id, it targets that one.
 export function recoveryLines(
   result: RestoreResult,
   sink: (line: string) => void = console.log,
 ): void {
-  sink(`The state this replaced is commit ${result.preUndoCommit}. To get it back, run:`);
+  sink(`The state this replaced is commit ${result.preUndoCommit}. To get it back in this session, run:`);
   sink(`  ${result.recoverCommand}`);
 }
 

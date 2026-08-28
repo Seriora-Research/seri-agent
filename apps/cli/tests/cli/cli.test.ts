@@ -29,7 +29,7 @@ import {
   type SessionState,
   saveSession,
 } from "../../src/session/session";
-import { deliverSignal, onSignalCancel, raiseSignal } from "../../src/signals";
+import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { CheckOutcome } from "../../src/verify/run";
 import {
   createTrajectoryWriter,
@@ -62,10 +62,7 @@ function testPresenter(dirs: { sessionsDir: string }, session?: SessionState<Mod
     transcriptCleared: () => {},
     usageAccrued: (usage: LanguageModelUsage) =>
       printUsage({ inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }),
-    cancelled: (signal: NodeJS.Signals) => {
-      console.log("Compaction cancelled.");
-      raiseSignal(signal);
-    },
+    cancelled: () => console.log("Compaction cancelled."),
     currentSession: () => session as SessionState<ModelMessage>,
   };
 }
@@ -3483,7 +3480,6 @@ describe("run (/usage)", () => {
     expect(usage.accepts(["please"])).toBe(false);
     expect(usage.accepts(["--detail", "extra"])).toBe(false);
     expect(usage.needsSession).toBe(false);
-    expect(usage.readsDetailFlag).toBe(true);
     expect(usage.mutatesRunState).toBeUndefined();
   });
 });
@@ -4145,11 +4141,9 @@ describe("run (/compact)", () => {
   // above) that nothing else in the repo needed before /compact (EXPLORE: zero
   // AbortSignal/AbortController matches in compaction.test.ts/loop.test.ts).
   //
-  // Presenter is a stub, not the default consolePresenter: consolePresenter's own `cancelled`
-  // re-raises the signal (cli.ts's own CommandPresenter comment), which would actually kill this
-  // test process. The stub isolates what this test is actually checking — that compactCommand's
-  // own catch branch calls `presenter.cancelled` with the signal that caused the abort — from
-  // consolePresenter's own (trivial, one-line) re-raise wiring.
+  // Presenter is a stub, not testPresenter: this test's assertion is on WHICH signal reached
+  // `cancelled`, and testPresenter's own cancelled only logs a fixed string, exposing no way to
+  // capture the argument it was called with.
   test("cancelled compaction is a strict no-op and reports the cancelling signal to the presenter", async () => {
     seedCheckpointLog();
     const session = makeSession(longMessages(30));

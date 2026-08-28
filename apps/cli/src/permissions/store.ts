@@ -49,7 +49,8 @@ export type Grants = {
 const TEMPLATE = `# seri — tools approved permanently, so seri stops asking.
 #
 # Written when you answer "a" at an approval prompt, and safe to edit by hand.
-#   /permissions                     what is in effect right now; revoke from there
+#   /permissions                     what is in effect right now; revokes a \`projects\` entry.
+#                                     A \`global\` entry only comes back out by editing it here.
 #
 # Only write_file and edit may appear here. bash and powershell are refused, on read as well as on
 # write: a grant keyed on a tool NAME says nothing about what a shell command will do, so an entry

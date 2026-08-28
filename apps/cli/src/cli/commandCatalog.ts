@@ -16,7 +16,6 @@ export type CommandMeta = {
       scopeTargetToCwd?: true;
       needsSession?: true | false;
       tuiClaimsFirst?: true;
-      readsDetailFlag?: true;
     }
   | { surface: "tui" }
 );
@@ -111,7 +110,6 @@ export const COMMAND_META: readonly CommandMeta[] = [
     argsUsage: "[--detail]",
     accepts: (args) => args.length === 0 || (args.length === 1 && args[0] === "--detail"),
     needsSession: false,
-    readsDetailFlag: true,
   },
   {
     name: "/exit",

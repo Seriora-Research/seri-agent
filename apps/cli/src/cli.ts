@@ -316,7 +316,6 @@ type SlashCommand = {
   // added here and nowhere else.
   mutatesRunState?: true;
   scopeTargetToCwd?: true;
-  readsDetailFlag?: true;
 } & (
   | {
       needsSession?: true;
@@ -362,7 +361,6 @@ function sessionSlash(
       run,
       ...(meta.mutatesRunState === true ? { mutatesRunState: true as const } : {}),
       ...(meta.scopeTargetToCwd === true ? { scopeTargetToCwd: true as const } : {}),
-      ...(meta.readsDetailFlag === true ? { readsDetailFlag: true as const } : {}),
     },
   ];
 }
@@ -382,7 +380,6 @@ function sessionSlashNoSession(
       needsSession: false,
       run,
       ...(meta.mutatesRunState === true ? { mutatesRunState: true as const } : {}),
-      ...(meta.readsDetailFlag === true ? { readsDetailFlag: true as const } : {}),
     },
   ];
 }
@@ -857,7 +854,17 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
 
   let values: ParsedArgs["values"];
   let positionals: string[];
-  let tokens: Array<{ kind: string; index?: number }>;
+  // Derived from parseArgs's own generic return, not a hand-rolled `{ kind: string }` shape: that
+  // widened `kind` to a bare string, so a typo in the "option-terminator" check below would compile
+  // clean and silently leave verbEscaped permanently false.
+  let tokens: ReturnType<
+    typeof parseArgs<{
+      options: typeof PARSE_OPTIONS;
+      strict: true;
+      allowPositionals: true;
+      tokens: true;
+    }>
+  >["tokens"];
   try {
     ({ values, positionals, tokens } = parseArgs({
       args: argv,

@@ -641,6 +641,30 @@ describe("run (argv and usage errors)", () => {
       expect(code).toBe(2);
       expect(getConfigDir()).toBe(getBaseConfigDir());
     });
+
+    // The case the reset above actually exists for: parseArgs() itself throws (an unrecognized
+    // flag under `strict: true`), before `values.profile` is ever read — a failure that a reset
+    // placed only after the try/catch would never see. The unrelated-usage-error test above
+    // exercises a DIFFERENT failure (a post-parse validation check), which runs after
+    // setProfileOverride(values.profile) already succeeded and so cannot exercise this path.
+    test("a later run() whose own parseArgs() throws does not leak a prior --profile override", async () => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+      const { fake } = fakeRunLoop();
+
+      await captureLogs(() =>
+        run(["--profile", "work", "do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "" }),
+      );
+
+      const { code } = await captureLogs(() =>
+        run(["--not-a-real-flag", "do", "a", "task"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+        }),
+      );
+
+      expect(code).toBe(2);
+      expect(getConfigDir()).toBe(getBaseConfigDir());
+    });
   });
 });
 
