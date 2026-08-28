@@ -132,20 +132,21 @@ function killInFlightChildren(): void {
 
 onSignalCleanup(killInFlightChildren);
 
-// The signal is a fourth positional rather than an options bag, and the cost of converting is
-// small: bash.ts and powershell.ts are the only production callers, plus one test file.
-// auth/browser.ts is not one of them — it spawns its own child and says at the top of that file
-// why it deliberately does not come through here.
+// timeout, signal, and cwd stay positionals rather than an options bag: bash.ts and powershell.ts
+// are the only production callers, plus one test file. auth/browser.ts is not one of them — it
+// spawns its own child and says at the top of that file why it deliberately does not come through
+// here.
 //
-// What decides it is the shape rather than the count. runBash and runPowerShell take the same two
+// What decides it is the shape rather than the count. runBash and runPowerShell take the same
 // optional parameters in the same order and pass them straight through, so a bag at this one frame
-// would leave both of them translating into it, and a bag at all three would rename the same two
+// would leave both of them translating into it, and a bag at all three would rename the same
 // values three times over for no behavioural gain.
 export function spawnCollect(
   executable: string,
   args: string[],
   timeoutMs?: number,
   signal?: AbortSignal,
+  cwd?: string,
 ): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
@@ -153,6 +154,7 @@ export function spawnCollect(
       // Own process group on POSIX so a timeout can reach the whole tree. Not on Windows,
       // where detached means a new console window instead.
       detached: process.platform !== "win32",
+      ...(cwd !== undefined ? { cwd } : {}),
     });
     const untrack = killOnFatalSignal(() => {
       if (child.pid !== undefined) killTree(child.pid);

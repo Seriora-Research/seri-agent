@@ -86,13 +86,14 @@ export async function runBash(
   timeoutMs?: number,
   signal?: AbortSignal,
   isAvailable: () => boolean = isBashAvailable,
+  cwd?: string,
 ): Promise<ProcessResult> {
   if (!isAvailable()) {
     throw new Error("bash is not available on this system");
   }
 
   try {
-    return await spawnCollect(resolveBashCommand(), ["-c", command], timeoutMs, signal);
+    return await spawnCollect(resolveBashCommand(), ["-c", command], timeoutMs, signal, cwd);
   } finally {
     // A command can touch any file, not just one readFile/writeFile already cached the EOL for —
     // and it may have changed a file's line endings before writeFile gets to it, so the whole cache

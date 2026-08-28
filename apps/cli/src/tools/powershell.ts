@@ -5,6 +5,7 @@ export async function runPowerShell(
   command: string,
   timeoutMs?: number,
   signal?: AbortSignal,
+  cwd?: string,
 ): Promise<ProcessResult> {
   try {
     return await spawnCollect(
@@ -12,6 +13,7 @@ export async function runPowerShell(
       ["-NonInteractive", "-NoProfile", "-Command", command],
       timeoutMs,
       signal,
+      cwd,
     );
   } finally {
     // See bash.ts's runBash: a command can touch any file, so the whole cache is dropped rather
