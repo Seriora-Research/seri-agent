@@ -77,9 +77,7 @@ export function SubagentPanel({
       {visible.map((child) => (
         <SubagentRow key={child.id} child={child} selected={focused && child.id === selectedId} />
       ))}
-      {overflow > 0 && (
-        <text fg={theme.muted}>{`  +${overflow}`}</text>
-      )}
+      {overflow > 0 && <text fg={theme.muted}>{`  +${overflow}`}</text>}
     </box>
   );
 }
@@ -94,13 +92,7 @@ function denialSuffix(child: ChildView): string | undefined {
   return undefined;
 }
 
-function RosterRow({
-  selected,
-  children,
-}: {
-  selected: boolean;
-  children: ReactNode;
-}) {
+function RosterRow({ selected, children }: { selected: boolean; children: ReactNode }) {
   return (
     <box flexDirection="row">
       <text flexShrink={0}>{selected ? "> " : "  "}</text>

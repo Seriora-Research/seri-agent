@@ -207,9 +207,7 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
         // down (same shape as the sibling tuiPty.test.ts's own sawLine).
         const sawDone = await waitFor("done ·", 20_000);
         if (!sawDone) {
-          throw new Error(
-            `child never printed "done ·"; got ${JSON.stringify(decodedSoFar())}`,
-          );
+          throw new Error(`child never printed "done ·"; got ${JSON.stringify(decodedSoFar())}`);
         }
 
         // A vacuous-pass guard, checked BEFORE the "no ?1049h/l found" inconclusive branch below:

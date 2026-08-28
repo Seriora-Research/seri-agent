@@ -355,10 +355,7 @@ describe("dispatch_subagents", () => {
         onChildEvent: (payload) => forwarded.push(payload),
       }),
     );
-    await dispatchTool.execute(
-      { tasks: [{ role: "explore", goal: "a" }] },
-      dispatchOpts("t1"),
-    );
+    await dispatchTool.execute({ tasks: [{ role: "explore", goal: "a" }] }, dispatchOpts("t1"));
 
     expect(forwarded.map((p) => p.event.type)).toEqual([
       "child-started",
@@ -394,10 +391,7 @@ describe("dispatch_subagents", () => {
         onChildUsage: (usage, cost) => forwarded.push({ usage, cost }),
       }),
     );
-    await dispatchTool.execute(
-      { tasks: [{ role: "explore", goal: "a" }] },
-      dispatchOpts("t1"),
-    );
+    await dispatchTool.execute({ tasks: [{ role: "explore", goal: "a" }] }, dispatchOpts("t1"));
 
     expect(forwarded).toHaveLength(1);
     expect(forwarded[0].usage.inputTokens).toBe(8);

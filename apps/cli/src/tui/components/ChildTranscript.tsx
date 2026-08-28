@@ -32,9 +32,7 @@ export function ChildTranscript({ child }: { child: ChildView | undefined }) {
           {line}
         </text>
       ))}
-      {current !== undefined && current.length > 0 && (
-        <text fg={theme.muted}>{current}</text>
-      )}
+      {current !== undefined && current.length > 0 && <text fg={theme.muted}>{current}</text>}
     </box>
   );
 }

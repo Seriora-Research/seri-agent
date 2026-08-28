@@ -202,10 +202,7 @@ export async function runSubagent(opts: {
       });
       // compacted has no cost field; the run-level fold still needs the tokens so the TUI live
       // total and printUsage match billed spend.
-      runtime.onChildUsage?.(
-        event.usage,
-        event.type === "usage" ? event.cost : undefined,
-      );
+      runtime.onChildUsage?.(event.usage, event.type === "usage" ? event.cost : undefined);
     } else if (event.type === "permission-denied") {
       deniedCount++;
     } else if (event.type === "error") {
