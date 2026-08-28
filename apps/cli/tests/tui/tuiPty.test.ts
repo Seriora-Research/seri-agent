@@ -5,7 +5,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -17,8 +16,34 @@ import { pathToFileURL } from "node:url";
 import type { ModelMessage } from "ai";
 import { checkpointStoreDir } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, resolveRef } from "../../src/checkpoint/shadowGit";
-import { loadSession, saveSession } from "../../src/session/session";
+import { configDirForStore, DATABASE_FILENAME } from "../../src/session/database";
+import { listSessionIds, loadSession, saveSession } from "../../src/session/session";
 import { childScriptInput } from "./helpers";
+
+function requireSessionId(sessionsDir: string): string {
+  const id = listSessionIds(sessionsDir)[0];
+  if (id === undefined) throw new Error("no session written yet");
+  return id;
+}
+
+function sessionDbPaths(sessionsDir: string): string[] {
+  const configDir = configDirForStore(sessionsDir, "sessions");
+  return [DATABASE_FILENAME, `${DATABASE_FILENAME}-wal`, `${DATABASE_FILENAME}-shm`].map((name) =>
+    join(configDir, name),
+  );
+}
+
+function makeSessionStoreReadOnly(sessionsDir: string): void {
+  for (const path of sessionDbPaths(sessionsDir)) {
+    if (existsSync(path)) chmodSync(path, 0o400);
+  }
+}
+
+function restoreSessionStore(sessionsDir: string): void {
+  for (const path of sessionDbPaths(sessionsDir)) {
+    if (existsSync(path)) chmodSync(path, 0o600);
+  }
+}
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 const SESSION_MODULE = pathToFileURL(join(import.meta.dir, "../../src/session/session.ts")).href;
@@ -728,9 +753,8 @@ function childScriptModelSwitchFailure(dir: string): string {
     // D9: same HOME redirection as childScriptModelSwitch's own comment — mandatory before
     // anything else runs, so a stray persist here could never reach the developer's real config.
     `process.env.HOME = ${JSON.stringify(dir)};`,
-    `import { readdirSync } from "node:fs";`,
     `const cli = await import(${JSON.stringify(CLI)});`,
-    `const { loadSession } = await import(${JSON.stringify(SESSION_MODULE)});`,
+    `const { loadSession, listSessionIds } = await import(${JSON.stringify(SESSION_MODULE)});`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
     `let calls = 0;`,
@@ -743,8 +767,8 @@ function childScriptModelSwitchFailure(dir: string): string {
     `    return opts.messages;`,
     `  }`,
     `  yield { type: "error", error: "simulated: no working key for this provider" };`,
-    `  const sessionFile = readdirSync(${JSON.stringify(sessionsDir)}).find((f) => f.endsWith(".jsonl"));`,
-    `  const onDisk = loadSession(sessionFile.replace(/\\.jsonl$/, ""), ${JSON.stringify(sessionsDir)});`,
+    `  const sessionId = listSessionIds(${JSON.stringify(sessionsDir)})[0];`,
+    `  const onDisk = loadSession(sessionId, ${JSON.stringify(sessionsDir)});`,
     `  console.log("\\nMODEL_ON_DISK_AFTER_FAILURE " + onDisk.model);`,
     `  return opts.messages;`,
     `}`,
@@ -972,10 +996,10 @@ function childScriptMultiTurnUsage(dir: string): string {
 function childScriptModePersistence(dir: string, flagPath: string): string {
   const sessionsDir = join(dir, "sessions");
   return [
-    `import { existsSync, readdirSync } from "node:fs";`,
+    `import { existsSync } from "node:fs";`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `const cli = await import(${JSON.stringify(CLI)});`,
-    `const { loadSession } = await import(${JSON.stringify(SESSION_MODULE)});`,
+    `const { loadSession, listSessionIds } = await import(${JSON.stringify(SESSION_MODULE)});`,
     `async function* runLoopFake(opts) {`,
     `  console.log("\\nRUNLOOP_READY");`,
     `  yield { type: "messages-updated", messages: opts.messages };`,
@@ -985,8 +1009,8 @@ function childScriptModePersistence(dir: string, flagPath: string): string {
     `    check();`,
     `  });`,
     `  yield { type: "messages-updated", messages: opts.messages };`,
-    `  const sessionFile = readdirSync(${JSON.stringify(sessionsDir)}).find((f) => f.endsWith(".jsonl"));`,
-    `  const modeAtResume = loadSession(sessionFile.replace(/\\.jsonl$/, ""), ${JSON.stringify(sessionsDir)}).permissionMode;`,
+    `  const sessionId = listSessionIds(${JSON.stringify(sessionsDir)})[0];`,
+    `  const modeAtResume = loadSession(sessionId, ${JSON.stringify(sessionsDir)}).permissionMode;`,
     `  console.log("\\nMODE_AT_RESUME " + modeAtResume);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -2194,14 +2218,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_READY");
       await sawLine("approve-each mode on");
 
-      // Read+execute only: saveSession's atomic write (a temp file plus a rename into this
-      // directory) can no longer create the mode-cycled session's .jsonl.
-      chmodSync(sessionsDir, 0o500);
+      // Read-only database files: the next saveSession write cannot land.
+      makeSessionStoreReadOnly(sessionsDir);
 
       child.stdin?.write("\x1b[Z");
       await sawLine("could not save the session");
 
-      chmodSync(sessionsDir, 0o700);
+      restoreSessionStore(sessionsDir);
 
       // Proof the process is still alive, not just that the error line appeared: a real second
       // command still gets a real response.
@@ -2210,7 +2233,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await sawLine("permission mode is now");
     } finally {
-      chmodSync(sessionsDir, 0o700);
+      restoreSessionStore(sessionsDir);
       child.kill("SIGKILL");
     }
   }, 60_000);
@@ -3167,9 +3190,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // failed on the missing key rather than succeeding some other way.
       await sawLine("No Anthropic key configured. Run /setup to add one.");
 
-      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".jsonl"));
-      if (sessionFile === undefined) throw new Error("no session file written yet");
-      const sessionId = sessionFile.replace(/\.jsonl$/, "");
+      const sessionId = requireSessionId(sessionsDir);
 
       // Polled, not asserted immediately: the pick's own persist happens in App.tsx's own
       // onSessionChange effect, which fires after the dispatch above, not synchronously with the
@@ -3351,13 +3372,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // not that the process just happened to exit some other way.
       expect(stdout).toContain("(tokens: 12 in, 34 out)");
 
-      // LOW-1: a mid-turn /exit leaves the session resumable — a well-formed session file still
+      // LOW-1: a mid-turn /exit leaves the session resumable — a well-formed session still
       // on disk, not corrupted or removed by the cancel-then-quit sequence.
       const sessionsDir = join(dir, "sessions");
-      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".jsonl"));
-      if (sessionFile === undefined) throw new Error("no session file written");
-      const onDisk = loadSession(sessionFile.replace(/\.jsonl$/, ""), sessionsDir);
-      expect(onDisk.id).toBe(sessionFile.replace(/\.jsonl$/, ""));
+      const sessionId = requireSessionId(sessionsDir);
+      const onDisk = loadSession(sessionId, sessionsDir);
+      expect(onDisk.id).toBe(sessionId);
       expect(Array.isArray(onDisk.messages)).toBe(true);
       expect(onDisk.messages.length).toBeGreaterThan(0);
     } finally {
@@ -3507,9 +3527,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await sawLine("permission mode is now auto");
 
-      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".jsonl"));
-      if (sessionFile === undefined) throw new Error("no session file written yet");
-      const sessionId = sessionFile.replace(/\.jsonl$/, "");
+      const sessionId = requireSessionId(sessionsDir);
 
       // Polled, not asserted immediately: the write happens in App.tsx's own onSessionChange
       // effect, which fires after the dispatch above, not synchronously with the keypress.
@@ -3533,18 +3551,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // Round 8 code review, finding 1: onSessionChange (cli.ts) used to call saveSession bare, with
-  // nothing to catch a throw. The sessions directory is replaced with a regular file AFTER
-  // prepareSession's own initial save has already succeeded (mkdirSync's own `recursive: true`
-  // then throws EEXIST on every later call, since the path exists but is not a directory) —
-  // deterministic and cross-platform, unlike trying to fill a real disk. Mutation-tested live (WSL,
-  // reverting onSessionChange to a bare `saveSession(session, ctx.sessionsDir)`): the throw did NOT
-  // just hang silently — it escaped the React effect entirely and Ink's own renderer caught it and
-  // dumped a raw `EEXIST: file already exists, mkdir '.../sessions'` stack trace across the whole
-  // terminal (twice), which is worse than a bare hang, not better. Either way "could not save the
-  // session" (this fix's own message) never appeared and the pending `/mode` never completed —
-  // sawLine's own 20s deadline is what actually bounds that wait, not a separate race. Confirmed
-  // green again with the fix restored.
+  // onSessionChange used to call saveSession bare, with nothing to catch a throw. The session
+  // database is made read-only AFTER prepareSession's own initial save has already succeeded —
+  // deterministic and cross-platform, unlike trying to fill a real disk. A bare throw escaped the
+  // React effect entirely and Ink's own renderer dumped a raw stack trace across the terminal;
+  // "could not save the session" never appeared and the pending `/mode` never completed.
   test("a session-save failure surfaces as a command error instead of hanging forever (finding 1)", async () => {
     const scriptPath = join(dir, "child-save-failure.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
@@ -3556,22 +3567,22 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       // Sabotage AFTER the initial save succeeds — prepareSession's own unconditional saveSession
       // call, unrelated to the bug under test, must be given a real chance to land first.
-      rmSync(sessionsDir, { recursive: true, force: true });
-      writeFileSync(sessionsDir, "");
+      makeSessionStoreReadOnly(sessionsDir);
 
       child.stdin?.write("/mode");
       await sawLine("/mode");
       child.stdin?.write("\r");
       await sawLine("could not save the session");
 
-      // Still alive, not wedged: restore a writable sessions dir and confirm a later command still
+      // Still alive, not wedged: restore a writable store and confirm a later command still
       // completes normally.
-      rmSync(sessionsDir, { force: true });
+      restoreSessionStore(sessionsDir);
       child.stdin?.write("/mode");
       await sawLineTimes("/mode", 2);
       child.stdin?.write("\r");
       await sawLine("permission mode is now");
     } finally {
+      restoreSessionStore(sessionsDir);
       child.kill("SIGKILL");
     }
   }, 60_000);
@@ -3694,9 +3705,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // "a resumed session's reroute notice blames the last-confirmed provider" test for the
       // end-to-end consequence of that on the notice text.
       const sessionsDir = join(dir, "sessions");
-      const sessionFile = readdirSync(sessionsDir).find((f) => f.endsWith(".jsonl"));
-      if (sessionFile === undefined) throw new Error("no session file written yet");
-      const sessionId = sessionFile.replace(/\.jsonl$/, "");
+      const sessionId = requireSessionId(sessionsDir);
       const deadline = Date.now() + 5_000;
       let onDisk: { provider?: string };
       do {
@@ -5348,9 +5357,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(stdout).toContain("EXIT_CODE 0");
 
         const sessionsDir = join(dir, "sessions");
-        const sessionFiles = existsSync(sessionsDir) ? readdirSync(sessionsDir) : [];
-        expect(sessionFiles).toHaveLength(1);
-        const session = loadSession(sessionFiles[0]!.replace(/\.jsonl$/, ""), sessionsDir);
+        const ids = listSessionIds(sessionsDir);
+        expect(ids).toHaveLength(1);
+        const session = loadSession(ids[0]!, sessionsDir);
         expect(session.messages).not.toContainEqual({ role: "user", content: "" });
         expect(session.messages).toEqual([]);
       } finally {
@@ -5935,10 +5944,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("WROTE 1");
         await sawLine("done ·");
 
-        const files1 = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
-        expect(files1).toHaveLength(1);
-        const oldId = (files1[0] ?? "").slice(0, -".jsonl".length);
-        const oldSnapshot = readFileSync(join(sessionsDir, `${oldId}.jsonl`));
+        const ids1 = listSessionIds(sessionsDir);
+        expect(ids1).toHaveLength(1);
+        const oldId = ids1[0]!;
+        const oldSnapshot = loadSession(oldId, sessionsDir);
         const oldRef = `refs/seri/sessions/${oldId}`;
         const oldCommitBeforeClear = resolveRef(gitDir, oldRef);
         expect(oldCommitBeforeClear).toBeDefined();
@@ -5953,11 +5962,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // call for the new session has actually run — BEFORE printing "Started a new session", so
         // the new file is already on disk by the time that line appears above; this loop exists
         // only to read its id, not to wait for it.
-        const files2 = readdirSync(sessionsDir).filter(
-          (f) => f.endsWith(".jsonl") && f !== `${oldId}.jsonl`,
-        );
-        expect(files2).toHaveLength(1);
-        const newId = (files2[0] ?? "").slice(0, -".jsonl".length);
+        const ids2 = listSessionIds(sessionsDir).filter((id) => id !== oldId);
+        expect(ids2).toHaveLength(1);
+        const newId = ids2[0]!;
 
         child.stdin?.write("do another task");
         await sawLine("do another task");
@@ -5973,7 +5980,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         // The old session's file and ref are exactly as they were before /clear — the second tool
         // call did not also land there.
-        expect(readFileSync(join(sessionsDir, `${oldId}.jsonl`))).toEqual(oldSnapshot);
+        expect(loadSession(oldId, sessionsDir)).toEqual(oldSnapshot);
         expect(resolveRef(gitDir, oldRef)).toBe(oldCommitBeforeClear);
       } finally {
         child.kill("SIGKILL");
@@ -5984,11 +5991,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // throws when the persist promise rejects, but `dispatch({ type: "session-updated", ... })`
     // (tuiPresenter's own sessionUpdated) already ran synchronously before that rejection — so
     // `liveState.session.id` has already changed by the time onSubmit's `finally` runs, regardless
-    // of whether `clearCommand` itself ever reached its own `presenter.message(message)`. Sabotages
-    // `sessionsDir` (chmod, same mechanism as "a persistently failing persist is attempted once per
-    // turn," above) so the NEW session's `saveSession` call fails, and confirms the checkpointer
-    // still moved off the old session's ref despite that failure — this is what would go red if the
-    // rebind were still living in the `try` block it used to (onSubmit's own comment explains why).
+    // of whether `clearCommand` itself ever reached its own `presenter.message(message)`. Makes
+    // the session database read-only so the NEW session's `saveSession` call fails, and confirms
+    // the checkpointer still moved off the old session's ref despite that failure — this is what
+    // would go red if the rebind were still living in the `try` block it used to (onSubmit's own
+    // comment explains why).
     test("checkpointing still rebinds off the old session even when /clear's own persist fails", async () => {
       const scriptPath = join(dir, "child-clear-persist-failure.mjs");
       writeFileSync(scriptPath, childScriptClear(dir));
@@ -6005,17 +6012,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("WROTE 1");
         await sawLine("done ·");
 
-        const files1 = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
-        expect(files1).toHaveLength(1);
-        const oldId = (files1[0] ?? "").slice(0, -".jsonl".length);
+        const ids1 = listSessionIds(sessionsDir);
+        expect(ids1).toHaveLength(1);
+        const oldId = ids1[0]!;
         const oldRef = `refs/seri/sessions/${oldId}`;
         const oldCommitBeforeClear = resolveRef(gitDir, oldRef);
         expect(oldCommitBeforeClear).toBeDefined();
         const refsBeforeClear = listSessionRefs(gitDir);
 
-        // Read+execute only: saveSession's atomic write (a temp file plus a rename into this
-        // directory) can no longer create the new session's .jsonl.
-        chmodSync(sessionsDir, 0o500);
+        // Read-only database files: the next saveSession write cannot land.
+        makeSessionStoreReadOnly(sessionsDir);
 
         child.stdin?.write("/clear");
         await sawLine("/clear");
@@ -6026,8 +6032,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("could not save the session");
 
         // Restored before driving the next turn: this test is about whether checkpointing rebound,
-        // not about the session file ever landing on disk (it doesn't, and never will for this id).
-        chmodSync(sessionsDir, 0o700);
+        // not about the new session ever landing in the store (it doesn't, and never will for this id).
+        restoreSessionStore(sessionsDir);
 
         child.stdin?.write("do another task");
         await sawLine("do another task");
@@ -6048,7 +6054,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(newRefs).toHaveLength(1);
         expect(resolveRef(gitDir, newRefs[0] ?? "")).toBeDefined();
       } finally {
-        chmodSync(sessionsDir, 0o700);
+        restoreSessionStore(sessionsDir);
         child.kill("SIGKILL");
       }
     }, 60_000);
@@ -6135,12 +6141,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         // No new session was minted, and the one in-flight session's own messages are exactly what
         // they were before the refused /clear — a real rebind never touched anything.
-        const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
-        expect(files).toHaveLength(1);
-        const loaded = loadSession<ModelMessage>(
-          (files[0] ?? "").slice(0, -".jsonl".length),
-          sessionsDir,
-        );
+        const ids = listSessionIds(sessionsDir);
+        expect(ids).toHaveLength(1);
+        const loaded = loadSession<ModelMessage>(ids[0]!, sessionsDir);
         expect(loaded.messages).toEqual([{ role: "user", content: "do a task" }]);
       } finally {
         child.kill("SIGKILL");
@@ -6177,10 +6180,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         }
       }, 60_000);
 
-      // Complements the byte-identical `.jsonl` check in the "/clear rebinds checkpointing"
-      // describe above, at the message-array level instead of the raw file level: the old
-      // session's own conversation is exactly what it was before /clear, with nothing from the
-      // NEW session's own further turn mixed in.
+      // Complements the old-session snapshot check in the "/clear rebinds checkpointing"
+      // describe above, at the message-array level: the old session's own conversation is
+      // exactly what it was before /clear, with nothing from the NEW session's own further
+      // turn mixed in.
       test("the old session's messages are exactly its pre-/clear messages, none of the post-/clear turn", async () => {
         const scriptPath = join(dir, "child-clear-persist.mjs");
         writeFileSync(scriptPath, childScriptClear(dir));
@@ -6192,9 +6195,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
           await sawLine("WROTE 1");
           await sawLine("done ·");
 
-          const files1 = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
-          expect(files1).toHaveLength(1);
-          const oldId = (files1[0] ?? "").slice(0, -".jsonl".length);
+          const ids1 = listSessionIds(sessionsDir);
+          expect(ids1).toHaveLength(1);
+          const oldId = ids1[0]!;
           const preClearMessages = loadSession<ModelMessage>(oldId, sessionsDir).messages;
 
           child.stdin?.write("/clear");
