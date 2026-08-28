@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { capJson, classifyEditError, summarizeArgs, summarizeResult } from "../../src/trajectory/summarize";
+import {
+  capJson,
+  classifyEditError,
+  summarizeArgs,
+  summarizeResult,
+} from "../../src/trajectory/summarize";
 
 describe("summarizeArgs", () => {
   test("write_file stores path and byte count, not content", () => {

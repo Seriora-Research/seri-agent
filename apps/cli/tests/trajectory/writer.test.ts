@@ -1,10 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTrajectoryWriter, readTrajectory } from "../../src/trajectory/writer";
 
-function writerOpts(dir: string, extras: Partial<Parameters<typeof createTrajectoryWriter>[0]> = {}) {
+function writerOpts(
+  dir: string,
+  extras: Partial<Parameters<typeof createTrajectoryWriter>[0]> = {},
+) {
   return {
     dir,
     sessionId: "sess-1",
@@ -246,9 +257,7 @@ describe("createTrajectoryWriter", () => {
     const day = 24 * 60 * 60 * 1000;
     utimesSync(oldPath, new Date(now.getTime() - 31 * day), new Date(now.getTime() - 31 * day));
     try {
-      const writer = createTrajectoryWriter(
-        writerOpts(dir, { enabled: false, now: () => now }),
-      );
+      const writer = createTrajectoryWriter(writerOpts(dir, { enabled: false, now: () => now }));
       writer.recordLoopEvent({ type: "done", reason: "no-tool-call" });
       expect(readdirSync(dir)).toEqual([]);
       expect(readdirSync(parent)).toEqual(["trajectories"]);
