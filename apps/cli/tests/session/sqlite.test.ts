@@ -61,7 +61,8 @@ describe("SessionDatabase", () => {
     raw.close();
 
     expect(() => new SessionDatabase(configDir)).toThrow("newer than this seri binary");
-  });
+    // Windows CI: first SessionDatabase open + pragma round-trip was 3373ms on the same job.
+  }, 20_000);
 
   test("append and header updates retain message row ids while shrink removes only the tail", () => {
     withDatabase((database) => database.saveSession(state("changes", [{ n: 1 }])));

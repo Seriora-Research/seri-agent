@@ -178,6 +178,8 @@ describe("recent SQLite sessions", () => {
   );
 });
 
+// Windows CI: a cold SessionDatabase open was ~3.3s on the same job; this test opens three
+// (save, list, load) and bun's 5s default killed it at 5184ms.
 test("separate profile roots never see each other's sessions", () => {
   const parent = mkdtempSync(join(tmpdir(), "seri-profile-session-test-"));
   const first = join(parent, "first", "sessions");
@@ -196,4 +198,4 @@ test("separate profile roots never see each other's sessions", () => {
   } finally {
     rmSync(parent, { recursive: true, force: true });
   }
-});
+}, 20_000);

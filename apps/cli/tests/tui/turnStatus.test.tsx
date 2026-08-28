@@ -196,23 +196,28 @@ describe("TurnStatus: the key app.tsx supplies decides whether a new turn re-mou
     const setup = await createTestRenderer({ width: 40, height: 5 });
     mountedRenderers.push(setup);
     const root = createRoot(setup.renderer);
-    const nowSpy = spyOn(Date, "now");
+    const nowSpy = spyOn(globalThis.Date, "now");
     let setStartedAt: ((startedAt: number) => void) | undefined;
 
-    nowSpy.mockReturnValue(100_000);
-    root.render(<TurnStatusHost withKey onReady={(fn) => (setStartedAt = fn)} />);
-    await settle(setup);
-    setStartedAt?.(100_000);
-    await settle(setup);
-    expect(setup.captureCharFrame()).toContain("0s");
+    try {
+      nowSpy.mockReturnValue(100_000);
+      root.render(<TurnStatusHost withKey onReady={(fn) => (setStartedAt = fn)} />);
+      await settle(setup);
+      setStartedAt?.(100_000);
+      await settle(setup);
+      await settle(setup);
+      expect(setup.captureCharFrame()).toContain("0s");
 
-    // The next turn, with a genuinely different startedAt.
-    nowSpy.mockReturnValue(500);
-    setStartedAt?.(500);
-    await settle(setup);
+      // The next turn, with a genuinely different startedAt.
+      nowSpy.mockReturnValue(500);
+      setStartedAt?.(500);
+      await settle(setup);
+      await settle(setup);
 
-    expect(setup.captureCharFrame()).toContain("0s");
-    nowSpy.mockRestore();
+      expect(setup.captureCharFrame()).toContain("0s");
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   // The negative control: the identical transition, but with a key that does NOT change — proving
@@ -221,23 +226,28 @@ describe("TurnStatus: the key app.tsx supplies decides whether a new turn re-mou
     const setup = await createTestRenderer({ width: 40, height: 5 });
     mountedRenderers.push(setup);
     const root = createRoot(setup.renderer);
-    const nowSpy = spyOn(Date, "now");
+    const nowSpy = spyOn(globalThis.Date, "now");
     let setStartedAt: ((startedAt: number) => void) | undefined;
 
-    nowSpy.mockReturnValue(100_000);
-    root.render(<TurnStatusHost withKey={false} onReady={(fn) => (setStartedAt = fn)} />);
-    await settle(setup);
-    setStartedAt?.(100_000);
-    await settle(setup);
-    expect(setup.captureCharFrame()).toContain("0s");
+    try {
+      nowSpy.mockReturnValue(100_000);
+      root.render(<TurnStatusHost withKey={false} onReady={(fn) => (setStartedAt = fn)} />);
+      await settle(setup);
+      setStartedAt?.(100_000);
+      await settle(setup);
+      await settle(setup);
+      expect(setup.captureCharFrame()).toContain("0s");
 
-    nowSpy.mockReturnValue(500);
-    setStartedAt?.(500);
-    await settle(setup);
+      nowSpy.mockReturnValue(500);
+      setStartedAt?.(500);
+      await settle(setup);
+      await settle(setup);
 
-    // The reused instance's `now` is still 100_000 (the first mount's value, never re-initialized)
-    // against the new `startedAt` of 500 — a 99_500ms elapsed ("1m 39s"), not "0s".
-    expect(setup.captureCharFrame()).toContain("1m 39s");
-    nowSpy.mockRestore();
+      // The reused instance's `now` is still 100_000 (the first mount's value, never re-initialized)
+      // against the new `startedAt` of 500 — a 99_500ms elapsed ("1m 39s"), not "0s".
+      expect(setup.captureCharFrame()).toContain("1m 39s");
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
