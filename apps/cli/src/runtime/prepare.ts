@@ -280,8 +280,8 @@ export type PreparedRun = {
   // the whole entry rather than just `contextWindow` means driveLoop needs exactly one
   // `findCatalogEntry` call per turn instead of two identical ones for the same (modelId, provider).
   catalogEntry: ModelCatalogEntry | undefined;
-  // The (model, provider) pair the run actually resolved to, per resolveRoute (D2/D3,
-  // feature-plan.md's multi-provider-byok-phase-2) — NOT necessarily `session.model`/`.provider`,
+  // The (model, provider) pair the run actually resolved to, per resolveRoute —
+  // NOT necessarily `session.model`/`.provider`,
   // which is what the session merely REQUESTED. runTui's own `confirmedModel`/`lastPersistedModel`
   // must initialize from this, not from `session`: starting them from the requested pair while
   // turn 1 actually runs on a rerouted one trips their inequality guards on turn 1 and persists a
@@ -333,7 +333,7 @@ export type PreparedRun = {
 };
 
 // Shared by prepareSession's own non-TTY notice and runTui's runTurn (below) — the two used to
-// hand-duplicate this exact template literal (code-review finding, PR #73, round 2, item #8),
+// hand-duplicate this exact template literal,
 // differing only by a leading "↻ " on the TUI path (that one repeats per turn, so the arrow marks
 // it as a live event rather than the one-time startup notice prepareSession prints).
 //
@@ -520,7 +520,7 @@ export async function prepareSession(
       session.messages.push({ role: "user", content: ctx.taskText });
     }
 
-    // D3 (feature-plan.md): resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
+    // resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
     // stays a pure, environment-independent switch with its own test file.
     // Read here, before the routing decision that needs it: `getApiKey`'s own `loadConfig` call
     // does a bare `JSON.parse`, so a corrupted config.json throws SYNCHRONOUSLY — the same failure
@@ -610,9 +610,9 @@ export async function prepareSession(
     //
     // opencode solves this upstream of the call, looking the id up in a provider catalog and
     // failing with `ModelNotFoundError` plus did-you-mean suggestions before anything is stored.
-    // seri has no catalog until Stage 7a, so "pin only what answered" is the catalog-free half of
-    // that guarantee. A model the session already recorded is untouched: it earned its place the
-    // same way.
+    // seri still pins only a model that answered: a typo in SERI_MODEL must not land in
+    // config.json just because the catalog listed similar ids. A model the session already
+    // recorded is untouched. It earned its place the same way.
     saveSession(modelRecorded ? session : { ...session, model: undefined }, ctx.sessionsDir);
 
     // Checkpointing is enabled by exactly this call, which is also why rolling it back is a
@@ -620,12 +620,11 @@ export async function prepareSession(
     // the store lives entirely outside the user's repository.
     const { storeDir, worktree } = checkpointTarget(session, dirs(ctx));
 
-    // Read here and nowhere else. NOTE FOR A FUTURE SCHEDULER (docs/BUILD-PLAN.md, "Unattended
-    // permission surface" open item): an unattended run must NOT copy this line. Every entry in
-    // that file was written by a human answering a live prompt in a run they were watching; that
-    // is consent for that run, not standing consent for one on a timer. Seeding a scheduled run
-    // from here is docs/ARCHITECTURE.md:202's "base safety layer disabled on a timer" arriving
-    // through a file instead of a flag.
+    // Read here and nowhere else. An unattended scheduled run must not copy this line. Every
+    // entry in that file was written by a human answering a live prompt in a run they were watching.
+    // That is consent for that run, not standing consent for one on a timer. Seeding a scheduled
+    // run from here would disable the gate through a file instead of a flag. The daemon's
+    // scheduled path uses permissionMode read-only and an empty allowlist instead.
     const grants = loadGrants(ctx.permissionsDir, worktree, (msg) => printWarning(msg, warnSink));
     const allowedTools = effectiveTools(grants);
     const permissionMode = skipPermissions ? "auto" : session.permissionMode;

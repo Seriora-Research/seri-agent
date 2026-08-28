@@ -137,16 +137,16 @@ export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
 // `persist` is what actually writes a messages-updated session to disk — a callback rather than a
 // hardcoded `saveSession` call, because the TWO callers need different answers to "does driveLoop
 // own persistence for this session." The non-interactive path passes `(s) => saveSession(s,
-// ctx.sessionsDir)`, unchanged. The TUI path passes a no-op: MEDIUM-1 found that even a CORRECT
-// merge dispatched to the reducer still left a ~6ms window where this function's own direct write
-// (using the session the CURRENT turn started with) was the last word on disk, since the reducer's
-// own onSessionChange effect corrects it asynchronously, not synchronously — a crash, a fatal
-// Ctrl-C or a SIGTERM landing in that window still persisted a reverted /mode. A no-op here closes
-// the window entirely rather than narrowing it: the reducer (via App.tsx's onSessionChange) is the
-// ONLY writer on the TUI path, full stop.
+// ctx.sessionsDir)`, unchanged. The TUI path passes a no-op: even a correct merge dispatched to the
+// reducer still left a ~6ms window where this function's own direct write (using the session the
+// CURRENT turn started with) was the last word on disk, since the reducer's own onSessionChange
+// effect corrects it asynchronously, not synchronously. A crash, a fatal Ctrl-C or a SIGTERM
+// landing in that window still persisted a reverted /mode. A no-op here closes the window
+// entirely rather than narrowing it: the reducer (via App.tsx's onSessionChange) is the ONLY
+// writer on the TUI path, full stop.
 //
-// `approvalPrompt` is the other per-caller swap, findings 1+5 (thermo-nuclear structural review,
-// round 6): this used to be hardcoded to `makeApprovalPrompt(deps.createInterface)` inside this
+// `approvalPrompt` is the other per-caller swap: this used to be hardcoded to
+// `makeApprovalPrompt(deps.createInterface)` inside this
 // function, called on EVERY path including the TUI one — but makeApprovalPrompt opens its own
 // readline.Interface on process.stdin and has its own `rl.on("SIGINT", ...)`, which on the TUI
 // path fights Ink for stdin ownership (Ink's own useInput already owns raw mode there) and races
@@ -226,7 +226,7 @@ export async function driveLoop(
   let cost: CostReport | undefined;
   // Hoisted so this and runLoopFn's own `system` opt below are the exact same value. Recomputed
   // every driveLoop call (once per TUI turn, once per non-interactive process), from the RESOLVED
-  // model/provider (`route`, D3/D4 feature-plan.md) — never captured once at session start, so a
+  // model/provider (`route`) — never captured once at session start, so a
   // live /model switch OR a routing-priority reroute is reflected on the very next turn instead of
   // confabulated. `route`, not `session.model`/`.provider`: `session` carries what was REQUESTED,
   // and a rerouted turn's system prompt/cost provenance must name the model actually being called,
@@ -369,7 +369,7 @@ export async function driveLoop(
       get permissionMode() {
         return getPermissionMode();
       },
-      // The seed runLoop has accepted since PR #45 and nothing produced until now. A seed, not a
+      // A seed, not a
       // handle: the loop copies it (loop.ts:211) and growth comes back out as `tool-allowed`,
       // below.
       allowedTools,
@@ -378,14 +378,14 @@ export async function driveLoop(
       system,
       signal: controller.signal,
       maxIterations: maxTurns,
-      // HIGH-1: without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`
+      // Without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`
       // / `opts.provider === "groq" && opts.modelId && opts.catalog`) never fires and every `usage`
       // event's `cost` field is silently undefined — the run genuinely never computes a cost, no
       // matter what cost.ts itself does. No `?? "groq"` fallback needed here (a prior version had
       // one): `route` (PreparedRun's own field) is never optional — `resolveRoute` always returns a
       // concrete pair. `route.model`/`.provider`, not `session.model`/`.provider`: this is the
       // pair the call is ACTUALLY being made against (this function's own comment just above), and
-      // the two can differ from a routing-priority reroute (D2/D3) — using the requested pair here
+      // the two can differ from a routing-priority reroute. Using the requested pair here
       // would mis-tag a rerouted call's cost report with the wrong provider's pricing branch.
       provider: route.provider,
       modelId: route.model,
@@ -403,10 +403,10 @@ export async function driveLoop(
       prepared.trajectory.recordLoopEvent(event);
       if (event.type === "messages-updated") {
         // `persist` (this function's own comment above explains the two callers) is the ONLY
-        // write for this event now — MEDIUM-1: driveLoop used to ALSO call saveSession directly
-        // here, using the session THIS call started with, and rely on the TUI path's reducer to
-        // correct it moments later; that left a real, if narrow, crash/fatal-signal window where
-        // the stale write was the last one on disk. No direct saveSession call here anymore.
+        // write for this event now. driveLoop used to ALSO call saveSession directly here, using
+        // the session THIS call started with, and rely on the TUI path's reducer to correct it
+        // moments later. That left a real, if narrow, crash/fatal-signal window where the stale
+        // write was the last one on disk. No direct saveSession call here anymore.
         persist({ ...session, messages: event.messages });
         onEvent(event);
         continue;
