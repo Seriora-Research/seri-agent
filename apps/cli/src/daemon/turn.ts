@@ -4,6 +4,7 @@ import { createArchivistState } from "../memory/archivist";
 import { driveLoop, exitCodeFromDriveResult } from "../runtime/drive";
 import { prepareSession } from "../runtime/prepare";
 import { saveSession } from "../session/session";
+import type { SessionDatabase } from "../session/database";
 import type { CliDeps, RunContext } from "../cli";
 import type { ExecuteTurn } from "./sessionManager";
 
@@ -13,6 +14,7 @@ export function createAttendedExecuteTurn(opts: {
   checkpointsDir: string;
   permissionsDir: string;
   deps: CliDeps;
+  database: SessionDatabase;
 }): ExecuteTurn {
   return async (input) => {
     const ctx: RunContext = {
@@ -51,6 +53,10 @@ export function createAttendedExecuteTurn(opts: {
       });
     };
 
+    const archivistState = createArchivistState(
+      prepared.session,
+      opts.database.getArchivistCursor(input.sessionId),
+    );
     const result = await driveLoop(
       prepared,
       ctx,
@@ -60,7 +66,7 @@ export function createAttendedExecuteTurn(opts: {
       () => input.permissionMode,
       (session) => saveSession(session, ctx.sessionsDir),
       approvalPrompt,
-      createArchivistState(prepared.session),
+      archivistState,
       undefined,
       {
         signal: input.signal,
@@ -68,6 +74,7 @@ export function createAttendedExecuteTurn(opts: {
         composeSubagents: true,
       },
     );
+    opts.database.setArchivistCursor(input.sessionId, archivistState.messages.length);
     return { exitCode: exitCodeFromDriveResult(result) };
   };
 }

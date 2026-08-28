@@ -133,6 +133,8 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
   const sessionsDir = deps.sessionsDir ?? join(opts.configDir, "sessions");
   const checkpointsDir = deps.checkpointsDir ?? join(opts.configDir, "checkpoints");
   const permissionsDir = deps.permissionsDir ?? opts.configDir;
+  database.importLegacySessions(sessionsDir);
+  database.importLegacyTrajectories(join(opts.configDir, "trajectories"));
   const executeTurn =
     opts.executeTurn ??
     createAttendedExecuteTurn({
@@ -141,6 +143,7 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
       checkpointsDir,
       permissionsDir,
       deps,
+      database,
     });
   const runScheduled =
     opts.runScheduled ??

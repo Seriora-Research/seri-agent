@@ -36,6 +36,7 @@ type TurnHandle = {
 type SessionHandle = {
   tail: Promise<void>;
   idleTimer: ReturnType<typeof setTimeout> | undefined;
+  generation: number;
 };
 
 export const DEFAULT_IDLE_MS = 5 * 60 * 1000;
@@ -86,6 +87,7 @@ export class DaemonSessionManager {
     this.database.insertTurn(turnId, session.id, new Date().toISOString());
 
     const sessionHandle = this.sessionHandle(session.id);
+    sessionHandle.generation += 1;
     if (sessionHandle.idleTimer !== undefined) {
       clearTimeout(sessionHandle.idleTimer);
       sessionHandle.idleTimer = undefined;
@@ -161,7 +163,7 @@ export class DaemonSessionManager {
   private sessionHandle(sessionId: string): SessionHandle {
     const existing = this.sessions.get(sessionId);
     if (existing !== undefined) return existing;
-    const created = { tail: Promise.resolve(), idleTimer: undefined };
+    const created = { tail: Promise.resolve(), idleTimer: undefined, generation: 0 };
     this.sessions.set(sessionId, created);
     return created;
   }
@@ -255,9 +257,15 @@ export class DaemonSessionManager {
     const handle = this.sessions.get(sessionId);
     if (handle === undefined) return;
     handle.idleTimer = undefined;
-    await this.onIdleFlush?.(sessionId);
-    this.sessions.delete(sessionId);
-    this.evictedSessionIds.push(sessionId);
+    const generation = handle.generation;
+    handle.tail = handle.tail.then(async () => {
+      if (handle.generation !== generation) return;
+      await this.onIdleFlush?.(sessionId);
+      if (handle.generation !== generation) return;
+      this.sessions.delete(sessionId);
+      this.evictedSessionIds.push(sessionId);
+    });
+    handle.tail.catch(() => {});
   }
 
   private onSubscriberGone(handle: TurnHandle): void {
