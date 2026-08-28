@@ -129,10 +129,7 @@ import {
   exitCodeFromDriveResult,
 } from "./runtime/drive";
 import { awaitsReply } from "./session/awaitsReply";
-import {
-  type SessionState,
-  saveSession,
-} from "./session/session";
+import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";

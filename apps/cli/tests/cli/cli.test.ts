@@ -14,13 +14,7 @@ import { getConfigDir, getTrajectoriesDir } from "../../src/config/paths";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
-import {
-  addCost,
-  chooseInterfaceOutput,
-  run,
-  SLASH_COMMANDS,
-  tuiPresenter,
-} from "../../src/cli";
+import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS, tuiPresenter } from "../../src/cli";
 import { USAGE } from "../../src/cli/output";
 import { loadConfig, setConfigValue } from "../../src/config/config";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
@@ -37,7 +31,11 @@ import {
 } from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { CheckOutcome } from "../../src/verify/run";
-import { createTrajectoryWriter, readTrajectory, type TrajectoryWriter } from "../../src/trajectory/writer";
+import {
+  createTrajectoryWriter,
+  readTrajectory,
+  type TrajectoryWriter,
+} from "../../src/trajectory/writer";
 import { fakeRunLoop } from "./fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
@@ -2947,7 +2945,10 @@ describe("run (/effort)", () => {
     });
   }
 
-  function seedSession(id: string, overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
+  function seedSession(
+    id: string,
+    overrides: Partial<SessionState<ModelMessage>> = {},
+  ): SessionState<ModelMessage> {
     const session: SessionState<ModelMessage> = {
       id,
       cwd: ".",
@@ -2965,11 +2966,18 @@ describe("run (/effort)", () => {
   test("/effort <level> on a session with that tier legal sets session.reasoningEffort", async () => {
     const session = seedSession("eff-1");
 
-    await withReasoningFetch(() => invokeSlash("/effort", ["medium"], {
-      sessionsDir,
-      checkpointsDir: join(tmpConfigRoot, "checkpoints"),
-      configDir: getConfigDir(),
-    }, session));
+    await withReasoningFetch(() =>
+      invokeSlash(
+        "/effort",
+        ["medium"],
+        {
+          sessionsDir,
+          checkpointsDir: join(tmpConfigRoot, "checkpoints"),
+          configDir: getConfigDir(),
+        },
+        session,
+      ),
+    );
 
     expect(loadSession("eff-1", sessionsDir).reasoningEffort).toBe("medium");
   });
@@ -2982,11 +2990,16 @@ describe("run (/effort)", () => {
     console.log = (msg: string) => logs.push(String(msg));
     try {
       await withReasoningFetch(() =>
-        invokeSlash("/effort", ["extreme"], {
-          sessionsDir,
-          checkpointsDir: join(tmpConfigRoot, "checkpoints"),
-          configDir: getConfigDir(),
-        }, loadSession("eff-2", sessionsDir)),
+        invokeSlash(
+          "/effort",
+          ["extreme"],
+          {
+            sessionsDir,
+            checkpointsDir: join(tmpConfigRoot, "checkpoints"),
+            configDir: getConfigDir(),
+          },
+          loadSession("eff-2", sessionsDir),
+        ),
       );
     } finally {
       console.log = originalLog;
@@ -3000,11 +3013,16 @@ describe("run (/effort)", () => {
     const session = seedSession("eff-3", { reasoningEffort: "high" });
 
     await withReasoningFetch(() =>
-      invokeSlash("/effort", ["auto"], {
-        sessionsDir,
-        checkpointsDir: join(tmpConfigRoot, "checkpoints"),
-        configDir: getConfigDir(),
-      }, session),
+      invokeSlash(
+        "/effort",
+        ["auto"],
+        {
+          sessionsDir,
+          checkpointsDir: join(tmpConfigRoot, "checkpoints"),
+          configDir: getConfigDir(),
+        },
+        session,
+      ),
     );
 
     expect(loadSession("eff-3", sessionsDir).reasoningEffort).toBeUndefined();
@@ -3018,11 +3036,16 @@ describe("run (/effort)", () => {
     console.log = (msg: string) => logs.push(String(msg));
     try {
       await withReasoningFetch(() =>
-        invokeSlash("/effort", [], {
-          sessionsDir,
-          checkpointsDir: join(tmpConfigRoot, "checkpoints"),
-          configDir: getConfigDir(),
-        }, session),
+        invokeSlash(
+          "/effort",
+          [],
+          {
+            sessionsDir,
+            checkpointsDir: join(tmpConfigRoot, "checkpoints"),
+            configDir: getConfigDir(),
+          },
+          session,
+        ),
       );
     } finally {
       console.log = originalLog;
@@ -3680,7 +3703,9 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
 
     // Resolving to the most recent session and failing on the sha is the proof: taken as a session
     // id, "/restore" would have failed to load a session instead.
-    await expect(slashCall("/restore", ["deadbeef"])).rejects.toThrow(/deadbeef is not a checkpoint/);
+    await expect(slashCall("/restore", ["deadbeef"])).rejects.toThrow(
+      /deadbeef is not a checkpoint/,
+    );
   }, 15_000);
 
   test("a rewind invalidates the anchors recorded before it, instead of slicing into a rebuilt array", async () => {

@@ -123,9 +123,7 @@ export function printPreApproved(
   tools: readonly string[],
   sink: (line: string) => void = console.log,
 ): void {
-  sink(
-    `Pre-approved without asking: ${tools.map(escapeControlChars).join(", ")} — /permissions`,
-  );
+  sink(`Pre-approved without asking: ${tools.map(escapeControlChars).join(", ")} — /permissions`);
 }
 
 // One line-shape, one place: cli.ts's consolePresenter and tuiPresenter both call this — the
