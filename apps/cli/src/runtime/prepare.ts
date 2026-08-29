@@ -27,7 +27,7 @@ import { DEFAULT_PROVIDER, resolveDefaultModel } from "../provider/defaults";
 import { configuredProviders, PROVIDER_DISPLAY_NAMES } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
 import { appliedReasoningEffort } from "../provider/reasoning";
-import { type ResolvedRoute, resolveLegalReasoningTiers, resolveRoute } from "../provider/routing";
+import { type ResolvedRoute, resolveRoute } from "../provider/routing";
 import { createToolDefinitions } from "../provider/tools";
 import {
   findMostRecentSession,
@@ -545,22 +545,6 @@ export async function prepareSession(
       deps,
       warnSink,
     );
-    // --effort's own validation, deferred to here rather than parseCliArgs (ParsedArgs.effort's
-    // own comment): legal tiers are route-dependent, and `route`/`catalog` only exist from this
-    // point on. Throws, like every other fallible call in this function, so it goes through the
-    // SAME catch below (fatalDuringTui) rather than a bespoke early return — a `return
-    // usageError(...)` here would print straight to console even mid-TTY-mount, bypassing
-    // fatalDuringTui's own preMountMessages flush and renderer teardown.
-    if (ctx.effortFlag !== undefined) {
-      const legalTiers = resolveLegalReasoningTiers(route, catalog);
-      if (!legalTiers.includes(ctx.effortFlag)) {
-        throw new Error(
-          legalTiers.length === 0
-            ? "Invalid --effort value: the resolved model has no reasoning-effort tiers available."
-            : `Invalid --effort value: ${ctx.effortFlag}. Legal tiers: ${legalTiers.join(", ")}.`,
-        );
-      }
-    }
     // A rerouted OR gateway-served pair is never silent — the piped/non-interactive path gets
     // the notice here, gated on `!isTTY` — runTui's own runTurn (below) prints the TUI equivalent
     // into the transcript once per turn for either case, and this call ALSO runs on the TUI path
@@ -583,13 +567,8 @@ export async function prepareSession(
     // `reasoningEffort` override that the currently resolved route no longer considers legal is
     // dropped silently by loop.ts's own re-validation gate — surfaced here so this path is never
     // quieter than the TUI's, gated the same `!isTTY` way the reroute/gateway notices just above
-    // are (runTurn prints the TUI equivalent into the transcript instead). `ctx.effortFlag ===
-    // undefined` guards against a false positive: when `--effort` is given, it wins outright over
-    // `session.reasoningEffort` (driveLoop's own `??` chain) — the turn actually runs on the flag's
-    // tier, so a stale/illegal `session.reasoningEffort` sitting unused underneath it must not be
-    // reported as dropped.
+    // are (runTurn prints the TUI equivalent into the transcript instead).
     if (
-      ctx.effortFlag === undefined &&
       session.reasoningEffort !== undefined &&
       appliedReasoningEffort(session.reasoningEffort, catalogEntry) === undefined &&
       !isTTY

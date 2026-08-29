@@ -148,7 +148,7 @@ describe("resolveRoute", () => {
       viaGateway: false,
     });
     expect(() => getModel(route.model, route.provider, "test-session-id")).toThrow(
-      "OPENROUTER_API_KEY is not set. Run: seri config set OPENROUTER_API_KEY <your-key>",
+      "OPENROUTER_API_KEY is not set. Set it as an environment variable and re-run.",
     );
   });
 

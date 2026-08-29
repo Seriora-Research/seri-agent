@@ -1099,13 +1099,11 @@ function childScriptSetup(dir: string, extraEnv: Record<string, string> = {}): s
   ].join("\n");
 }
 
-// Stage C (cli-commands-to-tui feature-plan.md): /login, /signup and /logout's own script.
-// `login`/`logout` are faked via the SAME injection seam `handleAuthCommand` already uses for the
-// non-interactive `seri login`/`seri logout` (argv.test.ts's own "run (login/signup/logout)"
-// describe block) — the fake stands in for the real WorkOS device flow the way every other
-// runLoopFake in this file stands in for a real model round-trip, and calls the real
-// saveAuthSession/loadAuthSession/clearAuthSession (dynamically imported below) so auth.json on
-// disk is genuinely written/read/cleared, not merely asserted on captured stdout.
+// /login, /signup and /logout's own script.
+// `login`/`logout` are faked via CliDeps so the child never hits the real WorkOS device flow.
+// The fake still calls saveAuthSession/loadAuthSession/clearAuthSession (dynamically imported
+// below) so auth.json on disk is genuinely written/read/cleared, not merely asserted on captured
+// stdout.
 function childScriptAuth(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -4713,7 +4711,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         const { stdout } = await exited;
         expect(stdout).toContain("EXIT_CODE 1");
         expect(stdout).toContain(
-          "GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>",
+          "GROQ_API_KEY is not set. Set it as an environment variable and re-run.",
         );
         expect(stdout).not.toContain("Pick a default model to continue.");
       } finally {
@@ -4937,7 +4935,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // message a non-interactive missing-key run does — this assertion is the negative
         // control: it fails against that old silent `return 1`.
         expect(stdout).toContain(
-          "GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>",
+          "GROQ_API_KEY is not set. Set it as an environment variable and re-run.",
         );
       } finally {
         child.kill("SIGKILL");

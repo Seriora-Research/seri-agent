@@ -70,8 +70,8 @@ body:
         The exact commands, in order. If it involves a prompt to the agent, include the
         prompt verbatim — behaviour often depends on it.
       placeholder: |
-        1. seri config set GROQ_API_KEY ...
-        2. seri "..."
+        1. seri "..."
+        2. /setup, add a key
         3. ...
     validations:
       required: true

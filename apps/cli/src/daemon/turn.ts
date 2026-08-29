@@ -25,8 +25,6 @@ export function createAttendedExecuteTurn(opts: {
       checkpointsDir: opts.checkpointsDir,
       permissionsDir: opts.permissionsDir,
       configDir: opts.configDir,
-      effortFlag: undefined,
-      detailFlag: false,
       cwd: input.cwd,
     };
     const prepared = await prepareSession(ctx, opts.deps, false, false);

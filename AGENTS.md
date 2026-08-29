@@ -53,14 +53,15 @@ daemon/transport layer is expected to consume the same generator.
 Flags are flags in any position and remaining positionals are the task; `--` is the documented
 escape for a task that contains what looks like a flag (`seri -- fix the --help output`). Exit
 codes: **0** a request was served or the turn finished, **1** the turn did not finish, **2** a bad
-invocation (parseArgs rejected it, or no task was given; `config`'s own invocation errors also
-exit 2). `--max-turns <n>` (default 500) is the CLI-facing knob for `runLoop`'s own
-`maxIterations` option; the CLI also sets a handful of other `runLoop` options that carry routing/
-cost/reasoning context rather than user-facing flags (`provider`, `modelId`, `catalog`,
-`reasoningEffort`) — see `runLoop`'s own opts type (`apps/cli/src/loop/loop.ts`) for the full list.
-`--help`/
-`--version`/`--selftest` are checked before any subcommand dispatch, so `seri login --help` (and
-`signup`/`logout`) prints seri's own usage rather than reaching the subcommand.
+invocation (parseArgs rejected it, or no task was given). `--max-turns <n>` (default 500) is the
+CLI-facing knob for `runLoop`'s own `maxIterations` option; the CLI also sets a handful of other
+`runLoop` options that carry routing/cost/reasoning context rather than user-facing flags
+(`provider`, `modelId`, `catalog`, `reasoningEffort`) — see `runLoop`'s own opts type
+(`apps/cli/src/loop/loop.ts`) for the full list. After `--help`/`--version`/`--selftest`, argv
+only launches: `seri serve`, `seri exec`, and a task (or a TTY idle TUI). `login`/`signup`/`logout`,
+`config`, `permissions`, `usage`, and any `seri /slash` are not verbs. A positional `/foo` is
+prompt text. `--continue`, `--resume`, `--max-turns`, `--profile`,
+`--dangerously-skip-permissions`, and `--` stay.
 
 **Cancellation belongs to the consumer.** `runLoop` accepts an optional `AbortSignal` and never
 constructs one — `apps/cli/src/cli.ts` owns an `AbortController` per run. The signal reaches
@@ -82,9 +83,7 @@ nothing is running (between turns) finds the slot already empty and is immediate
 completes — it returns to awaiting input for another task or slash command, indefinitely; the
 only graceful exit is `/exit` (an exact match — trailing words show a command-error instead of
 quitting, the same as every other TUI slash command's own `accepts()` guard failing shows a
-command-error rather than silently falling through to a task; that fallback is the
-NON-INTERACTIVE `handleSlashCommand`'s own behavior for input its table doesn't match at all, a
-different path) or Ctrl-D at the input box. If nothing
+command-error rather than silently falling through to a task) or Ctrl-D at the input box. If nothing
 is running, both unmount the TUI immediately and resolve the run with a normal exit code and the
 same final `printUsage` token/cost summary the non-interactive path prints, accumulated across
 every turn the session ran (exit 0, the same as any other completed `no-tool-call` turn). If a
@@ -114,7 +113,7 @@ session starts in `approve-each`, not `read-only`: native Windows does not enfor
 sandbox, so the gate is the whole Base layer and a default that does not ask is a default
 that writes unattended. Answering `a`/always at the prompt adds the tool to an allowlist so
 `approve-each` isn't an approve-*every*-call mode; for `write_file`/`edit` that grant also
-persists across processes (`seri permissions list|remove`, `<configDir>/permissions.yaml`).
+persists across processes (`/permissions`, `<configDir>/permissions.yaml`).
 **`bash`/`powershell` never get an "always" option, run-scoped or persisted** — a grant keyed
 on a tool name says nothing about what a shell command will do. Neither tier survives a cycle
 into `read-only`. `seri --dangerously-skip-permissions` maps to `auto` for that run only, never
@@ -164,8 +163,7 @@ share an id across providers) has a key, that sibling is used instead, native pr
 over an aggregator (Groq/OpenRouter); an explicit `/model` pick always wins over this if its own
 provider has a key, and a reroute is announced once per turn in the transcript. `/model`'s picker
 shows every route one model is reachable through, adjacently, with a `your key`/`no key` column.
-`/setup` (inside the TUI) lists, adds, replaces and removes a BYOK key per provider — the
-in-TUI equivalent of `seri config set`, with one lightweight `generateText` probe rejecting a key
+`/setup` (inside the TUI) lists, adds, replaces and removes a BYOK key per provider, with one lightweight `generateText` probe rejecting a key
 only on a 401/403; everything else stores it anyway with a warning, since an unverifiable-but-wrong
 key still fails loudly on first real use, same as before this existed. All five providers' model metadata (context
 window, pricing, tool-call/reasoning support) comes from a models.dev-sourced catalog
@@ -179,11 +177,10 @@ visibly different line for each. API keys resolve from env var first, then
 `apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`. A non-default profile
 (`--profile <name>` or `SERI_PROFILE`, the flag wins) puts config.json, auth.json,
 permissions.yaml, sessions/ and checkpoints/ under `<root>/<profile>/` instead; the vendored
-`rg/` cache stays shared across every profile. `seri config
-set|list|unset` (`apps/cli/src/config/commands.ts`) manages that file; it's written
+`rg/` cache stays shared across every profile. `/setup` and `/config` write that file; it's written
 owner-only and via write-then-rename, since it holds API keys and a partial write
-would break every later command's `loadConfig`. `list` masks values and flags any
-shadowed by an env var, because `getApiKey` prefers `process.env`.
+would break every later command's `loadConfig`. Masked values and env-shadow flags live in
+`/setup` rows, because `getApiKey` prefers `process.env`.
 
 # Seri Code Review Guidelines
 

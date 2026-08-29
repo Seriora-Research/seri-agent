@@ -731,7 +731,7 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
     deleted: finalDeleted,
     preserved: finalPreserved,
     preUndoCommit,
-    recoverCommand: `seri --resume ${opts.sessionId} /restore ${preUndoCommit}`,
+    recoverCommand: `/restore ${preUndoCommit}`,
   };
 }
 

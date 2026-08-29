@@ -21,7 +21,6 @@ import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFi
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
 import { login as loginReal, logout as logoutReal } from "./auth/commands";
-import { getWorkosClientId } from "./auth/deviceFlow";
 import {
   appendBarrier,
   type Checkpointer,
@@ -29,7 +28,6 @@ import {
   type RestorePlan,
   type RestoreResult,
 } from "./checkpoint/checkpoint";
-import { projectRoot } from "./checkpoint/shadowGit";
 import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
   assertTuiHandlers,
@@ -54,7 +52,6 @@ import {
   undoPlanLines,
   usageError,
 } from "./cli/output";
-import { configCommand as configCommandReal } from "./config/commands";
 import {
   loadConfig,
   loadReasoningEffortConfig,
@@ -96,7 +93,6 @@ import {
 } from "./memory/archivist";
 import { decideMemoryCommand } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
-import { permissionsCommand as permissionsCommandReal } from "./permissions/commands";
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
 import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
@@ -132,13 +128,7 @@ import {
   exitCodeFromDriveResult,
 } from "./runtime/drive";
 import { awaitsReply } from "./session/awaitsReply";
-import {
-  findMostRecentSession,
-  findMostRecentSessionForCwd,
-  loadSession,
-  type SessionState,
-  saveSession,
-} from "./session/session";
+import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
@@ -153,7 +143,6 @@ export { addCost, addTokens };
 
 import {
   bindSession,
-  createSessionTrajectory,
   dirs,
   fatalDuringTui,
   gatewayNotice,
@@ -219,8 +208,6 @@ export type CliDeps = {
   authConfigDir?: string;
   login?: typeof loginReal;
   logout?: typeof logoutReal;
-  configCommand?: typeof configCommandReal;
-  permissionsCommand?: typeof permissionsCommandReal;
   usageCommand?: typeof runUsageCommandReal;
   startDaemon?: typeof startDaemonReal;
   executeTurn?: ExecuteTurn;
@@ -228,9 +215,8 @@ export type CliDeps = {
   onIdleFlush?: (sessionId: string, signal: AbortSignal) => Promise<void>;
   waitForServe?: () => Promise<void>;
   fetch?: typeof fetch;
-  // The directory holding permissions.yaml. Deliberately NOT reusing `authConfigDir`: that name is
-  // already stretched across auth AND `seri config`, and a third consumer that is neither would
-  // make it mean nothing. Same shape as sessionsDir/checkpointsDir, defaulting to getConfigDir().
+  // The directory holding permissions.yaml. Not `authConfigDir`: that name already covers auth
+  // and TUI `/config`. Same shape as sessionsDir/checkpointsDir, defaulting to getConfigDir().
   permissionsDir?: string;
   grep?: typeof grepReal;
   createInterface?: () => Interface;
@@ -249,47 +235,41 @@ export type CliDeps = {
 
 // The presentation half of the decision/presentation split (research-spec) for /mode, /undo,
 // /restore and /rewind: the DECISION is one of the pure functions in tui/commands.ts (Phase 2) —
-// this is only how the result is shown, with two implementations mirroring ApprovalPrompt's own
-// two-implementation shape. consolePresenter (below) is what every command used, inline, before
-// this refactor — console.log, byte-for-byte unchanged; tuiPresenter (near the TUI entry point
-// further down) dispatches into the live transcript instead. `restore` mirrors what /undo and
-// /restore return (`{plan, message}` — RestoreResult is a RestorePlan plus the recovery commit);
-// `sessionUpdated` is only ever called by /mode and /rewind, the two commands that actually change
-// the session — /undo and /restore never touch it, so they never call it. `onPlan` is /undo and
-// /restore's own pre-mutation report (output.ts's own documented guarantee on undoPlanLines:
-// "before the restore happens, not after") — threaded through to decideUndo/decideRestore
-// (tui/commands.ts) rather than folded into `restore`, which only ever sees the FINAL result.
+// this is only how the result is shown. tuiPresenter (near the TUI entry point further down) is
+// the sole implementation now — the console.log-based consolePresenter this interface used to have
+// a second implementation for was deleted once the non-interactive slash dispatch it backed
+// (handleSlashCommand) was removed by the launch-only argv refactor; every command is reached only
+// through the TUI. `restore` mirrors what /undo and /restore return (`{plan, message}` —
+// RestoreResult is a RestorePlan plus the recovery commit); `sessionUpdated` is only ever called by
+// /mode and /rewind, the two commands that actually change the session — /undo and /restore never
+// touch it, so they never call it. `onPlan` is /undo and /restore's own pre-mutation report
+// (output.ts's own documented guarantee on undoPlanLines: "before the restore happens, not after")
+// — threaded through to decideUndo/decideRestore (tui/commands.ts) rather than folded into
+// `restore`, which only ever sees the FINAL result.
 //
-// `sessionUpdated` OWNS persistence, not optional: it is the only thing that ever calls
-// saveSession on the non-interactive path (consolePresenter's own implementation) or, on the TUI
-// path, the only thing that dispatches session-updated at all — the reducer's own onSessionChange
-// effect is what actually persists there. Before this, cycleModeCommand/rewindCommand called
-// saveSession directly AND called sessionUpdated, the exact "caller keeps its own copy" shape
-// MEDIUM-1 was opened to eliminate for driveLoop, left standing here — not a live race (nothing
-// else wrote in between on either path), but the same shape as a bug five rounds went into
-// closing does not get to stand next to a comment (driveLoop's own, and this file's) claiming the
-// reducer is the ONLY writer on the TUI path.
+// `sessionUpdated` OWNS persistence, not optional: it is the only thing that dispatches
+// session-updated — the reducer's own onSessionChange effect is what actually persists.
+// cycleModeCommand/rewindCommand used to call saveSession directly AND call sessionUpdated, the
+// exact "caller keeps its own copy" shape MEDIUM-1 was opened to eliminate for driveLoop, left
+// standing here — not a live race (nothing else wrote in between), but the same shape as a bug
+// five rounds went into closing does not get to stand next to a comment (driveLoop's own, and this
+// file's) claiming the reducer is the ONLY writer on the TUI path.
 //
-// Returns `Promise<void>`, genuinely awaitable — not just typed that way for form. On the
-// non-interactive path (consolePresenter) the underlying saveSession call is already
-// synchronous, so the promise settles immediately either way. On the TUI path (tuiPresenter) it
-// does NOT settle until the reducer's own onSessionChange effect actually runs and persists that
-// session — the fix for a real gap found by code review: rewindCommand used to call
-// `recordBarrier()` right after `sessionUpdated(next)` on the strength of a comment claiming the
-// truncation was "already persisted by this point," true on the non-interactive path but not on
-// the TUI path, where sessionUpdated only ever dispatched (persistence was, and still is, effect-
-// driven — see onSessionChange's own comment). A crash/kill in that window could leave a barrier
-// durably recorded pointing at a truncation that never reached disk, exactly what finding 9 was
-// supposed to prevent. Making this awaitable — not adding a second writer, the effect is still
-// the only one — is what lets a caller that needs the ordering (rewindCommand) actually get it.
+// Returns `Promise<void>`, genuinely awaitable — not just typed that way for form. It does NOT
+// settle until the reducer's own onSessionChange effect actually runs and persists that session —
+// the fix for a real gap found by code review: rewindCommand used to call `recordBarrier()` right
+// after `sessionUpdated(next)` on the strength of a comment claiming the truncation was "already
+// persisted by this point," which was never true here — sessionUpdated only ever dispatched
+// (persistence was, and still is, effect-driven — see onSessionChange's own comment). A crash/kill
+// in that window could leave a barrier durably recorded pointing at a truncation that never reached
+// disk, exactly what finding 9 was supposed to prevent. Making this awaitable is what lets a caller
+// that needs the ordering (rewindCommand) actually get it.
 type CommandPresenter = {
   message: (text: string) => void;
   onPlan: (plan: RestorePlan) => void;
   restore: (result: { plan: RestoreResult; message: string }) => void;
   sessionUpdated: (next: SessionState<ModelMessage>) => Promise<void>;
-  // /clear's own hook: wipes whatever is rendering the transcript. Only meaningful where something
-  // is actually rendered — the non-interactive path has no live transcript to wipe (consolePresenter's
-  // own no-op below).
+  // /clear's own hook: wipes whatever is rendering the transcript.
   transcriptCleared: () => void;
   // Reports a compaction summarizer round-trip's real token spend, which does not flow through
   // driveLoop's own usage fold (compactCommand never runs inside driveLoop) and would otherwise be
@@ -299,20 +279,17 @@ type CommandPresenter = {
   // (loop.ts's comment on `"compacted" has no cost of its own`).
   usageAccrued: (usage: LanguageModelUsage) => void;
   // /compact's own cancellation report — the SIGINT-exit-code contract (run()'s own comment on why
-  // it re-raises rather than exiting plainly) applies to a cancelled /compact too, but only on the
-  // non-interactive path: consolePresenter re-raises the signal after reporting, matching
-  // driveLoop's own re-raise; tuiPresenter only appends a transcript line, matching the LOW-J
-  // precedent (a per-turn cancel returns control to the input prompt, not to process death).
+  // it re-raises rather than exiting plainly) applies to a cancelled /compact too; tuiPresenter only
+  // appends a transcript line, matching the LOW-J precedent (a per-turn cancel returns control to
+  // the input prompt, not to process death).
   cancelled: (signal: NodeJS.Signals) => void;
   // /compact's own hook, read at persist time rather than trusted from its caller's pre-await
   // snapshot: compactCommand holds two real awaits (the catalog/plan fetch, the summarizer's own
   // round trip) between reading `session` and building its result, and /mode is deliberately NOT
   // gated by `turnInFlight` while /compact runs (SlashCommand's own comment on why /mode is exempt)
   // — so a /mode change landed mid-compact would otherwise be overwritten when /compact spreads
-  // its own stale `session` back out. consolePresenter has nothing else running concurrently to
-  // race, so it just echoes back whatever it was constructed with; tuiPresenter reads runTui's own
-  // `liveState.session` (this file's own comment on why that, not a closure, is the live source of
-  // truth on the TUI path).
+  // its own stale `session` back out. tuiPresenter reads runTui's own `liveState.session` (this
+  // file's own comment on why that, not a closure, is the live source of truth on the TUI path).
   currentSession: () => SessionState<ModelMessage>;
 };
 
@@ -338,52 +315,24 @@ type SlashCommand = {
   // place") — a future command that mutates run state can't get silently left ungated by being
   // added here and nowhere else.
   mutatesRunState?: true;
-  // Whether the bare (no `--resume`) form must resolve within the CURRENT process's cwd rather
-  // than the plain most-recent-mtime pick across every project sharing `sessionsDir` — set only on
-  // /clear, which mints a brand-new session carrying the resolved one's `cwd` forward verbatim
-  // (decideClear's own comment). /undo, /rewind and /restore deliberately keep the plain lookup:
-  // they act on the resolved session's OWN recorded cwd regardless of where the terminal currently
-  // sits (handleSlashCommand's own comment on that), so a cross-project pick there is not the same
-  // hazard it is for /clear. A field on this same table, not a name check in handleSlashCommand —
-  // this table's own comment above on why a second, table-external check is what lets a future
-  // command with the same need go unhandled by construction rather than by remembering to add it.
   scopeTargetToCwd?: true;
-  // /usage is the only command that consumes PARSE_OPTIONS.detail. `seri /usage --detail` has
-  // --detail stripped from positionals (flags are flags in any position), so handleSlashCommand
-  // rehydrates it from RunContext.detailFlag when this is set.
-  readsDetailFlag?: true;
 } & (
   | {
-      // Session-required commands: `run` operates on a resumed session, so handleSlashCommand
-      // (below) resolves one — an explicit --resume id or the most recent session — before calling
-      // it, and fails with "No session to run <name> against" when none exists.
       needsSession?: true;
-      // `presenter` is optional and defaults to consolePresenter at each command's own definition
-      // (below) — handleSlashCommand's call site (unchanged) never passes one; the TUI entry
-      // point's does. `void | Promise<void>`, not just `void`: cycleModeCommand/rewindCommand are
-      // `async` now (they await presenter.sessionUpdated's own promise — CommandPresenter's own
-      // comment), undo/restoreCommand are not and never need to be. Both call sites await this
-      // either way, a no-op for the ones that were never async.
       run: (
         session: SessionState<ModelMessage>,
         args: string[],
         dirs: CommandDirs,
-        presenter?: CommandPresenter,
+        presenter: CommandPresenter,
         deps?: CliDeps,
       ) => void | Promise<void>;
     }
   | {
-      // /memory, /trajectory, /usage: I/O is keyed on configDir (or the hosted gateway), never on
-      // a session — routing them through the session-required branch meant `seri /memory pending`
-      // on a fresh profile failed with "No session to run /memory against" and exited 1, the same
-      // class of bug /exit's own fix (this table's comment, below) addresses. This variant's `run`
-      // drops the session parameter entirely rather than accepting one it would never read, so
-      // handleSlashCommand can skip session resolution for it by construction, not by convention.
       needsSession: false;
       run: (
         args: string[],
         dirs: CommandDirs,
-        presenter?: CommandPresenter,
+        presenter: CommandPresenter,
         deps?: CliDeps,
       ) => void | Promise<void>;
     }
@@ -412,7 +361,6 @@ function sessionSlash(
       run,
       ...(meta.mutatesRunState === true ? { mutatesRunState: true as const } : {}),
       ...(meta.scopeTargetToCwd === true ? { scopeTargetToCwd: true as const } : {}),
-      ...(meta.readsDetailFlag === true ? { readsDetailFlag: true as const } : {}),
     },
   ];
 }
@@ -432,15 +380,12 @@ function sessionSlashNoSession(
       needsSession: false,
       run,
       ...(meta.mutatesRunState === true ? { mutatesRunState: true as const } : {}),
-      ...(meta.readsDetailFlag === true ? { readsDetailFlag: true as const } : {}),
     },
   ];
 }
 
 // Commands that operate on the resume target rather than being a task for the model. The name
 // list lives in commandCatalog.ts; this Map is the session slice plus each command's run.
-// Dispatch in `run()` shares resume-target resolution and error reporting. Handlers throw to
-// report a failure; the caller turns that into a message and a non-zero exit.
 //
 // A Map rather than an object literal, because an object literal inherits Object.prototype and a
 // lookup keyed on user input walks it: `SLASH_COMMANDS["toString"]` returned a function, so
@@ -468,58 +413,11 @@ for (const meta of sessionMeta()) {
   }
 }
 
-// MEDIUM-F: /exit is deliberately NOT a SLASH_COMMANDS entry — it used to be, with a no-op `run`
-// for the non-interactive path, but handleSlashCommand (below) resolves a resume target for
-// anything it matches: `seri /exit` with no session printed a nonsense "No session to run /exit
-// against" and exited 1, and with a session it silently ran the no-op and exited 0 — the task
-// never reached the model, exactly the hijack SlashCommand's own comment above says this table
-// exists to prevent. /exit only means anything to a live TUI (there is nothing to "exit" in a
-// process that is about to end anyway), so it is intercepted solely in runTui's own onSubmit,
-// below, and documented in USAGE without a table entry backing it.
-
-// The non-interactive presenter: exactly what every command printed inline before this refactor
-// (console.log, plus undoPlanLines/recoveryLines — via their own default console.log sink — for
-// /undo and /restore) — used by handleSlashCommand, unchanged observable output. A factory, not a
-// plain object, because `sessionUpdated` now owns persistence (CommandPresenter's own comment) and
-// needs `dirs` to call saveSession with — closed over here rather than threaded through a second
-// way. `onPlan` is what makes the console path print the plan BEFORE undoFiles/restoreCommit
-// mutate anything, restoring output.ts's own documented guarantee.
-function consolePresenter(
-  dirs: CommandDirs,
-  // Only /compact ever calls `.currentSession()`, and only compactCommand's own default parameter
-  // (below) passes one — every other command's `consolePresenter(dirs)` call site omits it and
-  // never invokes the field, so the cast in `currentSession` below is safe by construction, the
-  // same shape as compactCommand's own `cancelledSignal` cast.
-  session?: SessionState<ModelMessage>,
-): CommandPresenter {
-  return {
-    message: (text) => console.log(text),
-    onPlan: (plan) => undoPlanLines(plan),
-    restore: ({ plan, message }) => {
-      console.log(message);
-      if (plan.restored.length > 0 || plan.deleted.length > 0) recoveryLines(plan);
-    },
-    // Trivially awaitable: saveSession is already synchronous, so this settles on the same tick
-    // it is called — `async` only to satisfy CommandPresenter's own contract (its comment).
-    sessionUpdated: async (next) => saveSession(next, dirs.sessionsDir),
-    // Explicit no-op, not an ANSI screen-clear: the user's own scrollback is not seri's to erase,
-    // and clearing it would corrupt piped/redirected output.
-    transcriptCleared: () => {},
-    usageAccrued: (usage) =>
-      printUsage({ inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }),
-    cancelled: (signal) => {
-      console.log("Compaction cancelled.");
-      raiseSignal(signal);
-    },
-    currentSession: () => session as SessionState<ModelMessage>,
-  };
-}
-
 async function cycleModeCommand(
   session: SessionState<ModelMessage>,
   _args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): Promise<void> {
   const { next, message } = decideModeCycle(session);
   // Awaited even though /mode has nothing of its own to sequence after sessionUpdated (unlike
@@ -531,18 +429,6 @@ async function cycleModeCommand(
   presenter.message(message);
 }
 
-// Shared by both `/effort` callers (this file's own non-interactive `effortCommand` below, and the
-// TUI's `onSubmit` interception further down) so they can never silently disagree about what a
-// `<level>`/`auto` form resolves to — only how `catalog`/`plan` were obtained (awaited fresh here by
-// `effortCommand`, already resolved and reused by the TUI) differs between them.
-//
-// Legal tiers are resolved against the model this session is CURRENTLY routed to
-// (resolveSessionRoute/resolveLegalReasoningTiers), not a static per-model catalog lookup: the same
-// model id can resolve to different catalog entries — and thus different legal tiers — depending on
-// which route it's actually reached through, so routing.ts's own resolveLegalReasoningTiers keys off
-// the resolved route, not the raw model id. A stale/missing `plan` mis-resolves a gateway route the
-// same way a stale route id would: routing.ts's own gateway branch changes route.model/route.provider
-// to the gateway entry, which resolveLegalReasoningTiers is keyed on.
 async function applyEffortResult(
   session: SessionState<ModelMessage>,
   result: EffortCommandResult,
@@ -571,20 +457,13 @@ async function applyEffortCommand(
   await applyEffortResult(session, result, presenter);
 }
 
-// /effort's own NON-INTERACTIVE path, mirroring cycleModeCommand's shape above. The TUI path
-// (runTui's own onSubmit, below) claims every form of `/effort` — bare, `<level>`, `auto` — before it
-// ever reaches this table, resolving `<level>`/`auto` synchronously off `prepared.catalog`/
-// `prepared.plan` instead of calling this function: this function survives only for
-// `handleSlashCommand` (the single-shot, non-interactive path), where its own fetches below are
-// unavoidable — there is no `prepared` in scope there.
-//
 // `auto` skips both fetches entirely: resolveEffortCommand ignores `legalTiers`/`current` for that
 // form, so awaiting `getModelCatalog()`/`fetchAccountPlan()` first would just be discarded latency.
 async function effortCommand(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): Promise<void> {
   if (args[0] === "auto") {
     await applyEffortResult(session, resolveEffortCommand(args, [], undefined), presenter);
@@ -616,7 +495,7 @@ function undoCommand(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): void {
   presenter.restore(decideUndo(session, args, dirs, presenter.onPlan));
   dirs.trajectory?.recordCheckpoint({ op: "pre-undo" });
@@ -629,7 +508,7 @@ function restoreCommand(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): void {
   presenter.restore(decideRestore(session, args, dirs, presenter.onPlan));
   dirs.trajectory?.recordCheckpoint({ op: "pre-undo" });
@@ -639,7 +518,7 @@ async function rewindCommand(
   session: SessionState<ModelMessage>,
   args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): Promise<void> {
   const { next, message, recordBarrier } = decideRewind(session, args, dirs);
   // Awaited — genuinely, not just called and moved on from. Code review found the previous
@@ -651,7 +530,7 @@ async function rewindCommand(
   // here is what makes this genuinely ordered rather than only appearing to be.
   await presenter.sessionUpdated(next);
   // Not wrapped in its own try/catch: a failure here propagates out to the SAME try/catch every
-  // slash command's own `run` already sits inside (onSubmit's, handleSlashCommand's) — the
+  // slash command's own `run` already sits inside (onSubmit's) — the
   // truncation is already persisted by this point, so surfacing the failure as this command's own
   // error, rather than silently swallowing it the way driveLoop's compaction-barrier warning
   // does, is the more honest signal: the barrier itself did not land, and a later /rewind may not
@@ -668,7 +547,7 @@ async function compactCommand(
   session: SessionState<ModelMessage>,
   _args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs, session),
+  presenter: CommandPresenter,
   deps: CliDeps = {},
 ): Promise<void> {
   const evictBoundary = findSafeEvictionBoundary(
@@ -746,8 +625,7 @@ async function compactCommand(
 }
 
 // /clear: starts a brand-new session in the running process. No try/catch of its own — this runs
-// inside the same try/catch every slash command's `run` already sits inside (onSubmit's,
-// handleSlashCommand's).
+// inside the same try/catch every slash command's `run` already sits inside (onSubmit's).
 //
 // Order is load-bearing. `sessionUpdated` first and awaited: it is what persists `next` (the new,
 // empty session) before anything else happens, the same "await before you rely on it having
@@ -760,7 +638,7 @@ async function clearCommand(
   session: SessionState<ModelMessage>,
   _args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): Promise<void> {
   const { next, message } = decideClear(session);
   await presenter.sessionUpdated(next);
@@ -774,17 +652,13 @@ async function clearCommand(
 async function memoryCommand(
   args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
 ): Promise<void> {
   const { lines } = decideMemoryCommand(args, { configDir: dirs.configDir });
   for (const line of lines) presenter.message(line);
 }
 
-function trajectoryCommand(
-  args: string[],
-  dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
-): void {
+function trajectoryCommand(args: string[], dirs: CommandDirs, presenter: CommandPresenter): void {
   const currentlyEnabled =
     dirs.trajectory?.isEnabled() ?? loadTrajectoryConfig(dirs.configDir).enabled;
   const decided = decideTrajectoryCommand(args, currentlyEnabled);
@@ -803,7 +677,7 @@ function trajectoryCommand(
 async function usageCommand(
   args: string[],
   dirs: CommandDirs,
-  presenter: CommandPresenter = consolePresenter(dirs),
+  presenter: CommandPresenter,
   deps?: CliDeps,
 ): Promise<void> {
   const fn = deps?.usageCommand ?? runUsageCommandReal;
@@ -943,8 +817,6 @@ const PARSE_OPTIONS = {
   "max-turns": { type: "string" },
   "dangerously-skip-permissions": { type: "boolean" },
   profile: { type: "string" },
-  effort: { type: "string" },
-  detail: { type: "boolean" },
 } as const;
 
 type ParsedArgs = {
@@ -957,17 +829,14 @@ type ParsedArgs = {
     "max-turns"?: string;
     "dangerously-skip-permissions"?: boolean;
     profile?: string;
-    effort?: string;
-    detail?: boolean;
   };
   positionals: string[];
   maxTurns: number | undefined;
   skipPermissions: boolean;
-  // Raw, unvalidated here on purpose: legal tiers are route-dependent, and the route
-  // isn't resolved yet at this point in `run()` — validated in prepareSession, once `route`/
-  // `catalog` are available, the same deferred-validation shape as everything else route-dependent.
-  effort: string | undefined;
-  detail: boolean;
+  // True when positionals[0] came from AFTER a `--` terminator: `seri -- serve` means the task
+  // text "serve", not the daemon verb — AGENTS.md's "`--` is the documented escape for a task
+  // that contains what looks like a flag" applies to verbs too, not just `--foo`-shaped words.
+  verbEscaped: boolean;
 };
 
 // One convention across every handler below, so `run` reads as the sequence it is: a `number` is
@@ -975,18 +844,48 @@ type ParsedArgs = {
 // called in is the behaviour — each was a guard clause inside one function before, and the three
 // orderings that are load-bearing are named at their call sites.
 function parseCliArgs(argv: string[]): ParsedArgs | number {
+  // Reset before the parse attempt, not just after a successful one: parseArgs itself can throw
+  // (an unknown flag, a value-taking option with none) before `values.profile` is ever known, and
+  // that early return used to skip the reset below entirely — a PREVIOUS invocation's --profile
+  // stayed active for this one. bun test runs many run() calls in a single process, and a future
+  // fixed-process TUI/REPL loop will too, so every path out of this function must leave a correct
+  // override, not just the one that reaches line 932.
+  setProfileOverride(undefined);
+
   let values: ParsedArgs["values"];
   let positionals: string[];
+  // Derived from parseArgs's own generic return, not a hand-rolled `{ kind: string }` shape: that
+  // widened `kind` to a bare string, so a typo in the "option-terminator" check below would compile
+  // clean and silently leave verbEscaped permanently false.
+  let tokens: ReturnType<
+    typeof parseArgs<{
+      options: typeof PARSE_OPTIONS;
+      strict: true;
+      allowPositionals: true;
+      tokens: true;
+    }>
+  >["tokens"];
   try {
-    ({ values, positionals } = parseArgs({
+    ({ values, positionals, tokens } = parseArgs({
       args: argv,
       strict: true,
       allowPositionals: true,
       options: PARSE_OPTIONS,
+      tokens: true,
     }));
   } catch (err) {
     return usageError(messageOf(err));
   }
+
+  // A bare `--` before the first positional means EVERYTHING from there on, including the first
+  // word, is task text — not just the flag-shaped ones. Without this, `seri -- serve` started the
+  // daemon and `seri -- exec` returned an exec usage error, both silently ignoring the escape.
+  const terminatorIndex = tokens.find((t) => t.kind === "option-terminator")?.index;
+  const firstPositionalIndex = tokens.find((t) => t.kind === "positional")?.index;
+  const verbEscaped =
+    terminatorIndex !== undefined &&
+    firstPositionalIndex !== undefined &&
+    terminatorIndex < firstPositionalIndex;
 
   // Set here, before any validation below that can return a usage error early: every call to
   // parseCliArgs must reset the override to what THIS invocation's flag says (undefined if none),
@@ -995,24 +894,13 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
   // runs many run() calls in a single process, and a future fixed-process TUI/REPL loop will too.
   setProfileOverride(values.profile);
 
-  // PARSE_OPTIONS.detail is declared globally because parseArgs is strict and flags are flags
-  // in any position (`seri usage --detail` / `seri --detail usage`). Rejected here unless the
-  // first positional is usage or /usage, so `seri --detail` cannot open a TUI whose later
-  // `/usage` inherits detailFlag, and a task token `--detail` is not silently stripped.
-  if (values.detail === true) {
-    const cmd = positionals[0];
-    if (cmd !== "usage" && cmd !== "/usage") {
-      return usageError("--detail is only valid with usage");
-    }
-  }
-
   const maxTurnsRaw = values["max-turns"];
   let maxTurns: number | undefined;
   if (maxTurnsRaw !== undefined) {
     // parseArgs accepts --max-turns abc happily (measured) — it has no numeric option type — so
     // this check is not redundant. Same shape as /undo's `[n]` accepts. Validated here, right after the
-    // parse, so a malformed value is a usage error regardless of which subcommand follows it —
-    // `seri --max-turns garbage login` used to reach login with the bad flag silently ignored.
+    // parse, so a malformed value is a usage error regardless of which verb follows it —
+    // `seri --max-turns garbage serve` used to reach serve with the bad flag silently ignored.
     if (!/^[1-9]\d*$/.test(maxTurnsRaw))
       return usageError(`Invalid --max-turns value: ${maxTurnsRaw}`);
     maxTurns = Number(maxTurnsRaw);
@@ -1032,9 +920,15 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
   // the form `--resume`'s old optional-value parsing used to cycle the most recent session's mode)
   // looks for a session literally named "/mode" and fails with "session not found" instead — a
   // silent behaviour change rather than a loud one. Caught here as a usage error naming the fix.
-  if (values.resume !== undefined && SLASH_COMMANDS.has(values.resume)) {
+  // The fix is NOT `seri --continue /mode`: under launch-only argv that positional is task text,
+  // not a slash dispatch — the fix is to resume with `--continue`/`--resume <id>` and then type
+  // the slash command once the TUI is up.
+  // commandByName, not SLASH_COMMANDS.has: SLASH_COMMANDS is only the session-scoped slice —
+  // TUI-only commands like /setup, /login, /config, /permissions and /model hit this same
+  // "looks for a session literally named ..." trap and need the same guard.
+  if (values.resume !== undefined && commandByName(values.resume) !== undefined) {
     return usageError(
-      `--resume ${values.resume} looks for a session named "${values.resume}". Did you mean: seri --continue ${values.resume}`,
+      `--resume ${values.resume} looks for a session named "${values.resume}". Slash commands only run inside the TUI: resume with seri --continue, then type ${values.resume}.`,
     );
   }
 
@@ -1043,8 +937,7 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     positionals,
     maxTurns,
     skipPermissions: values["dangerously-skip-permissions"] === true,
-    effort: values.effort,
-    detail: values.detail === true,
+    verbEscaped,
   };
 }
 
@@ -1080,97 +973,6 @@ async function runSelftest(deps: CliDeps): Promise<number> {
     // Names the version, because "it worked" leaves the one thing a cross-compiled artifact can
     // get wrong — which rg was actually vendored for this target — unsaid.
     console.log(`selftest ok: ripgrep ${rgVersion(resolveRg())}`);
-    return 0;
-  } catch (err) {
-    console.error(messageOf(err));
-    return 1;
-  }
-}
-
-async function handleAuthCommand(
-  positionals: string[],
-  deps: CliDeps,
-): Promise<number | undefined> {
-  if (positionals[0] === "login" || positionals[0] === "signup") {
-    const loginFn = deps.login ?? loginReal;
-    try {
-      const configDir = deps.authConfigDir ?? getConfigDir();
-      await loginFn(positionals[0], getWorkosClientId(configDir), configDir);
-    } catch (err) {
-      console.error(messageOf(err));
-      return 1;
-    }
-    return 0;
-  }
-  if (positionals[0] === "logout") {
-    const logoutFn = deps.logout ?? logoutReal;
-    try {
-      logoutFn(deps.authConfigDir ?? getConfigDir());
-    } catch (err) {
-      console.error(messageOf(err));
-      return 1;
-    }
-    return 0;
-  }
-  return undefined;
-}
-
-function handleConfigCommand(positionals: string[], deps: CliDeps): number | undefined {
-  if (positionals[0] !== "config") return undefined;
-  const configCommandFn = deps.configCommand ?? configCommandReal;
-  try {
-    // Annotated and returned through a local, not `return configCommandFn(...)` directly. This
-    // function's own return type has to admit `undefined` — that is how the dispatch in run() says
-    // "not mine, carry on" — which means the compiler would accept an `undefined` arriving from
-    // configCommand too, and run() would read it as "not handled". Before the decomposition this
-    // call sat in `run(): Promise<number>` and widening it was a tsc error; the annotation is what
-    // puts that error back. What it costs to lose is measured, not imagined: with a bare `return;`
-    // added here, `seri config set GROQ_API_KEY gsk_live_…` falls through to the task path, mints a
-    // session and writes `{"role":"user","content":"config set GROQ_API_KEY gsk_live_…"}` into the
-    // session JSON — the key in full, on disk, and tsc stays green.
-    const code: number = configCommandFn(
-      positionals.slice(1),
-      deps.authConfigDir ?? getConfigDir(),
-    );
-    return code;
-  } catch (err) {
-    console.error(messageOf(err));
-    return 1;
-  }
-}
-
-function handlePermissionsCommand(positionals: string[], deps: CliDeps): number | undefined {
-  if (positionals[0] !== "permissions") return undefined;
-  const fn = deps.permissionsCommand ?? permissionsCommandReal;
-  try {
-    // projectRoot(process.cwd()), not a session's cwd: there is no session here, and "this
-    // project" for a bare command means the one you are standing in. A resumed session started
-    // elsewhere is keyed on ITS cwd (checkpointTarget's own reasoning) — so `list` run from a
-    // different project shows that project's grants, which is what its heading says it shows.
-    const code: number = fn(
-      positionals.slice(1),
-      deps.permissionsDir ?? getConfigDir(),
-      projectRoot(process.cwd()),
-    );
-    return code;
-  } catch (err) {
-    console.error(messageOf(err));
-    return 1;
-  }
-}
-
-async function handleUsageCommand(
-  positionals: string[],
-  deps: CliDeps,
-  detail: boolean,
-): Promise<number | undefined> {
-  if (positionals[0] !== "usage") return undefined;
-  if (positionals.length > 1) {
-    return usageError("usage takes no arguments — pass --detail as a flag");
-  }
-  const fn = deps.usageCommand ?? runUsageCommandReal;
-  try {
-    await fn(deps.authConfigDir ?? getConfigDir(), { detail });
     return 0;
   } catch (err) {
     console.error(messageOf(err));
@@ -1274,19 +1076,7 @@ async function handleExecCommand(
   return exitCode;
 }
 
-// --effort is scoped to the non-interactive path only — a TTY run's `--effort` must not reach
-// driveLoop at all, or it (a) applies to
-// EVERY turn of the whole session, not "this single invocation", and (b) permanently outranks a
-// later `/effort <level>`, since RunContext.effortFlag always wins over session.reasoningEffort in
-// driveLoop's own `??` chain. Extracted as its own pure function (rather than an inline ternary at
-// ctx's own construction) so this scoping rule is directly unit-testable without mounting a real
-// TUI — this repo's own pty-based TUI tests need a real console the CI/dev sandbox this ran in
-// does not always have (tuiPtyWindows.test.ts's own pre-existing ConPTY failures).
-export function resolveEffortFlag(effort: string | undefined, isTTY: boolean): string | undefined {
-  return isTTY ? undefined : effort;
-}
-
-// What the task path needs after the subcommands have had their say. It extends CommandDirs, so it
+// What the task path needs after serve/exec have had their say. It extends CommandDirs, so it
 // satisfies the two callees that take one structurally — but it is not handed to them whole:
 // `dirs(ctx)` below narrows it back down at each call. Structural typing makes passing the whole
 // thing legal and silent, so a slash command handler that asks for two directories would in fact
@@ -1298,89 +1088,10 @@ export type RunContext = CommandDirs & {
   resumeId: string | undefined;
   taskText: string;
   permissionsDir: string;
-  // The `--effort <level>` flag, raw and unvalidated (ParsedArgs.effort's own comment) — bypasses
-  // session.reasoningEffort/config.json entirely, for this single run only. `undefined` means no
-  // flag was given, not "off"/"none" (those are legal tier VALUES a model can offer, resolved the
-  // normal session-then-config way when no flag overrides them). Also `undefined` on a TTY
-  // invocation even when the flag WAS given (resolveEffortFlag's own comment above) — set once, at
-  // `ctx`'s own construction (`run()`, gated on `!isTTY`), not re-checked here or at either read
-  // site.
-  effortFlag: string | undefined;
-  detailFlag: boolean;
   // Explicit working directory for a new session. Direct CLI/TUI callers pass process.cwd(); the
   // daemon passes the session's stored cwd and never calls process.chdir.
   cwd: string;
 };
-
-// A slash command always operates on the resume target — an explicit --resume id, or the most
-// recent session — and never creates a session just to act on it, so this is called before
-// prepareSession and a bare `/undo` (no --resume) does not fall into the new-session path. `/undo`
-// and `/rewind` are keyed on the session's own `cwd`, not the current one, so running them from a
-// different directory still finds the store the edits were recorded in — the plain, cross-project
-// most-recent-mtime pick is what they want, deliberately.
-//
-// `command.scopeTargetToCwd` (only /clear sets it — that field's own comment on SlashCommand) is
-// the one exception: a bare `/clear`, with no resumed session to inherit a directory from, must not
-// silently mint a new session pointed at whatever OTHER project's session was touched last on this
-// machine (`sessionsDir` is shared across every project). Scoped to `process.cwd()` instead,
-// matching what a bare `seri "task"` with no /clear would have started fresh in. An explicit
-// `--resume <id> /clear` is unaffected — that id is honoured regardless of cwd, the same as every
-// other slash command.
-async function handleSlashCommand(ctx: RunContext, deps: CliDeps): Promise<number | undefined> {
-  const [name = "", ...commandArgs] = ctx.taskText.split(/\s+/).filter(Boolean);
-  const command = SLASH_COMMANDS.get(name);
-  if (command === undefined || !command.accepts(commandArgs)) return undefined;
-
-  const args =
-    command.readsDetailFlag === true && ctx.detailFlag && commandArgs.length === 0
-      ? ["--detail"]
-      : commandArgs;
-
-  // needsSession: false (/memory, /trajectory, /usage) skips resume-target
-  // resolution entirely: nothing below it reads a session, so requiring one to already exist would
-  // only make the command fail on a fresh profile for no reason.
-  if (command.needsSession === false) {
-    try {
-      await command.run(args, dirs(ctx), undefined, deps);
-      return 0;
-    } catch (err) {
-      console.error(messageOf(err));
-      return 1;
-    }
-  }
-
-  const id =
-    ctx.resumeId ??
-    (command.scopeTargetToCwd === true
-      ? findMostRecentSessionForCwd(ctx.sessionsDir, process.cwd())
-      : findMostRecentSession(ctx.sessionsDir));
-  if (!id) {
-    console.error(`No session to run ${name} against.`);
-    return 1;
-  }
-  try {
-    // Awaited: cycleModeCommand/rewindCommand are `async` (SlashCommand.run's own comment) — not
-    // awaiting here would let this function return before their own continuation (recordBarrier,
-    // the final message) ran at all, since nothing else keeps the process alive for a background
-    // continuation to finish in once run() returns and the real binary calls process.exit(code).
-    const loaded = loadSession<ModelMessage>(id, ctx.sessionsDir, () =>
-      printWarning(
-        "the last message in this session's saved history was incomplete (an interrupted save) and has been dropped — everything before it is intact",
-      ),
-    );
-    await command.run(
-      loaded,
-      commandArgs,
-      dirs(ctx, createSessionTrajectory(loaded, ctx.configDir, printWarning)),
-      undefined,
-      deps,
-    );
-    return 0;
-  } catch (err) {
-    console.error(messageOf(err));
-    return 1;
-  }
-}
 
 // Shared by confirmedModel's and lastPersistedModel's own guards (both inside runTui, below) —
 // hand-duplicating `a.model !== b.model || a.provider !== b.provider` at each site was the same
@@ -1441,22 +1152,13 @@ export function tuiPresenter(
     },
     transcriptCleared: () => dispatch({ type: "transcript-cleared" }),
     usageAccrued: onUsageAccrued,
-    // No signal re-raise, unlike consolePresenter: matches the LOW-J precedent (runTurn's own
-    // comment) that a per-turn cancel on the TUI path returns control to the input prompt rather
-    // than killing the process.
+    // No signal re-raise: matches the LOW-J precedent (runTurn's own comment) that a per-turn
+    // cancel on the TUI path returns control to the input prompt rather than killing the process.
     cancelled: () => append("Compaction cancelled."),
     currentSession: getSession,
   };
 }
 
-// `boolean | number` mirrors this file's own established convention for a check that's usually a
-// plain result but sometimes an exit code (prepareSession, handleAuthCommand, handleConfigCommand,
-// handlePermissionsCommand, handleSlashCommand all return `T | number` for the identical reason) —
-// callers check `typeof result === "number"` and return it directly on a throw. Used once, by
-// run()'s own guided-setup gate, to decide whether to mount runGuidedSetup at all — no re-check
-// after it returns (round 4): that fell through to prepareSession's own identical
-// configuredProviders/missing-key handling instead, rather than duplicating this corrupted-config
-// try/catch and its error-formatting a second time.
 function checkZeroKeysConfigured(configDir: string): boolean | number {
   try {
     return configuredProviders(configDir).size === 0;
@@ -1473,9 +1175,7 @@ function checkZeroKeysConfigured(configDir: string): boolean | number {
 // see CliDeps.isTTY's own comment for why that reads a passed-in flag, not a live
 // process.stdout.isTTY). Drives the SAME driveLoop the non-interactive path uses for the initial
 // task already appended to `prepared.session.messages` by prepareSession — only how it reports
-// events differs. Slash commands typed into the TUI's input box reuse the exact same command
-// functions (cycleModeCommand etc.) the non-interactive path uses, via tuiPresenter instead of
-// consolePresenter — one decision function, two presentations, per the research spec.
+// events differs.
 //
 // `ink`/`react` used to be imported lazily here rather than at this file's top level: Ink's own
 // reconciler.js had a module-load-time check — `if (process.env['DEV'] === 'true') { …; await
@@ -2466,17 +2166,6 @@ async function runTui(
   };
   assertTuiHandlers(tuiHandlers);
 
-  // H-1: a decision function throwing (e.g. `/undo 5` with fewer checkpoints than that) used to
-  // escape straight out of Ink's own input handler — mirrors handleSlashCommand's existing
-  // try/catch (the non-interactive path already has one) rather than leaving the TUI path with
-  // none. M-3: input shaped like a slash command that matches nothing, or matches one but fails
-  // its own accepts() guard, gets the same visible feedback instead of silently vanishing —
-  // genuinely free-form text (H-3) is the only thing that becomes a new task, and only when it
-  // is not shaped like a slash command at all. TUI-claimed names (and /effort via tuiClaimsFirst)
-  // run from tuiHandlers above before SLASH_COMMANDS, so /exit is not a session-decision function
-  // and /effort never awaits effortCommand's catalog/plan fetch. `async` because
-  // cycleModeCommand/rewindCommand are async (SlashCommand.run's own comment), and the try/catch
-  // below has to await the call to still catch a later rejection.
   async function onSubmit(value: string): Promise<void> {
     if (reactDispatch === undefined) return;
     const trimmed = value.trim();
@@ -2527,8 +2216,6 @@ async function runTui(
       dispatch({ type: "command-error", message: `${name}: invalid arguments.` });
       return;
     }
-    // MEDIUM-3: gated by the command's own mutatesRunState (SlashCommand's own comment explains
-    // what it means and why /mode never sets it).
     if (turnInFlight && command.mutatesRunState === true) {
       dispatch({
         type: "command-error",
@@ -2764,7 +2451,7 @@ async function runTui(
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const parsed = parseCliArgs(argv);
   if (typeof parsed === "number") return parsed;
-  const { values, positionals, maxTurns, skipPermissions, effort, detail } = parsed;
+  const { values, positionals, maxTurns, skipPermissions, verbEscaped } = parsed;
   // The override is already set — parseCliArgs does it before any of its own validation can
   // short-circuit with a usage error (see the comment there). Nothing to do here except rely on
   // it having happened before handleInfoFlags, runSelftest and all seven getConfigDir() consumers.
@@ -2794,8 +2481,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     resumeId: values.resume,
     // Trimmed once, here, not at each push/echo site: an untrimmed value (`seri "   "`) used to
     // read as non-empty (a bare `.length > 0` check) while the push site's OWN separate `.trim()`
-    // then persisted an empty-content message anyway — the exact bug this whole stage exists to
-    // prevent, reintroduced by a whitespace-only task. One trim, at construction, means every later
+    // then persisted an empty-content message anyway — a whitespace-only task. One trim, at construction, means every later
     // reader of `ctx.taskText` (runStart, the push, the echo) agrees on what "empty" means.
     taskText: positionals.join(" ").trim(),
     sessionsDir: deps.sessionsDir ?? join(getConfigDir(), "sessions"),
@@ -2804,13 +2490,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // Matches prepareSession's own resolution (D7) so /memory and the archivist read the same
     // config.json / memories/ directory a /setup-written key or a config set just landed in.
     configDir: deps.authConfigDir ?? getConfigDir(),
-    // resolveEffortFlag's own comment explains why this is scoped to the non-interactive path only.
-    // Gated here, the single point
-    // ctx is built, not in driveLoop/prepareSession: `undefined` on a TTY run means prepareSession's
-    // own --effort validation and driveLoop's own resolution both skip it identically, for free — a
-    // TTY invocation of `--effort` is simply inert, the same as it doing nothing at all.
-    effortFlag: resolveEffortFlag(effort, isTTY),
-    detailFlag: detail,
     cwd: process.cwd(),
   };
 
@@ -2831,51 +2510,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     return usageError("No task given.");
   }
 
-  const auth = await handleAuthCommand(positionals, deps);
-  if (auth !== undefined) return auth;
-
-  const config = handleConfigCommand(positionals, deps);
-  if (config !== undefined) return config;
-
-  const permissions = handlePermissionsCommand(positionals, deps);
-  if (permissions !== undefined) return permissions;
-
-  const usageHandled = await handleUsageCommand(positionals, deps, detail);
-  if (usageHandled !== undefined) return usageHandled;
-
-  const serve = await handleServeCommand(positionals, deps);
+  const serve = verbEscaped ? undefined : await handleServeCommand(positionals, deps);
   if (serve !== undefined) return serve;
 
-  const exec = await handleExecCommand(positionals, deps);
+  const exec = verbEscaped ? undefined : await handleExecCommand(positionals, deps);
   if (exec !== undefined) return exec;
 
-  // Before prepareSession, never after: a bare `/undo` must act on the resume target rather than
-  // mint a session to act on.
-  const slash = await handleSlashCommand(ctx, deps);
-  if (slash !== undefined) return slash;
-
-  // Open 2 (BYOK-KEY-STORAGE-AND-SETUP.md): a genuinely blank config must not hard-exit before the
-  // TUI ever mounts. Gated on isTTY FIRST (code-review finding): the non-interactive path is the
-  // common case and never uses this check's result, so checking isTTY before reading config.json
-  // at all avoids a wasted read/parse on every piped/CI invocation — prepareSession's own
-  // configuredProviders call moments later is the one that actually needs it on that path.
-  //
-  // No re-check after runGuidedSetup returns (thermo-nuclear finding, round 4; invariant updated by
-  // byok-guided-setup-default-model): a re-check here used to `return 1` directly on a still-empty
-  // config, silently — every other `return 1` in this file is preceded by a `console.error`, and
-  // this bare one discarded the exact message the user needs. Falling through unconditionally
-  // instead means a DECLINE (no key ever added) routes into prepareSession's own catch below, which
-  // throws/prints missingKeyError's own default message ("GROQ_API_KEY is not set. Run: seri config
-  // set GROQ_API_KEY <your-key>") — the SAME code path (not just the same exit code) the
-  // non-interactive missing-key exit already uses. A COMPLETED guided setup is different: it now
-  // persists SERI_MODEL/SERI_PROVIDER before `runGuidedSetup` returns (its own mandatory model
-  // picker), so the same unconditional fall-through instead lands `prepareSession`'s
-  // `resolveDefaultModel` read on that freshly-written pair rather than the groq-only fallback —
-  // which is the actual fix this loop exists to ship.
-  // Ahead of both the zero-key gate below and the normal prompt, on every interactive launch —
-  // not gated behind any first-run/"seen it" flag or file. A separate, earlier isTTY gate rather
-  // than a branch inside the block below, so a corrected zeroKeysConfigured/runGuidedSetup diff
-  // never also has to account for this mount.
   if (isTTY) {
     // Wrapped, unlike the rest of this function's own `return N` early exits: `run()` has never had
     // a top-level `.catch` (its only caller, `import.meta.main`, does

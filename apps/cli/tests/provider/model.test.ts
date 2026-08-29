@@ -211,7 +211,7 @@ describe("getModel", () => {
       setConfigValue("GROQ_API_KEY", "sk-from-ambient-default-dir", undefined);
       // The caller's OWN configDir has nothing for groq.
       expect(() => getModel("some-id", "groq", "test-session-id", {}, configDir)).toThrow(
-        "GROQ_API_KEY is not set. Run: seri config set GROQ_API_KEY <your-key>",
+        "GROQ_API_KEY is not set. Set it as an environment variable and re-run.",
       );
     });
   });

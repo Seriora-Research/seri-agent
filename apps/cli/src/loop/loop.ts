@@ -217,8 +217,8 @@ export async function* runLoop(opts: {
   provider?: ModelProvider;
   modelId?: string;
   catalog?: ModelCatalog;
-  // The resolved reasoning-effort tier (session /effort override, config default, or the
-  // non-persisting --effort CLI flag — resolution happens in cli.ts, this is just the winning
+  // The resolved reasoning-effort tier (session /effort override or config default —
+  // resolution happens in driveLoop, this is just the winning
   // value). Requires opts.provider too, to know which provider-options shape to build.
   reasoningEffort?: string;
 }): AsyncGenerator<LoopEvent> {

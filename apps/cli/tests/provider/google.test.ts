@@ -31,7 +31,7 @@ afterEach(() => {
 describe("getGoogleModel", () => {
   test("throws a clear error when GOOGLE_GENERATIVE_AI_API_KEY is unset", () => {
     expect(() => getGoogleModel("gemini-2.5-pro")).toThrow(
-      "GOOGLE_GENERATIVE_AI_API_KEY is not set. Run: seri config set GOOGLE_GENERATIVE_AI_API_KEY <your-key>",
+      "GOOGLE_GENERATIVE_AI_API_KEY is not set. Set it as an environment variable and re-run.",
     );
   });
 

@@ -36,15 +36,15 @@ function estimatedCacheSavedUsd(
   return priced ? saved : undefined;
 }
 
-export const LOGGED_OUT_USAGE = `Not signed in. seri usage shows hosted-gateway spend for a seri account.
-Sign in with seri login.
+export const LOGGED_OUT_USAGE = `Not signed in. /usage shows hosted-gateway spend for a seri account.
+Sign in with /login.
 BYOK provider-key spend is in your provider console, not here.`;
 
 export function formatUsageReport(report: UsageReport, opts: FormatUsageOpts = {}): string {
   const lines: string[] = [];
   if (opts.staleFrom !== undefined) {
     lines.push(
-      `Showing a snapshot from ${opts.staleFrom}. Figures may be stale. Retry: seri usage`,
+      `Showing a snapshot from ${opts.staleFrom}. Figures may be stale. Retry: /usage`,
       "",
     );
   }
