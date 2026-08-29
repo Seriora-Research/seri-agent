@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
 import type { ToolSet } from "ai";
+import { foldsCase } from "../caseFold";
 import { type OnAfterMutation, withMutationRecording } from "../checkpoint/wrapTools";
 import { commandByName } from "../cli/commandCatalog";
 import { AGENTS_DIRNAME, getAgentsDir, getBaseConfigDir } from "../config/paths";
@@ -193,12 +194,15 @@ function findProjectAgentsDir(startDir: string): string | undefined {
   // The one candidate the walk must never adopt: `~/.seri/agents` is the default profile's GLOBAL
   // scope. A repository that happens to sit under $HOME would otherwise claim it as its own
   // project scope, and a `--profile work` run would reach the default root's agents through it —
-  // the opposite of the disjoint profile trees a named profile promises.
-  const globalDefault = getAgentsDir(getBaseConfigDir());
+  // the opposite of the disjoint profile trees a named profile promises. Compared case-folded on
+  // win32/darwin (caseFold.ts): the cwd's casing and $HOME's casing are routinely different
+  // spellings of one directory there, and an exact compare would leave the back door open.
+  const fold = (path: string): string => (foldsCase() ? path.toLowerCase() : path);
+  const globalDefault = fold(getAgentsDir(getBaseConfigDir()));
   let dir = startDir;
   for (;;) {
     const candidate = join(dir, ".seri", AGENTS_DIRNAME);
-    if (candidate !== globalDefault && existsSync(candidate)) return candidate;
+    if (fold(candidate) !== globalDefault && existsSync(candidate)) return candidate;
     const parent = dirname(dir);
     if (parent === dir) return undefined;
     dir = parent;
@@ -228,7 +232,6 @@ export function loadAgentRegistry(opts: {
   worktree: string;
   configDir: string;
   catalog: ModelCatalog;
-  configured: ReadonlySet<ModelProvider>;
   onWarning: (message: string) => void;
 }): AgentRegistry {
   const agents = new Map(builtinRegistry());
@@ -248,15 +251,19 @@ export function loadAgentRegistry(opts: {
     isRoutableRole(name) ||
     commandByName(`/${name}`) !== undefined;
 
+  // Which providers hold a key is deliberately not consulted here: the first catalog entry serving
+  // the id decides the provider half of the pin, and resolveChildRoute -> resolveRoute (routes.ts)
+  // — which knows the configured set AND the plan, including the gateway path — decides how that
+  // pair actually routes, rerouting it to a sibling if it has to. Filtering here instead left a
+  // hosted-gateway user, who configures no provider at all, unable to pin a model from a file.
   const resolveModel = (id: string): { model: string; provider: ModelProvider } | undefined => {
-    const entry = opts.catalog.entries.find(
-      (candidate) => candidate.id === id && opts.configured.has(candidate.provider),
-    );
+    const entry = opts.catalog.entries.find((candidate) => candidate.id === id);
     return entry === undefined ? undefined : { model: entry.id, provider: entry.provider };
   };
 
   for (const scope of scopes) {
     if (!existsSync(scope.dir)) continue;
+    const loaded: string[] = [];
     for (const filePath of agentFilesIn(scope.dir, opts.onWarning)) {
       let text: string;
       try {
@@ -278,7 +285,12 @@ export function loadAgentRegistry(opts: {
       }
       for (const warning of outcome.warnings) opts.onWarning(warning);
       agents.set(outcome.spec.name, outcome.spec);
+      loaded.push(outcome.spec.name);
     }
+    // One line per scope that produced something, so a session says which files it actually took
+    // and from where. Until this existed, only a FAILURE was visible: an agent that silently
+    // stopped loading (a renamed directory, a profile switch) looked exactly like one still there.
+    if (loaded.length > 0) opts.onWarning(`agents from ${scope.dir}: ${loaded.join(", ")}`);
   }
   return agents;
 }

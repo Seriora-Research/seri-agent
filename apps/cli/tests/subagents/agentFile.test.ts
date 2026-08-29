@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   DISPATCH_TOOL_NAME,
   READ_ONLY_TOOL_NAMES,
@@ -7,13 +8,13 @@ import {
 } from "../../src/provider/tools";
 import { type AgentFileOutcome, parseAgentFile } from "../../src/subagents/agentFile";
 
-// The committed text of this repository's own Cursor agent file, read out of git rather than off
-// disk: it is a fixture for the "a Cursor file parses unchanged" claim, and a working-copy edit to
-// it must not quietly change what that claim is being made about.
-const CURSOR_FIXTURE = execSync("git show HEAD:.cursor/agents/reviewer-verifier.md", {
-  cwd: `${import.meta.dir}/../../../..`,
-  encoding: "utf8",
-});
+// A verbatim copy of a real Cursor agent file, committed beside this test rather than read out of
+// the repository it came from: it is the fixture for the "a Cursor file parses unchanged" claim,
+// and that claim must keep being made about the same bytes however the source file moves or goes.
+const CURSOR_FIXTURE = readFileSync(
+  join(import.meta.dir, "fixtures", "cursor-reviewer-verifier.md"),
+  "utf8",
+);
 
 function parse(
   text: string,
@@ -122,6 +123,17 @@ describe("parseAgentFile — tool grants", () => {
     expect(outcome.kind === "skipped" && outcome.warning).toContain("/agents/reviewer.md");
   });
 
+  // A bare `tools:` is a YAML null, not an absent key: the author plainly meant to restrict the
+  // grant and got as far as typing the key, so falling through to the full toolset would hand
+  // bash to exactly the file that was trying to give it up.
+  test("a bare tools: line skips the file instead of granting every tool", () => {
+    const outcome = parse("---\ndescription: d\ntools:\n---\nb\n");
+    expect(outcome.kind).toBe("skipped");
+    expect(outcome.kind === "skipped" && outcome.warning).toContain(
+      "names nothing seri recognises",
+    );
+  });
+
   test("duplicate entries collapse to one grant each", () => {
     expect(spec(parse("---\ndescription: d\ntools: Read, read_file\n---\nb\n")).toolNames).toEqual([
       "read_file",
@@ -134,6 +146,14 @@ describe("parseAgentFile — names", () => {
     expect(
       spec(parse("---\ndescription: d\n---\nb\n", { filePath: "/a/Deep-Reviewer.md" })).name,
     ).toBe("deep-reviewer");
+  });
+
+  // The directory scan accepts `.MD`, so the default name has to strip it too — otherwise the file
+  // loads far enough to be refused for a name it was never given.
+  test("an uppercase .MD extension is stripped from the default name", () => {
+    expect(spec(parse("---\ndescription: d\n---\nb\n", { filePath: "/a/Reviewer.MD" })).name).toBe(
+      "reviewer",
+    );
   });
 
   test("an explicit name wins over the filename", () => {
@@ -184,7 +204,7 @@ describe("parseAgentFile — model routing", () => {
     });
   });
 
-  test("an id no configured provider serves warns and inherits, never a half pin", () => {
+  test("an id the catalog does not carry warns and inherits, never a half pin", () => {
     const outcome = parse("---\ndescription: d\nmodel: made-up-model\n---\nb\n");
     expect(spec(outcome).request).toBeUndefined();
     expect(outcome.kind === "spec" && outcome.warnings.join(" ")).toContain("made-up-model");
@@ -219,11 +239,31 @@ describe("parseAgentFile — a missing description", () => {
   });
 });
 
+// The description is resent inside the dispatch tool's own description on every parent turn, so an
+// essay in that field is a per-turn tax on the whole session, not a one-off cost of the file.
+describe("parseAgentFile — a very long description", () => {
+  test("beyond 500 characters it is truncated, with a warning naming the file", () => {
+    const outcome = parse(`---\ndescription: ${"d".repeat(600)}\n---\nb\n`, {
+      filePath: "/a/wordy.md",
+    });
+    expect(spec(outcome).description).toBe("d".repeat(500));
+    expect(outcome.kind === "spec" && outcome.warnings.join(" ")).toContain("/a/wordy.md");
+  });
+});
+
 describe("parseAgentFile — CRLF", () => {
   test("a file written with Windows line endings parses the same as one with LF", () => {
     const lf = "---\nname: r\ndescription: d\ntools: Read\n---\nbody line\n";
     const crlf = lf.replace(/\n/g, "\r\n");
     expect(spec(parse(crlf)).toolNames).toEqual(spec(parse(lf)).toolNames);
     expect(spec(parse(crlf)).description).toBe("d");
+  });
+
+  // Notepad and PowerShell's own redirection both write one, and it lands before the opening
+  // fence — where it is the difference between an agent file and "a stray note in agents/".
+  test("a leading UTF-8 BOM does not defeat the frontmatter fence", () => {
+    const parsed = spec(parse("﻿---\r\nname: r\r\ndescription: d\r\n---\r\nbody line\r\n"));
+    expect(parsed.name).toBe("r");
+    expect(parsed.description).toBe("d");
   });
 });

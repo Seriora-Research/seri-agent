@@ -13,6 +13,7 @@ import {
   createDispatchTool,
   type DispatchResult,
   dispatchDescription,
+  dispatchDirect,
   dispatchSchema,
   runSubagent,
   type SubagentRuntime,
@@ -1043,6 +1044,59 @@ describe("dispatch_subagents with a file-defined agent", () => {
   test("an agent with no description contributes no line, so the model is never told it exists", () => {
     const text = dispatchDescription(withCustomAgent({ name: "quiet", description: "" }));
     expect(text).not.toContain('"quiet"');
+  });
+
+  // Both halves of "never told it exists": the description leaves it out of the prose, and the
+  // enum leaves it out of the names the model may pass at all. `/name` is unaffected — it runs
+  // dispatchDirect, which never consults this schema.
+  test("an agent with no description is not in the schema's enum either, but /name still runs it", async () => {
+    const agents = withCustomAgent({ name: "quiet", description: "" });
+    const schema = dispatchSchema(agents);
+    expect(schema.safeParse({ tasks: [{ role: "quiet", goal: "grade it" }] }).success).toBe(false);
+    expect(schema.safeParse({ tasks: [{ role: "explore", goal: "look" }] }).success).toBe(true);
+
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [
+        { type: "text-delta", text: "graded" },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    const spec = agents.get("quiet");
+    if (spec === undefined) throw new Error("the custom agent was not registered");
+    const { result } = await dispatchDirect({
+      runtime: makeRuntime(fake, { agents }),
+      spec,
+      goal: "grade it",
+      toolCallId: "t1",
+      rewindTo: 0,
+    });
+    expect(calls).toHaveLength(1);
+    expect(result.results[0].summary).toBe("graded");
+  });
+
+  // The enum and this registry are built from the same Map, so a divergence between them is a bug
+  // — and a task that silently vanished would be one the model cannot see to re-dispatch.
+  test("a task whose role the registry does not hold comes back as a not-run row", async () => {
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const dispatchTool = createDispatchTool(makeRuntime(fake));
+    const result = (await dispatchTool.execute(
+      {
+        tasks: [
+          { role: "explore", goal: "look" },
+          { role: "ghost", goal: "haunt" },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(calls).toHaveLength(1);
+    expect(result.results).toHaveLength(2);
+    expect(result.results[1].role).toBe("ghost");
+    expect(result.results[1].summary).toContain('no agent named "ghost"');
+    expect(result.results[1].usage).toEqual({});
+    expect(result.results[1].doneReason).toBeUndefined();
   });
 
   test("a custom agent runs with exactly its own ToolSet and its own addendum", async () => {

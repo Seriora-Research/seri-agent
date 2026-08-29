@@ -1,6 +1,7 @@
 import { basename } from "node:path";
 import type { ModelProvider } from "@seri/model-catalog";
 import { parse } from "yaml";
+import { messageOf } from "../errors";
 import { READ_ONLY_TOOL_NAMES, type ToolName, toolDefinitions } from "../provider/tools";
 import { type AgentSource, type AgentSpec, composeAddendum } from "./registry";
 
@@ -37,6 +38,15 @@ const FRONTMATTER = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 
 const NAME_SHAPE = /^[a-z0-9][a-z0-9-]*$/;
 
+// agentFilesIn (registry.ts) accepts `.MD` as readily as `.md`, so the default name has to strip
+// either — otherwise an uppercase file loads far enough to be refused for a name it never had.
+const MD_EXTENSION = /\.md$/i;
+
+// The description travels inside the dispatch tool's own description, which is resent on every
+// parent turn — an essay in that field is a per-turn tax on the whole session, not a one-off cost
+// of the file.
+const MAX_DESCRIPTION_LENGTH = 500;
+
 function skip(filePath: string, reason: string): AgentFileOutcome {
   return { kind: "skipped", warning: `agent file ${filePath} was skipped: ${reason}` };
 }
@@ -49,9 +59,12 @@ function readString(value: unknown): string | undefined {
 
 // A YAML list or a comma-separated plain scalar — Cursor's own files use both. `undefined` means
 // the key was absent; an empty array means it was present and said nothing this parser can use,
-// which is a different fact and gets a different answer below.
+// which is a different fact and gets a different answer below. A bare `tools:` line parses to null
+// and belongs in the second category: the author was plainly restricting the grant, so folding it
+// into "absent" would hand the full toolset to the one file that was trying to give it up.
 function readToolEntries(value: unknown): readonly string[] | undefined {
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined) return undefined;
+  if (value === null) return [];
   if (Array.isArray(value)) return value.filter((entry) => typeof entry === "string");
   if (typeof value !== "string") return [];
   return value
@@ -71,14 +84,18 @@ export function parseAgentFile(opts: {
   resolveModel: (id: string) => { model: string; provider: ModelProvider } | undefined;
 }): AgentFileOutcome {
   const { filePath } = opts;
-  const fence = FRONTMATTER.exec(opts.text);
+  // A UTF-8 BOM is what Notepad and PowerShell redirection both write, and it lands ahead of the
+  // opening fence — where it would otherwise be the difference between an agent file and a stray
+  // note in agents/.
+  const text = opts.text.startsWith("﻿") ? opts.text.slice(1) : opts.text;
+  const fence = FRONTMATTER.exec(text);
   if (fence === null) return skip(filePath, "it has no YAML frontmatter block");
 
   let front: unknown;
   try {
     front = parse(fence[1] ?? "");
   } catch (err) {
-    return skip(filePath, `its frontmatter is not valid YAML (${(err as Error).message})`);
+    return skip(filePath, `its frontmatter is not valid YAML (${messageOf(err)})`);
   }
   if (typeof front !== "object" || front === null || Array.isArray(front)) {
     return skip(filePath, "its frontmatter is not a mapping of keys to values");
@@ -88,7 +105,9 @@ export function parseAgentFile(opts: {
   const fields = front as Record<string, unknown>;
   const warnings: string[] = [];
 
-  const name = (readString(fields.name) ?? basename(filePath, ".md")).toLowerCase();
+  const name = (
+    readString(fields.name) ?? basename(filePath).replace(MD_EXTENSION, "")
+  ).toLowerCase();
   if (!NAME_SHAPE.test(name)) {
     return skip(
       filePath,
@@ -138,19 +157,27 @@ export function parseAgentFile(opts: {
     ?.trim();
   const effort = readString(bracketEffort) ?? readString(fields.effort);
 
-  // Complete-or-absent, never a half pin: an id no configured provider serves inherits the session
-  // route with a warning, exactly as an unusable SERI_ROLE_* pair does.
+  // Complete-or-absent, never a half pin: an id the catalog does not carry at all inherits the
+  // session route with a warning, exactly as an unusable SERI_ROLE_* pair does. Whether the
+  // resolved pair's provider holds a key is a later question, answered at dispatch by
+  // resolveChildRoute — a typo'd id is what this warning is about.
   let pair: { model: string; provider: ModelProvider } | undefined;
   if (modelId.length > 0 && modelId.toLowerCase() !== "inherit") {
     pair = opts.resolveModel(modelId);
     if (pair === undefined) {
       warnings.push(
-        `agent file ${filePath}: no configured provider serves "${modelId}", so it inherits the session model`,
+        `agent file ${filePath}: no catalog model "${modelId}", so it inherits the session model`,
       );
     }
   }
 
-  const description = readString(fields.description);
+  let description = readString(fields.description);
+  if (description !== undefined && description.length > MAX_DESCRIPTION_LENGTH) {
+    warnings.push(
+      `agent file ${filePath}: its description is longer than ${MAX_DESCRIPTION_LENGTH} characters, so it was truncated`,
+    );
+    description = description.slice(0, MAX_DESCRIPTION_LENGTH);
+  }
   if (description === undefined) {
     // Loaded, not skipped: the parent model has nothing to delegate on, so in practice only an
     // explicit /name reaches it — describeAgent (registry.ts) is what leaves it out of the
@@ -160,7 +187,7 @@ export function parseAgentFile(opts: {
     );
   }
 
-  const body = opts.text.slice(fence[0].length).trim();
+  const body = text.slice(fence[0].length).trim();
   return {
     kind: "spec",
     spec: {

@@ -181,7 +181,7 @@ seri picks it up at the next start. No source change, no registration step.
 ---
 name: reviewer                  # optional — the filename without .md is the default
 description: Grades a diff against the plan. Read-only. Never edits code.
-tools: Read, Grep, Glob, Bash   # seri names (read_file, grep, …) work too, case-insensitively
+tools: Read, Grep, Glob         # seri names (read_file, grep, …) work too, case-insensitively
 model: inherit                  # or a concrete id; `some-model[effort=high]` is understood
 effort: high
 ---

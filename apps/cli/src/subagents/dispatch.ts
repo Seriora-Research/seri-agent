@@ -309,9 +309,21 @@ export function dispatchDescription(agents: AgentRegistry): string {
 // Built per compose (once per turn) rather than at module load, because the registry is
 // per-session. Destructured rather than asserted: BUILTIN_AGENTS is a non-empty tuple, so the head
 // is an AgentSpec by type and z.enum gets the `[string, ...string[]]` it needs with no cast.
+//
+// The description filter is the same one dispatchDescription applies, for the same reason and it
+// has to be both: a name the model is never told about must not be a name it may pass either, or
+// "never told this agent exists" is only true of the prose. Built-ins are unfiltered because every
+// one of them carries a description by construction. An agent left out here is still reachable by
+// an explicit `/name`, which runs dispatchDirect and never consults this schema.
 export function dispatchSchema(agents: AgentRegistry) {
   const [first, ...rest] = BUILTIN_AGENTS;
-  const custom = [...agents.keys()].filter((name) => !BUILTIN_AGENTS.some((s) => s.name === name));
+  const custom = [...agents.values()]
+    .filter(
+      (spec) =>
+        spec.description.length > 0 &&
+        !BUILTIN_AGENTS.some((builtin) => builtin.name === spec.name),
+    )
+    .map((spec) => spec.name);
   const names: [string, ...string[]] = [first.name, ...rest.map((spec) => spec.name), ...custom];
   return z.object({
     tasks: z
@@ -328,13 +340,72 @@ export function dispatchSchema(agents: AgentRegistry) {
   });
 }
 
-// The schema's own enum is built from this same registry, so a name that reaches `execute` always
-// resolves — this narrows the lookup for the type system rather than guarding a reachable case.
+// The schema's own enum is built from this same registry, so a name that reaches `execute` should
+// always resolve — this narrows the lookup for the type system. `execute` still writes a row for
+// the entries this drops, rather than trusting that.
 function hasSpec<T>(entry: {
   task: T;
   spec: AgentSpec | undefined;
 }): entry is { task: T; spec: AgentSpec } {
   return entry.spec !== undefined;
+}
+
+// The pair every result row and every forwarded event carries: what the child actually ran on.
+type ChildIdentity = {
+  model: string;
+  provider: ModelProvider;
+  inherited: boolean;
+};
+
+// Everything one dispatched child needs, for both engines below: the overlay resolution, the tool
+// grant, the addendum, the `child-started` emission and the nested run itself. Shared rather than
+// written twice because "a `/name` child is the same child a model-issued dispatch gets" is the
+// feature's own promise — two copies of this would be two things to keep equal by hand.
+//
+// `request` is the TASK's own pair (a model-issued dispatch can name one; `/name` cannot), folded
+// over the agent file's by agentRouteRequest. The overlay is resolved once and reused for both the
+// event and the row, so a child cannot be announced on one route and reported on another.
+async function runAgentChild(opts: {
+  runtime: SubagentRuntime & { system: string };
+  spec: AgentSpec;
+  goal: string;
+  childId: string;
+  request?: TaskRouteRequest;
+  signal?: AbortSignal;
+}): Promise<Awaited<ReturnType<typeof runSubagent>> & { identity: ChildIdentity }> {
+  const { runtime, spec, goal, childId } = opts;
+  const overlay = runtime.resolveRole?.(spec.name, agentRouteRequest(spec, opts.request));
+  const identity: ChildIdentity = {
+    model: overlay?.modelId ?? runtime.modelId,
+    provider: overlay?.provider ?? runtime.provider,
+    inherited: overlay?.inherited ?? true,
+  };
+  runtime.onChildEvent?.({
+    childId,
+    role: spec.name,
+    goal,
+    event: { type: "child-started" },
+    ...identity,
+  });
+  const settled = await runSubagent({
+    tools: agentToolSet(spec, runtime.checkpointer?.onAfterMutation, runtime.cwd),
+    system: joinTiers(runtime.system, spec.addendum),
+    messages: [{ role: "user", content: goal }],
+    runtime:
+      overlay === undefined
+        ? runtime
+        : {
+            ...runtime,
+            model: overlay.model,
+            provider: overlay.provider,
+            modelId: overlay.modelId,
+            contextWindowSize: overlay.contextWindowSize,
+            reasoningEffort: overlay.reasoningEffort,
+          },
+    signal: opts.signal,
+    child: { id: childId, role: spec.name, goal, ...identity },
+  });
+  return { ...settled, identity };
 }
 
 // `system` (the parent's own composed stable+context+volatile tiers; runOne appends the agent's
@@ -353,10 +424,10 @@ export function createDispatchTool(
       // Names become specs once, here, and nothing below this line takes a name again: the tool
       // grant, the addendum, the checkpoint predicate and the writer serialization all read the
       // spec, so a dynamic agent name physically cannot reach grant logic.
-      const runnable = tasks
+      const scheduled = tasks
         .slice(0, MAX_TASKS_PER_DISPATCH)
-        .map((task) => ({ task, spec: agents.get(task.role) }))
-        .filter(hasSpec);
+        .map((task) => ({ task, spec: agents.get(task.role) }));
+      const runnable = scheduled.filter(hasSpec);
       const overflow = tasks.slice(MAX_TASKS_PER_DISPATCH);
 
       // One parent-anchored snapshot before any child runs, not one per child write: a per-child
@@ -378,60 +449,18 @@ export function createDispatchTool(
 
       type Runnable = (typeof runnable)[number];
 
-      function overlayFor(entry: Runnable) {
-        return runtime.resolveRole?.(
-          entry.spec.name,
-          agentRouteRequest(entry.spec, {
+      function runOne(entry: Runnable, index: number) {
+        return runAgentChild({
+          runtime,
+          spec: entry.spec,
+          goal: entry.task.goal,
+          childId: `${options.toolCallId}:${index}`,
+          request: {
             model: entry.task.model,
             provider: entry.task.provider,
             effort: entry.task.effort,
-          }),
-        );
-      }
-
-      function roleIdentity(entry: Runnable): {
-        model: string;
-        provider: ModelProvider;
-        inherited: boolean;
-      } {
-        const overlay = overlayFor(entry);
-        return {
-          model: overlay?.modelId ?? runtime.modelId,
-          provider: overlay?.provider ?? runtime.provider,
-          inherited: overlay?.inherited ?? true,
-        };
-      }
-
-      function runtimeFor(entry: Runnable): SubagentRuntime {
-        const overlay = overlayFor(entry);
-        if (overlay === undefined) return runtime;
-        return {
-          ...runtime,
-          model: overlay.model,
-          provider: overlay.provider,
-          modelId: overlay.modelId,
-          contextWindowSize: overlay.contextWindowSize,
-          reasoningEffort: overlay.reasoningEffort,
-        };
-      }
-
-      function runOne(entry: Runnable, index: number) {
-        const childId = `${options.toolCallId}:${index}`;
-        const identity = roleIdentity(entry);
-        runtime.onChildEvent?.({
-          childId,
-          role: entry.spec.name,
-          goal: entry.task.goal,
-          event: { type: "child-started" },
-          ...identity,
-        });
-        return runSubagent({
-          tools: agentToolSet(entry.spec, runtime.checkpointer?.onAfterMutation, runtime.cwd),
-          system: joinTiers(runtime.system, entry.spec.addendum),
-          messages: [{ role: "user", content: entry.task.goal }],
-          runtime: runtimeFor(entry),
+          },
           signal: options.abortSignal,
-          child: { id: childId, role: entry.spec.name, goal: entry.task.goal, ...identity },
         });
       }
 
@@ -460,18 +489,35 @@ export function createDispatchTool(
         })(),
       ]);
 
-      const results: SubagentResult[] = runnable.map((entry, index) => {
-        const identity = roleIdentity(entry);
-        return {
-          role: entry.spec.name,
-          goal: entry.task.goal,
-          summary: settled[index].summary,
-          usage: settled[index].usage,
-          toolCallsMade: settled[index].toolCallsMade,
-          doneReason: settled[index].doneReason,
-          ...identity,
-        };
-      });
+      // One row per scheduled task, in call order. A role the registry does not hold gets a
+      // not-run row rather than being dropped: the enum and this registry are built from the same
+      // Map, so a divergence between them is a bug — and a task that silently vanished is one the
+      // model cannot see to re-dispatch.
+      const results: SubagentResult[] = [];
+      let settledIndex = 0;
+      for (const { task, spec } of scheduled) {
+        if (spec === undefined) {
+          results.push({
+            role: task.role,
+            goal: task.goal,
+            summary: `not run: no agent named "${task.role}" is loaded in this session`,
+            usage: {},
+            toolCallsMade: 0,
+            doneReason: undefined,
+          });
+          continue;
+        }
+        const child = settled[settledIndex++];
+        results.push({
+          role: spec.name,
+          goal: task.goal,
+          summary: child.summary,
+          usage: child.usage,
+          toolCallsMade: child.toolCallsMade,
+          doneReason: child.doneReason,
+          ...child.identity,
+        });
+      }
 
       for (const task of overflow) {
         results.push({
@@ -541,39 +587,13 @@ export async function dispatchDirect(opts: {
     });
   }
 
-  const childId = `${toolCallId}:0`;
-  const request = agentRouteRequest(spec, undefined);
-  const overlay = runtime.resolveRole?.(spec.name, request);
-  const identity = {
-    model: overlay?.modelId ?? runtime.modelId,
-    provider: overlay?.provider ?? runtime.provider,
-    inherited: overlay?.inherited ?? true,
-  };
-  runtime.onChildEvent?.({
-    childId,
-    role: spec.name,
+  // No task pair to fold in: `/name <task>` is a name and free text, with nowhere to say a model.
+  const settled = await runAgentChild({
+    runtime,
+    spec,
     goal,
-    event: { type: "child-started" },
-    ...identity,
-  });
-
-  const settled = await runSubagent({
-    tools: agentToolSet(spec, runtime.checkpointer?.onAfterMutation, runtime.cwd),
-    system: joinTiers(runtime.system, spec.addendum),
-    messages: [{ role: "user", content: goal }],
-    runtime:
-      overlay === undefined
-        ? runtime
-        : {
-            ...runtime,
-            model: overlay.model,
-            provider: overlay.provider,
-            modelId: overlay.modelId,
-            contextWindowSize: overlay.contextWindowSize,
-            reasoningEffort: overlay.reasoningEffort,
-          },
+    childId: `${toolCallId}:0`,
     signal: opts.signal,
-    child: { id: childId, role: spec.name, goal, ...identity },
   });
 
   const result: DispatchResult = {
@@ -585,7 +605,7 @@ export async function dispatchDirect(opts: {
         usage: settled.usage,
         toolCallsMade: settled.toolCallsMade,
         doneReason: settled.doneReason,
-        ...identity,
+        ...settled.identity,
       },
     ],
     totalUsage: settled.usage,

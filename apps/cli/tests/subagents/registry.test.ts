@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ModelCatalog } from "@seri/model-catalog";
 import type { ToolExecutionOptions } from "ai";
+import { foldsCase } from "../../src/caseFold";
 import type { MutationContext } from "../../src/checkpoint/wrapTools";
 import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
 import {
@@ -244,7 +245,6 @@ describe("loadAgentRegistry", () => {
       worktree,
       configDir,
       catalog,
-      configured: new Set(["anthropic"]),
       onWarning: (message) => warnings.push(message),
     });
     return { agents, warnings };
@@ -284,7 +284,6 @@ describe("loadAgentRegistry", () => {
         worktree,
         configDir: join(root, "work"),
         catalog: { fetchedAt: "", entries: [] },
-        configured: new Set(["anthropic"]),
         onWarning: () => {},
       });
       expect(agents.has("global-only")).toBe(false);
@@ -293,6 +292,37 @@ describe("loadAgentRegistry", () => {
       else process.env.HOME = originalHome;
     }
   });
+
+  // Case-folding is platform-conditional (win32/darwin only), matching paths.test.ts's own reason
+  // for testing it that way: on NTFS and APFS the cwd's casing and $HOME's casing are routinely
+  // different spellings of one directory, so an exact string compare would let the walk adopt the
+  // global scope after all — the back door the test above closes.
+  (foldsCase() ? test : test.skip)(
+    "the global agents dir is refused as a project scope even in a different case",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "seri-agents-case-"));
+      roots.push(root);
+      mkdirSync(join(root, ".seri", "agents"), { recursive: true });
+      writeFileSync(
+        join(root, ".seri", "agents", "global-only.md"),
+        "---\ndescription: d\n---\nb\n",
+      );
+      const originalHome = process.env.HOME;
+      process.env.HOME = root.toUpperCase();
+      try {
+        const agents = loadAgentRegistry({
+          worktree: root,
+          configDir: join(root, "work"),
+          catalog: { fetchedAt: "", entries: [] },
+          onWarning: () => {},
+        });
+        expect(agents.has("global-only")).toBe(false);
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    },
+  );
 
   test("the profile root's agents/ loads as the global scope", () => {
     const { agents } = load({
@@ -355,7 +385,24 @@ describe("loadAgentRegistry", () => {
     expect(warnings).toEqual([]);
   });
 
-  test("a model: is resolved against the configured providers' catalog entries", () => {
+  // Only a failure used to be visible, so an agent that silently stopped loading looked exactly
+  // like one still there.
+  test("a scope that loaded something says so, naming the directory and the agent", () => {
+    const { warnings } = load({
+      "project/.seri/agents/reviewer.md": "---\ndescription: grades a diff\n---\nreview it\n",
+    });
+    const line = warnings.find((message) => message.startsWith("agents from "));
+    expect(line).toContain(join(".seri", "agents"));
+    expect(line).toContain("reviewer");
+  });
+
+  test("a scope that loaded nothing says nothing", () => {
+    expect(load({}).warnings).toEqual([]);
+  });
+
+  // The catalog decides the provider half of the pin; whether that provider holds a key is
+  // resolveRoute's question at dispatch, not this one's — a hosted-gateway user configures none.
+  test("a model: is resolved against the catalog, whatever providers are configured", () => {
     const catalog: ModelCatalog = {
       fetchedAt: "",
       entries: [

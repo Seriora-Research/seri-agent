@@ -468,7 +468,6 @@ export function bindSession(
     worktree: prepared.worktree,
     configDir,
     catalog: prepared.catalog,
-    configured: configuredProviders(configDir),
     onWarning,
   });
   prepared.session = session;
@@ -674,14 +673,13 @@ export async function prepareSession(
     const memory = loadMemory({ configDir, worktree });
 
     // Same freeze, and after `catalog` above rather than beside the other once-per-run reads: an
-    // agent file's `model:` is resolved against the configured providers' catalog entries at load,
-    // so the catalog has to be settled before any file is read. Every failure inside is a warning
+    // agent file's `model:` is resolved against the catalog's entries at load, so the catalog has
+    // to be settled before any file is read. Every failure inside is a warning
     // routed through the same sink loadGrants uses — a malformed agent file never fails a start.
     const agents = loadAgentRegistry({
       worktree,
       configDir,
       catalog,
-      configured: configuredProviders(configDir),
       onWarning: (msg) => printWarning(msg, warnSink),
     });
 

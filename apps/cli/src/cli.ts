@@ -2233,8 +2233,10 @@ async function runTui(
           return;
         }
         // The session is passed unchanged: driveLoop's direct path appends the user row itself,
-        // alongside the two synthetic dispatch rows, as one unit.
-        currentTurn = runTurn(liveState.session, undefined, { agent, goal });
+        // alongside the two synthetic dispatch rows, as one unit. `goal` is still this turn's own
+        // newly-typed text, though — it is what the child is sent — so the live input estimate
+        // reads the task rather than reporting a `/name` turn as zero input.
+        currentTurn = runTurn(liveState.session, goal, { agent, goal });
         return;
       }
       if (turnInFlight) {
