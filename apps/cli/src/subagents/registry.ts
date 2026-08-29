@@ -1,5 +1,11 @@
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
 import type { ToolSet } from "ai";
 import { type OnAfterMutation, withMutationRecording } from "../checkpoint/wrapTools";
+import { commandByName } from "../cli/commandCatalog";
+import { AGENTS_DIRNAME, getAgentsDir, getBaseConfigDir } from "../config/paths";
+import { messageOf } from "../errors";
 import {
   createToolDefinitions,
   FS_MUTATING_TOOL_NAMES,
@@ -7,7 +13,8 @@ import {
   type ToolName,
   toolDefinitions,
 } from "../provider/tools";
-import { pinFromTask, type RoutableRole, type TaskRouteRequest } from "./routes";
+import { parseAgentFile } from "./agentFile";
+import { isRoutableRole, pinFromTask, type RoutableRole, type TaskRouteRequest } from "./routes";
 
 export type AgentSource = "builtin" | "user" | "project";
 
@@ -176,4 +183,102 @@ export function agentRouteRequest(
 // the model sees cannot disagree with the ToolSet the child actually gets.
 export function describeAgent(spec: AgentSpec): string {
   return `"${spec.name}": ${spec.description} Tools: ${spec.toolNames.join(", ")}.`;
+}
+
+// The upward walk loadAgentsFile.ts already idiomatises for AGENTS.md, stopping at the first
+// ancestor that has one. seri reads no other harness's directories: an agent written for another
+// toolset and another dispatch behaviour auto-loading here is a surprise, not a convenience —
+// compatibility lives in the file format, and migrating is copying the files in.
+function findProjectAgentsDir(startDir: string): string | undefined {
+  // The one candidate the walk must never adopt: `~/.seri/agents` is the default profile's GLOBAL
+  // scope. A repository that happens to sit under $HOME would otherwise claim it as its own
+  // project scope, and a `--profile work` run would reach the default root's agents through it —
+  // the opposite of the disjoint profile trees a named profile promises.
+  const globalDefault = getAgentsDir(getBaseConfigDir());
+  let dir = startDir;
+  for (;;) {
+    const candidate = join(dir, ".seri", AGENTS_DIRNAME);
+    if (candidate !== globalDefault && existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
+// Sorted, so two files that both define the same name resolve the same way on every platform and
+// every filesystem rather than by readdir order.
+function agentFilesIn(dir: string, onWarning: (message: string) => void): readonly string[] {
+  try {
+    return readdirSync(dir)
+      .filter((entry) => entry.toLowerCase().endsWith(".md"))
+      .sort()
+      .map((entry) => join(dir, entry));
+  } catch (err) {
+    onWarning(`could not read the agents directory ${dir}: ${messageOf(err)}`);
+    return [];
+  }
+}
+
+/**
+ * Built-ins, then the profile root's `agents/`, then the project's `.seri/agents/` — into one Map,
+ * in that order, so "project beats global" is a later `set` rather than a conditional. Total: every
+ * failure below is a warning, never a throw, because session start must not fail over an agent file.
+ */
+export function loadAgentRegistry(opts: {
+  worktree: string;
+  configDir: string;
+  catalog: ModelCatalog;
+  configured: ReadonlySet<ModelProvider>;
+  onWarning: (message: string) => void;
+}): AgentRegistry {
+  const agents = new Map(builtinRegistry());
+  const scopes: { dir: string; source: Exclude<AgentSource, "builtin"> }[] = [
+    { dir: getAgentsDir(opts.configDir), source: "user" },
+  ];
+  const projectDir = findProjectAgentsDir(opts.worktree);
+  if (projectDir !== undefined) scopes.push({ dir: projectDir, source: "project" });
+
+  // A built-in's name, a routing target's name and a slash command's name are all refused. The
+  // routing targets matter beyond tidiness: SERI_ROLE_<NAME>_MODEL is a closed env surface, and a
+  // file free to claim one of those names would silently inherit that pin. A name a previously
+  // loaded FILE took is NOT reserved — the later `set` wins, which is how a project agent shadows
+  // a global one.
+  const isReserved = (name: string): boolean =>
+    agents.get(name)?.source === "builtin" ||
+    isRoutableRole(name) ||
+    commandByName(`/${name}`) !== undefined;
+
+  const resolveModel = (id: string): { model: string; provider: ModelProvider } | undefined => {
+    const entry = opts.catalog.entries.find(
+      (candidate) => candidate.id === id && opts.configured.has(candidate.provider),
+    );
+    return entry === undefined ? undefined : { model: entry.id, provider: entry.provider };
+  };
+
+  for (const scope of scopes) {
+    if (!existsSync(scope.dir)) continue;
+    for (const filePath of agentFilesIn(scope.dir, opts.onWarning)) {
+      let text: string;
+      try {
+        text = readFileSync(filePath, "utf8");
+      } catch (err) {
+        opts.onWarning(`could not read the agent file ${filePath}: ${messageOf(err)}`);
+        continue;
+      }
+      const outcome = parseAgentFile({
+        filePath,
+        text,
+        source: scope.source,
+        isReserved,
+        resolveModel,
+      });
+      if (outcome.kind === "skipped") {
+        opts.onWarning(outcome.warning);
+        continue;
+      }
+      for (const warning of outcome.warnings) opts.onWarning(warning);
+      agents.set(outcome.spec.name, outcome.spec);
+    }
+  }
+  return agents;
 }

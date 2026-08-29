@@ -1,11 +1,13 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import type { ModelCatalog } from "@seri/model-catalog";
 import type { ToolExecutionOptions } from "ai";
 import type { MutationContext } from "../../src/checkpoint/wrapTools";
 import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
 import {
+  type AgentRegistry,
   type AgentSpec,
   agentMutatesFilesystem,
   agentRouteRequest,
@@ -14,6 +16,7 @@ import {
   builtinRegistry,
   composeAddendum,
   describeAgent,
+  loadAgentRegistry,
 } from "../../src/subagents/registry";
 
 function execOpts(): ToolExecutionOptions<Record<string, unknown>> {
@@ -210,5 +213,187 @@ describe("agentRouteRequest", () => {
       provider: undefined,
       effort: undefined,
     });
+  });
+});
+
+describe("loadAgentRegistry", () => {
+  let roots: string[] = [];
+
+  function makeTree(files: Record<string, string>): { worktree: string; configDir: string } {
+    const root = mkdtempSync(join(tmpdir(), "seri-agents-"));
+    roots.push(root);
+    const worktree = join(root, "project", "packages", "cli");
+    const configDir = join(root, "profile");
+    mkdirSync(worktree, { recursive: true });
+    mkdirSync(configDir, { recursive: true });
+    for (const [relative, text] of Object.entries(files)) {
+      const path = join(root, relative);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, text);
+    }
+    return { worktree, configDir };
+  }
+
+  function load(
+    files: Record<string, string>,
+    catalog: ModelCatalog = { fetchedAt: "", entries: [] },
+  ): { agents: AgentRegistry; warnings: string[] } {
+    const { worktree, configDir } = makeTree(files);
+    const warnings: string[] = [];
+    const agents = loadAgentRegistry({
+      worktree,
+      configDir,
+      catalog,
+      configured: new Set(["anthropic"]),
+      onWarning: (message) => warnings.push(message),
+    });
+    return { agents, warnings };
+  }
+
+  afterEach(() => {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+    roots = [];
+  });
+
+  test("with no agents directory anywhere, the registry is exactly the built-ins", () => {
+    expect([...load({}).agents.keys()]).toEqual(["explore", "plan", "code", "test", "oracle"]);
+  });
+
+  test("a project file is found by walking up from the worktree, not only in it", () => {
+    const { agents } = load({
+      "project/.seri/agents/reviewer.md": "---\ndescription: grades a diff\n---\nreview it\n",
+    });
+    expect(agents.get("reviewer")?.source).toBe("project");
+    expect(agents.get("reviewer")?.description).toBe("grades a diff");
+  });
+
+  // ~/.seri/agents is the default profile's GLOBAL scope. Every repository under $HOME would
+  // otherwise find it on the way up and claim it as its own project scope — and a --profile run
+  // would reach the default root's agents through that back door.
+  test("the default profile root's own agents/ is never adopted as a project scope", () => {
+    const root = mkdtempSync(join(tmpdir(), "seri-agents-home-"));
+    roots.push(root);
+    const worktree = join(root, "project");
+    mkdirSync(worktree, { recursive: true });
+    mkdirSync(join(root, ".seri", "agents"), { recursive: true });
+    writeFileSync(join(root, ".seri", "agents", "global-only.md"), "---\ndescription: d\n---\nb\n");
+    const originalHome = process.env.HOME;
+    process.env.HOME = root;
+    try {
+      const agents = loadAgentRegistry({
+        worktree,
+        configDir: join(root, "work"),
+        catalog: { fetchedAt: "", entries: [] },
+        configured: new Set(["anthropic"]),
+        onWarning: () => {},
+      });
+      expect(agents.has("global-only")).toBe(false);
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
+  });
+
+  test("the profile root's agents/ loads as the global scope", () => {
+    const { agents } = load({
+      "profile/agents/scribe.md": "---\ndescription: writes notes\n---\nwrite\n",
+    });
+    expect(agents.get("scribe")?.source).toBe("user");
+  });
+
+  test("a project agent shadows a global one of the same name", () => {
+    const { agents } = load({
+      "profile/agents/reviewer.md": "---\ndescription: global\n---\nglobal body\n",
+      "project/.seri/agents/reviewer.md": "---\ndescription: project\n---\nproject body\n",
+    });
+    expect(agents.get("reviewer")?.description).toBe("project");
+    expect(agents.get("reviewer")?.source).toBe("project");
+  });
+
+  test("a file taking a built-in's name is skipped and the built-in survives untouched", () => {
+    const { agents, warnings } = load({
+      "project/.seri/agents/code.md": "---\ndescription: impostor\ntools: Read\n---\nb\n",
+    });
+    expect(agents.get("code")?.source).toBe("builtin");
+    expect(warnings.join(" ")).toContain("code.md");
+  });
+
+  test("a file taking a slash command's name is skipped", () => {
+    const { agents, warnings } = load({
+      "project/.seri/agents/compact.md": "---\ndescription: impostor\n---\nb\n",
+    });
+    expect(agents.has("compact")).toBe(false);
+    expect(warnings.join(" ")).toContain("compact.md");
+  });
+
+  // SERI_ROLE_ARCHIVIST_MODEL is a real env pin. A file free to claim that name would inherit it
+  // silently, which is why every routing target is reserved and not just the dispatchable ones.
+  test("a file taking a routing target's name is skipped", () => {
+    const { agents, warnings } = load({
+      "project/.seri/agents/archivist.md": "---\ndescription: impostor\n---\nb\n",
+    });
+    expect(agents.has("archivist")).toBe(false);
+    expect(warnings.join(" ")).toContain("archivist.md");
+  });
+
+  test("a malformed file is skipped with a warning and the rest of the directory still loads", () => {
+    const { agents, warnings } = load({
+      "project/.seri/agents/broken.md": "---\ndescription: [unclosed\n---\nb\n",
+      "project/.seri/agents/fine.md": "---\ndescription: fine\n---\nb\n",
+    });
+    expect(agents.has("broken")).toBe(false);
+    expect(agents.has("fine")).toBe(true);
+    expect(warnings.join(" ")).toContain("broken.md");
+  });
+
+  test("non-markdown files in the directory are ignored entirely", () => {
+    const { agents, warnings } = load({
+      "project/.seri/agents/notes.txt": "not an agent",
+      "project/.seri/agents/README": "not an agent either",
+    });
+    expect([...agents.keys()]).toEqual(["explore", "plan", "code", "test", "oracle"]);
+    expect(warnings).toEqual([]);
+  });
+
+  test("a model: is resolved against the configured providers' catalog entries", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "",
+      entries: [
+        {
+          id: "claude-sonnet-5",
+          provider: "anthropic",
+          displayName: "Claude Sonnet 5",
+          family: null,
+          contextWindow: 200_000,
+          maxOutputTokens: 8_000,
+          toolCall: true,
+          reasoning: true,
+          pricing: undefined,
+        },
+      ],
+    };
+    const { agents } = load(
+      {
+        "project/.seri/agents/deep.md":
+          "---\ndescription: d\nmodel: claude-sonnet-5[effort=high]\n---\nb\n",
+      },
+      catalog,
+    );
+    expect(agents.get("deep")?.request).toEqual({
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      effort: "high",
+    });
+  });
+
+  test("a file-defined agent carries no ToolSet the dispatch tool could recurse through", () => {
+    const { agents } = load({
+      "project/.seri/agents/hostile.md": `---\ndescription: d\ntools: Read, ${DISPATCH_TOOL_NAME}\n---\nb\n`,
+    });
+    const spec = agents.get("hostile");
+    expect(spec).toBeDefined();
+    if (spec === undefined) return;
+    expect(Object.keys(agentToolSet(spec))).toEqual(["read_file"]);
+    expect(Object.keys(agentToolSet(spec))).not.toContain(DISPATCH_TOOL_NAME);
   });
 });

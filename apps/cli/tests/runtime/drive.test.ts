@@ -10,6 +10,7 @@ import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
 import { driveLoop } from "../../src/runtime/drive";
 import type { PreparedRun } from "../../src/runtime/prepare";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
+import { builtinRegistry } from "../../src/subagents/registry";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 
 let dirs: string[] = [];
@@ -58,6 +59,7 @@ function preparedStub(): PreparedRun {
     }),
     verifyConfig: loadVerifyConfig(dir),
     memory: loadMemory({ configDir: dir, worktree: dir }),
+    agents: builtinRegistry(),
     trajectory: {
       recordLoopEvent: () => {},
       recordChildUsage: () => {},

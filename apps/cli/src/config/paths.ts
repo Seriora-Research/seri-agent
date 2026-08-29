@@ -17,6 +17,7 @@ export const DEFAULT_PROFILE = "default";
 // getReservedProfileNames()'s set below and getMemoriesDir/getPendingDir's own accessors read from
 // one source and cannot drift apart from each other, the same anti-drift discipline this file's
 // own header comment already applies to CONFIG_FILENAME/AUTH_FILENAME/PERMISSIONS_FILENAME.
+export const AGENTS_DIRNAME = "agents";
 export const MEMORIES_DIRNAME = "memories";
 export const PENDING_DIRNAME = "pending";
 export const TRAJECTORIES_DIRNAME = "trajectories";
@@ -52,6 +53,7 @@ export function getReservedProfileNames(): ReadonlySet<string> {
     "checkpoints",
     "rg",
     "bin",
+    AGENTS_DIRNAME,
     MEMORIES_DIRNAME,
     PENDING_DIRNAME,
     TRAJECTORIES_DIRNAME,
@@ -152,6 +154,14 @@ export function getConfigDir(): string {
 // memory store is built and tested against an mkdtempSync fixture, never the real profile root.
 export function getMemoriesDir(configDir: string = getConfigDir()): string {
   return join(configDir, MEMORIES_DIRNAME);
+}
+
+// Global-scope agent files. Under the profile root like every other accessor here, which is the
+// whole rule: a default-profile user puts them in ~/.seri/agents/, a `--profile work` user in
+// ~/.seri/work/agents/, and a named profile never falls back to the default root's — spec 008
+// makes non-default profiles disjoint trees and agents share that isolation.
+export function getAgentsDir(configDir: string = getConfigDir()): string {
+  return join(configDir, AGENTS_DIRNAME);
 }
 
 export function getPendingDir(configDir: string = getConfigDir()): string {
