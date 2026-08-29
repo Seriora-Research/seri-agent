@@ -284,6 +284,15 @@ export function loadAgentRegistry(opts: {
         continue;
       }
       for (const warning of outcome.warnings) opts.onWarning(warning);
+      // A project agent shadowing a global one is the documented precedence and stays silent. Two
+      // files in the SAME directory resolving to one name is an authoring mistake — one definition
+      // silently vanishes — and it is the only misload here that would otherwise say nothing.
+      const previous = agents.get(outcome.spec.name);
+      if (previous?.source === scope.source && previous.filePath !== undefined) {
+        opts.onWarning(
+          `agent files ${previous.filePath} and ${filePath} both name "${outcome.spec.name}"; the later one wins`,
+        );
+      }
       agents.set(outcome.spec.name, outcome.spec);
       loaded.push(outcome.spec.name);
     }

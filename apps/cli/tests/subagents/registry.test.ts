@@ -340,6 +340,21 @@ describe("loadAgentRegistry", () => {
     expect(agents.get("reviewer")?.source).toBe("project");
   });
 
+  test("two files in one scope naming the same agent warn; the cross-scope shadow stays silent", () => {
+    const { agents, warnings } = load({
+      "project/.seri/agents/aaa.md": "---\nname: dup\ndescription: first\n---\nb\n",
+      "project/.seri/agents/zzz.md": "---\nname: dup\ndescription: second\n---\nb\n",
+    });
+    expect(agents.get("dup")?.description).toBe("second");
+    const duplicate = warnings.find((w) => w.includes("aaa.md") && w.includes("zzz.md"));
+    expect(duplicate).toContain('"dup"');
+    const shadow = load({
+      "profile/agents/reviewer.md": "---\ndescription: global\n---\nb\n",
+      "project/.seri/agents/reviewer.md": "---\ndescription: project\n---\nb\n",
+    });
+    expect(shadow.warnings.find((w) => w.includes("both name"))).toBeUndefined();
+  });
+
   test("a file taking a built-in's name is skipped and the built-in survives untouched", () => {
     const { agents, warnings } = load({
       "project/.seri/agents/code.md": "---\ndescription: impostor\ntools: Read\n---\nb\n",
