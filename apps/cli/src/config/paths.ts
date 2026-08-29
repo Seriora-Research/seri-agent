@@ -158,8 +158,8 @@ export function getMemoriesDir(configDir: string = getConfigDir()): string {
 
 // Global-scope agent files. Under the profile root like every other accessor here, which is the
 // whole rule: a default-profile user puts them in ~/.seri/agents/, a `--profile work` user in
-// ~/.seri/work/agents/, and a named profile never falls back to the default root's — spec 008
-// makes non-default profiles disjoint trees and agents share that isolation.
+// ~/.seri/work/agents/, and a named profile never falls back to the default root's — a
+// non-default profile is a fully disjoint tree, and agents share that isolation.
 export function getAgentsDir(configDir: string = getConfigDir()): string {
   return join(configDir, AGENTS_DIRNAME);
 }
