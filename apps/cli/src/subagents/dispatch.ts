@@ -1,5 +1,5 @@
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
-import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "ai";
+import type { JSONValue, LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "ai";
 import { tool } from "ai";
 import { z } from "zod";
 import { joinTiers } from "../agents/systemPrompt";
@@ -9,12 +9,14 @@ import type { LoopEvent, runLoop } from "../loop/loop";
 import type { CostReport } from "../provider/cost";
 import { DISPATCH_TOOL_NAME } from "../provider/tools";
 import {
-  buildRoleToolSet,
-  DISPATCHABLE_ROLES,
-  roleAddendum,
-  roleMutatesFilesystem,
-  type SubagentRole,
-} from "./roles";
+  type AgentRegistry,
+  type AgentSpec,
+  agentMutatesFilesystem,
+  agentRouteRequest,
+  agentToolSet,
+  BUILTIN_AGENTS,
+  describeAgent,
+} from "./registry";
 import type { TaskRouteRequest } from "./routes";
 
 // Hermes' own parallel-batch cap (research-spec.md's Sources) — tasks past this per dispatch_subagents
@@ -34,7 +36,10 @@ export type SubagentUsage = {
 
 export type ChildEventPayload = {
   childId: string;
-  role: SubagentRole;
+  // A label, not a key: the agent name the roster paints and the trajectory records. Nothing
+  // downstream of the registry reads it to decide behaviour — tools, addendum, serialization and
+  // checkpointing all take an AgentSpec instead, which is why this can widen to any agent name.
+  role: string;
   goal: string;
   event: LoopEvent | { type: "child-started" };
   // Present on every forwarded event for a child that actually started. Overflow rows never
@@ -45,7 +50,7 @@ export type ChildEventPayload = {
 };
 
 export type SubagentTask = {
-  role: SubagentRole;
+  role: string;
   goal: string;
   model?: string;
   provider?: string;
@@ -85,7 +90,7 @@ export type SubagentRuntime = {
   permissionMode: () => PermissionMode;
   allowedTools: readonly string[];
   // onAfterMutation is optional here even though the concrete Checkpointer (checkpoint.ts) always
-  // has one: this type is the generic contract runOne/buildRoleToolSet code against, and a test
+  // has one: this type is the generic contract runOne/agentToolSet code against, and a test
   // double or a future caller with no write ledger is still a valid OnBeforeMutation without it.
   checkpointer?: OnBeforeMutation & { onAfterMutation?: OnAfterMutation };
   onChildUsage?: (usage: LanguageModelUsage, cost: CostReport | undefined) => void;
@@ -95,9 +100,11 @@ export type SubagentRuntime = {
   // Optional overlay: when set, each dispatched child gets this role's model/provider/effort
   // instead of the runtime defaults. The optional request is the task's own pair; omitted,
   // every child shares the runtime (tests, callers that have already resolved the pair onto
-  // this object).
+  // this object). `role` stays a name rather than an AgentSpec because the archivist — which has
+  // no spec, being a routing target and not a dispatchable agent — resolves through the same
+  // overlay.
   resolveRole?: (
-    role: SubagentRole,
+    role: string,
     request?: TaskRouteRequest,
   ) => {
     model: LanguageModel;
@@ -183,7 +190,7 @@ export async function runSubagent(opts: {
   signal?: AbortSignal;
   child?: {
     id: string;
-    role: SubagentRole;
+    role: string;
     goal: string;
     model?: string;
     provider?: ModelProvider;
@@ -277,58 +284,160 @@ export async function runSubagent(opts: {
   };
 }
 
-const DISPATCH_DESCRIPTION =
-  `Run one or more subagents in parallel on separate goals, each with its own limited tool ` +
-  `access. Roles — "explore": read-only (read_file, grep, glob), reports findings. "plan": the ` +
-  `same read-only tools, reasons toward a change and describes it, never writes it. "oracle": ` +
-  `the same read-only tools, advises as a senior engineer, never writes or runs commands. ` +
-  `"code": every tool including write_file/edit/bash/powershell, makes the change. "test": ` +
-  `read-only tools plus bash/powershell, runs the project's own checks and reports a verdict, ` +
-  `never fixes anything. Subagents cannot dispatch further subagents — this is a one-level ` +
-  `tool. Up to ${MAX_TASKS_PER_DISPATCH} tasks run per call; extra tasks come back as not-run ` +
-  `rows so you can re-dispatch them. Each subagent's final assistant message is its only ` +
-  `deliverable, returned here as that task's summary. When the user names a model for a child, ` +
-  `pass that task's model and provider together: provider is one of groq, openrouter, anthropic, ` +
-  `openai, google; model is that provider's id (OpenRouter: the OpenRouter slug). Optional ` +
-  `effort is a reasoning tier for that child (for example "high"). A model without a valid ` +
-  `provider is ignored. Tasks that omit these fields inherit the session route. A pair that ` +
-  `cannot be constructed falls back to the session model.`;
+// One generated line per agent, so an agent the model is told about and the ToolSet it actually
+// gets are read off the same spec. An agent with no `description` contributes no line at all: the
+// model is never told it exists, which is what leaves it reachable only by an explicit /name.
+export function dispatchDescription(agents: AgentRegistry): string {
+  const roster = [...agents.values()]
+    .filter((spec) => spec.description.length > 0)
+    .map(describeAgent)
+    .join(" ");
+  return (
+    `Run one or more subagents in parallel on separate goals, each with its own limited tool ` +
+    `access. Agents — ${roster} Subagents cannot dispatch further subagents — this is a ` +
+    `one-level tool. Up to ${MAX_TASKS_PER_DISPATCH} tasks run per call; extra tasks come back as ` +
+    `not-run rows so you can re-dispatch them. Each subagent's final assistant message is its ` +
+    `only deliverable, returned here as that task's summary. When the user names a model for a ` +
+    `child, pass that task's model and provider together: provider is one of groq, openrouter, ` +
+    `anthropic, openai, google; model is that provider's id (OpenRouter: the OpenRouter slug). ` +
+    `Optional effort is a reasoning tier for that child (for example "high"). A model without a ` +
+    `valid provider is ignored. Tasks that omit these fields inherit the session route. A pair ` +
+    `that cannot be constructed falls back to the session model.`
+  );
+}
 
-const inputSchema = z.object({
-  tasks: z
-    .array(
-      z.object({
-        role: z.enum(DISPATCHABLE_ROLES),
-        goal: z.string().min(1),
-        model: z.string().optional(),
-        provider: z.string().optional(),
-        effort: z.string().optional(),
-      }),
+// Built per compose (once per turn) rather than at module load, because the registry is
+// per-session. Destructured rather than asserted: BUILTIN_AGENTS is a non-empty tuple, so the head
+// is an AgentSpec by type and z.enum gets the `[string, ...string[]]` it needs with no cast.
+//
+// The description filter is the same one dispatchDescription applies, for the same reason and it
+// has to be both: a name the model is never told about must not be a name it may pass either, or
+// "never told this agent exists" is only true of the prose. Built-ins are unfiltered because every
+// one of them carries a description by construction. An agent left out here is still reachable by
+// an explicit `/name`, which runs dispatchDirect and never consults this schema.
+export function dispatchSchema(agents: AgentRegistry) {
+  const [first, ...rest] = BUILTIN_AGENTS;
+  const custom = [...agents.values()]
+    .filter(
+      (spec) =>
+        spec.description.length > 0 &&
+        !BUILTIN_AGENTS.some((builtin) => builtin.name === spec.name),
     )
-    .min(1),
-});
+    .map((spec) => spec.name);
+  const names: [string, ...string[]] = [first.name, ...rest.map((spec) => spec.name), ...custom];
+  return z.object({
+    tasks: z
+      .array(
+        z.object({
+          role: z.enum(names),
+          goal: z.string().min(1),
+          model: z.string().optional(),
+          provider: z.string().optional(),
+          effort: z.string().optional(),
+        }),
+      )
+      .min(1),
+  });
+}
 
-// `system` (the parent's own composed stable+context+volatile tiers; runOne appends the role
-// addendum) lives on this parameter, not SubagentRuntime itself: the archivist reuses
+// The schema's own enum is built from this same registry, so a name that reaches `execute` should
+// always resolve — this narrows the lookup for the type system. `execute` still writes a row for
+// the entries this drops, rather than trusting that.
+function hasSpec<T>(entry: {
+  task: T;
+  spec: AgentSpec | undefined;
+}): entry is { task: T; spec: AgentSpec } {
+  return entry.spec !== undefined;
+}
+
+// The pair every result row and every forwarded event carries: what the child actually ran on.
+type ChildIdentity = {
+  model: string;
+  provider: ModelProvider;
+  inherited: boolean;
+};
+
+// Everything one dispatched child needs, for both engines below: the overlay resolution, the tool
+// grant, the addendum, the `child-started` emission and the nested run itself. Shared rather than
+// written twice because "a `/name` child is the same child a model-issued dispatch gets" is the
+// feature's own promise — two copies of this would be two things to keep equal by hand.
+//
+// `request` is the TASK's own pair (a model-issued dispatch can name one; `/name` cannot), folded
+// over the agent file's by agentRouteRequest. The overlay is resolved once and reused for both the
+// event and the row, so a child cannot be announced on one route and reported on another.
+async function runAgentChild(opts: {
+  runtime: SubagentRuntime & { system: string };
+  spec: AgentSpec;
+  goal: string;
+  childId: string;
+  request?: TaskRouteRequest;
+  signal?: AbortSignal;
+}): Promise<Awaited<ReturnType<typeof runSubagent>> & { identity: ChildIdentity }> {
+  const { runtime, spec, goal, childId } = opts;
+  const overlay = runtime.resolveRole?.(spec.name, agentRouteRequest(spec, opts.request));
+  const identity: ChildIdentity = {
+    model: overlay?.modelId ?? runtime.modelId,
+    provider: overlay?.provider ?? runtime.provider,
+    inherited: overlay?.inherited ?? true,
+  };
+  runtime.onChildEvent?.({
+    childId,
+    role: spec.name,
+    goal,
+    event: { type: "child-started" },
+    ...identity,
+  });
+  const settled = await runSubagent({
+    tools: agentToolSet(spec, runtime.checkpointer?.onAfterMutation, runtime.cwd),
+    system: joinTiers(runtime.system, spec.addendum),
+    messages: [{ role: "user", content: goal }],
+    runtime:
+      overlay === undefined
+        ? runtime
+        : {
+            ...runtime,
+            model: overlay.model,
+            provider: overlay.provider,
+            modelId: overlay.modelId,
+            contextWindowSize: overlay.contextWindowSize,
+            reasoningEffort: overlay.reasoningEffort,
+          },
+    signal: opts.signal,
+    child: { id: childId, role: spec.name, goal, ...identity },
+  });
+  return { ...settled, identity };
+}
+
+// `system` (the parent's own composed stable+context+volatile tiers; runOne appends the agent's
+// addendum) and `agents` live on this parameter, not SubagentRuntime itself: the archivist reuses
 // SubagentRuntime + runSubagent directly (this file's own hand-off comment) but never this
-// function, and its own runtime has no such parent system prompt to compose.
-export function createDispatchTool(runtime: SubagentRuntime & { system: string }) {
+// function, and has neither a parent system prompt to compose nor a registry to be named in.
+export function createDispatchTool(
+  runtime: SubagentRuntime & { system: string; agents: AgentRegistry },
+) {
+  const { agents } = runtime;
   return tool({
-    description: DISPATCH_DESCRIPTION,
-    inputSchema,
+    description: dispatchDescription(agents),
+    inputSchema: dispatchSchema(agents),
     execute: async (args, options) => {
       const { tasks } = args;
-      const runnable = tasks.slice(0, MAX_TASKS_PER_DISPATCH);
+      // Names become specs once, here, and nothing below this line takes a name again: the tool
+      // grant, the addendum, the checkpoint predicate and the writer serialization all read the
+      // spec, so a dynamic agent name physically cannot reach grant logic.
+      const scheduled = tasks
+        .slice(0, MAX_TASKS_PER_DISPATCH)
+        .map((task) => ({ task, spec: agents.get(task.role) }));
+      const runnable = scheduled.filter(hasSpec);
       const overflow = tasks.slice(MAX_TASKS_PER_DISPATCH);
 
       // One parent-anchored snapshot before any child runs, not one per child write: a per-child
       // withCheckpoints would append a child-derived rewindTo to the PARENT session's rewind log
       // (checkpoint.ts's newestDistinct), corrupting /rewind. The anchor is the parent's own
       // message array, which is why this call sits here instead of inside a child. Keyed on the
-      // same predicate the serialization below uses (roleMutatesFilesystem), not on `role ===
+      // same predicate the serialization below uses (agentMutatesFilesystem), not on `role ===
       // "code"`: a `test`-only batch holds bash/powershell (both in FS_MUTATING_TOOL_NAMES) and
       // needs the same snapshot, or its shell writes have zero /undo coverage.
-      if (runnable.some((task) => roleMutatesFilesystem(task.role)) && runtime.checkpointer) {
+      if (runnable.some(({ spec }) => agentMutatesFilesystem(spec)) && runtime.checkpointer) {
         const context: MutationContext = {
           tool: DISPATCH_TOOL_NAME,
           toolCallId: options.toolCallId,
@@ -338,58 +447,25 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
         runtime.checkpointer(context);
       }
 
-      function taskRequest(task: SubagentTask): TaskRouteRequest {
-        return { model: task.model, provider: task.provider, effort: task.effort };
-      }
+      type Runnable = (typeof runnable)[number];
 
-      function roleIdentity(task: SubagentTask): {
-        model: string;
-        provider: ModelProvider;
-        inherited: boolean;
-      } {
-        const overlay = runtime.resolveRole?.(task.role, taskRequest(task));
-        return {
-          model: overlay?.modelId ?? runtime.modelId,
-          provider: overlay?.provider ?? runtime.provider,
-          inherited: overlay?.inherited ?? true,
-        };
-      }
-
-      function runtimeFor(task: SubagentTask): SubagentRuntime {
-        const overlay = runtime.resolveRole?.(task.role, taskRequest(task));
-        if (overlay === undefined) return runtime;
-        return {
-          ...runtime,
-          model: overlay.model,
-          provider: overlay.provider,
-          modelId: overlay.modelId,
-          contextWindowSize: overlay.contextWindowSize,
-          reasoningEffort: overlay.reasoningEffort,
-        };
-      }
-
-      function runOne(task: SubagentTask, index: number) {
-        const childId = `${options.toolCallId}:${index}`;
-        const identity = roleIdentity(task);
-        runtime.onChildEvent?.({
-          childId,
-          role: task.role,
-          goal: task.goal,
-          event: { type: "child-started" },
-          ...identity,
-        });
-        return runSubagent({
-          tools: buildRoleToolSet(task.role, runtime.checkpointer?.onAfterMutation, runtime.cwd),
-          system: joinTiers(runtime.system, roleAddendum(task.role)),
-          messages: [{ role: "user", content: task.goal }],
-          runtime: runtimeFor(task),
+      function runOne(entry: Runnable, index: number) {
+        return runAgentChild({
+          runtime,
+          spec: entry.spec,
+          goal: entry.task.goal,
+          childId: `${options.toolCallId}:${index}`,
+          request: {
+            model: entry.task.model,
+            provider: entry.task.provider,
+            effort: entry.task.effort,
+          },
           signal: options.abortSignal,
-          child: { id: childId, role: task.role, goal: task.goal, ...identity },
         });
       }
 
       // Readers (explore/plan/oracle) run concurrently with each other and with the writer chain
-      // below — this is the fan-out the dispatch exists for. Writers (any role holding a mutating
+      // below — this is the fan-out the dispatch exists for. Writers (any agent holding a mutating
       // tool: code, test) run one at a time, in call order: one filesystem, one writer at a time.
       // This is what makes a `code` child's write through bash/powershell safe by construction, not
       // by tracking which path a call touched — no per-path check could see through an arbitrary
@@ -400,10 +476,10 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
       const settled: Awaited<ReturnType<typeof runOne>>[] = new Array(runnable.length);
       const readerIdx = runnable
         .map((_, i) => i)
-        .filter((i) => !roleMutatesFilesystem(runnable[i].role));
+        .filter((i) => !agentMutatesFilesystem(runnable[i].spec));
       const writerIdx = runnable
         .map((_, i) => i)
-        .filter((i) => roleMutatesFilesystem(runnable[i].role));
+        .filter((i) => agentMutatesFilesystem(runnable[i].spec));
       await Promise.all([
         ...readerIdx.map(async (i) => {
           settled[i] = await runOne(runnable[i], i);
@@ -413,18 +489,35 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
         })(),
       ]);
 
-      const results: SubagentResult[] = runnable.map((task, index) => {
-        const identity = roleIdentity(task);
-        return {
-          role: task.role,
+      // One row per scheduled task, in call order. A role the registry does not hold gets a
+      // not-run row rather than being dropped: the enum and this registry are built from the same
+      // Map, so a divergence between them is a bug — and a task that silently vanished is one the
+      // model cannot see to re-dispatch.
+      const results: SubagentResult[] = [];
+      let settledIndex = 0;
+      for (const { task, spec } of scheduled) {
+        if (spec === undefined) {
+          results.push({
+            role: task.role,
+            goal: task.goal,
+            summary: `not run: no agent named "${task.role}" is loaded in this session`,
+            usage: {},
+            toolCallsMade: 0,
+            doneReason: undefined,
+          });
+          continue;
+        }
+        const child = settled[settledIndex++];
+        results.push({
+          role: spec.name,
           goal: task.goal,
-          summary: settled[index].summary,
-          usage: settled[index].usage,
-          toolCallsMade: settled[index].toolCallsMade,
-          doneReason: settled[index].doneReason,
-          ...identity,
-        };
-      });
+          summary: child.summary,
+          usage: child.usage,
+          toolCallsMade: child.toolCallsMade,
+          doneReason: child.doneReason,
+          ...child.identity,
+        });
+      }
 
       for (const task of overflow) {
         results.push({
@@ -452,7 +545,91 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
 // back is deleting the one call site that composes this in (cli.ts's driveLoop).
 export function withSubagents(
   tools: ToolSet,
-  runtime: SubagentRuntime & { system: string },
+  runtime: SubagentRuntime & { system: string; agents: AgentRegistry },
 ): ToolSet {
   return { ...tools, [DISPATCH_TOOL_NAME]: createDispatchTool(runtime) };
+}
+
+/**
+ * The `/name <task>` engine: exactly one child, with the same tool grant, addendum, overlay
+ * resolution, checkpoint and child-event forwarding a model-issued dispatch gets — and the message
+ * rows loop.ts would have written for it.
+ *
+ * Three rows, not two. Providers want a user-first, alternating history, and every real dispatch in
+ * loop.ts follows a user turn; a synthetic assistant row alone would be the first row of a session
+ * whose first action was `/name`. The user row carries the plain task text, never the slash line:
+ * the model must not be shown syntax it cannot itself issue, and the tool-call row already says
+ * which agent ran.
+ *
+ * Returned rather than pushed, so the caller appends them as one unit — a throw writes none of
+ * them, and history is never left holding a tool call with no result.
+ */
+export async function dispatchDirect(opts: {
+  runtime: SubagentRuntime & { system: string };
+  spec: AgentSpec;
+  goal: string;
+  toolCallId: string;
+  /** Where the user row is about to land. Unlike createDispatchTool's own anchor, no row of this
+   *  dispatch exists yet, so this is `messages.length` — a later /rewind to it drops the whole
+   *  `/name` submission, which is the one user action it undoes. */
+  rewindTo: number;
+  signal?: AbortSignal;
+}): Promise<{ result: DispatchResult; rows: readonly ModelMessage[] }> {
+  const { runtime, spec, goal, toolCallId } = opts;
+  const input = { tasks: [{ role: spec.name, goal }] };
+
+  if (agentMutatesFilesystem(spec) && runtime.checkpointer) {
+    runtime.checkpointer({
+      tool: DISPATCH_TOOL_NAME,
+      toolCallId,
+      args: input,
+      rewindTo: opts.rewindTo,
+    });
+  }
+
+  // No task pair to fold in: `/name <task>` is a name and free text, with nowhere to say a model.
+  const settled = await runAgentChild({
+    runtime,
+    spec,
+    goal,
+    childId: `${toolCallId}:0`,
+    signal: opts.signal,
+  });
+
+  const result: DispatchResult = {
+    results: [
+      {
+        role: spec.name,
+        goal,
+        summary: settled.summary,
+        usage: settled.usage,
+        toolCallsMade: settled.toolCallsMade,
+        doneReason: settled.doneReason,
+        ...settled.identity,
+      },
+    ],
+    totalUsage: settled.usage,
+  };
+
+  return {
+    result,
+    rows: [
+      { role: "user", content: goal },
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId, toolName: DISPATCH_TOOL_NAME, input }],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId,
+            toolName: DISPATCH_TOOL_NAME,
+            output: { type: "json", value: result as unknown as JSONValue },
+          },
+        ],
+      },
+    ],
+  };
 }

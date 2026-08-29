@@ -154,6 +154,7 @@ to a temporary copy.
 | `/trajectory [on\|off]` | show or turn local trajectory recording on or off (default on; persists for the profile) |
 | `/login`, `/signup`, `/logout` | sign in to, create, or leave a hosted seri account |
 | `/usage [--detail]` | hosted-gateway spend vs allowance, reset date, and a burn-rate projection |
+| `/<agent> <task>` | run one of your own subagents on a task — see below |
 | `/profile new <name>` | create a new profile — an isolated config/memory/session root |
 | `/max-turns <n>` | override the per-task turn budget (default 500) for the rest of the session |
 | `/exit` | end the session (or Ctrl-D) |
@@ -170,6 +171,42 @@ way a plain `seri <task>` already leaves one file per session behind. The checkp
 separate matter: it keeps only the most recently touched 20 sessions per project, so `/clear`ing
 repeatedly in one long-lived process can eventually prune an earlier session's checkpoint history
 (what `/undo`/`/rewind` act on) even though its conversation file never goes away.
+
+## Your own subagents
+
+Drop a Markdown file in `.seri/agents/` (this project) or `~/.seri/agents/` (every project) and
+seri picks it up at the next start. No source change, no registration step.
+
+```markdown
+---
+name: reviewer                  # optional — the filename without .md is the default
+description: Grades a diff against the plan. Read-only. Never edits code.
+tools: Read, Grep, Glob         # seri names (read_file, grep, …) work too, case-insensitively
+model: inherit                  # or a concrete id; `some-model[effort=high]` is understood
+effort: high
+---
+
+You are a senior reviewer in a FRESH context. Report CRITICAL/HIGH/MEDIUM/LOW findings
+with file:line. Do NOT modify any file.
+```
+
+Two things then work:
+
+- **You run it**: `/reviewer grade the diff on this branch` dispatches it immediately, with no
+  round trip through the main model to decide whether to.
+- **The model runs it**: your `description` is what it reads to decide when to delegate, so "have
+  someone check this before I push" can reach the same agent on its own.
+
+The format is the one Cursor and Claude Code already use, so existing agent files work when you
+copy them into `.seri/agents/`. seri does not read `.cursor/agents/` or `.claude/agents/` itself:
+an agent written for another harness's toolset auto-loading here is a surprise, not a convenience.
+
+A few rules worth knowing. Omit `tools` and the agent gets every tool seri has, the same grant the
+built-in `code` agent holds; `readonly: true` restricts it to reading. A subagent can never
+dispatch further subagents — that is structural, not a rule it is asked to follow. A file that
+does not parse, or that takes the name of a built-in agent or a slash command, is skipped with a
+warning at startup rather than failing the session. And `/explore`, `/plan`, `/code`, `/test` and
+`/oracle` work the same way, because the built-in roster is entries in the same registry.
 
 ## Checking your code after a write
 

@@ -35,6 +35,7 @@ import {
   type SessionState,
   saveSession,
 } from "../session/session";
+import { type AgentRegistry, loadAgentRegistry } from "../subagents/registry";
 import { createTrajectoryWriter, type TrajectoryWriter } from "../trajectory/writer";
 import { destroyTuiRenderer } from "../tui/runtime/renderer";
 import { type CommandDirs, checkpointTarget } from "../tui/state/commands";
@@ -317,6 +318,11 @@ export type PreparedRun = {
   // the session-keyed checkpointer/tools/archivistState, rather than carrying the old session's
   // memory forward.
   memory: LoadedMemory;
+  // The built-in agents plus whatever `.seri/agents/` and the profile root's `agents/` defined,
+  // resolved once here and frozen for the session — the same rule `memory` above states, and for
+  // the same reason: an agent file added mid-session takes effect next session. /clear is the one
+  // exception (bindSession, below), which reloads it alongside memory.
+  agents: AgentRegistry;
   // Trajectory records for this session id. Rebound in bindSession the same way checkpointer/tools
   // are: /clear mints a new id, so a writer closed over the old one would keep appending under a
   // session nothing resumes. Disabled config still yields a no-op writer.
@@ -458,6 +464,12 @@ export function bindSession(
   prepared.checkpointer = checkpointer;
   prepared.tools = tools;
   prepared.memory = loadMemory({ configDir, worktree: prepared.worktree });
+  prepared.agents = loadAgentRegistry({
+    worktree: prepared.worktree,
+    configDir,
+    catalog: prepared.catalog,
+    onWarning,
+  });
   prepared.session = session;
   prepared.trajectory = trajectory;
   return createArchivistState(session);
@@ -660,6 +672,17 @@ export async function prepareSession(
     // what "frozen per session" means (memory/store.ts's own renderMemoryTier doc comment).
     const memory = loadMemory({ configDir, worktree });
 
+    // Same freeze, and after `catalog` above rather than beside the other once-per-run reads: an
+    // agent file's `model:` is resolved against the catalog's entries at load, so the catalog has
+    // to be settled before any file is read. Every failure inside is a warning
+    // routed through the same sink loadGrants uses — a malformed agent file never fails a start.
+    const agents = loadAgentRegistry({
+      worktree,
+      configDir,
+      catalog,
+      onWarning: (msg) => printWarning(msg, warnSink),
+    });
+
     return {
       session,
       storeDir,
@@ -675,6 +698,7 @@ export async function prepareSession(
       checkpointer,
       verifyConfig,
       memory,
+      agents,
       trajectory,
       preMountMessages,
     };
