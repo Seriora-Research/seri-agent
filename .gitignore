@@ -58,3 +58,7 @@ PORTAL-ENV.md
 # A live OpenRouter API key used for Stage 7a's manual verification (VERIFY pass 1, HIGH-3) —
 # never commit (VERIFY pass 2, MEDIUM-1: was untracked but unignored, one `git add -A` from a leak).
 openrouter.md
+
+# .audit/ is per-run audit output written by a loop or review pass — local to whoever ran it,
+# regenerated every time, and of no use to anyone else's checkout. Same reasoning as .claude/loops/.
+.audit/
