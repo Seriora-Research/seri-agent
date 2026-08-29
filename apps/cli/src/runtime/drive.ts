@@ -380,11 +380,10 @@ export async function driveLoop(
   // same LoopEvent stream the loop would for a dispatch the model itself issued — tool-call,
   // tool-result, messages-updated, done — which is why persistence, the trajectory writer, the
   // live subagent panel, turn-started/turn-ended and Ctrl-C all keep working with no change at
-  // those sites. The `tool-result` clears the live roster (reducer.ts's EMPTY_ROSTER), so
-  // `directSummary` below is the surviving evidence in the transcript; there is no parent turn
-  // after this one to paraphrase the child. The events also reach observeArchivistEvent, so a
-  // `/name` turn counts toward the archivist trigger like any other tool-using turn — intended:
-  // a dispatch is a dispatch whoever asked for it.
+  // those sites. The `tool-result` clears the live roster (reducer.ts's EMPTY_ROSTER), which is
+  // what `directSummary` below is for — see its own doc on DriveLoopResult. The events also reach
+  // observeArchivistEvent, so a `/name` turn counts toward the archivist trigger like any other
+  // tool-using turn — intended: a dispatch is a dispatch whoever asked for it.
   async function* directDispatchEvents(direct: {
     agent: AgentSpec;
     goal: string;
@@ -405,7 +404,6 @@ export async function driveLoop(
     });
     directSummary = `[dispatched to the "${direct.agent.name}" subagent]\n\n${result.results[0].summary}`;
     yield { type: "tool-result", name: DISPATCH_TOOL_NAME, result };
-    // The three rows land together, after the child settled — a throw above writes none of them.
     yield { type: "messages-updated", messages: [...session.messages, ...rows] };
     // Read literally — "the turn ended with no pending model tool call" — this is true, and it
     // keeps the four consumers that exhaustively switch on `done.reason` unchanged.

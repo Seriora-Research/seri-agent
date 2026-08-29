@@ -1862,8 +1862,6 @@ async function runTui(
         tuiApprovalPrompt,
         archivistState,
         (payload) => dispatch({ type: "subagent-child-event", ...payload }),
-        // driveLoop's 11th positional parameter, defaulted everywhere else. Passed explicitly here
-        // rather than reordering the signature: only this call site ever has a /name to hand over.
         { directDispatch },
       );
       usage = {
@@ -1879,9 +1877,8 @@ async function runTui(
       // feeds the FINAL resolveRunTui result (printed once more after Ink unmounts, quit()'s own
       // comment explains why). Stats are a muted plain line so the markdown parser never sees
       // "(archivist: …)"; a defined summary is a second muted markdown entry.
-      // The one thing a /name turn leaves behind: the synthetic tool-result already cleared the
-      // live roster, and no parent turn follows to paraphrase the child. Same two lines the
-      // archivist summary below uses, and for the same reason.
+      // Same two muted lines the archivist summary below uses, for the same reason — see
+      // `DriveLoopResult.directSummary`'s own doc for what this is.
       if (result.directSummary !== undefined) {
         pushTranscriptLine(dispatch, result.directSummary, { muted: true, markdown: true });
       }
