@@ -152,7 +152,7 @@ describe("READ_ONLY_TOOL_NAMES", () => {
 });
 
 describe("DISPATCH_TOOL_NAME", () => {
-  // The whole one-level subagent recursion guard (subagents/roles.ts): this name is not a key of
+  // The whole one-level subagent recursion guard (subagents/registry.ts): this name is not a key of
   // toolDefinitions, so no subagent ToolSet built from it can ever contain the tool.
   test("is not a key of toolDefinitions", () => {
     expect(Object.keys(toolDefinitions)).not.toContain(DISPATCH_TOOL_NAME);

@@ -9,13 +9,13 @@ import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { runLoop as realRunLoop } from "../../src/loop/loop";
 import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
 import {
-  createDispatchTool,
   type ChildEventPayload,
+  createDispatchTool,
   type DispatchResult,
   runSubagent,
   type SubagentRuntime,
 } from "../../src/subagents/dispatch";
-import { buildRoleToolSet } from "../../src/subagents/roles";
+import { type AgentSpec, agentToolSet, builtinRegistry } from "../../src/subagents/registry";
 import { collect, streamResult, textOnlyChunks, toolCallChunks } from "../loop/fixtures";
 import { fakeChildLoop } from "./fakeChildLoop";
 
@@ -27,6 +27,12 @@ function dispatchOpts(
   abortSignal?: AbortSignal,
 ) {
   return { toolCallId, messages, context: {}, abortSignal };
+}
+
+function agentSpec(name: string): AgentSpec {
+  const spec = builtinRegistry().get(name);
+  if (spec === undefined) throw new Error(`no built-in agent named "${name}"`);
+  return spec;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -152,7 +158,7 @@ describe("dispatch_subagents", () => {
     const events = await collect(
       realRunLoop({
         model,
-        tools: buildRoleToolSet("explore"),
+        tools: agentToolSet(agentSpec("explore")),
         messages: [{ role: "user", content: "go" }],
         permissionMode: "auto",
       }),
@@ -253,7 +259,7 @@ describe("dispatch_subagents", () => {
     }));
     const forwarded: ChildEventPayload[] = [];
     await runSubagent({
-      tools: buildRoleToolSet("explore"),
+      tools: agentToolSet(agentSpec("explore")),
       system: "irrelevant",
       messages: [{ role: "user", content: "go" }],
       runtime: makeRuntime(fake, {
@@ -579,7 +585,7 @@ describe("dispatch_subagents", () => {
     };
 
     const result = await runSubagent({
-      tools: buildRoleToolSet("code"),
+      tools: agentToolSet(agentSpec("code")),
       system: "irrelevant",
       messages: [{ role: "user", content: "go" }],
       runtime,
@@ -927,7 +933,7 @@ describe("dispatch_subagents", () => {
     const events = await collect(
       realRunLoop({
         model,
-        tools: buildRoleToolSet("oracle"),
+        tools: agentToolSet(agentSpec("oracle")),
         messages: [{ role: "user", content: "go" }],
         permissionMode: "auto",
       }),

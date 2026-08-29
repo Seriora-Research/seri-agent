@@ -4,19 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCatalog, ModelCatalogEntry } from "@seri/model-catalog";
 import { loadConfig, setConfigValue } from "../../src/config/config";
+import { BUILTIN_AGENTS } from "../../src/subagents/registry";
 import {
-  ROUTABLE_ROLES,
-  type RoutableRole,
   effortForChild,
   effortForRole,
   parseRolePins,
   pinFromTask,
+  ROUTABLE_ROLES,
+  type RoutableRole,
   realizedRoute,
   resolveChildRoute,
   resolveRoleRoute,
   roleConstructionWarning,
 } from "../../src/subagents/routes";
-import { DISPATCHABLE_ROLES } from "../../src/subagents/roles";
 
 function entry(overrides: Partial<ModelCatalogEntry>): ModelCatalogEntry {
   return {
@@ -223,7 +223,7 @@ describe("resolveRoleRoute", () => {
   });
 
   test("archivist is a routing target even though it is not dispatchable", () => {
-    expect((DISPATCHABLE_ROLES as readonly string[]).includes("archivist")).toBe(false);
+    expect(BUILTIN_AGENTS.some((spec) => spec.name === "archivist")).toBe(false);
     const route = resolveRoleRoute(
       "archivist",
       parent,
@@ -412,10 +412,10 @@ describe("realizedRoute", () => {
   });
 });
 
-describe("DISPATCHABLE_ROLES vs RoutableRole", () => {
+describe("BUILTIN_AGENTS vs RoutableRole", () => {
   test("oracle is dispatchable; archivist is only routable", () => {
-    expect(DISPATCHABLE_ROLES).toContain("oracle");
-    expect((DISPATCHABLE_ROLES as readonly string[]).includes("archivist")).toBe(false);
+    expect(BUILTIN_AGENTS.map((spec) => spec.name)).toContain("oracle");
+    expect(BUILTIN_AGENTS.some((spec) => spec.name === "archivist")).toBe(false);
     expect(ROUTABLE_ROLES).toEqual(["explore", "plan", "code", "test", "oracle", "archivist"]);
     const _archivist: RoutableRole = "archivist";
     expect(_archivist).toBe("archivist");

@@ -24,9 +24,9 @@ import { onSignalCancel } from "../signals";
 import { type ChildEventPayload, withSubagents } from "../subagents/dispatch";
 import {
   effortForChild,
+  isRoutableRole,
   parseRolePins,
   pinFromTask,
-  type RoutableRole,
   realizedRoute,
   resolveChildRoute,
   roleConstructionWarning,
@@ -248,19 +248,22 @@ export async function driveLoop(
     inherited: boolean;
   };
   const roleOverlays = new Map<string, RoleOverlay>();
-  function overlayKey(role: RoutableRole, request: TaskRouteRequest | undefined): string {
+  function overlayKey(role: string, request: TaskRouteRequest | undefined): string {
     const pin = pinFromTask(request);
     const effort =
       typeof request?.effort === "string" && request.effort.length > 0 ? request.effort : "";
     if (pin === undefined && effort.length === 0) return role;
     return `${role}:${pin?.provider ?? ""}:${pin?.model ?? ""}:${effort}`;
   }
-  function overlayFor(role: RoutableRole, request?: TaskRouteRequest): RoleOverlay {
+  // `role` is any agent name — a built-in, the archivist, or one a user's own agent file defines.
+  // Only a name in ROUTABLE_ROLES has a SERI_ROLE_* env pin to look up, and agent files are barred
+  // from those names, so a file-defined agent falls straight through to its own request.
+  function overlayFor(role: string, request?: TaskRouteRequest): RoleOverlay {
     const key = overlayKey(role, request);
     const cached = roleOverlays.get(key);
     if (cached !== undefined) return cached;
     const intended = resolveChildRoute(
-      role,
+      isRoutableRole(role) ? role : undefined,
       route,
       pins,
       request,

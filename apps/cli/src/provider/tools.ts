@@ -159,6 +159,6 @@ export function createScheduledToolDefinitions(cwd: string) {
 }
 
 // Not a key of toolDefinitions, and that absence IS the one-level subagent recursion guard
-// (subagents/roles.ts): every subagent's ToolSet is built by picking names out of
+// (subagents/registry.ts): every subagent's ToolSet is built by picking names out of
 // toolDefinitions, so `ToolName` can never name this tool and no child ToolSet can contain it.
 export const DISPATCH_TOOL_NAME = "dispatch_subagents";

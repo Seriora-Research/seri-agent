@@ -73,8 +73,8 @@ export function withCheckpoints(
 }
 
 // The after-only half of withCheckpoints, for a caller that must record write provenance without
-// taking withCheckpoints' pre-mutation snapshot. subagents/roles.ts's buildRoleToolSet deliberately
-// never wraps a role's tools with withCheckpoints — a per-child snapshot would append a
+// taking withCheckpoints' pre-mutation snapshot. subagents/registry.ts's agentToolSet deliberately
+// never wraps an agent's tools with withCheckpoints — a per-child snapshot would append a
 // child-derived rewindTo to the PARENT session's rewind log (dispatch.ts's own pre-dispatch-snapshot
 // comment) — which left every subagent write_file call unrecorded in the write ledger:
 // filterSafeToDelete (writeLedger.ts) has no provenance for a subagent-written file, so /undo can
