@@ -85,7 +85,7 @@ describe("formatUsageReport", () => {
   });
 
   test("logged-out copy names login and BYOK", () => {
-    expect(LOGGED_OUT_USAGE).toContain("seri login");
+    expect(LOGGED_OUT_USAGE).toContain("/login");
     expect(LOGGED_OUT_USAGE).toContain("BYOK");
   });
 

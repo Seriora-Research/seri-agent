@@ -236,9 +236,8 @@ export function createSetupHandlers(opts: {
 
 // /login, /signup and /logout's own two handlers, mirroring createSetupHandlers's exact shape
 // (dispatch/deps/configDir in). `deps.login ?? loginReal`
-// / `deps.logout ?? logoutReal` is the SAME injection seam handleAuthCommand already uses for the
-// non-interactive `seri login`/`seri logout` — so a pty test can fake the device flow here exactly
-// the way argv.test.ts already fakes it there. Every recompute-and-dispatch is wrapped so a failure
+// / `deps.logout ?? logoutReal` is the injection seam pty tests use to fake the device flow.
+// Every recompute-and-dispatch is wrapped so a failure
 // (a network error, a denied/expired device code, a bad WorkOS client id) degrades to a rendered
 // `auth-step` result rather than an unhandled rejection out of onSubmit's own fire-and-forget
 // caller (InputBox's own useInput handler) — the same "never throw/crash" contract dispatchSetupList
@@ -366,9 +365,8 @@ function verifyConfigTakesEffectNote(key: string): string {
 
 // /config's own two handlers, mirroring createSetupHandlers's exact shape
 // (dispatch/getPendingConfig/configDir in). Calls the DATA
-// functions directly — loadConfig/setConfigValue/unsetConfigValue (config/config.ts) — never
-// configCommand (config/commands.ts), which is console/exit-code shaped for the non-interactive
-// path. Every recompute-and-dispatch is wrapped in try/catch degrading to command-error: config.json
+// functions directly — loadConfig/setConfigValue/unsetConfigValue (config/config.ts).
+// Every recompute-and-dispatch is wrapped in try/catch degrading to command-error: config.json
 // can be hand-edited or corrupted mid-session, same reachable-anytime failure dispatchSetupList's
 // own comment already documents for /setup.
 export function createConfigHandlers(opts: {
@@ -635,9 +633,8 @@ export function createPermissionsHandlers(opts: {
       // loadGrants/forgetGrant do NOT throw on a malformed permissions.yaml — they degrade to an
       // empty/no-op result and an optional `onWarning` callback instead (permissions/store.ts's own
       // comment: the file is hand-editable, so a caller must not risk overwriting content it could
-      // not make sense of). The non-interactive removeCommand (permissions/commands.ts) already
-      // treats that as a real failure, not a silent no-op — `warned` and the branch on `result`
-      // below mirror it, instead of unconditionally claiming "Removed".
+      // not make sense of). `warned` and the branch on `result` below must not unconditionally
+      // claim "Removed".
       //
       // scope: "project": a tool granted in BOTH tiers still renders as a single
       // "persisted"/removable row (decidePermissionsOpen, tui/commands.ts) — the global grant is
@@ -675,12 +672,7 @@ export function createPermissionsHandlers(opts: {
       // `removable` re-check above and this 'y' press can already have cleared the project entry
       // by the time forgetGrant runs, independently of whether the tool is still globally granted
       // — gating this check on result.project would report "was not permanently approved" even
-      // while the tool stayed auto-approved globally, the exact false claim removeCommand's own
-      // comment (permissions/commands.ts) refuses to make for the non-interactive path. Not
-      // try/catch-guarded, on purpose: loadGrants cannot
-      // throw (store.ts's own readStore degrades every failure mode to a status instead), and this
-      // file already carries guards on that call that can't fire — not adding another rather than
-      // resolving the standing one.
+      // while the tool stayed auto-approved globally.
       const stillGlobal = loadGrants(permissionsDir, worktree).global.includes(confirmedTool);
       let line: string;
       if (result.project && stillGlobal) {

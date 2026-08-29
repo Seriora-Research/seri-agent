@@ -7,6 +7,14 @@ export const ROUTABLE_ROLES = ["explore", "plan", "code", "test", "oracle", "arc
 
 export type RoutableRole = (typeof ROUTABLE_ROLES)[number];
 
+// The SERI_ROLE_* surface is a closed, documented set of names, and this is the one place a
+// free-form agent name is admitted to it. A file-defined agent can never satisfy this, because
+// loadAgentRegistry reserves every ROUTABLE_ROLES name against agent files — so "no env pin
+// exists for this agent" is decided here rather than carried on every spec.
+export function isRoutableRole(value: string): value is RoutableRole {
+  return (ROUTABLE_ROLES as readonly string[]).includes(value);
+}
+
 export type RolePin = { model: string; provider: ModelProvider };
 
 export type TaskRouteRequest = {
@@ -70,8 +78,11 @@ export function pinFromTask(request: TaskRouteRequest | undefined): RolePin | un
   return { model: request.model, provider: request.provider };
 }
 
+// `role` is `undefined` for an agent with no env-pin surface at all — a file-defined one. It means
+// "no pin exists", which falls through to the task request and then to inherit, not "look one up
+// and find nothing".
 export function resolveChildRoute(
-  role: RoutableRole,
+  role: RoutableRole | undefined,
   parent: ResolvedRoute,
   pins: Partial<Record<RoutableRole, RolePin>>,
   request: TaskRouteRequest | undefined,
@@ -94,14 +105,14 @@ export function resolveChildRoute(
 }
 
 export function resolveRoleRoute(
-  role: RoutableRole,
+  role: RoutableRole | undefined,
   parent: ResolvedRoute,
   pins: Partial<Record<RoutableRole, RolePin>>,
   catalog: ModelCatalog,
   configured: ReadonlySet<ModelProvider>,
   plan: Plan | null,
 ): RoleRoute {
-  const pin = pins[role];
+  const pin = role === undefined ? undefined : pins[role];
   if (pin === undefined) {
     return {
       model: parent.model,
@@ -157,8 +168,10 @@ export function realizedRoute(
   };
 }
 
+// Takes the agent's own name, not its pin key: a file-defined agent has no pin key, and naming it
+// "undefined" in a warning the user has to act on would hide which agent file to go and fix.
 export function roleConstructionWarning(
-  role: RoutableRole,
+  role: string,
   intended: { provider: ModelProvider; model: string },
   detail: string,
 ): string {

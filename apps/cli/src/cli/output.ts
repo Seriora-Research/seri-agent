@@ -18,62 +18,20 @@ import { type CheckOutcome, writeFileVerification } from "../verify/outcome";
 
 // stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
 // parseArgs rejects, or no task given — is a usage error: printed to stderr, exit 2.
-// config/commands.ts's own usage error also exits 2, keeping the convention uniform across every
-// subcommand rather than half-adopted on just this one.
 // `--selftest` is left out on purpose — cli.ts calls it an undocumented build-verification flag.
 export const USAGE = `Usage:
   seri <task>                     send a task to the model
   seri                            (in a terminal) open the TUI with an empty input box
   seri --continue [task]          continue the most recent session
   seri --resume <id> [task]       continue that session
-  seri [--resume <id>] /mode      cycle the permission mode
-  seri [--resume <id>] /effort [level|auto]
-                                    show, set to <level>, or clear (auto) this session's
-                                    reasoning-effort override — legal levels depend on the model
-  /model (inside the TUI)         open the model picker — not a seri subcommand, same reasoning
-                                    as /exit below: there is no picker to open outside a live TUI
-  /setup (inside the TUI)         add, replace or remove a provider API key — not a seri
-                                    subcommand; seri config set is the non-interactive equivalent
-  seri [--resume <id>] /undo [n] | /rewind [n] | /restore <sha> | /compact
-  seri [--resume <id>] /clear     start a new session — the previous one stays resumable
-  seri [--resume <id>] /memory pending | diff <id|all> | approve <id|all> | reject <id|all>
-                                    | approval on|off | archivist on|off
-  seri /trajectory [on|off]         show or set local trajectory recording (default on)
-  seri usage [--detail]             hosted-gateway spend vs allowance (not BYOK)
-  /usage [--detail] (inside the TUI) same report as seri usage
-  /exit (inside the TUI)          end the session, or Ctrl-D — not a seri subcommand: it means
-                                    nothing outside a live TUI, and "seri /exit" is just a task
-  /login | /signup | /logout (inside the TUI)
-                                    sign in, create an account, or sign out — not seri
-                                    subcommands; seri login | signup | logout below is the
-                                    non-interactive equivalent
-  /config (inside the TUI)        view or edit non-provider settings — not a seri subcommand;
-                                    seri config set|list|unset below is the non-interactive
-                                    equivalent
-  /permissions (inside the TUI)   view or revoke permanently approved tools — not a seri
-                                    subcommand; seri permissions list|remove <tool> below is the
-                                    non-interactive equivalent
-  seri login | signup | logout
   seri serve                      start the foreground loopback daemon for this profile
   seri exec <task>                run one task through an already-running daemon
-  seri config set|list|unset
-  seri permissions list|remove <tool>
-  seri usage [--detail]
   seri --version | --help
 
 Options:
   --max-turns <n>                 stop after n model turns (default 500)
-  /max-turns <n> (inside the TUI) override --max-turns for the rest of the session, taking
-                                    effect on the next turn — not a seri subcommand
-  --effort <level>                set the reasoning effort for this run only, e.g. low, medium,
-                                    high (never saved; SERI_REASONING_EFFORT sets a persistent
-                                    default) (non-interactive runs only — use /effort inside the TUI)
   --profile <name>                use the named profile's config, auth, permissions, sessions
                                     and checkpoints (or SERI_PROFILE; the flag wins)
-  /profile new <name> (inside the TUI)
-                                    create a new profile's directory — not a seri subcommand;
-                                    does not switch the running session's profile, restart with
-                                    --profile <name> or SERI_PROFILE to use it
   --dangerously-skip-permissions  run every tool with no approval prompt (attended use only)
   --                              everything after this is the task, flags included:
                                     seri -- fix the --help output`;
@@ -150,29 +108,29 @@ export function printWarning(message: string, sink: (line: string) => void = con
 // The second half of what an "always" answer now does. Printed only when a grant was actually
 // written — driveLoop calls this on rememberGrant's `true`, never unconditionally — so it can
 // never claim a persistence that the store refused (a non-persistable name, an unparseable file).
+// Reachable outside the TUI (approve-each answered from a plain stdin prompt), so the undo
+// instruction names permissions.yaml directly rather than only /permissions, which isn't there.
 export function printGrantPersisted(name: string, worktree: string): void {
   console.log(
-    `  saved for ${worktree} — undo with: seri permissions remove ${escapeControlChars(name)}`,
+    `  saved for ${worktree} — undo by editing permissions.yaml, or with /permissions inside the TUI (remove ${escapeControlChars(name)})`,
   );
 }
 
 // A grant the user cannot see is a grant they cannot revoke, and a grant made weeks ago in another
 // session is exactly the invisible kind. One line at the start of the run that would otherwise
-// silently skip a prompt.
+// silently skip a prompt. Same non-TTY reachability as printGrantPersisted above.
 export function printPreApproved(
   tools: readonly string[],
   sink: (line: string) => void = console.log,
 ): void {
   sink(
-    `Pre-approved without asking: ${tools.map(escapeControlChars).join(", ")} — seri permissions list`,
+    `Pre-approved without asking: ${tools.map(escapeControlChars).join(", ")} — permissions.yaml, or /permissions inside the TUI`,
   );
 }
 
-// One line-shape, one place: cli.ts's consolePresenter and tuiPresenter both call this — the
-// former via its own default `console.log` sink, the latter with a sink that dispatches a
-// transcript-append action per line — instead of each hand-copying the same
-// restored/deleted/ignored template, which can drift out of sync the moment one of them changes
-// and the other does not.
+// One line-shape, one place: cli.ts's tuiPresenter calls this via a sink that dispatches a
+// transcript-append action per line, instead of hand-copying the restored/deleted/ignored
+// template inline where it could drift out of sync with this one.
 //
 // Called before the restore happens, not after. Every path here comes from git's own output, so
 // an ignored file can never appear under "restored" or "deleted"; the ones that were written and
@@ -192,11 +150,15 @@ export function undoPlanLines(plan: RestorePlan, sink: (line: string) => void = 
 }
 
 // Restoring is never the operation that loses work: the state it just replaced was committed first.
+// "in this session" because recoverCommand resolves against the live session's own ref
+// (decideRestore reads session.id) — pasted after a /clear mints a new id, it targets that one.
 export function recoveryLines(
   result: RestoreResult,
   sink: (line: string) => void = console.log,
 ): void {
-  sink(`The state this replaced is commit ${result.preUndoCommit}. To get it back:`);
+  sink(
+    `The state this replaced is commit ${result.preUndoCommit}. To get it back in this session, run:`,
+  );
   sink(`  ${result.recoverCommand}`);
 }
 

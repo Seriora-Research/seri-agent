@@ -82,11 +82,17 @@ describe("command catalog completeness", () => {
     expect(missing).toEqual([]);
   });
 
-  test("USAGE names every catalog command as a /name token", () => {
-    const missing = COMMAND_META.map((meta) => meta.name).filter(
-      (name) => !mentionsName(USAGE, name),
+  test("USAGE is launch-only and does not list catalog slash names", () => {
+    expect(USAGE).toContain("seri serve");
+    expect(USAGE).toContain("seri exec");
+    expect(USAGE).not.toContain("seri config");
+    expect(USAGE).not.toContain("seri login");
+    expect(USAGE).not.toContain("seri usage");
+    expect(USAGE).not.toContain("seri permissions");
+    const slashInUsage = COMMAND_META.map((meta) => meta.name).filter((name) =>
+      mentionsName(USAGE, name),
     );
-    expect(missing).toEqual([]);
+    expect(slashInUsage).toEqual([]);
   });
 
   test("SLASH_COMMANDS is the session slice and does not include /exit", () => {

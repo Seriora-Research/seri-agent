@@ -14,10 +14,10 @@ import { type LoadedMemory, loadMemory, type MemoryContext, renderMemoryTier } f
 import { makeMemoryWriteTool } from "./tool";
 
 // The archivist's ENTIRE system prompt, not an addendum composed onto a parent's the way
-// subagents/roles.ts's dispatchable roles are: the archivist has no coding-agent identity to
+// subagents/registry.ts's dispatchable agents are: the archivist has no coding-agent identity
 // inherit — its only job is deciding what belongs in memory and writing it with memory_write, so
 // runArchivist passes this directly as runSubagent's `system`, never joinTiers'd with anything
-// else. Lives here, not roles.ts: it is memory-specific prose no dispatchable role composes.
+// else. Lives here, not registry.ts: it is memory-specific prose no dispatchable agent composes.
 export const ARCHIVIST_PROMPT = `You are seri's archivist. You are handed the transcript of a completed stretch of a
 coding session and the current contents of the three memory files. Your only job is to decide what
 in that transcript is worth remembering, and to record it with memory_write. You have no other
@@ -230,10 +230,10 @@ export async function runArchivist(args: {
   // mid-session /memory approve) — comparing against stale text would miss a duplicate `add` the
   // live file already has.
   const goal = buildArchivistGoal(transcript, loadMemory(args.ctx), args.trigger);
-  // The archivist is not dispatched through subagents/roles.ts's buildRoleToolSet: that seam
-  // exists for the DISPATCHABLE_ROLES the model-facing dispatch_subagents tool can name, and
-  // the archivist is deliberately unreachable from the model — it never appears in
-  // DISPATCHABLE_ROLES, is dispatched directly by this function via runSubagent, and needs
+  // The archivist is not dispatched through subagents/registry.ts's agentToolSet: that seam
+  // exists for the agents the model-facing dispatch_subagents tool can name, and the archivist is
+  // deliberately unreachable from the model — it never appears in the agent registry, is
+  // dispatched directly by this function via runSubagent, and needs
   // exactly one tool, so the ToolSet is simplest built inline. The (model, provider) pair on
   // `runtime` is whatever the caller already resolved; this function does not parse role pins.
   const tools: ToolSet = {

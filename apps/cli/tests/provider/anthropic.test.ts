@@ -31,7 +31,7 @@ afterEach(() => {
 describe("getAnthropicModel", () => {
   test("throws a clear error when ANTHROPIC_API_KEY is unset", () => {
     expect(() => getAnthropicModel("claude-sonnet-4-5")).toThrow(
-      "ANTHROPIC_API_KEY is not set. Run: seri config set ANTHROPIC_API_KEY <your-key>",
+      "ANTHROPIC_API_KEY is not set. Set it as an environment variable and re-run.",
     );
   });
 

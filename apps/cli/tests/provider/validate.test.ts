@@ -113,13 +113,6 @@ describe("validateProviderKey", () => {
     expect(called).toBe(false);
   });
 
-  // Round-2 reviewer-verifier finding: the empty-key check above used to sit AFTER the
-  // SERI_SKIP_KEY_VALIDATION short-circuit, so under that test-only escape hatch an empty key
-  // returned `{ok: true}` — and onSetupKeyEntered (cli.ts) has nothing else guarding against
-  // storing that empty string into config.json (setConfigValue doesn't reject empties; only
-  // configCommand's own CLI path does, which /setup never calls). The escape hatch is for skipping
-  // the NETWORK probe, not for waiving "was anything even typed" — this must still reject
-  // regardless of SERI_SKIP_KEY_VALIDATION.
   test("an empty key is still rejected even with SERI_SKIP_KEY_VALIDATION=1", async () => {
     process.env.SERI_SKIP_KEY_VALIDATION = "1";
     const result = await validateProviderKey("anthropic", "");

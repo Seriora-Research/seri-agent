@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { findCatalogEntry, type ModelProvider } from "@seri/model-catalog";
-import type { LanguageModel, ModelMessage } from "ai";
+import type { LanguageModel, LanguageModelUsage, ModelMessage } from "ai";
 import { buildVolatileTier, joinTiers } from "../agents/systemPrompt";
 import { appendBarrier } from "../checkpoint/checkpoint";
 import type { CliDeps, PreparedRun, RunContext } from "../cli";
@@ -19,14 +20,16 @@ import type { CostReport } from "../provider/cost";
 import { configuredProviders } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
 import { resolveReasoningEffort } from "../provider/reasoning";
+import { DISPATCH_TOOL_NAME } from "../provider/tools";
 import type { SessionState } from "../session/session";
 import { onSignalCancel } from "../signals";
-import { type ChildEventPayload, withSubagents } from "../subagents/dispatch";
+import { type ChildEventPayload, dispatchDirect, withSubagents } from "../subagents/dispatch";
+import type { AgentSpec } from "../subagents/registry";
 import {
   effortForChild,
+  isRoutableRole,
   parseRolePins,
   pinFromTask,
-  type RoutableRole,
   realizedRoute,
   resolveChildRoute,
   roleConstructionWarning,
@@ -87,6 +90,11 @@ export type DriveLoopResult = {
   // distinguishable from the main turn's, and summing it in would silently change what this file's
   // own printUsage/printCost assertions mean.
   archivist: ArchivistReport | undefined;
+  // The transcript line for a `/name` turn: the agent it went to, then the child's own summary.
+  // undefined on every ordinary turn. It exists because the synthetic tool-result clears the live
+  // roster the moment the child finishes, and no parent turn follows to say what came back — the
+  // user would otherwise watch a roster row appear and vanish with nothing to show for it.
+  directSummary: string | undefined;
   // Always true from driveLoop's own return, below — reaching it means a turn ran, unconditionally.
   // runTui's own resolveRunTui (quit(), further down) is the one caller that can genuinely produce
   // `false` here: an idle TUI session the user quit without ever submitting a task never calls
@@ -110,6 +118,10 @@ export type DriveLoopOptions = {
   // Scheduled runs omit this child. maybeRunArchivist's only tool is memory_write, which is
   // not in the read-only scheduled toolset. Default remains true for attended CLI and TUI.
   runArchivist?: boolean;
+  // `/name <task>` from the TUI: run this one agent on this goal instead of calling the parent
+  // model. Everything above the engine — route resolution, overlays, the checkpointer, the system
+  // tier, the usage fold — is shared with an ordinary turn; only the engine differs.
+  directDispatch?: { agent: AgentSpec; goal: string };
 };
 
 export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
@@ -195,13 +207,7 @@ export async function driveLoop(
     memory,
   } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
-  // `ctx.effortFlag` (--effort) wins outright and bypasses session.reasoningEffort/config.json
-  // entirely, for this call only (ParsedArgs.effort's own comment) — otherwise the ordinary
-  // precedence chain: session override, then the SERI_REASONING_EFFORT config default. Read fresh
-  // every driveLoop call, same reasoning as `system`/`route` above: a live /effort switch or a
-  // config default written mid-session must take effect on the very next turn.
-  const reasoningEffort =
-    ctx.effortFlag ?? resolveReasoningEffort(session, loadConfig(ctx.configDir));
+  const reasoningEffort = resolveReasoningEffort(session, loadConfig(ctx.configDir));
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
   // the consumer is the only thing that knows what a Ctrl-C means. Direct CLI/TUI callers register
@@ -254,19 +260,22 @@ export async function driveLoop(
     inherited: boolean;
   };
   const roleOverlays = new Map<string, RoleOverlay>();
-  function overlayKey(role: RoutableRole, request: TaskRouteRequest | undefined): string {
+  function overlayKey(role: string, request: TaskRouteRequest | undefined): string {
     const pin = pinFromTask(request);
     const effort =
       typeof request?.effort === "string" && request.effort.length > 0 ? request.effort : "";
     if (pin === undefined && effort.length === 0) return role;
     return `${role}:${pin?.provider ?? ""}:${pin?.model ?? ""}:${effort}`;
   }
-  function overlayFor(role: RoutableRole, request?: TaskRouteRequest): RoleOverlay {
+  // `role` is any agent name — a built-in, the archivist, or one a user's own agent file defines.
+  // Only a name in ROUTABLE_ROLES has a SERI_ROLE_* env pin to look up, and agent files are barred
+  // from those names, so a file-defined agent falls straight through to its own request.
+  function overlayFor(role: string, request?: TaskRouteRequest): RoleOverlay {
     const key = overlayKey(role, request);
     const cached = roleOverlays.get(key);
     if (cached !== undefined) return cached;
     const intended = resolveChildRoute(
-      role,
+      isRoutableRole(role) ? role : undefined,
       route,
       pins,
       request,
@@ -314,40 +323,44 @@ export async function driveLoop(
     roleOverlays.set(key, overlay);
     return overlay;
   }
+  // Hoisted rather than built inline in the composition below, because directDispatch (further
+  // down) runs its one child against this exact same runtime: same overlay resolution, same
+  // checkpointer, same usage fold, same child-event forwarding. A `/name` child and a
+  // model-issued one differ in who chose the agent, in nothing else.
+  const subagentRuntime = {
+    runLoop: runLoopFn,
+    model,
+    provider: route.provider,
+    modelId: route.model,
+    catalog,
+    contextWindowSize: catalogEntry?.contextWindow,
+    system,
+    agents: prepared.agents,
+    permissionMode: getPermissionMode,
+    allowedTools,
+    checkpointer,
+    reasoningEffort,
+    cwd: worktree,
+    resolveRole: (role: string, request?: TaskRouteRequest) => overlayFor(role, request),
+    // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
+    // subagent tokens land in the run's own reported total instead of vanishing.
+    // Child token spend is not a parent LoopEvent, so the writer records it here.
+    onChildUsage: (childUsage: LanguageModelUsage, childCost: CostReport | undefined) => {
+      usage.inputTokens = addTokens(usage.inputTokens, childUsage.inputTokens);
+      usage.outputTokens = addTokens(usage.outputTokens, childUsage.outputTokens);
+      cost = addCost(cost, childCost);
+      prepared.trajectory.recordChildUsage(childUsage, childCost);
+    },
+    onChildEvent: (payload: ChildEventPayload) => {
+      prepared.trajectory.recordChildEvent(payload);
+      onChildEvent?.(payload);
+    },
+  };
   // The one composition that enables dispatch_subagents; deleting this call (tools -> baseTools)
   // is the whole rollback, matching withCheckpoints/withVerification's own comment in prepareSession.
   // Scheduled runs pass composeSubagents: false so that tool never exists on the unattended path.
   const tools =
-    driveOpts.composeSubagents === false
-      ? baseTools
-      : withSubagents(baseTools, {
-          runLoop: runLoopFn,
-          model,
-          provider: route.provider,
-          modelId: route.model,
-          catalog,
-          contextWindowSize: catalogEntry?.contextWindow,
-          system,
-          permissionMode: getPermissionMode,
-          allowedTools,
-          checkpointer,
-          reasoningEffort,
-          cwd: worktree,
-          resolveRole: (role, request) => overlayFor(role, request),
-          // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
-          // subagent tokens land in the run's own reported total instead of vanishing.
-          // Child token spend is not a parent LoopEvent, so the writer records it here.
-          onChildUsage: (childUsage, childCost) => {
-            usage.inputTokens = addTokens(usage.inputTokens, childUsage.inputTokens);
-            usage.outputTokens = addTokens(usage.outputTokens, childUsage.outputTokens);
-            cost = addCost(cost, childCost);
-            prepared.trajectory.recordChildUsage(childUsage, childCost);
-          },
-          onChildEvent: (payload) => {
-            prepared.trajectory.recordChildEvent(payload);
-            onChildEvent?.(payload);
-          },
-        });
+    driveOpts.composeSubagents === false ? baseTools : withSubagents(baseTools, subagentRuntime);
   // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
   // what an exit code promises a shell, which is this consumer's business, not the loop's.
   // `permission-denied` fires on two different facts carried in its `reason` — "blocked" is a
@@ -361,45 +374,83 @@ export async function driveLoop(
   let hadDenial = false;
   let ranTool = false;
   let archivist: ArchivistReport | undefined;
-  try {
-    for await (const event of runLoopFn({
-      model,
-      tools,
-      messages: session.messages,
-      // A getter, not a resolved-once value — see this function's own comment above for why.
-      // loop.ts reads `opts.permissionMode` fresh on every gate check (loop.ts's own
-      // decidePermission call), never caching it into a local at the top of the generator, which
-      // is what makes a getter here actually take effect mid-turn rather than only on the next one.
-      get permissionMode() {
-        return getPermissionMode();
-      },
-      // A seed, not a
-      // handle: the loop copies it (loop.ts:211) and growth comes back out as `tool-allowed`,
-      // below.
-      allowedTools,
-      approvalPrompt,
-      // Computed once above, so a live /model switch or reroute reaches subagents identically.
-      system,
+  let directSummary: string | undefined;
+
+  // `/name <task>`: one agent the USER picked, run in place of a parent model call. It yields the
+  // same LoopEvent stream the loop would for a dispatch the model itself issued — tool-call,
+  // tool-result, messages-updated, done — which is why persistence, the trajectory writer, the
+  // live subagent panel, turn-started/turn-ended and Ctrl-C all keep working with no change at
+  // those sites. The `tool-result` clears the live roster (reducer.ts's EMPTY_ROSTER), which is
+  // what `directSummary` below is for — see its own doc on DriveLoopResult. The events also reach
+  // observeArchivistEvent, so a `/name` turn counts toward the archivist trigger like any other
+  // tool-using turn — intended: a dispatch is a dispatch whoever asked for it.
+  async function* directDispatchEvents(direct: {
+    agent: AgentSpec;
+    goal: string;
+  }): AsyncGenerator<LoopEvent> {
+    const toolCallId = randomUUID();
+    yield {
+      type: "tool-call",
+      name: DISPATCH_TOOL_NAME,
+      args: { tasks: [{ role: direct.agent.name, goal: direct.goal }] },
+    };
+    const { result, rows } = await dispatchDirect({
+      runtime: subagentRuntime,
+      spec: direct.agent,
+      goal: direct.goal,
+      toolCallId,
+      rewindTo: session.messages.length,
       signal: controller.signal,
-      maxIterations: maxTurns,
-      // Without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`
-      // / `opts.provider === "groq" && opts.modelId && opts.catalog`) never fires and every `usage`
-      // event's `cost` field is silently undefined — the run genuinely never computes a cost, no
-      // matter what cost.ts itself does. No `?? "groq"` fallback needed here (a prior version had
-      // one): `route` (PreparedRun's own field) is never optional — `resolveRoute` always returns a
-      // concrete pair. `route.model`/`.provider`, not `session.model`/`.provider`: this is the
-      // pair the call is ACTUALLY being made against (this function's own comment just above), and
-      // the two can differ from a routing-priority reroute. Using the requested pair here
-      // would mis-tag a rerouted call's cost report with the wrong provider's pricing branch.
-      provider: route.provider,
-      modelId: route.model,
-      catalog,
-      // The catalog's own contextWindow for whatever model this turn is actually calling — a
-      // /model switch to a provider/model with a different limit must change compaction's own
-      // math, not just which endpoint gets called (PreparedRun.catalogEntry's own comment).
-      contextWindowSize: catalogEntry?.contextWindow,
-      reasoningEffort,
-    })) {
+    });
+    directSummary = `[dispatched to the "${direct.agent.name}" subagent]\n\n${result.results[0].summary}`;
+    yield { type: "tool-result", name: DISPATCH_TOOL_NAME, result };
+    yield { type: "messages-updated", messages: [...session.messages, ...rows] };
+    // Read literally — "the turn ended with no pending model tool call" — this is true, and it
+    // keeps the four consumers that exhaustively switch on `done.reason` unchanged.
+    yield { type: "done", reason: controller.signal.aborted ? "aborted" : "no-tool-call" };
+  }
+
+  try {
+    for await (const event of driveOpts.directDispatch !== undefined
+      ? directDispatchEvents(driveOpts.directDispatch)
+      : runLoopFn({
+          model,
+          tools,
+          messages: session.messages,
+          // A getter, not a resolved-once value — see this function's own comment above for why.
+          // loop.ts reads `opts.permissionMode` fresh on every gate check (loop.ts's own
+          // decidePermission call), never caching it into a local at the top of the generator, which
+          // is what makes a getter here actually take effect mid-turn rather than only on the next one.
+          get permissionMode() {
+            return getPermissionMode();
+          },
+          // A seed, not a
+          // handle: the loop copies it (loop.ts:211) and growth comes back out as `tool-allowed`,
+          // below.
+          allowedTools,
+          approvalPrompt,
+          // Computed once above, so a live /model switch or reroute reaches subagents identically.
+          system,
+          signal: controller.signal,
+          maxIterations: maxTurns,
+          // Without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`
+          // / `opts.provider === "groq" && opts.modelId && opts.catalog`) never fires and every `usage`
+          // event's `cost` field is silently undefined — the run genuinely never computes a cost, no
+          // matter what cost.ts itself does. No `?? "groq"` fallback needed here (a prior version had
+          // one): `route` (PreparedRun's own field) is never optional — `resolveRoute` always returns a
+          // concrete pair. `route.model`/`.provider`, not `session.model`/`.provider`: this is the
+          // pair the call is ACTUALLY being made against (this function's own comment just above), and
+          // the two can differ from a routing-priority reroute. Using the requested pair here
+          // would mis-tag a rerouted call's cost report with the wrong provider's pricing branch.
+          provider: route.provider,
+          modelId: route.model,
+          catalog,
+          // The catalog's own contextWindow for whatever model this turn is actually calling — a
+          // /model switch to a provider/model with a different limit must change compaction's own
+          // math, not just which endpoint gets called (PreparedRun.catalogEntry's own comment).
+          contextWindowSize: catalogEntry?.contextWindow,
+          reasoningEffort,
+        })) {
       // The archivist's entire view of this turn — its own module owns what each event means to
       // it (memory/archivist.ts's own comment on observeArchivistEvent), so nothing else in this
       // loop mutates archivistState directly.
@@ -508,6 +559,7 @@ export async function driveLoop(
     cost,
     refusedWithoutRunning: hadDenial && !ranTool,
     archivist,
+    directSummary,
     ranAnyTurn: true,
   };
 }

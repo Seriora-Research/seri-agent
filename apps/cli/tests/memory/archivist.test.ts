@@ -27,7 +27,7 @@ import { applyWrite, loadMemory, type MemoryContext } from "../../src/memory/sto
 import { makeMemoryWriteTool } from "../../src/memory/tool";
 import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
 import { runSubagent, type SubagentRuntime } from "../../src/subagents/dispatch";
-import { DISPATCHABLE_ROLES } from "../../src/subagents/roles";
+import { BUILTIN_AGENTS } from "../../src/subagents/registry";
 import { parseRolePins, resolveRoleRoute } from "../../src/subagents/routes";
 import { streamResult, usage as usageChunk } from "../loop/fixtures";
 import { fakeChildLoop } from "../subagents/fakeChildLoop";
@@ -516,7 +516,7 @@ describe("maybeRunArchivist", () => {
   });
 
   test("an env archivist pin is the pair nested runLoop sees, and archivist is still not dispatchable", async () => {
-    expect((DISPATCHABLE_ROLES as readonly string[]).includes("archivist")).toBe(false);
+    expect(BUILTIN_AGENTS.some((spec) => spec.name === "archivist")).toBe(false);
 
     const originalModel = process.env.SERI_ROLE_ARCHIVIST_MODEL;
     const originalProvider = process.env.SERI_ROLE_ARCHIVIST_PROVIDER;

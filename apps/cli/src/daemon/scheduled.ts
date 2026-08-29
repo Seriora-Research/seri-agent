@@ -13,7 +13,8 @@ import { resolveDefaultModel } from "../provider/defaults";
 import { driveLoop } from "../runtime/drive";
 import { createSessionTrajectory, type RunSession, resolveModelRoute } from "../runtime/prepare";
 import { saveSession } from "../session/session";
-import { type RunScheduled, assertScheduledToolset } from "./scheduler";
+import { builtinRegistry } from "../subagents/registry";
+import { assertScheduledToolset, type RunScheduled } from "./scheduler";
 
 export function createRunScheduled(opts: {
   configDir: string;
@@ -63,6 +64,9 @@ export function createRunScheduled(opts: {
       checkpointer: live,
       verifyConfig: loadVerifyConfig(opts.configDir),
       memory: loadMemory({ configDir: opts.configDir, worktree: session.cwd }),
+      // Built-ins only, no disk read: this path passes composeSubagents: false, so the dispatch
+      // tool never exists here and a scheduled run must not load agent files a human never saw.
+      agents: builtinRegistry(),
       trajectory: createSessionTrajectory(session, opts.configDir, onWarning),
       preMountMessages: [],
     };
@@ -74,8 +78,6 @@ export function createRunScheduled(opts: {
       checkpointsDir,
       permissionsDir: opts.configDir,
       configDir: opts.configDir,
-      effortFlag: undefined,
-      detailFlag: false,
       cwd: session.cwd,
     };
 
