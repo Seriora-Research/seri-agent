@@ -87,7 +87,7 @@ export function parseAgentFile(opts: {
   // A UTF-8 BOM is what Notepad and PowerShell redirection both write, and it lands ahead of the
   // opening fence — where it would otherwise be the difference between an agent file and a stray
   // note in agents/.
-  const text = opts.text.startsWith("﻿") ? opts.text.slice(1) : opts.text;
+  const text = opts.text.charCodeAt(0) === 0xfeff ? opts.text.slice(1) : opts.text;
   const fence = FRONTMATTER.exec(text);
   if (fence === null) return skip(filePath, "it has no YAML frontmatter block");
 
