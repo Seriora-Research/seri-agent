@@ -15,7 +15,6 @@ import {
   agentRouteRequest,
   agentToolSet,
   BUILTIN_AGENTS,
-  builtinRegistry,
   describeAgent,
 } from "./registry";
 import type { TaskRouteRequest } from "./routes";
@@ -288,7 +287,7 @@ export async function runSubagent(opts: {
 // One generated line per agent, so an agent the model is told about and the ToolSet it actually
 // gets are read off the same spec. An agent with no `description` contributes no line at all: the
 // model is never told it exists, which is what leaves it reachable only by an explicit /name.
-function dispatchDescription(agents: AgentRegistry): string {
+export function dispatchDescription(agents: AgentRegistry): string {
   const roster = [...agents.values()]
     .filter((spec) => spec.description.length > 0)
     .map(describeAgent)
@@ -307,9 +306,10 @@ function dispatchDescription(agents: AgentRegistry): string {
   );
 }
 
-// Destructured rather than asserted: BUILTIN_AGENTS is a non-empty tuple, so the head is an
-// AgentSpec by type and z.enum gets the `[string, ...string[]]` it needs with no cast.
-function dispatchSchema(agents: AgentRegistry) {
+// Built per compose (once per turn) rather than at module load, because the registry is
+// per-session. Destructured rather than asserted: BUILTIN_AGENTS is a non-empty tuple, so the head
+// is an AgentSpec by type and z.enum gets the `[string, ...string[]]` it needs with no cast.
+export function dispatchSchema(agents: AgentRegistry) {
   const [first, ...rest] = BUILTIN_AGENTS;
   const custom = [...agents.keys()].filter((name) => !BUILTIN_AGENTS.some((s) => s.name === name));
   const names: [string, ...string[]] = [first.name, ...rest.map((spec) => spec.name), ...custom];
@@ -337,12 +337,14 @@ function hasSpec<T>(entry: {
   return entry.spec !== undefined;
 }
 
-// `system` (the parent's own composed stable+context+volatile tiers; runOne appends the role
-// addendum) lives on this parameter, not SubagentRuntime itself: the archivist reuses
+// `system` (the parent's own composed stable+context+volatile tiers; runOne appends the agent's
+// addendum) and `agents` live on this parameter, not SubagentRuntime itself: the archivist reuses
 // SubagentRuntime + runSubagent directly (this file's own hand-off comment) but never this
-// function, and its own runtime has no such parent system prompt to compose.
-export function createDispatchTool(runtime: SubagentRuntime & { system: string }) {
-  const agents = builtinRegistry();
+// function, and has neither a parent system prompt to compose nor a registry to be named in.
+export function createDispatchTool(
+  runtime: SubagentRuntime & { system: string; agents: AgentRegistry },
+) {
+  const { agents } = runtime;
   return tool({
     description: dispatchDescription(agents),
     inputSchema: dispatchSchema(agents),
@@ -497,7 +499,7 @@ export function createDispatchTool(runtime: SubagentRuntime & { system: string }
 // back is deleting the one call site that composes this in (cli.ts's driveLoop).
 export function withSubagents(
   tools: ToolSet,
-  runtime: SubagentRuntime & { system: string },
+  runtime: SubagentRuntime & { system: string; agents: AgentRegistry },
 ): ToolSet {
   return { ...tools, [DISPATCH_TOOL_NAME]: createDispatchTool(runtime) };
 }

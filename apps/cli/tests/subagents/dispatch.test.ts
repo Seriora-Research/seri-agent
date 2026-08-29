@@ -12,10 +12,18 @@ import {
   type ChildEventPayload,
   createDispatchTool,
   type DispatchResult,
+  dispatchDescription,
+  dispatchSchema,
   runSubagent,
   type SubagentRuntime,
 } from "../../src/subagents/dispatch";
-import { type AgentSpec, agentToolSet, builtinRegistry } from "../../src/subagents/registry";
+import {
+  type AgentRegistry,
+  type AgentSpec,
+  agentToolSet,
+  builtinRegistry,
+  composeAddendum,
+} from "../../src/subagents/registry";
 import { collect, streamResult, textOnlyChunks, toolCallChunks } from "../loop/fixtures";
 import { fakeChildLoop } from "./fakeChildLoop";
 
@@ -68,8 +76,8 @@ function usageEvent(inputTokens?: number, outputTokens?: number): LoopEvent {
 
 function makeRuntime(
   fake: (opts: RunLoopOpts) => AsyncGenerator<LoopEvent>,
-  overrides: Partial<SubagentRuntime & { system: string }> = {},
-): SubagentRuntime & { system: string } {
+  overrides: Partial<SubagentRuntime & { system: string; agents: AgentRegistry }> = {},
+): SubagentRuntime & { system: string; agents: AgentRegistry } {
   const catalog: ModelCatalog = { fetchedAt: "", entries: [] };
   return {
     runLoop: fake as unknown as typeof runLoop,
@@ -78,6 +86,7 @@ function makeRuntime(
     modelId: "test-model",
     catalog,
     system: "PARENT SYSTEM",
+    agents: builtinRegistry(),
     permissionMode: () => "auto",
     allowedTools: [],
     reasoningEffort: undefined,
@@ -994,5 +1003,178 @@ describe("dispatch_subagents", () => {
     );
 
     expect(snapshots).toHaveLength(1);
+  });
+});
+
+// A registry with one file-defined agent in it, standing in for a `.seri/agents/reviewer.md` that
+// loadAgentRegistry already parsed — these assert what the DISPATCH TOOL does with a custom spec,
+// which is a different question from whether the file parsed (agentFile.test.ts) or was found
+// (registry.test.ts).
+function withCustomAgent(spec: Partial<AgentSpec> & { name: string }): AgentRegistry {
+  const agents = new Map(builtinRegistry());
+  const toolNames = spec.toolNames ?? (["read_file", "grep"] as const);
+  agents.set(spec.name, {
+    description: "Grades a diff against the plan.",
+    request: undefined,
+    ...spec,
+    toolNames,
+    addendum: composeAddendum({ name: spec.name, job: "review it", toolNames }),
+    source: "project",
+    filePath: `/p/.seri/agents/${spec.name}.md`,
+  });
+  return agents;
+}
+
+describe("dispatch_subagents with a file-defined agent", () => {
+  test("the input schema accepts the custom name and rejects one no file defined", () => {
+    const schema = dispatchSchema(withCustomAgent({ name: "reviewer" }));
+    expect(schema.safeParse({ tasks: [{ role: "reviewer", goal: "grade it" }] }).success).toBe(
+      true,
+    );
+    expect(schema.safeParse({ tasks: [{ role: "nobody", goal: "grade it" }] }).success).toBe(false);
+  });
+
+  test("the tool description carries the custom agent's own line and its real tool grant", () => {
+    const text = dispatchDescription(withCustomAgent({ name: "reviewer" }));
+    expect(text).toContain('"reviewer": Grades a diff against the plan. Tools: read_file, grep.');
+    expect(text).toContain('"explore"');
+  });
+
+  test("an agent with no description contributes no line, so the model is never told it exists", () => {
+    const text = dispatchDescription(withCustomAgent({ name: "quiet", description: "" }));
+    expect(text).not.toContain('"quiet"');
+  });
+
+  test("a custom agent runs with exactly its own ToolSet and its own addendum", async () => {
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, { agents: withCustomAgent({ name: "reviewer" }) }),
+    );
+    await dispatchTool.execute(
+      { tasks: [{ role: "reviewer", goal: "grade it" }] },
+      dispatchOpts("t1"),
+    );
+
+    expect(Object.keys(calls[0].opts.tools ?? {}).sort()).toEqual(["grep", "read_file"]);
+    expect(calls[0].opts.system).toContain('"reviewer" subagent');
+    expect(calls[0].opts.system?.startsWith("PARENT SYSTEM")).toBe(true);
+  });
+
+  // The structural half of the recursion guard, from the other end: even if a file asks for the
+  // dispatch tool by name, the grant is picked out of toolDefinitions keys, which that name is not
+  // one of — so there is nothing for parseAgentFile to have put on the spec for this to grant.
+  test("a custom agent's ToolSet can never contain dispatch_subagents", async () => {
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, { agents: withCustomAgent({ name: "reviewer" }) }),
+    );
+    await dispatchTool.execute(
+      { tasks: [{ role: "reviewer", goal: "grade it" }] },
+      dispatchOpts("t1"),
+    );
+    expect(Object.keys(calls[0].opts.tools ?? {})).not.toContain(DISPATCH_TOOL_NAME);
+  });
+
+  test("a custom agent holding bash gets the pre-dispatch checkpoint a built-in writer gets", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const snapshots: unknown[] = [];
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        agents: withCustomAgent({ name: "fixer", toolNames: ["read_file", "bash"] }),
+        checkpointer: (context) => snapshots.push(context),
+      }),
+    );
+    await dispatchTool.execute(
+      { tasks: [{ role: "fixer", goal: "fix it" }] },
+      dispatchOpts("t1", [{ role: "user", content: "hi" }]),
+    );
+    expect(snapshots).toHaveLength(1);
+  });
+
+  test("a custom agent holding no mutating tool takes no snapshot", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const snapshots: unknown[] = [];
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        agents: withCustomAgent({ name: "reviewer" }),
+        checkpointer: (context) => snapshots.push(context),
+      }),
+    );
+    await dispatchTool.execute(
+      { tasks: [{ role: "reviewer", goal: "grade it" }] },
+      dispatchOpts("t1", [{ role: "user", content: "hi" }]),
+    );
+    expect(snapshots).toEqual([]);
+  });
+
+  test("a custom agent holding bash serializes against a built-in writer instead of racing it", async () => {
+    const { fake, calls } = fakeChildLoop((_opts, index) => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+      before: index === 0 ? () => sleep(30) : undefined,
+    }));
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        agents: withCustomAgent({ name: "fixer", toolNames: ["read_file", "bash"] }),
+      }),
+    );
+    await dispatchTool.execute(
+      {
+        tasks: [
+          { role: "fixer", goal: "fix it" },
+          { role: "code", goal: "write" },
+        ],
+      },
+      dispatchOpts("t1"),
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1].startedAt).toBeGreaterThanOrEqual(calls[0].endedAt as number);
+  });
+
+  test("a custom agent's own model pin reaches resolveRole, and its name is what the roster sees", async () => {
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const requests: unknown[] = [];
+    const agents = withCustomAgent({
+      name: "reviewer",
+      request: { model: "claude-sonnet-5", provider: "anthropic", effort: "high" },
+    });
+    const events: ChildEventPayload[] = [];
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        agents,
+        onChildEvent: (payload) => events.push(payload),
+        resolveRole: (role, request) => {
+          requests.push({ role, request });
+          return {
+            model: new MockLanguageModelV4({}),
+            provider: "anthropic",
+            modelId: "claude-sonnet-5",
+            reasoningEffort: request?.effort,
+            inherited: false,
+          };
+        },
+      }),
+    );
+    await dispatchTool.execute(
+      { tasks: [{ role: "reviewer", goal: "grade it" }] },
+      dispatchOpts("t1"),
+    );
+
+    expect(requests).toContainEqual({
+      role: "reviewer",
+      request: { model: "claude-sonnet-5", provider: "anthropic", effort: "high" },
+    });
+    expect(calls[0].opts.reasoningEffort).toBe("high");
+    expect(events[0]?.role).toBe("reviewer");
   });
 });

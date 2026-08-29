@@ -325,6 +325,7 @@ export async function driveLoop(
           catalog,
           contextWindowSize: catalogEntry?.contextWindow,
           system,
+          agents: prepared.agents,
           permissionMode: getPermissionMode,
           allowedTools,
           checkpointer,
