@@ -130,6 +130,7 @@ import {
 import { awaitsReply } from "./session/awaitsReply";
 import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
+import type { AgentSpec } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
@@ -1600,7 +1601,11 @@ async function runTui(
   // comment, reducer.ts). `undefined` for a turn with no new typed text this call (the mount-time
   // "resume" path, runTui's own `connectDispatch`, continues a conversation already ending on an
   // unanswered user turn already in `session.messages` — not new this run).
-  async function runTurn(session: SessionState<ModelMessage>, inputText?: string): Promise<void> {
+  async function runTurn(
+    session: SessionState<ModelMessage>,
+    inputText?: string,
+    directDispatch?: { agent: AgentSpec; goal: string },
+  ): Promise<void> {
     if (reactDispatch === undefined || turnInFlight) return;
     turnInFlight = true;
     ranAnyTurn = true;
@@ -1857,6 +1862,9 @@ async function runTui(
         tuiApprovalPrompt,
         archivistState,
         (payload) => dispatch({ type: "subagent-child-event", ...payload }),
+        // driveLoop's 11th positional parameter, defaulted everywhere else. Passed explicitly here
+        // rather than reordering the signature: only this call site ever has a /name to hand over.
+        { directDispatch },
       );
       usage = {
         inputTokens: addTokens(usage.inputTokens, result.usage.inputTokens),
@@ -1871,6 +1879,12 @@ async function runTui(
       // feeds the FINAL resolveRunTui result (printed once more after Ink unmounts, quit()'s own
       // comment explains why). Stats are a muted plain line so the markdown parser never sees
       // "(archivist: …)"; a defined summary is a second muted markdown entry.
+      // The one thing a /name turn leaves behind: the synthetic tool-result already cleared the
+      // live roster, and no parent turn follows to paraphrase the child. Same two lines the
+      // archivist summary below uses, and for the same reason.
+      if (result.directSummary !== undefined) {
+        pushTranscriptLine(dispatch, result.directSummary, { muted: true, markdown: true });
+      }
       if (result.archivist) {
         pushTranscriptLine(dispatch, archivistStatsLine(result.archivist), { muted: true });
         if (result.archivist.summary !== undefined) {
@@ -1959,6 +1973,9 @@ async function runTui(
         cost,
         refusedWithoutRunning,
         archivist,
+        // Rendered live into the transcript the turn it happened (runTurn, above), never carried
+        // to the end of the session the way `archivist` is.
+        directSummary: undefined,
         ranAnyTurn,
       });
     };
@@ -2193,7 +2210,31 @@ async function runTui(
     const command = SLASH_COMMANDS.get(name);
     if (command === undefined) {
       if (name.startsWith("/")) {
-        dispatch({ type: "command-error", message: `Unrecognized command: ${name}` });
+        // The last place a slash name is looked up: the session's agent registry. `/reviewer grade
+        // the diff` runs that agent directly, with no parent round trip to decide whether to.
+        const agent = prepared.agents.get(name.slice(1));
+        if (agent === undefined) {
+          dispatch({ type: "command-error", message: `Unrecognized command: ${name}` });
+          return;
+        }
+        // Sliced off `trimmed`, not rejoined from `args`: the goal keeps whatever spacing the user
+        // typed, which for a pasted multi-clause task is the difference between a readable prompt
+        // and a mangled one.
+        const goal = trimmed.slice(name.length).trim();
+        if (goal.length === 0) {
+          dispatch({ type: "command-error", message: `${name}: usage ${name} <task>` });
+          return;
+        }
+        if (turnInFlight) {
+          dispatch({
+            type: "command-error",
+            message: "A turn is already running; wait for it to finish before submitting another.",
+          });
+          return;
+        }
+        // The session is passed unchanged: driveLoop's direct path appends the user row itself,
+        // alongside the two synthetic dispatch rows, as one unit.
+        currentTurn = runTurn(liveState.session, undefined, { agent, goal });
         return;
       }
       if (turnInFlight) {

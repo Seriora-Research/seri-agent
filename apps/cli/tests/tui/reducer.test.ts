@@ -2085,3 +2085,77 @@ describe("tuiReducer: subagent-child-event", () => {
     expect(state.transcript.at(-1)?.text).toBe(`done · ${formatTokenProgress(tokens!)}`);
   });
 });
+
+// The TUI half of a `/name <task>` turn. driveLoop emits the same LoopEvents a model-issued
+// dispatch does, so these assert that the reducer needs no branch for one: a file-defined agent's
+// name paints the roster like a built-in's, the synthetic tool-result clears it, and the three
+// appended rows land on the session the same way any other messages-updated does.
+describe("tuiReducer: a /name turn's synthetic dispatch events", () => {
+  test("a file-defined agent's name paints the roster with no built-in role list to belong to", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("d1:0", "reviewer", "grade the diff", {
+        type: "child-started",
+      }),
+    );
+    expect(panel(state).subagents).toHaveLength(1);
+    expect(panel(state).subagents[0]?.role).toBe("reviewer");
+    expect(panel(state).subagents[0]?.goal).toBe("grade the diff");
+  });
+
+  test("the synthetic tool-result clears the roster, which is why the summary line is the evidence", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(
+      state,
+      childEvent("d1:0", "reviewer", "grade the diff", {
+        type: "child-started",
+      }),
+    );
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: {
+        type: "tool-result",
+        name: "dispatch_subagents",
+        result: { results: [{ doneReason: "no-tool-call" }], totalUsage: {} },
+      },
+    });
+    expect(panel(state).subagents).toEqual([]);
+  });
+
+  test("the three appended rows reach the session through the ordinary messages-updated path", () => {
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "loop-event",
+      event: {
+        type: "messages-updated",
+        messages: [
+          { role: "user", content: "grade the diff" },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "c1",
+                toolName: "dispatch_subagents",
+                input: { tasks: [{ role: "reviewer", goal: "grade the diff" }] },
+              },
+            ],
+          },
+          {
+            role: "tool",
+            content: [
+              {
+                type: "tool-result",
+                toolCallId: "c1",
+                toolName: "dispatch_subagents",
+                output: { type: "json", value: { results: [], totalUsage: {} } },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(state.session.messages).toHaveLength(3);
+    expect(state.session.messages[0]).toEqual({ role: "user", content: "grade the diff" });
+  });
+});

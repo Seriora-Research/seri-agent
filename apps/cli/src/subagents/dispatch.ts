@@ -1,5 +1,5 @@
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
-import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "ai";
+import type { JSONValue, LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "ai";
 import { tool } from "ai";
 import { z } from "zod";
 import { joinTiers } from "../agents/systemPrompt";
@@ -502,4 +502,114 @@ export function withSubagents(
   runtime: SubagentRuntime & { system: string; agents: AgentRegistry },
 ): ToolSet {
   return { ...tools, [DISPATCH_TOOL_NAME]: createDispatchTool(runtime) };
+}
+
+/**
+ * The `/name <task>` engine: exactly one child, with the same tool grant, addendum, overlay
+ * resolution, checkpoint and child-event forwarding a model-issued dispatch gets — and the message
+ * rows loop.ts would have written for it.
+ *
+ * Three rows, not two. Providers want a user-first, alternating history, and every real dispatch in
+ * loop.ts follows a user turn; a synthetic assistant row alone would be the first row of a session
+ * whose first action was `/name`. The user row carries the plain task text, never the slash line:
+ * the model must not be shown syntax it cannot itself issue, and the tool-call row already says
+ * which agent ran.
+ *
+ * Returned rather than pushed, so the caller appends them as one unit — a throw writes none of
+ * them, and history is never left holding a tool call with no result.
+ */
+export async function dispatchDirect(opts: {
+  runtime: SubagentRuntime & { system: string };
+  spec: AgentSpec;
+  goal: string;
+  toolCallId: string;
+  /** Where the user row is about to land. Unlike createDispatchTool's own anchor, no row of this
+   *  dispatch exists yet, so this is `messages.length` — a later /rewind to it drops the whole
+   *  `/name` submission, which is the one user action it undoes. */
+  rewindTo: number;
+  signal?: AbortSignal;
+}): Promise<{ result: DispatchResult; rows: readonly ModelMessage[] }> {
+  const { runtime, spec, goal, toolCallId } = opts;
+  const input = { tasks: [{ role: spec.name, goal }] };
+
+  if (agentMutatesFilesystem(spec) && runtime.checkpointer) {
+    runtime.checkpointer({
+      tool: DISPATCH_TOOL_NAME,
+      toolCallId,
+      args: input,
+      rewindTo: opts.rewindTo,
+    });
+  }
+
+  const childId = `${toolCallId}:0`;
+  const request = agentRouteRequest(spec, undefined);
+  const overlay = runtime.resolveRole?.(spec.name, request);
+  const identity = {
+    model: overlay?.modelId ?? runtime.modelId,
+    provider: overlay?.provider ?? runtime.provider,
+    inherited: overlay?.inherited ?? true,
+  };
+  runtime.onChildEvent?.({
+    childId,
+    role: spec.name,
+    goal,
+    event: { type: "child-started" },
+    ...identity,
+  });
+
+  const settled = await runSubagent({
+    tools: agentToolSet(spec, runtime.checkpointer?.onAfterMutation, runtime.cwd),
+    system: joinTiers(runtime.system, spec.addendum),
+    messages: [{ role: "user", content: goal }],
+    runtime:
+      overlay === undefined
+        ? runtime
+        : {
+            ...runtime,
+            model: overlay.model,
+            provider: overlay.provider,
+            modelId: overlay.modelId,
+            contextWindowSize: overlay.contextWindowSize,
+            reasoningEffort: overlay.reasoningEffort,
+          },
+    signal: opts.signal,
+    child: { id: childId, role: spec.name, goal, ...identity },
+  });
+
+  const result: DispatchResult = {
+    results: [
+      {
+        role: spec.name,
+        goal,
+        summary: settled.summary,
+        usage: settled.usage,
+        toolCallsMade: settled.toolCallsMade,
+        doneReason: settled.doneReason,
+        ...identity,
+      },
+    ],
+    totalUsage: settled.usage,
+  };
+
+  return {
+    result,
+    rows: [
+      { role: "user", content: goal },
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId, toolName: DISPATCH_TOOL_NAME, input }],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId,
+            toolName: DISPATCH_TOOL_NAME,
+            output: { type: "json", value: result as unknown as JSONValue },
+          },
+        ],
+      },
+    ],
+  };
 }
