@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
+import { mcpAuthPath, saveMcpServerAuth } from "../../src/mcp/authStore";
 import { createMcpClients, type McpServerStatus } from "../../src/mcp/client";
 import {
   decideMcpCommand,
@@ -78,6 +79,7 @@ describe("mcpCommandAccepts", () => {
     expect(mcpCommandAccepts(["add", "exa", "https://mcp.exa.ai/mcp"])).toBe(true);
     expect(mcpCommandAccepts(["remove", "exa"])).toBe(true);
     expect(mcpCommandAccepts(["connect", "exa"])).toBe(true);
+    expect(mcpCommandAccepts(["auth", "exa"])).toBe(true);
   });
 
   // The exact hijack class SLASH_COMMANDS' own comment documents elsewhere: a task that merely
@@ -94,6 +96,8 @@ describe("mcpCommandAccepts", () => {
     expect(mcpCommandAccepts(["remove"])).toBe(false);
     expect(mcpCommandAccepts(["remove", "exa", "extra"])).toBe(false);
     expect(mcpCommandAccepts(["connect"])).toBe(false);
+    expect(mcpCommandAccepts(["auth"])).toBe(false);
+    expect(mcpCommandAccepts(["auth", "exa", "extra"])).toBe(false);
     expect(mcpCommandAccepts(["bogus"])).toBe(false);
   });
 });
@@ -454,7 +458,7 @@ describe("decideMcpCommand: add", () => {
 });
 
 describe("decideMcpCommand: remove", () => {
-  test("edits the file the entry actually came from and deletes its cached catalog", () => {
+  test("edits the file the entry came from and deletes both its catalog and its credentials", () => {
     const { configDir, worktree } = load({
       "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
     });
@@ -468,7 +472,14 @@ describe("decideMcpCommand: remove", () => {
       fetchedAt: new Date().toISOString(),
       tools: [tool()],
     });
+    saveMcpServerAuth(
+      configDir,
+      "exa",
+      { tokens: { access_token: "at", token_type: "Bearer" } },
+      "https://mcp.exa.ai/mcp",
+    );
     expect(existsSync(join(configDir, "mcp", "catalog", "exa.json"))).toBe(true);
+    expect(existsSync(mcpAuthPath(configDir, "exa"))).toBe(true);
 
     const { lines } = decideMcpCommand(["remove", "exa"], {
       registry,
@@ -476,11 +487,12 @@ describe("decideMcpCommand: remove", () => {
       worktree,
       clients: createMcpClients(),
     });
-    expect(lines[0]).toContain("Removed");
+    expect(lines).toEqual(['Removed "exa", its cached catalog and its stored credentials.']);
 
     const projectFile = entryFromRegistry?.spec.filePath as string;
     expect(readFileSync(projectFile, "utf8")).not.toContain("exa:");
     expect(existsSync(join(configDir, "mcp", "catalog", "exa.json"))).toBe(false);
+    expect(existsSync(mcpAuthPath(configDir, "exa"))).toBe(false);
   });
 
   test("an unknown name returns a line rather than throwing", () => {

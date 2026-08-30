@@ -2,6 +2,7 @@ import { join, relative } from "node:path";
 import { getMcpDir } from "../config/paths";
 import { messageOf } from "../errors";
 import type { ExtensionSource } from "../extensions/discovery";
+import { clearMcpServerAuth } from "./authStore";
 import type { McpClients, McpServerStatus } from "./client";
 import { mcpServerStatus } from "./client";
 import {
@@ -55,6 +56,7 @@ export function mcpCommandAccepts(args: string[]): boolean {
   if (sub === "add") return rest.length === 2;
   if (sub === "remove") return rest.length === 1;
   if (sub === "connect") return rest.length === 1; // dials; handled by the panel, not this file
+  if (sub === "auth") return rest.length === 1; // logs in; handled by cli.ts's own branch
   return false;
 }
 
@@ -221,15 +223,19 @@ function removeResult(
   if (!removed) return { lines: [`No MCP server named "${name}".`] };
 
   deleteCatalogCache(deps.configDir, name);
+  // Alongside the catalog, for the same reason: a name added back later must not silently inherit
+  // what the previous owner of that name was trusted with — here, a live access token.
+  clearMcpServerAuth(deps.configDir, name);
   return {
-    lines: [`Removed "${name}" and its cached catalog.`],
+    lines: [`Removed "${name}", its cached catalog and its stored credentials.`],
     change: { kind: "removed", name },
   };
 }
 
-// The one-shot forms: list, add, remove. `connect` belongs to the panel because it dials, and the
-// bare form opens the panel too — neither reaches this function in practice; the default line
-// below exists only as a defensive fallback if they ever do.
+// The one-shot forms: list, add, remove. `connect` belongs to the panel and `auth` to cli.ts's own
+// branch, because both do network I/O, and the bare form opens the panel too — none of the three
+// reaches this function in practice; the default line below exists only as a defensive fallback if
+// they ever do.
 export function decideMcpCommand(
   args: string[],
   deps: { registry: McpRegistry; configDir: string; worktree: string; clients: McpClients },
@@ -242,5 +248,5 @@ export function decideMcpCommand(
   if (sub === "add") return addResult(rest[0], rest[1], deps);
   if (sub === "remove") return removeResult(rest[0], deps);
 
-  return { lines: ["Usage: /mcp [list] | add <name> <url> | remove <name>"] };
+  return { lines: ["Usage: /mcp [list] | add <name> <url> | auth <name> | remove <name>"] };
 }
