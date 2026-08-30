@@ -19,7 +19,7 @@ On a real terminal `seri` opens a full-screen (alternate-buffer) TUI: a welcome 
 
 Preconditions:
 
-- Baseline (see README). Windows only as written (the helper uses node-pty/ConPTY, prebuilt for win32/darwin; POSIX runs live on the WSL box). `SERI_DISABLE_MODELS_FETCH=1` set; helper runs under **node**.
+- Baseline (see README). Windows only as written (the helper uses node-pty/ConPTY, prebuilt for win32/darwin; POSIX runs live on the WSL box). helper runs under **node**.
 
 - **Mount and quit.** Run `node .claude/skills/verify-seri/scripts/drive-tui.mjs .claude/loops/verify-seri/<run-id>/tui.txt verify-<run-id> "wait=Esc continue" sleep=400 key=esc sleep=600 type=/exit sleep=400 key=enter sleep=800`. Stderr says `DRIVE-RESULT code=0`; `tui.txt` contains the splash (`SERI`, `Esc continue`), `Session ` … ` created.`, and ends in reset escapes (the TUI unmounted).
 - **Run a turn.** Same helper with steps `"wait=Esc continue" sleep=400 key=esc sleep=600 "type=Reply with exactly the word SERI-TUI-PROOF" "wait=exactly the word" key=enter "wait=done ·@90000" key=ctrl-d sleep=800`. Transcript shows the model line (`openai/gpt-oss-120b · your key`), the reply, and `done · <n> ↑, <n> ↓`.
@@ -27,10 +27,10 @@ Preconditions:
 
 ## Gotchas
 
-- The splash on an unauthenticated profile is a login picker — Enter SELECTS the highlighted `Log in` and starts a real WorkOS device flow (can open a browser). Dismiss with `"wait=Esc continue" sleep=400 key=esc sleep=600`; the Esc needs the settle, a too-early Esc is swallowed.
+- The splash on an unauthenticated profile is a login picker — Enter SELECTS the highlighted `Log in` and starts a real WorkOS device flow (can open a browser). Dismiss with `"wait=Esc continue" sleep=400 key=esc "wait=created.@30000" sleep=600`; the Esc needs the settle, a too-early Esc is swallowed.
 - The footer mode label (`⏸ approve-each mode on`) renders behind the splash — it is never proof the splash was dismissed.
 - Waiting on the echo of typed text only works for a mid-text fragment of a longer string; slash commands and short strings get split by cursor redraw (`/ exit` in the stream) and never match — use `type=… sleep=400 key=enter`.
-- Without `SERI_DISABLE_MODELS_FETCH=1` the live models.dev fetch stalled a fresh profile's first turn past 90 seconds on this machine; with it, the app prints `⚠ could not reach models.dev; using the bundled model catalog`.
+- Dismissing the splash does not mean the session is ready. Until it is, the app renders a `starting session…` placeholder that accepts no input, so a task typed there is not echoed and never runs. Wait for `created.` before typing. Issue #211 was this window read as a hang, widened by the models.dev fetch on the way to the first mount.
 - The box borders are `┌`, never `╭` — asserting the wrong glyph family passes on nothing.
 - Ctrl-C between turns is immediately fatal (the cancel slot only exists while a turn runs) — quit with `/exit` or Ctrl-D, not Ctrl-C.
 - ConPTY re-serializes output; assert on text markers, not raw byte layout. The post-quit `(tokens: …)` summary may flush after capture ends — assert `done ·` instead.

@@ -13,7 +13,7 @@ This directory is the maintained source for verifying seri's user-facing behavio
 
 ## Driving conventions
 
-- TUI drives: `node .claude/skills/verify-seri/scripts/drive-tui.mjs <transcript-out> <profile> <step...>` (steps: `wait=`/`wait=TEXT@MS`, `type=`, `key=`, `sleep=`) — **node, never bun** (bun-hosted ConPTY kills every child instantly on this machine), with `SERI_DISABLE_MODELS_FETCH=1` set (the live catalog fetch stalled a first turn past 90s here) and `MSYS_NO_PATHCONV=1` when invoking from Git Bash.
+- TUI drives: `node .claude/skills/verify-seri/scripts/drive-tui.mjs <transcript-out> <profile> <step...>` (steps: `wait=`/`wait=TEXT@MS`, `type=`, `key=`, `sleep=`) — **node, never bun** (bun-hosted ConPTY kills every child instantly on this machine), and `MSYS_NO_PATHCONV=1` when invoking from Git Bash.
 - Always dismiss the splash first: `"wait=Esc continue" sleep=400 key=esc sleep=600`. Enter on the splash starts a real login device flow — Esc is "continue without logging in".
 - The helper's outcome is its stderr `DRIVE-RESULT code=N` line plus the transcript; its process exit code and same-command stdout after it are unreliable under hosting shells. Read the transcript in a separate command.
 - ApprovalBox answers are single keypresses (`type=y` / `type=a` / `type=n`), no Enter. Slash commands: `type=/x sleep=400 key=enter` (no echo-wait — cursor redraw splits short strings in the byte stream).
