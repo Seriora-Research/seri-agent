@@ -50,7 +50,7 @@ export async function loginMcpServer(
     // Bound before the provider exists, because the provider's redirectUrl has to name the port
     // that actually bound — and auth() reaches redirectToAuthorization inside its own call below,
     // so the browser can arrive at that port moments later.
-    server = await listen();
+    server = await listen({ serverName: spec.name });
     const provider = createMcpAuthProvider({
       spec,
       configDir,
