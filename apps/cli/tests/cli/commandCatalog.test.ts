@@ -40,6 +40,9 @@ const EXPECTED_NAMES = [
 
 const EXPECTED_TUI_CLAIMED = [
   "/effort",
+  // Session-surface, TUI-claimed: the bare form opens the review panel here, while
+  // `seri "/memory approve all"` still runs on the non-TTY path that has no panel to open.
+  "/memory",
   "/exit",
   "/model",
   "/setup",
@@ -119,7 +122,7 @@ describe("command catalog completeness", () => {
     expect(commandByName("/mode")?.shortcut?.chord).toBe("shift+tab");
   });
 
-  test("tuiClaimedNames is the TUI surface plus /effort", () => {
+  test("tuiClaimedNames is the TUI surface plus /effort and /memory", () => {
     expect(tuiClaimedNames()).toEqual([...EXPECTED_TUI_CLAIMED]);
   });
 

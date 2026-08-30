@@ -72,6 +72,7 @@ import { ConfigPanel } from "./routes/config/ConfigPanel";
 import { EffortPanel } from "./routes/config/EffortPanel";
 import { PermissionsPanel } from "./routes/config/PermissionsPanel";
 import { McpPanel } from "./routes/mcp/McpPanel";
+import { MemoryPanel } from "./routes/memory/MemoryPanel";
 import { SetupPanel } from "./routes/setup/SetupPanel";
 import { SplashBanner, type SplashBannerInfo } from "./routes/setup/SplashBanner";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
@@ -210,6 +211,12 @@ export type AppProps = {
   onMcpRemove?: (name: string) => void;
   onMcpAuth?: (name: string) => Promise<McpLoginResult>;
   onMcpAuthCancel?: () => void;
+  // /memory's own three resolutions. Closing is dispatched locally, like every other panel's Esc;
+  // reading a staged write's diff and applying or discarding it are all disk I/O cli.ts owns, so
+  // they are props — the same split /mcp's own trio above already has.
+  onMemoryDiff?: (id: string) => string[];
+  onMemoryApprove?: (id: string) => void;
+  onMemoryReject?: (id: string) => void;
   // Every completion source the input box may open (util/completion.ts). A function, not an array:
   // runTui is the only place the command catalog, the agent registry and the skill registry are all
   // in scope, and `/clear` reloads the latter two mid-process — so this is called at render time
@@ -308,6 +315,9 @@ export function App({
   onMcpRemove,
   onMcpAuth,
   onMcpAuthCancel,
+  onMemoryDiff,
+  onMemoryApprove,
+  onMemoryReject,
   getCompletionSources,
   onSplashLogin,
   onSplashSignup,
@@ -427,6 +437,7 @@ export function App({
     state.pendingEffort === undefined &&
     state.pendingSkills === undefined &&
     state.pendingMcp === undefined &&
+    state.pendingMemory === undefined &&
     !state.pendingSplash;
 
   // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
@@ -708,6 +719,14 @@ export function App({
             onSkillRun?.(name);
           }}
           onSkillsClose={() => dispatch({ type: "skills-closed" })}
+        />
+      ) : state.pendingMemory !== undefined ? (
+        <MemoryPanel
+          rows={state.pendingMemory.rows}
+          onDiff={onMemoryDiff}
+          onApprove={onMemoryApprove}
+          onReject={onMemoryReject}
+          onMemoryClose={() => dispatch({ type: "memory-closed" })}
         />
       ) : state.pendingMcp !== undefined ? (
         <McpPanel

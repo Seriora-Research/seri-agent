@@ -102,7 +102,7 @@ import {
   createArchivistState,
   resetArchivistForRewind,
 } from "./memory/archivist";
-import { decideMemoryCommand } from "./memory/commands";
+import { decideMemoryCommand, memoryDiffLines, memoryPanelRows } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
 import { effectiveTools, isPersistableTool, loadGrants, rememberGrant } from "./permissions/store";
 import { fetchAccountPlan } from "./provider/accountStatus";
@@ -684,7 +684,9 @@ async function memoryCommand(
   presenter: CommandPresenter,
 ): Promise<void> {
   const { lines } = decideMemoryCommand(args, { configDir: dirs.configDir });
-  for (const line of lines) presenter.message(line);
+  // `muted` is dropped, not honoured: CommandPresenter.message takes a plain string, and the
+  // TUI reaches /memory through tuiHandlers (which does honour it) rather than through here.
+  for (const line of lines) presenter.message(line.text);
 }
 
 function trajectoryCommand(args: string[], dirs: CommandDirs, presenter: CommandPresenter): void {
@@ -1706,6 +1708,34 @@ async function runTui(
     }
   }
 
+  // /memory's panel trio. `memoryDeps` is rebuilt per call rather than captured: the staged queue
+  // lives on disk under configDir, and every one of these three reads it fresh — the panel is a
+  // view of what is staged NOW, which is the difference between it and /skills' session-frozen
+  // registry.
+  const memoryDeps = { configDir };
+
+  function onMemoryDiff(id: string): string[] {
+    return memoryDiffLines(memoryDeps, id);
+  }
+
+  // Both of these re-dispatch `memory-requested` with freshly read rows, which is how a
+  // panel-driven change reaches an open panel (reducer.ts's own pendingMemory comment) — the same
+  // shape onMcpRemove above uses, unconditionally here because both actions either consume the
+  // entry or report why they could not, and the row list has to reflect either ending.
+  function onMemoryApprove(id: string): void {
+    for (const line of decideMemoryCommand(["approve", id], memoryDeps).lines) {
+      dispatch({ type: "transcript-append", line: line.text, muted: line.muted });
+    }
+    dispatch({ type: "memory-requested", rows: memoryPanelRows(memoryDeps) });
+  }
+
+  function onMemoryReject(id: string): void {
+    for (const line of decideMemoryCommand(["reject", id], memoryDeps).lines) {
+      dispatch({ type: "transcript-append", line: line.text, muted: line.muted });
+    }
+    dispatch({ type: "memory-requested", rows: memoryPanelRows(memoryDeps) });
+  }
+
   // EffortPanel's own two resolutions — extracted to createEffortHandlers, mirroring
   // createSetupHandlers'/createConfigHandlers' own factory shape. `effort-resolved` is the one
   // action that both clears `pendingEffort` and (only
@@ -2314,6 +2344,23 @@ async function runTui(
         dispatch({ type: "command-error", message: messageOf(err) });
       }
     },
+    "/memory": (args) => {
+      // The bare and `list` forms open the panel; every review subcommand renders lines — the same
+      // split /skills' and /mcp's own handlers make, for the same reason: the panel is the listing
+      // surface the review lines were never going to be.
+      const [sub] = args;
+      if (sub === undefined || sub === "list") {
+        dispatch({ type: "memory-requested", rows: memoryPanelRows({ configDir: ctx.configDir }) });
+        return;
+      }
+      try {
+        for (const line of decideMemoryCommand(args, { configDir: ctx.configDir }).lines) {
+          dispatch({ type: "transcript-append", line: line.text, muted: line.muted });
+        }
+      } catch (err) {
+        dispatch({ type: "command-error", message: messageOf(err) });
+      }
+    },
     "/mcp": (args) => {
       // The bare and `list` forms open the panel; add/remove render lines — same split as /skills'
       // own handler just above, for the same reason.
@@ -2720,6 +2767,9 @@ async function runTui(
       onMcpRemove,
       onMcpAuth,
       onMcpAuthCancel,
+      onMemoryDiff,
+      onMemoryApprove,
+      onMemoryReject,
       getCompletionSources: buildCompletionSources,
       // No auth-offer recompute here — redundant: every path that reaches this (Escape on
       // "starting"/"device", Enter/Esc on a login-failure result, or
