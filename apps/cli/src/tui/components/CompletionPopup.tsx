@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { theme } from "../theme/theme";
 import type { CompletionItem } from "../util/completion";
-import { truncatePad } from "../util/format";
+import { remaining, truncatePad } from "../util/format";
 
 // How many rows the popup may take. It sits directly above the input box and pushes the transcript
 // up by this much in the worst case, so it is deliberately short: a user narrows by typing one more
@@ -23,17 +23,24 @@ const VALUE_WIDTH = 24;
 export function CompletionPopup({
   matches,
   selected,
+  offset,
 }: {
   matches: readonly CompletionItem[];
+  // Both index into the FULL match list. InputBox owns them as one state and slides `offset` by
+  // `slideWindow` so the selection stays inside the window; this component only slices.
   selected: number;
+  offset: number;
 }) {
   if (matches.length === 0) return null;
-  const visible = matches.slice(0, COMPLETION_POPUP_ROWS);
-  const remainingCount = matches.length - visible.length;
+  const visible = matches.slice(offset, offset + COMPLETION_POPUP_ROWS);
+  // Rows strictly BELOW the window, the same count `util/format.ts`'s own `remaining` gives every
+  // list panel — not `matches.length - visible.length`, which counts the rows scrolled off ABOVE
+  // too and so would never count down as the user arrows toward the bottom.
+  const remainingCount = remaining(matches.length, offset, COMPLETION_POPUP_ROWS);
   return (
     <box flexDirection="column">
       {visible.map((item, index) => {
-        const isSelected = index === selected;
+        const isSelected = offset + index === selected;
         // Reverse video via an explicit `theme.selectedBg`/`theme.selectedFg` pair, never
         // `TextAttributes.INVERSE` — ui/ListRow.tsx's own comment records the raw PTY capture
         // showing INVERSE setting a cell's background to its own foreground. It hit this popup

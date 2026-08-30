@@ -14,7 +14,7 @@
 //   wait=TEXT       block until TEXT appears in the decoded output (20s deadline, exit 1 on miss)
 //   wait=TEXT@MS    same with an explicit deadline (e.g. `wait=done ·@90000` for a model turn)
 //   type=TEXT   write TEXT to the terminal
-//   key=NAME    esc | enter | ctrl-c | ctrl-d | shift-tab
+//   key=NAME    esc | enter | ctrl-c | ctrl-d | shift-tab | up | down
 //   sleep=MS    pause MS milliseconds
 //
 // The child is `bun apps/cli/src/cli.ts --profile <profile>` with cwd = repo root, so the repo
@@ -36,6 +36,8 @@ const KEYS = {
   "ctrl-c": "\x03",
   "ctrl-d": "\x04",
   "shift-tab": "\x1b[Z",
+  up: "\x1b[A",
+  down: "\x1b[B",
 };
 
 const [outFile, profile, ...rest] = process.argv.slice(2);
