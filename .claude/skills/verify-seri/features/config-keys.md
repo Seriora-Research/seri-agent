@@ -1,19 +1,18 @@
 # Config and API keys
 
-Per-profile settings and BYOK API keys live in `~\.seri\<profile>\config.json`. The TUI paths are `/setup` (provider keys) and `/config` (non-provider settings); `seri config set|list|unset` is the non-interactive subcommand exception — and it is slated for removal in favor of the TUI `/config` panel, so treat it as the exception it is, not a stable fallback.
+Per-profile settings and BYOK API keys live in `~\.seri\<profile>\config.json`. The TUI paths are `/setup` (provider keys) and `/config` (non-provider settings); the `seri config set|list|unset` subcommand is **gone**: `configCommand` (`apps/cli/src/config/commands.ts`) has no dispatch site left in `run()`, only its `maskValue` helper is still imported, and `seri --help` does not list it. Running `seri config list` sends `config list` to the model as a task and bills a turn.
 
 ## Sub-features
 
-- `config-set` `config set KEY VALUE` writes the key to the profile's config.json.
-- `config-list` `config list` prints every key with the value masked.
-- `config-unset` `config unset KEY` removes it.
-- `config-env-shadow` `list` flags a key whose value an environment variable currently overrides (env beats config.json).
+- `config-set` `/config` writes a key to the profile's config.json.
+- `config-list` `/config` lists every key with the value masked.
+- `config-unset` `/config` removes a key.
+- `config-env-shadow` the list flags a key whose value an environment variable currently overrides (env beats config.json).
 - `config-tui-setup` `/setup` in the TUI adds/replaces/removes a provider key, probing it with one lightweight request.
 
 ## How to get to it (user POV)
 
-- Type `/setup` or `/config` inside the TUI.
-- Run `seri config set|list|unset` in a terminal (exception path).
+- Type `/setup` or `/config` inside the TUI. That is the only path.
 
 ## Driving it with the verify-seri harness
 
@@ -21,11 +20,7 @@ Preconditions:
 
 - Baseline (see README); use only non-secret keys (`SERI_MODEL`) in scripted drives — never write a real API key into a throwaway profile's config.
 
-- **Set.** Run `bun apps/cli/src/cli.ts --profile verify-<run-id> config set SERI_MODEL openai/gpt-oss-20b; $LASTEXITCODE`. Prints `Saved SERI_MODEL to <profile>\config.json`, exit 0.
-- **List (masked).** Run `... config list`. Shows `SERI_MODEL = open...-20b` — first four and last four characters around `...`, never the full value.
-- **Env shadowing.** Run `$env:SERI_MODEL = "other/model"; ... config list; Remove-Item Env:SERI_MODEL`. The line ends with `(overridden by env var)`.
-- **Unset.** Run `... config unset SERI_MODEL` (prints `Removed SERI_MODEL`), then `... config list` again — `No values set in <profile>\config.json`.
-- **Proof.** All four command outputs with exit codes; the set→list→unset→list sequence is the mutation plus its read-back.
+**These four steps are broken and must not be run.** They drive a `config` subcommand that no longer exists, so each one bills a model turn and proves nothing. The replacement drives the `/config` panel in the TUI and has not been written or run yet; write it with `/pstack:maintain-verification-skill` rather than guessing at it here. The masking, env-shadowing and write-then-rename behaviour below is still accurate about the app, only the way to reach it changed.
 
 ## Gotchas
 

@@ -2,7 +2,7 @@
 
 This directory is the maintained source for verifying seri's user-facing behavior. Read the index, then use the matching feature file as the recipe.
 
-**seri is used through the TUI in this project.** Every feature proof drives the interactive TUI under a real PTY; the non-interactive `seri <task>` prompt path is not a user path here and must not stand in for one. Management subcommands (`config`, `permissions`, `usage`) are the only sanctioned non-interactive drives.
+**seri is used through the TUI in this project.** Every feature proof drives the interactive TUI under a real PTY; the non-interactive `seri <task>` prompt path is not a user path here and must not stand in for one. `config`, `permissions` and `usage` are TUI slash commands, not subcommands: `seri config list` sends a task to the model. The only sanctioned non-interactive drives are `--version`, `--help`, `--selftest`, `serve` and `exec`.
 
 ## Baseline preconditions
 
@@ -24,7 +24,7 @@ This directory is the maintained source for verifying seri's user-facing behavio
 ## Proof and skip reporting
 
 - Capture the command, the full transcript, and the exit code for every drive.
-- A mutation's proof includes a second, read-only view of the stored value (re-run `config list`, re-read the written file, list the sessions dir).
+- A mutation's proof includes a second, read-only view of the stored value (reopen `/config`, re-read the written file, list the sessions dir).
 - Report an unreachable path with the attempted command and the unmet precondition; never report a skipped entry point as verified through a different path.
 
 ## Feature entry contract
@@ -36,4 +36,4 @@ Each file: H1 title, one paragraph of user-visible behavior, then exactly four H
 - [Interactive TUI session](./tui-session.md) — splash, input box, submitting a task, `/exit` and Ctrl-D.
 - [Permission gate](./permission-gate.md) — mode cycling, the ApprovalBox, read-only blocking, persisted grants.
 - [Sessions](./sessions.md) — `--continue`, `--resume <id>`, `/clear`, session files on disk.
-- [Config and API keys](./config-keys.md) — `config set|list|unset` (the subcommand exception), masking, env shadowing.
+- [Config and API keys](./config-keys.md) — `/config` and `/setup`, masking, env shadowing. Its recipes still name a `config` subcommand that no longer exists and need a live pass.
