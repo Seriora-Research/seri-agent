@@ -162,7 +162,7 @@ export function resolvePendingSkillRef(configDir: string, ref: string): PendingS
  */
 export function diffPendingSkill(p: PendingSkill): { path: string; lines: string[] } {
   const path = approvedSkillPath(p.worktree, p.name);
-  const before = existsSync(path) ? readFileSync(path, "utf8").replace(/\r\n/g, "\n") : "";
+  const before = liveSkillFile(p);
   const after = renderSkillFile(p);
   return {
     path,
@@ -176,8 +176,37 @@ export function diffPendingSkill(p: PendingSkill): { path: string; lines: string
   };
 }
 
-export function approvePendingSkill(configDir: string, p: PendingSkill): { path: string } {
+// CRLF folded to LF before any compare or diff. A skill file edited in Notepad and one written by
+// atomicWriteFile differ only in line endings, and without this the approve guard below would
+// refuse every Windows-edited file as "changed".
+function normalizeEol(text: string): string {
+  return text.replace(/\r\n/g, "\n");
+}
+
+/** The live file as diffPendingSkill reads it, so a caller can hand it back to approvePendingSkill
+ *  as the "this is what I showed the human" token. */
+export function liveSkillFile(p: PendingSkill): string {
   const path = approvedSkillPath(p.worktree, p.name);
+  return existsSync(path) ? normalizeEol(readFileSync(path, "utf8")) : "";
+}
+
+export function approvePendingSkill(
+  configDir: string,
+  p: PendingSkill,
+  /** What the human was shown, when they were shown anything. Absent means "approve whatever is
+   *  there", which is all a caller with no preview behind it can honestly mean. */
+  previewedAgainst?: string,
+): { path: string } {
+  const path = approvedSkillPath(p.worktree, p.name);
+  // A staged skill can sit in the queue for days, and `/skills approve all` renders no diff at all.
+  // Overwriting a file the human edited in between would destroy their work silently, and this file
+  // is theirs — no checkpoint covers it. Refusing leaves the staged record in place, which is what
+  // makes the retry (diff, look, approve) possible.
+  if (previewedAgainst !== undefined && liveSkillFile(p) !== previewedAgainst) {
+    throw new Error(
+      `${path} changed since it was previewed. Run /skills diff ${p.id} again to see the current file, then approve.`,
+    );
+  }
   atomicWriteFile(path, renderSkillFile(p));
   unlinkSync(pendingSkillPath(configDir, p.id));
   return { path };

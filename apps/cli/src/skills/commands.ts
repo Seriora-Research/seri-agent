@@ -6,13 +6,21 @@ import {
   approvePendingSkill,
   diffPendingSkill,
   listPendingSkills,
+  liveSkillFile,
   type PendingSkill,
   rejectPendingSkill,
   resolvePendingSkillRef,
 } from "./pending";
-import { loadSkillRegistry } from "./registry";
+import type { SkillRegistry } from "./registry";
 
-export type SkillsCommandDeps = { configDir: string; worktree: string };
+export type SkillsCommandDeps = {
+  configDir: string;
+  worktree: string;
+  /** Staged-skill id to the live file text at the moment `/skills diff` last rendered it. Owned by
+   *  the session, so it survives across commands but not across runs — which is the right lifetime:
+   *  "you looked at this a moment ago" is a claim only the running session can make. */
+  previewed?: Map<string, string>;
+};
 
 const ID_ARG_RE = /^(all|[0-9a-f]{4,40})$/;
 
@@ -60,16 +68,18 @@ function forEachMatch(
 }
 
 /**
- * The panel's rows, resolved from the session's own discovery walk — so it shows this project's
- * skills and this profile's global ones, and cannot show another project's: the walk has no way to
- * reach one.
+ * The panel's rows, built from the registry the SESSION actually loaded — never a fresh disk read.
+ *
+ * The distinction is the whole point of the panel. `PreparedRun.skills` is frozen at session start
+ * (and reloaded only by `/clear`), so a skill added or approved since then is not invocable yet. A
+ * panel that re-read disk would list it anyway, and `/name` would answer "Unrecognized command" for
+ * a row the user was just looking at. Showing what the session can actually run is more useful than
+ * showing what is on disk, and `/skills approve` already says a new skill lands next session.
+ *
+ * It shows this project's skills and this profile's global ones, and cannot show another project's:
+ * the discovery walk has no way to reach one.
  */
-export function skillsPanelRows(deps: SkillsCommandDeps): SkillsPanelRow[] {
-  const skills = loadSkillRegistry({
-    worktree: deps.worktree,
-    configDir: deps.configDir,
-    onWarning: () => {},
-  });
+export function skillsPanelRows(deps: SkillsCommandDeps, skills: SkillRegistry): SkillsPanelRow[] {
   return [...skills.values()].map((skill) => ({
     name: skill.name,
     description: skill.description,
@@ -96,6 +106,9 @@ export function decideSkillsCommand(args: string[], deps: SkillsCommandDeps): { 
   if (sub === "diff" && rest.length === 1) {
     return {
       lines: forEachMatch(deps.configDir, rest[0] as string, "diff", true, (p) => {
+        // Recorded as the diff is rendered, so a later approve can tell whether the file moved
+        // under the human between looking and deciding.
+        deps.previewed?.set(p.id, liveSkillFile(p));
         return diffPendingSkill(p).lines;
       }),
     };
@@ -104,7 +117,10 @@ export function decideSkillsCommand(args: string[], deps: SkillsCommandDeps): { 
   if (sub === "approve" && rest.length === 1) {
     return {
       lines: forEachMatch(deps.configDir, rest[0] as string, "approve", false, (p) => {
-        const { path } = approvePendingSkill(deps.configDir, p);
+        // Compared against the file as it stands now only when a diff was actually rendered this
+        // session — otherwise there is nothing the human was shown for it to have changed from, and
+        // demanding one would refuse every first-time approve.
+        const { path } = approvePendingSkill(deps.configDir, p, deps.previewed?.get(p.id));
         // "next session", not "now": the registry is frozen per session (prepare.ts), so a skill
         // approved mid-session is not loadable until the next one or a /clear. Saying otherwise
         // would send the user off to type /name for something that is not there yet.

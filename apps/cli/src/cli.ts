@@ -1600,11 +1600,28 @@ async function runTui(
   // on this tier, the same gate `confirmedModel` already has.
   const { onEffortSelected, onEffortCancel } = createEffortHandlers({ dispatch });
 
+  // What `/skills diff` last showed the human, per staged id. Lives for the run, so `/skills
+  // approve` can refuse a file that moved since they looked at it.
+  const previewedSkillFiles = new Map<string, string>();
+
+  // "subagent · <what it does>", or just "subagent" when the file gave no description. Without the
+  // empty check the popup renders a dangling separator on a description-less entry, which reads as
+  // truncated output rather than as an absent field.
+  const describeCompletion = (kind: string, description: string): string =>
+    description.length === 0 ? kind : `${kind} · ${description}`;
+
   // Everything a leading "/" can resolve to this session, in the order onSubmit resolves them:
-  // catalog commands, then agents, then skills. Built once — all three registries are frozen for
-  // the session (PreparedRun's own comments), so recomputing per keystroke would produce the same
-  // array and throw away the popup's own render memoisation.
-  const completionSources: readonly CompletionSource[] = [
+  // catalog commands, then agents, then skills.
+  //
+  // Recomputed on demand rather than captured once. The registries are frozen for a session, but
+  // `/clear` mints a conceptually new one and bindSession (runtime/prepare.ts) reassigns
+  // `prepared.agents`/`prepared.skills` to freshly-loaded registries in the same process — that
+  // reload is the whole point of doing it there, so a skill approved or deleted since startup is
+  // live afterwards. A captured array would keep offering the pre-clear list while `onSubmit`
+  // resolved against the new one, so the popup could hand back a name that then failed with
+  // "Unrecognized command", and a genuinely new skill would not complete until the process
+  // restarted.
+  const buildCompletionSources = (): readonly CompletionSource[] => [
     {
       id: "commands",
       trigger: "/",
@@ -1615,13 +1632,13 @@ async function runTui(
         ...COMMAND_META.map((meta) => ({ name: meta.name, description: meta.description })),
         ...[...prepared.agents.values()].map((agent) => ({
           name: `/${agent.name}`,
-          description: `subagent · ${agent.description}`,
+          description: describeCompletion("subagent", agent.description),
         })),
         // Skills last so an agent of the same name wins the list the way it wins the lookup —
         // resolveCompletion keeps the first match for a value, and onSubmit checks agents first.
         ...[...prepared.skills.values()].map((skill) => ({
           name: `/${skill.name}`,
-          description: `skill · ${skill.description}`,
+          description: describeCompletion("skill", skill.description),
         })),
       ]
         .filter((item, index, all) => all.findIndex((other) => other.name === item.name) === index)
@@ -2165,10 +2182,11 @@ async function runTui(
       const deps = {
         configDir: ctx.configDir,
         worktree: checkpointTarget(liveState.session, dirs(ctx)).worktree,
+        previewed: previewedSkillFiles,
       };
       const [sub] = args;
       if (sub === undefined || sub === "list") {
-        dispatch({ type: "skills-requested", rows: skillsPanelRows(deps) });
+        dispatch({ type: "skills-requested", rows: skillsPanelRows(deps, prepared.skills) });
         return;
       }
       try {
@@ -2533,7 +2551,7 @@ async function runTui(
       onSkillRun: (name: string) => {
         void onSubmit(`/${name}`);
       },
-      completionSources,
+      getCompletionSources: buildCompletionSources,
       // No auth-offer recompute here — redundant: every path that reaches this (Escape on
       // "starting"/"device", Enter/Esc on a login-failure result, or
       // a logout-failure result) never changed the auth-session file between when it was last

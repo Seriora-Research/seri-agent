@@ -195,10 +195,11 @@ export type AppProps = {
   // /skills' own single resolution. Closing is dispatched locally, like every other panel's Esc;
   // running needs cli.ts's own turn machinery, so it is a prop.
   onSkillRun?: (name: string) => void;
-  // Every completion source the input box may open (util/completion.ts). Resolved once per session
-  // by runTui, which is the only place the command catalog, the agent registry and the skill
-  // registry are all in scope.
-  completionSources?: readonly CompletionSource[];
+  // Every completion source the input box may open (util/completion.ts). A function, not an array:
+  // runTui is the only place the command catalog, the agent registry and the skill registry are all
+  // in scope, and `/clear` reloads the latter two mid-process — so this is called at render time
+  // rather than captured, and a skill approved since startup completes after a /clear.
+  getCompletionSources?: () => readonly CompletionSource[];
   // The welcome-splash mount's own three resolutions — unreachable in runTui/runGuidedSetup, whose
   // own initialTuiState calls never set pendingSplash (reducer.ts's own comment).
   onSplashLogin?: () => void;
@@ -277,7 +278,7 @@ export function App({
   onEffortSelected,
   onEffortCancel,
   onSkillRun,
-  completionSources,
+  getCompletionSources,
   onSplashLogin,
   onSplashSignup,
   onSplashContinue,
@@ -388,6 +389,7 @@ export function App({
     state.pendingConfig === undefined &&
     state.pendingPermissions === undefined &&
     state.pendingEffort === undefined &&
+    state.pendingSkills === undefined &&
     !state.pendingSplash;
 
   // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
@@ -681,7 +683,7 @@ export function App({
               : undefined
           }
           inert={state.subagentPanelFocus || state.pendingChildView !== undefined}
-          completionSources={completionSources}
+          completionSources={getCompletionSources?.()}
         />
       )}
       {state.subagents.length > 0 && (

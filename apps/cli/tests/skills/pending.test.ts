@@ -8,6 +8,7 @@ import {
   approvePendingSkill,
   diffPendingSkill,
   listPendingSkills,
+  liveSkillFile,
   pendingSkillPath,
   rejectPendingSkill,
   stagePendingSkill,
@@ -87,7 +88,9 @@ describe("stage, preview, approve", () => {
     expect(text).toContain("author: archivist");
     expect(text).toContain(`reason: ${JSON.stringify(INPUT.reason)}`);
 
-    const rows = skillsPanelRows(ctx);
+    // The panel is fed the registry a session loaded, so this reloads it explicitly — which is
+    // also the assertion that an approved skill is only visible once something re-reads disk.
+    const rows = skillsPanelRows(ctx, loadSkillRegistry({ ...ctx, onWarning: () => {} }));
     expect(rows).toHaveLength(1);
     expect(rows[0]?.author).toBe("archivist");
     expect(rows[0]?.scope).toBe("project");
@@ -185,6 +188,53 @@ describe("skill_write", () => {
       run(makeSkillWriteTool(ctx), { ...INPUT, body: "x".repeat(MAX_SKILL_BODY_LENGTH + 1) }),
     ).rejects.toThrow(/over the .* limit/);
     expect(listPendingSkills(ctx.configDir)).toEqual([]);
+  });
+});
+
+describe("approve guards the human's own edits", () => {
+  test("refuses when the file changed since the diff was rendered, and keeps the staged record", () => {
+    const ctx = makeCtx();
+    approvePendingSkill(ctx.configDir, stagePendingSkill(INPUT, ctx, new Date()));
+    const staged = stagePendingSkill(INPUT, ctx, new Date());
+    const previewed = liveSkillFile(staged);
+
+    // The human edits their own copy after looking at the diff.
+    const path = approvedSkillPath(ctx.worktree, INPUT.name);
+    writeFileSync(
+      path,
+      `${readFileSync(path, "utf8")}
+Hand-written addition.
+`,
+    );
+
+    expect(() => approvePendingSkill(ctx.configDir, staged, previewed)).toThrow(/changed since/);
+    expect(readFileSync(path, "utf8")).toContain("Hand-written addition.");
+    expect(listPendingSkills(ctx.configDir)).toHaveLength(1);
+  });
+
+  test("approves when the file is untouched since the diff", () => {
+    const ctx = makeCtx();
+    approvePendingSkill(ctx.configDir, stagePendingSkill(INPUT, ctx, new Date()));
+    const staged = stagePendingSkill(INPUT, ctx, new Date());
+    expect(() => approvePendingSkill(ctx.configDir, staged, liveSkillFile(staged))).not.toThrow();
+  });
+
+  // A first-time approve has no preview to compare against, and demanding one would refuse
+  // every new skill.
+  test("approves with no preview recorded", () => {
+    const ctx = makeCtx();
+    const staged = stagePendingSkill(INPUT, ctx, new Date());
+    expect(() => approvePendingSkill(ctx.configDir, staged)).not.toThrow();
+  });
+
+  test("a CRLF-edited file is not mistaken for a changed one", () => {
+    const ctx = makeCtx();
+    approvePendingSkill(ctx.configDir, stagePendingSkill(INPUT, ctx, new Date()));
+    const staged = stagePendingSkill(INPUT, ctx, new Date());
+    const previewed = liveSkillFile(staged);
+    const path = approvedSkillPath(ctx.worktree, INPUT.name);
+    writeFileSync(path, readFileSync(path, "utf8").replace(/\n/g, "\r\n"));
+    expect(() => approvePendingSkill(ctx.configDir, staged, previewed)).not.toThrow();
   });
 });
 

@@ -464,6 +464,33 @@ export function buildCheckpointedTools(opts: {
   return { checkpointer, tools };
 }
 
+/**
+ * Reported rather than refused at either loader, because neither loader can see the other: skills
+ * load before the session so their listing can be frozen into the context tier, and agents load
+ * after it because an agent file's `model:` needs the catalog. A shared name is not fatal to either
+ * — the model still reaches both, through different tools — so only the ONE surface they actually
+ * compete for is affected, `/name`, where cli.ts checks agents first. The shadowed half is
+ * invisible without this warning.
+ *
+ * Called from prepareSession AND from bindSession, not just the first: `/clear` reloads both
+ * registries, so a collision introduced mid-session (a skill file dropped in while seri was
+ * running) first exists at that reload. Warning only at startup would be silent for exactly the
+ * case this check is for.
+ */
+export function warnOnNameCollisions(
+  skills: SkillRegistry,
+  agents: AgentRegistry,
+  onWarning: (message: string) => void,
+): void {
+  for (const name of skills.keys()) {
+    if (agents.has(name)) {
+      onWarning(
+        `"${name}" names both an agent and a skill; /${name} runs the agent. The skill is still reachable through the skill tool.`,
+      );
+    }
+  }
+}
+
 // Everything scoped to a session id, rebound in one place — the checkpointer/tools pair,
 // PreparedRun.session, PreparedRun.memory, PreparedRun.trajectory, and the archivist's own
 // counter/cursor, none of which stay valid once `session` is a conceptually different conversation
@@ -500,6 +527,7 @@ export function bindSession(
     catalog: prepared.catalog,
     onWarning,
   });
+  warnOnNameCollisions(prepared.skills, prepared.agents, onWarning);
   prepared.session = session;
   prepared.trajectory = trajectory;
   return createArchivistState(session);
@@ -720,20 +748,7 @@ export async function prepareSession(
       onWarning: (msg) => printWarning(msg, warnSink),
     });
 
-    // Reported here rather than refused at either loader, because neither loader can see the other:
-    // skills load before the session so their listing can be frozen into the context tier, and
-    // agents load after it because an agent file's `model:` needs the catalog. A shared name is not
-    // fatal to either — the model still reaches both, through different tools — so only the ONE
-    // surface they actually compete for is affected, `/name`, where cli.ts checks agents first. The
-    // shadowed half is invisible without this line.
-    for (const name of skills.keys()) {
-      if (agents.has(name)) {
-        printWarning(
-          `"${name}" names both an agent and a skill; /${name} runs the agent. The skill is still reachable through the skill tool.`,
-          warnSink,
-        );
-      }
-    }
+    warnOnNameCollisions(skills, agents, (msg) => printWarning(msg, warnSink));
 
     return {
       session,
