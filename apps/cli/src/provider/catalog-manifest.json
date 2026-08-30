@@ -41,11 +41,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -66,11 +62,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -90,11 +82,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -115,10 +103,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "default"
-          ]
+          "values": ["none", "default"]
         }
       ],
       "pricing": {
@@ -139,11 +124,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "high"
-          ]
+          "values": ["none", "low", "high"]
         }
       ],
       "pricing": {
@@ -164,11 +145,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "high"
-          ]
+          "values": ["none", "low", "high"]
         }
       ],
       "pricing": {
@@ -189,11 +166,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "high"
-          ]
+          "values": ["none", "low", "high"]
         }
       ],
       "pricing": {
@@ -238,13 +211,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -269,13 +236,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -297,13 +258,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -325,12 +280,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -354,10 +304,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium"
-          ]
+          "values": ["low", "medium"]
         },
         {
           "type": "budget_tokens"
@@ -403,10 +350,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium"
-          ]
+          "values": ["low", "medium"]
         },
         {
           "type": "budget_tokens"
@@ -452,10 +396,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "medium",
-            "high"
-          ]
+          "values": ["medium", "high"]
         },
         {
           "type": "budget_tokens"
@@ -523,10 +464,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "medium",
-            "high"
-          ]
+          "values": ["medium", "high"]
         },
         {
           "type": "budget_tokens"
@@ -549,14 +487,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -578,13 +509,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -733,10 +658,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "high",
-            "xhigh"
-          ]
+          "values": ["high", "xhigh"]
         }
       ],
       "pricing": {
@@ -796,11 +718,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "high",
-            "max"
-          ]
+          "values": ["low", "high", "max"]
         }
       ],
       "pricing": {
@@ -824,10 +742,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "high",
-            "xhigh"
-          ]
+          "values": ["high", "xhigh"]
         }
       ],
       "pricing": {
@@ -948,11 +863,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "high",
-            "max"
-          ]
+          "values": ["low", "high", "max"]
         }
       ],
       "pricing": {
@@ -1011,10 +922,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "high",
-            "xhigh"
-          ]
+          "values": ["high", "xhigh"]
         }
       ],
       "pricing": {
@@ -1038,11 +946,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "high",
-            "max"
-          ]
+          "values": ["low", "high", "max"]
         }
       ],
       "pricing": {
@@ -1066,10 +970,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "high",
-            "xhigh"
-          ]
+          "values": ["high", "xhigh"]
         }
       ],
       "pricing": {
@@ -1196,11 +1097,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "high",
-            "max"
-          ]
+          "values": ["low", "high", "max"]
         }
       ],
       "pricing": {
@@ -1224,11 +1121,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "high",
-            "max"
-          ]
+          "values": ["low", "high", "max"]
         }
       ],
       "pricing": {
@@ -1324,12 +1217,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -1351,11 +1239,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -1377,11 +1261,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -1444,12 +1324,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -1474,12 +1349,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -1612,12 +1482,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -1642,12 +1507,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -1672,12 +1532,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -1722,11 +1577,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -1748,12 +1599,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -1774,13 +1620,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["minimal", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -1801,13 +1641,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["minimal", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -1828,13 +1662,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["minimal", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -1855,12 +1683,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["none", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -2004,12 +1827,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -2030,11 +1848,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -2071,12 +1885,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["none", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -2100,11 +1909,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -2165,12 +1970,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -2193,12 +1993,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -2256,11 +2051,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "high",
-            "max"
-          ]
+          "values": ["low", "high", "max"]
         }
       ],
       "pricing": {
@@ -2368,13 +2159,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -2420,12 +2205,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "max"]
         }
       ],
       "pricing": {
@@ -2466,13 +2246,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -2518,13 +2292,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -2591,13 +2359,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -2622,12 +2384,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "max"]
         },
         {
           "type": "budget_tokens"
@@ -2655,13 +2412,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -2725,13 +2476,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -2756,13 +2501,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -2787,13 +2526,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -2862,11 +2595,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -2888,11 +2617,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -2957,12 +2682,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -3026,11 +2746,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -3078,14 +2794,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -3126,11 +2835,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -3165,12 +2870,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -3191,9 +2891,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "high"
-          ]
+          "values": ["high"]
         }
       ],
       "pricing": {
@@ -3217,11 +2915,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -3242,12 +2936,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -3268,14 +2957,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -3297,14 +2979,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -3326,13 +3001,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -3353,11 +3022,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -3426,13 +3091,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -3453,13 +3112,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -3529,9 +3182,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "high"
-          ]
+          "values": ["high"]
         }
       ],
       "pricing": {
@@ -3551,13 +3202,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -3578,9 +3223,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "high"
-          ]
+          "values": ["high"]
         }
       ],
       "pricing": {
@@ -3601,12 +3244,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -3657,14 +3295,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -3700,14 +3331,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -3749,13 +3373,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -3811,14 +3429,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -3855,11 +3466,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -3879,12 +3486,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -3905,11 +3507,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -3930,11 +3528,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -3970,11 +3564,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -3995,13 +3585,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -4022,12 +3606,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["none", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -4084,11 +3663,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -4406,13 +3981,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["minimal", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -4738,11 +4307,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "xhigh"
-          ]
+          "values": ["low", "medium", "xhigh"]
         }
       ],
       "pricing": {
@@ -4964,11 +4529,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "xhigh"
-          ]
+          "values": ["low", "medium", "xhigh"]
         }
       ],
       "pricing": {
@@ -5044,10 +4605,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "high"
-          ]
+          "values": ["none", "high"]
         }
       ],
       "pricing": {
@@ -5068,11 +4626,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -5120,14 +4674,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "max"
-          ]
+          "values": ["none", "minimal", "low", "medium", "high", "max"]
         }
       ],
       "pricing": {
@@ -5148,14 +4695,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "max"
-          ]
+          "values": ["none", "minimal", "low", "medium", "high", "max"]
         }
       ],
       "pricing": {
@@ -5175,14 +4715,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "max"
-          ]
+          "values": ["none", "minimal", "low", "medium", "high", "max"]
         }
       ],
       "pricing": {
@@ -5203,14 +4736,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "max"
-          ]
+          "values": ["none", "minimal", "low", "medium", "high", "max"]
         }
       ],
       "pricing": {
@@ -5233,11 +4759,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "high",
-            "max"
-          ]
+          "values": ["low", "high", "max"]
         }
       ],
       "pricing": {
@@ -5414,10 +4936,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "high"
-          ]
+          "values": ["none", "high"]
         }
       ],
       "pricing": {
@@ -5452,10 +4971,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "high"
-          ]
+          "values": ["none", "high"]
         }
       ],
       "pricing": {
@@ -5716,11 +5232,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "high",
-            "max"
-          ]
+          "values": ["low", "high", "max"]
         }
       ],
       "pricing": {
@@ -5838,11 +5350,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "high",
-            "max"
-          ]
+          "values": ["low", "high", "max"]
         }
       ],
       "pricing": {
@@ -6090,13 +5598,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -6118,13 +5620,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -6149,13 +5645,7 @@
         },
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -6199,11 +5689,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         },
         {
           "type": "budget_tokens",
@@ -6229,12 +5715,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "max"]
         },
         {
           "type": "budget_tokens",
@@ -6304,11 +5785,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         },
         {
           "type": "budget_tokens",
@@ -6334,13 +5811,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -6384,12 +5855,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "max"]
         },
         {
           "type": "budget_tokens",
@@ -6415,13 +5881,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -6473,12 +5933,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -6514,11 +5969,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -6538,11 +5989,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -6590,14 +6037,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -6619,11 +6059,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -6643,11 +6079,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -6667,12 +6099,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -6693,14 +6120,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -6722,12 +6142,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -6748,14 +6163,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -6777,13 +6185,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -6804,13 +6206,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -6846,11 +6242,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -6871,13 +6263,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -6898,13 +6284,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["minimal", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -6925,13 +6305,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -6966,11 +6340,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -6991,9 +6361,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "high"
-          ]
+          "values": ["high"]
         }
       ],
       "pricing": {
@@ -7013,13 +6381,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -7070,14 +6432,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
         }
       ],
       "pricing": {
@@ -7099,11 +6454,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7124,13 +6475,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -7151,11 +6496,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7191,9 +6532,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "medium"
-          ]
+          "values": ["medium"]
         }
       ],
       "pricing": {
@@ -7214,11 +6553,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -7253,13 +6588,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["none", "low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -7280,12 +6609,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["none", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7321,12 +6645,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7347,12 +6666,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7373,10 +6687,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "high"
-          ]
+          "values": ["minimal", "high"]
         }
       ],
       "pricing": {
@@ -7396,11 +6707,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7421,11 +6728,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7540,11 +6843,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7565,12 +6864,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7591,12 +6885,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7642,12 +6931,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7668,12 +6952,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7694,12 +6973,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7758,12 +7032,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["minimal", "low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7783,11 +7052,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7808,12 +7073,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
+          "values": ["low", "medium", "high", "xhigh"]
         }
       ],
       "pricing": {
@@ -7834,11 +7094,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["low", "medium", "high"]
         }
       ],
       "pricing": {
@@ -7906,12 +7162,7 @@
       "reasoningOptions": [
         {
           "type": "effort",
-          "values": [
-            "none",
-            "low",
-            "medium",
-            "high"
-          ]
+          "values": ["none", "low", "medium", "high"]
         }
       ],
       "pricing": {
