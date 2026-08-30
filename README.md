@@ -158,6 +158,8 @@ to a temporary copy.
 | `/skills` | open the skills panel: every skill this project and this profile define |
 | `/skills pending\|diff\|approve\|reject` | review and act on skills the archivist proposed |
 | `/<skill> [args]` | run one of your own skills — see below |
+| `/mcp` | open the MCP panel: connect a server, preview its tools, and trust or remove it |
+| `/mcp add <name> <url>`, `/mcp remove <name>` | add or remove an MCP server without opening the panel |
 | `/profile new <name>` | create a new profile — an isolated config/memory/session root |
 | `/max-turns <n>` | override the per-task turn budget (default 500) for the rest of the session |
 | `/exit` | end the session (or Ctrl-D) |

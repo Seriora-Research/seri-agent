@@ -86,6 +86,10 @@ import {
   type LoopEvent,
   type runLoop as runLoopReal,
 } from "./loop/loop";
+import { fetchCatalog } from "./mcp/client";
+import { decideMcpCommand, mcpPanelRows } from "./mcp/commands";
+import { writeCatalogCache } from "./mcp/registry";
+import type { McpCatalog } from "./mcp/types";
 import {
   type ArchivistReport,
   type ArchivistState,
@@ -1597,6 +1601,50 @@ async function runTui(
     dispatch({ type: "permissions-resolved", leftoverInput });
   }
 
+  // /mcp panel's own three resolutions. `onMcpConnect` reuses fetchCatalog's own one-shot
+  // connection (mcp/client.ts) rather than the session's dialled pool (prepared.mcpClients) — the
+  // pool is for a server this session has already decided to trust, and the whole point of the
+  // preview the panel is about to show is that trust has not happened yet.
+  async function onMcpConnect(
+    name: string,
+  ): Promise<{ ok: true; catalog: McpCatalog } | { ok: false; message: string }> {
+    const entry = prepared.mcp.get(name);
+    if (entry === undefined) return { ok: false, message: `No MCP server named "${name}".` };
+    try {
+      return { ok: true, catalog: await fetchCatalog(entry.spec) };
+    } catch (err) {
+      return { ok: false, message: messageOf(err) };
+    }
+  }
+
+  // Called only on the preview's 'y'. `prepared.mcp` is frozen for the life of the session
+  // (runtime/prepare.ts's own comment on why), so writing the cache here does not change what this
+  // session's own `mcp` tool can call — the transcript line says so, the same way /skills approve's
+  // own line does for the identical reason.
+  function onMcpTrust(catalog: McpCatalog): void {
+    writeCatalogCache(configDir, catalog);
+    const toolCount = catalog.tools.length;
+    dispatch({
+      type: "transcript-append",
+      line: `Trusted "${catalog.server}" and cached its ${toolCount} tool${toolCount === 1 ? "" : "s"}. It loads in the next session, or after /clear.`,
+    });
+  }
+
+  function onMcpRemove(name: string): void {
+    try {
+      for (const line of decideMcpCommand(["remove", name], {
+        registry: prepared.mcp,
+        configDir,
+        worktree: checkpointTarget(liveState.session, dirs(ctx)).worktree,
+        clients: prepared.mcpClients,
+      }).lines) {
+        dispatch({ type: "transcript-append", line });
+      }
+    } catch (err) {
+      dispatch({ type: "command-error", message: messageOf(err) });
+    }
+  }
+
   // EffortPanel's own two resolutions — extracted to createEffortHandlers, mirroring
   // createSetupHandlers'/createConfigHandlers' own factory shape. `effort-resolved` is the one
   // action that both clears `pendingEffort` and (only
@@ -2205,6 +2253,28 @@ async function runTui(
         dispatch({ type: "command-error", message: messageOf(err) });
       }
     },
+    "/mcp": (args) => {
+      // The bare and `list` forms open the panel; add/remove render lines — same split as /skills'
+      // own handler just above, for the same reason.
+      const deps = {
+        registry: prepared.mcp,
+        configDir: ctx.configDir,
+        worktree: checkpointTarget(liveState.session, dirs(ctx)).worktree,
+        clients: prepared.mcpClients,
+      };
+      const [sub] = args;
+      if (sub === undefined || sub === "list") {
+        dispatch({ type: "mcp-requested", rows: mcpPanelRows(prepared.mcp, prepared.mcpClients) });
+        return;
+      }
+      try {
+        for (const line of decideMcpCommand(args, deps).lines) {
+          dispatch({ type: "transcript-append", line });
+        }
+      } catch (err) {
+        dispatch({ type: "command-error", message: messageOf(err) });
+      }
+    },
     "/permissions": () => {
       // decidePermissionsOpen's loadGrants never throws for a malformed store — it degrades to an
       // empty list and reports through onWarning. Dropping that callback opened a silently-empty
@@ -2560,6 +2630,9 @@ async function runTui(
       onSkillRun: (name: string) => {
         void onSubmit(`/${name}`);
       },
+      onMcpConnect,
+      onMcpTrust,
+      onMcpRemove,
       getCompletionSources: buildCompletionSources,
       // No auth-offer recompute here — redundant: every path that reaches this (Escape on
       // "starting"/"device", Enter/Esc on a login-failure result, or

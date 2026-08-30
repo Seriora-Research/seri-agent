@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import type { LoopEvent } from "../../src/loop/loop";
+import type { McpPanelRow } from "../../src/mcp/commands";
 import type { SessionState } from "../../src/session/session";
 import type {
   ConfigRow,
@@ -1160,6 +1161,32 @@ describe("tuiReducer: effort-requested / effort-resolved", () => {
       session: { ...session(), reasoningEffort: "medium" },
       pendingInputPrefill: "typed after close",
     });
+  });
+});
+
+describe("tuiReducer: mcp-requested / mcp-closed", () => {
+  const rows: McpPanelRow[] = [
+    { kind: "header", scope: "project", sourceFile: ".seri/mcp/servers.yaml" },
+    {
+      kind: "server",
+      name: "exa",
+      scope: "project",
+      status: { state: "connected", toolCount: 4 },
+      toolCount: 4,
+    },
+  ];
+
+  test("mcp-requested opens pendingMcp with the given rows, mirroring skills-requested", () => {
+    const state = tuiReducer(initialTuiState(session()), { type: "mcp-requested", rows });
+
+    expect(state).toEqual({ ...initialTuiState(session()), pendingMcp: { rows } });
+  });
+
+  test("mcp-closed clears pendingMcp", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "mcp-requested", rows });
+    state = tuiReducer(state, { type: "mcp-closed" });
+
+    expect(state).toEqual(initialTuiState(session()));
   });
 });
 

@@ -33,6 +33,7 @@ const EXPECTED_NAMES = [
   "/config",
   "/permissions",
   "/skills",
+  "/mcp",
   "/max-turns",
   "/profile",
 ] as const;
@@ -48,6 +49,7 @@ const EXPECTED_TUI_CLAIMED = [
   "/config",
   "/permissions",
   "/skills",
+  "/mcp",
   "/max-turns",
   "/profile",
 ] as const;

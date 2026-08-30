@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import type { McpPanelRow } from "../../src/mcp/commands";
 import {
   estimateTokens,
   formatDoneLine,
   formatElapsed,
+  formatMcpRow,
   formatModeDetail,
   formatTokenProgress,
   MODE_CYCLE_HINT,
@@ -294,5 +296,80 @@ describe("formatModeDetail", () => {
     for (const width of [10, 76, 80, 100]) {
       expect(formatModeDetail(undefined, width, "high")).toBe("");
     }
+  });
+});
+
+describe("formatMcpRow", () => {
+  test("a header row renders the scope and its source file", () => {
+    const row: McpPanelRow = {
+      kind: "header",
+      scope: "project",
+      sourceFile: ".seri/mcp/servers.yaml",
+    };
+    expect(formatMcpRow(row)).toBe("Project (.seri/mcp/servers.yaml)");
+  });
+
+  test("a header row for the user scope renders as User", () => {
+    const row: McpPanelRow = {
+      kind: "header",
+      scope: "user",
+      sourceFile: "/home/lioar/.seri/mcp/servers.yaml",
+    };
+    expect(formatMcpRow(row)).toBe("User (/home/lioar/.seri/mcp/servers.yaml)");
+  });
+
+  test("a connected server renders its name, status word, and cached tool count with no mark", () => {
+    const row: McpPanelRow = {
+      kind: "server",
+      name: "exa",
+      scope: "user",
+      status: { state: "connected", toolCount: 4 },
+      toolCount: 4,
+    };
+    expect(formatMcpRow(row)).toBe("exa · connected · 4 tools");
+  });
+
+  test("a needs-auth server is marked with WARNING_MARK, never a color", () => {
+    const row: McpPanelRow = {
+      kind: "server",
+      name: "vercel",
+      scope: "project",
+      status: { state: "needs-auth" },
+      toolCount: undefined,
+    };
+    expect(formatMcpRow(row)).toBe("vercel · ! needs authentication");
+  });
+
+  test("an unreachable server is marked with ERROR_MARK", () => {
+    const row: McpPanelRow = {
+      kind: "server",
+      name: "supabase",
+      scope: "project",
+      status: { state: "failed", message: "ECONNREFUSED" },
+      toolCount: undefined,
+    };
+    expect(formatMcpRow(row)).toBe("supabase · ✕ unreachable");
+  });
+
+  test("an idle server with no cached catalog shows no tool count", () => {
+    const row: McpPanelRow = {
+      kind: "server",
+      name: "notion",
+      scope: "user",
+      status: { state: "idle" },
+      toolCount: undefined,
+    };
+    expect(formatMcpRow(row)).toBe("notion · idle, connects on first use");
+  });
+
+  test("a single cached tool is singular, not plural", () => {
+    const row: McpPanelRow = {
+      kind: "server",
+      name: "exa",
+      scope: "user",
+      status: { state: "connected", toolCount: 1 },
+      toolCount: 1,
+    };
+    expect(formatMcpRow(row)).toBe("exa · connected · 1 tool");
   });
 });
