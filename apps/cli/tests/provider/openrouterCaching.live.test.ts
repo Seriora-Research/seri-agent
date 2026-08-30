@@ -25,7 +25,7 @@ test.skipIf(!process.env.OPENROUTER_API_KEY || process.env.SERI_LIVE_CACHE_CHECK
     // an earlier run (this repo's own negative-control rule — .claude/rules/code-quality.md,
     // "An acceptance check must be seen to fail before it counts as passing").
     const nonce = crypto.randomUUID();
-    const system = `${nonce}\n\n${buildSystemPrompt({ agentsContent: PADDING, skills: [] })}`;
+    const system = `${nonce}\n\n${buildSystemPrompt({ agentsContent: PADDING, skills: [], rules: [] })}`;
     // A session-scoped UUID minted once, mirroring how cli.ts derives sessionId from session.id
     // for the life of one CLI session — both turns below share it, which is what sticky routing
     // needs.

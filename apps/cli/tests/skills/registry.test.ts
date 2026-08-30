@@ -247,17 +247,17 @@ describe("renderSkillsTier and the context tier", () => {
 
   test("empty when nothing is model-visible, so the prompt is unchanged from having no skills", () => {
     expect(renderSkillsTier([])).toBe("");
-    expect(buildSystemPrompt({ agentsContent: "PROJECT", skills: [] })).toBe(
-      buildSystemPrompt({ agentsContent: "PROJECT", skills: [] }),
+    expect(buildSystemPrompt({ agentsContent: "PROJECT", skills: [], rules: [] })).toBe(
+      buildSystemPrompt({ agentsContent: "PROJECT", skills: [], rules: [] }),
     );
-    expect(buildSystemPrompt({ agentsContent: "PROJECT", skills: [] })).not.toContain("# Skills");
+    expect(buildSystemPrompt({ agentsContent: "PROJECT", skills: [], rules: [] })).not.toContain("# Skills");
   });
 
   // The load contract, asserted at the surface that actually matters: the body is not in the
   // string handed to the provider.
   test("the assembled system prompt carries the metadata and not the body", () => {
     const { skills } = load({ "project/.seri/skills/reviewer/SKILL.md": SIMPLE });
-    const prompt = buildSystemPrompt({ agentsContent: "PROJECT", skills: [...skills.values()] });
+    const prompt = buildSystemPrompt({ agentsContent: "PROJECT", skills: [...skills.values()], rules: [] });
     expect(prompt).toContain("# Skills");
     expect(prompt).toContain("reviewer: Reviews a diff and reports findings.");
     expect(prompt).not.toContain("Review the diff for");
@@ -267,8 +267,7 @@ describe("renderSkillsTier and the context tier", () => {
     const { skills } = load({ "project/.seri/skills/reviewer/SKILL.md": SIMPLE });
     const prompt = buildSystemPrompt({
       agentsContent: "PROJECT-CONTRACT",
-      skills: [...skills.values()],
-    });
+      skills: [...skills.values()], rules: [] });
     expect(prompt.indexOf("PROJECT-CONTRACT")).toBeLessThan(prompt.indexOf("# Skills"));
   });
 });

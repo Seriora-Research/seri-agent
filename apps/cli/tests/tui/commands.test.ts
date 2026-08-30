@@ -744,7 +744,7 @@ describe("decideClear", () => {
     const { next } = decideClear(before, configDir, "new-id");
 
     expect(next.systemPrompt).toBe(
-      buildSystemPrompt({ agentsContent: loadAgentsFile(workTree), skills: [] }),
+      buildSystemPrompt({ agentsContent: loadAgentsFile(workTree), skills: [], rules: [] }),
     );
     expect(next.systemPrompt).not.toBe(before.systemPrompt);
   });
@@ -756,7 +756,7 @@ describe("decideClear", () => {
     const { next } = decideClear(before, configDir, "new-id", stub);
 
     expect(next.systemPrompt).toBe(
-      buildSystemPrompt({ agentsContent: stub(workTree), skills: [] }),
+      buildSystemPrompt({ agentsContent: stub(workTree), skills: [], rules: [] }),
     );
   });
 

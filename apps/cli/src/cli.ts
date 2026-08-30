@@ -132,6 +132,7 @@ import { awaitsReply } from "./session/awaitsReply";
 import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { decideSkillsCommand, skillsPanelRows } from "./skills/commands";
+import type { RuleRegistry } from "./rules/registry";
 import { readSkillBody, type SkillRegistry, substituteSkillArgs } from "./skills/registry";
 import type { AgentSpec } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
@@ -208,12 +209,16 @@ export type CliDeps = {
   // getModel or this is ever called.
   getGatewayModel?: typeof getGatewayModelReal;
   loadAgentsFile?: typeof loadAgentsFileReal;
-  // The skill registry, injectable for the same reason `loadAgentsFile` is: both read the ambient
-  // worktree, and a test that does not stub them is asserting against whatever the developer
-  // happens to have on disk. Without this, a repository that has its own `.seri/skills/` cannot run
-  // its own suite — the skill tool appears in the toolset and a "# Skills" block in the prompt, and
-  // every assertion on either shape fails for a reason that has nothing to do with the code.
-  loadSkills?: (cwd: string, configDir: string) => SkillRegistry;
+  // The `.seri/` registries, injectable for the same reason `loadAgentsFile` is: all of them read
+  // the ambient worktree, and a test that does not stub them is asserting against whatever the
+  // developer happens to have on disk. Without this, a repository that has its own `.seri/skills/`
+  // or `.seri/rules/` cannot run its own suite — the skill tool appears in the toolset, rule text
+  // appears in the prompt, and assertions on either fail for reasons unrelated to the code.
+  //
+  // One seam covering both, not one each: they are discovered from the same cwd at the same moment,
+  // and a caller that stubbed only one would still be reading the other off the real disk, which is
+  // the exact bug this exists to remove.
+  loadExtensions?: (cwd: string, configDir: string) => { skills: SkillRegistry; rules: RuleRegistry };
   sessionsDir?: string;
   checkpointsDir?: string;
   authConfigDir?: string;

@@ -3,6 +3,7 @@ import { findCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { loadAgentsFile as loadAgentsFileReal } from "../agents/loadAgentsFile";
 import { buildSystemPrompt } from "../agents/systemPrompt";
+import { createRulesState } from "../rules/match";
 import { createCheckpointer } from "../checkpoint/checkpoint";
 import type { CliDeps, RunContext } from "../cli";
 import { printWarning } from "../cli/output";
@@ -41,6 +42,7 @@ export function createRunScheduled(opts: {
       systemPrompt: buildSystemPrompt({
         agentsContent: loadAgentsFileFn(input.session.cwd),
         skills: [],
+        rules: [],
       }),
       model: route.model,
       provider: route.provider,
@@ -74,6 +76,8 @@ export function createRunScheduled(opts: {
       // tool never exists here and a scheduled run must not load agent files a human never saw.
       agents: builtinRegistry(),
       skills: new Map(),
+      rules: new Map(),
+      rulesState: createRulesState(),
       trajectory: createSessionTrajectory(session, opts.configDir, onWarning),
       preMountMessages: [],
     };

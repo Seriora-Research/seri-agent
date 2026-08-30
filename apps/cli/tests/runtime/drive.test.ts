@@ -74,6 +74,8 @@ function preparedStub(): PreparedRun {
       isEnabled: () => true,
     },
     skills: new Map(),
+    rules: new Map(),
+    rulesState: { fired: new Set<string>() },
     preMountMessages: [],
   };
 }

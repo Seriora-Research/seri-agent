@@ -16,6 +16,7 @@ import {
   observeArchivistEvent,
 } from "../memory/archivist";
 import { rememberGrant } from "../permissions/store";
+import { createRuleInjector } from "../rules/match";
 import type { CostReport } from "../provider/cost";
 import { configuredProviders } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
@@ -436,6 +437,16 @@ export async function driveLoop(
           approvalPrompt,
           // Computed once above, so a live /model switch or reroute reaches subagents identically.
           system,
+          // undefined when this session defines no glob-scoped rule, which is the common case and
+          // costs the loop nothing. The parent loop only: a subagent builds its own message array
+          // (subagents/dispatch.ts), and a child still inherits every `alwaysApply` rule through
+          // the shared system tiers.
+          onToolPhaseEnd: createRuleInjector({
+            rules: prepared.rules,
+            state: prepared.rulesState,
+            worktree: prepared.worktree,
+            cwd: session.cwd,
+          }),
           signal: controller.signal,
           maxIterations: maxTurns,
           // Without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`

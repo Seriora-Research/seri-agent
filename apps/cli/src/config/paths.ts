@@ -19,6 +19,7 @@ export const DEFAULT_PROFILE = "default";
 // own header comment already applies to CONFIG_FILENAME/AUTH_FILENAME/PERMISSIONS_FILENAME.
 export const AGENTS_DIRNAME = "agents";
 export const SKILLS_DIRNAME = "skills";
+export const RULES_DIRNAME = "rules";
 export const MEMORIES_DIRNAME = "memories";
 export const PENDING_DIRNAME = "pending";
 export const TRAJECTORIES_DIRNAME = "trajectories";
@@ -56,6 +57,7 @@ export function getReservedProfileNames(): ReadonlySet<string> {
     "bin",
     AGENTS_DIRNAME,
     SKILLS_DIRNAME,
+    RULES_DIRNAME,
     MEMORIES_DIRNAME,
     PENDING_DIRNAME,
     TRAJECTORIES_DIRNAME,
@@ -171,6 +173,11 @@ export function getAgentsDir(configDir: string = getConfigDir()): string {
 // ~/.seri/work/skills/, and a named profile never falls back to the default root's.
 export function getSkillsDir(configDir: string = getConfigDir()): string {
   return join(configDir, SKILLS_DIRNAME);
+}
+
+// Global-scope rule files, under the profile root on the same rule as agents and skills.
+export function getRulesDir(configDir: string = getConfigDir()): string {
+  return join(configDir, RULES_DIRNAME);
 }
 
 export function getPendingDir(configDir: string = getConfigDir()): string {
