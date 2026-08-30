@@ -3,7 +3,9 @@ import { decodePasteBytes, TextAttributes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import { useEffect, useRef, useState } from "react";
 import { theme } from "../theme/theme";
+import { applyCompletion, type CompletionSource, resolveCompletion } from "../util/completion";
 import { isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
+import { COMPLETION_POPUP_ROWS, CompletionPopup } from "./CompletionPopup";
 
 // Ceiling on how often a keystroke can trigger InputBox's own repaint (a `setValue` call).
 // OS key-repeat while holding Backspace fires faster than this (~33ms apart, measured under Ink),
@@ -20,6 +22,10 @@ import { isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
 // just an Ink artifact.
 const THROTTLE_MS = 50;
 
+// A stable identity for the default, so the common "no completion wired" mount does not get a fresh
+// array on every render.
+const EMPTY_SOURCES: readonly CompletionSource[] = [];
+
 export function InputBox({
   onSubmit,
   onQuit,
@@ -27,6 +33,7 @@ export function InputBox({
   onPrefillConsumed,
   onEmptyDown,
   inert,
+  completionSources,
 }: {
   // Required, not optional. App renders this component only when a submitted line has somewhere to
   // go (see its own render ternary): the pre-session mounts — the welcome splash and the guided
@@ -45,8 +52,20 @@ export function InputBox({
   // When true, printable keys, paste, Enter, and Ctrl-D no-op. Empty Down still calls
   // onEmptyDown so a child view can focus the roster.
   inert?: boolean;
+  // Every source a typed trigger could open (util/completion.ts). Empty by default so the
+  // pre-session mounts, which have no registry behind them, render exactly as before.
+  completionSources?: readonly CompletionSource[];
 }) {
+  const sources = completionSources ?? EMPTY_SOURCES;
   const [value, setValue] = useState(prefill ?? "");
+  // The highlighted row of the completion popup. Reset to 0 on every value change rather than kept
+  // in sync with a moving match list: after another keystroke the list is a different list, and a
+  // preserved index would point at an unrelated entry.
+  const [completionIndex, setCompletionIndex] = useState(0);
+  // Set to the value the user pressed Escape on, so the popup stays shut for that exact text and
+  // reopens the moment they type anything else. Without it, Escape would be undone by the next
+  // render.
+  const [dismissedFor, setDismissedFor] = useState<string | undefined>(undefined);
   // The current input value at all times, kept in sync synchronously on every keystroke.
   // `value` (React state) only mirrors this, and only on a throttled `flush()` — reads that need
   // the up-to-the-keystroke value (submit) must read this ref, not `value`.
@@ -76,6 +95,23 @@ export function InputBox({
     setValue(pendingValueRef.current);
   }
 
+  // Recomputed from the up-to-the-keystroke ref, not the throttled `value`: the popup has to answer
+  // for the character just typed, and a 50ms-stale list would accept the wrong item on a fast
+  // type-then-Tab.
+  function liveCompletion() {
+    const current = pendingValueRef.current;
+    if (inert || sources.length === 0 || current === dismissedFor) return undefined;
+    return resolveCompletion(sources, current);
+  }
+
+  // Every value change opens a fresh list, so the selection goes back to the top and any earlier
+  // Escape stops applying.
+  function updateAndResetCompletion(next: string) {
+    scheduleUpdate(next);
+    setCompletionIndex(0);
+    if (dismissedFor !== undefined) setDismissedFor(undefined);
+  }
+
   function scheduleUpdate(next: string) {
     pendingValueRef.current = next;
     if (timerRef.current !== null) return; // a flush is already scheduled; it will pick up `next`
@@ -93,6 +129,43 @@ export function InputBox({
         onEmptyDown?.();
       }
       return;
+    }
+    // The popup owns Up/Down/Tab/Escape, and Enter, only while it is open. Checked before every
+    // other branch below so an open popup cannot submit the half-typed name underneath it.
+    const open = liveCompletion();
+    if (open !== undefined) {
+      if (key.name === "up" || key.name === "down") {
+        const last = Math.min(open.matches.length, COMPLETION_POPUP_ROWS) - 1;
+        setCompletionIndex((index) =>
+          key.name === "up" ? Math.max(0, index - 1) : Math.min(last, index + 1),
+        );
+        return;
+      }
+      if (key.name === "escape") {
+        setDismissedFor(pendingValueRef.current);
+        return;
+      }
+      const item = open.matches[completionIndex] ?? open.matches[0];
+      // Enter on a name already typed in full submits it rather than "completing" it to the text
+      // that is already there, which swallows the keypress. Verified live: typing `/skills` and
+      // pressing Enter left the popup up and ran nothing, reading as dropped input. Tab is exempt
+      // — it unambiguously means "complete this", and completing an exact match is a harmless
+      // no-op that still adds the trailing space. Anything this does not claim falls through to
+      // the ordinary handling below, submit included.
+      const alreadyComplete = isEnter(key) && item?.value === open.token;
+      if ((key.name === "tab" || isEnter(key)) && item !== undefined && !alreadyComplete) {
+        const next = applyCompletion(pendingValueRef.current, open, item);
+        // Synchronous, not scheduleUpdate: a pending throttled flush holding the pre-accept text
+        // would otherwise land after this and undo the completion.
+        if (timerRef.current !== null) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        pendingValueRef.current = next;
+        setValue(next);
+        setCompletionIndex(0);
+        return;
+      }
     }
     if (key.name === "down" && pendingValueRef.current === "") {
       onEmptyDown?.();
@@ -121,7 +194,7 @@ export function InputBox({
       return;
     }
     if (key.name === "backspace" || key.name === "delete") {
-      scheduleUpdate(pendingValueRef.current.slice(0, -1));
+      updateAndResetCompletion(pendingValueRef.current.slice(0, -1));
       return;
     }
     // A plain, printable keypress (util/keys.ts's own comment explains the OpenTUI-vs-Ink
@@ -132,7 +205,7 @@ export function InputBox({
     // terminator-splitting logic that used to live in this branch moved to `usePaste`'s handler
     // below, where a multi-character chunk can actually occur.
     if (isPrintableKey(key)) {
-      scheduleUpdate(pendingValueRef.current + key.sequence);
+      updateAndResetCompletion(pendingValueRef.current + key.sequence);
     }
   });
 
@@ -154,19 +227,31 @@ export function InputBox({
     scheduleUpdate(split.after);
   });
 
+  // Derived from the throttled `value`, not the ref: this is the render path, and rendering from a
+  // ref would not repaint on its own anyway.
+  const completion =
+    inert || sources.length === 0 || value === dismissedFor
+      ? undefined
+      : resolveCompletion(sources, value);
+
   return (
-    <box
-      flexDirection="row"
-      borderStyle="single"
-      borderColor={theme.muted}
-      border={["top", "bottom"]}
-    >
-      {/* "> " matches the same marker the transcript's own user-turn echo uses (cli.ts's
+    <>
+      {completion !== undefined && (
+        <CompletionPopup matches={completion.matches} selected={completionIndex} />
+      )}
+      <box
+        flexDirection="row"
+        borderStyle="single"
+        borderColor={theme.muted}
+        border={["top", "bottom"]}
+      >
+        {/* "> " matches the same marker the transcript's own user-turn echo uses (cli.ts's
       echoUserInput), so it's visually clear where typed text goes. There is no cursor-position
       tracking here — the keyboard/paste handlers above only append to/delete from the end of
       `value` — so a block cursor always trails the text rather than needing its own coordinate. */}
-      <text fg={theme.text}>{`> ${value}`}</text>
-      <text attributes={TextAttributes.INVERSE}> </text>
-    </box>
+        <text fg={theme.text}>{`> ${value}`}</text>
+        <text attributes={TextAttributes.INVERSE}> </text>
+      </box>
+    </>
   );
 }

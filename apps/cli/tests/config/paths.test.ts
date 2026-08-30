@@ -4,19 +4,19 @@ import { join } from "node:path";
 import { AUTH_FILENAME } from "../../src/auth/authStore";
 import { CONFIG_FILENAME } from "../../src/config/config";
 import {
-  DATABASE_FILENAME,
   DAEMON_DESCRIPTOR_FILENAME,
   DAEMON_LOCK_FILENAME,
+  DATABASE_FILENAME,
   DEFAULT_PROFILE,
   getBaseConfigDir,
   getConfigDir,
-  getDatabasePath,
   getDaemonDescriptorPath,
   getDaemonLockPath,
+  getDatabasePath,
   getMemoriesDir,
   getPendingDir,
-  getTrajectoriesDir,
   getReservedProfileNames,
+  getTrajectoriesDir,
   profileNameError,
   resolveProfile,
   setProfileOverride,
@@ -226,9 +226,12 @@ describe("profileNameError", () => {
   });
 
   // Stage 6b: memories/ and pending/ join the reserved set the same way sessions/checkpoints did.
-  test.each(["agents", "skills", "memories", "pending", "trajectories"])("%s is reserved", (name) => {
-    expect(profileNameError(name)).toBeDefined();
-  });
+  test.each(["agents", "skills", "memories", "pending", "trajectories"])(
+    "%s is reserved",
+    (name) => {
+      expect(profileNameError(name)).toBeDefined();
+    },
+  );
 
   test.each(["Memories", "Pending"])("%s is reserved case-folded on win32/darwin", (name) => {
     setPlatform("win32");

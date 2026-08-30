@@ -31,6 +31,7 @@ import {
 import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
   assertTuiHandlers,
+  COMMAND_META,
   type CommandMeta,
   commandByName,
   isTuiClaimed,
@@ -130,7 +131,8 @@ import {
 import { awaitsReply } from "./session/awaitsReply";
 import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
-import { readSkillBody, substituteSkillArgs } from "./skills/registry";
+import { decideSkillsCommand, skillsPanelRows } from "./skills/commands";
+import { readSkillBody, type SkillRegistry, substituteSkillArgs } from "./skills/registry";
 import type { AgentSpec } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
@@ -139,6 +141,7 @@ import { App } from "./tui/app";
 import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
 import { runWelcomeSplash } from "./tui/routes/setup/welcomeSplash";
 import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";
+import type { CompletionSource } from "./tui/util/completion";
 import { runUsageCommand as runUsageCommandReal } from "./usage/command";
 
 export { addCost, addTokens };
@@ -205,6 +208,12 @@ export type CliDeps = {
   // getModel or this is ever called.
   getGatewayModel?: typeof getGatewayModelReal;
   loadAgentsFile?: typeof loadAgentsFileReal;
+  // The skill registry, injectable for the same reason `loadAgentsFile` is: both read the ambient
+  // worktree, and a test that does not stub them is asserting against whatever the developer
+  // happens to have on disk. Without this, a repository that has its own `.seri/skills/` cannot run
+  // its own suite — the skill tool appears in the toolset and a "# Skills" block in the prompt, and
+  // every assertion on either shape fails for a reason that has nothing to do with the code.
+  loadSkills?: (cwd: string, configDir: string) => SkillRegistry;
   sessionsDir?: string;
   checkpointsDir?: string;
   authConfigDir?: string;
@@ -1591,6 +1600,36 @@ async function runTui(
   // on this tier, the same gate `confirmedModel` already has.
   const { onEffortSelected, onEffortCancel } = createEffortHandlers({ dispatch });
 
+  // Everything a leading "/" can resolve to this session, in the order onSubmit resolves them:
+  // catalog commands, then agents, then skills. Built once — all three registries are frozen for
+  // the session (PreparedRun's own comments), so recomputing per keystroke would produce the same
+  // array and throw away the popup's own render memoisation.
+  const completionSources: readonly CompletionSource[] = [
+    {
+      id: "commands",
+      trigger: "/",
+      // A "/" only opens this list as the first character of the line. Mid-sentence it is a path
+      // separator or a date, and a popup there would cover the transcript on every "src/cli.ts".
+      lineStartOnly: true,
+      items: [
+        ...COMMAND_META.map((meta) => ({ name: meta.name, description: meta.description })),
+        ...[...prepared.agents.values()].map((agent) => ({
+          name: `/${agent.name}`,
+          description: `subagent · ${agent.description}`,
+        })),
+        // Skills last so an agent of the same name wins the list the way it wins the lookup —
+        // resolveCompletion keeps the first match for a value, and onSubmit checks agents first.
+        ...[...prepared.skills.values()].map((skill) => ({
+          name: `/${skill.name}`,
+          description: `skill · ${skill.description}`,
+        })),
+      ]
+        .filter((item, index, all) => all.findIndex((other) => other.name === item.name) === index)
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((item) => ({ value: item.name, description: item.description })),
+    },
+  ];
+
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
   // reducer and driveLoop have always shared. Guarded against overlap: a second Enter press
@@ -2119,6 +2158,27 @@ async function runTui(
         });
       }
     },
+    "/skills": (args) => {
+      // The bare and `list` forms open the panel; the review subcommands render lines. The panel is
+      // the listing surface the review lines were never going to be, and splitting them here keeps
+      // one command name over both rather than inventing a second.
+      const deps = {
+        configDir: ctx.configDir,
+        worktree: checkpointTarget(liveState.session, dirs(ctx)).worktree,
+      };
+      const [sub] = args;
+      if (sub === undefined || sub === "list") {
+        dispatch({ type: "skills-requested", rows: skillsPanelRows(deps) });
+        return;
+      }
+      try {
+        for (const line of decideSkillsCommand(args, deps).lines) {
+          dispatch({ type: "transcript-append", line });
+        }
+      } catch (err) {
+        dispatch({ type: "command-error", message: messageOf(err) });
+      }
+    },
     "/permissions": () => {
       // decidePermissionsOpen's loadGrants never throws for a malformed store — it degrades to an
       // empty list and reports through onWarning. Dropping that callback opened a silently-empty
@@ -2468,6 +2528,12 @@ async function runTui(
       onPermissionsClose,
       onEffortSelected,
       onEffortCancel,
+      // Enter on a panel row runs the skill, through the exact path `/name` takes — the panel picks
+      // which skill, and everything after that is one code path, not two.
+      onSkillRun: (name: string) => {
+        void onSubmit(`/${name}`);
+      },
+      completionSources,
       // No auth-offer recompute here — redundant: every path that reaches this (Escape on
       // "starting"/"device", Enter/Esc on a login-failure result, or
       // a logout-failure result) never changed the auth-session file between when it was last

@@ -550,6 +550,7 @@ export async function prepareSession(
       configDir,
       ctx.cwd,
       (cwd) =>
+        deps.loadSkills?.(cwd, configDir) ??
         loadSkillRegistry({
           worktree: cwd,
           configDir,

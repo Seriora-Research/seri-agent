@@ -9,6 +9,7 @@ import {
 } from "../loop/loop";
 import { type CostReport, reportFromCatalogPricing } from "../provider/cost";
 import type { SessionState } from "../session/session";
+import { makeSkillWriteTool } from "../skills/writeTool";
 import { runSubagent, type SubagentRuntime } from "../subagents/dispatch";
 import { type LoadedMemory, loadMemory, type MemoryContext, renderMemoryTier } from "./store";
 import { makeMemoryWriteTool } from "./tool";
@@ -19,9 +20,10 @@ import { makeMemoryWriteTool } from "./tool";
 // runArchivist passes this directly as runSubagent's `system`, never joinTiers'd with anything
 // else. Lives here, not registry.ts: it is memory-specific prose no dispatchable agent composes.
 export const ARCHIVIST_PROMPT = `You are seri's archivist. You are handed the transcript of a completed stretch of a
-coding session and the current contents of the three memory files. Your only job is to decide what
-in that transcript is worth remembering, and to record it with memory_write. You have no other
-tools: you cannot read files, search, run commands, or edit anything.
+coding session and the current contents of the three memory files. Your job is to decide what in
+that transcript is worth keeping, and to record it — a fact with memory_write, a procedure with
+skill_write. Those are your only tools: you cannot read files, search, run commands, or edit
+anything.
 
 Write a fact only if it will still be true and still be useful in a session next week. Corrections
 the user made, conventions of this repo, commands that work here, and stated preferences qualify.
@@ -37,6 +39,15 @@ Cross-project environment facts go in "memory-global".
 Every file has a hard character cap and a write that would exceed it is refused, listing the
 current entries. When that happens, consolidate: "replace" two overlapping entries with one, or
 "remove" one that a newer fact has invalidated. Never restate a fact already recorded.
+
+Use skill_write instead when what is worth keeping is a PROCEDURE rather than a fact: a sequence
+of steps that was hard to work out and would be worth following again — the order, the checks, the
+traps. A fact answers "what is true here"; a skill answers "how do I do this here". Most sessions
+warrant neither, and a session that produced one good fact rarely also produced a good skill. Do
+not write a skill for something the agent would do correctly anyway, for a one-off task, or for a
+sequence you did not actually watch succeed in this transcript. Give it a name someone would guess
+and a description that says when to reach for it, because the description is all a future session
+sees until it loads the skill.
 
 Every call also requires "reason" (one short phrase: which turn or fact in the transcript triggered
 this write — not a restatement of the entry itself) and "durable" (true if this will still be true
@@ -238,6 +249,10 @@ export async function runArchivist(args: {
   // `runtime` is whatever the caller already resolved; this function does not parse role pins.
   const tools: ToolSet = {
     memory_write: makeMemoryWriteTool(args.ctx, { forceStage: args.forceStage === true }),
+    // The second write path, and the only one that produces a whole file. It always stages —
+    // there is no approval-off branch the way memory_write has one — because a skill lands inside
+    // the user's own tree and steers later sessions.
+    skill_write: makeSkillWriteTool(args.ctx),
   };
   const runtime: SubagentRuntime = {
     runLoop: args.runLoop ?? runLoop,

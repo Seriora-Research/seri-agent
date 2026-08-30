@@ -485,3 +485,50 @@ export function formatSetupRow(row: SetupProviderRow): string {
   }
   return `${name} ${masked} (config)`;
 }
+
+// One row of the /skills panel. Produced by skillsPanelRows (skills/commands.ts) from the session's
+// own registry, so it carries only this project's skills and this profile's global ones — never
+// another project's, which the discovery walk cannot reach in the first place.
+export type SkillsPanelRow = {
+  name: string;
+  description: string;
+  scope: "project" | "global";
+  /** Worktree-relative for a project skill, absolute for a global one — whichever names the file
+   *  more usefully to someone about to open it. */
+  where: string;
+  author: "human" | "archivist";
+  modelInvocable: boolean;
+};
+
+// Same padded-string approach the model picker's own columns use, and the same reason: this repo
+// hand-rolls its TUI and has no table component.
+export const SKILL_NAME_WIDTH = 24;
+export const SKILL_SCOPE_WIDTH = 9;
+
+export function formatSkillRow(row: SkillsPanelRow): string {
+  // The marks are what a reader cannot get from the name or the path: who wrote it, and whether
+  // the model may reach for it on its own. Omitted entirely when neither applies, so the common
+  // row stays quiet.
+  const marks = [
+    row.author === "archivist" ? "archivist" : undefined,
+    row.modelInvocable ? undefined : "user-only",
+  ].filter(Boolean);
+  const suffix = marks.length === 0 ? "" : `  [${marks.join(", ")}]`;
+  return `${truncatePad(row.name, SKILL_NAME_WIDTH)}${truncatePad(row.scope, SKILL_SCOPE_WIDTH)}${row.where}${suffix}`;
+}
+
+export const SKILLS_PANEL_HEADER = `${"NAME".padEnd(SKILL_NAME_WIDTH)}${"SCOPE".padEnd(SKILL_SCOPE_WIDTH)}FILE`;
+
+export function matchesSkillFilter(row: SkillsPanelRow, query: string): boolean {
+  const terms = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((term) => term.length > 0);
+  if (terms.length === 0) return true;
+  const haystacks = [
+    row.name.toLowerCase(),
+    row.description.toLowerCase(),
+    row.where.toLowerCase(),
+  ];
+  return terms.every((term) => haystacks.some((hay) => hay.includes(term)));
+}

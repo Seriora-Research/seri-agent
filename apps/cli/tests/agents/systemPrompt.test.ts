@@ -53,7 +53,10 @@ describe("buildSystemPrompt", () => {
   // `loadAgentsFile` returns "" and the model got "You are seri, a coding agent." and nothing else.
   test("a project with no AGENTS.md still gets the full tool guidance", () => {
     const withoutAgents = buildSystemPrompt({ agentsContent: "", skills: [] });
-    const withAgents = buildSystemPrompt({ agentsContent: "# Project rules\nUse tabs.", skills: [] });
+    const withAgents = buildSystemPrompt({
+      agentsContent: "# Project rules\nUse tabs.",
+      skills: [],
+    });
 
     expect(withoutAgents).toMatch(/call your tools/i);
     expect(withoutAgents).toMatch(/read_file/);

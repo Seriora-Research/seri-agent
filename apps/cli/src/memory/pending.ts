@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import { atomicWriteFile } from "../atomicWriteFile";
 import { getPendingDir } from "../config/paths";
+import { diffLines } from "../diffLines";
 import { projectKey } from "../permissions/store";
 import {
   applyWrite,
@@ -161,45 +162,6 @@ function toRequest(p: PendingWrite): MemoryWriteRequest {
     reason: p.reason,
     durable: p.durable,
   };
-}
-
-const DIFF_CONTEXT = 2;
-
-// Every write is line-scoped (store.ts's computeWrite), so the diff is exact-prefix/exact-suffix
-// trim, not a general LCS — the algorithm the plan specifies rather than a diff dependency.
-function diffLines(before: string, after: string): string[] {
-  const beforeLines = before.length === 0 ? [] : before.split("\n");
-  const afterLines = after.length === 0 ? [] : after.split("\n");
-
-  let prefix = 0;
-  while (
-    prefix < beforeLines.length &&
-    prefix < afterLines.length &&
-    beforeLines[prefix] === afterLines[prefix]
-  ) {
-    prefix++;
-  }
-  let suffix = 0;
-  while (
-    suffix < beforeLines.length - prefix &&
-    suffix < afterLines.length - prefix &&
-    beforeLines[beforeLines.length - 1 - suffix] === afterLines[afterLines.length - 1 - suffix]
-  ) {
-    suffix++;
-  }
-
-  const out: string[] = [];
-  for (const line of beforeLines.slice(Math.max(0, prefix - DIFF_CONTEXT), prefix))
-    out.push(`  ${line}`);
-  for (const line of beforeLines.slice(prefix, beforeLines.length - suffix)) out.push(`- ${line}`);
-  for (const line of afterLines.slice(prefix, afterLines.length - suffix)) out.push(`+ ${line}`);
-  for (const line of afterLines.slice(
-    afterLines.length - suffix,
-    afterLines.length - suffix + DIFF_CONTEXT,
-  )) {
-    out.push(`  ${line}`);
-  }
-  return out;
 }
 
 // Re-runs computeWrite against the CURRENT live file, not the file as it was at stage time — so a

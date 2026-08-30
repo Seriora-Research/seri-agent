@@ -10,13 +10,13 @@ import { MockLanguageModelV4 } from "ai/test";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { saveAuthSession } from "../../src/auth/authStore";
-import { getConfigDir, getTrajectoriesDir } from "../../src/config/paths";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
 import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS, tuiPresenter } from "../../src/cli";
-import { recoveryLines, undoPlanLines, USAGE, printUsage } from "../../src/cli/output";
+import { printUsage, recoveryLines, USAGE, undoPlanLines } from "../../src/cli/output";
 import { loadConfig, setConfigValue } from "../../src/config/config";
+import { getConfigDir, getTrajectoriesDir } from "../../src/config/paths";
 import type { ApprovalAnswer, LoopEvent, runLoop } from "../../src/loop/loop";
 import { loadGrants, permissionsPath, projectKey } from "../../src/permissions/store";
 import type { CostReport } from "../../src/provider/cost";
@@ -24,18 +24,18 @@ import { getGroqModel } from "../../src/provider/groq";
 import { configuredProviders, PROVIDER_API_KEY_NAMES } from "../../src/provider/keys";
 import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
 import {
-  loadSession,
   listSessionIds,
+  loadSession,
   type SessionState,
   saveSession,
 } from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
-import type { CheckOutcome } from "../../src/verify/run";
 import {
   createTrajectoryWriter,
   readTrajectory,
   type TrajectoryWriter,
 } from "../../src/trajectory/writer";
+import type { CheckOutcome } from "../../src/verify/run";
 import { fakeRunLoop } from "./fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
@@ -167,7 +167,11 @@ describe("run (task invocation)", () => {
 
     let code: number;
     try {
-      code = await run(["do", "a", "task"], { sessionsDir, loadAgentsFile: () => "" });
+      code = await run(["do", "a", "task"], {
+        sessionsDir,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+      });
     } finally {
       console.error = originalError;
     }
@@ -194,6 +198,7 @@ describe("run (task invocation)", () => {
       code = await run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
       });
     } finally {
@@ -233,6 +238,7 @@ describe("run (task invocation)", () => {
       code = await run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
       });
     } finally {
@@ -283,6 +289,7 @@ describe("run (task invocation)", () => {
       code = await run(["--resume", "reroute-on-resume", "another", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
       });
     } finally {
@@ -338,6 +345,7 @@ describe("run (task invocation)", () => {
       code = await run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
       });
     } finally {
@@ -407,6 +415,7 @@ describe("run (task invocation)", () => {
       code = await run(["--resume", "gateway-on-resume", "another", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
       });
     } finally {
@@ -449,7 +458,12 @@ describe("run (task invocation)", () => {
     const { fake, capture } = fakeRunLoop();
 
     await captureLogs(() =>
-      run(["--continue"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["--continue"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(capture()?.messages).toEqual([{ role: "user", content: "new task" }]);
@@ -480,7 +494,12 @@ describe("run (task invocation)", () => {
     const { fake, capture } = fakeRunLoop();
 
     await captureLogs(() =>
-      run(["--resume", "older"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["--resume", "older"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(capture()?.messages).toEqual([{ role: "user", content: "old task" }]);
@@ -500,6 +519,7 @@ describe("run (task invocation)", () => {
       code = await run(["write", "hello.txt"], {
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
       });
     } finally {
@@ -521,7 +541,9 @@ describe("run (task invocation)", () => {
     // The assembled prompt, not the bare identity line: with no AGENTS.md this used to be 29
     // characters of identity and no tool guidance at all. The per-turn volatile tier (which model
     // this run actually is) is appended after it — see driveLoop's system composition.
-    expect(capture()?.system?.startsWith(buildSystemPrompt({ agentsContent: "", skills: [] }))).toBe(true);
+    expect(
+      capture()?.system?.startsWith(buildSystemPrompt({ agentsContent: "", skills: [] })),
+    ).toBe(true);
     expect(capture()?.system).toMatch(/You are powered by the model named/);
   });
 
@@ -534,7 +556,12 @@ describe("run (task invocation)", () => {
     const { fake, capture } = fakeRunLoop();
 
     await captureLogs(() =>
-      run(["  do a task  "], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["  do a task  "], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(capture()?.messages).toEqual([{ role: "user", content: "do a task" }]);
@@ -547,7 +574,12 @@ describe("run (task invocation)", () => {
     const { fake, capture } = fakeRunLoop();
 
     await captureLogs(() =>
-      run(["write", "hello.txt"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["write", "hello.txt"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(capture()?.permissionMode).toBe("approve-each");
@@ -563,6 +595,7 @@ describe("run (task invocation)", () => {
       run(["--dangerously-skip-permissions", "write", "hello.txt"], {
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
       }),
     );
@@ -581,6 +614,7 @@ describe("run (task invocation)", () => {
       run(["--dangerously-skip-permissions", "write", "hello.txt"], {
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
       }),
     );
@@ -597,7 +631,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { logs } = await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(logs.some((line) => line.includes("bash"))).toBe(true);
@@ -619,6 +658,7 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         permissionsDir,
       }),
@@ -639,7 +679,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { logs } = await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     const rendered = logs.join("\n");
@@ -654,7 +699,12 @@ describe("run (task invocation)", () => {
     const { fake } = fakeRunLoop([{ type: "done", reason: "repeated-denials" }]);
 
     const { code, logs } = await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(1);
@@ -673,7 +723,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { code } = await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(1);
@@ -687,7 +742,12 @@ describe("run (task invocation)", () => {
     const { fake } = fakeRunLoop();
 
     const { code } = await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(0);
@@ -705,7 +765,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { code } = await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(0);
@@ -724,7 +789,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { code } = await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(1);
@@ -742,7 +812,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { code } = await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(0);
@@ -765,7 +840,12 @@ describe("run (task invocation)", () => {
     ]);
 
     await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: firstRun, loadAgentsFile: () => "", sessionsDir }),
+      run(["do", "a", "task"], {
+        runLoop: firstRun,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     const createdId = listSessionIds(sessionsDir)[0]!;
@@ -773,7 +853,12 @@ describe("run (task invocation)", () => {
 
     const { fake: secondRun, capture } = fakeRunLoop();
     await captureLogs(() =>
-      run(["--continue"], { runLoop: secondRun, loadAgentsFile: () => "", sessionsDir }),
+      run(["--continue"], {
+        runLoop: secondRun,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(capture()?.allowedTools).toEqual([]);
@@ -800,6 +885,7 @@ describe("run (task invocation)", () => {
     const deps = {
       runLoop: fakeRunLoop(answeredTurn).fake,
       loadAgentsFile: () => "",
+      loadSkills: () => new Map(),
       sessionsDir,
       getGroqModel: (id: string) => {
         asked.push(id);
@@ -865,7 +951,9 @@ describe("run (task invocation)", () => {
     );
 
     expect(code).toBe(0);
-    expect(capture()?.system?.startsWith(buildSystemPrompt({ agentsContent: "", skills: [] }))).toBe(true);
+    expect(
+      capture()?.system?.startsWith(buildSystemPrompt({ agentsContent: "", skills: [] })),
+    ).toBe(true);
     expect(capture()?.system).toContain("model-on-session");
     expect(askedFor).toEqual([sessionCwd]);
   });
@@ -885,6 +973,7 @@ describe("run (task invocation)", () => {
         // needs that recording to check which model/provider a brand-new session resolved to.
         runLoop: fakeRunLoop(answeredTurn).fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         getOpenRouterModel: (id: string) => {
           askedOpenRouter.push(id);
@@ -913,6 +1002,7 @@ describe("run (task invocation)", () => {
       run(["another", "task"], {
         runLoop: fakeRunLoop(answeredTurn).fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         getOpenRouterModel: (id: string) => {
           askedOpenRouter.push(id);
@@ -945,6 +1035,7 @@ describe("run (task invocation)", () => {
       run(["a", "task"], {
         runLoop: fakeRunLoop(answeredTurn).fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         getAnthropicModel: (id: string) => {
           askedAnthropic.push(id);
@@ -986,6 +1077,7 @@ describe("run (task invocation)", () => {
         run(["--resume", "legacy", "another", "task"], {
           runLoop: fakeRunLoop(answeredTurn).fake,
           loadAgentsFile: () => "",
+          loadSkills: () => new Map(),
           sessionsDir,
           getGroqModel: (id: string) => {
             asked.push(id);
@@ -1033,6 +1125,7 @@ describe("run (task invocation)", () => {
       run(["--resume", "legacy-no-provider", "another", "task"], {
         runLoop: fakeRunLoop(answeredTurn).fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         getGroqModel: () => {
           throw new Error("should not be called: the persisted pair is openrouter, not groq");
@@ -1063,6 +1156,7 @@ describe("run (task invocation)", () => {
     const deps = (events: LoopEvent[]) => ({
       runLoop: fakeRunLoop(events).fake,
       loadAgentsFile: () => "",
+      loadSkills: () => new Map(),
       sessionsDir,
       getGroqModel: (id: string) => {
         asked.push(id);
@@ -1101,7 +1195,12 @@ describe("run (task invocation)", () => {
     const originalLog = console.log;
     console.log = () => {};
     try {
-      await run(["write", "hello.txt"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir });
+      await run(["write", "hello.txt"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      });
     } finally {
       console.log = originalLog;
     }
@@ -1143,6 +1242,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
       });
     } finally {
@@ -1180,6 +1280,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         createInterface: () => {
           input = new PassThrough();
@@ -1239,6 +1340,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         // The SAME stream returned to every call, matching production's shared process.stdin —
         // NOT a fresh PassThrough per prompt, which is the divergence that hid this bug before.
@@ -1285,6 +1387,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         // A fresh stream per prompt, deliberately unlike the shared-stream test above: this test
         // is about the LATCH surviving a close that was not a real end, not about stream sharing.
@@ -1329,6 +1432,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         createInterface: () => {
           input = new PassThrough();
@@ -1377,6 +1481,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         createInterface: () => {
           input = new PassThrough();
@@ -1427,6 +1532,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         createInterface: () => {
           input = new PassThrough();
@@ -1472,6 +1578,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         createInterface: () => {
           input = new PassThrough();
@@ -1574,6 +1681,7 @@ describe("run (task invocation)", () => {
       code = await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         // A real readline over a pair of pipes rather than a mock: emitting SIGINT on it is the
         // same call readline itself makes on a terminal, and nothing else about the interface is
@@ -1617,7 +1725,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { logs } = await captureLogs(() =>
-      run(["edit", "a.txt"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["edit", "a.txt"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(logs.join("\n")).toContain("nothing written");
@@ -1654,7 +1767,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { logs } = await captureLogs(() =>
-      run(["write", "a.ts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["write", "a.ts"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(logs.join("\n")).toContain("✓ write_file done (1 diagnostic");
@@ -1692,7 +1810,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { logs } = await captureLogs(() =>
-      run(["write", "a.ts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["write", "a.ts"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(logs.join("\n")).toContain("20 of 300 diagnostics");
@@ -1720,7 +1843,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { logs } = await captureLogs(() =>
-      run(["write", "a.ts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["write", "a.ts"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     const printed = logs.join("\n");
@@ -1750,7 +1878,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { logs } = await captureLogs(() =>
-      run(["write", "a.ts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["write", "a.ts"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(logs.join("\n")).toContain("3.6s");
@@ -1771,7 +1904,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { logs } = await captureLogs(() =>
-      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["say", "hi"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(logs.filter((line) => line.includes("retrying"))).toEqual([
@@ -1825,7 +1963,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { code, logs } = await captureLogs(() =>
-      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["say", "hi"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(0);
@@ -1845,7 +1988,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { logs } = await captureLogs(() =>
-      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["say", "hi"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["\n(tokens: 320 in)"]);
@@ -1859,7 +2007,12 @@ describe("run (task invocation)", () => {
     const { fake } = fakeRunLoop([usageEvent(320, 0), { type: "done", reason: "no-tool-call" }]);
 
     const { logs } = await captureLogs(() =>
-      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["say", "hi"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(logs.filter((line) => line.includes("tokens:"))).toEqual(["\n(tokens: 320 in, 0 out)"]);
@@ -1875,7 +2028,12 @@ describe("run (task invocation)", () => {
     const { fake } = fakeRunLoop();
 
     const { logs } = await captureLogs(() =>
-      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["say", "hi"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(logs.filter((line) => line.includes("tokens:"))).toEqual([]);
@@ -1897,7 +2055,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { code, logs } = await captureLogs(() =>
-      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["say", "hi"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(1);
@@ -1913,7 +2076,12 @@ describe("run (task invocation)", () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
     const { fake, capture } = fakeRunLoop();
-    await run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir });
+    await run(["say", "hi"], {
+      runLoop: fake,
+      loadAgentsFile: () => "",
+      loadSkills: () => new Map(),
+      sessionsDir,
+    });
 
     const opts = capture();
     expect(opts?.provider).toBe("groq");
@@ -1939,7 +2107,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { logs } = await captureLogs(() =>
-      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["say", "hi"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(logs.filter((line) => line.includes("cost:"))).toEqual(["(cost: ~$0.0021 (estimated))"]);
@@ -1989,7 +2162,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { code, stdout } = await captureStdout(() =>
-      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["say", "hi"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(1);
@@ -2005,7 +2183,12 @@ describe("run (task invocation)", () => {
     const { fake } = fakeRunLoop([{ type: "error", error: "AI_APICallError: Invalid API Key" }]);
 
     const { code } = await captureLogs(() =>
-      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["say", "hi"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(1);
@@ -2020,7 +2203,12 @@ describe("run (task invocation)", () => {
     const { fake } = fakeRunLoop([{ type: "done", reason: "max-iterations" }]);
 
     const { code } = await captureLogs(() =>
-      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["say", "hi"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(1);
@@ -2039,7 +2227,12 @@ describe("run (task invocation)", () => {
     ]);
 
     const { code } = await captureLogs(() =>
-      run(["say", "hi"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["say", "hi"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     expect(code).toBe(0);
@@ -2058,6 +2251,7 @@ describe("run (task invocation)", () => {
       run(["config", "set", "GROQ_API_KEY", "gsk_live_secret"], {
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         authConfigDir: tmpConfigRoot,
       }),
@@ -2096,6 +2290,7 @@ describe("run (task invocation)", () => {
         code = await run([word, "is", "wrong", "on", "User"], {
           runLoop: fake,
           loadAgentsFile: () => "",
+          loadSkills: () => new Map(),
           sessionsDir,
         });
       } finally {
@@ -2121,6 +2316,7 @@ describe("run (task invocation)", () => {
     const code = await run(["/exit", "the", "debugger", "and", "retry"], {
       runLoop: fake,
       loadAgentsFile: () => "",
+      loadSkills: () => new Map(),
       sessionsDir,
     });
 
@@ -2145,6 +2341,7 @@ describe("run (task invocation)", () => {
     const code = await run(["/exit"], {
       runLoop: fake,
       loadAgentsFile: () => "",
+      loadSkills: () => new Map(),
       sessionsDir,
     });
 
@@ -2181,7 +2378,12 @@ describe("run (task invocation)", () => {
     ]);
 
     await captureLogs(() =>
-      run(["read", "a.ts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["read", "a.ts"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     const sessionId = latestSessionId();
@@ -2205,7 +2407,12 @@ describe("run (task invocation)", () => {
     const { fake } = fakeRunLoop();
     try {
       await captureLogs(() =>
-        run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+        run(["do", "a", "task"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+          loadSkills: () => new Map(),
+          sessionsDir,
+        }),
       );
       expect(existsSync(getTrajectoriesDir(getConfigDir()))).toBe(false);
     } finally {
@@ -2240,6 +2447,7 @@ describe("run (task invocation)", () => {
         run(["/trajectory", "off"], {
           runLoop: fake,
           loadAgentsFile: () => "",
+          loadSkills: () => new Map(),
           sessionsDir,
         }),
       );
@@ -2286,7 +2494,12 @@ describe("run (task invocation)", () => {
     ]);
 
     await captureLogs(() =>
-      run(["edit", "a.ts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["edit", "a.ts"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     const outcome = trajectoryLines(latestSessionId()).find(
@@ -2300,7 +2513,12 @@ describe("run (task invocation)", () => {
     const { fake } = fakeRunLoop([{ type: "done", reason: "aborted" }]);
 
     await captureLogs(() =>
-      run(["do", "a", "task"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     const done = trajectoryLines(latestSessionId()).find(
@@ -2332,7 +2550,12 @@ describe("run (task invocation)", () => {
     }
 
     await captureLogs(() =>
-      run(["dispatch"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+      run(["dispatch"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
+        sessionsDir,
+      }),
     );
 
     const childUsage = trajectoryLines(latestSessionId()).find(
@@ -2459,6 +2682,7 @@ describe("bare seri", () => {
       run(["--continue", "new", "task"], {
         runLoop: echoRunLoop,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
       }),
     );
@@ -2471,6 +2695,7 @@ describe("bare seri", () => {
       run(["--continue"], {
         runLoop: echoRunLoop,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
       }),
     );
@@ -2502,6 +2727,7 @@ describe("bare seri", () => {
       run(["--resume", "abc"], {
         runLoop: echoRunLoop,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
       }),
     );
@@ -2617,6 +2843,7 @@ describe("run (permanent permissions)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         permissionsDir,
       }),
@@ -2636,6 +2863,7 @@ describe("run (permanent permissions)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         permissionsDir,
       }),
@@ -2656,6 +2884,7 @@ describe("run (permanent permissions)", () => {
       run(["do", "a", "task"], {
         runLoop: firstRun,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         permissionsDir,
       }),
@@ -2666,6 +2895,7 @@ describe("run (permanent permissions)", () => {
       run(["--continue"], {
         runLoop: secondRun,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         permissionsDir,
       }),
@@ -2688,6 +2918,7 @@ describe("run (permanent permissions)", () => {
       run(["do", "a", "task"], {
         runLoop: approveEachFake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         permissionsDir,
       }),
@@ -2709,6 +2940,7 @@ describe("run (permanent permissions)", () => {
       run(["--resume", "ro", "do", "a", "task"], {
         runLoop: readOnlyFake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         permissionsDir,
       }),
@@ -2720,6 +2952,7 @@ describe("run (permanent permissions)", () => {
       run(["--dangerously-skip-permissions", "do", "a", "task"], {
         runLoop: autoFake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
         sessionsDir,
         permissionsDir,
       }),
@@ -2747,6 +2980,7 @@ describe("run (permanent permissions)", () => {
         run(["do", "a", "task"], {
           runLoop: fake,
           loadAgentsFile: () => "",
+          loadSkills: () => new Map(),
           sessionsDir,
           permissionsDir,
         }),
@@ -2791,6 +3025,7 @@ describe("run (/mode)", () => {
         sessionsDir,
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
       });
       expect(code).toBe(0);
     } finally {
@@ -2881,6 +3116,7 @@ describe("run (/mode)", () => {
         sessionsDir,
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
       });
     } finally {
       console.log = originalLog;
@@ -3213,6 +3449,7 @@ describe("run (/effort)", () => {
           sessionsDir,
           runLoop: fake,
           loadAgentsFile: () => "",
+          loadSkills: () => new Map(),
         }),
       );
     } finally {
@@ -3297,6 +3534,7 @@ describe("run (/clear)", () => {
         sessionsDir,
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
       });
     } finally {
       console.log = originalLog;
@@ -3334,6 +3572,7 @@ describe("run (/clear)", () => {
         sessionsDir,
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
       });
     } finally {
       console.log = originalLog;
@@ -3431,7 +3670,9 @@ describe("run (/clear)", () => {
     const loaded = loadSession(newId, sessionsDir);
     expect(loaded.messages).toEqual([]);
     expect(loaded.cwd).toBe(existing.cwd);
-    expect(loaded.systemPrompt).toBe(buildSystemPrompt({ agentsContent: loadAgentsFile(cwd), skills: [] }));
+    expect(loaded.systemPrompt).toBe(
+      buildSystemPrompt({ agentsContent: loadAgentsFile(cwd), skills: [] }),
+    );
     expect(loaded.systemPrompt).not.toBe(existing.systemPrompt);
     expect(loaded.permissionMode).toBe(existing.permissionMode);
     expect(loaded.model).toBe(existing.model);
@@ -3459,6 +3700,7 @@ describe("run (/clear)", () => {
         sessionsDir,
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
       });
       expect(code).toBe(0);
     } finally {
@@ -3524,6 +3766,7 @@ describe("run (/memory)", () => {
         authConfigDir: configDir,
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
       });
     } finally {
       console.log = originalLog;
@@ -3885,6 +4128,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
         checkpointsDir,
         runLoop: fake,
         loadAgentsFile: () => "",
+        loadSkills: () => new Map(),
       });
     } finally {
       // Deleted rather than reassigned when it was unset: `process.env.X = undefined` stores the
