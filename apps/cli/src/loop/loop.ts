@@ -197,6 +197,10 @@ export async function* runLoop(opts: {
   messages: ModelMessage[];
   permissionMode: PermissionMode;
   approvalPrompt?: ApprovalPrompt;
+  /** The name a tool call answers to at the gate, at the approval prompt, and in the events a
+   *  consumer renders. A composite tool can carry its real subject in its input; everything else
+   *  answers to its own name. Optional and pure — omitting it leaves behaviour byte-identical. */
+  callSubject?: (toolName: string, input: unknown) => string;
   /**
    * Called at the very end of each tool round, with the calls whose `execute` actually resolved.
    * Returning text appends it to `messages` as a user message the model sees on its next call
@@ -508,8 +512,18 @@ export async function* runLoop(opts: {
         continue;
       }
 
+      // The rule, not a list of sites: every string a MODEL or a HUMAN reads — the gate, the
+      // approval prompt, an `error`/`execution-denied` reason, any event name a consumer renders —
+      // names `subject`. Every field a PROVIDER matches against the tool-call it emitted — the
+      // `opts.tools[...]` lookup, and the `toolName` field of every row pushed into `toolResults` —
+      // stays `call.toolName`, the literal ToolSet key. A composite tool (the `mcp` tool composed
+      // by mcp/tool.ts, for instance) carries the call it actually means in its input, so the two
+      // can disagree; telling the model a tool has two different names within one turn is an
+      // invitation to retry under the wrong one.
+      const subject = opts.callSubject?.(call.toolName, call.input) ?? call.toolName;
+
       const verdict = await decidePermission(
-        call.toolName,
+        subject,
         call.input,
         opts.permissionMode,
         allowedTools,
@@ -527,7 +541,7 @@ export async function* runLoop(opts: {
       // inside decidePermission on purpose — see that function's own comment.
       if (opts.signal?.aborted) break;
 
-      if (verdict === "allow-new") yield { type: "tool-allowed", name: call.toolName };
+      if (verdict === "allow-new") yield { type: "tool-allowed", name: subject };
 
       if (verdict === "deny-blocked" || verdict === "deny-declined") {
         // Only a declined call is a signal about the RUN — a blocked one is the mode working as
@@ -535,7 +549,7 @@ export async function* runLoop(opts: {
         if (verdict === "deny-declined") consecutiveDenials++;
         yield {
           type: "permission-denied",
-          name: call.toolName,
+          name: subject,
           reason: verdict === "deny-blocked" ? "blocked" : "declined",
         };
         toolResults.push({
@@ -545,7 +559,7 @@ export async function* runLoop(opts: {
           output: {
             type: "execution-denied",
             reason:
-              `Tool "${call.toolName}" was not permitted to run (permission mode: ${opts.permissionMode}). ` +
+              `Tool "${subject}" was not permitted to run (permission mode: ${opts.permissionMode}). ` +
               `Do not retry this call. Either use a tool that does not write, or tell the user to run ` +
               `/mode to change the permission mode.`,
           },
@@ -564,7 +578,7 @@ export async function* runLoop(opts: {
       // done nothing wrong. See MAX_CONSECUTIVE_DENIALS for the padding risk this accepts instead.
       consecutiveDenials = 0;
 
-      yield { type: "tool-call", name: call.toolName, args: call.input };
+      yield { type: "tool-call", name: subject, args: call.input };
       let toolResult: unknown;
       try {
         toolResult = await toolDef.execute(call.input, {
@@ -579,7 +593,7 @@ export async function* runLoop(opts: {
         // Without this the cancel would be recorded as a tool that failed and the loop would go on
         // to run the next one — which is precisely what the user pressed Ctrl-C to stop.
         if (opts.signal?.aborted) break;
-        const error = `Tool "${call.toolName}" threw during execution: ${errorText(err)}`;
+        const error = `Tool "${subject}" threw during execution: ${errorText(err)}`;
         yield { type: "error", error };
         toolResults.push({
           type: "tool-result",
@@ -589,7 +603,7 @@ export async function* runLoop(opts: {
         });
         continue;
       }
-      yield { type: "tool-result", name: call.toolName, result: toolResult };
+      yield { type: "tool-result", name: subject, result: toolResult };
       executed.push({ toolName: call.toolName, input: call.input });
       toolResults.push({
         type: "tool-result",
@@ -618,13 +632,16 @@ export async function* runLoop(opts: {
     // category — this call did not run, and it was the human's doing — and this provider already
     // round-trips it.
     for (const call of unanswered) {
+      // Same rule as the block above: the reason text is read by the model, so it names the
+      // subject. This loop runs outside that block, so the expression is recomputed here.
+      const subject = opts.callSubject?.(call.toolName, call.input) ?? call.toolName;
       toolResults.push({
         type: "tool-result",
         toolCallId: call.toolCallId,
         toolName: call.toolName,
         output: {
           type: "execution-denied",
-          reason: `Tool "${call.toolName}" was cancelled by the user before it completed.`,
+          reason: `Tool "${subject}" was cancelled by the user before it completed.`,
         },
       });
     }
