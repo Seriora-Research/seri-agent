@@ -334,6 +334,7 @@ export async function driveLoop(
     model,
     provider: route.provider,
     modelId: route.model,
+    credential: route.credential,
     catalog,
     contextWindowSize: catalogEntry?.contextWindow,
     system,
@@ -460,6 +461,7 @@ export async function driveLoop(
           // would mis-tag a rerouted call's cost report with the wrong provider's pricing branch.
           provider: route.provider,
           modelId: route.model,
+          credential: route.credential,
           catalog,
           // The catalog's own contextWindow for whatever model this turn is actually calling — a
           // /model switch to a provider/model with a different limit must change compaction's own

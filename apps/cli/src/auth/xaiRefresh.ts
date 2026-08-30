@@ -14,6 +14,10 @@ export type XaiRefreshResult =
   // Terminal. A 403 means the account's plan tier is not allowed, which no retry and no
   // re-consent fixes. Kept distinct from "error" so a caller cannot fold it into a retry loop.
   | { status: "tier-denied"; message: string }
+  // The stored refresh token is dead — the usual cause is a rotation that was lost, since xAI
+  // invalidates the previous token on every use. Terminal and distinct from "error": no retry
+  // recovers it, the only fix is connecting again, so a caller must say that rather than loop.
+  | { status: "reconnect-required"; message: string }
   | { status: "error"; message: string };
 
 // Same hazard, same shape as auth/refresh.ts's own map, for the same reason: two concurrent 401s
@@ -66,6 +70,12 @@ async function refreshXaiSubscriptionOnce(
       return {
         status: "tier-denied",
         message: String(payload.error_description ?? payload.error ?? "Plan tier not allowed"),
+      };
+    }
+    if (payload.error === "invalid_grant") {
+      return {
+        status: "reconnect-required",
+        message: "Your Grok subscription session has expired. Connect it again from /setup.",
       };
     }
     if (!response.ok) {

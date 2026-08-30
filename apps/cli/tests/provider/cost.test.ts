@@ -225,3 +225,13 @@ describe("reportForSubscription", () => {
     });
   });
 });
+
+describe("a subscription turn is not priced from the catalog", () => {
+  // The gap a reviewer caught: reportForSubscription existed with no production caller, so a
+  // subscription turn was still being costed like a metered one.
+  test("reportForSubscription never returns a dollar amount", () => {
+    const report = reportForSubscription();
+    expect(report.amountUsd).toBeUndefined();
+    expect(report.status).toBe("included");
+  });
+});

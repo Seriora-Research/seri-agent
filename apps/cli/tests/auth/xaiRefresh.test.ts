@@ -235,3 +235,18 @@ describe("the stored file", () => {
     expect(JSON.parse(raw).accessToken).toBe("access-1");
   });
 });
+
+describe("a dead rotated refresh token", () => {
+  // The realistic failure after a lost rotation: xAI killed the previous token, so no retry can
+  // recover it. Reporting it as a generic error invites a caller to loop on it forever.
+  test("invalid_grant is reconnect-required, not a retryable error", async () => {
+    setConfigValue("SERI_GROK_CLIENT_ID", "client-1", dir);
+    connect("refresh-dead");
+    const result = await refreshXaiSubscription(
+      dir,
+      fakeIssuer(() => jsonResponse(false, 400, { error: "invalid_grant" })),
+    );
+    expect(result.status).toBe("reconnect-required");
+    expect(loadXaiSubscription(dir)?.refreshToken).toBe("refresh-dead");
+  });
+});

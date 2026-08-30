@@ -319,3 +319,32 @@ describe("pollForToken", () => {
     expect(result).toEqual({ status: "aborted" });
   });
 });
+
+describe("WorkOS keeps its pre-shared-loop 403 semantics", () => {
+  // Regression guard for the poll-loop extraction. xAI opts into treating a 403 as a terminal
+  // tier denial; WorkOS has no subscription tier, so a 403 must still fall through to the RFC's
+  // own error codes exactly as it did before the loop was shared.
+  test("a 403 carrying access_denied is still denied, not an error", async () => {
+    const device: DeviceAuthorization = {
+      deviceCode: "dc",
+      userCode: "uc",
+      verificationUri: "https://example.com/device",
+      verificationUriComplete: "https://example.com/device?code=uc",
+      expiresIn: 600,
+      interval: 5,
+    };
+    const fetchFn = (async () =>
+      ({
+        ok: false,
+        status: 403,
+        text: async () => JSON.stringify({ error: "access_denied" }),
+      }) as Response) as unknown as typeof fetch;
+
+    const result = await pollForToken("client_123", device, {
+      fetchFn,
+      sleep: async () => {},
+      now: () => 0,
+    });
+    expect(result).toEqual({ status: "denied" });
+  });
+});

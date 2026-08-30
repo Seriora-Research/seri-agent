@@ -35,9 +35,10 @@ export type XaiEndpoints = {
 // Discovery is re-fetched rather than persisted: a cached endpoint that goes stale is a hard
 // failure with no recovery path, while a re-discovered one self-heals.
 //
-// Host-pinned on purpose. A poisoned or hijacked discovery document could otherwise redirect
-// refresh traffic — which carries a long-lived, rotating refresh token — to an attacker's host.
-// Every endpoint must live on the issuer's own host or discovery fails closed.
+// Origin-pinned on purpose. A poisoned or hijacked discovery document could otherwise redirect
+// refresh traffic — which carries a long-lived, rotating refresh token — to an attacker's host,
+// or downgrade it to http on the right one. Every endpoint must share the issuer's own origin or
+// discovery fails closed.
 export async function discoverXaiEndpoints(
   issuer: string,
   fetchFn: typeof fetch = fetch,
@@ -53,9 +54,11 @@ export async function discoverXaiEndpoints(
     if (typeof value !== "string" || value.length === 0) {
       throw new Error(`OIDC discovery for ${issuer} returned no ${name}`);
     }
-    if (new URL(value).host !== issuerUrl.host) {
+    // Origin, not host: a host-only check would accept http://auth.x.ai for an https issuer,
+    // which downgrades the channel carrying a rotating refresh token.
+    if (new URL(value).origin !== issuerUrl.origin) {
       throw new Error(
-        `OIDC discovery for ${issuer} returned a ${name} on a different host (${value}) — refusing it`,
+        `OIDC discovery for ${issuer} returned a ${name} on a different origin (${value}) — refusing it`,
       );
     }
     return value;
@@ -142,6 +145,7 @@ export function pollForXaiToken(
         client_id: clientId,
       }),
     onSuccess: readXaiTokens,
+    tierDeniedOn403: true,
     ...opts,
   });
 }

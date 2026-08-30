@@ -78,7 +78,7 @@ describe("discoverXaiEndpoints", () => {
 
   // Host pinning is the control that stops a poisoned discovery document from redirecting refresh
   // traffic — which carries a long-lived, rotating refresh token — to an attacker's host.
-  test("refuses a token endpoint on a different host than the issuer", async () => {
+  test("refuses a token endpoint on a different origin than the issuer", async () => {
     await expect(
       discoverXaiEndpoints(
         "https://auth.x.ai",
@@ -89,10 +89,10 @@ describe("discoverXaiEndpoints", () => {
           }),
         ),
       ),
-    ).rejects.toThrow(/different host/);
+    ).rejects.toThrow(/different origin/);
   });
 
-  test("refuses a device endpoint on a different host than the issuer", async () => {
+  test("refuses a device endpoint on a different origin than the issuer", async () => {
     await expect(
       discoverXaiEndpoints(
         "https://auth.x.ai",
@@ -103,7 +103,7 @@ describe("discoverXaiEndpoints", () => {
           }),
         ),
       ),
-    ).rejects.toThrow(/different host/);
+    ).rejects.toThrow(/different origin/);
   });
 
   test("throws when the discovery document omits an endpoint", async () => {
@@ -284,5 +284,23 @@ describe("pollForXaiToken", () => {
       }),
     });
     expect(result).toEqual({ status: "aborted" });
+  });
+});
+
+describe("discovery scheme pinning", () => {
+  // Host equality alone would accept this: an http endpoint on the right host downgrades the
+  // channel that carries a rotating refresh token.
+  test("refuses an http endpoint for an https issuer", async () => {
+    await expect(
+      discoverXaiEndpoints(
+        "https://auth.x.ai",
+        asFetch(async () =>
+          jsonResponse(true, 200, {
+            ...DISCOVERY,
+            token_endpoint: "http://auth.x.ai/oauth2/token",
+          }),
+        ),
+      ),
+    ).rejects.toThrow(/different origin/);
   });
 });

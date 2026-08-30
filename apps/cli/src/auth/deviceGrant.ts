@@ -37,6 +37,11 @@ export type PollOptions<T> = {
   // Each issuer words its own terminal-error copy, and those strings are user-facing, so the
   // wording stays with the caller rather than being genericised here.
   describeError?: (raw: unknown) => string;
+  // Opt-in, because it is a real behaviour change for any caller that did not have it. Before the
+  // loop was shared, a 403 fell through to the RFC's own error-code checks, so a 403 whose body
+  // said access_denied returned "denied". WorkOS has no subscription tier and keeps that; xAI
+  // turns it on, where a 403 genuinely means the plan is not allowed.
+  tierDeniedOn403?: boolean;
   fetchFn?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -98,7 +103,7 @@ export async function pollDeviceGrant<T>(
     // Terminal before the RFC's own error vocabulary, because it is decided by HTTP status rather
     // than by an `error` field: the account authenticated fine, its plan just is not allowed.
     // Never retried — no amount of polling or re-consent changes a subscription tier.
-    if (response.status === 403) {
+    if (opts.tierDeniedOn403 === true && response.status === 403) {
       return {
         status: "tier-denied",
         message: String(payload.error_description ?? payload.error ?? "Plan tier not allowed"),

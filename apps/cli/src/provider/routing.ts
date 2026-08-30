@@ -119,7 +119,6 @@ const EMPTY_SUBSCRIPTIONS: ReadonlySet<ModelProvider> = new Set();
 // will reasonably think their key is broken.
 function credentialFor(
   provider: ModelProvider,
-  configured: ReadonlySet<ModelProvider>,
   subscribed: ReadonlySet<ModelProvider>,
 ): RouteCredential {
   return subscribed.has(provider) ? "subscription" : "key";
@@ -146,7 +145,7 @@ export function resolveRoute(
     model: requested.model,
     provider: requested.provider,
     rerouted: false,
-    credential: credentialFor(requested.provider, configured, subscribed),
+    credential: credentialFor(requested.provider, subscribed),
   };
 
   // Rule 1: an explicit pick whose own provider has a key wins, unconditionally — never
@@ -206,7 +205,7 @@ export function resolveRoute(
     provider: chosen.provider,
     rerouted: true,
     reason: PROVIDER_API_KEY_NAMES[requested.provider],
-    credential: credentialFor(chosen.provider, configured, subscribed),
+    credential: credentialFor(chosen.provider, subscribed),
   };
 }
 
