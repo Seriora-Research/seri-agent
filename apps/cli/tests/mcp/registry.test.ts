@@ -206,7 +206,13 @@ describe("findMcpTool", () => {
     inputSchema: { type: "object" },
   };
   const entry: McpEntry = {
-    spec: { name: "exa", url: "https://mcp.exa.ai/mcp", headers: {}, source: "project", filePath: "x" },
+    spec: {
+      name: "exa",
+      url: "https://mcp.exa.ai/mcp",
+      headers: {},
+      source: "project",
+      filePath: "x",
+    },
     catalog: { server: "exa", fetchedAt: new Date().toISOString(), tools: [tool] },
   };
   const registry: McpRegistry = new Map([["exa", entry]]);
@@ -261,7 +267,13 @@ describe("grantFingerprint", () => {
       [
         "exa",
         {
-          spec: { name: "exa", url: "https://mcp.exa.ai/mcp", headers: {}, source: "project", filePath: "x" },
+          spec: {
+            name: "exa",
+            url: "https://mcp.exa.ai/mcp",
+            headers: {},
+            source: "project",
+            filePath: "x",
+          },
           catalog: { server: "exa", fetchedAt: new Date().toISOString(), tools: [tool] },
         },
       ],
@@ -277,7 +289,12 @@ describe("writeCatalogCache / readCatalogCache", () => {
       server: "exa",
       fetchedAt: new Date().toISOString(),
       tools: [
-        { name: "web_search", toolName: "mcp_exa_web_search", description: "Search.", inputSchema: {} },
+        {
+          name: "web_search",
+          toolName: "mcp_exa_web_search",
+          description: "Search.",
+          inputSchema: {},
+        },
       ],
     };
     writeCatalogCache(configDir, catalog);

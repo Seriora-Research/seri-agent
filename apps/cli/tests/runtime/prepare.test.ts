@@ -295,7 +295,13 @@ describe("bindSession + mcp", () => {
     const warmClients = createMcpClients(dial);
     await callMcpTool(
       warmClients,
-      { name: "ghost", url: "https://127.0.0.1:1/mcp", headers: {}, source: "project", filePath: "x" },
+      {
+        name: "ghost",
+        url: "https://127.0.0.1:1/mcp",
+        headers: {},
+        source: "project",
+        filePath: "x",
+      },
       "noop",
       {},
     );
