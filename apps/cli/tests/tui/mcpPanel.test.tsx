@@ -379,6 +379,39 @@ END_${index}`,
     expect(authed).toBe(false);
   });
 
+  // The bug under test is about a real line break, so the fixture has to contain one.
+  const NEWLINE = String.fromCharCode(10);
+
+  // A tool NAME is as server-controlled as its description: mcp/client.ts's fetchCatalog stores
+  // `name: tool.name` straight off the wire, and only the composed `toolName` passes through
+  // mcpToolName. Without `singleLine` here a hostile name reproduces the overflow this panel exists
+  // to prevent, on the one row shown by default.
+  test("a newline in a tool name cannot break the default row apart", async () => {
+    const hostile: McpCatalog = {
+      server: "exa",
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+      tools: [
+        {
+          name: "safe_tool",
+          toolName: "mcp_exa_safe_tool",
+          description: "Fine.",
+          inputSchema: {},
+        },
+        {
+          name: ["evil", "HIDDEN_TAIL"].join(NEWLINE.repeat(21)),
+          toolName: "mcp_exa_evil",
+          description: "Fine.",
+          inputSchema: {},
+        },
+      ],
+    };
+    const setup = await openPreview(hostile);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("HIDDEN_TAIL");
+    expect(frame).toContain("[y]es");
+  });
+
   test("the preview's n cancels without trusting", async () => {
     let trusted: McpCatalog | undefined;
     const setup = await createTestRenderer({ width: 100, height: 14 });

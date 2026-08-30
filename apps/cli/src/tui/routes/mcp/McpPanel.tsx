@@ -255,7 +255,9 @@ function McpTrustPreview({
         // `singleLine` for ErrorLine's own reason (ui/ErrorLine.tsx): a server is free to write a
         // description containing literal newlines or a fenced code block, OpenTUI renders each
         // break as a real row, and one such tool pushes the y/n question off the viewport. Collapse
-        // first, then let `truncate` clip what is left to one row per tool.
+        // first, then let `truncate` clip what is left to one row per tool. The names row above
+        // needs the same treatment for the same reason: `mcp/client.ts`'s fetchCatalog stores
+        // `name` verbatim off the wire, so a tool NAME is server-controlled too.
         catalog.tools.map((tool) => (
           <text key={tool.toolName} fg={theme.muted} truncate wrapMode="none">
             {singleLine(`${tool.name} — ${tool.description}`)}
@@ -263,7 +265,7 @@ function McpTrustPreview({
         ))
       ) : (
         <text fg={theme.muted} truncate wrapMode="none">
-          {catalog.tools.map((tool) => tool.name).join(", ")}
+          {singleLine(catalog.tools.map((tool) => tool.name).join(", "))}
         </text>
       )}
       <text fg={theme.muted} truncate wrapMode="none">
