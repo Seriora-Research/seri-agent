@@ -72,7 +72,7 @@ import { EffortPanel } from "./routes/config/EffortPanel";
 import { PermissionsPanel } from "./routes/config/PermissionsPanel";
 import { McpPanel } from "./routes/mcp/McpPanel";
 import { SetupPanel } from "./routes/setup/SetupPanel";
-import type { SplashBannerInfo } from "./routes/setup/SplashBanner";
+import { SplashBanner, type SplashBannerInfo } from "./routes/setup/SplashBanner";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { SkillsPanel } from "./routes/skills/SkillsPanel";
 import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
@@ -572,6 +572,17 @@ export function App({
         >
           {state.pendingChildView === undefined ? (
             <>
+              {/* The session header, inside the scrollbox rather than pinned above it, so it
+              behaves the way Codex's own session history cell does: it holds the top of an empty
+              transcript, and scrolls away on its own once enough conversation accumulates below
+              it. Static after mount — a later `/model` switch moves `state.route` and the mode
+              indicator, not this, which reports what the session opened on. */}
+              {splashBanner !== undefined && (
+                <>
+                  <SplashBanner info={splashBanner} />
+                  <text> </text>
+                </>
+              )}
               <TranscriptList transcript={state.transcript} />
               {/* Settled toolActivity groups, painted live inside the scrollbox so mid-turn
               scrollback includes them. pendingTool (below) stays pinned outside. After

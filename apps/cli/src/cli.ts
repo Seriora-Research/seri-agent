@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
@@ -2625,6 +2625,17 @@ async function runTui(
       route: prepared.route,
       catalog: prepared.catalog,
       config: initialConfig,
+      // The same banner the splash opened on, now holding the top of the transcript (app.tsx).
+      // Built from `prepared.route`, not `resolveDefaultModel` the way the splash's own copy is:
+      // by this point the route is resolved, so a request that rerouted to a sibling provider
+      // reports the provider the session actually dispatches to.
+      splashBanner: {
+        version: pkg.version,
+        model: prepared.route.model,
+        provider: prepared.route.provider,
+        cwd: prepared.session.cwd,
+        home: process.env.HOME || homedir(),
+      },
       onSubmit,
       onSessionChange,
       onQuit: quit,
