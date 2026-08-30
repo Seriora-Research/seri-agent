@@ -158,6 +158,30 @@ describe("App", () => {
     expect(frame).not.toContain("┘");
   });
 
+  // Issue #211. `onSubmit` is only wired once a session exists (runTui, cli.ts); the splash and
+  // guided-setup mounts (routes/setup/) render this same component with nothing behind it. Before
+  // this, InputBox rendered anyway, echoed everything typed at it, and dropped it on Enter — so a
+  // task typed during the seconds between dismissing the splash and the session mounting vanished
+  // and the run sat idle forever with no spinner and no error.
+  test("an App with nowhere to send input does not echo what is typed at it", async () => {
+    const { setup } = await connect({ onSubmit: undefined });
+    // A second flush before typing, and a real wait after it, for the two reasons
+    // inputBox.test.tsx's own harness documents: `useKeyboard` subscribes from a passive effect
+    // that needs one more settled pass than mount, and InputBox's own 50ms throttle holds
+    // everything after the leading-edge keystroke behind a pending timer.
+    await flush(setup);
+    await setup.mockInput.typeText("Reply with exactly the word PROBE");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await flush(setup);
+
+    expect(setup.captureCharFrame()).not.toContain("PROBE");
+  });
+
+  test("an App with nowhere to send input says the session is still starting", async () => {
+    const { setup } = await connect({ onSubmit: undefined });
+    expect(setup.captureCharFrame()).toContain("starting session");
+  });
+
   test("a command-error dispatch renders the ErrorLine mark and message", async () => {
     const { setup, dispatch } = await connect();
 
