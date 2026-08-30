@@ -6,6 +6,7 @@ import type { LanguageModelUsage, ModelMessage } from "ai";
 import { toolAllowedLine } from "../../cli/output";
 import type { LoopEvent } from "../../loop/loop";
 import type { McpPanelRow } from "../../mcp/commands";
+import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
 import type { ChildEventPayload } from "../../subagents/dispatch";
@@ -173,6 +174,12 @@ export type TuiState = {
   // applied by re-dispatching mcp-requested with freshly recomputed rows, not by this reducer
   // reaching back into disk on its own.
   pendingMcp: { rows: readonly McpPanelRow[] } | undefined;
+  // /memory's own blocking panel, mirroring pendingSkills/pendingMcp. Rows are read from the staged
+  // queue on disk at the moment the panel opens, not from a session-frozen registry: unlike a skill,
+  // a memory write staged by the turn that just ran is reviewable right now. An approve or reject
+  // taken inside the panel re-dispatches `memory-requested` with freshly read rows, the same way a
+  // panel-driven /mcp removal does, rather than this reducer reaching for disk itself.
+  pendingMemory: { rows: readonly MemoryPanelRow[] } | undefined;
   // /effort's own blocking panel. Mirrors `pendingSetup`'s role — set when
   // the bare, no-argument form opens the slider (runTui's own onSubmit interception, cli.ts),
   // cleared once resolved.
@@ -278,6 +285,7 @@ export function initialTuiState(
     pendingPermissions: undefined,
     pendingSkills: undefined,
     pendingMcp: undefined,
+    pendingMemory: undefined,
     pendingEffort: undefined,
     pendingSplash: opts?.showSplash ?? false,
     splashDone: false,
@@ -376,6 +384,9 @@ export type TuiAction =
   // /mcp's own pair, mirroring skills-requested/skills-closed exactly.
   | { type: "mcp-requested"; rows: readonly McpPanelRow[] }
   | { type: "mcp-closed" }
+  // /memory's own pair, mirroring mcp-requested/mcp-closed exactly.
+  | { type: "memory-requested"; rows: readonly MemoryPanelRow[] }
+  | { type: "memory-closed" }
   | { type: "effort-requested"; tiers: string[]; selected: number }
   | { type: "effort-resolved"; tier?: string; leftoverInput?: string }
   | { type: "splash-requested" }
@@ -665,6 +676,10 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return { ...state, pendingMcp: { rows: action.rows } };
     case "mcp-closed":
       return { ...state, pendingMcp: undefined };
+    case "memory-requested":
+      return { ...state, pendingMemory: { rows: action.rows } };
+    case "memory-closed":
+      return { ...state, pendingMemory: undefined };
     case "effort-requested":
       return { ...state, pendingEffort: { tiers: action.tiers, selected: action.selected } };
     case "effort-resolved":

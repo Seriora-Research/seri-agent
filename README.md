@@ -31,7 +31,7 @@ capability below is a slash command inside that session.
   `code`, `test`) for parts of a task that benefit from their own context window.
 - **Persistent memory.** After a turn, an `archivist` role can write facts it learned to
   `MEMORY.md`/`USER.md` outside the repo. Writes are staged for approval by default
-  (`/memory pending|diff|approve|reject`), never applied silently, and can be turned off
+  (`/memory` opens the review panel), never applied silently, and can be turned off
   entirely (`/memory archivist off`).
 - **Five providers, one routing layer.** Groq, OpenRouter, Anthropic, OpenAI, and Google,
   switchable mid-session (`/model`) without losing context, with automatic reroute to a
@@ -149,7 +149,8 @@ to a temporary copy.
 | `/undo [n]`, `/rewind [n]`, `/restore <sha>` | step back through checkpoints |
 | `/clear` | start a new session (clears the conversation) — the previous one stays recoverable with `seri --resume <id>` |
 | `/compact` | summarize older messages in this session so the conversation fits the context window |
-| `/memory pending\|diff\|approve\|reject` | review and act on staged memory writes |
+| `/memory` | review staged memory writes: preview a diff, approve or reject |
+| `/memory pending\|diff\|approve\|reject` | the same review as flat lines, for copy-pasting an id |
 | `/memory archivist on\|off` | turn the post-turn learning pass off entirely |
 | `/trajectory [on\|off]` | show or turn local trajectory recording on or off (default on; persists for the profile) |
 | `/login`, `/signup`, `/logout` | sign in to, create, or leave a hosted seri account |

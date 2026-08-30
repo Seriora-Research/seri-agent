@@ -5,7 +5,8 @@ import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@s
 import { escapeControlChars } from "../../cli/output";
 import type { PermissionMode } from "../../gate/gate";
 import type { LoopEvent } from "../../loop/loop";
-import { mcpStatusWord, type McpPanelRow } from "../../mcp/commands";
+import { type McpPanelRow, mcpStatusWord } from "../../mcp/commands";
+import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "../state/commands";
 import { ERROR_MARK, WARNING_MARK } from "../theme/theme";
@@ -556,6 +557,28 @@ export function formatMcpRow(row: McpPanelRow): string {
   const toolsPart =
     row.toolCount === undefined ? "" : ` · ${row.toolCount} tool${row.toolCount === 1 ? "" : "s"}`;
   return `${row.name} · ${mark}${mcpStatusWord(row.status)}${toolsPart}`;
+}
+
+// Column padding, unlike formatMcpRow: an action is one of three short words and a file one of
+// three fixed shapes, so the columns line up for free and a reader scans down "what kind of write"
+// and "which file" instead of re-parsing each row. Same padded-string approach formatSkillRow uses,
+// and the same reason: this repo hand-rolls its TUI and has no table component.
+export const MEMORY_ACTION_WIDTH = 8;
+export const MEMORY_FILE_WIDTH = 22;
+
+export const MEMORY_PANEL_HEADER = `${"ACTION".padEnd(MEMORY_ACTION_WIDTH)}${"FILE".padEnd(MEMORY_FILE_WIDTH)}WRITE`;
+
+// `singleLine` for McpTrustPreview's own reason: `detail` is the model's own proposed memory text,
+// free to contain literal newlines, and OpenTUI renders each break as a real row — one such write
+// would push the rest of the list past the viewport. Collapse first, then let the row's own
+// `truncate` clip what is left to one row.
+export function formatMemoryRow(row: MemoryPanelRow): string {
+  // `[transient]` is the one mark a reader cannot get from the other three columns: the model
+  // tagged this write as session-scoped noise rather than a lasting fact (memory/store.ts's own
+  // `durable` comment), which is the single strongest reason to reject it. Nothing is printed for
+  // the durable case, so the ordinary row stays quiet.
+  const mark = row.durable ? "" : "  [transient]";
+  return `${truncatePad(row.action, MEMORY_ACTION_WIDTH)}${truncatePad(row.file, MEMORY_FILE_WIDTH)}${singleLine(row.detail)}${mark}`;
 }
 
 // The welcome splash's `directory` row (routes/setup/SplashBanner.tsx). `home` is a parameter, not

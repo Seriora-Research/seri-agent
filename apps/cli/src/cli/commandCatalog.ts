@@ -91,10 +91,23 @@ export const COMMAND_META: readonly CommandMeta[] = [
     name: "/memory",
     surface: "session",
     description: "review and act on staged memory writes",
-    argsUsage: "pending|…",
+    argsUsage:
+      "[pending|diff <id|all>|approve <id|all>|reject <id|all>|approval on|off|archivist on|off]",
     accepts: memoryCommandAccepts,
     mutatesRunState: true,
     needsSession: false,
+    // TUI-claimed for every form: the bare/`list` form opens the review panel, and the
+    // subcommands render their lines through the same handler — the same split /skills and /mcp
+    // make. `surface: "session"` rather than "tui" so this row keeps its `needsSession`/
+    // `mutatesRunState` shape and its SLASH_COMMANDS entry, which the table's own completeness
+    // assertions (cli.ts) require; `tuiClaimsFirst` is what actually routes it.
+    //
+    // Claiming it does lift the mid-turn `mutatesRunState` gate, which is deliberate: that gate
+    // exists for commands a still-in-flight turn can silently undo or corrupt — the checkpoint
+    // store and `session.messages` — and /memory touches neither. It writes a memories/*.md file
+    // through atomicWriteFile and unlinks a .pending file; the memory files are read into the
+    // system prompt at session start, not mid-turn.
+    tuiClaimsFirst: true,
   },
   {
     name: "/trajectory",
