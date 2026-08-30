@@ -18,6 +18,7 @@ export const DEFAULT_PROFILE = "default";
 // one source and cannot drift apart from each other, the same anti-drift discipline this file's
 // own header comment already applies to CONFIG_FILENAME/AUTH_FILENAME/PERMISSIONS_FILENAME.
 export const AGENTS_DIRNAME = "agents";
+export const SKILLS_DIRNAME = "skills";
 export const MEMORIES_DIRNAME = "memories";
 export const PENDING_DIRNAME = "pending";
 export const TRAJECTORIES_DIRNAME = "trajectories";
@@ -54,6 +55,7 @@ export function getReservedProfileNames(): ReadonlySet<string> {
     "rg",
     "bin",
     AGENTS_DIRNAME,
+    SKILLS_DIRNAME,
     MEMORIES_DIRNAME,
     PENDING_DIRNAME,
     TRAJECTORIES_DIRNAME,
@@ -162,6 +164,13 @@ export function getMemoriesDir(configDir: string = getConfigDir()): string {
 // non-default profile is a fully disjoint tree, and agents share that isolation.
 export function getAgentsDir(configDir: string = getConfigDir()): string {
   return join(configDir, AGENTS_DIRNAME);
+}
+
+// Global-scope skill directories, under the profile root on the identical rule getAgentsDir states
+// — a default-profile user puts them in ~/.seri/skills/, a `--profile work` user in
+// ~/.seri/work/skills/, and a named profile never falls back to the default root's.
+export function getSkillsDir(configDir: string = getConfigDir()): string {
+  return join(configDir, SKILLS_DIRNAME);
 }
 
 export function getPendingDir(configDir: string = getConfigDir()): string {

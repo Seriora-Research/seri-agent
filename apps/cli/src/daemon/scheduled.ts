@@ -35,7 +35,13 @@ export function createRunScheduled(opts: {
     const session: RunSession = {
       ...input.session,
       messages: input.session.messages as ModelMessage[],
-      systemPrompt: buildSystemPrompt(loadAgentsFileFn(input.session.cwd)),
+      // No skills, deliberately, on the same rule the `agents: builtinRegistry()` line below
+      // states: an unattended run gets a strictly smaller surface than an attended one, and a
+      // skill file a human never saw must not steer it.
+      systemPrompt: buildSystemPrompt({
+        agentsContent: loadAgentsFileFn(input.session.cwd),
+        skills: [],
+      }),
       model: route.model,
       provider: route.provider,
       permissionMode: input.policy.permissionMode,
@@ -67,6 +73,7 @@ export function createRunScheduled(opts: {
       // Built-ins only, no disk read: this path passes composeSubagents: false, so the dispatch
       // tool never exists here and a scheduled run must not load agent files a human never saw.
       agents: builtinRegistry(),
+      skills: new Map(),
       trajectory: createSessionTrajectory(session, opts.configDir, onWarning),
       preMountMessages: [],
     };

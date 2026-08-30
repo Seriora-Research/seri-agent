@@ -1,5 +1,6 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import { type LoadedMemory, renderMemoryTier } from "../memory/store";
+import { renderSkillsTier, type SkillSpec } from "../skills/registry";
 
 // One prompt for every model, deliberately: routing a different prompt per model family is what
 // both references do (OpenCode selects a file, Hermes injects a block for GPT/Codex only) and it is
@@ -121,9 +122,13 @@ function buildStableTier(): string {
 
 // At session start: AGENTS.md is appended, never a substitute — a project without one used to get
 // a 29-character prompt with no tool guidance at all, which is the failure this module exists to
-// fix. Future hook point: Stage 10 recipe metadata joins this tier alongside AGENTS.md.
-function buildContextTier(agentsContent: string): string {
-  return agentsContent;
+// fix. Skill metadata joins it here, after it: AGENTS.md is the project's own contract
+// and reads first, and both are frozen for the session, which is exactly what this tier is for.
+// Metadata only — renderSkillsTier can only emit names and descriptions, because a SkillSpec has no
+// body to emit (skills/skillFile.ts). That is the progressive-disclosure guarantee, and it holds
+// here by construction rather than by this function remembering to honour it.
+function buildContextTier(agentsContent: string, skills: readonly SkillSpec[]): string {
+  return joinTiers(agentsContent, renderSkillsTier(skills));
 }
 
 // Per turn: tells the model which model/provider it is actually running as this turn, so a live
@@ -161,6 +166,13 @@ export function joinTiers(...tiers: (string | undefined)[]): string {
   return tiers.filter(Boolean).join("\n\n");
 }
 
-export function buildSystemPrompt(agentsContent: string): string {
-  return joinTiers(buildStableTier(), buildContextTier(agentsContent));
+// An options bag rather than a growing positional list: more context-tier sources are coming and
+// every call site would otherwise be edited again for what is one decision.
+export function buildSystemPrompt(opts: {
+  agentsContent: string;
+  /** Metadata for the session's model-invocable skills. `[]` on the unattended path, which is how
+   *  "an unattended run gets a strictly smaller permission surface" (CONSTITUTION) reads here. */
+  skills: readonly SkillSpec[];
+}): string {
+  return joinTiers(buildStableTier(), buildContextTier(opts.agentsContent, opts.skills));
 }

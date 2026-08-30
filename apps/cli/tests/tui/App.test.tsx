@@ -3088,6 +3088,36 @@ describe("App", () => {
       expect(calls).toBe(0);
     });
 
+    // The skills panel is the newest branch of the render ternary, and a panel added without being
+    // added to `noPanelOpen` leaves the global keys live underneath it — shift+tab silently cycling
+    // the permission mode while the user is arrowing a list is exactly the kind of thing nobody
+    // notices until it has already happened.
+    test("shift+tab does nothing while the skills panel is open", async () => {
+      let calls = 0;
+      const { setup, dispatch } = await connect({ onCycleMode: () => calls++ });
+
+      dispatch({
+        type: "skills-requested",
+        rows: [
+          {
+            name: "reviewer",
+            description: "Reviews a diff.",
+            scope: "project",
+            where: ".seri/skills/reviewer/SKILL.md",
+            author: "human",
+            modelInvocable: true,
+          },
+        ],
+      });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("Skills");
+
+      setup.mockInput.pressKey(SHIFT_TAB);
+      await flush(setup);
+
+      expect(calls).toBe(0);
+    });
+
     // Plain Tab (no shift) shares the same `key.name === "tab"`, so this proves the `key.shift`
     // check is what actually gates the cycle, not just the key name. `isPrintableKey`
     // (util/keys.ts) already excludes a `key.name.length > 1` key like "tab" from InputBox's own

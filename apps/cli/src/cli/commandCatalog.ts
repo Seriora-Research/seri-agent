@@ -1,4 +1,5 @@
 import { memoryCommandAccepts } from "../memory/commands";
+import { skillsCommandAccepts } from "../skills/commands";
 
 export type CommandShortcut = { chord: "shift+tab" };
 
@@ -166,6 +167,16 @@ export const COMMAND_META: readonly CommandMeta[] = [
     description: "view or revoke permanently approved tools",
     argsUsage: "",
     accepts: (args) => args.length === 0,
+  },
+  {
+    // TUI-claimed for every form: the bare/list form opens the panel, and the review subcommands
+    // render their lines through the same handler, so there is no non-TTY consumer to split this
+    // across two surfaces for.
+    name: "/skills",
+    surface: "tui",
+    description: "list this project's skills, and review what the archivist proposed",
+    argsUsage: "[list|pending|diff <id|all>|approve <id|all>|reject <id|all>]",
+    accepts: skillsCommandAccepts,
   },
   {
     name: "/max-turns",

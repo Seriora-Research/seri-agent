@@ -11,6 +11,7 @@ import type { ChildEventPayload } from "../../subagents/dispatch";
 import {
   estimateTokens,
   formatDoneLine,
+  type SkillsPanelRow,
   type TokenProgress,
   type TranscriptEntry,
   type TranscriptRole,
@@ -160,6 +161,11 @@ export type TuiState = {
   pendingConfig: ConfigPanelState | undefined;
   // /permissions' own blocking panel. Mirrors `pendingSetup`'s role.
   pendingPermissions: PermissionsPanelState | undefined;
+  // /skills' own blocking panel. Mirrors `pendingSetup`'s role. Holds the rows resolved from the
+  // session's registry at the moment the panel opened, not the registry itself: the panel is a view
+  // of what this session actually loaded, and re-reading disk while it is open would show rows the
+  // running session cannot invoke.
+  pendingSkills: { rows: SkillsPanelRow[] } | undefined;
   // /effort's own blocking panel. Mirrors `pendingSetup`'s role — set when
   // the bare, no-argument form opens the slider (runTui's own onSubmit interception, cli.ts),
   // cleared once resolved.
@@ -258,6 +264,7 @@ export function initialTuiState(
     pendingAuth: undefined,
     pendingConfig: undefined,
     pendingPermissions: undefined,
+    pendingSkills: undefined,
     pendingEffort: undefined,
     pendingSplash: opts?.showSplash ?? false,
     ...EMPTY_ROSTER,
@@ -348,6 +355,10 @@ export type TuiAction =
   // the SAME atomic transition as clearing `pendingEffort` — the identical race `model-picker-
   // resolved`'s own comment explains avoiding (a `messages-updated` landing between open and
   // resolve must not be clobbered by a second, separate dispatch).
+  // /skills' own pair, the same one-open-one-close shape /effort uses: one step, nothing to
+  // navigate between.
+  | { type: "skills-requested"; rows: SkillsPanelRow[] }
+  | { type: "skills-closed" }
   | { type: "effort-requested"; tiers: string[]; selected: number }
   | { type: "effort-resolved"; tier?: string; leftoverInput?: string }
   | { type: "splash-requested" }
@@ -629,6 +640,10 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         pendingPermissions: undefined,
         pendingInputPrefill: action.leftoverInput,
       };
+    case "skills-requested":
+      return { ...state, pendingSkills: { rows: action.rows } };
+    case "skills-closed":
+      return { ...state, pendingSkills: undefined };
     case "effort-requested":
       return { ...state, pendingEffort: { tiers: action.tiers, selected: action.selected } };
     case "effort-resolved":

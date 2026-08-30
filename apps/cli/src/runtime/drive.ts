@@ -23,6 +23,7 @@ import { resolveReasoningEffort } from "../provider/reasoning";
 import { DISPATCH_TOOL_NAME } from "../provider/tools";
 import type { SessionState } from "../session/session";
 import { onSignalCancel } from "../signals";
+import { withSkills } from "../skills/tool";
 import { type ChildEventPayload, dispatchDirect, withSubagents } from "../subagents/dispatch";
 import type { AgentSpec } from "../subagents/registry";
 import {
@@ -359,8 +360,12 @@ export async function driveLoop(
   // The one composition that enables dispatch_subagents; deleting this call (tools -> baseTools)
   // is the whole rollback, matching withCheckpoints/withVerification's own comment in prepareSession.
   // Scheduled runs pass composeSubagents: false so that tool never exists on the unattended path.
-  const tools =
+  const dispatchable =
     driveOpts.composeSubagents === false ? baseTools : withSubagents(baseTools, subagentRuntime);
+  // Needs no flag of its own: withSkills adds nothing when the registry holds no model-visible
+  // skill, and the one path that must never see this tool — a scheduled run — is built with an
+  // empty registry, so its absence there is structural rather than conditional.
+  const tools = withSkills(dispatchable, prepared.skills);
   // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
   // what an exit code promises a shell, which is this consumer's business, not the loop's.
   // `permission-denied` fires on two different facts carried in its `reason` — "blocked" is a

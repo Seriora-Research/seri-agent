@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SLASH_COMMANDS } from "../../src/cli";
 import {
-  COMMAND_META,
   assertTuiHandlers,
+  COMMAND_META,
   commandByName,
   isShiftTabModeCycle,
   isTuiClaimed,
@@ -32,6 +32,7 @@ const EXPECTED_NAMES = [
   "/logout",
   "/config",
   "/permissions",
+  "/skills",
   "/max-turns",
   "/profile",
 ] as const;
@@ -46,6 +47,7 @@ const EXPECTED_TUI_CLAIMED = [
   "/logout",
   "/config",
   "/permissions",
+  "/skills",
   "/max-turns",
   "/profile",
 ] as const;

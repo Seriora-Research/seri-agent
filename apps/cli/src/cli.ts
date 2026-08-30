@@ -20,7 +20,7 @@ import { onAbort } from "./abort";
 import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
-import { login as loginReal, logout as logoutReal } from "./auth/commands";
+import type { login as loginReal, logout as logoutReal } from "./auth/commands";
 import {
   appendBarrier,
   type Checkpointer,
@@ -31,6 +31,7 @@ import {
 import { withCheckpoints } from "./checkpoint/wrapTools";
 import {
   assertTuiHandlers,
+  COMMAND_META,
   type CommandMeta,
   commandByName,
   isTuiClaimed,
@@ -83,7 +84,7 @@ import {
   type ApprovalPrompt,
   DEFAULT_PRESERVE_RECENT_MESSAGES,
   type LoopEvent,
-  runLoop as runLoopReal,
+  type runLoop as runLoopReal,
 } from "./loop/loop";
 import {
   type ArchivistReport,
@@ -130,6 +131,8 @@ import {
 import { awaitsReply } from "./session/awaitsReply";
 import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
+import { decideSkillsCommand, skillsPanelRows } from "./skills/commands";
+import { readSkillBody, type SkillRegistry, substituteSkillArgs } from "./skills/registry";
 import type { AgentSpec } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
@@ -138,6 +141,7 @@ import { App } from "./tui/app";
 import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
 import { runWelcomeSplash } from "./tui/routes/setup/welcomeSplash";
 import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";
+import type { CompletionSource } from "./tui/util/completion";
 import { runUsageCommand as runUsageCommandReal } from "./usage/command";
 
 export { addCost, addTokens };
@@ -204,6 +208,12 @@ export type CliDeps = {
   // getModel or this is ever called.
   getGatewayModel?: typeof getGatewayModelReal;
   loadAgentsFile?: typeof loadAgentsFileReal;
+  // The skill registry, injectable for the same reason `loadAgentsFile` is: both read the ambient
+  // worktree, and a test that does not stub them is asserting against whatever the developer
+  // happens to have on disk. Without this, a repository that has its own `.seri/skills/` cannot run
+  // its own suite — the skill tool appears in the toolset and a "# Skills" block in the prompt, and
+  // every assertion on either shape fails for a reason that has nothing to do with the code.
+  loadSkills?: (cwd: string, configDir: string) => SkillRegistry;
   sessionsDir?: string;
   checkpointsDir?: string;
   authConfigDir?: string;
@@ -641,7 +651,7 @@ async function clearCommand(
   dirs: CommandDirs,
   presenter: CommandPresenter,
 ): Promise<void> {
-  const { next, message } = decideClear(session);
+  const { next, message } = decideClear(session, dirs.configDir);
   await presenter.sessionUpdated(next);
   presenter.transcriptCleared();
   presenter.message(message);
@@ -1590,6 +1600,53 @@ async function runTui(
   // on this tier, the same gate `confirmedModel` already has.
   const { onEffortSelected, onEffortCancel } = createEffortHandlers({ dispatch });
 
+  // What `/skills diff` last showed the human, per staged id. Lives for the run, so `/skills
+  // approve` can refuse a file that moved since they looked at it.
+  const previewedSkillFiles = new Map<string, string>();
+
+  // "subagent · <what it does>", or just "subagent" when the file gave no description. Without the
+  // empty check the popup renders a dangling separator on a description-less entry, which reads as
+  // truncated output rather than as an absent field.
+  const describeCompletion = (kind: string, description: string): string =>
+    description.length === 0 ? kind : `${kind} · ${description}`;
+
+  // Everything a leading "/" can resolve to this session, in the order onSubmit resolves them:
+  // catalog commands, then agents, then skills.
+  //
+  // Recomputed on demand rather than captured once. The registries are frozen for a session, but
+  // `/clear` mints a conceptually new one and bindSession (runtime/prepare.ts) reassigns
+  // `prepared.agents`/`prepared.skills` to freshly-loaded registries in the same process — that
+  // reload is the whole point of doing it there, so a skill approved or deleted since startup is
+  // live afterwards. A captured array would keep offering the pre-clear list while `onSubmit`
+  // resolved against the new one, so the popup could hand back a name that then failed with
+  // "Unrecognized command", and a genuinely new skill would not complete until the process
+  // restarted.
+  const buildCompletionSources = (): readonly CompletionSource[] => [
+    {
+      id: "commands",
+      trigger: "/",
+      // A "/" only opens this list as the first character of the line. Mid-sentence it is a path
+      // separator or a date, and a popup there would cover the transcript on every "src/cli.ts".
+      lineStartOnly: true,
+      items: [
+        ...COMMAND_META.map((meta) => ({ name: meta.name, description: meta.description })),
+        ...[...prepared.agents.values()].map((agent) => ({
+          name: `/${agent.name}`,
+          description: describeCompletion("subagent", agent.description),
+        })),
+        // Skills last so an agent of the same name wins the list the way it wins the lookup —
+        // resolveCompletion keeps the first match for a value, and onSubmit checks agents first.
+        ...[...prepared.skills.values()].map((skill) => ({
+          name: `/${skill.name}`,
+          description: describeCompletion("skill", skill.description),
+        })),
+      ]
+        .filter((item, index, all) => all.findIndex((other) => other.name === item.name) === index)
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((item) => ({ value: item.name, description: item.description })),
+    },
+  ];
+
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
   // reducer and driveLoop have always shared. Guarded against overlap: a second Enter press
@@ -2118,6 +2175,28 @@ async function runTui(
         });
       }
     },
+    "/skills": (args) => {
+      // The bare and `list` forms open the panel; the review subcommands render lines. The panel is
+      // the listing surface the review lines were never going to be, and splitting them here keeps
+      // one command name over both rather than inventing a second.
+      const deps = {
+        configDir: ctx.configDir,
+        worktree: checkpointTarget(liveState.session, dirs(ctx)).worktree,
+        previewed: previewedSkillFiles,
+      };
+      const [sub] = args;
+      if (sub === undefined || sub === "list") {
+        dispatch({ type: "skills-requested", rows: skillsPanelRows(deps, prepared.skills) });
+        return;
+      }
+      try {
+        for (const line of decideSkillsCommand(args, deps).lines) {
+          dispatch({ type: "transcript-append", line });
+        }
+      } catch (err) {
+        dispatch({ type: "command-error", message: messageOf(err) });
+      }
+    },
     "/permissions": () => {
       // decidePermissionsOpen's loadGrants never throws for a malformed store — it degrades to an
       // empty list and reports through onWarning. Dropping that callback opened a silently-empty
@@ -2210,10 +2289,48 @@ async function runTui(
         // The last place a slash name is looked up: the session's agent registry. `/reviewer grade
         // the diff` runs that agent directly, with no parent round trip to decide whether to.
         const agent = prepared.agents.get(name.slice(1));
-        if (agent === undefined) {
+        const skill = agent === undefined ? prepared.skills.get(name.slice(1)) : undefined;
+        if (agent === undefined && skill === undefined) {
           dispatch({ type: "command-error", message: `Unrecognized command: ${name}` });
           return;
         }
+        // A skill is not a dispatch. Its body IS a prompt, and it runs in this session's own
+        // context, so `/name` on one needs no engine of its own: substitute the user's arguments
+        // into the body and submit the result as an ordinary user turn, exactly as if they had
+        // typed it. The body deliberately never enters the transcript — the user already sees the
+        // `/name` they typed, and printing a page of instructions back at them is noise. The muted
+        // line below is the whole acknowledgement.
+        if (skill !== undefined) {
+          if (turnInFlight) {
+            dispatch({
+              type: "command-error",
+              message:
+                "A turn is already running; wait for it to finish before submitting another.",
+            });
+            return;
+          }
+          let prompt: string;
+          try {
+            prompt = substituteSkillArgs(readSkillBody(skill), trimmed.slice(name.length).trim());
+          } catch (err) {
+            dispatch({ type: "command-error", message: messageOf(err) });
+            return;
+          }
+          dispatch({
+            type: "transcript-append",
+            line: `Skill loaded: ${skill.name}`,
+            muted: true,
+          });
+          currentTurn = runTurn(
+            {
+              ...liveState.session,
+              messages: [...liveState.session.messages, { role: "user", content: prompt }],
+            },
+            prompt,
+          );
+          return;
+        }
+        if (agent === undefined) return;
         // Sliced off `trimmed`, not rejoined from `args`: the goal keeps whatever spacing the user
         // typed, which for a pasted multi-clause task is the difference between a readable prompt
         // and a mangled one.
@@ -2429,6 +2546,12 @@ async function runTui(
       onPermissionsClose,
       onEffortSelected,
       onEffortCancel,
+      // Enter on a panel row runs the skill, through the exact path `/name` takes — the panel picks
+      // which skill, and everything after that is one code path, not two.
+      onSkillRun: (name: string) => {
+        void onSubmit(`/${name}`);
+      },
+      getCompletionSources: buildCompletionSources,
       // No auth-offer recompute here — redundant: every path that reaches this (Escape on
       // "starting"/"device", Enter/Esc on a login-failure result, or
       // a logout-failure result) never changed the auth-session file between when it was last

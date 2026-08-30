@@ -46,7 +46,7 @@
 // unlike Ink, where `App` itself called `useApp().exit()` on a `done` prop, OpenTUI has no such
 // hook: the three callers above own the `CliRenderer` directly and destroy it themselves once a
 // quit is ready to complete (`getTuiRenderer`/`destroyTuiRenderer`, runtime/renderer.ts).
-import { type BoxRenderable, type ScrollBoxRenderable } from "@opentui/core";
+import type { BoxRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
@@ -71,10 +71,12 @@ import { EffortPanel } from "./routes/config/EffortPanel";
 import { PermissionsPanel } from "./routes/config/PermissionsPanel";
 import { SetupPanel } from "./routes/setup/SetupPanel";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
+import { SkillsPanel } from "./routes/skills/SkillsPanel";
 import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
 import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
+import type { CompletionSource } from "./util/completion";
 import {
   DEFAULT_COLUMNS,
   DEFAULT_ROWS,
@@ -190,6 +192,14 @@ export type AppProps = {
   // see EffortPanel's own comment on why it is always `undefined` today.
   onEffortSelected?: (tier: string, leftoverInput?: string) => void;
   onEffortCancel?: (leftoverInput?: string) => void;
+  // /skills' own single resolution. Closing is dispatched locally, like every other panel's Esc;
+  // running needs cli.ts's own turn machinery, so it is a prop.
+  onSkillRun?: (name: string) => void;
+  // Every completion source the input box may open (util/completion.ts). A function, not an array:
+  // runTui is the only place the command catalog, the agent registry and the skill registry are all
+  // in scope, and `/clear` reloads the latter two mid-process — so this is called at render time
+  // rather than captured, and a skill approved since startup completes after a /clear.
+  getCompletionSources?: () => readonly CompletionSource[];
   // The welcome-splash mount's own three resolutions — unreachable in runTui/runGuidedSetup, whose
   // own initialTuiState calls never set pendingSplash (reducer.ts's own comment).
   onSplashLogin?: () => void;
@@ -267,6 +277,8 @@ export function App({
   onPermissionsClose,
   onEffortSelected,
   onEffortCancel,
+  onSkillRun,
+  getCompletionSources,
   onSplashLogin,
   onSplashSignup,
   onSplashContinue,
@@ -377,6 +389,7 @@ export function App({
     state.pendingConfig === undefined &&
     state.pendingPermissions === undefined &&
     state.pendingEffort === undefined &&
+    state.pendingSkills === undefined &&
     !state.pendingSplash;
 
   // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
@@ -620,6 +633,15 @@ export function App({
           onPermissionsBack={onPermissionsBack}
           onPermissionsClose={onPermissionsClose}
         />
+      ) : state.pendingSkills !== undefined ? (
+        <SkillsPanel
+          rows={state.pendingSkills.rows}
+          onSkillRun={(name) => {
+            dispatch({ type: "skills-closed" });
+            onSkillRun?.(name);
+          }}
+          onSkillsClose={() => dispatch({ type: "skills-closed" })}
+        />
       ) : state.pendingEffort !== undefined ? (
         <EffortPanel
           pendingEffort={state.pendingEffort}
@@ -661,6 +683,7 @@ export function App({
               : undefined
           }
           inert={state.subagentPanelFocus || state.pendingChildView !== undefined}
+          completionSources={getCompletionSources?.()}
         />
       )}
       {state.subagents.length > 0 && (

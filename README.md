@@ -155,6 +155,9 @@ to a temporary copy.
 | `/login`, `/signup`, `/logout` | sign in to, create, or leave a hosted seri account |
 | `/usage [--detail]` | hosted-gateway spend vs allowance, reset date, and a burn-rate projection |
 | `/<agent> <task>` | run one of your own subagents on a task — see below |
+| `/skills` | open the skills panel: every skill this project and this profile define |
+| `/skills pending\|diff\|approve\|reject` | review and act on skills the archivist proposed |
+| `/<skill> [args]` | run one of your own skills — see below |
 | `/profile new <name>` | create a new profile — an isolated config/memory/session root |
 | `/max-turns <n>` | override the per-task turn budget (default 500) for the rest of the session |
 | `/exit` | end the session (or Ctrl-D) |
@@ -174,8 +177,9 @@ repeatedly in one long-lived process can eventually prune an earlier session's c
 
 ## Your own subagents
 
-Drop a Markdown file in `.seri/agents/` (this project) or `~/.seri/agents/` (every project) and
-seri picks it up at the next start. No source change, no registration step.
+Drop a Markdown file in `.seri/agents/` (this project) or under your profile root (every project) —
+`~/.seri/agents/` by default, `~/.seri/<profile>/agents/` under `--profile <name>` — and seri picks
+it up at the next start. No source change, no registration step.
 
 ```markdown
 ---
@@ -207,6 +211,54 @@ dispatch further subagents — that is structural, not a rule it is asked to fol
 does not parse, or that takes the name of a built-in agent or a slash command, is skipped with a
 warning at startup rather than failing the session. And `/explore`, `/plan`, `/code`, `/test` and
 `/oracle` work the same way, because the built-in roster is entries in the same registry.
+
+## Your own skills
+
+A skill is a procedure rather than a role: a named set of instructions that runs in the session's
+own context instead of a subagent's. Drop one in `.seri/skills/<name>/SKILL.md` (this project) or
+under your profile root (every project) — `~/.seri/skills/` by default, `~/.seri/<profile>/skills/`
+under `--profile <name>`, with no fallback between them.
+
+```markdown
+---
+name: regression-sweep          # optional — the directory name is the default
+description: Reproduce a bug, write the failing test, then fix it.
+argument-hint: "<bug description>"
+disable-model-invocation: true  # optional — only you can run it, never the model
+---
+
+Fix this bug: $ARGUMENTS
+
+1. Reproduce it and record the exact steps.
+2. Write the failing test first.
+3. Fix it, then run the suite.
+```
+
+Two things then work, the same two that work for an agent:
+
+- **You run it**: type `/` and the name. The completion list shows every command, agent and skill
+  with what each one does, so you do not have to remember the exact name.
+- **The model runs it**: your `description` is what it reads to decide when a task calls for this
+  procedure.
+
+**A skill's instructions are never in the prompt.** Session start pays for the name, the
+description and the argument hint; the body stays on disk until the skill actually fires, so a
+directory of twenty skills costs twenty descriptions, not twenty procedures. `/skills` opens a panel listing what this session loaded, where each file lives,
+and who wrote it.
+
+`$ARGUMENTS` substitutes everything you typed after the name; `$0`, `$1`, `$2` substitute the
+individual words. `disable-model-invocation: true` keeps a skill out of the prompt and out of the
+model's reach entirely, leaving `/name` as its only entry point. The format is Cursor's, so
+existing `SKILL.md` files work when you copy them in — seri does not read `.cursor/skills/` itself,
+for the same reason it does not read `.cursor/agents/`. `allowed-tools`, `model` and `context` are
+accepted and ignored, with a warning naming the file: a skill runs in the parent's context, on the
+parent's model, with the parent's tools.
+
+**Skills are the one artifact seri writes for you.** After hard-won work, the archivist can propose
+one — it is staged, never applied: `/skills pending` lists what is waiting, `/skills diff <id>`
+shows the exact file, and `/skills approve <id>` writes it. An approved file carries
+`author: archivist` and the reason it was proposed, so you can always tell which of your skills you
+wrote and which one seri did.
 
 ## Checking your code after a write
 
