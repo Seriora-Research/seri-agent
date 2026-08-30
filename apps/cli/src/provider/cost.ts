@@ -70,3 +70,12 @@ export function reportFromCatalogPricing(
   const outputCost = ((usage.outputTokens ?? 0) / 1_000_000) * pricing.outputPerMTok;
   return { amountUsd: inputCost + outputCost, status: "estimated", source: "provider_models_api" };
 }
+
+// A plan-billed turn has no per-token dollar cost to report, and inventing one from catalog
+// pricing would bill the user for tokens they already bought. `included` has been a member of
+// CostStatus since it was written, with no producer until now — this is the case it was for.
+// `custom_contract` is the closest existing source: the price came from the user's own plan, not
+// from any catalog or provider API.
+export function reportForSubscription(): CostReport {
+  return { amountUsd: undefined, status: "included", source: "custom_contract" };
+}

@@ -54,3 +54,42 @@ describe("dispatchModel", () => {
     expect(model).toBe(fakeModel);
   });
 });
+
+describe("dispatchModel for a subscription route", () => {
+  test("dispatches to the subscription client, never getModel's key switch", () => {
+    const calls: string[] = [];
+    const fake = {} as ReturnType<typeof dispatchModel>;
+    const model = dispatchModel(
+      {
+        model: "grok-4.5",
+        provider: "xai",
+        rerouted: false,
+        credential: "subscription",
+      },
+      "session-1",
+      "/tmp/cfg",
+      {
+        getXaiSubscriptionModel: (id) => {
+          calls.push(id);
+          return fake;
+        },
+        getXaiModel: () => {
+          throw new Error("the key path must not be used for a subscription route");
+        },
+      },
+    );
+    expect(model).toBe(fake);
+    expect(calls).toEqual(["grok-4.5"]);
+  });
+
+  test("names the provider when a subscription route resolves to one with no subscription client", () => {
+    expect(() =>
+      dispatchModel(
+        { model: "gpt-4.1", provider: "openai", rerouted: false, credential: "subscription" },
+        "session-1",
+        "/tmp/cfg",
+        {},
+      ),
+    ).toThrow(/No subscription client for provider/);
+  });
+});

@@ -11,6 +11,7 @@ import { DEFAULT_PROVIDER, resolveDefaultModel } from "./defaults";
 import { PROVIDER_API_KEY_NAMES } from "./keys";
 import { GATEWAY_PROVIDER, planCoverage } from "./planCoverage";
 import { legalTiersFor } from "./reasoning";
+import { subscribedProviders } from "./subscriptions";
 
 // D2 (feature-plan.md): "native-direct" for tie-breaking is these three providers specifically —
 // not derived from routeKey's own vendor string, which would also call groq/openrouter "direct"
@@ -52,9 +53,10 @@ export function byRoutePriority(a: ModelCatalogEntry, b: ModelCatalogEntry): num
 
 // What pays for a resolved route. "key" is a BYOK console key from env or config.json;
 // "gateway" is seri's own hosted account. A third member arrives with the Grok subscription
-// (docs/specs/040-grok-subscription/spec.md); this commit is the two-state refactor only, so
-// behaviour is unchanged.
-export type RouteCredential = "key" | "gateway";
+// "subscription" is a vendor OAuth grant against the user's own consumer plan — the user's
+// credential, like "key", but flat-rate rather than metered, which is why cost.ts reports it as
+// included rather than pricing it from the catalog.
+export type RouteCredential = "key" | "subscription" | "gateway";
 
 export type ResolvedRoute = {
   model: string;
@@ -108,6 +110,21 @@ export function gatewayCoverage(
   return gatewayCoverageInGroup(routesFor(catalog.entries, entry), plan);
 }
 
+const EMPTY_SUBSCRIPTIONS: ReadonlySet<ModelProvider> = new Set();
+
+// Subscription over key when a user holds both for the same provider. Both are the user's own
+// credential, so the only asymmetry is marginal cost: the subscription is already paid and
+// flat-rate, while the key bills per token. Spending money when a paid-for alternative is
+// connected is the wrong default. /setup has to say the key is present and unused, or a user
+// will reasonably think their key is broken.
+function credentialFor(
+  provider: ModelProvider,
+  configured: ReadonlySet<ModelProvider>,
+  subscribed: ReadonlySet<ModelProvider>,
+): RouteCredential {
+  return subscribed.has(provider) ? "subscription" : "key";
+}
+
 // D2's three-rule priority order, implemented as a pure function: no `process.env`, no
 // `loadConfig` — `configured` is the caller's own single source of truth (apps/cli/src/provider/
 // keys.ts's `configuredProviders`), which is what keeps every test here independent of the
@@ -117,6 +134,11 @@ export function resolveRoute(
   requested: { model: string; provider: ModelProvider },
   configured: ReadonlySet<ModelProvider>,
   plan: Plan | null = null,
+  // Providers reachable by a connected vendor subscription. Appended optional, mirroring how
+  // `plan` itself arrived, so every existing call site stays valid; today it is only ever empty
+  // or {"xai"}. A separate set rather than a member of `configured` because the two answer
+  // different questions — `configured` means "has an API key", which a subscription does not.
+  subscribed: ReadonlySet<ModelProvider> = EMPTY_SUBSCRIPTIONS,
 ): ResolvedRoute {
   // Every early-return branch below stays on `requested` unchanged (code-review finding, PR #73,
   // round 2, item #9 — the four branches used to hand-duplicate this identical literal).
@@ -124,13 +146,13 @@ export function resolveRoute(
     model: requested.model,
     provider: requested.provider,
     rerouted: false,
-    credential: "key",
+    credential: credentialFor(requested.provider, configured, subscribed),
   };
 
   // Rule 1: an explicit pick whose own provider has a key wins, unconditionally — never
   // second-guessed even when a native sibling also has one (MULTI-PROVIDER-BYOK-ROUTING.md:121,
   // "picking the entry IS picking the route").
-  if (configured.has(requested.provider)) {
+  if (configured.has(requested.provider) || subscribed.has(requested.provider)) {
     return noReroute;
   }
 
@@ -143,7 +165,9 @@ export function resolveRoute(
   }
 
   const candidates = routesFor(catalog.entries, entry).filter(
-    (candidate) => candidate.provider !== requested.provider && configured.has(candidate.provider),
+    (candidate) =>
+      candidate.provider !== requested.provider &&
+      (configured.has(candidate.provider) || subscribed.has(candidate.provider)),
   );
   // Reached only when no sibling provider has a configured key either — Rule 1 and Rule 2 have
   // both already failed to find one. The gateway covering the model under `plan` is the 4th
@@ -182,7 +206,7 @@ export function resolveRoute(
     provider: chosen.provider,
     rerouted: true,
     reason: PROVIDER_API_KEY_NAMES[requested.provider],
-    credential: "key",
+    credential: credentialFor(chosen.provider, configured, subscribed),
   };
 }
 
@@ -215,7 +239,16 @@ export function resolveSessionRoute(
   const defaults = resolveDefaultModel(configDir);
   const model = session.model ?? defaults.model;
   const provider = session.provider ?? defaults.provider ?? DEFAULT_PROVIDER;
-  return resolveRoute(catalog, { model, provider }, configured, plan);
+  // Read here rather than threaded from every caller: this function already reads configDir for
+  // resolveDefaultModel, so it is the one place that can answer "is a subscription connected"
+  // without making resolveRoute itself impure.
+  return resolveRoute(
+    catalog,
+    { model, provider },
+    configured,
+    plan,
+    subscribedProviders(configDir),
+  );
 }
 
 // Route-aware, not a static per-model lookup: the same

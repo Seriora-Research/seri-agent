@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelCatalog } from "@seri/model-catalog";
 import type { LanguageModelUsage, ProviderMetadata } from "ai";
-import { reportForOpenRouter, reportFromCatalogPricing } from "../../src/provider/cost";
+import {
+  reportForOpenRouter,
+  reportForSubscription,
+  reportFromCatalogPricing,
+} from "../../src/provider/cost";
 
 const usage = (inputTokens: number, outputTokens: number): LanguageModelUsage => ({
   inputTokens,
@@ -208,5 +212,16 @@ describe("reportFromCatalogPricing", () => {
       fixtureCatalog,
     );
     expect(report.amountUsd).toBeCloseTo(0.59, 6);
+  });
+});
+
+describe("reportForSubscription", () => {
+  // Pricing a flat-rate turn from the catalog would bill the user for tokens they already bought.
+  test("reports included with no dollar amount", () => {
+    expect(reportForSubscription()).toEqual({
+      amountUsd: undefined,
+      status: "included",
+      source: "custom_contract",
+    });
   });
 });

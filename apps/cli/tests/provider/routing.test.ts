@@ -434,3 +434,75 @@ describe("resolveSessionRoute", () => {
     });
   });
 });
+
+describe("a connected subscription as a credential", () => {
+  const grokCatalog: ModelCatalog = {
+    fetchedAt: "",
+    entries: [
+      entry({ id: "grok-4.5", provider: "xai" }),
+      entry({ id: "x-ai/grok-4.5", provider: "openrouter" }),
+    ],
+  };
+
+  test("a subscribed provider satisfies rule 1 with no API key at all", () => {
+    const route = resolveRoute(
+      grokCatalog,
+      { model: "grok-4.5", provider: "xai" },
+      new Set(),
+      null,
+      new Set(["xai"]),
+    );
+    expect(route.rerouted).toBe(false);
+    expect(route.provider).toBe("xai");
+    expect(route.credential).toBe("subscription");
+  });
+
+  // Both credentials are the user's own, so the tie-break is marginal cost: the subscription is
+  // already paid and flat-rate while the key bills per token.
+  test("a subscription beats an API key on the same provider", () => {
+    const route = resolveRoute(
+      grokCatalog,
+      { model: "grok-4.5", provider: "xai" },
+      new Set(["xai"]),
+      null,
+      new Set(["xai"]),
+    );
+    expect(route.credential).toBe("subscription");
+  });
+
+  // No new precedence rule: NATIVE_PROVIDERS.xai makes byRoutePriority prefer xai over the
+  // aggregator, and the alias in routeKey is what puts them in one group to be compared at all.
+  test("a grok request with only an OpenRouter key reroutes there, but a subscription keeps it native", () => {
+    const viaKey = resolveRoute(
+      grokCatalog,
+      { model: "grok-4.5", provider: "xai" },
+      new Set(["openrouter"]),
+      null,
+    );
+    expect(viaKey.rerouted).toBe(true);
+    expect(viaKey.provider).toBe("openrouter");
+    expect(viaKey.credential).toBe("key");
+
+    const viaSubscription = resolveRoute(
+      grokCatalog,
+      { model: "grok-4.5", provider: "xai" },
+      new Set(["openrouter"]),
+      null,
+      new Set(["xai"]),
+    );
+    expect(viaSubscription.rerouted).toBe(false);
+    expect(viaSubscription.provider).toBe("xai");
+    expect(viaSubscription.credential).toBe("subscription");
+  });
+
+  test("an empty subscription set leaves every existing route unchanged", () => {
+    const route = resolveRoute(
+      grokCatalog,
+      { model: "grok-4.5", provider: "xai" },
+      new Set(["xai"]),
+      null,
+      new Set(),
+    );
+    expect(route.credential).toBe("key");
+  });
+});

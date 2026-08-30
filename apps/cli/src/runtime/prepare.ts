@@ -28,6 +28,7 @@ import { configuredProviders, PROVIDER_DISPLAY_NAMES } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
 import { appliedReasoningEffort } from "../provider/reasoning";
 import { type ResolvedRoute, resolveRoute } from "../provider/routing";
+import { subscribedProviders } from "../provider/subscriptions";
 import { createToolDefinitions } from "../provider/tools";
 import { createRulesState, type RulesState } from "../rules/match";
 import { loadRuleRegistry, type RuleRegistry } from "../rules/registry";
@@ -79,6 +80,7 @@ export async function resolveModelRoute(
     { model: requested.model, provider: requestedProvider },
     configured,
     plan,
+    subscribedProviders(configDir),
   );
   const model = dispatchModel(route, sessionId, configDir, deps);
   return { model, route, catalog, plan };

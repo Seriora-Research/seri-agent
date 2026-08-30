@@ -1,5 +1,6 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
+import { xaiAuthedFetch } from "../auth/xaiRefresh";
 import { getApiKey } from "../config/config";
 import { missingKeyError, PROVIDER_API_KEY_NAMES } from "./keys";
 
@@ -25,4 +26,26 @@ export function getXaiModel(
 ): LanguageModel {
   if (!apiKey) throw missingKeyError("xai");
   return createOpenAI({ apiKey, baseURL: xaiBaseUrl(configDir) }).chat(modelId);
+}
+
+// createOpenAI still demands an apiKey even though every request's Authorization header is set
+// per-request inside xaiAuthedFetch from the freshly-read stored token. Same placeholder shape
+// gateway.ts uses, and for the same reason.
+const UNUSED_PLACEHOLDER_KEY = "unused-subscription-placeholder";
+
+// The subscription-backed client: same base URL and same chat surface as the key path, but the
+// credential is a rotating OAuth bearer rather than a static key, so the fetch wrapper owns
+// attaching it and refreshing it on a 401.
+export function getXaiSubscriptionModel(
+  modelId: string,
+  configDir: string,
+  fetchFn: typeof fetch = fetch,
+): LanguageModel {
+  return createOpenAI({
+    apiKey: UNUSED_PLACEHOLDER_KEY,
+    baseURL: xaiBaseUrl(configDir),
+    // Cast for the same bun-types reason gateway.ts documents: bun augments the global fetch with
+    // a static preconnect member that the AI SDK's own FetchFunction type then inherits here.
+    fetch: xaiAuthedFetch(configDir, fetchFn) as typeof fetch,
+  }).chat(modelId);
 }

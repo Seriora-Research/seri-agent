@@ -9,7 +9,10 @@ import { missingKeyError, PROVIDER_API_KEY_NAMES } from "./keys";
 import { getOpenAIModel as getOpenAIModelReal } from "./openai";
 import { getOpenRouterModel as getOpenRouterModelReal } from "./openrouter";
 import type { ResolvedRoute } from "./routing";
-import { getXaiModel as getXaiModelReal } from "./xai";
+import {
+  getXaiModel as getXaiModelReal,
+  getXaiSubscriptionModel as getXaiSubscriptionModelReal,
+} from "./xai";
 
 // Optional injected fns, mirroring cli.ts's own CliDeps (all five fields, same names) — lets
 // tests exercise the dispatch without constructing a real provider.
@@ -119,6 +122,7 @@ export function getModel(
 
 type DispatchModelDeps = ModelDeps & {
   getGatewayModel?: typeof getGatewayModelReal;
+  getXaiSubscriptionModel?: typeof getXaiSubscriptionModelReal;
 };
 
 // Dispatches to getGatewayModel instead of getModel's provider switch when the route resolved via
@@ -137,6 +141,16 @@ export function dispatchModel(
   if (route.credential === "gateway") {
     const getGatewayModelFn = deps.getGatewayModel ?? getGatewayModelReal;
     return getGatewayModelFn(route.model, route.provider, sessionId, configDir);
+  }
+  if (route.credential === "subscription") {
+    // xai is the only provider a subscription can currently serve. A different provider here
+    // means routing produced a state this dispatcher has no client for, which is worth naming
+    // rather than silently falling through to the key path and failing on a missing key.
+    if (route.provider !== "xai") {
+      throw new Error(`No subscription client for provider: ${JSON.stringify(route.provider)}`);
+    }
+    const getXaiSubscriptionModelFn = deps.getXaiSubscriptionModel ?? getXaiSubscriptionModelReal;
+    return getXaiSubscriptionModelFn(route.model, configDir);
   }
   return getModel(route.model, route.provider, sessionId, deps, configDir);
 }
