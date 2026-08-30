@@ -156,7 +156,7 @@ describe("McpPanel", () => {
 
     const frame = setup.captureCharFrame();
     expect(frame).toContain("web_search");
-    expect(frame).toContain("Search the web.");
+    expect(frame).toContain("1 tool");
   });
 
   test("a failed dial shows the error and returns to list mode", async () => {
@@ -287,6 +287,129 @@ describe("McpPanel", () => {
 
     expect(cancelled).toBe(true);
     expect(closed).toBe(false);
+  });
+
+  // A real server writes descriptions with embedded newlines and fenced code blocks (Supabase's
+  // deploy_edge_function ships a whole Deno snippet). Four of those rendered in full is more rows
+  // than the viewport has, and the y/n question is what falls off the bottom.
+  function noisyCatalog(): McpCatalog {
+    return {
+      server: "exa",
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+      tools: Array.from({ length: 4 }, (_unused, index) => ({
+        name: `tool_${index}`,
+        toolName: `mcp_exa_tool_${index}`,
+        description: `Deploys.
+
+import "x";
+Deno.serve(() => {
+  return 1;
+});
+END_${index}`,
+        inputSchema: {},
+      })),
+    };
+  }
+
+  async function openPreview(catalogue: McpCatalog): Promise<TestRendererSetup> {
+    const setup = await createTestRenderer({ width: 100, height: 14 });
+    await mount(
+      setup,
+      <McpPanel rows={rows} onConnect={async () => ({ ok: true, catalog: catalogue })} />,
+    );
+    setup.mockInput.pressEnter();
+    await settle(setup);
+    await settle(setup);
+    return setup;
+  }
+
+  test("the preview names the tool count and the tool names, without their descriptions", async () => {
+    const setup = await openPreview(noisyCatalog());
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("4 tools");
+    expect(frame).toContain("tool_0, tool_1, tool_2, tool_3");
+    expect(frame).not.toContain("Deno.serve");
+    expect(frame).toContain("[y]es");
+  });
+
+  // The negative control: drop `singleLine` from McpTrustPreview's description row and re-run.
+  // Verified live — each description then renders across six rows, the fourth tool falls outside
+  // the 14-row viewport entirely, and the END_3 assertion below goes red.
+  test("d reveals descriptions with newlines collapsed, keeping the question on screen", async () => {
+    const setup = await openPreview(noisyCatalog());
+    setup.mockInput.typeText("d");
+    await settle(setup);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("Deno.serve");
+    expect(frame).toContain("END_3");
+    expect(frame).toContain("[y]es");
+  });
+
+  // The negative control: drop the `preview` guard from McpPanel's useKeyboard and re-run. Verified
+  // live — `removed` becomes "exa", because the list's own handler stays registered behind the
+  // preview and fires on the same keypress that cancels it.
+  test("keys meant for the list do not reach it while the preview owns the screen", async () => {
+    let removed: string | undefined;
+    let authed = false;
+    const setup = await createTestRenderer({ width: 100, height: 14 });
+    await mount(
+      setup,
+      <McpPanel
+        rows={rows}
+        onConnect={async (name) => ({ ok: true, catalog: catalog(name) })}
+        onRemove={(name) => {
+          removed = name;
+        }}
+        onAuth={async () => {
+          authed = true;
+          return { status: "success" };
+        }}
+      />,
+    );
+
+    setup.mockInput.pressEnter();
+    await settle(setup);
+    await settle(setup);
+    setup.mockInput.typeText("r");
+    await settle(setup);
+
+    expect(removed).toBeUndefined();
+    expect(authed).toBe(false);
+  });
+
+  // The bug under test is about a real line break, so the fixture has to contain one.
+  const NEWLINE = String.fromCharCode(10);
+
+  // A tool NAME is as server-controlled as its description: mcp/client.ts's fetchCatalog stores
+  // `name: tool.name` straight off the wire, and only the composed `toolName` passes through
+  // mcpToolName. Without `singleLine` here a hostile name reproduces the overflow this panel exists
+  // to prevent, on the one row shown by default.
+  test("a newline in a tool name cannot break the default row apart", async () => {
+    const hostile: McpCatalog = {
+      server: "exa",
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+      tools: [
+        {
+          name: "safe_tool",
+          toolName: "mcp_exa_safe_tool",
+          description: "Fine.",
+          inputSchema: {},
+        },
+        {
+          name: ["evil", "HIDDEN_TAIL"].join(NEWLINE.repeat(21)),
+          toolName: "mcp_exa_evil",
+          description: "Fine.",
+          inputSchema: {},
+        },
+      ],
+    };
+    const setup = await openPreview(hostile);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("HIDDEN_TAIL");
+    expect(frame).toContain("[y]es");
   });
 
   test("the preview's n cancels without trusting", async () => {
