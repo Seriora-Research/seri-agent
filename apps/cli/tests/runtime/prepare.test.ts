@@ -55,7 +55,7 @@ describe("explicit session cwd", () => {
       loadAgentsFile,
       configDir,
       sessionDir,
-      () => ({ skills: new Map(), rules: new Map() }),
+      () => ({ skills: new Map(), rules: new Map(), hooks: { registry: new Map() } }),
     );
     expect(session.cwd).toBe(sessionDir);
     expect(session.cwd).not.toBe(original);
@@ -128,7 +128,7 @@ describe("prepareSession + mcp", () => {
 
   const deps = {
     loadAgentsFile: () => "",
-    loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
+    loadExtensions: () => ({ skills: new Map(), rules: new Map(), hooks: { registry: new Map() } }),
   };
 
   // Same fixture-isolation shape cli.test.ts's own "run" describes use: a fresh HOME per test so a
@@ -268,7 +268,11 @@ describe("bindSession + mcp", () => {
       ctx,
       {
         loadAgentsFile: () => "",
-        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
+        loadExtensions: () => ({
+          skills: new Map(),
+          rules: new Map(),
+          hooks: { registry: new Map() },
+        }),
       },
       false,
       false,

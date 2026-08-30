@@ -5,9 +5,9 @@ import { join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
 import { createToolDefinitions, toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
-import { spawnCollect } from "../../src/tools/spawnCollect";
 import type { GlobResult } from "../../src/tools/glob";
 import type { GrepResult } from "../../src/tools/grep";
+import { spawnCollect } from "../../src/tools/spawnCollect";
 
 const execOpts: ToolExecutionOptions<Record<string, unknown>> = {
   toolCallId: "test-call",

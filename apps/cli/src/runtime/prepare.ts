@@ -18,6 +18,7 @@ import { loadTrajectoryConfig, loadVerifyConfig, type VerifyConfig } from "../co
 import { getConfigDir, getTrajectoriesDir } from "../config/paths";
 import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
+import { type HooksLoad, loadHookRegistry } from "../hooks/registry";
 import {
   closeMcpClients,
   createMcpClients,
@@ -129,13 +130,14 @@ export function loadOrCreateSession(
   // the same reason the AGENTS.md read is: a skill added since the session was saved must be
   // visible on resume, and one deleted since must not be. Nothing skill-shaped is ever replayed out
   // of the session JSON.
-  loadExtensions: (cwd: string) => { skills: SkillRegistry; rules: RuleRegistry },
+  loadExtensions: (cwd: string) => { skills: SkillRegistry; rules: RuleRegistry; hooks: HooksLoad },
   onTruncated: () => void = () => {},
 ): {
   session: RunSession;
   modelRecorded: boolean;
   skills: SkillRegistry;
   rules: RuleRegistry;
+  hooks: HooksLoad;
 } {
   if (resuming) {
     const id = resumeId ?? findMostRecentSession(sessionsDir);
@@ -180,7 +182,7 @@ export function loadOrCreateSession(
       loaded.model === undefined
         ? resolveDefaultModel(configDir)
         : { model: loaded.model, provider: loaded.provider };
-    const { skills, rules } = loadExtensions(loaded.cwd);
+    const { skills, rules, hooks } = loadExtensions(loaded.cwd);
     return {
       session: {
         ...loaded,
@@ -195,6 +197,7 @@ export function loadOrCreateSession(
       modelRecorded: loaded.model !== undefined,
       skills,
       rules,
+      hooks,
     };
   }
 
@@ -202,7 +205,7 @@ export function loadOrCreateSession(
   // (resolveDefaultModel's own comment), falling back to DEFAULT_MODEL/"groq" the same way
   // resolveModelId always has when nothing was ever picked.
   const { model, provider } = resolveDefaultModel(configDir);
-  const { skills, rules } = loadExtensions(cwd);
+  const { skills, rules, hooks } = loadExtensions(cwd);
   return {
     session: {
       id: randomUUID(),
@@ -229,6 +232,7 @@ export function loadOrCreateSession(
     modelRecorded: false,
     skills,
     rules,
+    hooks,
   };
 }
 
@@ -386,6 +390,12 @@ export type PreparedRun = {
   // Which glob-scoped rules have already fired. Rebound on /clear alongside the registry itself, so
   // a cleared session re-fires a rule the previous conversation had already seen.
   rulesState: RulesState;
+  // The PreToolUse/PostToolUse scripts this session will actually run, resolved once and frozen on
+  // the same terms `skills` and `rules` above are. `untrusted` rides along rather than being
+  // dropped at load, because "there is a hooks directory here and none of it ran" is a fact the
+  // user has to be told once — a hook the author believes is guarding something, silently not
+  // guarding it, is the failure this whole feature exists to prevent.
+  hooks: HooksLoad;
   // Whatever `.seri/mcp/servers.yaml` at both scopes defines, each server fused with its cached
   // tool catalog. Resolved once here like `skills` and `agents` above, then kept current by the
   // only two things that change it from inside the session: `/mcp add` and `/mcp remove` apply
@@ -622,6 +632,12 @@ export function bindSession(
   prepared.skills = loadSkillRegistry({ worktree: session.cwd, configDir, onWarning });
   prepared.rules = loadRuleRegistry({ worktree: session.cwd, configDir, onWarning });
   prepared.rulesState = createRulesState();
+  // Reloaded here for the reason this function's own doc gives — a session-scoped PreparedRun field
+  // is rebound in one place — and because the alternative is worse than staleness: a `/hooks` grant
+  // made during the previous conversation would otherwise leave the runner (runtime/drive.ts, which
+  // builds it per turn off this registry) firing the empty set for the rest of the process, so the
+  // user would be told the hooks are on while nothing runs them.
+  prepared.hooks = loadHookRegistry({ worktree: session.cwd, configDir, onWarning });
   prepared.agents = loadAgentRegistry({
     worktree: prepared.worktree,
     configDir,
@@ -645,6 +661,29 @@ export function bindSession(
   prepared.session = session;
   prepared.trajectory = trajectory;
   return createArchivistState(session);
+}
+
+// A "changed" verdict names every file whose digest moved, which for a directory reorganised in one
+// commit is every file in it. Three names is enough to recognise which hooks are being talked
+// about, and the count carries the rest — a line long enough to wrap loses its own tail, and the
+// tail is the half that says what to do about it.
+const UNTRUSTED_HOOK_FILES_SHOWN = 3;
+
+// One line, not one per hook: nothing in that directory has been parsed (hooks/registry.ts's own
+// comment on why), so there is no per-hook fact to report — and describing an untrusted file's
+// contents would present them as though seri had adopted them.
+function untrustedHooksNotice(untrusted: NonNullable<HooksLoad["untrusted"]>): string {
+  const where = `project hooks in ${untrusted.dir}`;
+  if (untrusted.verdict.kind === "changed") {
+    const { files } = untrusted.verdict;
+    const shown = files.slice(0, UNTRUSTED_HOOK_FILES_SHOWN).join(", ");
+    const rest = files.length - UNTRUSTED_HOOK_FILES_SHOWN;
+    return `${where} changed since you trusted them (${rest > 0 ? `${shown} and ${rest} more` : shown}), so none of them ran — /hooks to review what moved`;
+  }
+  // "files", not "scripts": scriptCount is the directory listing minus the manifest, so both halves
+  // of an OS-paired hook — `guard.sh` and `guard.ps1`, one hook its author wrote once — are counted
+  // separately, and calling that two scripts would overstate what is sitting there.
+  return `${where} (${untrusted.scriptCount} files) have not been reviewed, so none of them ran — /hooks to read them and turn them on`;
 }
 
 export async function prepareSession(
@@ -684,7 +723,7 @@ export async function prepareSession(
   // that call site's own comment.
   try {
     const configDir = deps.authConfigDir ?? getConfigDir();
-    const { session, modelRecorded, skills, rules } = loadOrCreateSession(
+    const { session, modelRecorded, skills, rules, hooks } = loadOrCreateSession(
       ctx.resuming,
       ctx.resumeId,
       ctx.sessionsDir,
@@ -703,6 +742,11 @@ export async function prepareSession(
             configDir,
             onWarning: (msg) => printWarning(msg, warnSink),
           }),
+          hooks: loadHookRegistry({
+            worktree: cwd,
+            configDir,
+            onWarning: (msg) => printWarning(msg, warnSink),
+          }),
         },
       () =>
         printWarning(
@@ -712,6 +756,15 @@ export async function prepareSession(
     );
 
     if (!ctx.resuming) emit(`Session ${session.id} created.`);
+
+    // Through printWarning/warnSink like every loader warning above, so the TUI path queues it into
+    // preMountMessages and it survives into the transcript. A hooks directory that is present and
+    // not running is the one state a user can be wrong about in the dangerous direction: they
+    // believe a PreToolUse guard is in front of every tool call, and nothing is. Silence here would
+    // be indistinguishable from a project that has no hooks at all.
+    if (hooks.untrusted !== undefined) {
+      printWarning(untrustedHooksNotice(hooks.untrusted), warnSink);
+    }
 
     // On every start, not only a fresh one: the queue outlives sessions, and the writes a human is
     // least likely to know about are exactly the ones an earlier session or the daemon's idle flush
@@ -915,6 +968,7 @@ export async function prepareSession(
       skills,
       rules,
       rulesState: createRulesState(),
+      hooks,
       mcp,
       mcpClients,
       trajectory,

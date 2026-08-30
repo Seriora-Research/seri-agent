@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { RunPolicy } from "../../src/runtime/types";
 import { READ_ONLY_TOOL_NAMES } from "../../src/provider/tools";
+import type { RunPolicy } from "../../src/runtime/types";
 
 describe("RunPolicy", () => {
   test("scheduled policy is read-only with an empty grant list", () => {

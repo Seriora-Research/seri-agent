@@ -2,11 +2,11 @@
 // loop.test.ts (the stream, its retries, its usage and provider errors) when that file passed
 // 1000 lines; every test below is moved verbatim, none is new.
 import { describe, expect, test } from "bun:test";
-import { tool, type ModelMessage, type ToolSet } from "ai";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
+import { type ModelMessage, type ToolSet, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { z } from "zod";
-import { runLoop, type ApprovalAnswer, type LoopEvent } from "../../src/loop/loop";
+import { type ApprovalAnswer, type LoopEvent, runLoop } from "../../src/loop/loop";
 import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
 import {
@@ -1317,6 +1317,36 @@ describe("runLoop", () => {
       const errorIndex = events.findIndex((e) => e.type === "error");
       expect(resultIndex).toBeGreaterThanOrEqual(0);
       expect(errorIndex).toBeGreaterThan(resultIndex);
+    });
+
+    // A cancelled hook rejects, and before the catch that makes this pass the rejection escaped
+    // runLoop entirely: no `done` event at all, and an assistant message whose tool call had no
+    // matching tool-result row — AI_MissingToolResultsError on the next --resume. Measured, not
+    // theorised, which is why it gets a test of its own rather than a line in another one.
+    test.each([
+      ["PreToolUse", "onBeforeTool"],
+      ["PostToolUse", "onAfterTool"],
+    ])("a cancelled %s hook still leaves the turn resumable", async (_event, optName) => {
+      const controller = new AbortController();
+      const reject = async () => {
+        controller.abort();
+        throw new Error("cancelled");
+      };
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(async () => "ok"),
+          messages: baseMessages,
+          permissionMode: "auto",
+          signal: controller.signal,
+          [optName]: reject,
+        }),
+      );
+
+      expect(events).toContainEqual({ type: "done", reason: "aborted" });
+      // Every tool call the assistant message carries has a row, which is the whole point: the
+      // session has to be resumable after a Ctrl-C landing inside a hook.
+      expect(toolRowOutputs(events)).toHaveLength(1);
     });
 
     // The cost control: with neither callback the turn is exactly what "executes a tool call and

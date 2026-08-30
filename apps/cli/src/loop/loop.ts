@@ -571,7 +571,19 @@ export async function* runLoop(opts: {
       const subject = opts.callSubject?.(call.toolName, call.input) ?? call.toolName;
 
       if (opts.onBeforeTool !== undefined) {
-        const hook = await opts.onBeforeTool(subject, call.input);
+        let hook: { readonly block?: string; readonly errors?: readonly string[] };
+        try {
+          hook = await opts.onBeforeTool(subject, call.input);
+        } catch (err) {
+          // A cancelled hook rejects, the same way a cancelled tool's `execute` does, and it needs
+          // the same catch for the same reason. Measured before this existed: the rejection escaped
+          // the generator entirely, so the turn produced no `done` event and left the assistant
+          // message's tool call without a matching tool-result row — AI_MissingToolResultsError on
+          // the next --resume, which is the one thing a cancel must not cause. Breaking here hands
+          // the call to the unanswered-row loop below, exactly as every other cancel site does.
+          if (opts.signal?.aborted) break;
+          throw err;
+        }
         for (const error of hook.errors ?? []) yield { type: "error", error };
         // A new await is a new window for an abort to land in, and a check placed after a different
         // await does not cover it — same reason as the re-check below, whose comment spells the
@@ -684,15 +696,24 @@ export async function* runLoop(opts: {
         output: { type: "json", value: (toolResult ?? null) as JSONValue },
       });
 
-      // After both pushes above, never before. A cancel landing inside a post hook must not leave
-      // this call unanswered: the assistant message carrying it is already pushed and already
-      // persisted, so a missing row is AI_MissingToolResultsError on the next --resume — the
-      // argument the unanswered-row loop and the repeated-denials stop below each make for their
-      // own site, applied to a third one.
+      // After both pushes above, never before. A post hook that returns once a cancel has already
+      // landed must not cost this call its row: the assistant message carrying the call is pushed
+      // and persisted by now, so a missing row is AI_MissingToolResultsError on the next --resume —
+      // the argument the unanswered-row loop and the repeated-denials stop below each make for
+      // their own site, applied to a third one. The next iteration's abort check then breaks, and
+      // the unanswered-row loop fills in every call behind this one.
       if (opts.onAfterTool !== undefined) {
-        for (const error of await opts.onAfterTool(subject, call.input)) {
-          yield { type: "error", error };
+        let messages: readonly string[];
+        try {
+          messages = await opts.onAfterTool(subject, call.input);
+        } catch (err) {
+          // Same catch as the pre-hook above and as the `execute` call itself: a cancelled hook
+          // rejects, and an escaping rejection would take the generator down without a `done`
+          // event. This call already has its row, so breaking here loses nothing.
+          if (opts.signal?.aborted) break;
+          throw err;
         }
+        for (const error of messages) yield { type: "error", error };
       }
     }
 

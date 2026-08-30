@@ -2,8 +2,9 @@
 // out when loop.test.ts crossed 1000 lines: the two files exercise different halves of runLoop
 // (the stream and its errors; tool dispatch, permissions and cancellation) but drive it with the
 // same chunk builders, so a second copy of these would be the thing that drifts.
-import { simulateReadableStream, tool, type ModelMessage, type ToolSet } from "ai";
+
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
+import { type ModelMessage, simulateReadableStream, type ToolSet, tool } from "ai";
 import { z } from "zod";
 import type { LoopEvent } from "../../src/loop/loop";
 

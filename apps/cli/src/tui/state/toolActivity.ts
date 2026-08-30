@@ -225,7 +225,10 @@ export function anomalyLineForResult(
 }
 
 export function anomalyLineForDenial(reason: "blocked" | "declined" | "hook"): string {
-  return reason;
+  // "blocked" and "declined" each read as a complete statement about the call. "hook" names an
+  // actor instead, so on its own it tells a reader who did it and not what was done — it needs the
+  // verb the other two carry implicitly.
+  return reason === "hook" ? "blocked by hook" : reason;
 }
 
 function emptyEntry(name: string): ToolActivityEntry {

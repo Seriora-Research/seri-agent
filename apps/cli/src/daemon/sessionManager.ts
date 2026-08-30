@@ -1,8 +1,27 @@
 import { randomUUID } from "node:crypto";
 import type { ApprovalAnswer, DaemonEvent, PublicLoopEvent } from "@seri/daemon-client";
 import type { PermissionMode } from "../gate/gate";
+import type { LoopEvent } from "../loop/loop";
 import type { SessionDatabase } from "../session/database";
 import type { SessionState } from "../session/session";
+
+// The `as PublicLoopEvent` cast below is what puts a LoopEvent on the wire without the compiler
+// ever comparing the two unions, so a member added to one and not the other ships silently. This
+// line is the comparison that cast skips. It fired for real: `permission-denied` grew a "hook"
+// reason in loop.ts and the daemon emitted it for a week's worth of edits under a wire type that
+// said it could not occur. Widen protocol.ts when you widen loop.ts, and this stays green.
+type DenialReason<E extends { type: string }> = Extract<
+  E,
+  { type: "permission-denied"; reason: string }
+>["reason"];
+// Assert<T extends true>, not a bare conditional resolving to a message string: a conditional type
+// that evaluates to something other than `true` is still a perfectly legal type and compiles
+// silently. Verified by narrowing protocol.ts back and watching this line, and only this line, go
+// red. A conditional alone did nothing at all.
+type Assert<T extends true> = T;
+type _WireCarriesEveryDenialReason = Assert<
+  DenialReason<LoopEvent> extends DenialReason<PublicLoopEvent> ? true : false
+>;
 
 export type ExecuteTurnInput = {
   turnId: string;

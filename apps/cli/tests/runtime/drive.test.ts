@@ -5,7 +5,8 @@ import { join } from "node:path";
 import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { loadVerifyConfig } from "../../src/config/config";
-import type { LoopEvent } from "../../src/loop/loop";
+import type { HookRegistry, HookSpec } from "../../src/hooks/types";
+import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { createMcpClients } from "../../src/mcp/client";
 import { toolFingerprint } from "../../src/mcp/registry";
 import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
@@ -21,6 +22,8 @@ import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { type AgentSpec, builtinRegistry, composeAddendum } from "../../src/subagents/registry";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
+
+type RunLoopOpts = Parameters<typeof runLoop>[0];
 
 let dirs: string[] = [];
 
@@ -81,6 +84,7 @@ function preparedStub(): PreparedRun {
     skills: new Map(),
     rules: new Map(),
     rulesState: { fired: new Set<string>() },
+    hooks: { registry: new Map() },
     mcp: new Map(),
     mcpClients: createMcpClients(),
     preMountMessages: [],
@@ -481,6 +485,62 @@ describe("driveLoop directDispatch", () => {
     // at index 1 — a rewind to it undoes the whole submission, the request included.
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].rewindTo).toBe(1);
+  });
+
+  // A child's tool calls never reach the parent's runLoop, so a PreToolUse hook is only a rail for
+  // a child if the SubagentRuntime carries the runner down — which is why this asserts on the opts
+  // the CHILD loop was handed rather than on anything the parent did. A dispatch is the vehicle
+  // because it is the shortest one: `/name` runs exactly one child and no parent model call, so
+  // the single captured opts object is the child's.
+  //
+  // The matcher is written to match nothing, so the runner is exercised without spawning anything:
+  // a real HookRunner short-circuits on hookMatches and resolves `{ errors: [] }`, where any other
+  // function of that shape would not. The empty-registry half is the negative control — without it
+  // this test would pass identically against a wiring that always passed some callback down.
+  test("a session with a PreToolUse hook hands the runner down to the child loop", async () => {
+    const spec: HookSpec = {
+      event: "PreToolUse",
+      script: "guard",
+      path: "/p/.seri/hooks/guard.sh",
+      matcher: /^matches_no_tool$/,
+      timeoutMs: 1000,
+      source: "project",
+      filePath: "/p/.seri/hooks/hooks.yaml",
+    };
+
+    async function childSees(registry: HookRegistry) {
+      const prepared = preparedStub();
+      prepared.hooks = { registry };
+      let before: Awaited<ReturnType<NonNullable<RunLoopOpts["onBeforeTool"]>>> | undefined;
+      let sawOpt = false;
+      await driveLoop(
+        prepared,
+        unusedCtx(prepared.session.cwd),
+        {
+          runLoop: async function* (opts) {
+            sawOpt = opts.onBeforeTool !== undefined;
+            before = await opts.onBeforeTool?.("bash", { command: "rm -rf /" });
+            yield { type: "done", reason: "no-tool-call" as const };
+            return opts.messages;
+          },
+        },
+        1,
+        () => {},
+        () => "auto",
+        () => {},
+        async () => "no",
+        createArchivistState(prepared.session),
+        undefined,
+        { directDispatch: { agent: reviewer(), goal: "grade the diff" }, runArchivist: false },
+      );
+      return { sawOpt, before };
+    }
+
+    expect(await childSees(new Map([["PreToolUse", [spec]]]))).toEqual({
+      sawOpt: true,
+      before: { errors: [] },
+    });
+    expect(await childSees(new Map())).toEqual({ sawOpt: false, before: undefined });
   });
 });
 

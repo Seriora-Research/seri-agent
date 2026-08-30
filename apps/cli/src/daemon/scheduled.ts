@@ -79,6 +79,12 @@ export function createRunScheduled(opts: {
       skills: new Map(),
       rules: new Map(),
       rulesState: createRulesState(),
+      // The same rule again, applied where it costs the most: skipping a skill file a human never
+      // previewed withholds text from a model, and skipping a hooks directory declines to EXECUTE
+      // a script — unattended, on a schedule, with nobody watching. An empty registry also makes
+      // createHookRunner (runtime/drive.ts) return undefined, so this path adds no callback rather
+      // than adding one that finds nothing to run.
+      hooks: { registry: new Map() },
       // Empty and freshly built, on the same rule as skills/rules above: an unattended run must
       // not reach a server a human never previewed and trusted, and withMcp (runtime/drive.ts)
       // adds nothing to the ToolSet for a registry with no cataloged tool.

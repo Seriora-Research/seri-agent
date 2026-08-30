@@ -1,3 +1,4 @@
+import { hooksCommandAccepts } from "../hooks/commands";
 import { mcpCommandAccepts } from "../mcp/commands";
 import { memoryCommandAccepts } from "../memory/commands";
 import { skillsCommandAccepts } from "../skills/commands";
@@ -201,6 +202,16 @@ export const COMMAND_META: readonly CommandMeta[] = [
     description: "manage MCP servers: connect, preview their tools, and trust or remove them",
     argsUsage: "[list|add <name> <url>|auth <name>|remove <name>]",
     accepts: mcpCommandAccepts,
+  },
+  {
+    // TUI-claimed for every form, on /skills' and /mcp's own reasoning: every subcommand renders
+    // its lines through the same handler, so there is no non-TTY consumer to split it across two
+    // surfaces for.
+    name: "/hooks",
+    surface: "tui",
+    description: "read this project's hooks and decide whether they may run",
+    argsUsage: "[list|show|trust|untrust]",
+    accepts: hooksCommandAccepts,
   },
   {
     name: "/max-turns",

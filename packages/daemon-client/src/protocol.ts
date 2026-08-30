@@ -13,7 +13,11 @@ export type PublicLoopEvent =
   | { type: "text-delta"; text: string }
   | { type: "tool-call"; name: string; args: unknown }
   | { type: "tool-result"; name: string; result: unknown }
-  | { type: "permission-denied"; name: string; reason: "blocked" | "declined" }
+  // Mirrors loop.ts's own reason union, including "hook". Not caught by the compiler: the daemon
+  // launders a LoopEvent through `as PublicLoopEvent` (daemon/sessionManager.ts), so a value this
+  // type says cannot occur still goes out on the wire. Add a member here whenever one is added
+  // there.
+  | { type: "permission-denied"; name: string; reason: "blocked" | "declined" | "hook" }
   | { type: "compacted"; summary: unknown; evictedCount: number; usage: unknown }
   | { type: "usage"; usage: unknown; cost?: unknown }
   | { type: "retry"; attempt: number }

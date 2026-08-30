@@ -79,6 +79,8 @@ import {
 } from "./daemon/server";
 import { messageOf } from "./errors";
 import type { PermissionMode } from "./gate/gate";
+import { decideHooksCommand } from "./hooks/commands";
+import type { HooksLoad } from "./hooks/registry";
 import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
 import {
   type ApprovalAnswer,
@@ -226,13 +228,20 @@ export type CliDeps = {
   // or `.seri/rules/` cannot run its own suite — the skill tool appears in the toolset, rule text
   // appears in the prompt, and assertions on either fail for reasons unrelated to the code.
   //
-  // One seam covering both, not one each: they are discovered from the same cwd at the same moment,
-  // and a caller that stubbed only one would still be reading the other off the real disk, which is
-  // the exact bug this exists to remove.
+  // One seam covering all three, not one each: they are discovered from the same cwd at the same
+  // moment, and a caller that stubbed only some would still be reading the rest off the real disk,
+  // which is the exact bug this exists to remove.
+  //
+  // `hooks` needs the seam more than the other two do, and not by degree. An unstubbed skills or
+  // rules load READS a file the developer happens to have; an unstubbed hooks load finds the
+  // `hooks/` directory under the developer's own profile root — user scope, which carries no trust
+  // check because nothing reaches a profile root by cloning a repository (hooks/registry.ts) — and
+  // EXECUTES it, in front of every tool call the suite makes. The worst a missing skills stub can
+  // do is make an assertion wrong.
   loadExtensions?: (
     cwd: string,
     configDir: string,
-  ) => { skills: SkillRegistry; rules: RuleRegistry };
+  ) => { skills: SkillRegistry; rules: RuleRegistry; hooks: HooksLoad };
   sessionsDir?: string;
   checkpointsDir?: string;
   authConfigDir?: string;
@@ -2345,6 +2354,22 @@ async function runTui(
       }
       try {
         for (const line of decideSkillsCommand(args, deps).lines) {
+          dispatch({ type: "transcript-append", line });
+        }
+      } catch (err) {
+        dispatch({ type: "command-error", message: messageOf(err) });
+      }
+    },
+    "/hooks": (args) => {
+      // Lines for every form, no panel. Unlike /skills and /mcp, the listing here is not the point:
+      // the command exists so a user can READ the scripts before allowing them to run, and a
+      // scrollable transcript is what shows a 200-line shell script whole. A panel would have to
+      // reinvent paging to do worse.
+      try {
+        for (const line of decideHooksCommand(args, {
+          configDir: ctx.configDir,
+          worktree: checkpointTarget(liveState.session, dirs(ctx)).worktree,
+        }).lines) {
           dispatch({ type: "transcript-append", line });
         }
       } catch (err) {

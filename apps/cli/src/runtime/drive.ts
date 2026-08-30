@@ -8,6 +8,7 @@ import { printGrantPersisted, printWarning, type RunUsage } from "../cli/output"
 import { loadConfig } from "../config/config";
 import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
+import { createHookRunner } from "../hooks/gate";
 import { type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "../loop/loop";
 import { grantFingerprint } from "../mcp/registry";
 import { mcpCallSubject, withMcp } from "../mcp/tool";
@@ -329,6 +330,17 @@ export async function driveLoop(
     roleOverlays.set(key, overlay);
     return overlay;
   }
+  // Built once per driveLoop call and shared by the parent loop below and every child dispatched
+  // out of `subagentRuntime` — one runner, so a hook cannot fire for a parent tool call and be
+  // absent for the identical call a subagent makes. undefined when this session registered no
+  // PreToolUse and no PostToolUse hook (createHookRunner's own contract), which is what leaves both
+  // loop opts undefined and costs a project that has not adopted the feature nothing at all — the
+  // same shape `onToolPhaseEnd` already has for a session with no glob-scoped rule.
+  const hookRunner = createHookRunner({
+    registry: prepared.hooks.registry,
+    cwd: session.cwd,
+    signal: controller.signal,
+  });
   // Hoisted rather than built inline in the composition below, because directDispatch (further
   // down) runs its one child against this exact same runtime: same overlay resolution, same
   // checkpointer, same usage fold, same child-event forwarding. A `/name` child and a
@@ -348,6 +360,10 @@ export async function driveLoop(
     checkpointer,
     reasoningEffort,
     cwd: worktree,
+    // The same pair the parent loop below is driven with — see SubagentRuntime's own comment on
+    // these two for why a child gets the hooks even though it deliberately does not get the rules.
+    onBeforeTool: hookRunner?.onBeforeTool,
+    onAfterTool: hookRunner?.onAfterTool,
     resolveRole: (role: string, request?: TaskRouteRequest) => overlayFor(role, request),
     // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
     // subagent tokens land in the run's own reported total instead of vanishing.
@@ -465,6 +481,10 @@ export async function driveLoop(
             worktree: prepared.worktree,
             cwd: session.cwd,
           }),
+          // Both undefined for a session with no hooks, on the same terms `onToolPhaseEnd` above
+          // is: nothing is composed, so nothing is awaited on the path every tool call takes.
+          onBeforeTool: hookRunner?.onBeforeTool,
+          onAfterTool: hookRunner?.onAfterTool,
           signal: controller.signal,
           maxIterations: maxTurns,
           // Without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`
@@ -589,6 +609,11 @@ export async function driveLoop(
         signal: controller.signal,
         onWarning: printWarning,
         reasoningEffort: archivistOverlay.reasoningEffort,
+        // The archivist builds its own SubagentRuntime rather than reusing `subagentRuntime` above,
+        // so wiring the pair there does not reach it — and it is the child that most needs them:
+        // it runs on a hardcoded "auto" permission mode.
+        onBeforeTool: hookRunner?.onBeforeTool,
+        onAfterTool: hookRunner?.onAfterTool,
       });
       prepared.trajectory.recordArchivist(archivist);
     }

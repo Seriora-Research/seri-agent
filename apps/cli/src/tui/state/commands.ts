@@ -34,6 +34,7 @@ import { maskValue } from "../../config/commands";
 import { configBoolean, loadConfig, resolveConfigValue } from "../../config/config";
 import { isDefaultProfile, profileDir, profileNameError } from "../../config/paths";
 import { cycleMode } from "../../gate/gate";
+import { type HooksLoad, loadHookRegistry } from "../../hooks/registry";
 import { loadGrants, PERSISTABLE_TOOL_NAMES } from "../../permissions/store";
 import {
   allProviderKeyStates,
@@ -617,13 +618,21 @@ export function decideClear(
   newId: string = randomUUID(),
   loadAgents: typeof loadAgentsFile = loadAgentsFile,
   // Injected on the same terms `loadAgents` is, and for the same reason: /clear mints a
-  // conceptually new session, so both halves of its context tier are rediscovered rather than
-  // carried over. A skill directory added since the session started is live after /clear. Warnings
-  // are dropped here rather than surfaced — bindSession reloads the identical set moments later
-  // with a real sink attached, and printing each one twice is worse than printing it once.
-  loadExtensions: (cwd: string) => { skills: SkillRegistry; rules: RuleRegistry } = (cwd) => ({
+  // conceptually new session, so every part of it that was discovered from disk is rediscovered
+  // rather than carried over. A skill directory added since the session started is live after
+  // /clear. Warnings are dropped here rather than surfaced — bindSession reloads the identical set
+  // moments later with a real sink attached, and printing each one twice is worse than printing it
+  // once. `hooks` is loaded and not read: only skills and rules reach the prompt below. It stays in
+  // the seam anyway because splitting it out would leave a caller free to stub two of the three and
+  // still hit real disk for the third, which is the one bug this injection point exists to remove.
+  loadExtensions: (cwd: string) => {
+    skills: SkillRegistry;
+    rules: RuleRegistry;
+    hooks: HooksLoad;
+  } = (cwd) => ({
     skills: loadSkillRegistry({ worktree: cwd, configDir, onWarning: () => {} }),
     rules: loadRuleRegistry({ worktree: cwd, configDir, onWarning: () => {} }),
+    hooks: loadHookRegistry({ worktree: cwd, configDir, onWarning: () => {} }),
   }),
 ): { next: SessionState<ModelMessage>; message: string } {
   const extensions = loadExtensions(session.cwd);

@@ -116,6 +116,22 @@ export type SubagentRuntime = {
   };
   // Session worktree. Children must not fall back to process.cwd().
   cwd?: string;
+  // The parent's hook callbacks, handed down deliberately — and note that this is the opposite of
+  // what `createRuleInjector` does, which drive.ts keeps parent-only on purpose. The two are not
+  // inconsistent, because a rule and a hook are not the same kind of thing. A rule is CONTEXT: it
+  // appends text a model may act on, and a child already inherits every `alwaysApply` rule through
+  // the shared system tiers, so withholding the glob-scoped injector costs a child nothing it was
+  // promised. A hook is a GUARANTEE — a PreToolUse script that refuses `rm -rf` is a rail, and a
+  // rail a child can route around is not a rail, it is a rail with a hole. Without these, every
+  // hook in the project is one `dispatch_subagents` call away from being bypassed, and the
+  // archivist is the sharpest case of all: it is dispatched with a hardcoded `permissionMode:
+  // "auto"` (memory/archivist.ts), so the permission gate is not standing behind the hook there
+  // either.
+  onBeforeTool?: (
+    subject: string,
+    input: unknown,
+  ) => Promise<{ readonly block?: string; readonly errors?: readonly string[] }>;
+  onAfterTool?: (subject: string, input: unknown) => Promise<readonly string[]>;
 };
 
 // Sum what showed up, like cli.ts's own addTokens — not imported from there because cli.ts
@@ -232,6 +248,8 @@ export async function runSubagent(opts: {
     catalog: runtime.catalog,
     contextWindowSize: runtime.contextWindowSize,
     reasoningEffort: runtime.reasoningEffort,
+    onBeforeTool: runtime.onBeforeTool,
+    onAfterTool: runtime.onAfterTool,
   })) {
     if (event.type === "text-delta") {
       segment += event.text;

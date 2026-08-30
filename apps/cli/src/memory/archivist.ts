@@ -240,6 +240,12 @@ export async function runArchivist(args: {
   signal: AbortSignal;
   onWarning: (message: string) => void;
   forceStage?: boolean;
+  // Handed down from the parent's own runner rather than rebuilt here — SubagentRuntime's own
+  // comment on this pair argues why a child gets them at all. The archivist needs them more than
+  // any dispatched agent does: its runtime below pins `permissionMode: () => "auto"`, so a
+  // PreToolUse hook is the only thing left in front of a write it decides to make.
+  onBeforeTool?: SubagentRuntime["onBeforeTool"];
+  onAfterTool?: SubagentRuntime["onAfterTool"];
   // Overridable only for tests (fakeChildLoop, the same seam subagents/dispatch.test.ts's own
   // makeRuntime already uses) — every production call (maybeRunArchivist, below) leaves this at
   // its default, the real runLoop.
@@ -293,6 +299,8 @@ export async function runArchivist(args: {
     permissionMode: () => "auto",
     allowedTools: [],
     reasoningEffort: args.reasoningEffort,
+    onBeforeTool: args.onBeforeTool,
+    onAfterTool: args.onAfterTool,
   };
 
   let result: Awaited<ReturnType<typeof runSubagent>>;
@@ -360,6 +368,9 @@ export async function maybeRunArchivist(args: {
   signal: AbortSignal;
   onWarning: (message: string) => void;
   reasoningEffort?: string;
+  // Passed straight through to runArchivist — see its own comment on this pair.
+  onBeforeTool?: SubagentRuntime["onBeforeTool"];
+  onAfterTool?: SubagentRuntime["onAfterTool"];
   // Overridable only for tests (fakeChildLoop). Production callers omit it.
   runLoop?: typeof runLoop;
 }): Promise<ArchivistReport | undefined> {
@@ -402,6 +413,8 @@ export async function maybeRunArchivist(args: {
     reasoningEffort: args.reasoningEffort,
     signal: args.signal,
     onWarning: args.onWarning,
+    onBeforeTool: args.onBeforeTool,
+    onAfterTool: args.onAfterTool,
     runLoop: args.runLoop,
   });
 }
