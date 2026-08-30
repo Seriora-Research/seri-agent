@@ -20,6 +20,7 @@ export const DEFAULT_PROFILE = "default";
 export const AGENTS_DIRNAME = "agents";
 export const SKILLS_DIRNAME = "skills";
 export const RULES_DIRNAME = "rules";
+export const MCP_DIRNAME = "mcp";
 export const MEMORIES_DIRNAME = "memories";
 export const PENDING_DIRNAME = "pending";
 export const TRAJECTORIES_DIRNAME = "trajectories";
@@ -58,6 +59,7 @@ export function getReservedProfileNames(): ReadonlySet<string> {
     AGENTS_DIRNAME,
     SKILLS_DIRNAME,
     RULES_DIRNAME,
+    MCP_DIRNAME,
     MEMORIES_DIRNAME,
     PENDING_DIRNAME,
     TRAJECTORIES_DIRNAME,
@@ -178,6 +180,12 @@ export function getSkillsDir(configDir: string = getConfigDir()): string {
 // Global-scope rule files, under the profile root on the same rule as agents and skills.
 export function getRulesDir(configDir: string = getConfigDir()): string {
   return join(configDir, RULES_DIRNAME);
+}
+
+// Global-scope MCP server config and catalog cache, under the profile root on the same rule as
+// agents, skills and rules.
+export function getMcpDir(configDir: string = getConfigDir()): string {
+  return join(configDir, MCP_DIRNAME);
 }
 
 export function getPendingDir(configDir: string = getConfigDir()): string {
