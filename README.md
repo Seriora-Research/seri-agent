@@ -329,6 +329,12 @@ silently not run on a teammate's machine says so instead.
 `edit` tool and not the tail of something else. Omit it and the hook runs for every tool.
 `mcp_github_.*` scopes a hook to one MCP server. `timeout` is in seconds, 30 by default.
 
+**A matcher names a tool, not an intent.** A hook matching only `read_file` blocks `read_file`, and
+the model is free to reach the same file with `grep` or `bash` instead — observed, not theorised.
+If what you mean to protect is a path or a secret rather than one tool, match every tool that could
+get there (`read_file|grep|bash|powershell`), or leave `matcher` out and let the script decide from
+the payload.
+
 seri sends the script a JSON payload on stdin and reads its exit code:
 
 | exit | meaning |

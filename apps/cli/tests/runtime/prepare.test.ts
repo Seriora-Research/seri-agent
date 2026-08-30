@@ -7,6 +7,7 @@ import type { ToolExecutionOptions } from "ai";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import type { RunContext } from "../../src/cli";
 import { loadVerifyConfig } from "../../src/config/config";
+import type { HooksLoad } from "../../src/hooks/registry";
 import {
   callMcpTool,
   createMcpClients,
@@ -367,5 +368,76 @@ describe("bindSession + mcp", () => {
 
     expect(prepared.mcp.get("exa")).toBeDefined();
     expect(prepared.allowedTools).toContain("mcp_exa_web_search");
+  });
+
+  // Asserted through preMountMessages rather than a captured console.error, because that queue IS
+  // the delivery: prepareSession runs after the shared renderer exists but before the TUI's first
+  // frame, so a line written straight to the console in that window is painted over and gone.
+  // `isTTY: true` is what selects that path.
+  async function hookNoticesFor(hooks: HooksLoad): Promise<string[]> {
+    const ctx: RunContext = {
+      resuming: false,
+      resumeId: undefined,
+      taskText: "hi",
+      sessionsDir,
+      checkpointsDir: join(tmpConfigRoot, "checkpoints"),
+      permissionsDir,
+      configDir: tmpConfigRoot,
+      cwd: makeDir(),
+    };
+    const result = await prepareSession(
+      ctx,
+      {
+        loadAgentsFile: () => "",
+        loadExtensions: () => ({ skills: new Map(), rules: new Map(), hooks }),
+      },
+      false,
+      true,
+    );
+    return (result as PreparedRun).preMountMessages
+      .map((message) => message.text)
+      .filter((text) => text.includes("project hooks in"));
+  }
+
+  test("a hooks directory that is present and not running is announced exactly once", async () => {
+    expect(
+      await hookNoticesFor({
+        registry: new Map(),
+        untrusted: { dir: "/p/.seri/hooks", verdict: { kind: "untrusted" }, scriptCount: 4 },
+      }),
+    ).toEqual([
+      "⚠ project hooks in /p/.seri/hooks (4 files) have not been reviewed, so none of them ran — /hooks to read them and turn them on",
+    ]);
+
+    // The negative control for both of the above: with no `untrusted` field there is no line at
+    // all, so neither assertion can be passing on a notice that fires unconditionally.
+    expect(await hookNoticesFor({ registry: new Map() })).toEqual([]);
+  });
+
+  test("the changed notice names a few files and counts the rest", async () => {
+    const files = ["guard.sh", "guard.ps1", "hooks.yaml", "fmt.sh", "fmt.ps1"];
+    expect(
+      await hookNoticesFor({
+        registry: new Map(),
+        untrusted: { dir: "/p/.seri/hooks", verdict: { kind: "changed", files }, scriptCount: 4 },
+      }),
+    ).toEqual([
+      "⚠ project hooks in /p/.seri/hooks changed since you trusted them (guard.sh, guard.ps1, hooks.yaml and 2 more), so none of them ran — /hooks to review what moved",
+    ]);
+
+    // A directory small enough to name whole gets no trailing count — the cap is a guard against
+    // an unreadable line, not a format every message pays for.
+    expect(
+      await hookNoticesFor({
+        registry: new Map(),
+        untrusted: {
+          dir: "/p/.seri/hooks",
+          verdict: { kind: "changed", files: ["guard.sh", "guard.ps1"] },
+          scriptCount: 2,
+        },
+      }),
+    ).toEqual([
+      "⚠ project hooks in /p/.seri/hooks changed since you trusted them (guard.sh, guard.ps1), so none of them ran — /hooks to review what moved",
+    ]);
   });
 });
