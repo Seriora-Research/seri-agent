@@ -557,3 +557,18 @@ export function formatMcpRow(row: McpPanelRow): string {
     row.toolCount === undefined ? "" : ` · ${row.toolCount} tool${row.toolCount === 1 ? "" : "s"}`;
   return `${row.name} · ${mark}${mcpStatusWord(row.status)}${toolsPart}`;
 }
+
+// The welcome splash's `directory` row (routes/setup/SplashBanner.tsx). `home` is a parameter, not
+// read from `node:os` here, so this stays a pure function testable on any OS — a Windows home and
+// a POSIX one are both just strings to it. Separator-agnostic for the same reason: the character
+// after the home prefix is read off the input rather than compared against `node:path`'s `sep`,
+// which would be the wrong one for every test not running on the path's own platform. A `path` that
+// merely starts with the home STRING but continues into another segment ("/home/lion-old") is left
+// alone, which is why the separator check exists at all.
+export function formatHomePath(path: string, home: string): string {
+  if (home.length === 0 || !path.startsWith(home)) return path;
+  const rest = path.slice(home.length);
+  if (rest.length === 0) return "~";
+  if (rest[0] !== "/" && rest[0] !== "\\") return path;
+  return `~${rest}`;
+}
