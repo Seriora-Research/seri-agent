@@ -135,9 +135,8 @@ describe("getModelCatalog", () => {
     expect(errors).toHaveLength(1);
   });
 
-  // Issue #211's cosmetic half. Both paths return the bundled manifest, so a single warning worded
-  // for a failed fetch told a user running with the flag that something was unreachable when
-  // nothing had been tried. `fetch` is not stubbed here on purpose: reaching it at all would fail
+  // Both paths return the bundled manifest, so a single warning worded for a failed fetch told a
+  // user running with the flag that something was unreachable when nothing had been tried. `fetch` is not stubbed here on purpose: reaching it at all would fail
   // the `called` assertion this test makes.
   test("the SERI_DISABLE_MODELS_FETCH path says the fetch was disabled, not that models.dev was unreachable", async () => {
     process.env.SERI_DISABLE_MODELS_FETCH = "1";

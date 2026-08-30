@@ -162,11 +162,11 @@ describe("App", () => {
     expect(frame).not.toContain("┘");
   });
 
-  // Issue #211. `onSubmit` is only wired once a session exists (runTui, cli.ts); the splash and
-  // guided-setup mounts (routes/setup/) render this same component with nothing behind it. Before
-  // this, InputBox rendered anyway, echoed everything typed at it, and dropped it on Enter — so a
-  // task typed during the seconds between dismissing the splash and the session mounting vanished
-  // and the run sat idle forever with no spinner and no error.
+  // `onSubmit` is only wired once a session exists (runTui, cli.ts); the splash and guided-setup
+  // mounts (routes/setup/) render this same component with nothing behind it. An InputBox rendered
+  // there echoes everything typed at it and drops it on Enter, so a task typed during the seconds
+  // between dismissing the splash and the session mounting vanishes and the run sits idle forever
+  // with no spinner and no error.
   test("an App with nowhere to send input does not echo what is typed at it", async () => {
     const { setup } = await connect({ onSubmit: undefined });
     // A second flush before typing, and a real wait after it, for the two reasons

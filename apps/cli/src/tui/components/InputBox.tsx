@@ -30,8 +30,8 @@ export function InputBox({
 }: {
   // Required, not optional. App renders this component only when a submitted line has somewhere to
   // go (see its own render ternary): the pre-session mounts — the welcome splash and the guided
-  // setup, routes/setup/ — have no session behind them, and an optional `onSubmit` is what used to
-  // let them render a box that echoed a typed task and then dropped it on Enter (issue #211).
+  // setup, routes/setup/ — have no session behind them, and an optional `onSubmit` would let them
+  // render a box that echoes a typed task and then drops it on Enter.
   onSubmit: (value: string) => void;
   onQuit?: () => void;
   // Leftover text from a combined-chunk terminator in a just-closed ModelPicker (see

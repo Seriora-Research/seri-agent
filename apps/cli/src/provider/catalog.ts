@@ -74,8 +74,7 @@ export async function getModelCatalog(
   if (catalog === FALLBACK_MANIFEST && !warnedFallback) {
     warnedFallback = true;
     // `loadCatalog` returns the manifest for two different reasons and the user deserves the right
-    // one (issue #211): a genuinely unreachable models.dev, and this flag, where nothing was tried
-    // at all. Reading the env var here rather than having `loadCatalog` report which branch it took
+    // one: a genuinely unreachable models.dev, and this flag, where nothing was tried at all. Reading the env var here rather than having `loadCatalog` report which branch it took
     // keeps the flag's meaning in the app that documents it.
     printWarning(
       process.env.SERI_DISABLE_MODELS_FETCH
