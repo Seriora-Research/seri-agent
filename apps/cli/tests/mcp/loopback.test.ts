@@ -24,8 +24,8 @@ function freePorts(count: number): number[] {
   return ports as number[];
 }
 
-async function start(ports: readonly number[], serverName?: string): Promise<CallbackServer> {
-  const server = await startCallbackServer({ ports, serverName });
+async function start(ports: readonly number[]): Promise<CallbackServer> {
+  const server = await startCallbackServer({ ports });
   opened.push(server);
   return server;
 }
@@ -123,44 +123,47 @@ describe("a taken port falls through to the next candidate", () => {
 // This page is the last thing a login shows, and the only seri surface a browser renders rather
 // than a terminal — so it has to hold up on its own, offline, in either theme.
 describe("the page the browser is left on", () => {
-  async function bodyFor(query: string, serverName?: string): Promise<string> {
-    const server = await start(freePorts(1), serverName);
+  async function bodyFor(query: string): Promise<string> {
+    const server = await start(freePorts(1));
     void server.waitForCallback({ expectedState: undefined, timeoutMs: 5_000 });
     return (await fetch(`${server.redirectUri}${query}`)).text();
   }
 
-  test("names the server that was authenticated", async () => {
-    const body = await bodyFor("?code=abc", "supabase");
-    expect(body).toContain("Authenticated");
-    expect(body).toContain("<b>supabase</b>");
+  test("a completed login sends the reader back to seri", async () => {
+    const body = await bodyFor("?code=abc");
+    expect(body).toContain("Authorization complete");
+    expect(body).toContain("Returning you to seri. You can close this tab.");
   });
 
-  test("a declined login says nothing was saved", async () => {
-    const body = await bodyFor("?error=access_denied", "supabase");
-    expect(body).toContain("declined");
-    expect(body).toContain("Nothing was saved");
+  // The browser is the wrong place to explain a failure: the TUI already has the authorization
+  // server's own error_description on its transcript line, and this page has none of that context.
+  test("a declined login points back at seri rather than explaining itself", async () => {
+    const body = await bodyFor("?error=access_denied");
+    expect(body).toContain("Authorization failed");
+    expect(body).toContain("Return to seri for details.");
   });
 
   // A listener that closes moments later cannot depend on a CDN or a webfont: a blocked or slow
   // request would land on the last screen of a login, and a font that swapped in late would do so
   // after this little text had already been read.
   test("is self-contained, so nothing on it can fail to load", async () => {
-    const body = await bodyFor("?code=abc", "supabase");
+    const body = await bodyFor("?code=abc");
     expect(body).not.toContain("http://");
     expect(body).not.toContain("https://");
     expect(body).not.toContain("<script");
   });
 
   test("renders in both themes rather than assuming light", async () => {
-    const body = await bodyFor("?code=abc", "supabase");
+    const body = await bodyFor("?code=abc");
     expect(body).toContain("prefers-color-scheme:dark");
   });
 
-  // servers.yaml confines a name to lowercase letters, digits and "-" (NAME_SHAPE), but that rule
-  // lives in another module and this is the one string on the page seri did not write.
-  test("escapes a server name rather than trusting a shape rule two files away", async () => {
-    const body = await bodyFor("?code=abc", '<img src=x onerror="alert(1)">');
+  // Nothing from the request reaches the markup, so a crafted callback cannot put anything on the
+  // page. Asserted rather than assumed, because the page is served to a browser and the day
+  // someone interpolates a parameter into it is the day this stops being true for free.
+  test("puts nothing from the request into the page", async () => {
+    const body = await bodyFor('?code=%3Cimg%20src%3Dx%20onerror%3D"alert(1)"%3E&state=x');
     expect(body).not.toContain("<img");
-    expect(body).toContain("&lt;img");
+    expect(body).not.toContain("alert(1)");
   });
 });
