@@ -17,6 +17,11 @@ export const PROVIDER_API_KEY_NAMES: Record<ModelProvider, string> = {
   // Not the shorter GOOGLE_API_KEY: matches @ai-sdk/google's own implicit env-var default (see
   // google.ts's own comment, unchanged by this refactor).
   google: "GOOGLE_GENERATIVE_AI_API_KEY",
+  // A real product, not a sentinel standing in for the subscription: xAI sells console keys and
+  // models.dev declares this exact env var for its own `xai` block. The SuperGrok subscription is
+  // a SECOND credential for this same provider (docs/specs/040-grok-subscription/spec.md), which
+  // is why it lives on the route rather than here.
+  xai: "XAI_API_KEY",
 };
 
 // Human-facing labels — for TUI-facing messages that are purely informational (tuiMissingKeyMessage
@@ -30,6 +35,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ModelProvider, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
   google: "Google",
+  xai: "xAI",
 };
 
 // Tagged with the provider (not just a string to parse) so a caller can build a context-specific

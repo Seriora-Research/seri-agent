@@ -216,3 +216,30 @@ describe("getModel", () => {
     });
   });
 });
+
+describe("getModel for provider: xai", () => {
+  test("dispatches to getXaiModel", () => {
+    const calls: string[] = [];
+    const fakeXaiModel = {} as ReturnType<typeof getModel>;
+    const model = getModel("grok-4.3", "xai", "test-session-id", {
+      getXaiModel: (id) => {
+        calls.push(id);
+        return fakeXaiModel;
+      },
+      getGroqModel: () => {
+        throw new Error("should not be called");
+      },
+    });
+    expect(model).toBe(fakeXaiModel);
+    expect(calls).toEqual(["grok-4.3"]);
+  });
+
+  test("throws missingKeyError when XAI_API_KEY is absent and the real constructor would run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "seri-xai-"));
+    try {
+      expect(() => getModel("grok-4.3", "xai", "test-session-id", {}, dir)).toThrow(/XAI_API_KEY/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

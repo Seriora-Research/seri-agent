@@ -118,3 +118,29 @@ describe("routesFor", () => {
     expect(routesFor([native, viaOpenRouter, unrelated], native)).toEqual([native, viaOpenRouter]);
   });
 });
+
+describe("routeKey vendor aliases", () => {
+  test("a native xai id groups with the same model behind OpenRouter's x-ai prefix", () => {
+    const native = routeKey(entry({ id: "grok-4.5", provider: "xai" }));
+    const aggregated = routeKey(entry({ id: "x-ai/grok-4.5", provider: "openrouter" }));
+    expect(native).toBe(aggregated);
+  });
+
+  test("the alias also applies through OpenRouter's ~ auto-alias prefix", () => {
+    expect(routeKey(entry({ id: "~x-ai/grok-latest", provider: "openrouter" }))).toBe(
+      routeKey(entry({ id: "grok-latest", provider: "xai" })),
+    );
+  });
+
+  test("aliasing the vendor does not merge two different grok slugs", () => {
+    expect(routeKey(entry({ id: "grok-4.5", provider: "xai" }))).not.toBe(
+      routeKey(entry({ id: "x-ai/grok-4.3", provider: "openrouter" })),
+    );
+  });
+
+  test("an unaliased vendor is untouched", () => {
+    expect(routeKey(entry({ id: "anthropic/claude-sonnet-5", provider: "openrouter" }))).toBe(
+      "anthropic/claude-sonnet-5",
+    );
+  });
+});

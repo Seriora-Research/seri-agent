@@ -10,10 +10,18 @@ import type { ModelCatalogEntry } from "./types";
 // prefix-strip could cause — `mistralai/foo` must not collide with a native `openai::foo`, which
 // is exactly why `vendor` is taken from the entry's OWN provider when its id has no slash, not
 // derived by stripping a prefix unconditionally).
+// models.dev names the same vendor two ways: its own provider key is `xai` (so a native bare id
+// like `grok-4.5` takes vendor `xai` from `entry.provider`), while OpenRouter prefixes the same
+// model `x-ai/grok-4.5`. Without this alias the two never share a route key, which means they
+// never group — and a route group of one has no sibling for resolveRoute to prefer, so the
+// native-over-aggregator rule silently stops applying to grok specifically.
+const VENDOR_ALIASES: Record<string, string> = { "x-ai": "xai" };
+
 export function routeKey(entry: ModelCatalogEntry): string {
   const slash = entry.id.indexOf("/");
-  const vendor =
+  const rawVendor =
     slash === -1 ? entry.provider : entry.id.slice(0, slash).replace(/^~/, "").toLowerCase();
+  const vendor = VENDOR_ALIASES[rawVendor] ?? rawVendor;
   const slug = (slash === -1 ? entry.id : entry.id.slice(slash + 1))
     .toLowerCase()
     .replace(/[._]/g, "-");

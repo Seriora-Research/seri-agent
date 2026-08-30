@@ -18,6 +18,9 @@ export const CATALOG_PROVIDERS: readonly ModelProvider[] = [
   "anthropic",
   "openai",
   "google",
+  // Appended, never inserted: byRoutePriority breaks a same-tier tie on this array's index, so
+  // adding "xai" anywhere but the end would silently reorder every existing tie.
+  "xai",
 ];
 
 type RawModel = {

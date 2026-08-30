@@ -9,6 +9,7 @@ import { missingKeyError, PROVIDER_API_KEY_NAMES } from "./keys";
 import { getOpenAIModel as getOpenAIModelReal } from "./openai";
 import { getOpenRouterModel as getOpenRouterModelReal } from "./openrouter";
 import type { ResolvedRoute } from "./routing";
+import { getXaiModel as getXaiModelReal } from "./xai";
 
 // Optional injected fns, mirroring cli.ts's own CliDeps (all five fields, same names) — lets
 // tests exercise the dispatch without constructing a real provider.
@@ -18,6 +19,7 @@ type ModelDeps = {
   getAnthropicModel?: typeof getAnthropicModelReal;
   getOpenAIModel?: typeof getOpenAIModelReal;
   getGoogleModel?: typeof getGoogleModelReal;
+  getXaiModel?: typeof getXaiModelReal;
 };
 
 // The one dispatch point cli.ts's prepareSession/runTurn call instead of getGroqModel directly
@@ -63,6 +65,7 @@ export function getModel(
   const getAnthropicModelFn = deps.getAnthropicModel ?? getAnthropicModelReal;
   const getOpenAIModelFn = deps.getOpenAIModel ?? getOpenAIModelReal;
   const getGoogleModelFn = deps.getGoogleModel ?? getGoogleModelReal;
+  const getXaiModelFn = deps.getXaiModel ?? getXaiModelReal;
   switch (provider) {
     case "groq": {
       const apiKey = getApiKey(PROVIDER_API_KEY_NAMES.groq, configDir);
@@ -98,6 +101,13 @@ export function getModel(
         throw missingKeyError("google");
       }
       return getGoogleModelFn(id, apiKey);
+    }
+    case "xai": {
+      const apiKey = getApiKey(PROVIDER_API_KEY_NAMES.xai, configDir);
+      if (getXaiModelFn === getXaiModelReal && apiKey === undefined) {
+        throw missingKeyError("xai");
+      }
+      return getXaiModelFn(id, apiKey, configDir);
     }
     default:
       // provider is `never` here if it only ever holds the five ModelProvider members above —

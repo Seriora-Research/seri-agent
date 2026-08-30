@@ -33,6 +33,10 @@ export const NATIVE_PROVIDERS: Record<ModelProvider, boolean> = {
   google: true,
   groq: false,
   openrouter: false,
+  // api.x.ai is xAI's own first-party endpoint and never proxies another vendor's models, which
+  // is exactly this table's criterion. It is also what makes a connected SuperGrok subscription
+  // beat an OpenRouter key for the same grok model without a second precedence rule.
+  xai: true,
 };
 
 // The native-then-aggregator, CATALOG_PROVIDERS-tiebroken ordering rule 2 applies — exported so
