@@ -326,7 +326,13 @@ describe("bindSession + mcp", () => {
 
   test("bindSession reloads the registry and re-derives allowedTools from the persisted grants on disk", async () => {
     const prepared = await freshPrepared();
-    expect(prepared.mcp.size).toBe(0);
+    // Named, not counted. `process.env.HOME` above points at a temp root, but the worktree this
+    // session starts in is a mkdtemp directory, and on Windows that sits UNDER the real profile —
+    // so findProjectExtensionDir's upward walk still reaches the developer's own `~/.seri/mcp` and
+    // claims it as project scope, which the guard there cannot recognise once HOME has moved off
+    // it. A size assertion turns "this machine has an MCP server configured" into a failure of a
+    // test about bindSession; the name this test seeds is what it actually cares about.
+    expect(prepared.mcp.has("exa")).toBe(false);
 
     // Everything below is written AFTER the session already started — the exact `/mcp reconnect`
     // window bindSession's own re-derivation exists to close.
