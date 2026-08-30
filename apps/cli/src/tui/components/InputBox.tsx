@@ -28,7 +28,11 @@ export function InputBox({
   onEmptyDown,
   inert,
 }: {
-  onSubmit?: (value: string) => void;
+  // Required, not optional. App renders this component only when a submitted line has somewhere to
+  // go (see its own render ternary): the pre-session mounts — the welcome splash and the guided
+  // setup, routes/setup/ — have no session behind them, and an optional `onSubmit` is what used to
+  // let them render a box that echoed a typed task and then dropped it on Enter (issue #211).
+  onSubmit: (value: string) => void;
   onQuit?: () => void;
   // Leftover text from a combined-chunk terminator in a just-closed ModelPicker (see
   // reducer.ts's `pendingInputPrefill`) — read once, as this mount's own starting value, never
@@ -99,7 +103,7 @@ export function InputBox({
         clearTimeout(timerRef.current);
         timerRef.current = null;
       }
-      onSubmit?.(pendingValueRef.current);
+      onSubmit(pendingValueRef.current);
       // Synchronous, not scheduleUpdate("") — a stale already-scheduled flush must never be able
       // to fire after this and repopulate the just-cleared box with pre-submit content.
       pendingValueRef.current = "";
@@ -146,7 +150,7 @@ export function InputBox({
       scheduleUpdate(pendingValueRef.current + text);
       return;
     }
-    onSubmit?.(pendingValueRef.current + split.before);
+    onSubmit(pendingValueRef.current + split.before);
     scheduleUpdate(split.after);
   });
 

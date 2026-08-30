@@ -61,7 +61,7 @@ describe("InputBox throttled repaints", () => {
   test("keystrokes spaced beyond the throttle window each flush immediately, without ever scheduling a pending timer", async () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
     mountedRenderers.push(setup);
-    await mount(setup, <InputBox />);
+    await mount(setup, <InputBox onSubmit={() => {}} />);
 
     const gapMs = THROTTLE_MS + 50; // slower than THROTTLE_MS: a deliberate typing pace, never coalesced
     const chars = "abcde";

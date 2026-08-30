@@ -51,7 +51,7 @@ async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
 describe("InputBox (OpenTUI)", () => {
   test("typed text renders with the '> ' prefix", async () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
-    await mount(setup, <InputBox />);
+    await mount(setup, <InputBox onSubmit={() => {}} />);
 
     await setup.mockInput.typeText("hello");
     await settle(setup);
@@ -62,7 +62,7 @@ describe("InputBox (OpenTUI)", () => {
 
   test("a rapid backspace burst schedules at most one pending flush timer, not one per keystroke", async () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
-    await mount(setup, <InputBox />);
+    await mount(setup, <InputBox onSubmit={() => {}} />);
 
     await setup.mockInput.typeText("x".repeat(30));
     await settle(setup);
@@ -126,7 +126,7 @@ describe("InputBox (OpenTUI)", () => {
 
   test("an arrow key is inert, not inserted as raw escape bytes", async () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
-    await mount(setup, <InputBox />);
+    await mount(setup, <InputBox onSubmit={() => {}} />);
 
     await setup.mockInput.typeText("ab");
     await settle(setup);
@@ -141,7 +141,7 @@ describe("InputBox (OpenTUI)", () => {
   test("inert empty Down still fires onEmptyDown", async () => {
     const downs: number[] = [];
     const setup = await createTestRenderer({ width: 40, height: 5 });
-    await mount(setup, <InputBox inert onEmptyDown={() => downs.push(1)} />);
+    await mount(setup, <InputBox inert onSubmit={() => {}} onEmptyDown={() => downs.push(1)} />);
 
     setup.mockInput.pressArrow("down");
     await settle(setup);
@@ -151,7 +151,7 @@ describe("InputBox (OpenTUI)", () => {
 
   test("inert printable key does not change the value", async () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
-    await mount(setup, <InputBox inert />);
+    await mount(setup, <InputBox inert onSubmit={() => {}} />);
 
     await setup.mockInput.typeText("x");
     await settle(setup);

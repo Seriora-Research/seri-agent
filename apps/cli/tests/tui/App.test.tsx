@@ -85,6 +85,10 @@ async function connect(
       route={route()}
       catalog={undefined}
       config={{}}
+      // Before `{...overrides}` so a test can still pass `onSubmit: undefined` to mount the
+      // pre-session state (the splash/guided-setup shape). The default mount here is a live
+      // session, which is what every other test in this file assumes.
+      onSubmit={() => {}}
       {...overrides}
       connectDispatch={(d) => {
         dispatch = d;

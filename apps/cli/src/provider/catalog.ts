@@ -44,6 +44,19 @@ export function resetFallbackWarning(): void {
   warnedFallback = false;
 }
 
+// Starts the models.dev fetch without waiting for it, so it overlaps whatever the user is doing on
+// the welcome splash instead of being paid for after they dismiss it. `loadCatalog` caches the
+// in-flight promise, so the real `getModelCatalog` await further into startup joins THIS fetch
+// rather than starting a second one. Deliberately not `getModelCatalog`: this call has no sink to
+// print through (it runs before the renderer exists), and routing the fallback warning to a bare
+// `console.error` here would write straight onto the alt-screen buffer. Leaving the warning to the
+// awaited call, which has a sink, keeps it on screen where the user can read it.
+export function prewarmModelCatalog(): void {
+  // `loadCatalog` resolves to the bundled manifest on any failure and never rejects (its own
+  // contract), so an unawaited call here cannot become an unhandled rejection.
+  void loadCatalog(FALLBACK_MANIFEST, fetch);
+}
+
 // The one dispatch point apps/cli calls to get the model catalog: @seri/model-catalog does the
 // fetch-with-fallback and the in-memory caching, this just supplies the CLI's own bundled
 // fallback and warns once when that fallback is what actually got used.
@@ -60,7 +73,16 @@ export async function getModelCatalog(
   const catalog = await loadCatalog(FALLBACK_MANIFEST, fetchFn);
   if (catalog === FALLBACK_MANIFEST && !warnedFallback) {
     warnedFallback = true;
-    printWarning("could not reach models.dev; using the bundled model catalog", sink);
+    // `loadCatalog` returns the manifest for two different reasons and the user deserves the right
+    // one (issue #211): a genuinely unreachable models.dev, and this flag, where nothing was tried
+    // at all. Reading the env var here rather than having `loadCatalog` report which branch it took
+    // keeps the flag's meaning in the app that documents it.
+    printWarning(
+      process.env.SERI_DISABLE_MODELS_FETCH
+        ? "models.dev fetch disabled by SERI_DISABLE_MODELS_FETCH; using the bundled model catalog"
+        : "could not reach models.dev; using the bundled model catalog",
+      sink,
+    );
   }
   return catalog;
 }
