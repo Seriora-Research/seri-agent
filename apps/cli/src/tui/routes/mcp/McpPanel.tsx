@@ -83,6 +83,12 @@ export function McpPanel({
 
   useKeyboard((key) => {
     if (mode.kind === "connecting") return; // static busy text owns the keyboard while dialling
+    // The early return below renders McpTrustPreview INSTEAD of this panel, but it sits after this
+    // hook, so without this guard both handlers stay live and every key reaches the list underneath
+    // the question. Verified live: "r" at the trust prompt cancelled the preview and removed the
+    // server in the same keypress, and "a" opened a browser tab. It also makes the preview's own
+    // "Escape is inert" contract true, which the panel-closing branch below was quietly breaking.
+    if (mode.kind === "preview") return;
     if (isDismiss(key)) {
       // Esc cancels the login, not the panel. Unlike `connecting` above there is something to
       // cancel, and closing the panel instead would leave a bound listener and an open browser tab

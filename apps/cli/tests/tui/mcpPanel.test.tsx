@@ -347,6 +347,38 @@ END_${index}`,
     expect(frame).toContain("[y]es");
   });
 
+  // The negative control: drop the `preview` guard from McpPanel's useKeyboard and re-run. Verified
+  // live — `removed` becomes "exa", because the list's own handler stays registered behind the
+  // preview and fires on the same keypress that cancels it.
+  test("keys meant for the list do not reach it while the preview owns the screen", async () => {
+    let removed: string | undefined;
+    let authed = false;
+    const setup = await createTestRenderer({ width: 100, height: 14 });
+    await mount(
+      setup,
+      <McpPanel
+        rows={rows}
+        onConnect={async (name) => ({ ok: true, catalog: catalog(name) })}
+        onRemove={(name) => {
+          removed = name;
+        }}
+        onAuth={async () => {
+          authed = true;
+          return { status: "success" };
+        }}
+      />,
+    );
+
+    setup.mockInput.pressEnter();
+    await settle(setup);
+    await settle(setup);
+    setup.mockInput.typeText("r");
+    await settle(setup);
+
+    expect(removed).toBeUndefined();
+    expect(authed).toBe(false);
+  });
+
   test("the preview's n cancels without trusting", async () => {
     let trusted: McpCatalog | undefined;
     const setup = await createTestRenderer({ width: 100, height: 14 });
