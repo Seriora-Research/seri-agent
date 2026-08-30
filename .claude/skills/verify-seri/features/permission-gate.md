@@ -15,7 +15,7 @@ Every write-capable tool call passes a gate with three modes — `read-only`, `a
 
 - Press Shift+Tab in the TUI, or type `/mode`, to cycle the permission mode.
 - Submit a task that writes a file; the ApprovalBox appears with `[y]es / [a]lways (saved for this project) / [N]o`.
-- Review persisted grants outside the TUI with `seri permissions list`, revoke with `seri permissions remove <tool>` (subcommand exception; `/permissions` is the TUI view).
+- Review and revoke persisted grants with `/permissions` in the TUI. There is no `seri permissions` subcommand; that first word reaches the model as a task.
 
 ## Driving it with the verify-seri harness
 
@@ -25,9 +25,9 @@ Preconditions:
 
 - **Mode cycling.** Run the helper with steps `"wait=Esc continue" sleep=400 key=esc sleep=600 key=shift-tab "wait=bypass permissions on"`. The label moves from `⏸ approve-each mode on` to `⏵⏵ bypass permissions on`.
 - **Prompt and approve.** Steps: `"wait=Esc continue" sleep=400 key=esc sleep=600 "type=Create a file named gate-probe-<run-id>.txt containing exactly GATE-OK" "wait=file named gate-probe" key=enter "wait=[y]es@90000" type=y "wait=done ·@90000" type=/exit sleep=400 key=enter sleep=800`. The ApprovalBox names `write_file` and the file path; after `y` the turn completes.
-- **Side effect.** `Get-Content gate-probe-<run-id>.txt` contains `GATE-OK`; `bun apps/cli/src/cli.ts --profile verify-<run-id> permissions list` shows no grant (a `y` is once, not always).
-- **Persisted grant.** Repeat the drive answering `type=a` instead; `permissions list` afterwards shows `write_file`, and `permissions remove write_file` revokes it (re-list to prove).
-- **Proof.** The transcript (prompt text visible, answer keypress, `done ·`), the probe file's content, and the before/after `permissions list` output.
+- **Side effect.** `Get-Content gate-probe-<run-id>.txt` contains `GATE-OK`; the profile's `permissions.yaml` shows no grant (a `y` is once, not always).
+- **Persisted grant.** Repeat the drive answering `type=a` instead; the profile's `permissions.yaml` afterwards carries `write_file`. Revoking through `/permissions` is a TUI drive that has not been written yet — add it with `/pstack:maintain-verification-skill`.
+- **Proof.** The transcript (prompt text visible, answer keypress, `done ·`), the probe file's content, and the before/after contents of the profile's `permissions.yaml`.
 
 ## Gotchas
 

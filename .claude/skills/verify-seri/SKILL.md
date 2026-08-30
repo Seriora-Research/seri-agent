@@ -1,11 +1,11 @@
 ---
 name: verify-seri
-description: Drive the seri coding-agent TUI the way a user does — under a real PTY — and capture proof; CLI subcommands (config, permissions, usage) only as the non-interactive exception. Use when a change to apps/cli needs evidence it works in the real app, not just tests.
+description: Drive the seri coding-agent TUI the way a user does — under a real PTY — and capture proof; the handful of real non-interactive surfaces (--version, --help, --selftest, serve, exec) only as the exception. Use when a change to apps/cli needs evidence it works in the real app, not just tests.
 ---
 
 # Verify seri
 
-seri is the CLI in `apps/cli`, and **this project uses it through the TUI**: a user runs `seri` in a real terminal, gets the full-screen session, and does everything there — tasks, approvals, `/mode`, `/model`, `/exit`. The non-interactive `seri <task>` path exists in the product but is not how seri is used here; do not verify a feature through it when the map gives a TUI path. The only non-TUI surfaces worth driving directly are the management subcommands (`config`, `permissions`, `usage`, `--version`, `--selftest`) — exceptions, not the product. The monorepo also has `apps/server`, `apps/web`, `apps/lab`, `apps/portal`; those are separate surfaces this skill does not cover.
+seri is the CLI in `apps/cli`, and **this project uses it through the TUI**: a user runs `seri` in a real terminal, gets the full-screen session, and does everything there — tasks, approvals, `/mode`, `/model`, `/exit`. The non-interactive `seri <task>` path exists in the product but is not how seri is used here; do not verify a feature through it when the map gives a TUI path. `run()` dispatches exactly two positional verbs, `serve` and `exec`, plus the `--version`/`--help`/`--selftest` flags. Those are the only non-interactive surfaces; `seri --help` is the authority on that list. `config`, `permissions` and `usage` are TUI slash commands (`/config`, `/permissions`, `/usage`), never subcommands — typing `seri config list` sends `config list` to the model as a task and bills a real turn. The monorepo also has `apps/server`, `apps/web`, `apps/lab`, `apps/portal`; those are separate surfaces this skill does not cover.
 
 Every run in this skill uses a throwaway profile (`--profile verify-<run-id>`, where `<run-id>` is unique per run, e.g. `verify-20260828a`). A profile isolates config.json, auth.json, permissions.yaml, sessions/ and checkpoints/ under `~\.seri\<profile>\` — the user's real state lives in `~\.seri\` directly (the default profile) and must never be driven or deleted. A fresh profile starts with no config, so it resolves provider `groq`, model `openai/gpt-oss-120b`, and the `GROQ_API_KEY` that bun auto-loads from the repo-root `.env` (env beats config.json). That key is real: a driven turn is a real model call.
 
@@ -20,8 +20,8 @@ bun install            # once per checkout; also vendors ripgrep via postinstall
 - **TUI session** (the primary drive; needs a real PTY — node-pty/ConPTY on Windows):
   `node .claude/skills/verify-seri/scripts/drive-tui.mjs <evidence>\tui.txt verify-<run-id> <step...>`
   **node, never bun** — bun as the node-pty host on this machine kills every ConPTY child instantly (exit -1073741510 after only `?9001h?1049h`-style enables); under node the same drive works, including from agent tool-shells. Do not set `SERI_DISABLE_MODELS_FETCH=1`; drive the same catalog fetch a user gets. From Git Bash also set `MSYS_NO_PATHCONV=1`, or `type=/exit` reaches the app as `C:/Program Files/Git/exit`. Ready when the transcript shows the splash (`SERI` wordmark and, on an unauthenticated profile, the login picker with footer `↑/↓ move · Enter select · Esc continue`).
-- **Subcommands** (the exception — plain processes, piped stdio):
-  `bun apps/cli/src/cli.ts --profile verify-<run-id> config list` etc., run from the repo root, stdout + `$LASTEXITCODE` captured directly.
+- **Non-interactive surfaces** (the exception — plain processes, piped stdio):
+  `bun apps/cli/src/cli.ts --selftest`, `--version`, `--help`, and the `serve`/`exec` verbs, run from the repo root, stdout + `$LASTEXITCODE` captured directly. Nothing else. Any other first word is a task.
 
 ## Doctor
 
@@ -62,7 +62,7 @@ The verified drive pattern (each piece below was learned from a live failure —
 
 A write tool in `approve-each` mode raises the ApprovalBox — `[y]es / [a]lways (saved for this project) / [N]o` — answered by a single `type=y` / `type=a` / `type=n` keypress, no Enter. Stable handles to `wait=` on, all rendered by the real app: `Esc continue` (splash up), `┌` (box border — the TUI renders `┌`, never `╭`), `Session ` + `created.` (TUI mounted past the splash), `⏸ approve-each mode on` / `⏸ read-only mode on` / `⏵⏵ bypass permissions on` (mode label, cycled by `key=shift-tab`), `[y]es` (ApprovalBox up), `done ·` (turn finished). Prefer these over screen positions.
 
-**Subcommands** are the exception for what has no TUI path or needs a non-interactive read: `config set|list|unset`, `permissions list|remove`, `usage`, `--version`, `--help` (always with `--profile verify-<run-id>` when they touch state). Capture stdout + exit code directly.
+**Non-interactive surfaces** are the exception for what has no TUI path: `--version`, `--help`, `--selftest`, and the `serve`/`exec` verbs (always with `--profile verify-<run-id>` when they touch state). Capture stdout + exit code directly. Check a candidate against `seri --help` before driving it; anything absent there is a task, not a command.
 
 ## Evidence
 
@@ -71,7 +71,7 @@ Evidence for run `<run-id>` goes to `.claude/loops/verify-seri/<run-id>\` — gi
 Proof standards:
 - Exercise the real user path — the TUI under a PTY, never an imported function, a faked `runLoop`, or the non-interactive prompt path standing in for a TUI feature. The unit tests already cover the fakes.
 - Capture the action and the result: the full helper command line, the complete transcript file, and the exit code (recorded in a `.txt` next to the transcript).
-- Verify side effects, not just the screen: a write task's file content afterward; a config change re-read with `config list`; a session's `~\.seri\verify-<run-id>\sessions\` entry; a persisted grant in `permissions list`.
+- Verify side effects, not just the screen: a write task's file content afterward; a config change re-read by reopening `/config`; a session's `~\.seri\verify-<run-id>\sessions\` entry; a persisted grant in `/permissions`.
 - A model's answer is nondeterministic prose — seed a token (`SERI-VERIFY-<run-id>`) and assert on it appearing, not on wording.
 - Gate proofs answer the real ApprovalBox in `approve-each` or `read-only`. `--dangerously-skip-permissions` is a real product flag but a run using it proves nothing about the gate.
 
