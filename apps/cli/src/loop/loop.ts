@@ -34,8 +34,12 @@ export type LoopEvent =
   // refusal: the prompt answered "no", or there was no one to ask at all. Only "declined" is a
   // signal about the RUN going wrong; "blocked" is a signal about the MODE working. Consumers that
   // count denials (driveLoop's exit code, this file's own repeated-denials stop) must count only
-  // the second — see MAX_CONSECUTIVE_DENIALS.
-  | { type: "permission-denied"; name: string; reason: "blocked" | "declined" }
+  // the second — see MAX_CONSECUTIVE_DENIALS. "hook" falls on the "blocked" side of that same line:
+  // a PreToolUse hook is configuration the user installed, refusing the call it was installed to
+  // refuse, which is the mode argument again in another shape. It must therefore never increment
+  // MAX_CONSECUTIVE_DENIALS — that streak counts a human answering no to a live question three
+  // times, and there is no human anywhere in a hook's path to answer even once.
+  | { type: "permission-denied"; name: string; reason: "blocked" | "declined" | "hook" }
   | { type: "messages-updated"; messages: ModelMessage[] }
   | {
       type: "compacted";
@@ -220,6 +224,36 @@ export async function* runLoop(opts: {
   onToolPhaseEnd?: (
     executed: readonly { toolName: string; input: unknown }[],
   ) => string | undefined;
+  /**
+   * Consulted before the gate, per call, with the resolved `subject` rather than `call.toolName` —
+   * the rule this file already states for every string a model or a human reads applies to a
+   * consumer's matcher too, and one reading the raw ToolSet key would see every MCP call as the
+   * literal "mcp".
+   *
+   * Ahead of the gate, and that ordering is load-bearing rather than incidental: it is the argument
+   * the unknown-tool guard's own comment makes one branch further down. A human must never be asked
+   * to approve a call that is about to be refused anyway, and a block reached only after the prompt
+   * could be answered "always" and never asked about again — which is the whole determinism claim
+   * gone.
+   *
+   * Asynchronous, where onToolPhaseEnd above is deliberately synchronous, and it leans on the same
+   * mitigation that one relies on: a consumer with nothing to say returns undefined from its own
+   * factory, so this opt is undefined and a session with no hooks at all adds no `await` to the
+   * path every tool call takes.
+   *
+   * `errors` are reported and the call goes ahead; only `block` stops it. A hook that could not run
+   * has expressed no opinion, and a broken formatter must not be able to stop the agent working.
+   */
+  onBeforeTool?: (
+    subject: string,
+    input: unknown,
+  ) => Promise<{ readonly block?: string; readonly errors?: readonly string[] }>;
+  /**
+   * Consulted after a call's result has been recorded, with the same resolved subject. Everything
+   * it returns is reported as `error` events and nothing it returns can stop anything: the tool has
+   * already run, so a consumer with an objection at this point has a message, not a veto.
+   */
+  onAfterTool?: (subject: string, input: unknown) => Promise<readonly string[]>;
   // The tools already approved with "always" before this run started, or nothing. A seed, not a
   // handle: the loop copies it into its own Set and never writes back through this reference, so a
   // caller cannot be surprised by a mutation it did not ask for. Growth leaves as `tool-allowed`.
@@ -536,6 +570,30 @@ export async function* runLoop(opts: {
       // invitation to retry under the wrong one.
       const subject = opts.callSubject?.(call.toolName, call.input) ?? call.toolName;
 
+      if (opts.onBeforeTool !== undefined) {
+        const hook = await opts.onBeforeTool(subject, call.input);
+        for (const error of hook.errors ?? []) yield { type: "error", error };
+        // A new await is a new window for an abort to land in, and a check placed after a different
+        // await does not cover it — same reason as the re-check below, whose comment spells the
+        // argument out. Without this a cancel lands as a hook verdict.
+        if (opts.signal?.aborted) break;
+        if (hook.block !== undefined) {
+          yield { type: "permission-denied", name: subject, reason: "hook" };
+          toolResults.push({
+            type: "tool-result",
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            output: {
+              type: "execution-denied",
+              reason:
+                `Tool "${subject}" was blocked by a project hook: ${hook.block} ` +
+                `Do not retry this call. The block is deterministic and asking again will not change it.`,
+            },
+          });
+          continue;
+        }
+      }
+
       const verdict = await decidePermission(
         subject,
         call.input,
@@ -625,6 +683,17 @@ export async function* runLoop(opts: {
         toolName: call.toolName,
         output: { type: "json", value: (toolResult ?? null) as JSONValue },
       });
+
+      // After both pushes above, never before. A cancel landing inside a post hook must not leave
+      // this call unanswered: the assistant message carrying it is already pushed and already
+      // persisted, so a missing row is AI_MissingToolResultsError on the next --resume — the
+      // argument the unanswered-row loop and the repeated-denials stop below each make for their
+      // own site, applied to a third one.
+      if (opts.onAfterTool !== undefined) {
+        for (const error of await opts.onAfterTool(subject, call.input)) {
+          yield { type: "error", error };
+        }
+      }
     }
 
     // Every path through the body above either pushes exactly one row and carries on, or breaks, so

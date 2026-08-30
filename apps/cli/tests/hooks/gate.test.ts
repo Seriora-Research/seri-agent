@@ -215,16 +215,16 @@ describe("createHookRunner", () => {
 
     expect(fake.calls.map((call) => call.payload)).toEqual([
       {
-        event: "PreToolUse",
-        tool: "mcp__github__create_issue",
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__github__create_issue",
         cwd: "/worktree",
-        input: { title: "a bug" },
+        tool_input: { title: "a bug" },
       },
       {
-        event: "PostToolUse",
-        tool: "mcp__github__create_issue",
+        hook_event_name: "PostToolUse",
+        tool_name: "mcp__github__create_issue",
         cwd: "/worktree",
-        input: { title: "a bug" },
+        tool_input: { title: "a bug" },
       },
     ]);
   });

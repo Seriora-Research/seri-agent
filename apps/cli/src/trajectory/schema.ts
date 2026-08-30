@@ -1,6 +1,6 @@
-import type { CheckOutcome } from "../verify/outcome";
 import type { LanguageModelUsage } from "ai";
 import type { CostReport } from "../provider/cost";
+import type { CheckOutcome } from "../verify/outcome";
 
 export const TRAJECTORY_SCHEMA_VERSION = 1;
 
@@ -34,7 +34,7 @@ export type TrajectoryKind =
       tool?: string;
       toolCallId?: string;
     }
-  | { kind: "denial"; name: string; reason: "blocked" | "declined" }
+  | { kind: "denial"; name: string; reason: "blocked" | "declined" | "hook" }
   | {
       kind: "usage";
       usage: LanguageModelUsage;

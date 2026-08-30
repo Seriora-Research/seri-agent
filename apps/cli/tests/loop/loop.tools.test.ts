@@ -1126,4 +1126,228 @@ describe("runLoop", () => {
       }
     });
   });
+
+  // Project hooks reach the loop as two callbacks and nothing else. The loop knows only that a
+  // consumer may refuse a call and may have something to say after one — never that a hook, a
+  // script or a hooks.yaml exists — so everything here is about WHEN the callbacks are consulted
+  // and WHAT their answers turn into.
+  describe("project hooks", () => {
+    function oneWriteThenText(): MockLanguageModelV4 {
+      return new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+    }
+
+    function toolRowOutputs(events: LoopEvent[]): { type: string; reason?: string }[] {
+      // Not `.at(-1)`: the tool turn is followed by a text-only turn whose own messages-updated
+      // ends in an assistant message. Same shape the denial tests above use.
+      const toolMessage = events
+        .filter(
+          (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
+            e.type === "messages-updated",
+        )
+        .map((e) => e.messages.at(-1))
+        .find((message) => message?.role === "tool");
+      const content = (toolMessage?.content ?? []) as {
+        output: { type: string; reason?: string };
+      }[];
+      return content.map((part) => part.output);
+    }
+
+    // The negative control, first on purpose: a suite that only ever watches a hook block cannot
+    // tell a working gate from one that refuses everything. Identical to the block case below
+    // except for what the callback returns.
+    test("a PreToolUse callback that blocks nothing lets the call through", async () => {
+      const executed: unknown[] = [];
+      const prompted: string[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "approve-each",
+          approvalPrompt: async (toolName) => {
+            prompted.push(toolName);
+            return "once";
+          },
+          onBeforeTool: async () => ({}),
+        }),
+      );
+
+      expect(executed).toEqual([{ path: "a.txt" }]);
+      expect(prompted).toEqual(["write_file"]);
+      expect(events).toContainEqual({ type: "tool-result", name: "write_file", result: "ok" });
+      expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
+    });
+
+    test("a PreToolUse block stops the call before the gate ever asks", async () => {
+      const executed: unknown[] = [];
+      const prompted: string[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "approve-each",
+          approvalPrompt: async (toolName) => {
+            prompted.push(toolName);
+            return "once";
+          },
+          onBeforeTool: async () => ({ block: "nope" }),
+        }),
+      );
+
+      expect(executed).toEqual([]);
+      // The ordering claim, and the only assertion here that can see it: a block evaluated after
+      // the gate would have parked a human on a question whose answer could not matter — and an
+      // "always" to it would have written a grant that reaches around the hook on every later call.
+      expect(prompted).toEqual([]);
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "write_file",
+        reason: "hook",
+      });
+      const [output] = toolRowOutputs(events);
+      expect(output?.type).toBe("execution-denied");
+      expect(output?.reason).toContain("nope");
+    });
+
+    // The determinism claim. "auto" is the mode that permits everything, and a hook a mode can
+    // reach around is a hook nobody can rely on.
+    test("a PreToolUse block still blocks in auto, the mode that permits everything", async () => {
+      const executed: unknown[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "auto",
+          onBeforeTool: async () => ({ block: "nope" }),
+        }),
+      );
+
+      expect(executed).toEqual([]);
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "write_file",
+        reason: "hook",
+      });
+    });
+
+    // The MAX_CONSECUTIVE_DENIALS boundary, in the shape "read-only blocks never trip
+    // repeated-denials" above already pins for mode blocks: five in a row, comfortably past the
+    // cap, and the run still reaches the iteration limit. Counted as denials these would stop it at
+    // three with `repeated-denials` — a stop that means "a human said no three times" reported for
+    // a path with no human in it at all.
+    test("hook blocks never trip repeated-denials, however many times they happen", async () => {
+      const model = new MockLanguageModelV4({ doStream: repeatedWriteCalls(5) });
+      const events = await collect(
+        runLoop({
+          model,
+          tools: makeTools(async () => "ok"),
+          messages: baseMessages,
+          permissionMode: "auto",
+          maxIterations: 5,
+          onBeforeTool: async () => ({ block: "nope" }),
+        }),
+      );
+
+      expect(events.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
+      expect(events.filter((e) => e.type === "permission-denied")).toHaveLength(5);
+      expect(model.doStreamCalls).toHaveLength(5);
+    });
+
+    test("PreToolUse errors are reported and the call still runs", async () => {
+      const executed: unknown[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "auto",
+          onBeforeTool: async () => ({ errors: ["lint could not be run", "audit timed out"] }),
+        }),
+      );
+
+      expect(events.filter((e) => e.type === "error")).toEqual([
+        { type: "error", error: "lint could not be run" },
+        { type: "error", error: "audit timed out" },
+      ]);
+      // A hook that could not run has expressed no opinion, so it must never become a refusal.
+      expect(executed).toEqual([{ path: "a.txt" }]);
+      expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
+    });
+
+    test("PostToolUse runs after the call and its messages become error events", async () => {
+      const seen: { subject: string; input: unknown }[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(async () => "ok"),
+          messages: baseMessages,
+          permissionMode: "auto",
+          onAfterTool: async (subject, input) => {
+            seen.push({ subject, input });
+            return ["format rewrote a.txt"];
+          },
+        }),
+      );
+
+      expect(seen).toEqual([{ subject: "write_file", input: { path: "a.txt" } }]);
+      expect(events).toContainEqual({ type: "error", error: "format rewrote a.txt" });
+      // The row survives: it is what keeps the session resumable, and a post hook consulted before
+      // the push would be one cancel away from deleting it.
+      expect(toolRowOutputs(events).map((output) => output.type)).toEqual(["json"]);
+      const resultIndex = events.findIndex((e) => e.type === "tool-result");
+      const errorIndex = events.findIndex((e) => e.type === "error");
+      expect(resultIndex).toBeGreaterThanOrEqual(0);
+      expect(errorIndex).toBeGreaterThan(resultIndex);
+    });
+
+    // The cost control: with neither callback the turn is exactly what "executes a tool call and
+    // appends the result to the next turn" (the first test in this file) already pins, assertion
+    // for assertion. Nothing about the two new opts touches a session that has no hooks.
+    test("a session with neither callback behaves exactly as it did before", async () => {
+      const executed: unknown[] = [];
+      const model = oneWriteThenText();
+      const events = await collect(
+        runLoop({
+          model,
+          tools: makeTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "auto",
+        }),
+      );
+
+      expect(events).toContainEqual({
+        type: "tool-call",
+        name: "write_file",
+        args: { path: "a.txt" },
+      });
+      expect(events).toContainEqual({ type: "tool-result", name: "write_file", result: "ok" });
+      expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+      expect(executed).toEqual([{ path: "a.txt" }]);
+      expect(model.doStreamCalls).toHaveLength(2);
+      expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain("ok");
+      expect(events.find((e) => e.type === "error")).toBeUndefined();
+    });
+  });
 });

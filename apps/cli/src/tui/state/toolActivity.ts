@@ -224,7 +224,7 @@ export function anomalyLineForResult(
   return undefined;
 }
 
-export function anomalyLineForDenial(reason: "blocked" | "declined"): string {
+export function anomalyLineForDenial(reason: "blocked" | "declined" | "hook"): string {
   return reason;
 }
 
@@ -345,7 +345,7 @@ export function recordResult(
 export function recordDenial(
   entries: ToolActivityEntry[],
   name: string,
-  reason: "blocked" | "declined",
+  reason: "blocked" | "declined" | "hook",
 ): ToolActivityEntry[] {
   const labels = TOOL_LABELS[name];
   return mapEntry(

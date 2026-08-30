@@ -46,7 +46,7 @@ export function createHookRunner(opts: {
         if (!hookMatches(spec, subject)) continue;
         const outcome = await run(
           spec,
-          { event: "PreToolUse", tool: subject, cwd: opts.cwd, input },
+          { hook_event_name: "PreToolUse", tool_name: subject, cwd: opts.cwd, tool_input: input },
           opts.signal,
         );
         // The hooks after a blocker do not run: the call is already refused and their opinions
@@ -63,7 +63,7 @@ export function createHookRunner(opts: {
         if (!hookMatches(spec, subject)) continue;
         const outcome = await run(
           spec,
-          { event: "PostToolUse", tool: subject, cwd: opts.cwd, input },
+          { hook_event_name: "PostToolUse", tool_name: subject, cwd: opts.cwd, tool_input: input },
           opts.signal,
         );
         // Exit 2 has no blocking meaning after the fact: the tool has already run and its result is
