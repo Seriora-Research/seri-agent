@@ -13,7 +13,7 @@ import { buildSystemPrompt } from "../agents/systemPrompt";
 import { type Checkpointer, createCheckpointer } from "../checkpoint/checkpoint";
 import { withCheckpoints } from "../checkpoint/wrapTools";
 import type { CliDeps, RunContext } from "../cli";
-import { printPreApproved, printWarning } from "../cli/output";
+import { pendingQueueNotice, printPreApproved, printWarning } from "../cli/output";
 import { loadTrajectoryConfig, loadVerifyConfig, type VerifyConfig } from "../config/config";
 import { getConfigDir, getTrajectoriesDir } from "../config/paths";
 import { messageOf } from "../errors";
@@ -33,6 +33,7 @@ import {
   parseMcpGrantKey,
 } from "../mcp/types";
 import { type ArchivistState, createArchivistState } from "../memory/archivist";
+import { listPending } from "../memory/pending";
 import { type LoadedMemory, loadMemory } from "../memory/store";
 import { effectiveTools, loadGrants } from "../permissions/store";
 import { fetchAccountPlan } from "../provider/accountStatus";
@@ -52,6 +53,7 @@ import {
   type SessionState,
   saveSession,
 } from "../session/session";
+import { listPendingSkills } from "../skills/pending";
 import { loadSkillRegistry, type SkillRegistry } from "../skills/registry";
 import { type AgentRegistry, loadAgentRegistry } from "../subagents/registry";
 import { createTrajectoryWriter, type TrajectoryWriter } from "../trajectory/writer";
@@ -710,6 +712,17 @@ export async function prepareSession(
     );
 
     if (!ctx.resuming) emit(`Session ${session.id} created.`);
+
+    // On every start, not only a fresh one: the queue outlives sessions, and the writes a human is
+    // least likely to know about are exactly the ones an earlier session or the daemon's idle flush
+    // left behind. `emit`, not `warn`, because a queue waiting for review is a notice, not a
+    // failure. Both listings swallow a malformed record through their own onWarning path, so a
+    // corrupt .pending file cannot stop a session from starting.
+    const queueNotice = pendingQueueNotice(
+      listPending(configDir, (msg) => printWarning(msg, warnSink)).length,
+      listPendingSkills(configDir, (msg) => printWarning(msg, warnSink)).length,
+    );
+    if (queueNotice !== undefined) emit(queueNotice);
 
     if (runStart(ctx) === "task") {
       session.messages.push({ role: "user", content: ctx.taskText });

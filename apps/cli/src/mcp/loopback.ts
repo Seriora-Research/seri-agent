@@ -18,62 +18,45 @@ export type CallbackServer = {
   close(): void;
 };
 
-export type StartCallbackServer = (opts?: {
-  ports?: readonly number[];
-  serverName?: string;
-}) => Promise<CallbackServer>;
-
-// A server name reaches this page from servers.yaml, where NAME_SHAPE (mcp/registry.ts) already
-// confines it to lowercase letters, digits and "-". Escaped anyway: this is the one string on the
-// page seri did not write, the shape rule lives in a different module, and a page that only stays
-// safe while a regex two files away holds is not worth the coupling.
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
+export type StartCallbackServer = (opts?: { ports?: readonly number[] }) => Promise<CallbackServer>;
 
 // Ink on canvas with no accent hue, the palette docs/design/tokens.md defines for seri's web
 // surfaces, inverted under prefers-color-scheme: dark. Every value is inline and no font is
 // fetched: this page is served by a loopback listener that closes moments later, so a request to
 // a CDN would be a blocked or slow one on the last screen of a login, and a webfont on a page
 // this short would swap after the user has already read it.
-function callbackPage(opts: { heading: string; detail: string; serverName?: string }): string {
-  const named = opts.serverName === undefined ? "" : ` <b>${escapeHtml(opts.serverName)}</b>`;
+//
+// Both strings are constants and neither names the server, which leaves no text on the page that
+// seri did not write and so nothing here to escape.
+function callbackPage(title: string, detail: string): string {
   return `<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>seri</title>
 <style>
-:root { --ink:#141413; --canvas:#faf9f5; --subtle:rgba(20,20,19,.64); --hairline:rgba(20,20,19,.14) }
+:root { color-scheme:light dark; --ink:#141413; --canvas:#faf9f5; --subtle:rgba(20,20,19,.64) }
 @media (prefers-color-scheme:dark) {
-  :root { --ink:#faf9f5; --canvas:#141413; --subtle:rgba(250,249,245,.68); --hairline:rgba(250,249,245,.16) }
+  :root { --ink:#faf9f5; --canvas:#141413; --subtle:rgba(250,249,245,.68) }
 }
-* { box-sizing:border-box }
 body {
   margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-  background:var(--canvas); color:var(--ink); padding:24px;
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
-  font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  background:var(--canvas); color:var(--ink);
+  font:15px/1.6 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased;
 }
-main { max-width:26rem; width:100% }
-.mark {
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  font-size:12px; letter-spacing:.18em; text-transform:uppercase; color:var(--subtle);
-  padding-bottom:14px; margin-bottom:22px; border-bottom:1px solid var(--hairline);
-}
-h1 { font-size:19px; font-weight:600; margin:0 0 8px; letter-spacing:-.01em }
-p { margin:0; color:var(--subtle) }
-b { font-weight:600; color:var(--ink) }
+main { text-align:center; padding:2rem; max-width:26rem }
+h1 { margin:0 0 .5rem; font-size:1.125rem; font-weight:600; letter-spacing:-.01em }
+p { margin:0; font-size:.875rem; color:var(--subtle) }
 </style>
-<main>
-  <div class="mark">seri</div>
-  <h1>${opts.heading}${named}</h1>
-  <p>${opts.detail}</p>
-</main>
+<main><h1>${title}</h1><p>${detail}</p></main>
 </html>`;
 }
+
+const SUCCESS_PAGE = callbackPage(
+  "Authorization complete",
+  "Returning you to seri. You can close this tab.",
+);
+
+const DENIED_PAGE = callbackPage("Authorization failed", "Return to seri for details.");
 
 function page(body: string): Response {
   return new Response(body, { headers: { "content-type": "text/html; charset=utf-8" } });
@@ -89,7 +72,6 @@ type ActiveWait = {
 // within reach of anything else on the network.
 export const startCallbackServer: StartCallbackServer = async (opts) => {
   const ports = opts?.ports ?? MCP_CALLBACK_PORTS;
-  const serverName = opts?.serverName;
   let active: ActiveWait | undefined;
   let stopped = false;
   // Carries the port alongside the server because Server.port is `number | undefined` (a
@@ -131,13 +113,7 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
         message: url.searchParams.get("error_description") ?? error,
       });
       close();
-      return page(
-        callbackPage({
-          heading: "Authentication was declined for",
-          detail: "Nothing was saved. You can close this tab and go back to seri.",
-          serverName,
-        }),
-      );
+      return page(DENIED_PAGE);
     }
 
     const code = url.searchParams.get("code");
@@ -149,13 +125,7 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
       iss: url.searchParams.get("iss") ?? undefined,
     });
     close();
-    return page(
-      callbackPage({
-        heading: "Authenticated",
-        detail: "You can close this tab and go back to seri.",
-        serverName,
-      }),
-    );
+    return page(SUCCESS_PAGE);
   }
 
   for (const port of ports) {

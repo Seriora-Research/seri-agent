@@ -23,6 +23,7 @@ import {
   runArchivist,
   shouldRunArchivist,
 } from "../../src/memory/archivist";
+import { resolvePendingRef } from "../../src/memory/pending";
 import { applyWrite, loadMemory, type MemoryContext } from "../../src/memory/store";
 import { makeMemoryWriteTool } from "../../src/memory/tool";
 import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
@@ -718,6 +719,15 @@ describe("runArchivist", () => {
     expect(report?.cost?.amountUsd).toBeGreaterThan(0);
     expect(state.toolCallsSinceRun).toBe(0);
     expect(state.messageCursor).toBe(3);
+
+    // The write this run staged is named in the report, and named by the id `/memory diff` takes:
+    // a report that invented or dropped an id would send the human to a queue entry that is not
+    // there. resolvePendingRef is the same lookup that command runs.
+    expect(report?.staged).toHaveLength(1);
+    const [only] = report?.staged ?? [];
+    expect(only?.kind).toBe("memory");
+    expect(only?.label).toBe("harness/MEMORY.md");
+    expect(resolvePendingRef(ctx.configDir, only?.id ?? "")).toHaveLength(1);
   });
 
   // Round-4 review finding: runArchivist's own SubagentRuntime used to omit contextWindowSize

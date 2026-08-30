@@ -2,7 +2,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { loadMemoryConfig } from "../config/config";
 import { scanForInjection } from "./injectionScan";
-import { stagePendingWrite } from "./pending";
+import { type PendingWrite, stagePendingWrite } from "./pending";
 import {
   applyWrite,
   computeWrite,
@@ -42,7 +42,17 @@ const DESCRIPTION =
 // configDir/worktree, which toolDefinitions' tools never do. Never added to toolDefinitions itself
 // — it reaches exactly one ToolSet, the archivist's own, built directly in memory/archivist.ts's
 // runArchivist rather than through subagents/registry.ts (the archivist is not a dispatchable agent).
-export function makeMemoryWriteTool(ctx: MemoryContext, opts: { forceStage?: boolean } = {}) {
+export function makeMemoryWriteTool(
+  ctx: MemoryContext,
+  opts: {
+    forceStage?: boolean;
+    // Handed the record this call staged. The queue directory is shared by every session on the
+    // profile, so a caller that instead listed it before and after a run would credit itself with
+    // whatever another session staged meanwhile. Never fires on the approval-off branch below:
+    // that write lands in the file directly and leaves no queue entry to name.
+    onStaged?: (staged: PendingWrite) => void;
+  } = {},
+) {
   return tool({
     description: DESCRIPTION,
     inputSchema: memoryWriteInputSchema,
@@ -74,6 +84,7 @@ export function makeMemoryWriteTool(ctx: MemoryContext, opts: { forceStage?: boo
 
       if (opts.forceStage === true || loadMemoryConfig(ctx.configDir).approvalRequired) {
         const staged = stagePendingWrite(req, ctx, new Date());
+        opts.onStaged?.(staged);
         return {
           staged: true,
           id: staged.id,
