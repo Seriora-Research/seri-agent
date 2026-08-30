@@ -21,10 +21,10 @@ function makeSpec(overrides: Partial<HookSpec> = {}): HookSpec {
 
 function makePayload(overrides: Partial<HookPayload> = {}): HookPayload {
   return {
-    event: "PreToolUse",
-    tool: "probe-tool",
+    hook_event_name: "PreToolUse",
+    tool_name: "probe-tool",
     cwd: "/workdir",
-    input: { command: "echo hi" },
+    tool_input: { command: "echo hi" },
     ...overrides,
   };
 }
@@ -186,12 +186,12 @@ describeSh("runHook (real bash subprocess)", () => {
     const path = writeShScript(
       dir,
       "stdin-check",
-      'PAYLOAD=$(cat)\nif echo "$PAYLOAD" | grep -q \'"tool":"probe-tool"\'; then\n' +
+      'PAYLOAD=$(cat)\nif echo "$PAYLOAD" | grep -q \'"tool_name":"probe-tool"\'; then\n' +
         '  echo "saw the tool name on stdin" >&2\n  exit 2\nfi\nexit 0',
     );
     const spec = makeSpec({ script: "stdin-check", path, timeoutMs: 10_000 });
 
-    const outcome = await runHook(spec, makePayload({ cwd: dir, tool: "probe-tool" }));
+    const outcome = await runHook(spec, makePayload({ cwd: dir, tool_name: "probe-tool" }));
 
     expect(outcome.kind).toBe("block");
     expect(outcome.kind === "block" && outcome.reason).toContain("saw the tool name on stdin");
@@ -253,13 +253,16 @@ describePs1("runHook (real powershell subprocess)", () => {
     const path = writePs1Script(
       dir,
       "stdin-check",
+      // Parsed, not pattern-matched, because a structural reader is the case a regex reader hides:
+      // the reference .ps1 in .cursor/hooks/ does exactly this, and it is what caught the payload
+      // envelope being wrong when a text-matching probe was still passing.
       "$payload = [Console]::In.ReadToEnd()\n" +
-        'if ($payload -match \'"tool":"probe-tool"\') {\n' +
+        'if (($payload | ConvertFrom-Json).tool_name -eq "probe-tool") {\n' +
         '  [Console]::Error.WriteLine("saw the tool name on stdin")\n  exit 2\n}\nexit 0',
     );
     const spec = makeSpec({ script: "stdin-check", path, timeoutMs: 15_000 });
 
-    const outcome = await runHook(spec, makePayload({ cwd: dir, tool: "probe-tool" }));
+    const outcome = await runHook(spec, makePayload({ cwd: dir, tool_name: "probe-tool" }));
 
     expect(outcome.kind).toBe("block");
     expect(outcome.kind === "block" && outcome.reason).toContain("saw the tool name on stdin");

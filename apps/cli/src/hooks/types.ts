@@ -53,15 +53,25 @@ export function hookMatches(spec: HookSpec, subject: string): boolean {
   return spec.matcher === undefined || spec.matcher.test(subject);
 }
 
-// What the script reads on stdin. `input` is the tool's own arguments, nested rather than spread:
-// spreading would let a tool argument named `tool` or `cwd` shadow the envelope, and the hook
-// scripts that read this by regex over the raw text (block-dangerous.sh greps for "command", not
-// $.input.command) find their field either way.
+// What the script reads on stdin. The field names are Claude Code's wire names, snake_case
+// included, and that is the whole point: interoperability is the feature ADR 0013 names, and a
+// ported script reads these keys by name. Measured rather than assumed — the first cut used
+// `{ event, tool, input }` on the theory that the reference scripts grep the raw JSON text, which
+// is true of `.cursor/hooks/block-dangerous.sh` and false of its `.ps1` twin: that one does
+// `($payload | ConvertFrom-Json).tool_input.command`, so a renamed envelope silently found no
+// command and let `rm -rf /` through. A structural reader is the case a regex reader hides.
+//
+// `tool_input` is nested rather than spread for the reason spreading would break: a tool argument
+// named `cwd` would shadow the envelope's own.
+//
+// What does NOT carry over is the tool NAMES. seri's are `write_file`, `edit`, `bash`; Claude
+// Code's are `Write`, `Edit`, `Bash`. A ported script that switches on the name needs its matcher
+// rewritten, and the matcher lives in hooks.yaml, which its author is writing regardless.
 export type HookPayload = {
-  readonly event: HookEvent;
-  readonly tool: string;
+  readonly hook_event_name: HookEvent;
+  readonly tool_name: string;
   readonly cwd: string;
-  readonly input: unknown;
+  readonly tool_input: unknown;
 };
 
 // Three outcomes rather than a boolean plus a nullable string. A block always has a reason (the
