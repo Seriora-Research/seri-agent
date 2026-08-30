@@ -1,5 +1,6 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import { type LoadedMemory, renderMemoryTier } from "../memory/store";
+import { type RuleSpec, renderRulesTier } from "../rules/registry";
 import { renderSkillsTier, type SkillSpec } from "../skills/registry";
 
 // One prompt for every model, deliberately: routing a different prompt per model family is what
@@ -127,8 +128,12 @@ function buildStableTier(): string {
 // Metadata only — renderSkillsTier can only emit names and descriptions, because a SkillSpec has no
 // body to emit (skills/skillFile.ts). That is the progressive-disclosure guarantee, and it holds
 // here by construction rather than by this function remembering to honour it.
-function buildContextTier(agentsContent: string, skills: readonly SkillSpec[]): string {
-  return joinTiers(agentsContent, renderSkillsTier(skills));
+function buildContextTier(
+  agentsContent: string,
+  skills: readonly SkillSpec[],
+  rules: readonly RuleSpec[],
+): string {
+  return joinTiers(agentsContent, renderRulesTier(rules), renderSkillsTier(skills));
 }
 
 // Per turn: tells the model which model/provider it is actually running as this turn, so a live
@@ -173,6 +178,13 @@ export function buildSystemPrompt(opts: {
   /** Metadata for the session's model-invocable skills. `[]` on the unattended path, which is how
    *  "an unattended run gets a strictly smaller permission surface" (CONSTITUTION) reads here. */
   skills: readonly SkillSpec[];
+  /** The session's rules. Only `alwaysApply` ones render here; a glob-scoped rule reaches the model
+   *  through the turn instead (rules/match.ts), which is what keeps this string byte-stable for the
+   *  whole session. */
+  rules: readonly RuleSpec[];
 }): string {
-  return joinTiers(buildStableTier(), buildContextTier(opts.agentsContent, opts.skills));
+  return joinTiers(
+    buildStableTier(),
+    buildContextTier(opts.agentsContent, opts.skills, opts.rules),
+  );
 }

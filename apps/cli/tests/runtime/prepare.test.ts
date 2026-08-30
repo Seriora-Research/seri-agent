@@ -38,7 +38,7 @@ describe("explicit session cwd", () => {
       loadAgentsFile,
       configDir,
       sessionDir,
-      () => new Map(),
+      () => ({ skills: new Map(), rules: new Map() }),
     );
     expect(session.cwd).toBe(sessionDir);
     expect(session.cwd).not.toBe(original);

@@ -197,6 +197,19 @@ export async function* runLoop(opts: {
   messages: ModelMessage[];
   permissionMode: PermissionMode;
   approvalPrompt?: ApprovalPrompt;
+  /**
+   * Called at the very end of each tool round, with the calls whose `execute` actually resolved.
+   * Returning text appends it to `messages` as a user message the model sees on its next call
+   * within the same turn; returning undefined appends nothing.
+   *
+   * Deliberately rule-ignorant and synchronous. The loop is a library: it does not know what a
+   * project rule is, only that its consumer may have something to say about what was just touched.
+   * Synchronous because it runs between a tool round and the next model call, where an await would
+   * add latency to every turn for the benefit of the sessions that have no rules at all.
+   */
+  onToolPhaseEnd?: (
+    executed: readonly { toolName: string; input: unknown }[],
+  ) => string | undefined;
   // The tools already approved with "always" before this run started, or nothing. A seed, not a
   // handle: the loop copies it into its own Set and never writes back through this reference, so a
   // caller cannot be surprised by a mutation it did not ask for. Growth leaves as `tool-allowed`.
@@ -463,6 +476,9 @@ export async function* runLoop(opts: {
     yield { type: "messages-updated", messages: [...messages] };
 
     const toolResults: ToolContent = [];
+    // Only the calls whose `execute` resolved, for onToolPhaseEnd below. Rebuilt per iteration, not
+    // per turn: the callback answers for the round that just ran.
+    const executed: { toolName: string; input: unknown }[] = [];
     for (const call of toolCalls) {
       // Before the call, therefore upstream of the checkpoint snapshot taken inside the wrapper at
       // toolDef.execute — and this is the only point that sees all seven tools, since wrapTools
@@ -564,6 +580,7 @@ export async function* runLoop(opts: {
         continue;
       }
       yield { type: "tool-result", name: call.toolName, result: toolResult };
+      executed.push({ toolName: call.toolName, input: call.input });
       toolResults.push({
         type: "tool-result",
         toolCallId: call.toolCallId,
@@ -621,6 +638,22 @@ export async function* runLoop(opts: {
     if (consecutiveDenials >= MAX_CONSECUTIVE_DENIALS) {
       yield { type: "done", reason: "repeated-denials" };
       return;
+    }
+
+    // The last thing the iteration does, after both early returns above, so a cancelled or
+    // denial-terminated phase reaches nothing here. The loop stays ignorant of what the callback is
+    // for: it hands over the calls whose `execute` actually resolved and appends whatever text
+    // comes back as an ordinary user message. Denied, unknown-tool, thrown and cancelled calls are
+    // excluded by construction, because none of them reach the push above.
+    //
+    // A message rather than a mutation of `opts.system`: the messages array is append-only and
+    // already grows every round, so a provider's prefix cache diverges only at the tail. Rewriting
+    // the system string would move the divergence point in front of the entire conversation and
+    // re-bill every message token uncached.
+    const appended = executed.length === 0 ? undefined : opts.onToolPhaseEnd?.(executed);
+    if (appended !== undefined && appended.length > 0) {
+      messages.push({ role: "user", content: [{ type: "text", text: appended }] });
+      yield { type: "messages-updated", messages: [...messages] };
     }
   }
 

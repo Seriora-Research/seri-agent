@@ -10,6 +10,7 @@ import { loadVerifyConfig } from "../config/config";
 import { createArchivistState } from "../memory/archivist";
 import { loadMemory } from "../memory/store";
 import { resolveDefaultModel } from "../provider/defaults";
+import { createRulesState } from "../rules/match";
 import { driveLoop } from "../runtime/drive";
 import { createSessionTrajectory, type RunSession, resolveModelRoute } from "../runtime/prepare";
 import { saveSession } from "../session/session";
@@ -35,12 +36,13 @@ export function createRunScheduled(opts: {
     const session: RunSession = {
       ...input.session,
       messages: input.session.messages as ModelMessage[],
-      // No skills, deliberately, on the same rule the `agents: builtinRegistry()` line below
+      // No skills and no rules, deliberately, on the same rule the `agents: builtinRegistry()` line below
       // states: an unattended run gets a strictly smaller surface than an attended one, and a
-      // skill file a human never saw must not steer it.
+      // skill or rule file a human never saw must not steer it.
       systemPrompt: buildSystemPrompt({
         agentsContent: loadAgentsFileFn(input.session.cwd),
         skills: [],
+        rules: [],
       }),
       model: route.model,
       provider: route.provider,
@@ -74,6 +76,8 @@ export function createRunScheduled(opts: {
       // tool never exists here and a scheduled run must not load agent files a human never saw.
       agents: builtinRegistry(),
       skills: new Map(),
+      rules: new Map(),
+      rulesState: createRulesState(),
       trajectory: createSessionTrajectory(session, opts.configDir, onWarning),
       preMountMessages: [],
     };

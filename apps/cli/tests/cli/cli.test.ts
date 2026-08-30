@@ -170,7 +170,7 @@ describe("run (task invocation)", () => {
       code = await run(["do", "a", "task"], {
         sessionsDir,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
       });
     } finally {
       console.error = originalError;
@@ -198,7 +198,7 @@ describe("run (task invocation)", () => {
       code = await run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       });
     } finally {
@@ -238,7 +238,7 @@ describe("run (task invocation)", () => {
       code = await run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       });
     } finally {
@@ -289,7 +289,7 @@ describe("run (task invocation)", () => {
       code = await run(["--resume", "reroute-on-resume", "another", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       });
     } finally {
@@ -345,7 +345,7 @@ describe("run (task invocation)", () => {
       code = await run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       });
     } finally {
@@ -415,7 +415,7 @@ describe("run (task invocation)", () => {
       code = await run(["--resume", "gateway-on-resume", "another", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       });
     } finally {
@@ -461,7 +461,7 @@ describe("run (task invocation)", () => {
       run(["--continue"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -497,7 +497,7 @@ describe("run (task invocation)", () => {
       run(["--resume", "older"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -519,7 +519,7 @@ describe("run (task invocation)", () => {
       code = await run(["write", "hello.txt"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       });
     } finally {
@@ -542,7 +542,9 @@ describe("run (task invocation)", () => {
     // characters of identity and no tool guidance at all. The per-turn volatile tier (which model
     // this run actually is) is appended after it — see driveLoop's system composition.
     expect(
-      capture()?.system?.startsWith(buildSystemPrompt({ agentsContent: "", skills: [] })),
+      capture()?.system?.startsWith(
+        buildSystemPrompt({ agentsContent: "", skills: [], rules: [] }),
+      ),
     ).toBe(true);
     expect(capture()?.system).toMatch(/You are powered by the model named/);
   });
@@ -559,7 +561,7 @@ describe("run (task invocation)", () => {
       run(["  do a task  "], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -577,7 +579,7 @@ describe("run (task invocation)", () => {
       run(["write", "hello.txt"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -595,7 +597,7 @@ describe("run (task invocation)", () => {
       run(["--dangerously-skip-permissions", "write", "hello.txt"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -614,7 +616,7 @@ describe("run (task invocation)", () => {
       run(["--dangerously-skip-permissions", "write", "hello.txt"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -634,7 +636,7 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -658,7 +660,7 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         permissionsDir,
       }),
@@ -682,7 +684,7 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -702,7 +704,7 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -726,7 +728,7 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -745,7 +747,7 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -768,7 +770,7 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -792,7 +794,7 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -815,7 +817,7 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -843,7 +845,7 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], {
         runLoop: firstRun,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -856,7 +858,7 @@ describe("run (task invocation)", () => {
       run(["--continue"], {
         runLoop: secondRun,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -885,7 +887,7 @@ describe("run (task invocation)", () => {
     const deps = {
       runLoop: fakeRunLoop(answeredTurn).fake,
       loadAgentsFile: () => "",
-      loadSkills: () => new Map(),
+      loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
       sessionsDir,
       getGroqModel: (id: string) => {
         asked.push(id);
@@ -952,7 +954,9 @@ describe("run (task invocation)", () => {
 
     expect(code).toBe(0);
     expect(
-      capture()?.system?.startsWith(buildSystemPrompt({ agentsContent: "", skills: [] })),
+      capture()?.system?.startsWith(
+        buildSystemPrompt({ agentsContent: "", skills: [], rules: [] }),
+      ),
     ).toBe(true);
     expect(capture()?.system).toContain("model-on-session");
     expect(askedFor).toEqual([sessionCwd]);
@@ -973,7 +977,7 @@ describe("run (task invocation)", () => {
         // needs that recording to check which model/provider a brand-new session resolved to.
         runLoop: fakeRunLoop(answeredTurn).fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         getOpenRouterModel: (id: string) => {
           askedOpenRouter.push(id);
@@ -1002,7 +1006,7 @@ describe("run (task invocation)", () => {
       run(["another", "task"], {
         runLoop: fakeRunLoop(answeredTurn).fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         getOpenRouterModel: (id: string) => {
           askedOpenRouter.push(id);
@@ -1035,7 +1039,7 @@ describe("run (task invocation)", () => {
       run(["a", "task"], {
         runLoop: fakeRunLoop(answeredTurn).fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         getAnthropicModel: (id: string) => {
           askedAnthropic.push(id);
@@ -1077,7 +1081,7 @@ describe("run (task invocation)", () => {
         run(["--resume", "legacy", "another", "task"], {
           runLoop: fakeRunLoop(answeredTurn).fake,
           loadAgentsFile: () => "",
-          loadSkills: () => new Map(),
+          loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
           sessionsDir,
           getGroqModel: (id: string) => {
             asked.push(id);
@@ -1125,7 +1129,7 @@ describe("run (task invocation)", () => {
       run(["--resume", "legacy-no-provider", "another", "task"], {
         runLoop: fakeRunLoop(answeredTurn).fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         getGroqModel: () => {
           throw new Error("should not be called: the persisted pair is openrouter, not groq");
@@ -1156,7 +1160,7 @@ describe("run (task invocation)", () => {
     const deps = (events: LoopEvent[]) => ({
       runLoop: fakeRunLoop(events).fake,
       loadAgentsFile: () => "",
-      loadSkills: () => new Map(),
+      loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
       sessionsDir,
       getGroqModel: (id: string) => {
         asked.push(id);
@@ -1198,7 +1202,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       });
     } finally {
@@ -1242,7 +1246,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       });
     } finally {
@@ -1280,7 +1284,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         createInterface: () => {
           input = new PassThrough();
@@ -1340,7 +1344,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         // The SAME stream returned to every call, matching production's shared process.stdin —
         // NOT a fresh PassThrough per prompt, which is the divergence that hid this bug before.
@@ -1387,7 +1391,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         // A fresh stream per prompt, deliberately unlike the shared-stream test above: this test
         // is about the LATCH surviving a close that was not a real end, not about stream sharing.
@@ -1432,7 +1436,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         createInterface: () => {
           input = new PassThrough();
@@ -1481,7 +1485,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         createInterface: () => {
           input = new PassThrough();
@@ -1532,7 +1536,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         createInterface: () => {
           input = new PassThrough();
@@ -1578,7 +1582,7 @@ describe("run (task invocation)", () => {
       await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         createInterface: () => {
           input = new PassThrough();
@@ -1681,7 +1685,7 @@ describe("run (task invocation)", () => {
       code = await run(["write", "hello.txt"], {
         runLoop: runLoopFake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         // A real readline over a pair of pipes rather than a mock: emitting SIGINT on it is the
         // same call readline itself makes on a terminal, and nothing else about the interface is
@@ -1728,7 +1732,7 @@ describe("run (task invocation)", () => {
       run(["edit", "a.txt"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -1770,7 +1774,7 @@ describe("run (task invocation)", () => {
       run(["write", "a.ts"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -1813,7 +1817,7 @@ describe("run (task invocation)", () => {
       run(["write", "a.ts"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -1846,7 +1850,7 @@ describe("run (task invocation)", () => {
       run(["write", "a.ts"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -1881,7 +1885,7 @@ describe("run (task invocation)", () => {
       run(["write", "a.ts"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -1907,7 +1911,7 @@ describe("run (task invocation)", () => {
       run(["say", "hi"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -1966,7 +1970,7 @@ describe("run (task invocation)", () => {
       run(["say", "hi"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -1991,7 +1995,7 @@ describe("run (task invocation)", () => {
       run(["say", "hi"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2010,7 +2014,7 @@ describe("run (task invocation)", () => {
       run(["say", "hi"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2031,7 +2035,7 @@ describe("run (task invocation)", () => {
       run(["say", "hi"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2058,7 +2062,7 @@ describe("run (task invocation)", () => {
       run(["say", "hi"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2079,7 +2083,7 @@ describe("run (task invocation)", () => {
     await run(["say", "hi"], {
       runLoop: fake,
       loadAgentsFile: () => "",
-      loadSkills: () => new Map(),
+      loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
       sessionsDir,
     });
 
@@ -2110,7 +2114,7 @@ describe("run (task invocation)", () => {
       run(["say", "hi"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2165,7 +2169,7 @@ describe("run (task invocation)", () => {
       run(["say", "hi"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2186,7 +2190,7 @@ describe("run (task invocation)", () => {
       run(["say", "hi"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2206,7 +2210,7 @@ describe("run (task invocation)", () => {
       run(["say", "hi"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2230,7 +2234,7 @@ describe("run (task invocation)", () => {
       run(["say", "hi"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2251,7 +2255,7 @@ describe("run (task invocation)", () => {
       run(["config", "set", "GROQ_API_KEY", "gsk_live_secret"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         authConfigDir: tmpConfigRoot,
       }),
@@ -2290,7 +2294,7 @@ describe("run (task invocation)", () => {
         code = await run([word, "is", "wrong", "on", "User"], {
           runLoop: fake,
           loadAgentsFile: () => "",
-          loadSkills: () => new Map(),
+          loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
           sessionsDir,
         });
       } finally {
@@ -2316,7 +2320,7 @@ describe("run (task invocation)", () => {
     const code = await run(["/exit", "the", "debugger", "and", "retry"], {
       runLoop: fake,
       loadAgentsFile: () => "",
-      loadSkills: () => new Map(),
+      loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
       sessionsDir,
     });
 
@@ -2341,7 +2345,7 @@ describe("run (task invocation)", () => {
     const code = await run(["/exit"], {
       runLoop: fake,
       loadAgentsFile: () => "",
-      loadSkills: () => new Map(),
+      loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
       sessionsDir,
     });
 
@@ -2381,7 +2385,7 @@ describe("run (task invocation)", () => {
       run(["read", "a.ts"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2410,7 +2414,7 @@ describe("run (task invocation)", () => {
         run(["do", "a", "task"], {
           runLoop: fake,
           loadAgentsFile: () => "",
-          loadSkills: () => new Map(),
+          loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
           sessionsDir,
         }),
       );
@@ -2447,7 +2451,7 @@ describe("run (task invocation)", () => {
         run(["/trajectory", "off"], {
           runLoop: fake,
           loadAgentsFile: () => "",
-          loadSkills: () => new Map(),
+          loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
           sessionsDir,
         }),
       );
@@ -2497,7 +2501,7 @@ describe("run (task invocation)", () => {
       run(["edit", "a.ts"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2516,7 +2520,7 @@ describe("run (task invocation)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2553,7 +2557,7 @@ describe("run (task invocation)", () => {
       run(["dispatch"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2682,7 +2686,7 @@ describe("bare seri", () => {
       run(["--continue", "new", "task"], {
         runLoop: echoRunLoop,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2695,7 +2699,7 @@ describe("bare seri", () => {
       run(["--continue"], {
         runLoop: echoRunLoop,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2727,7 +2731,7 @@ describe("bare seri", () => {
       run(["--resume", "abc"], {
         runLoop: echoRunLoop,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
       }),
     );
@@ -2843,7 +2847,7 @@ describe("run (permanent permissions)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         permissionsDir,
       }),
@@ -2863,7 +2867,7 @@ describe("run (permanent permissions)", () => {
       run(["do", "a", "task"], {
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         permissionsDir,
       }),
@@ -2884,7 +2888,7 @@ describe("run (permanent permissions)", () => {
       run(["do", "a", "task"], {
         runLoop: firstRun,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         permissionsDir,
       }),
@@ -2895,7 +2899,7 @@ describe("run (permanent permissions)", () => {
       run(["--continue"], {
         runLoop: secondRun,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         permissionsDir,
       }),
@@ -2918,7 +2922,7 @@ describe("run (permanent permissions)", () => {
       run(["do", "a", "task"], {
         runLoop: approveEachFake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         permissionsDir,
       }),
@@ -2940,7 +2944,7 @@ describe("run (permanent permissions)", () => {
       run(["--resume", "ro", "do", "a", "task"], {
         runLoop: readOnlyFake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         permissionsDir,
       }),
@@ -2952,7 +2956,7 @@ describe("run (permanent permissions)", () => {
       run(["--dangerously-skip-permissions", "do", "a", "task"], {
         runLoop: autoFake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         sessionsDir,
         permissionsDir,
       }),
@@ -2980,7 +2984,7 @@ describe("run (permanent permissions)", () => {
         run(["do", "a", "task"], {
           runLoop: fake,
           loadAgentsFile: () => "",
-          loadSkills: () => new Map(),
+          loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
           sessionsDir,
           permissionsDir,
         }),
@@ -3025,7 +3029,7 @@ describe("run (/mode)", () => {
         sessionsDir,
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
       });
       expect(code).toBe(0);
     } finally {
@@ -3116,7 +3120,7 @@ describe("run (/mode)", () => {
         sessionsDir,
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
       });
     } finally {
       console.log = originalLog;
@@ -3449,7 +3453,7 @@ describe("run (/effort)", () => {
           sessionsDir,
           runLoop: fake,
           loadAgentsFile: () => "",
-          loadSkills: () => new Map(),
+          loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
         }),
       );
     } finally {
@@ -3534,7 +3538,7 @@ describe("run (/clear)", () => {
         sessionsDir,
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
       });
     } finally {
       console.log = originalLog;
@@ -3572,7 +3576,7 @@ describe("run (/clear)", () => {
         sessionsDir,
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
       });
     } finally {
       console.log = originalLog;
@@ -3671,7 +3675,7 @@ describe("run (/clear)", () => {
     expect(loaded.messages).toEqual([]);
     expect(loaded.cwd).toBe(existing.cwd);
     expect(loaded.systemPrompt).toBe(
-      buildSystemPrompt({ agentsContent: loadAgentsFile(cwd), skills: [] }),
+      buildSystemPrompt({ agentsContent: loadAgentsFile(cwd), skills: [], rules: [] }),
     );
     expect(loaded.systemPrompt).not.toBe(existing.systemPrompt);
     expect(loaded.permissionMode).toBe(existing.permissionMode);
@@ -3700,7 +3704,7 @@ describe("run (/clear)", () => {
         sessionsDir,
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
       });
       expect(code).toBe(0);
     } finally {
@@ -3766,7 +3770,7 @@ describe("run (/memory)", () => {
         authConfigDir: configDir,
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
       });
     } finally {
       console.log = originalLog;
@@ -4128,7 +4132,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
         checkpointsDir,
         runLoop: fake,
         loadAgentsFile: () => "",
-        loadSkills: () => new Map(),
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
       });
     } finally {
       // Deleted rather than reassigned when it was unset: `process.env.X = undefined` stores the

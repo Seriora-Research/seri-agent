@@ -47,6 +47,7 @@ import {
   resolveRoute,
   resolveSessionRoute,
 } from "../../provider/routing";
+import { loadRuleRegistry, type RuleRegistry } from "../../rules/registry";
 import type { SessionState } from "../../session/session";
 import { loadSkillRegistry, type SkillRegistry } from "../../skills/registry";
 import type { TrajectoryWriter } from "../../trajectory/writer";
@@ -620,16 +621,20 @@ export function decideClear(
   // carried over. A skill directory added since the session started is live after /clear. Warnings
   // are dropped here rather than surfaced — bindSession reloads the identical set moments later
   // with a real sink attached, and printing each one twice is worse than printing it once.
-  loadSkills: (cwd: string) => SkillRegistry = (cwd) =>
-    loadSkillRegistry({ worktree: cwd, configDir, onWarning: () => {} }),
+  loadExtensions: (cwd: string) => { skills: SkillRegistry; rules: RuleRegistry } = (cwd) => ({
+    skills: loadSkillRegistry({ worktree: cwd, configDir, onWarning: () => {} }),
+    rules: loadRuleRegistry({ worktree: cwd, configDir, onWarning: () => {} }),
+  }),
 ): { next: SessionState<ModelMessage>; message: string } {
+  const extensions = loadExtensions(session.cwd);
   const next = {
     ...session,
     id: newId,
     messages: [],
     systemPrompt: buildSystemPrompt({
       agentsContent: loadAgents(session.cwd),
-      skills: [...loadSkills(session.cwd).values()],
+      skills: [...extensions.skills.values()],
+      rules: [...extensions.rules.values()],
     }),
   };
   // "saved", not "intact": the checkpoint store retains only a fixed number of recent session refs

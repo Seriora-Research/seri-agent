@@ -29,6 +29,8 @@ import { dispatchModel } from "../provider/model";
 import { appliedReasoningEffort } from "../provider/reasoning";
 import { type ResolvedRoute, resolveRoute } from "../provider/routing";
 import { createToolDefinitions } from "../provider/tools";
+import { createRulesState, type RulesState } from "../rules/match";
+import { loadRuleRegistry, type RuleRegistry } from "../rules/registry";
 import {
   findMostRecentSession,
   loadSession,
@@ -109,9 +111,14 @@ export function loadOrCreateSession(
   // the same reason the AGENTS.md read is: a skill added since the session was saved must be
   // visible on resume, and one deleted since must not be. Nothing skill-shaped is ever replayed out
   // of the session JSON.
-  loadSkills: (cwd: string) => SkillRegistry,
+  loadExtensions: (cwd: string) => { skills: SkillRegistry; rules: RuleRegistry },
   onTruncated: () => void = () => {},
-): { session: RunSession; modelRecorded: boolean; skills: SkillRegistry } {
+): {
+  session: RunSession;
+  modelRecorded: boolean;
+  skills: SkillRegistry;
+  rules: RuleRegistry;
+} {
   if (resuming) {
     const id = resumeId ?? findMostRecentSession(sessionsDir);
     if (!id) throw new Error("No session to resume.");
@@ -155,19 +162,21 @@ export function loadOrCreateSession(
       loaded.model === undefined
         ? resolveDefaultModel(configDir)
         : { model: loaded.model, provider: loaded.provider };
-    const skills = loadSkills(loaded.cwd);
+    const { skills, rules } = loadExtensions(loaded.cwd);
     return {
       session: {
         ...loaded,
         systemPrompt: buildSystemPrompt({
           agentsContent: loadAgentsFileFn(loaded.cwd),
           skills: [...skills.values()],
+          rules: [...rules.values()],
         }),
         model,
         provider,
       },
       modelRecorded: loaded.model !== undefined,
       skills,
+      rules,
     };
   }
 
@@ -175,7 +184,7 @@ export function loadOrCreateSession(
   // (resolveDefaultModel's own comment), falling back to DEFAULT_MODEL/"groq" the same way
   // resolveModelId always has when nothing was ever picked.
   const { model, provider } = resolveDefaultModel(configDir);
-  const skills = loadSkills(cwd);
+  const { skills, rules } = loadExtensions(cwd);
   return {
     session: {
       id: randomUUID(),
@@ -183,6 +192,7 @@ export function loadOrCreateSession(
       systemPrompt: buildSystemPrompt({
         agentsContent: loadAgentsFileFn(cwd),
         skills: [...skills.values()],
+        rules: [...rules.values()],
       }),
       // approve-each, not read-only: on native Windows the OS sandbox is not enforced
       // (docs/ARCHITECTURE.md:417), so the permission gate is the whole Base layer and a default
@@ -200,6 +210,7 @@ export function loadOrCreateSession(
     },
     modelRecorded: false,
     skills,
+    rules,
   };
 }
 
@@ -349,6 +360,14 @@ export type PreparedRun = {
   // that, by reading the file. /clear is the one exception (bindSession, below), which reloads it
   // alongside memory and agents.
   skills: SkillRegistry;
+  // The project's own `.seri/rules/`, plus the profile root's, resolved once and frozen. Only the
+  // `alwaysApply` ones are in `session.systemPrompt`; a glob-scoped rule is held here until a tool
+  // call touches a path it matches, and then reaches the model through the turn instead — which is
+  // what keeps the system prompt byte-stable for the whole session.
+  rules: RuleRegistry;
+  // Which glob-scoped rules have already fired. Rebound on /clear alongside the registry itself, so
+  // a cleared session re-fires a rule the previous conversation had already seen.
+  rulesState: RulesState;
   // Trajectory records for this session id. Rebound in bindSession the same way checkpointer/tools
   // are: /clear mints a new id, so a writer closed over the old one would keep appending under a
   // session nothing resumes. Disabled config still yields a no-op writer.
@@ -521,6 +540,8 @@ export function bindSession(
   // context tier this feeds — the two must agree or /clear would list one set of skills and load
   // another.
   prepared.skills = loadSkillRegistry({ worktree: session.cwd, configDir, onWarning });
+  prepared.rules = loadRuleRegistry({ worktree: session.cwd, configDir, onWarning });
+  prepared.rulesState = createRulesState();
   prepared.agents = loadAgentRegistry({
     worktree: prepared.worktree,
     configDir,
@@ -570,7 +591,7 @@ export async function prepareSession(
   // that call site's own comment.
   try {
     const configDir = deps.authConfigDir ?? getConfigDir();
-    const { session, modelRecorded, skills } = loadOrCreateSession(
+    const { session, modelRecorded, skills, rules } = loadOrCreateSession(
       ctx.resuming,
       ctx.resumeId,
       ctx.sessionsDir,
@@ -578,12 +599,18 @@ export async function prepareSession(
       configDir,
       ctx.cwd,
       (cwd) =>
-        deps.loadSkills?.(cwd, configDir) ??
-        loadSkillRegistry({
-          worktree: cwd,
-          configDir,
-          onWarning: (msg) => printWarning(msg, warnSink),
-        }),
+        deps.loadExtensions?.(cwd, configDir) ?? {
+          skills: loadSkillRegistry({
+            worktree: cwd,
+            configDir,
+            onWarning: (msg) => printWarning(msg, warnSink),
+          }),
+          rules: loadRuleRegistry({
+            worktree: cwd,
+            configDir,
+            onWarning: (msg) => printWarning(msg, warnSink),
+          }),
+        },
       () =>
         printWarning(
           "the last message in this session's saved history was incomplete (an interrupted save) and has been dropped — everything before it is intact",
@@ -767,6 +794,8 @@ export async function prepareSession(
       memory,
       agents,
       skills,
+      rules,
+      rulesState: createRulesState(),
       trajectory,
       preMountMessages,
     };

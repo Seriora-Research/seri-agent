@@ -212,6 +212,42 @@ does not parse, or that takes the name of a built-in agent or a slash command, i
 warning at startup rather than failing the session. And `/explore`, `/plan`, `/code`, `/test` and
 `/oracle` work the same way, because the built-in roster is entries in the same registry.
 
+## Project rules
+
+A rule is a standing instruction rather than something you invoke. Drop one in
+`.seri/rules/<name>.mdc` (this project) or your profile root (every project) — `~/.seri/rules/` by default,
+`~/.seri/<profile>/rules/` under `--profile <name>`. Frontmatter decides when it loads.
+
+```markdown
+---
+description: TypeScript conventions for this repo.
+globs: "**/*.{ts,tsx}"
+alwaysApply: false
+---
+
+Make illegal states unrepresentable. Parse external data at the boundary.
+```
+
+`alwaysApply: true` puts the rule in the prompt for the whole session, next to `AGENTS.md`.
+
+`globs` makes it conditional on what the session actually touches. The rule stays out of the prompt
+until a `read_file` or `write_file` lands on a matching path, and then it arrives as a note in the
+conversation — once per session, not once per file. Matching a `read_file` is deliberate: it puts
+the rule in front of the model *before* it composes the edit.
+
+**The rule text never enters the system prompt mid-session.** That string is frozen when the
+session starts, and keeping it frozen is what lets a provider reuse its cached prefix for every
+turn. A rule that fires appends to the conversation instead, which is where every tool result
+already goes.
+
+A rule with only a `description` and neither of the other two loads nothing today, and says so at
+startup naming the file. A file setting both `globs` and `alwaysApply: true` is always-on, and is
+never also injected per touch. Patterns accept `**`, braces and ranges; a comma-separated list is
+several patterns, while commas inside `{…}` stay part of one. Paths are matched relative to the
+worktree, with separators normalised, so `src/**` means the same thing on Windows, macOS and Linux.
+
+Rules are human-authored, like `AGENTS.md`. seri never writes one.
+
 ## Your own skills
 
 A skill is a procedure rather than a role: a named set of instructions that runs in the session's
