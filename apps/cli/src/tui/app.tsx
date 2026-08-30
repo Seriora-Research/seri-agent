@@ -486,6 +486,25 @@ export function App({
     else if (key.name === "end") el.scrollBy(1, "content");
   });
 
+  // The splash owns the whole terminal and returns before the session chrome below it renders.
+  // It is the one phase with nothing behind it — no transcript, no session, no input box — so
+  // rendering it in the panel slot at the bottom of that column left the entire viewport above it
+  // blank. `flexGrow` on the panel itself (WelcomeSplashPanel.tsx) is what makes its border span
+  // the full height instead of hugging its own content.
+  if (state.pendingSplash) {
+    return (
+      <box flexDirection="column" height={rows}>
+        <WelcomeSplashPanel
+          authenticated={!state.authOffer}
+          banner={splashBanner}
+          onLogin={onSplashLogin}
+          onSignup={onSplashSignup}
+          onContinue={onSplashContinue}
+        />
+      </box>
+    );
+  }
+
   return (
     // No `height - 1` spare-row workaround: that existed only for Ink's own console-patching
     // full-redraw path (`resolveOutput`'s `isFullscreen` check racing `log-update`'s line-count

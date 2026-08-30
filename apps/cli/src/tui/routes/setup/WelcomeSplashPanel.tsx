@@ -64,6 +64,7 @@ export function WelcomeSplashPanel({
       borderStyle="single"
       borderColor={theme.muted}
       flexDirection="column"
+      flexGrow={1}
       paddingLeft={1}
       paddingRight={1}
     >
@@ -72,6 +73,9 @@ export function WelcomeSplashPanel({
       {items.map((item, index) => (
         <ListRow key={item.label} selected={index === selected} label={item.label} />
       ))}
+      {/* Eats the leftover height so the hint sits on the bottom edge of a full-screen panel
+      instead of stranded under the list with a void beneath it. */}
+      <box flexGrow={1} />
       <text fg={theme.muted}>↑/↓ move · Enter select · Esc continue</text>
     </box>
   );
