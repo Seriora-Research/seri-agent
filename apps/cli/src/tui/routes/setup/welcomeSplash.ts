@@ -20,7 +20,14 @@ import { decideAuthOffer } from "../../state/commands";
 import { createAuthHandlers } from "../../state/handlers";
 import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "../../state/reducer";
 
-export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promise<void> {
+export async function runWelcomeSplash(
+  configDir: string,
+  deps: CliDeps,
+  // Forwarded straight to App, never stored here: this mount stays on screen after this
+  // function's own promise resolves — `run()` only replaces it once `prepareSession` is done —
+  // so a task typed in that window arrives AFTER the await below has already returned.
+  onPreSessionSubmit: (task: string) => void,
+): Promise<void> {
   const { root } = await getTuiRenderer();
 
   // Same synchronous-mirror pattern as guidedSetup.ts's own liveState/dispatch — see that file's
@@ -123,6 +130,7 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
         // abbreviates, instead of the two disagreeing about where home is.
         home: process.env.HOME || homedir(),
       },
+      onPreSessionSubmit,
       onSplashLogin,
       onSplashSignup,
       onSplashContinue,

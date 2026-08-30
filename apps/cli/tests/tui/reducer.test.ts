@@ -1205,12 +1205,15 @@ describe("tuiReducer: splash-requested / splash-resolved", () => {
     expect(state).toEqual({ ...initialTuiState(session()), pendingSplash: true });
   });
 
-  test("splash-resolved clears pendingSplash and leaves every other field untouched", () => {
+  test("splash-resolved clears pendingSplash, latches splashDone, and touches nothing else", () => {
     const state = tuiReducer(initialTuiState(session(), { showSplash: true }), {
       type: "splash-resolved",
     });
 
-    expect(state).toEqual(initialTuiState(session()));
+    // `splashDone` is the one field that differs from a fresh state: it is what tells "after the
+    // splash" from "before it", which `pendingSplash: false` alone cannot (app.tsx's own
+    // pre-session input branch).
+    expect(state).toEqual({ ...initialTuiState(session()), splashDone: true });
   });
 });
 

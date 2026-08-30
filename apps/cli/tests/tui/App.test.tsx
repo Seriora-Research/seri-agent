@@ -1845,6 +1845,81 @@ describe("App", () => {
       expect(bannerIndex).toBeLessThan(createdIndex);
     });
 
+    // The pre-session window used to render a dead placeholder, so a task typed while
+    // `prepareSession` was still running was lost. These pin both halves: the box takes the line,
+    // and the second one goes away so a second line cannot silently replace the first.
+    test("a task typed before the session exists is handed to the caller", async () => {
+      const taken: string[] = [];
+      const { setup, dispatch } = await connect({
+        onSubmit: undefined,
+        onPreSessionSubmit: (task) => taken.push(task),
+      });
+
+      dispatch({ type: "splash-resolved" });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("starting session");
+
+      setup.mockInput.typeText("fix the wrap");
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      expect(taken).toEqual(["fix the wrap"]);
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("queued");
+      expect(frame).toContain("fix the wrap");
+    });
+
+    test("the box is withdrawn after one task, so a second cannot replace it", async () => {
+      const taken: string[] = [];
+      const { setup, dispatch } = await connect({
+        onSubmit: undefined,
+        onPreSessionSubmit: (task) => taken.push(task),
+      });
+
+      dispatch({ type: "splash-resolved" });
+      await flush(setup);
+      setup.mockInput.typeText("first");
+      setup.mockInput.pressEnter();
+      await flush(setup);
+      setup.mockInput.typeText("second");
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      expect(taken).toEqual(["first"]);
+      expect(setup.captureCharFrame()).not.toContain("second");
+    });
+
+    // The splash mount's own first frame lands before `connectDispatch` fires `splash-requested`,
+    // so `pendingSplash` is false there too. Without the `splashDone` latch that frame offered a
+    // live input box, and a fast typist could queue a task before answering the login gate.
+    test("no input box before the login choice is answered", async () => {
+      const taken: string[] = [];
+      const { setup } = await connect({
+        onSubmit: undefined,
+        onPreSessionSubmit: (task) => taken.push(task),
+      });
+
+      setup.mockInput.typeText("too early");
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      expect(taken).toEqual([]);
+      expect(setup.captureCharFrame()).not.toContain("too early");
+    });
+
+    // Without onPreSessionSubmit the mount keeps the inert placeholder it always had — the guided
+    // setup has no session coming and nothing to hand a task to.
+    test("a mount with no pre-session handler keeps the inert placeholder", async () => {
+      const { setup } = await connect({ onSubmit: undefined });
+
+      setup.mockInput.typeText("dropped");
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("starting session");
+      expect(frame).not.toContain("dropped");
+    });
+
     // A mount with no banner is the test-only shape (WelcomeSplashPanel's own `banner?` comment) —
     // pinned so it degrades to the bare wordmark instead of throwing on an undefined field.
     test("a mount with no banner still renders the menu", async () => {

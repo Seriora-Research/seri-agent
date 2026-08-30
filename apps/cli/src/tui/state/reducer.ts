@@ -185,6 +185,11 @@ export type TuiState = {
   // `pendingAuth` already use. `runTui` and `runGuidedSetup` never dispatch it, so their own
   // separate App instances never render WelcomeSplash for the same launch.
   pendingSplash: boolean;
+  // Latched by `splash-resolved`, never cleared. `pendingSplash` alone cannot tell "before the
+  // splash" from "after it": both are `false`, and the splash mount's own first frame lands in
+  // the first of those, before `connectDispatch` fires `splash-requested`. The pre-session
+  // input box (app.tsx) keys off this so it cannot appear until the login choice is answered.
+  splashDone: boolean;
   // The status bar's own model+route label reads this, not `AppProps.route` (App.tsx's own
   // comment on that prop) — the prop only seeds this field at mount; every later switch reaches
   // the label by dispatching `route-updated` instead, the same "reducer state, not a caller-held
@@ -275,6 +280,7 @@ export function initialTuiState(
     pendingMcp: undefined,
     pendingEffort: undefined,
     pendingSplash: opts?.showSplash ?? false,
+    splashDone: false,
     ...EMPTY_ROSTER,
   };
 }
@@ -677,7 +683,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "splash-requested":
       return { ...state, pendingSplash: true };
     case "splash-resolved":
-      return { ...state, pendingSplash: false };
+      return { ...state, pendingSplash: false, splashDone: true };
     case "route-updated":
       return { ...state, route: action.route };
     case "config-updated":
