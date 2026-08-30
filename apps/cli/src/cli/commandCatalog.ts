@@ -186,7 +186,7 @@ export const COMMAND_META: readonly CommandMeta[] = [
     name: "/mcp",
     surface: "tui",
     description: "manage MCP servers: connect, preview their tools, and trust or remove them",
-    argsUsage: "[list|add <name> <url>|remove <name>]",
+    argsUsage: "[list|add <name> <url>|auth <name>|remove <name>]",
     accepts: mcpCommandAccepts,
   },
   {

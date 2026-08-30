@@ -2,8 +2,11 @@ import { join, relative } from "node:path";
 import { getMcpDir } from "../config/paths";
 import { messageOf } from "../errors";
 import type { ExtensionSource } from "../extensions/discovery";
+import { truncate } from "../truncate";
+import { clearMcpServerAuth } from "./authStore";
 import type { McpClients, McpServerStatus } from "./client";
 import { mcpServerStatus } from "./client";
+import type { McpLoginResult } from "./login";
 import {
   addServerToFile,
   deleteCatalogCache,
@@ -55,6 +58,7 @@ export function mcpCommandAccepts(args: string[]): boolean {
   if (sub === "add") return rest.length === 2;
   if (sub === "remove") return rest.length === 1;
   if (sub === "connect") return rest.length === 1; // dials; handled by the panel, not this file
+  if (sub === "auth") return rest.length === 1; // logs in; handled by cli.ts's own branch
   return false;
 }
 
@@ -85,6 +89,24 @@ export function mcpStatusWord(status: McpServerStatus): string {
   if (status.state === "needs-auth") return "needs authentication";
   if (status.state === "failed") return "unreachable";
   return "idle, connects on first use";
+}
+
+// The one sentence a finished login is reported with, for exactly the reason mcpStatusWord above
+// exists: the /mcp panel's error line and `/mcp auth`'s transcript line are two surfaces reporting
+// one outcome, and they must not word it two ways. `timeout` and `aborted` carry no message of
+// their own, so this is also the only place their words live.
+export function mcpLoginLine(name: string, result: McpLoginResult): string {
+  if (result.status === "success") {
+    return `Authenticated "${name}". Connect it from /mcp to preview and trust its tools.`;
+  }
+  if (result.status === "denied") return `Authenticating "${name}" was declined: ${result.message}`;
+  if (result.status === "timeout") return `Authenticating "${name}" timed out.`;
+  if (result.status === "aborted") return `Authenticating "${name}" was cancelled.`;
+  // Flattened and capped because this one is the only branch carrying a message seri did not
+  // write. Measured against the live Supabase authorization server: a rejected code comes back as
+  // a multi-line zod dump of the error body it could not parse, ~250 characters of JSON, which
+  // renders as a wall of text where a transcript expects one line.
+  return `Could not authenticate "${name}": ${truncate(result.message.replace(/\s+/g, " "), 200)}`;
 }
 
 /**
@@ -221,15 +243,19 @@ function removeResult(
   if (!removed) return { lines: [`No MCP server named "${name}".`] };
 
   deleteCatalogCache(deps.configDir, name);
+  // Alongside the catalog, for the same reason: a name added back later must not silently inherit
+  // what the previous owner of that name was trusted with — here, a live access token.
+  clearMcpServerAuth(deps.configDir, name);
   return {
-    lines: [`Removed "${name}" and its cached catalog.`],
+    lines: [`Removed "${name}", its cached catalog and its stored credentials.`],
     change: { kind: "removed", name },
   };
 }
 
-// The one-shot forms: list, add, remove. `connect` belongs to the panel because it dials, and the
-// bare form opens the panel too — neither reaches this function in practice; the default line
-// below exists only as a defensive fallback if they ever do.
+// The one-shot forms: list, add, remove. `connect` belongs to the panel and `auth` to cli.ts's own
+// branch, because both do network I/O, and the bare form opens the panel too — none of the three
+// reaches this function in practice; the default line below exists only as a defensive fallback if
+// they ever do.
 export function decideMcpCommand(
   args: string[],
   deps: { registry: McpRegistry; configDir: string; worktree: string; clients: McpClients },
@@ -242,5 +268,5 @@ export function decideMcpCommand(
   if (sub === "add") return addResult(rest[0], rest[1], deps);
   if (sub === "remove") return removeResult(rest[0], deps);
 
-  return { lines: ["Usage: /mcp [list] | add <name> <url> | remove <name>"] };
+  return { lines: ["Usage: /mcp [list] | add <name> <url> | auth <name> | remove <name>"] };
 }

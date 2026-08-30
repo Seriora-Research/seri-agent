@@ -2,10 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
+import { mcpAuthPath, saveMcpServerAuth } from "../../src/mcp/authStore";
 import { createMcpClients, type McpServerStatus } from "../../src/mcp/client";
 import {
   decideMcpCommand,
   mcpCommandAccepts,
+  mcpLoginLine,
   mcpPanelRows,
   mcpStatusWord,
 } from "../../src/mcp/commands";
@@ -78,6 +80,7 @@ describe("mcpCommandAccepts", () => {
     expect(mcpCommandAccepts(["add", "exa", "https://mcp.exa.ai/mcp"])).toBe(true);
     expect(mcpCommandAccepts(["remove", "exa"])).toBe(true);
     expect(mcpCommandAccepts(["connect", "exa"])).toBe(true);
+    expect(mcpCommandAccepts(["auth", "exa"])).toBe(true);
   });
 
   // The exact hijack class SLASH_COMMANDS' own comment documents elsewhere: a task that merely
@@ -94,6 +97,8 @@ describe("mcpCommandAccepts", () => {
     expect(mcpCommandAccepts(["remove"])).toBe(false);
     expect(mcpCommandAccepts(["remove", "exa", "extra"])).toBe(false);
     expect(mcpCommandAccepts(["connect"])).toBe(false);
+    expect(mcpCommandAccepts(["auth"])).toBe(false);
+    expect(mcpCommandAccepts(["auth", "exa", "extra"])).toBe(false);
     expect(mcpCommandAccepts(["bogus"])).toBe(false);
   });
 });
@@ -454,7 +459,7 @@ describe("decideMcpCommand: add", () => {
 });
 
 describe("decideMcpCommand: remove", () => {
-  test("edits the file the entry actually came from and deletes its cached catalog", () => {
+  test("edits the file the entry came from and deletes both its catalog and its credentials", () => {
     const { configDir, worktree } = load({
       "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
     });
@@ -468,7 +473,14 @@ describe("decideMcpCommand: remove", () => {
       fetchedAt: new Date().toISOString(),
       tools: [tool()],
     });
+    saveMcpServerAuth(
+      configDir,
+      "exa",
+      { tokens: { access_token: "at", token_type: "Bearer" } },
+      "https://mcp.exa.ai/mcp",
+    );
     expect(existsSync(join(configDir, "mcp", "catalog", "exa.json"))).toBe(true);
+    expect(existsSync(mcpAuthPath(configDir, "exa"))).toBe(true);
 
     const { lines } = decideMcpCommand(["remove", "exa"], {
       registry,
@@ -476,11 +488,12 @@ describe("decideMcpCommand: remove", () => {
       worktree,
       clients: createMcpClients(),
     });
-    expect(lines[0]).toContain("Removed");
+    expect(lines).toEqual(['Removed "exa", its cached catalog and its stored credentials.']);
 
     const projectFile = entryFromRegistry?.spec.filePath as string;
     expect(readFileSync(projectFile, "utf8")).not.toContain("exa:");
     expect(existsSync(join(configDir, "mcp", "catalog", "exa.json"))).toBe(false);
+    expect(existsSync(mcpAuthPath(configDir, "exa"))).toBe(false);
   });
 
   test("an unknown name returns a line rather than throwing", () => {
@@ -513,5 +526,51 @@ describe("decideMcpCommand: remove", () => {
       "No MCP servers configured. Add one with /mcp add <name> <url>.",
     ]);
     expect(mcpPanelRows(registry, deps.clients, worktree)).toEqual([]);
+  });
+});
+
+describe("one login outcome, worded once", () => {
+  test("each ending gets its own line", () => {
+    expect(mcpLoginLine("supabase", { status: "success" })).toBe(
+      'Authenticated "supabase". Connect it from /mcp to preview and trust its tools.',
+    );
+    expect(mcpLoginLine("supabase", { status: "denied", message: "user denied" })).toBe(
+      'Authenticating "supabase" was declined: user denied',
+    );
+    expect(mcpLoginLine("supabase", { status: "timeout" })).toBe(
+      'Authenticating "supabase" timed out.',
+    );
+    expect(mcpLoginLine("supabase", { status: "aborted" })).toBe(
+      'Authenticating "supabase" was cancelled.',
+    );
+  });
+
+  // The shape a real rejected authorization code came back as, measured against the live Supabase
+  // authorization server: a multi-line zod dump of an error body the library could not parse. A
+  // transcript renders one line, so neither the newlines nor the full length may reach it.
+  test("an authorization server's own error is flattened to one bounded line", () => {
+    const raw = [
+      "HTTP 404: Invalid OAuth error response: [",
+      '  {',
+      '    "expected": "string",',
+      '    "code": "invalid_type",',
+      '    "path": [',
+      '      "error"',
+      "    ],",
+      '    "message": "Invalid input: expected string, received undefined"',
+      "  }",
+      ']. Raw body: {"message":"Invalid or expired OAuth authorization"}',
+    ].join("\n");
+    const line = mcpLoginLine("supabase", { status: "error", message: raw });
+
+    expect(line).not.toContain("\n");
+    expect(line.length).toBeLessThan(250);
+    expect(line).toStartWith('Could not authenticate "supabase": HTTP 404:');
+    expect(line).toEndWith("…");
+  });
+
+  test("a short error is passed through whole, with no ellipsis", () => {
+    const line = mcpLoginLine("supabase", { status: "error", message: "connection refused" });
+    expect(line).toBe('Could not authenticate "supabase": connection refused');
   });
 });

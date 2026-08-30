@@ -3,6 +3,8 @@ import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useState } from "react";
 import type { McpPanelRow } from "../../../mcp/commands";
+import { mcpLoginLine } from "../../../mcp/commands";
+import type { McpLoginResult } from "../../../mcp/login";
 import type { McpCatalog } from "../../../mcp/types";
 import { useListWindow } from "../../hooks/useListWindow";
 import { theme } from "../../theme/theme";
@@ -21,6 +23,7 @@ type ServerRow = Extract<McpPanelRow, { kind: "server" }>;
 type Mode =
   | { kind: "list" }
   | { kind: "connecting"; name: string }
+  | { kind: "authenticating"; name: string }
   | { kind: "preview"; name: string; catalog: McpCatalog };
 
 export function McpPanel({
@@ -28,6 +31,8 @@ export function McpPanel({
   onConnect,
   onTrust,
   onRemove,
+  onAuth,
+  onAuthCancel,
   onMcpClose,
 }: {
   rows: readonly McpPanelRow[];
@@ -41,6 +46,10 @@ export function McpPanel({
   // writeCatalogCache). Never called on 'n' or a failed dial, which is the whole point of asking.
   onTrust?: (catalog: McpCatalog) => void;
   onRemove?: (name: string) => void;
+  // Runs one OAuth login for the named server (mcp/login.ts, via cli.ts). Resolves rather than
+  // throws for every ending, so this panel has a status to render in all five cases.
+  onAuth?: (name: string) => Promise<McpLoginResult>;
+  onAuthCancel?: () => void;
   onMcpClose?: () => void;
 }) {
   const [mode, setMode] = useState<Mode>({ kind: "list" });
@@ -53,31 +62,66 @@ export function McpPanel({
   const serverRows = rows.filter((row): row is ServerRow => row.kind === "server");
   const { selected, visible, remainingCount, handleArrowKey } = useListWindow(serverRows);
 
+  // Extracted from the Enter handler so a finished login can enter it directly, without the user
+  // pressing Enter a second time on the row they just authenticated.
+  function startConnect(name: string): void {
+    if (onConnect === undefined) {
+      setMode({ kind: "list" });
+      return;
+    }
+    setDialError(undefined);
+    setMode({ kind: "connecting", name });
+    onConnect(name).then((result) => {
+      if (result.ok) {
+        setMode({ kind: "preview", name, catalog: result.catalog });
+      } else {
+        setMode({ kind: "list" });
+        setDialError(result.message);
+      }
+    });
+  }
+
   useKeyboard((key) => {
     if (mode.kind === "connecting") return; // static busy text owns the keyboard while dialling
     if (isDismiss(key)) {
-      onMcpClose?.();
+      // Esc cancels the login, not the panel. Unlike `connecting` above there is something to
+      // cancel, and closing the panel instead would leave a bound listener and an open browser tab
+      // with nothing left to answer them.
+      if (mode.kind === "authenticating") onAuthCancel?.();
+      else onMcpClose?.();
       return;
     }
+    // Same rule the `connecting` guard states: the busy text owns everything else.
+    if (mode.kind === "authenticating") return;
     if (handleArrowKey(key)) return;
     const row = serverRows[selected];
     if (isEnter(key)) {
-      if (row === undefined || onConnect === undefined) return;
-      setDialError(undefined);
-      setMode({ kind: "connecting", name: row.name });
-      onConnect(row.name).then((result) => {
-        if (result.ok) {
-          setMode({ kind: "preview", name: row.name, catalog: result.catalog });
-        } else {
-          setMode({ kind: "list" });
-          setDialError(result.message);
-        }
-      });
+      if (row === undefined) return;
+      startConnect(row.name);
       return;
     }
     if (!isPrintableKey(key)) return;
     if (row === undefined) return;
-    if (key.sequence.toLowerCase() === "r") onRemove?.(row.name);
+    const pressed = key.sequence.toLowerCase();
+    if (pressed === "r") {
+      onRemove?.(row.name);
+      return;
+    }
+    if (pressed === "a" && onAuth !== undefined) {
+      setDialError(undefined);
+      setMode({ kind: "authenticating", name: row.name });
+      onAuth(row.name).then((result) => {
+        // Straight into the dial on success: the catalog the preview shows has to be fetched with
+        // the credentials this login just stored. It is still only a preview — authenticating
+        // grants nothing about trust, and McpTrustPreview stays the last gate.
+        if (result.status === "success") {
+          startConnect(row.name);
+          return;
+        }
+        setMode({ kind: "list" });
+        setDialError(mcpLoginLine(row.name, result));
+      });
+    }
   });
 
   if (mode.kind === "preview") {
@@ -143,7 +187,9 @@ export function McpPanel({
       <text fg={theme.muted} truncate wrapMode="none">
         {mode.kind === "connecting"
           ? "Connecting…"
-          : "↑/↓ move · Enter connect · r remove · Esc close"}
+          : mode.kind === "authenticating"
+            ? "Waiting for your browser… Esc cancels"
+            : "↑/↓ move · Enter connect · a authenticate · r remove · Esc close"}
       </text>
     </box>
   );

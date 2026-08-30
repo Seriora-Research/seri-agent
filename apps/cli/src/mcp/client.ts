@@ -1,5 +1,5 @@
-// The only file in the feature that touches the network. Consumes exactly two calls from
-// @ai-sdk/mcp: listTools() and callTool(). toolsFromDefinitions() looks like the obvious
+// One of the feature's two files that touch the network (mcp/login.ts is the other). Consumes
+// exactly two calls from @ai-sdk/mcp: listTools() and callTool(). toolsFromDefinitions() looks like the obvious
 // shortcut — it turns a catalog straight into an AI SDK ToolSet — but its return type does not
 // assign to seri's ToolSet: @ai-sdk/mcp pins @ai-sdk/provider-utils 5.0.33 while ai@7.0.58
 // resolves 5.0.25 (and 5.0.18), and each copy declares its own `unique symbol` schemaSymbol, so
@@ -7,8 +7,9 @@
 // 'Schema<unknown>' but required in type 'Schema<never>'"). listTools and callTool take and
 // return plain JSON, so nothing branded crosses this boundary and no version pin is needed to
 // keep this typechecking clean. Do not "simplify" this back to toolsFromDefinitions().
-import { createMCPClient, UnauthorizedError } from "@ai-sdk/mcp";
+import { createMCPClient, type OAuthClientProvider, UnauthorizedError } from "@ai-sdk/mcp";
 import { messageOf } from "../errors";
+import { createMcpAuthProvider, McpLoginRequiredError } from "./authProvider";
 import type { McpCatalog, McpServerSpec } from "./types";
 import { mcpToolName } from "./types";
 
@@ -55,9 +56,16 @@ export function flattenContent(result: {
     .join("\n");
 }
 
-async function dialServer(spec: McpServerSpec, signal?: AbortSignal): Promise<McpClientHandle> {
+async function dialServer(
+  spec: McpServerSpec,
+  signal?: AbortSignal,
+  authProvider?: OAuthClientProvider,
+): Promise<McpClientHandle> {
   const client = await createMCPClient({
-    transport: { type: "http", url: spec.url, headers: spec.headers },
+    // spec.headers spreads first and the transport only adds Authorization when the provider has
+    // a token, so a server authenticated by a static header in servers.yaml keeps working exactly
+    // as it did — a provider with nothing stored adds nothing to the request.
+    transport: { type: "http", url: spec.url, headers: spec.headers, authProvider },
     clientName: "seri",
     initializationOptions: { signal },
   });
@@ -86,6 +94,25 @@ export function createMcpClients(dial: DialFn = dialServer): McpClients {
   return { dial, handles: new Map(), status: new Map() };
 }
 
+// The dial a real session runs on: the same transport, plus a provider that spends and refreshes
+// stored credentials and refuses to start a login (the refuse persona, mcp/authProvider.ts). A
+// tool call is not consent to open a browser, and a scheduled run has nobody to open one for.
+export function createSessionDial(configDir: string): DialFn {
+  return (spec, signal) =>
+    dialServer(
+      spec,
+      signal,
+      createMcpAuthProvider({ spec, configDir, interaction: { kind: "refuse" } }),
+    );
+}
+
+// The two errors that both mean "this server will answer once, and only once, the user has logged
+// in": the transport's own 401 verdict, and the refuse persona declining to start a login. Lives
+// here so cli.ts never imports @ai-sdk/mcp directly.
+export function isAuthRequired(err: unknown): boolean {
+  return err instanceof UnauthorizedError || err instanceof McpLoginRequiredError;
+}
+
 function dialOnce(
   clients: McpClients,
   spec: McpServerSpec,
@@ -108,7 +135,7 @@ function dialOnce(
       clients.handles.delete(spec.name);
       clients.status.set(
         spec.name,
-        err instanceof UnauthorizedError
+        isAuthRequired(err)
           ? { state: "needs-auth" }
           : { state: "failed", message: messageOf(err) },
       );
@@ -130,6 +157,13 @@ export async function callMcpTool(
   try {
     handle = await dialOnce(clients, spec, signal);
   } catch (err) {
+    // The model reads this string and relays it, so a server that only needs a login has to say
+    // the command that provides one rather than read as broken.
+    if (isAuthRequired(err)) {
+      throw new Error(
+        `MCP server "${spec.name}" needs authentication. Run /mcp auth ${spec.name}.`,
+      );
+    }
     throw new Error(`MCP server "${spec.name}" is unreachable: ${messageOf(err)}`);
   }
   try {
