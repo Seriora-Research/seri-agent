@@ -47,12 +47,16 @@ if (!outFile || !profile || steps.length === 0) {
   process.exit(2);
 }
 
-const term = pty.spawn("bun.exe", [join(ROOT, "apps/cli/src/cli.ts"), "--profile", profile, ...cliArgs], {
-  cwd: ROOT,
-  env: process.env,
-  cols: 100,
-  rows: 30,
-});
+const term = pty.spawn(
+  "bun.exe",
+  [join(ROOT, "apps/cli/src/cli.ts"), "--profile", profile, ...cliArgs],
+  {
+    cwd: ROOT,
+    env: process.env,
+    cols: 100,
+    rows: 30,
+  },
+);
 
 let decoded = "";
 let exited = false;
@@ -117,7 +121,10 @@ for (const step of steps) {
       // -1073741510 (0xC000013A, STATUS_CONTROL_C_EXIT) with only "?9001h?1004h" captured means
       // the hosting process tree has no attached console and ConPTY cannot run here at all —
       // rerun from a standalone terminal window, not from an agent shell or Claude Code's `!`.
-      finish(1, `wait=${JSON.stringify(arg)} never appeared${exited ? ` (child exited, code ${childExit})` : ""}`);
+      finish(
+        1,
+        `wait=${JSON.stringify(arg)} never appeared${exited ? ` (child exited, code ${childExit})` : ""}`,
+      );
     }
   } else if (op === "type") {
     term.write(arg);
