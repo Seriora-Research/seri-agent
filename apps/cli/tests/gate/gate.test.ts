@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { WRITE_TOOL_NAMES } from "../../src/provider/tools";
-import { checkPermission, cycleMode, type PermissionMode, WRITE_TOOLS } from "../../src/gate/gate";
+import { classifyBuiltin, WRITE_TOOL_NAMES } from "../../src/provider/tools";
+import { checkPermission, cycleMode, type PermissionMode } from "../../src/gate/gate";
 
 const READ_TOOL_NAMES = ["read_file", "grep", "glob"];
 
-test("WRITE_TOOLS matches provider/tools.ts's WRITE_TOOL_NAMES exactly", () => {
-  expect(WRITE_TOOLS).toEqual(new Set(WRITE_TOOL_NAMES));
+// A name no classifier has ever seen, shaped the way an MCP server's would be (mcp_<server>_<tool>).
+const UNKNOWN_TOOL_NAME = "mcp_exa_web_search";
+
+test("the gate's write class over the built-ins is exactly WRITE_TOOL_NAMES", () => {
+  const write = [...WRITE_TOOL_NAMES, ...READ_TOOL_NAMES].filter(
+    (name) => classifyBuiltin(name) === "write",
+  );
+  expect(new Set(write)).toEqual(new Set<string>(WRITE_TOOL_NAMES));
 });
 
 describe("checkPermission", () => {
@@ -64,6 +70,35 @@ describe("checkPermission", () => {
 
     test("the allowlist does not make a read tool need approval", () => {
       expect(checkPermission("read_file", "approve-each", new Set(["read_file"]))).toBe("allow");
+    });
+  });
+
+  // The inversion, asserted where it bites: a name the gate has never heard of is not "safe by
+  // absence" any more, it takes the same path bash does in all three modes.
+  describe("an unrecognised tool name", () => {
+    test("is blocked in read-only", () => {
+      expect(checkPermission(UNKNOWN_TOOL_NAME, "read-only")).toBe("block");
+    });
+
+    test("needs approval in approve-each", () => {
+      expect(checkPermission(UNKNOWN_TOOL_NAME, "approve-each")).toBe("needs-approval");
+    });
+
+    test("is allowed in auto", () => {
+      expect(checkPermission(UNKNOWN_TOOL_NAME, "auto")).toBe("allow");
+    });
+
+    test("is allowed in approve-each once granted", () => {
+      const allowed = new Set([UNKNOWN_TOOL_NAME]);
+      expect(checkPermission(UNKNOWN_TOOL_NAME, "approve-each", allowed)).toBe("allow");
+    });
+  });
+
+  // The seam a caller composing a non-built-in tool set uses; the default is only a default.
+  describe("a caller-supplied classify", () => {
+    test("decides in both directions, overriding the built-in classification", () => {
+      expect(checkPermission("bash", "read-only", undefined, () => "read")).toBe("allow");
+      expect(checkPermission("read_file", "read-only", undefined, () => "write")).toBe("block");
     });
   });
 });

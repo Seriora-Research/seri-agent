@@ -146,6 +146,78 @@ describe("runLoop", () => {
     expect(model.doStreamCalls).toHaveLength(2);
   });
 
+  // The test above runs in auto, where every verdict is `allow` and the existence check is reached
+  // whichever side of the gate it sits on. read-only is where the order shows: the gate classifies
+  // a name it does not recognise as `write` (provider/tools.ts), so gating first answers a
+  // hallucinated call with `deny-blocked` and hands the model "was not permitted to run (permission
+  // mode: read-only) … tell the user to run /mode" plus "Do not retry this call" — a permission
+  // diagnosis, a permission remedy and a retry ban, for a call no mode could ever have run.
+  test("read-only reports a nonexistent tool as unknown, not as permission-denied", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallChunks("call-1", "does_not_exist", { path: "a.txt" })),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    const events = await collect(
+      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "read-only" }),
+    );
+
+    expect(events).toContainEqual({
+      type: "error",
+      error: 'Unknown tool "does_not_exist": no matching tool definition.',
+    });
+    expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
+    // The row the model actually reads, which is where the wrong remedy would have landed.
+    expect(toolResultOutputOf(events)).toEqual({
+      type: "error-text",
+      value: 'Unknown tool "does_not_exist": no matching tool definition.',
+    });
+    expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+
+    function toolResultOutputOf(collected: LoopEvent[]): unknown {
+      // Not `.at(-1)`: the errored call's turn is followed by a text-only turn, whose own
+      // messages-updated has an assistant message last, not a tool one. Find the tool row itself.
+      const toolMessage = collected
+        .filter(
+          (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
+            e.type === "messages-updated",
+        )
+        .map((e) => e.messages.at(-1))
+        .find((message) => message?.role === "tool");
+      return (toolMessage?.content as { output: unknown }[] | undefined)?.[0]?.output;
+    }
+  });
+
+  // The prompt throws instead of recording that it ran: if this order ever regresses, the failure
+  // is the human being asked to approve a tool that cannot run, which is the thing prevented here.
+  test("approve-each never asks the human to approve a tool that does not exist", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallChunks("call-1", "does_not_exist", { path: "a.txt" })),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "approve-each",
+        approvalPrompt: () => {
+          throw new Error("the human was asked to approve a tool with no definition");
+        },
+      }),
+    );
+
+    expect(events).toContainEqual({
+      type: "error",
+      error: 'Unknown tool "does_not_exist": no matching tool definition.',
+    });
+    expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
+    expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+  });
+
   test("yields an error and continues when a tool's execute throws, instead of crashing", async () => {
     const tools = makeTools(async () => {
       throw new Error("disk full");

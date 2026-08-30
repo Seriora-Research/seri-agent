@@ -486,6 +486,28 @@ export async function* runLoop(opts: {
       // a half-written file behind.
       if (opts.signal?.aborted) break;
 
+      // Existence first, permission second, and that order is load-bearing rather than incidental.
+      // The gate classifies a name it does not recognise as `write` (provider/tools.ts), which is
+      // the right answer for a third-party tool and the wrong one for a tool that does not exist.
+      // Gated first, a name the model invented comes back `deny-blocked` in read-only and the row
+      // below would tell the model its call "was not permitted to run … tell the user to run
+      // /mode": a permission diagnosis, a permission remedy, and an explicit instruction not to
+      // retry, for a call no mode could ever have run. In approve-each it is worse — the human is
+      // asked to approve a tool that cannot run. "No such tool" is the only true answer, and it
+      // costs nothing to give it first.
+      const toolDef = opts.tools[call.toolName];
+      if (!toolDef?.execute) {
+        const error = `Unknown tool "${call.toolName}": no matching tool definition.`;
+        yield { type: "error", error };
+        toolResults.push({
+          type: "tool-result",
+          toolCallId: call.toolCallId,
+          toolName: call.toolName,
+          output: { type: "error-text", value: error },
+        });
+        continue;
+      }
+
       const verdict = await decidePermission(
         call.toolName,
         call.input,
@@ -530,22 +552,10 @@ export async function* runLoop(opts: {
         });
         continue;
       }
-      const toolDef = opts.tools[call.toolName];
-      if (!toolDef?.execute) {
-        const error = `Unknown tool "${call.toolName}": no matching tool definition.`;
-        yield { type: "error", error };
-        toolResults.push({
-          type: "tool-result",
-          toolCallId: call.toolCallId,
-          toolName: call.toolName,
-          output: { type: "error-text", value: error },
-        });
-        continue;
-      }
 
-      // Any approved call resets the streak, and only below the guard above: an approved call that
-      // turns out to have no matching tool definition made no progress, so resetting before that
-      // guard would count a call that never actually ran as the reason to keep trying. Not
+      // Any approved call resets the streak, and by this line the call is known to have a tool
+      // definition behind it: the unknown-tool guard runs ahead of the gate, so a call that never
+      // actually ran can no longer reach here and count as the reason to keep trying. Not
       // write-only: in read-only mode checkPermission blocks every write, so no write is EVER
       // approved there, and a write-only reset would mean consecutiveDenials counts "denied write
       // attempts this run" instead of "denied calls in a row" — a long, productive read-heavy

@@ -47,18 +47,18 @@ export function usageError(message: string): number {
   return 2;
 }
 
-// Defence-in-depth, not a live threat today: this file renders a tool name at two sites — the
-// approval prompt (cli.ts) and the tool-allowed line below — and both are reached only when
-// `checkPermission` returns `needs-approval`/`allow-new`, which requires `WRITE_TOOLS.has(name)`
-// (gate.ts). That means the name at both sites is always one of the fixed `WRITE_TOOL_NAMES`
-// strings today, never model-invented — a model that names a tool anything else takes the early
-// "allow" return in checkPermission and never reaches either render site. Kept anyway, cheaply,
-// for the day `WRITE_TOOL_NAMES` grows a name that is not a compile-time constant (an MCP-provided
-// write tool, say): a newline or an ANSI escape sequence in THAT name could scroll real output
-// off-screen or paint a fake line, and this is what would stop it. Only control characters and DEL
-// are escaped, not the whole name the way a prompt's `args` are already wrapped in JSON.stringify:
-// a legitimate name is always a plain identifier (write_file, bash, …), and stringifying it would
-// put visible quotes on every single render for a case that, today, cannot happen at all.
+// Load-bearing, not defence-in-depth: this file renders a tool name at two sites — the approval
+// prompt (cli.ts) and the tool-allowed line below — and both are reached whenever `checkPermission`
+// returns `needs-approval`/`allow-new`, which is now every name `classifyBuiltin` does not vouch
+// for as read (gate.ts). Classifying an unknown name `write` is deliberate there, so the name at
+// both sites is no longer always one of the fixed `WRITE_TOOL_NAMES` strings — a name the model
+// invented reaches here too, since the gate runs on `call.toolName` before the `opts.tools[…]`
+// lookup that would reject it (loop.ts) — and a newline or an ANSI escape sequence in THAT name
+// could scroll real output off-screen or paint a fake line. This is what stops it. Only control
+// characters and DEL are escaped, not the whole name the way a prompt's `args` are already wrapped
+// in JSON.stringify: a legitimate name is always a plain identifier (write_file, bash, …), and
+// stringifying it would put visible quotes on every single render to defend against a case only a
+// hostile name reaches.
 export function escapeControlChars(text: string): string {
   return text.replace(
     /[\x00-\x1f\x7f]/g,
