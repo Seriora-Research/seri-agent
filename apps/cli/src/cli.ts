@@ -87,7 +87,7 @@ import {
   type runLoop as runLoopReal,
 } from "./loop/loop";
 import { fetchCatalog } from "./mcp/client";
-import { decideMcpCommand, mcpPanelRows } from "./mcp/commands";
+import { decideMcpCommand, type McpRegistryChange, mcpPanelRows } from "./mcp/commands";
 import { writeCatalogCache } from "./mcp/registry";
 import type { McpCatalog } from "./mcp/types";
 import {
@@ -1617,10 +1617,20 @@ async function runTui(
     }
   }
 
-  // Called only on the preview's 'y'. `prepared.mcp` is frozen for the life of the session
+  // The one place a McpRegistryChange (mcp/commands.ts) is applied. `prepared.mcp` is what both
+  // /mcp surfaces read, so without this an added server is on disk and nowhere a user can see it
+  // until the next session.
+  function applyMcpChange(change: McpRegistryChange | undefined): void {
+    if (change === undefined) return;
+    if (change.kind === "added") prepared.mcp.set(change.entry.spec.name, change.entry);
+    else prepared.mcp.delete(change.name);
+  }
+
+  // Called only on the preview's 'y'. A CATALOG stays frozen for the life of the session
   // (runtime/prepare.ts's own comment on why), so writing the cache here does not change what this
   // session's own `mcp` tool can call — the transcript line says so, the same way /skills approve's
-  // own line does for the identical reason.
+  // own line does for the identical reason. This is the half applyMcpChange above deliberately
+  // does not touch: an added entry carries no catalog precisely so the tool array cannot move here.
   function onMcpTrust(catalog: McpCatalog): void {
     writeCatalogCache(configDir, catalog);
     const toolCount = catalog.tools.length;
@@ -1631,14 +1641,26 @@ async function runTui(
   }
 
   function onMcpRemove(name: string): void {
+    const worktree = checkpointTarget(liveState.session, dirs(ctx)).worktree;
     try {
-      for (const line of decideMcpCommand(["remove", name], {
+      const { lines, change } = decideMcpCommand(["remove", name], {
         registry: prepared.mcp,
         configDir,
-        worktree: checkpointTarget(liveState.session, dirs(ctx)).worktree,
+        worktree,
         clients: prepared.mcpClients,
-      }).lines) {
+      });
+      for (const line of lines) {
         dispatch({ type: "transcript-append", line });
+      }
+      applyMcpChange(change);
+      // Re-dispatched with rows recomputed from the registry this removal just changed, which is
+      // how the reducer's own pendingMcp comment says a panel-driven change reaches an open panel.
+      // Skipped when nothing changed, so a failed removal leaves the panel exactly as it was.
+      if (change !== undefined) {
+        dispatch({
+          type: "mcp-requested",
+          rows: mcpPanelRows(prepared.mcp, prepared.mcpClients, worktree),
+        });
       }
     } catch (err) {
       dispatch({ type: "command-error", message: messageOf(err) });
@@ -2271,9 +2293,11 @@ async function runTui(
         return;
       }
       try {
-        for (const line of decideMcpCommand(args, deps).lines) {
+        const { lines, change } = decideMcpCommand(args, deps);
+        for (const line of lines) {
           dispatch({ type: "transcript-append", line });
         }
+        applyMcpChange(change);
       } catch (err) {
         dispatch({ type: "command-error", message: messageOf(err) });
       }

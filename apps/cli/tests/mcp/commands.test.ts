@@ -389,6 +389,68 @@ describe("decideMcpCommand: add", () => {
     });
     expect(lines[0]).toContain("not changed");
   });
+
+  // The reported bug, at the seam that caused it: add wrote the file and returned nothing for the
+  // session, so the very next /mcp read an unchanged registry and said no servers were configured.
+  // Seen red by dropping `change` from addResult's success return.
+  test("the session that ran add can see the server without restarting", () => {
+    const { configDir, worktree } = makeTree({});
+    const registry = new Map<string, McpEntry>();
+    const deps = { registry, configDir, worktree, clients: createMcpClients() };
+
+    const { change } = decideMcpCommand(["add", "exa", "https://mcp.exa.ai/mcp"], deps);
+    expect(change).toEqual({ kind: "added", entry: expect.anything() });
+    if (change?.kind === "added") registry.set(change.entry.spec.name, change.entry);
+
+    expect(decideMcpCommand(["list"], deps).lines).toEqual([
+      "exa  user  idle, connects on first use",
+    ]);
+    const rows = mcpPanelRows(registry, deps.clients, worktree);
+    expect(rows.filter((row) => row.kind === "server").map((row) => row.name)).toEqual(["exa"]);
+  });
+
+  // Pins the claim addResult's own comment makes. If the two ever drift, a server would read one
+  // way in the session that added it and another way after a restart, which is the class of bug
+  // that made the panel worth trusting in the first place.
+  test("the entry add hands back is the entry a restart would load from the file it wrote", () => {
+    const { configDir, worktree } = makeTree({});
+    const { change } = decideMcpCommand(["add", "exa", "https://mcp.exa.ai/mcp"], {
+      registry: new Map(),
+      configDir,
+      worktree,
+      clients: createMcpClients(),
+    });
+    const reloaded = loadMcpRegistry({ worktree, configDir, onWarning: () => {} }).get("exa");
+
+    expect(reloaded).toBeDefined();
+    expect(change?.kind === "added" ? change.entry.spec : undefined).toEqual(
+      reloaded?.spec as McpEntry["spec"],
+    );
+  });
+
+  // An added server contributes no tools until someone previews and trusts it, which is what lets
+  // the entry join a running session at all — see McpRegistryChange's own comment.
+  test("the added entry carries no catalog", () => {
+    const { configDir, worktree } = makeTree({});
+    const { change } = decideMcpCommand(["add", "exa", "https://mcp.exa.ai/mcp"], {
+      registry: new Map(),
+      configDir,
+      worktree,
+      clients: createMcpClients(),
+    });
+    expect(change?.kind === "added" ? change.entry.catalog : "not-added").toBeUndefined();
+  });
+
+  test("a rejected add changes nothing about the session", () => {
+    const { configDir } = makeTree({});
+    const { change } = decideMcpCommand(["add", "exa", "http://mcp.exa.ai/mcp"], {
+      registry: new Map(),
+      configDir,
+      worktree: "w",
+      clients: createMcpClients(),
+    });
+    expect(change).toBeUndefined();
+  });
 });
 
 describe("decideMcpCommand: remove", () => {
@@ -424,12 +486,32 @@ describe("decideMcpCommand: remove", () => {
   test("an unknown name returns a line rather than throwing", () => {
     const { configDir, worktree } = makeTree({});
     const registry: McpRegistry = new Map();
-    const { lines } = decideMcpCommand(["remove", "ghost"], {
+    const { lines, change } = decideMcpCommand(["remove", "ghost"], {
       registry,
       configDir,
       worktree,
       clients: createMcpClients(),
     });
     expect(lines).toEqual(['No MCP server named "ghost".']);
+    expect(change).toBeUndefined();
+  });
+
+  // The other half of the add fix. Once a session can see a server it added, it has to stop seeing
+  // one it removed, or /mcp keeps offering a row whose file is already gone.
+  test("the session that ran remove stops listing the server", () => {
+    const { configDir, worktree } = load({
+      "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
+    });
+    const registry = loadMcpRegistry({ worktree, configDir, onWarning: () => {} });
+    const deps = { registry, configDir, worktree, clients: createMcpClients() };
+
+    const { change } = decideMcpCommand(["remove", "exa"], deps);
+    expect(change).toEqual({ kind: "removed", name: "exa" });
+    if (change?.kind === "removed") registry.delete(change.name);
+
+    expect(decideMcpCommand(["list"], deps).lines).toEqual([
+      "No MCP servers configured. Add one with /mcp add <name> <url>.",
+    ]);
+    expect(mcpPanelRows(registry, deps.clients, worktree)).toEqual([]);
   });
 });
