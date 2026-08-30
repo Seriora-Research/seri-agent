@@ -14,7 +14,7 @@ function fakeLauncher() {
   const seen: {
     executable?: string;
     args?: string[];
-    options?: { stdio: "ignore"; detached: boolean };
+    options?: { stdio: "ignore"; detached: boolean; windowsVerbatimArguments?: boolean };
     unrefs: number;
   } = { unrefs: 0 };
   let onError: ((error: Error) => void) | undefined;
@@ -65,8 +65,43 @@ describe("openBrowser", () => {
 
     expect(launcher.launched()).toEqual({
       executable: "cmd",
-      args: ["/c", "start", "", "https://example.com/device"],
+      args: ["/c", "start", '""', '"https://example.com/device"'],
     });
+  });
+
+  // cmd.exe reads a bare `&` as a command separator, and an OAuth authorize URL is mostly
+  // ampersands. Measured against the live Supabase authorization server before this was quoted:
+  // the browser received only `…/authorize?response_type=code`, cmd tried to RUN the rest
+  // ("'client_id' is not recognized as an internal or external command"), and the server answered
+  // "client_id: expected string, received undefined, redirect_uri: expected string, received
+  // undefined". Verified with a real browser against a local listener: unquoted, every parameter
+  // after the first arrived missing; quoted and verbatim, all of them arrived.
+  test("win32 keeps a URL whose parameters are joined by & in one argument", () => {
+    setPlatform("win32");
+    const launcher = fakeLauncher();
+    const url = "https://api.supabase.com/v1/oauth/authorize?response_type=code&client_id=a&state=b";
+
+    openBrowser(url, launcher.spawnFn);
+
+    // One argument, quoted, with nothing split off at an ampersand.
+    expect(launcher.seen.args?.at(-1)).toBe(`"${url}"`);
+    expect(launcher.seen.args).toHaveLength(4);
+    // Without this the quotes are rewritten by Node's own escaping before cmd.exe ever sees them,
+    // and the URL truncates exactly as it did unquoted.
+    expect(launcher.seen.options?.windowsVerbatimArguments).toBe(true);
+  });
+
+  test("a non-Windows launcher passes the URL as one bare argument", () => {
+    setPlatform("darwin");
+    const launcher = fakeLauncher();
+    const url = "https://api.supabase.com/v1/oauth/authorize?response_type=code&client_id=a";
+
+    openBrowser(url, launcher.spawnFn);
+
+    // No shell is involved, so no quoting is wanted — quoting here would put literal quotes in
+    // the URL `open` receives.
+    expect(launcher.launched()).toEqual({ executable: "open", args: [url] });
+    expect(launcher.seen.options?.windowsVerbatimArguments).toBe(false);
   });
 
   test("darwin launches via open", () => {
@@ -138,7 +173,11 @@ describe("openBrowser", () => {
     // The three things that make "does not wait" true, rather than the absence of a hang, which
     // a synchronous test cannot observe: nothing inherited to hold a pipe open, a process group
     // seri's own signals cannot reach, and no reference keeping the event loop alive.
-    expect(launcher.seen.options).toEqual({ stdio: "ignore", detached: true });
+    expect(launcher.seen.options).toEqual({
+      stdio: "ignore",
+      detached: true,
+      windowsVerbatimArguments: false,
+    });
     expect(launcher.seen.unrefs).toBe(1);
   });
 });
