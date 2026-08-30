@@ -59,7 +59,7 @@ export function isBashAvailable(): boolean {
   return detectBash().available;
 }
 
-function resolveBashCommand(): string {
+export function resolveBashCommand(): string {
   return detectBash().command;
 }
 

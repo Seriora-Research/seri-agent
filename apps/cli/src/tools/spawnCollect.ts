@@ -1,4 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
+import { type ChildProcessByStdio, spawn, spawnSync } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
 import { onAbort } from "../abort";
 import { onSignalCleanup } from "../signals";
 
@@ -132,30 +133,47 @@ function killInFlightChildren(): void {
 
 onSignalCleanup(killInFlightChildren);
 
-// timeout, signal, and cwd stay positionals rather than an options bag: bash.ts and powershell.ts
-// are the only production callers, plus one test file. auth/browser.ts is not one of them — it
-// spawns its own child and says at the top of that file why it deliberately does not come through
-// here.
+// timeout, signal, cwd, and stdin stay positionals rather than an options bag: bash.ts and
+// powershell.ts are two of the production callers, hooks/run.ts is the third — and the first to
+// need stdin — plus one test file. auth/browser.ts is not one of them — it spawns its own child
+// and says at the top of that file why it deliberately does not come through here.
 //
-// What decides it is the shape rather than the count. runBash and runPowerShell take the same
-// optional parameters in the same order and pass them straight through, so a bag at this one frame
-// would leave both of them translating into it, and a bag at all three would rename the same
-// values three times over for no behavioural gain.
+// What decides it is the shape rather than the count. Each caller takes a prefix of these
+// parameters in the same order and passes them straight through, so a bag at this one frame would
+// leave every one of them translating into it, and a bag across all of them would rename the same
+// values repeatedly for no behavioural gain.
 export function spawnCollect(
   executable: string,
   args: string[],
   timeoutMs?: number,
   signal?: AbortSignal,
   cwd?: string,
+  stdin?: string,
 ): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      // Own process group on POSIX so a timeout can reach the whole tree. Not on Windows,
-      // where detached means a new console window instead.
+    // Own process group on POSIX so a timeout can reach the whole tree. Not on Windows, where
+    // detached means a new console window instead.
+    const spawnOptions = {
       detached: process.platform !== "win32",
       ...(cwd !== undefined ? { cwd } : {}),
-    });
+    };
+    // Split rather than a ternary on just the stdio field: the stdio tuple has to be a literal at
+    // the spawn call itself for its overload (and therefore whether child.stdin is typed
+    // possibly-null) to resolve per branch instead of widening to the general, all-nullable one.
+    let child:
+      | ChildProcessByStdio<Writable, Readable, Readable>
+      | ChildProcessByStdio<null, Readable, Readable>;
+    if (stdin !== undefined) {
+      child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"], ...spawnOptions });
+      // A hook script that never reads stdin (a session logger, say) can exit while this process
+      // is still writing the payload, which raises EPIPE on the write. With no listener that is an
+      // unhandled stream error and takes the whole process down over a script that did nothing
+      // wrong — it simply had no use for what it was sent.
+      child.stdin.on("error", () => {});
+      child.stdin.end(stdin);
+    } else {
+      child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"], ...spawnOptions });
+    }
     const untrack = killOnFatalSignal(() => {
       if (child.pid !== undefined) killTree(child.pid);
     });

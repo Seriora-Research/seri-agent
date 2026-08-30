@@ -2,9 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ProcessResult } from "../../src/tools/spawnCollect";
 import { runHook } from "../../src/hooks/run";
 import { HOOK_BLOCK_EXIT_CODE, type HookPayload, type HookSpec } from "../../src/hooks/types";
+import type { ProcessResult } from "../../src/tools/spawnCollect";
 
 function makeSpec(overrides: Partial<HookSpec> = {}): HookSpec {
   return {
@@ -57,8 +57,11 @@ describe("runHook (injected spawn)", () => {
   });
 
   test("exit HOOK_BLOCK_EXIT_CODE with empty stderr blocks with a stand-in reason", async () => {
-    const outcome = await runHook(makeSpec({ script: "silent-blocker" }), makePayload(), undefined, async () =>
-      fakeResult({ exitCode: HOOK_BLOCK_EXIT_CODE, stderr: "" }),
+    const outcome = await runHook(
+      makeSpec({ script: "silent-blocker" }),
+      makePayload(),
+      undefined,
+      async () => fakeResult({ exitCode: HOOK_BLOCK_EXIT_CODE, stderr: "" }),
     );
     expect(outcome.kind).toBe("block");
     expect(outcome.kind === "block" && outcome.reason).toContain("silent-blocker");
@@ -67,8 +70,11 @@ describe("runHook (injected spawn)", () => {
   });
 
   test("any other exit code fails, naming the script and the code", async () => {
-    const outcome = await runHook(makeSpec({ script: "flaky" }), makePayload(), undefined, async () =>
-      fakeResult({ exitCode: 1, stderr: "boom" }),
+    const outcome = await runHook(
+      makeSpec({ script: "flaky" }),
+      makePayload(),
+      undefined,
+      async () => fakeResult({ exitCode: 1, stderr: "boom" }),
     );
     expect(outcome.kind).toBe("failed");
     expect(outcome.kind === "failed" && outcome.message).toContain("flaky");
@@ -77,8 +83,11 @@ describe("runHook (injected spawn)", () => {
   });
 
   test("a timeout fails, naming the timeout rather than the exit code", async () => {
-    const outcome = await runHook(makeSpec({ script: "wedged" }), makePayload(), undefined, async () =>
-      fakeResult({ exitCode: 1, timedOut: true }),
+    const outcome = await runHook(
+      makeSpec({ script: "wedged" }),
+      makePayload(),
+      undefined,
+      async () => fakeResult({ exitCode: 1, timedOut: true }),
     );
     expect(outcome.kind).toBe("failed");
     expect(outcome.kind === "failed" && outcome.message).toContain("wedged");
