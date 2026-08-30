@@ -7,6 +7,7 @@ import { createMcpClients, type McpServerStatus } from "../../src/mcp/client";
 import {
   decideMcpCommand,
   mcpCommandAccepts,
+  mcpLoginLine,
   mcpPanelRows,
   mcpStatusWord,
 } from "../../src/mcp/commands";
@@ -525,5 +526,51 @@ describe("decideMcpCommand: remove", () => {
       "No MCP servers configured. Add one with /mcp add <name> <url>.",
     ]);
     expect(mcpPanelRows(registry, deps.clients, worktree)).toEqual([]);
+  });
+});
+
+describe("one login outcome, worded once", () => {
+  test("each ending gets its own line", () => {
+    expect(mcpLoginLine("supabase", { status: "success" })).toBe(
+      'Authenticated "supabase". Connect it from /mcp to preview and trust its tools.',
+    );
+    expect(mcpLoginLine("supabase", { status: "denied", message: "user denied" })).toBe(
+      'Authenticating "supabase" was declined: user denied',
+    );
+    expect(mcpLoginLine("supabase", { status: "timeout" })).toBe(
+      'Authenticating "supabase" timed out.',
+    );
+    expect(mcpLoginLine("supabase", { status: "aborted" })).toBe(
+      'Authenticating "supabase" was cancelled.',
+    );
+  });
+
+  // The shape a real rejected authorization code came back as, measured against the live Supabase
+  // authorization server: a multi-line zod dump of an error body the library could not parse. A
+  // transcript renders one line, so neither the newlines nor the full length may reach it.
+  test("an authorization server's own error is flattened to one bounded line", () => {
+    const raw = [
+      "HTTP 404: Invalid OAuth error response: [",
+      '  {',
+      '    "expected": "string",',
+      '    "code": "invalid_type",',
+      '    "path": [',
+      '      "error"',
+      "    ],",
+      '    "message": "Invalid input: expected string, received undefined"',
+      "  }",
+      ']. Raw body: {"message":"Invalid or expired OAuth authorization"}',
+    ].join("\n");
+    const line = mcpLoginLine("supabase", { status: "error", message: raw });
+
+    expect(line).not.toContain("\n");
+    expect(line.length).toBeLessThan(250);
+    expect(line).toStartWith('Could not authenticate "supabase": HTTP 404:');
+    expect(line).toEndWith("…");
+  });
+
+  test("a short error is passed through whole, with no ellipsis", () => {
+    const line = mcpLoginLine("supabase", { status: "error", message: "connection refused" });
+    expect(line).toBe('Could not authenticate "supabase": connection refused');
   });
 });

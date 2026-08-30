@@ -2,6 +2,7 @@ import { join, relative } from "node:path";
 import { getMcpDir } from "../config/paths";
 import { messageOf } from "../errors";
 import type { ExtensionSource } from "../extensions/discovery";
+import { truncate } from "../truncate";
 import { clearMcpServerAuth } from "./authStore";
 import type { McpClients, McpServerStatus } from "./client";
 import { mcpServerStatus } from "./client";
@@ -101,7 +102,11 @@ export function mcpLoginLine(name: string, result: McpLoginResult): string {
   if (result.status === "denied") return `Authenticating "${name}" was declined: ${result.message}`;
   if (result.status === "timeout") return `Authenticating "${name}" timed out.`;
   if (result.status === "aborted") return `Authenticating "${name}" was cancelled.`;
-  return `Could not authenticate "${name}": ${result.message}`;
+  // Flattened and capped because this one is the only branch carrying a message seri did not
+  // write. Measured against the live Supabase authorization server: a rejected code comes back as
+  // a multi-line zod dump of the error body it could not parse, ~250 characters of JSON, which
+  // renders as a wall of text where a transcript expects one line.
+  return `Could not authenticate "${name}": ${truncate(result.message.replace(/\s+/g, " "), 200)}`;
 }
 
 /**
