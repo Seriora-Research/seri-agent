@@ -13,8 +13,8 @@ import {
 } from "./registry";
 import type { McpEntry, McpRegistry } from "./types";
 
-// One row of the /mcp panel. Built by mcpPanelRows below from the SESSION's frozen registry, never
-// a fresh disk read — see that function's own comment for why, which is the same reason
+// One row of the /mcp panel. Built by mcpPanelRows below from the SESSION's registry, never a
+// fresh disk read — see that function's own comment for why, which is the same reason
 // skillsPanelRows (skills/commands.ts) gives.
 export type McpPanelRow =
   | { readonly kind: "header"; readonly scope: ExtensionSource; readonly sourceFile: string }
@@ -25,6 +25,23 @@ export type McpPanelRow =
       readonly status: McpServerStatus;
       readonly toolCount: number | undefined; // undefined until a catalog is cached
     };
+
+/**
+ * What a successful `/mcp add` or `/mcp remove` must do to the session's own registry, returned
+ * rather than applied so this module stays pure over the registry it is handed; `cli.ts` owns the
+ * one mutable copy. Writing only the file is what broke: `mcpPanelRows` and `listLines` below are
+ * views of what THIS session holds, so a server on disk and nowhere else stayed invisible until
+ * the next session.
+ *
+ * An `added` entry deliberately carries no catalog. That is what keeps the freeze that matters
+ * intact: `withMcp` (mcp/tool.ts) composes the model's tool array out of cataloged tools only, so
+ * an entry with none leaves that array byte-identical, and §3 of research-mcp.md still holds.
+ * `removed` can shrink that array between turns, which is the point — the user just deleted the
+ * server, and continuing to offer its tools would be the bug.
+ */
+export type McpRegistryChange =
+  | { readonly kind: "added"; readonly entry: McpEntry }
+  | { readonly kind: "removed"; readonly name: string };
 
 // The argv gate cli.ts runs before dispatch, kept here so it is testable against the exact strings
 // a user types — the same split skillsCommandAccepts and memoryCommandAccepts use. Arity and
@@ -72,10 +89,11 @@ export function mcpStatusWord(status: McpServerStatus): string {
 
 /**
  * The panel's rows, built from the registry and client pool the SESSION actually loaded and
- * dialled — never a fresh disk read or a fresh dial. `PreparedRun.mcp` is frozen at session start,
- * so a server added or reconnected since then is not what this session can call yet; a panel that
- * re-read disk would list it anyway and a call to it would fail with nothing here to explain why.
- * This is the same contract skillsPanelRows (skills/commands.ts) states, for the same reason.
+ * dialled — never a fresh disk read or a fresh dial. `PreparedRun.mcp` holds what this session
+ * knows about, which `/mcp add` and `/mcp remove` keep current through `McpRegistryChange` above;
+ * a panel that re-read disk instead would list a server another process wrote, and a call to it
+ * would fail with nothing here to explain why. This is the same contract skillsPanelRows
+ * (skills/commands.ts) states, for the same reason.
  *
  * A server with no cached catalog reports `toolCount: undefined` and `status: {state:"idle"}` —
  * the visible consequence of never dialling at session start (research-mcp.md §2): idle is a real
@@ -140,25 +158,27 @@ function listLines(registry: McpRegistry, clients: McpClients): string[] {
   return lines;
 }
 
-function addLines(
+function addResult(
   name: string | undefined,
   url: string | undefined,
   deps: { configDir: string },
-): string[] {
+): { lines: string[]; change?: McpRegistryChange } {
   if (name === undefined || !NAME_SHAPE.test(name)) {
-    return [
-      `"${name ?? ""}" is not a valid server name: it must be lowercase letters, digits and ` +
-        `"-", starting with a letter or digit.`,
-    ];
+    return {
+      lines: [
+        `"${name ?? ""}" is not a valid server name: it must be lowercase letters, digits and ` +
+          `"-", starting with a letter or digit.`,
+      ],
+    };
   }
   let parsed: URL;
   try {
     parsed = new URL(url ?? "");
   } catch {
-    return [`"${url ?? ""}" is not a valid URL.`];
+    return { lines: [`"${url ?? ""}" is not a valid URL.`] };
   }
   if (parsed.protocol !== "https:") {
-    return [`"${url}" must be an https URL.`];
+    return { lines: [`"${url}" must be an https URL.`] };
   }
 
   // The profile root, never the project scope: `/mcp add` is a personal action, and a project
@@ -168,18 +188,27 @@ function addLines(
   try {
     addServerToFile(filePath, { name, url: url as string, headers: {} });
   } catch (err) {
-    return [messageOf(err)];
+    return { lines: [messageOf(err)] };
   }
-  return [`Added "${name}". Connect it from /mcp to preview and trust its tools.`];
+  // Every field matches what loadMcpRegistry would build from the file just written, down to the
+  // raw `url` string: the session entry and a restart have to describe one server, not two that
+  // differ in a field nobody thought to align.
+  return {
+    lines: [`Added "${name}". Connect it from /mcp to preview and trust its tools.`],
+    change: {
+      kind: "added",
+      entry: { spec: { name, url: url as string, headers: {}, source: "user", filePath } },
+    },
+  };
 }
 
-function removeLines(
+function removeResult(
   name: string | undefined,
   deps: { registry: McpRegistry; configDir: string },
-): string[] {
-  if (name === undefined) return ["Usage: /mcp remove <name>"];
+): { lines: string[]; change?: McpRegistryChange } {
+  if (name === undefined) return { lines: ["Usage: /mcp remove <name>"] };
   const entry = deps.registry.get(name);
-  if (entry === undefined) return [`No MCP server named "${name}".`];
+  if (entry === undefined) return { lines: [`No MCP server named "${name}".`] };
 
   let removed: boolean;
   try {
@@ -187,12 +216,15 @@ function removeLines(
     // either servers.yaml, and editing the wrong one would silently fail to remove it.
     removed = removeServerFromFile(entry.spec.filePath, name);
   } catch (err) {
-    return [messageOf(err)];
+    return { lines: [messageOf(err)] };
   }
-  if (!removed) return [`No MCP server named "${name}".`];
+  if (!removed) return { lines: [`No MCP server named "${name}".`] };
 
   deleteCatalogCache(deps.configDir, name);
-  return [`Removed "${name}" and its cached catalog.`];
+  return {
+    lines: [`Removed "${name}" and its cached catalog.`],
+    change: { kind: "removed", name },
+  };
 }
 
 // The one-shot forms: list, add, remove. `connect` belongs to the panel because it dials, and the
@@ -201,14 +233,14 @@ function removeLines(
 export function decideMcpCommand(
   args: string[],
   deps: { registry: McpRegistry; configDir: string; worktree: string; clients: McpClients },
-): { lines: string[] } {
+): { lines: string[]; change?: McpRegistryChange } {
   const [sub, ...rest] = args;
 
   if (sub === undefined || sub === "list") {
     return { lines: listLines(deps.registry, deps.clients) };
   }
-  if (sub === "add") return { lines: addLines(rest[0], rest[1], deps) };
-  if (sub === "remove") return { lines: removeLines(rest[0], deps) };
+  if (sub === "add") return addResult(rest[0], rest[1], deps);
+  if (sub === "remove") return removeResult(rest[0], deps);
 
   return { lines: ["Usage: /mcp [list] | add <name> <url> | remove <name>"] };
 }

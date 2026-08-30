@@ -20,7 +20,13 @@ import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
 import { closeMcpClients, createMcpClients, type McpClients } from "../mcp/client";
 import { grantFingerprint, loadMcpRegistry } from "../mcp/registry";
-import { isMcpToolName, type McpRegistry, mcpGrantMatches, parseMcpGrantKey } from "../mcp/types";
+import {
+  isMcpToolName,
+  type McpEntry,
+  type McpRegistry,
+  mcpGrantMatches,
+  parseMcpGrantKey,
+} from "../mcp/types";
 import { type ArchivistState, createArchivistState } from "../memory/archivist";
 import { type LoadedMemory, loadMemory } from "../memory/store";
 import { effectiveTools, loadGrants } from "../permissions/store";
@@ -374,10 +380,14 @@ export type PreparedRun = {
   // a cleared session re-fires a rule the previous conversation had already seen.
   rulesState: RulesState;
   // Whatever `.seri/mcp/servers.yaml` at both scopes defines, each server fused with its cached
-  // tool catalog — frozen data, resolved once here exactly like `skills` and `agents` above: a
-  // server added mid-session, or a catalog a `/mcp` reconnect changed, takes effect next session.
-  // /clear is the one exception (bindSession, below), which reloads it.
-  mcp: McpRegistry;
+  // tool catalog. Resolved once here like `skills` and `agents` above, then kept current by the
+  // only two things that change it from inside the session: `/mcp add` and `/mcp remove` apply
+  // their McpRegistryChange (mcp/commands.ts) to this Map, so `/mcp` describes the session a user
+  // is actually in. A CATALOG is still frozen — trusting one writes the cache and takes effect
+  // next session, which is what keeps `withMcp`'s tool array stable. /clear reloads the lot
+  // (bindSession, below). The Map is mutable for exactly those two commands; every consumer takes
+  // the ReadonlyMap view instead.
+  mcp: Map<string, McpEntry>;
   // The live half `mcp` above deliberately is not — dialled handles and per-server status, mutated
   // as calls actually happen rather than read once from disk, the same split `rules`/`rulesState`
   // already draws. Never dialled here: `createMcpClients()`'s default dial function connects lazily

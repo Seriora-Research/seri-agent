@@ -213,11 +213,15 @@ export function readCatalogCache(
 // Project beats global by the later Map.set, same insertion-order rule they use too. Fuses each
 // spec with its cached catalog. NEVER dials anything: session start must not fail, or wait, over
 // an MCP config file, the same total-warn-and-skip contract loadSkillRegistry states for skills.
+// Returns the mutable Map rather than the ReadonlyMap view every consumer takes, because
+// `PreparedRun.mcp` is where `/mcp add` and `/mcp remove` apply their McpRegistryChange
+// (mcp/commands.ts). One owner holds the writable handle; everything downstream keeps taking
+// McpRegistry and stays unable to write through it.
 export function loadMcpRegistry(opts: {
   worktree: string;
   configDir: string;
   onWarning: (message: string) => void;
-}): McpRegistry {
+}): Map<string, McpEntry> {
   const registry = new Map<string, McpEntry>();
   const scopes = extensionScopes({
     worktree: opts.worktree,
