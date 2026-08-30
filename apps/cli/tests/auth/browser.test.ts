@@ -79,7 +79,8 @@ describe("openBrowser", () => {
   test("win32 keeps a URL whose parameters are joined by & in one argument", () => {
     setPlatform("win32");
     const launcher = fakeLauncher();
-    const url = "https://api.supabase.com/v1/oauth/authorize?response_type=code&client_id=a&state=b";
+    const url =
+      "https://api.supabase.com/v1/oauth/authorize?response_type=code&client_id=a&state=b";
 
     openBrowser(url, launcher.spawnFn);
 
