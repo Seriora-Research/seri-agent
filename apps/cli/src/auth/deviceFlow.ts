@@ -1,4 +1,9 @@
 import { getApiKey } from "../config/config";
+import { type DeviceAuthorization, parseResponseBody, pollDeviceGrant } from "./deviceGrant";
+
+// Re-exported so auth/refresh.ts keeps importing it from here, where it has always lived as far
+// as that module is concerned.
+export { parseResponseBody };
 
 // WorkOS AuthKit client ID (Staging environment). Deliberately not the Production
 // environment's client ID: that environment has never been activated (no API keys, no
@@ -17,18 +22,12 @@ export function getWorkosClientId(configDir?: string): string {
 }
 
 const AUTHORIZE_DEVICE_URL = "https://api.workos.com/user_management/authorize/device";
+
 // Exported so auth/refresh.ts's grant_type=refresh_token POST hits the same endpoint rather
 // than duplicating the literal.
 export const AUTHENTICATE_URL = "https://api.workos.com/user_management/authenticate";
 
-export type DeviceAuthorization = {
-  deviceCode: string;
-  userCode: string;
-  verificationUri: string;
-  verificationUriComplete: string;
-  expiresIn: number;
-  interval: number;
-};
+export type { DeviceAuthorization };
 
 export type TokenResult =
   | {
@@ -50,16 +49,6 @@ export type TokenResult =
   // message the way "denied"/"expired"/"error" all do (createAuthHandlers' own catch,
   // tui/handlers.ts).
   | { status: "aborted" };
-
-// Exported so auth/refresh.ts's refreshAccessToken reuses this instead of a verbatim copy.
-export async function parseResponseBody(response: Response): Promise<Record<string, unknown>> {
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { error: text.slice(0, 200) };
-  }
-}
 
 export async function requestDeviceCode(
   clientId: string,
@@ -89,20 +78,7 @@ export async function requestDeviceCode(
   };
 }
 
-function realSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// A function, not an inlined `signal?.aborted === true` at each call site: TS's control-flow
-// narrowing treats a property read as stable across an `await` within the same scope (it isn't,
-// for a mutable external AbortSignal — `.aborted` can flip between either check below) and
-// narrows the second read to `false | undefined`, a real type error, not just an unnecessary
-// check. A function call is an opaque boundary narrowing can't see through.
-function isAborted(signal: AbortSignal | undefined): boolean {
-  return signal?.aborted === true;
-}
-
-export async function pollForToken(
+export function pollForToken(
   clientId: string,
   device: DeviceAuthorization,
   opts: {
@@ -112,63 +88,34 @@ export async function pollForToken(
     // Bug fix (thermo-nuclear, round 5): real cancellation, not just a caller-side "ignore the
     // eventual result" guard — without this, an abandoned login kept polling in the background
     // (a device code stays valid for minutes) and could still call saveAuthSession later, past
-    // even an explicit /logout, since nothing else ever stopped it.
+    // even an explicit /logout, since nothing else ever stopped it. The loop that honours it now
+    // lives in deviceGrant.ts, shared with the xAI subscription flow.
     signal?: AbortSignal;
   } = {},
 ): Promise<TokenResult> {
-  const fetchFn = opts.fetchFn ?? fetch;
-  const sleep = opts.sleep ?? realSleep;
-  const now = opts.now ?? Date.now;
-  const signal = opts.signal;
-
-  let interval = device.interval;
-  const deadline = now() + device.expiresIn * 1000;
-
-  while (true) {
-    if (now() >= deadline) return { status: "expired" };
-    if (isAborted(signal)) return { status: "aborted" };
-
-    await sleep(interval * 1000);
-
-    const response = await fetchFn(AUTHENTICATE_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
+  return pollDeviceGrant(device, {
+    tokenUrl: AUTHENTICATE_URL,
+    body: () =>
+      new URLSearchParams({
         grant_type: "urn:ietf:params:oauth:grant-type:device_code",
         device_code: device.deviceCode,
         client_id: clientId,
-      }).toString(),
-    });
-    const body: any = await parseResponseBody(response);
-    // Re-checked here, not just at the top of the loop: an abort that lands WHILE this iteration's
-    // own sleep+fetch is already in flight (the exact race a real WorkOS poll can hit, since a
-    // device code stays valid for minutes) must still discard whatever this poll just resolved to
-    // — including a genuine "success" — rather than acting on it one iteration late.
-    if (isAborted(signal)) return { status: "aborted" };
-
-    if (response.ok) {
-      return {
-        status: "success",
-        accessToken: body.access_token,
-        refreshToken: body.refresh_token,
-        expiresIn: body.expires_in,
-        user: { id: body.user.id, email: body.user.email },
-      };
-    }
-
-    if (body.error === "authorization_pending") continue;
-    // RFC 8628: on slow_down, increase the polling interval by (at least) 5 seconds.
-    if (body.error === "slow_down") {
-      interval += 5;
-      continue;
-    }
-    if (body.error === "expired_token") return { status: "expired" };
-    if (body.error === "access_denied") return { status: "denied" };
-    // Any other terminal error (invalid_request/invalid_client/a transient 5xx/...) stops
-    // polling but is distinct from a real user denial.
-    return {
-      status: "error",
-      message: `WorkOS returned an unexpected error during authentication: ${body.error ?? response.status}`,
-    };
-  }
+      }),
+    // WorkOS's own response fields are trusted directly, same as every other field this file
+    // reads off a real WorkOS response.
+    onSuccess: (body: any) => ({
+      accessToken: body.access_token,
+      refreshToken: body.refresh_token,
+      expiresIn: body.expires_in,
+      user: { id: body.user.id, email: body.user.email },
+    }),
+    describeError: (raw) => `WorkOS returned an unexpected error during authentication: ${raw}`,
+    ...opts,
+  }).then((result): TokenResult => {
+    if (result.status === "success") return { status: "success", ...result.value };
+    // WorkOS has no subscription tier, so a 403 from it is just another unexpected terminal
+    // error — mapped back rather than surfaced as a state /login has no meaning for.
+    if (result.status === "tier-denied") return { status: "error", message: result.message };
+    return result;
+  });
 }
