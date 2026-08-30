@@ -214,8 +214,8 @@ warning at startup rather than failing the session. And `/explore`, `/plan`, `/c
 ## Project rules
 
 A rule is a standing instruction rather than something you invoke. Drop one in
-`.seri/rules/<name>.mdc` (this project) or `~/.seri/rules/<name>.mdc` (every project). Frontmatter
-decides when it loads.
+`.seri/rules/<name>.mdc` (this project) or your profile root (every project) — `~/.seri/rules/` by default,
+`~/.seri/<profile>/rules/` under `--profile <name>`. Frontmatter decides when it loads.
 
 ```markdown
 ---
