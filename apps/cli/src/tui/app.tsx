@@ -55,6 +55,7 @@ import { isShiftTabModeCycle } from "../cli/commandCatalog";
 import { truncateArgsDisplay } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
+import type { McpCatalog } from "../mcp/types";
 import { appliedReasoningEffort, resolveReasoningEffort } from "../provider/reasoning";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
@@ -69,6 +70,7 @@ import { AuthBanner, AuthPanel } from "./routes/config/AuthPanel";
 import { ConfigPanel } from "./routes/config/ConfigPanel";
 import { EffortPanel } from "./routes/config/EffortPanel";
 import { PermissionsPanel } from "./routes/config/PermissionsPanel";
+import { McpPanel } from "./routes/mcp/McpPanel";
 import { SetupPanel } from "./routes/setup/SetupPanel";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { SkillsPanel } from "./routes/skills/SkillsPanel";
@@ -195,6 +197,15 @@ export type AppProps = {
   // /skills' own single resolution. Closing is dispatched locally, like every other panel's Esc;
   // running needs cli.ts's own turn machinery, so it is a prop.
   onSkillRun?: (name: string) => void;
+  // /mcp's own three resolutions. Closing is dispatched locally, like every other panel's Esc;
+  // dialling and writing the trusted catalog are both network/disk I/O cli.ts owns, so they are
+  // props — the same "presentation calls a prop, cli.ts owns the decision" split every other
+  // interactive command on this type already has.
+  onMcpConnect?: (
+    name: string,
+  ) => Promise<{ ok: true; catalog: McpCatalog } | { ok: false; message: string }>;
+  onMcpTrust?: (catalog: McpCatalog) => void;
+  onMcpRemove?: (name: string) => void;
   // Every completion source the input box may open (util/completion.ts). A function, not an array:
   // runTui is the only place the command catalog, the agent registry and the skill registry are all
   // in scope, and `/clear` reloads the latter two mid-process — so this is called at render time
@@ -278,6 +289,9 @@ export function App({
   onEffortSelected,
   onEffortCancel,
   onSkillRun,
+  onMcpConnect,
+  onMcpTrust,
+  onMcpRemove,
   getCompletionSources,
   onSplashLogin,
   onSplashSignup,
@@ -390,6 +404,7 @@ export function App({
     state.pendingPermissions === undefined &&
     state.pendingEffort === undefined &&
     state.pendingSkills === undefined &&
+    state.pendingMcp === undefined &&
     !state.pendingSplash;
 
   // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
@@ -641,6 +656,14 @@ export function App({
             onSkillRun?.(name);
           }}
           onSkillsClose={() => dispatch({ type: "skills-closed" })}
+        />
+      ) : state.pendingMcp !== undefined ? (
+        <McpPanel
+          rows={state.pendingMcp.rows}
+          onConnect={onMcpConnect}
+          onTrust={onMcpTrust}
+          onRemove={onMcpRemove}
+          onMcpClose={() => dispatch({ type: "mcp-closed" })}
         />
       ) : state.pendingEffort !== undefined ? (
         <EffortPanel

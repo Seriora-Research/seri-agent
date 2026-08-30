@@ -11,9 +11,10 @@ import {
 
 // Not a key of `toolDefinitions` (provider/tools.ts), on the same terms DISPATCH_TOOL_NAME is not:
 // `ToolName` is derived from that object's keys, so no subagent's grant can ever name this, and a
-// child cannot load a skill into its own context. It is also not a WRITE_TOOL_NAME, so the
-// permission gate allows it in every mode — correct, because loading a skill reads one file the
-// user themselves put under `.seri/skills/` and writes nothing.
+// child cannot load a skill into its own context. That same absence is why `classifyBuiltin` has to
+// name it `read` explicitly — it classifies anything it does not recognise as `write` — and that
+// classification is what makes the permission gate allow it in every mode, correct because loading
+// a skill reads one file the user themselves put under `.seri/skills/` and writes nothing.
 export const SKILL_TOOL_NAME = "skill";
 
 const DESCRIPTION =

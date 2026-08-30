@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
 import {
+  classifyBuiltin,
   DISPATCH_TOOL_NAME,
   FS_MUTATING_TOOL_NAMES,
   READ_ONLY_TOOL_NAMES,
   toolDefinitions,
   WRITE_TOOL_NAMES,
 } from "../../src/provider/tools";
+import { SKILL_TOOL_NAME } from "../../src/skills/tool";
 import type { GlobResult } from "../../src/tools/glob";
 import type { GrepResult } from "../../src/tools/grep";
 
@@ -156,6 +158,37 @@ describe("DISPATCH_TOOL_NAME", () => {
   // toolDefinitions, so no subagent ToolSet built from it can ever contain the tool.
   test("is not a key of toolDefinitions", () => {
     expect(Object.keys(toolDefinitions)).not.toContain(DISPATCH_TOOL_NAME);
+  });
+});
+
+describe("classifyBuiltin", () => {
+  test("classifies every READ_ONLY_TOOL_NAMES entry read", () => {
+    for (const name of READ_ONLY_TOOL_NAMES) {
+      expect(classifyBuiltin(name)).toBe("read");
+    }
+  });
+
+  test("classifies every WRITE_TOOL_NAMES entry write", () => {
+    for (const name of WRITE_TOOL_NAMES) {
+      expect(classifyBuiltin(name)).toBe("write");
+    }
+  });
+
+  // The two composed tools are not keys of toolDefinitions, so READ_ONLY_TOOL_NAMES cannot contain
+  // them and the classifier enumerates them by hand — `skill` as a bare literal, because provider/
+  // does not import skills/. SKILL_TOOL_NAME is imported HERE, where the layering does not apply, so
+  // this assertion is the only thing standing between renaming that constant and silently making
+  // every read-only session unable to load a skill.
+  test("classifies the two composed tool names read", () => {
+    expect(classifyBuiltin(DISPATCH_TOOL_NAME)).toBe("read");
+    expect(classifyBuiltin(SKILL_TOOL_NAME)).toBe("read");
+  });
+
+  // The point of enumerating the read class rather than the write one: MCP makes the tool set open,
+  // so a name nothing here has ever seen has to cost an approval instead of being waved through.
+  test("classifies a name it has never seen write", () => {
+    expect(classifyBuiltin("mcp_exa_web_search")).toBe("write");
+    expect(classifyBuiltin("no_tool_has_ever_been_called_this")).toBe("write");
   });
 });
 

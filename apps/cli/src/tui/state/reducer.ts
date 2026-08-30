@@ -5,6 +5,7 @@ import type { ModelProvider } from "@seri/model-catalog";
 import type { LanguageModelUsage, ModelMessage } from "ai";
 import { toolAllowedLine } from "../../cli/output";
 import type { LoopEvent } from "../../loop/loop";
+import type { McpPanelRow } from "../../mcp/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
 import type { ChildEventPayload } from "../../subagents/dispatch";
@@ -166,6 +167,12 @@ export type TuiState = {
   // of what this session actually loaded, and re-reading disk while it is open would show rows the
   // running session cannot invoke.
   pendingSkills: { rows: SkillsPanelRow[] } | undefined;
+  // /mcp's own blocking panel, mirroring pendingSkills exactly — same rationale: rows resolved
+  // from the session's registry and client pool at the moment the panel opened, never re-read from
+  // a live connect/trust that happened while it was open, so a reconnect or trust decision is
+  // applied by re-dispatching mcp-requested with freshly recomputed rows, not by this reducer
+  // reaching back into disk on its own.
+  pendingMcp: { rows: readonly McpPanelRow[] } | undefined;
   // /effort's own blocking panel. Mirrors `pendingSetup`'s role — set when
   // the bare, no-argument form opens the slider (runTui's own onSubmit interception, cli.ts),
   // cleared once resolved.
@@ -265,6 +272,7 @@ export function initialTuiState(
     pendingConfig: undefined,
     pendingPermissions: undefined,
     pendingSkills: undefined,
+    pendingMcp: undefined,
     pendingEffort: undefined,
     pendingSplash: opts?.showSplash ?? false,
     ...EMPTY_ROSTER,
@@ -359,6 +367,9 @@ export type TuiAction =
   // navigate between.
   | { type: "skills-requested"; rows: SkillsPanelRow[] }
   | { type: "skills-closed" }
+  // /mcp's own pair, mirroring skills-requested/skills-closed exactly.
+  | { type: "mcp-requested"; rows: readonly McpPanelRow[] }
+  | { type: "mcp-closed" }
   | { type: "effort-requested"; tiers: string[]; selected: number }
   | { type: "effort-resolved"; tier?: string; leftoverInput?: string }
   | { type: "splash-requested" }
@@ -644,6 +655,10 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return { ...state, pendingSkills: { rows: action.rows } };
     case "skills-closed":
       return { ...state, pendingSkills: undefined };
+    case "mcp-requested":
+      return { ...state, pendingMcp: { rows: action.rows } };
+    case "mcp-closed":
+      return { ...state, pendingMcp: undefined };
     case "effort-requested":
       return { ...state, pendingEffort: { tiers: action.tiers, selected: action.selected } };
     case "effort-resolved":

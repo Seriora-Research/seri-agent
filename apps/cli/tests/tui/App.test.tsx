@@ -3118,6 +3118,34 @@ describe("App", () => {
       expect(calls).toBe(0);
     });
 
+    // Same guard, `pendingMcp`'s own branch — added alongside pendingSkills in noPanelOpen, same
+    // reasoning as the skills test just above.
+    test("shift+tab does nothing while the mcp panel is open", async () => {
+      let calls = 0;
+      const { setup, dispatch } = await connect({ onCycleMode: () => calls++ });
+
+      dispatch({
+        type: "mcp-requested",
+        rows: [
+          { kind: "header", scope: "project", sourceFile: ".seri/mcp/servers.yaml" },
+          {
+            kind: "server",
+            name: "exa",
+            scope: "project",
+            status: { state: "idle" },
+            toolCount: undefined,
+          },
+        ],
+      });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("MCP servers");
+
+      setup.mockInput.pressKey(SHIFT_TAB);
+      await flush(setup);
+
+      expect(calls).toBe(0);
+    });
+
     // Plain Tab (no shift) shares the same `key.name === "tab"`, so this proves the `key.shift`
     // check is what actually gates the cycle, not just the key name. `isPrintableKey`
     // (util/keys.ts) already excludes a `key.name.length > 1` key like "tab" from InputBox's own

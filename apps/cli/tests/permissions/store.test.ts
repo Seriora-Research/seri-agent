@@ -10,9 +10,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { toolFingerprint } from "../../src/mcp/registry";
+import type { McpToolInfo } from "../../src/mcp/types";
+import { mcpGrantKey } from "../../src/mcp/types";
 import {
   effectiveTools,
   forgetGrant,
+  isPersistableTool,
   loadGrants,
   PERSISTABLE_TOOL_NAMES,
   permissionsPath,
@@ -20,6 +24,16 @@ import {
   rememberGrant,
 } from "../../src/permissions/store";
 import { WRITE_TOOL_NAMES } from "../../src/provider/tools";
+
+function tool(overrides: Partial<McpToolInfo> = {}): McpToolInfo {
+  return {
+    name: "web_search",
+    toolName: "mcp_exa_web_search",
+    description: "Search the web.",
+    inputSchema: { type: "object", properties: { query: { type: "string" } } },
+    ...overrides,
+  };
+}
 
 describe("permissions store", () => {
   let dir: string;
@@ -232,5 +246,158 @@ describe("permissions store", () => {
     for (const name of PERSISTABLE_TOOL_NAMES) expect(WRITE_TOOL_NAMES).toContain(name);
     expect(PERSISTABLE_TOOL_NAMES).not.toContain("bash");
     expect(PERSISTABLE_TOOL_NAMES).not.toContain("powershell");
+  });
+
+  // A built-in name with a fingerprint is refused — the digest would mean nothing, since there is
+  // no third-party contract to pin it to.
+  test("a built-in name with a fingerprint is refused, and nothing is created", () => {
+    expect(rememberGrant(dir, "/w", "write_file", undefined, toolFingerprint(tool()))).toBe(false);
+    expect(existsSync(permissionsPath(dir))).toBe(false);
+  });
+
+  // NEGATIVE CONTROL 1: an mcp_ name with no fingerprint must be refused — an unbound MCP grant is
+  // exactly the rug pull this design exists to stop. Made rememberGrant accept it with no
+  // fingerprint (dropped the `if (fingerprint === undefined) return false` branch): this test went
+  // red, failing on `expect(false).toBe(true)` — rememberGrant returned true and wrote the entry.
+  test("an mcp_ name with no fingerprint is refused, and nothing is created", () => {
+    expect(rememberGrant(dir, "/w", "mcp_exa_web_search")).toBe(false);
+    expect(existsSync(permissionsPath(dir))).toBe(false);
+  });
+
+  // bash and powershell stay refused even with a fingerprint attached — a fingerprint does not
+  // launder a shell name into a persistable one.
+  test.each(["bash", "powershell"])(
+    "%s is refused even with a fingerprint, and nothing is created",
+    (name) => {
+      expect(rememberGrant(dir, "/w", name, undefined, toolFingerprint(tool()))).toBe(false);
+      expect(existsSync(permissionsPath(dir))).toBe(false);
+    },
+  );
+
+  // An mcp_ name with a fingerprint stores mcpGrantKey(tool, fingerprint), and it round-trips
+  // through loadGrants.
+  test("an mcp_ name with a fingerprint stores the composed grant key", () => {
+    const fingerprint = toolFingerprint(tool());
+    expect(rememberGrant(dir, "/w", "mcp_exa_web_search", undefined, fingerprint)).toBe(true);
+    expect(loadGrants(dir, "/w").project).toEqual([mcpGrantKey("mcp_exa_web_search", fingerprint)]);
+  });
+
+  // Re-granting the same MCP tool after its catalog changed REPLACES the stale entry rather than
+  // appending a second one for the same tool — two entries would let the old contract keep
+  // authorising the call.
+  test("re-granting an mcp_ tool under a new fingerprint replaces the stale entry", () => {
+    const before = toolFingerprint(tool({ description: "Search the web." }));
+    const after = toolFingerprint(tool({ description: "Search the web, differently." }));
+
+    expect(rememberGrant(dir, "/w", "mcp_exa_web_search", undefined, before)).toBe(true);
+    expect(rememberGrant(dir, "/w", "mcp_exa_web_search", undefined, after)).toBe(true);
+
+    const grants = loadGrants(dir, "/w");
+    expect(grants.project).toEqual([mcpGrantKey("mcp_exa_web_search", after)]);
+    expect(grants.project).not.toContain(mcpGrantKey("mcp_exa_web_search", before));
+  });
+
+  // Re-granting the exact same tool under the exact same fingerprint is a true no-op: nothing is
+  // rewritten, and no second entry appears.
+  test("re-granting an mcp_ tool under the same fingerprint is a no-op", () => {
+    const fingerprint = toolFingerprint(tool());
+    expect(rememberGrant(dir, "/w", "mcp_exa_web_search", undefined, fingerprint)).toBe(true);
+    expect(rememberGrant(dir, "/w", "mcp_exa_web_search", undefined, fingerprint)).toBe(false);
+    expect(loadGrants(dir, "/w").project).toEqual([mcpGrantKey("mcp_exa_web_search", fingerprint)]);
+  });
+
+  // A stale entry for the same tool can live in the GLOBAL tier by hand — rememberGrant itself
+  // never writes there, but the template's own header invites editing it. Re-granting must still
+  // replace it rather than leave a stale global digest sitting alongside a fresh project one,
+  // which would let the old contract keep authorising the call. Asserted against the reparsed
+  // file, not the in-memory document, so a fix that only mutates the doc object without writing
+  // it back would not be mistaken for correct.
+  test("re-granting an mcp_ tool removes a stale entry that lives in the global tier", () => {
+    const before = toolFingerprint(tool({ description: "Search the web." }));
+    const after = toolFingerprint(tool({ description: "Search the web, differently." }));
+    writeFileSync(
+      permissionsPath(dir),
+      `global:\n  - ${mcpGrantKey("mcp_exa_web_search", before)}\nprojects: {}\n`,
+    );
+
+    expect(rememberGrant(dir, "/w", "mcp_exa_web_search", undefined, after)).toBe(true);
+
+    const raw = readFileSync(permissionsPath(dir), "utf8");
+    const occurrences = (raw.match(/mcp_exa_web_search@/g) ?? []).length;
+    expect(occurrences).toBe(1);
+
+    const grants = loadGrants(dir, "/w");
+    expect(effectiveTools(grants)).toEqual([mcpGrantKey("mcp_exa_web_search", after)]);
+  });
+
+  // The built-in path must be unaffected by the global-tier lookup added above: a global grant of
+  // write_file still makes a project re-grant a no-op, exactly as before.
+  test("a global write_file entry still makes a project re-grant a no-op", () => {
+    writeFileSync(permissionsPath(dir), "global: [write_file]\nprojects: {}\n");
+    const before = readFileSync(permissionsPath(dir), "utf8");
+
+    expect(rememberGrant(dir, "/w", "write_file")).toBe(false);
+
+    expect(readFileSync(permissionsPath(dir), "utf8")).toBe(before);
+    expect(loadGrants(dir, "/w")).toEqual({
+      global: ["write_file"],
+      project: [],
+      otherProjects: 0,
+    });
+  });
+
+  // A hand-written entry with a malformed digest is dropped on read, with a warning — the same
+  // hand-edit hole as a bash entry, for the MCP shape.
+  test("a hand-written mcp entry with a malformed digest is dropped on read and warned about", () => {
+    writeFileSync(
+      permissionsPath(dir),
+      `global: []\nprojects:\n  '${projectKey("/w")}':\n    - mcp_exa_web_search@short\n`,
+    );
+    const warnings: string[] = [];
+    const grants = loadGrants(dir, "/w", (m) => warnings.push(m));
+    expect(grants.project).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("mcp_exa_web_search@short");
+  });
+
+  // A well-shaped mcp grant key round-trips through loadGrants unmolested.
+  test("a hand-written, well-shaped mcp entry round-trips through loadGrants", () => {
+    writeFileSync(
+      permissionsPath(dir),
+      `global: []\nprojects:\n  '${projectKey("/w")}':\n    - mcp_exa_web_search@a1b2c3d4e5f6\n`,
+    );
+    expect(loadGrants(dir, "/w").project).toEqual(["mcp_exa_web_search@a1b2c3d4e5f6"]);
+  });
+
+  // isPersistableTool is the single "may this be remembered at all" answer both approval-prompt
+  // call sites in cli.ts and rememberGrant's own whether-check now read — previously written
+  // three times independently, which is what let one copy drift without a test catching it until
+  // a negative control against each site individually. One function, tested here directly.
+  test("isPersistableTool: true for write_file, edit, and an mcp_ name", () => {
+    expect(isPersistableTool("write_file")).toBe(true);
+    expect(isPersistableTool("edit")).toBe(true);
+    expect(isPersistableTool("mcp_exa_web_search")).toBe(true);
+  });
+
+  test("isPersistableTool: false for bash, powershell, and an invented name", () => {
+    expect(isPersistableTool("bash")).toBe(false);
+    expect(isPersistableTool("powershell")).toBe(false);
+    expect(isPersistableTool("frobnicate")).toBe(false);
+  });
+
+  // The invariant that actually matters: whatever isPersistableTool says may be offered at the
+  // prompt, rememberGrant must actually accept — otherwise a user answers "[a]lways" to a question
+  // the store silently discards, with no error and no saved grant. Seen red first: with
+  // isPersistableTool changed to return false for an mcp_ name, this fails at the assertion below
+  // (isPersistableTool("mcp_exa_web_search") is false, so the loop's own `if` never reaches
+  // rememberGrant for it at all — the missing offer is the bug this test exists to catch).
+  test("every name isPersistableTool allows, rememberGrant actually persists", () => {
+    for (const name of ["write_file", "edit", "mcp_exa_web_search"]) {
+      expect(isPersistableTool(name)).toBe(true);
+      const fingerprint = name.startsWith("mcp_")
+        ? toolFingerprint(tool({ toolName: name }))
+        : undefined;
+      expect(rememberGrant(dir, "/w", name, undefined, fingerprint)).toBe(true);
+    }
   });
 });

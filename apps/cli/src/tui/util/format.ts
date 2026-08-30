@@ -5,8 +5,10 @@ import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@s
 import { escapeControlChars } from "../../cli/output";
 import type { PermissionMode } from "../../gate/gate";
 import type { LoopEvent } from "../../loop/loop";
+import { mcpStatusWord, type McpPanelRow } from "../../mcp/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "../state/commands";
+import { ERROR_MARK, WARNING_MARK } from "../theme/theme";
 
 // Shared by every list panel (ModelPicker, ConfigPanel, PermissionsPanel, SetupPanel) via
 // useListWindow.ts — the most any of their windows ever shows at once, regardless of how many
@@ -531,4 +533,27 @@ export function matchesSkillFilter(row: SkillsPanelRow, query: string): boolean 
     row.where.toLowerCase(),
   ];
   return terms.every((term) => haystacks.some((hay) => hay.includes(term)));
+}
+
+// One row of the /mcp panel (mcpPanelRows, mcp/commands.ts) — either a scope header or a server.
+// No column padding, unlike formatSkillRow: a header's "(<file path>)" and a server's status word
+// vary too widely in length for fixed columns to buy anything, and the design mock
+// (docs/specs/020-extensibility/research-mcp.md §7) already reads as free text, not a table.
+// `WARNING_MARK`/`ERROR_MARK` are the mark-not-color substitution docs/design/tui.md requires —
+// mcpStatusWord itself (mcp/commands.ts) deliberately returns a plain word with no glyph, precisely
+// so this is the one place that decides which status gets one.
+export function formatMcpRow(row: McpPanelRow): string {
+  if (row.kind === "header") {
+    const label = row.scope === "project" ? "Project" : "User";
+    return `${label} (${row.sourceFile})`;
+  }
+  const mark =
+    row.status.state === "needs-auth"
+      ? WARNING_MARK
+      : row.status.state === "failed"
+        ? ERROR_MARK
+        : "";
+  const toolsPart =
+    row.toolCount === undefined ? "" : ` · ${row.toolCount} tool${row.toolCount === 1 ? "" : "s"}`;
+  return `${row.name} · ${mark}${mcpStatusWord(row.status)}${toolsPart}`;
 }

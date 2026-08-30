@@ -2,18 +2,22 @@
 // `pendingTool` (app.tsx) for the in-flight call, and `renderLiveToolActivity` of this
 // accumulator for settled groups during the turn. `renderToolActivity` is also what the
 // reducer flushes into muted transcript lines on done/turn-ended. Aggregation is by exact
-// tool name (every TOOL_LABELS entry — not a Read special-case). `dispatch_subagents` is
-// never recorded here: recordCall and recordResult both early-return, so the TUI does not
-// paint a dispatch settled line. `alwaysAppend` stays on mapEntry's other callers so a
-// later regression cannot merge a dispatch row into another group.
+// tool name (every TOOL_LABELS entry — not a Read special-case), except every `mcp_`-prefixed
+// name, which folds into one bucket (`groupKey` below): the model's tool array already
+// collapses every MCP call behind the single `mcp` dispatcher (mcp/tool.ts), so the transcript
+// reads the same way, one line naming how many, with each call's own composed name as a child.
+// `dispatch_subagents` is never recorded here: recordCall and recordResult both early-return, so
+// the TUI does not paint a dispatch settled line. `alwaysAppend` stays on mapEntry's other
+// callers so a later regression cannot merge a dispatch row into another group.
 import path from "node:path";
 import { escapeControlChars, toolResultLine } from "../../cli/output";
+import { isMcpToolName } from "../../mcp/types";
 import type { DispatchResult } from "../../subagents/dispatch";
 import type { GlobResult } from "../../tools/glob";
 import type { GrepResult } from "../../tools/grep";
 import type { ProcessResult } from "../../tools/spawnCollect";
 import { writeFileVerification } from "../../verify/outcome";
-import { TREE_BRANCH } from "../theme/theme";
+import { TREE_BRANCH, TREE_MID } from "../theme/theme";
 
 export type ToolActivityEntry = {
   name: string;
@@ -26,6 +30,14 @@ export type ToolActivityEntry = {
   open?: boolean;
 };
 
+// Every mcp_-prefixed tool name groups under this one bucket instead of its own exact name —
+// see the header comment above for why. Everything else groups by its own exact name unchanged.
+const MCP_GROUP_KEY = "mcp";
+
+function groupKey(name: string): string {
+  return isMcpToolName(name) ? MCP_GROUP_KEY : name;
+}
+
 export const TOOL_LABELS: Record<string, { verb: string; noun: string }> = {
   read_file: { verb: "Read", noun: "files" },
   grep: { verb: "Searched", noun: "files" },
@@ -34,6 +46,12 @@ export const TOOL_LABELS: Record<string, { verb: string; noun: string }> = {
   powershell: { verb: "Ran", noun: "shell commands" },
   write_file: { verb: "Wrote", noun: "files" },
   edit: { verb: "Edited", noun: "edits" },
+  // The group header for MCP_GROUP_KEY, so aggregateLine reads "Ran MCP 3 tools" instead of
+  // falling through to its `${name} ×${count}` unknown-key case. Deliberately no bullet on this
+  // line — a reference mock for this feature puts `●` (BULLET, TranscriptList.tsx) on the group
+  // header, which is reserved for "this is the assistant's answer"; a tool group is muted and
+  // unmarked like every other TOOL_LABELS group, so it never reads as one.
+  mcp: { verb: "Ran MCP", noun: "tools" },
 };
 
 const COMMAND_CAP = 60;
@@ -261,7 +279,7 @@ export function recordCall(
   if (name === "dispatch_subagents") return entries;
   return mapEntry(
     entries,
-    name,
+    groupKey(name),
     (entry) => {
       const count = entry.count + 1;
       return {
@@ -269,11 +287,25 @@ export function recordCall(
         count,
         open: true,
         singleLine: entry.singleLine.length > 0 ? entry.singleLine : summarizeArgs(name, args),
-        detailLines: count > 1 ? [] : entry.detailLines,
+        // grep/glob's detail lines belong to one search and are dropped the instant a second
+        // call turns this into an aggregate. MCP accumulates instead (mcpDetailLines below), so
+        // a call starting mid-accumulation must not wipe what already settled.
+        detailLines: isMcpToolName(name) ? entry.detailLines : count > 1 ? [] : entry.detailLines,
       };
     },
     false,
   );
+}
+
+// MCP is the one case where the composed name IS the sub-line, not a derived summary of the
+// result the way grep/glob's matched paths are — so unlike them, an MCP group accumulates every
+// call's name across settles instead of resetting on the second one. The first call's own name
+// lives only in singleLine (a single call shows no children at all — count === 1 below), so it
+// is folded back in here the moment a second call turns the entry into a real group.
+function mcpDetailLines(entry: ToolActivityEntry, settledName: string, count: number): string[] {
+  if (count === 1) return [];
+  const priorNames = entry.detailLines.length > 0 ? entry.detailLines : [entry.singleLine];
+  return [...priorNames, settledName];
 }
 
 export function recordResult(
@@ -287,7 +319,7 @@ export function recordResult(
   const details = detailLinesForResult(name, result);
   return mapEntry(
     entries,
-    name,
+    groupKey(name),
     (entry) => {
       const count = settleCount(entry);
       return {
@@ -296,8 +328,13 @@ export function recordResult(
         open: false,
         singleLine: settledSingleLine(name, args, result),
         // Per-call grep/glob hits only survive on a single-call group; a repeat drops them
-        // back to a bare aggregate count, same as every other tool.
-        detailLines: count === 1 ? details : [],
+        // back to a bare aggregate count, same as every other tool. MCP is the exception,
+        // handled by mcpDetailLines.
+        detailLines: isMcpToolName(name)
+          ? mcpDetailLines(entry, name, count)
+          : count === 1
+            ? details
+            : [],
         anomalyLines: appendAnomaly(entry.anomalyLines, anomaly),
       };
     },
@@ -313,7 +350,7 @@ export function recordDenial(
   const labels = TOOL_LABELS[name];
   return mapEntry(
     entries,
-    name,
+    groupKey(name),
     (entry) => ({
       ...entry,
       count: settleCount(entry),
@@ -343,7 +380,17 @@ export function renderToolActivity(entries: ToolActivityEntry[]): string[] {
     const main = display(aggregateLine(entry));
     const subs = cappedSubLines([...entry.detailLines, ...entry.anomalyLines].map(display));
     if (subs.length === 0) return main;
-    return [main, ...subs.map((line) => `${TREE_BRANCH}${line}`)].join("\n");
+    // grep/glob's sub-lines are a sample (up to 3 matched paths out of however many, dropped
+    // entirely once count > 1) — TREE_BRANCH on each means "here is some more detail", and stays
+    // that way. An MCP group's sub-lines are the complete call list, not a sample, so only there
+    // does the tree glyph mean what it says: every child but the last gets TREE_MID, the last
+    // TREE_BRANCH.
+    const last = subs.length - 1;
+    const lines =
+      entry.name === MCP_GROUP_KEY
+        ? subs.map((line, i) => `${i === last ? TREE_BRANCH : TREE_MID}${line}`)
+        : subs.map((line) => `${TREE_BRANCH}${line}`);
+    return [main, ...lines].join("\n");
   });
 }
 

@@ -116,7 +116,9 @@ export function createToolDefinitions(cwd: string) {
 export const toolDefinitions = createToolDefinitions(process.cwd());
 
 // Tools that write to disk or execute commands, as opposed to merely reading/searching.
-// gate.ts derives its permission set from this list so a new write-capable tool can't
+// Still the only place a built-in's permission class is declared: classifyBuiltin (below) is what
+// gate.ts asks, and its read class is READ_ONLY_TOOL_NAMES — this list's complement over
+// toolDefinitions — so there is no second list to keep in step and a write-capable tool can't
 // silently drift out of sync with what read-only mode blocks.
 export const WRITE_TOOL_NAMES: (keyof typeof toolDefinitions)[] = [
   "write_file",
@@ -162,3 +164,31 @@ export function createScheduledToolDefinitions(cwd: string) {
 // (subagents/registry.ts): every subagent's ToolSet is built by picking names out of
 // toolDefinitions, so `ToolName` can never name this tool and no child ToolSet can contain it.
 export const DISPATCH_TOOL_NAME = "dispatch_subagents";
+
+export type ToolClass = "read" | "write";
+
+// The read class is enumerated and everything else is `write`, including every name this file has
+// never heard of. That direction is the whole point: MCP opens the tool set to third parties, so
+// "absent from the write list" stops being evidence of safety — absence of knowledge never was —
+// and an unseen name costs an approval instead of being waved through in all three modes.
+//
+// Two names here are not keys of `toolDefinitions` and would therefore be unknown, which would
+// break read-only sessions that use them. Neither writes: `dispatch_subagents` hands the child the
+// parent's own permission mode (subagents/dispatch.ts), so a subagent's `bash` re-enters this same
+// gate at the same mode rather than escaping it, and `skill` reads one file the user themselves put
+// under `.seri/skills/`.
+//
+// `skill` is the literal rather than an import of SKILL_TOOL_NAME (skills/tool.ts) because
+// `provider/` sits below `skills/` in the module graph, and the foundational modules here do not
+// import the extension modules layered on top of them. The drift a literal invites is guarded in
+// tests/provider/tools.test.ts, which imports the constant and asserts the two still agree — a
+// cross-module import that costs nothing in a test.
+const READ_CLASS_TOOL_NAMES = new Set<string>([
+  ...READ_ONLY_TOOL_NAMES,
+  DISPATCH_TOOL_NAME,
+  "skill",
+]);
+
+export function classifyBuiltin(name: string): ToolClass {
+  return READ_CLASS_TOOL_NAMES.has(name) ? "read" : "write";
+}

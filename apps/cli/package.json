@@ -28,6 +28,7 @@
     "@ai-sdk/anthropic": "^4.0.36",
     "@ai-sdk/google": "^4.0.39",
     "@ai-sdk/groq": "^4.0.19",
+    "@ai-sdk/mcp": "^2.0.40",
     "@ai-sdk/openai": "^4.0.36",
     "@openrouter/ai-sdk-provider": "^3.0.0",
     "@opentui/core": "0.5.6",

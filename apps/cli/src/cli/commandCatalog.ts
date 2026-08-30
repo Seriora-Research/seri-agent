@@ -1,3 +1,4 @@
+import { mcpCommandAccepts } from "../mcp/commands";
 import { memoryCommandAccepts } from "../memory/commands";
 import { skillsCommandAccepts } from "../skills/commands";
 
@@ -177,6 +178,16 @@ export const COMMAND_META: readonly CommandMeta[] = [
     description: "list this project's skills, and review what the archivist proposed",
     argsUsage: "[list|pending|diff <id|all>|approve <id|all>|reject <id|all>]",
     accepts: skillsCommandAccepts,
+  },
+  {
+    // TUI-claimed for every form, the same reasoning /skills' own entry states: the bare/list form
+    // opens the panel, and add/remove render their lines through the same handler, so there is no
+    // non-TTY consumer to split this across two surfaces for.
+    name: "/mcp",
+    surface: "tui",
+    description: "manage MCP servers: connect, preview their tools, and trust or remove them",
+    argsUsage: "[list|add <name> <url>|remove <name>]",
+    accepts: mcpCommandAccepts,
   },
   {
     name: "/max-turns",

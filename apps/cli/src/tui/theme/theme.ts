@@ -62,6 +62,10 @@ export const WARNING_MARK = "! ";
 // ERROR_MARK/WARNING_MARK already use. Prefixed onto a tool-activity anomaly or grep/glob
 // match path at the TUI call site.
 export const TREE_BRANCH = "└ ";
+// Secondary-detail glyph, not a color — same convention as TREE_BRANCH. A tool-activity group
+// with more than one sub-line prefixes every child but the last with this and the last with
+// TREE_BRANCH, so the tree reads as a tree instead of a stack of identical branches.
+export const TREE_MID = "├ ";
 // Secondary-detail glyph, not a color — same convention as TREE_BRANCH. Prefixed onto the
 // archivist stats line inside archivistLine (shared CLI+TUI formatter), unlike WARNING_MARK
 // which stays TUI-call-site-only.
