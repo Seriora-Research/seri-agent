@@ -15,7 +15,7 @@ import {
   type ToolActivityEntry,
   trimPath,
 } from "../../src/tui/state/toolActivity";
-import { TREE_BRANCH } from "../../src/tui/theme/theme";
+import { TREE_BRANCH, TREE_MID } from "../../src/tui/theme/theme";
 import type { CheckOutcome } from "../../src/verify/outcome";
 
 function proc(overrides: Partial<ProcessResult> = {}): ProcessResult {
@@ -436,5 +436,85 @@ describe("renderLiveToolActivity", () => {
     expect(renderLiveToolActivity(entries)).toEqual(["Ran echo a"]);
     entries = recordResult(entries, "bash", { command: "echo b" }, ok);
     expect(renderLiveToolActivity(entries)).toEqual(["Ran 2 shell commands"]);
+  });
+});
+
+describe("MCP grouping", () => {
+  test("three different MCP tools group into one line plus three children, mid then branch", () => {
+    let entries = recordResult([], "mcp_exa_web_search", {}, { ok: true });
+    entries = recordResult(entries, "mcp_notion_search", {}, { ok: true });
+    entries = recordResult(entries, "mcp_hugging_face_model_search", {}, { ok: true });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].count).toBe(3);
+    expect(renderToolActivity(entries)).toEqual([
+      `Ran MCP 3 tools\n${TREE_MID}mcp_exa_web_search\n${TREE_MID}mcp_notion_search\n${TREE_BRANCH}mcp_hugging_face_model_search`,
+    ]);
+  });
+
+  test("same turn: a grep group still renders TREE_BRANCH on every child while an MCP group alternates", () => {
+    // grep's sub-lines are a sample of matched paths, so TREE_BRANCH on each is unchanged from
+    // today; MCP's are the complete call list, so it alternates. Rendering both from one call
+    // proves the renderer distinguishes the two groups rather than switching on some global.
+    const grepEntry: ToolActivityEntry = {
+      name: "grep",
+      count: 1,
+      singleLine: "Searched TODO",
+      detailLines: ["a.ts", "b.ts"],
+      anomalyLines: [],
+    };
+    let mcpEntries = recordResult([], "mcp_exa_web_search", {}, { ok: true });
+    mcpEntries = recordResult(mcpEntries, "mcp_notion_search", {}, { ok: true });
+    const rendered = renderToolActivity([grepEntry, ...mcpEntries]);
+    expect(rendered[0]).toBe(`Searched TODO\n${TREE_BRANCH}a.ts\n${TREE_BRANCH}b.ts`);
+    expect(rendered[1]).toBe(
+      `Ran MCP 2 tools\n${TREE_MID}mcp_exa_web_search\n${TREE_BRANCH}mcp_notion_search`,
+    );
+  });
+
+  test("a single MCP call renders as just its composed name, with no group line and no children", () => {
+    const entries = recordResult([], "mcp_exa_web_search", {}, { ok: true });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].count).toBe(1);
+    expect(renderToolActivity(entries)).toEqual(["mcp_exa_web_search"]);
+  });
+
+  test("two calls to the same MCP tool still group into the one bucket", () => {
+    let entries = recordResult([], "mcp_exa_web_search", {}, { ok: true });
+    entries = recordResult(entries, "mcp_exa_web_search", {}, { ok: true });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].count).toBe(2);
+    expect(renderToolActivity(entries)[0]?.split("\n")[0]).toBe("Ran MCP 2 tools");
+  });
+
+  test("built-in grouping is unchanged: two read_file calls group by exact name, undisturbed by an MCP call in the same turn", () => {
+    let entries = recordResult([], "read_file", { path: "a.txt" }, "one");
+    entries = recordResult(entries, "read_file", { path: "b.txt" }, "two");
+    entries = recordResult(entries, "mcp_exa_web_search", {}, { ok: true });
+    expect(entries).toHaveLength(2);
+    const readFileEntry = entries.find((e) => e.name === "read_file");
+    const mcpEntry = entries.find((e) => e.name === "mcp");
+    expect(readFileEntry?.count).toBe(2);
+    expect(renderToolActivity([readFileEntry as ToolActivityEntry])).toEqual(["Read 2 files"]);
+    expect(mcpEntry?.count).toBe(1);
+    expect(renderToolActivity([mcpEntry as ToolActivityEntry])).toEqual(["mcp_exa_web_search"]);
+  });
+
+  test("overflow past the sub-line cap summarises through cappedSubLines", () => {
+    let entries: ToolActivityEntry[] = [];
+    for (let i = 1; i <= 6; i++) {
+      entries = recordResult(entries, `mcp_t${i}`, {}, { ok: true });
+    }
+    expect(entries[0].count).toBe(6);
+    const rendered = renderToolActivity(entries)[0] ?? "";
+    const lines = rendered.split("\n");
+    expect(lines[0]).toBe("Ran MCP 6 tools");
+    expect(lines).toHaveLength(6);
+    expect(lines.at(-1)).toBe(`${TREE_BRANCH}…and 2 more`);
+  });
+
+  test("a failed MCP call still gets its anomaly sub-line", () => {
+    const entries = recordDenial([], "mcp_exa_web_search", "blocked");
+    expect(entries[0].anomalyLines).toEqual(["blocked"]);
+    expect(renderToolActivity(entries)).toEqual([`mcp_exa_web_search\n${TREE_BRANCH}blocked`]);
   });
 });
