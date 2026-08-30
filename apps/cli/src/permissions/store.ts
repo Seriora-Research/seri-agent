@@ -13,6 +13,18 @@ import { isMcpGrantKey, isMcpToolName, mcpGrantKey, parseMcpGrantKey } from "../
 export const PERSISTABLE_TOOL_NAMES = ["write_file", "edit"] as const;
 export const PERSISTABLE_TOOLS: ReadonlySet<string> = new Set(PERSISTABLE_TOOL_NAMES);
 
+// The single answer to "may this tool be remembered permanently at all" — as distinct from HOW it
+// gets remembered, which rememberGrant's own fingerprint branch below still owns. This used to be
+// written three times: at both approval-prompt call sites in cli.ts (their `offersAlways`) and
+// again inside rememberGrant's own whether-check. Three independent copies of one boolean rule
+// meant a negative control could only prove one copy at a time was in sync with this file — a rule
+// stated once cannot be half-found. The prompt's `[a]lways` offer and the store's own acceptance
+// MUST agree on this exact question: a mismatch is either a prompt offering an answer the store
+// silently discards, or a grant the UI never gave anyone a way to make.
+export function isPersistableTool(tool: string): boolean {
+  return PERSISTABLE_TOOLS.has(tool) || isMcpToolName(tool);
+}
+
 export const PERMISSIONS_FILENAME = "permissions.yaml";
 
 export function permissionsPath(configDir: string): string {
@@ -200,7 +212,9 @@ function writeDocument(doc: Document, configDir: string): void {
 // `fingerprint` is required for an `mcp_` name and refused for a built-in one: a digest on a
 // built-in would mean nothing (there is no third-party contract to pin), and an mcp_ grant with
 // no digest is exactly the unbound rug-pull-prone grant this design exists to stop. bash and
-// powershell are refused either way, by falling through PERSISTABLE_TOOLS below.
+// powershell are refused either way, by isPersistableTool's own whether-check below — this
+// function no longer asks that question itself, only HOW a tool that may be persisted at all
+// gets written.
 export function rememberGrant(
   configDir: string,
   worktree: string,
@@ -208,6 +222,7 @@ export function rememberGrant(
   onWarning?: (message: string) => void,
   fingerprint?: string,
 ): boolean {
+  if (!isPersistableTool(tool)) return false;
   const mcp = isMcpToolName(tool);
   let value: string;
   if (mcp) {
@@ -215,7 +230,6 @@ export function rememberGrant(
     value = mcpGrantKey(tool, fingerprint);
   } else {
     if (fingerprint !== undefined) return false;
-    if (!PERSISTABLE_TOOLS.has(tool)) return false;
     value = tool;
   }
   const path = permissionsPath(configDir);

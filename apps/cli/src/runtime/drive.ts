@@ -9,6 +9,8 @@ import { loadConfig } from "../config/config";
 import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
 import { type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "../loop/loop";
+import { grantFingerprint } from "../mcp/registry";
+import { mcpCallSubject, withMcp } from "../mcp/tool";
 import {
   type ArchivistReport,
   type ArchivistState,
@@ -365,8 +367,14 @@ export async function driveLoop(
     driveOpts.composeSubagents === false ? baseTools : withSubagents(baseTools, subagentRuntime);
   // Needs no flag of its own: withSkills adds nothing when the registry holds no model-visible
   // skill, and the one path that must never see this tool — a scheduled run — is built with an
-  // empty registry, so its absence there is structural rather than conditional.
-  const tools = withSkills(dispatchable, prepared.skills);
+  // empty registry, so its absence there is structural rather than conditional. withMcp composes
+  // the same way, on the same terms: it adds nothing for a registry with no cataloged tool, which
+  // is what a fresh install or an unpreviewed server both look like.
+  const tools = withMcp(
+    withSkills(dispatchable, prepared.skills),
+    prepared.mcp,
+    prepared.mcpClients,
+  );
   // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
   // what an exit code promises a shell, which is this consumer's business, not the loop's.
   // `permission-denied` fires on two different facts carried in its `reason` — "blocked" is a
@@ -434,6 +442,13 @@ export async function driveLoop(
           // handle: the loop copies it (loop.ts:211) and growth comes back out as `tool-allowed`,
           // below.
           allowedTools,
+          // The `mcp` tool composed above is one ToolSet key standing in for every tool on every
+          // configured server — mcpCallSubject is what tells the gate, the approval prompt and
+          // every rendered event which one a given call actually means, resolving to the umbrella
+          // `mcp` name only for a shape it does not recognise as one of its own (its own comment in
+          // mcp/tool.ts). Every non-mcp call is unaffected: mcpCallSubject returns the ToolSet key
+          // unchanged for anything that isn't literally "mcp".
+          callSubject: mcpCallSubject,
           approvalPrompt,
           // Computed once above, so a live /model switch or reroute reaches subagents identically.
           system,
@@ -530,7 +545,19 @@ export async function driveLoop(
       // failure.
       if (event.type === "tool-allowed") {
         try {
-          if (rememberGrant(ctx.permissionsDir, worktree, event.name, printWarning))
+          // undefined for anything that is not a cataloged MCP tool — exactly today's behaviour
+          // for write_file/edit, since rememberGrant refuses a fingerprint on a built-in name and
+          // requires one on an mcp_ name (permissions/store.ts). No branch needed at this call
+          // site: the one function already knows which of its two shapes each name takes.
+          if (
+            rememberGrant(
+              ctx.permissionsDir,
+              worktree,
+              event.name,
+              printWarning,
+              grantFingerprint(prepared.mcp, event.name),
+            )
+          )
             printGrantPersisted(event.name, worktree);
         } catch (err) {
           printWarning(

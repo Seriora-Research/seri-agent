@@ -1455,6 +1455,55 @@ describe("run (task invocation)", () => {
     expect(rendered).not.toContain("write\x1bfile");
   }, 10_000);
 
+  // makeApprovalPrompt's own `offersAlways` widens to any mcp_-shaped name, not just
+  // PERSISTABLE_TOOLS — without it, rememberGrant's fingerprinted MCP grant (permissions/store.ts)
+  // is unreachable through this prompt, and an MCP tool would ask forever with no way to answer
+  // "always". A built-in name still gets no such offer, in the same run, so this also proves the
+  // widening did not just replace the PERSISTABLE_TOOLS check outright.
+  test("an MCP-shaped tool name offers [a]lways at the readline prompt; an unlisted built-in does not", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    let input: PassThrough | undefined;
+    let rendered = "";
+
+    async function* runLoopFake(
+      opts: RunLoopOpts,
+    ): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      const first = opts.approvalPrompt?.("mcp_exa_web_search", { query: "q" }, opts.signal);
+      input?.write("n\n");
+      await first;
+      const second = opts.approvalPrompt?.("bash", { command: "ls" }, opts.signal);
+      input?.write("n\n");
+      await second;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await run(["write", "hello.txt"], {
+        runLoop: runLoopFake,
+        loadAgentsFile: () => "",
+        loadExtensions: () => ({ skills: new Map(), rules: new Map() }),
+        sessionsDir,
+        createInterface: () => {
+          input = new PassThrough();
+          const output = new PassThrough();
+          output.on("data", (chunk: Buffer) => {
+            rendered += chunk.toString();
+          });
+          return createInterface({ input, output });
+        },
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(rendered).toContain('Approve mcp_exa_web_search({"query":"q"})? [y]es / [a]lways');
+    expect(rendered).toContain('Approve bash({"command":"ls"})? [y]es / [N]o');
+  }, 10_000);
+
   // write_file's input carries the whole file body: an uncapped JSON.stringify would render a
   // 500-line generated module on one prompt line and scroll the question itself out of
   // scrollback before the user could even see it, let alone answer it.

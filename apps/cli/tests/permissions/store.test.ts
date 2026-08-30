@@ -16,6 +16,7 @@ import { mcpGrantKey } from "../../src/mcp/types";
 import {
   effectiveTools,
   forgetGrant,
+  isPersistableTool,
   loadGrants,
   PERSISTABLE_TOOL_NAMES,
   permissionsPath,
@@ -366,5 +367,37 @@ describe("permissions store", () => {
       `global: []\nprojects:\n  '${projectKey("/w")}':\n    - mcp_exa_web_search@a1b2c3d4e5f6\n`,
     );
     expect(loadGrants(dir, "/w").project).toEqual(["mcp_exa_web_search@a1b2c3d4e5f6"]);
+  });
+
+  // isPersistableTool is the single "may this be remembered at all" answer both approval-prompt
+  // call sites in cli.ts and rememberGrant's own whether-check now read — previously written
+  // three times independently, which is what let one copy drift without a test catching it until
+  // a negative control against each site individually. One function, tested here directly.
+  test("isPersistableTool: true for write_file, edit, and an mcp_ name", () => {
+    expect(isPersistableTool("write_file")).toBe(true);
+    expect(isPersistableTool("edit")).toBe(true);
+    expect(isPersistableTool("mcp_exa_web_search")).toBe(true);
+  });
+
+  test("isPersistableTool: false for bash, powershell, and an invented name", () => {
+    expect(isPersistableTool("bash")).toBe(false);
+    expect(isPersistableTool("powershell")).toBe(false);
+    expect(isPersistableTool("frobnicate")).toBe(false);
+  });
+
+  // The invariant that actually matters: whatever isPersistableTool says may be offered at the
+  // prompt, rememberGrant must actually accept — otherwise a user answers "[a]lways" to a question
+  // the store silently discards, with no error and no saved grant. Seen red first: with
+  // isPersistableTool changed to return false for an mcp_ name, this fails at the assertion below
+  // (isPersistableTool("mcp_exa_web_search") is false, so the loop's own `if` never reaches
+  // rememberGrant for it at all — the missing offer is the bug this test exists to catch).
+  test("every name isPersistableTool allows, rememberGrant actually persists", () => {
+    for (const name of ["write_file", "edit", "mcp_exa_web_search"]) {
+      expect(isPersistableTool(name)).toBe(true);
+      const fingerprint = name.startsWith("mcp_")
+        ? toolFingerprint(tool({ toolName: name }))
+        : undefined;
+      expect(rememberGrant(dir, "/w", name, undefined, fingerprint)).toBe(true);
+    }
   });
 });

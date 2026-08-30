@@ -6,8 +6,13 @@ import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { loadVerifyConfig } from "../../src/config/config";
 import type { LoopEvent } from "../../src/loop/loop";
+import { createMcpClients } from "../../src/mcp/client";
+import { toolFingerprint } from "../../src/mcp/registry";
+import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
+import { type McpCatalog, type McpToolInfo, mcpGrantMatches } from "../../src/mcp/types";
 import { createArchivistState } from "../../src/memory/archivist";
 import { loadMemory } from "../../src/memory/store";
+import { loadGrants } from "../../src/permissions/store";
 import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
 import { driveLoop } from "../../src/runtime/drive";
 import type { PreparedRun } from "../../src/runtime/prepare";
@@ -76,6 +81,8 @@ function preparedStub(): PreparedRun {
     skills: new Map(),
     rules: new Map(),
     rulesState: { fired: new Set<string>() },
+    mcp: new Map(),
+    mcpClients: createMcpClients(),
     preMountMessages: [],
   };
 }
@@ -474,5 +481,92 @@ describe("driveLoop directDispatch", () => {
     // at index 1 — a rewind to it undoes the whole submission, the request included.
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].rewindTo).toBe(1);
+  });
+});
+
+describe("driveLoop mcp composition", () => {
+  function mcpRegistryWith(tool: McpToolInfo) {
+    const catalog: McpCatalog = {
+      server: "exa",
+      fetchedAt: new Date().toISOString(),
+      tools: [tool],
+    };
+    return new Map([
+      [
+        "exa",
+        {
+          spec: {
+            name: "exa",
+            url: "https://mcp.exa.ai/mcp",
+            headers: {},
+            source: "project" as const,
+            filePath: "x",
+          },
+          catalog,
+        },
+      ],
+    ]);
+  }
+
+  const searchTool: McpToolInfo = {
+    name: "web_search",
+    toolName: "mcp_exa_web_search",
+    description: "Search the web.",
+    inputSchema: {},
+  };
+
+  // Seen red first: with `withMcp(...)` deleted from the tools composition in runtime/drive.ts,
+  // MCP_TOOL_NAME never appears in what runLoop is handed, regardless of what prepared.mcp holds.
+  test("composes the mcp tool from prepared.mcp and passes mcpCallSubject as callSubject", async () => {
+    const prepared = preparedStub();
+    prepared.mcp = mcpRegistryWith(searchTool);
+    const ctx = unusedCtx(prepared.session.cwd);
+    const { fake, capture } = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      ctx,
+      { runLoop: fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+    );
+    expect(MCP_TOOL_NAME in (capture()?.tools ?? {})).toBe(true);
+    expect(capture()?.callSubject).toBe(mcpCallSubject);
+  });
+
+  // Seen red first: with the trailing `grantFingerprint(prepared.mcp, event.name)` argument
+  // removed from the rememberGrant call in runtime/drive.ts, the MCP entry below is refused
+  // (rememberGrant requires a fingerprint for an mcp_ name) and this test's own `mcpEntry` search
+  // finds nothing.
+  test("a tool-allowed event persists write_file with no fingerprint and an mcp tool with one", async () => {
+    const prepared = preparedStub();
+    prepared.mcp = mcpRegistryWith(searchTool);
+    const ctx = unusedCtx(prepared.session.cwd);
+    const { fake } = fakeRunLoop([
+      { type: "tool-allowed", name: "write_file" },
+      { type: "tool-allowed", name: "mcp_exa_web_search" },
+      { type: "done", reason: "no-tool-call" },
+    ]);
+    await driveLoop(
+      prepared,
+      ctx,
+      { runLoop: fake },
+      1,
+      () => {},
+      () => "approve-each",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+    );
+
+    const grants = loadGrants(ctx.permissionsDir, prepared.worktree);
+    const all = [...grants.global, ...grants.project];
+    expect(all).toContain("write_file");
+    const mcpEntry = all.find((entry) => entry.startsWith("mcp_exa_web_search@"));
+    expect(mcpEntry).toBeDefined();
+    expect(mcpGrantMatches(mcpEntry as string, toolFingerprint(searchTool))).toBe(true);
   });
 });

@@ -7,6 +7,7 @@ import { createCheckpointer } from "../checkpoint/checkpoint";
 import type { CliDeps, RunContext } from "../cli";
 import { printWarning } from "../cli/output";
 import { loadVerifyConfig } from "../config/config";
+import { createMcpClients } from "../mcp/client";
 import { createArchivistState } from "../memory/archivist";
 import { loadMemory } from "../memory/store";
 import { resolveDefaultModel } from "../provider/defaults";
@@ -78,6 +79,11 @@ export function createRunScheduled(opts: {
       skills: new Map(),
       rules: new Map(),
       rulesState: createRulesState(),
+      // Empty and freshly built, on the same rule as skills/rules above: an unattended run must
+      // not reach a server a human never previewed and trusted, and withMcp (runtime/drive.ts)
+      // adds nothing to the ToolSet for a registry with no cataloged tool.
+      mcp: new Map(),
+      mcpClients: createMcpClients(),
       trajectory: createSessionTrajectory(session, opts.configDir, onWarning),
       preMountMessages: [],
     };

@@ -18,6 +18,9 @@ import { loadTrajectoryConfig, loadVerifyConfig, type VerifyConfig } from "../co
 import { getConfigDir, getTrajectoriesDir } from "../config/paths";
 import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
+import { closeMcpClients, createMcpClients, type McpClients } from "../mcp/client";
+import { grantFingerprint, loadMcpRegistry } from "../mcp/registry";
+import { isMcpToolName, type McpRegistry, mcpGrantMatches, parseMcpGrantKey } from "../mcp/types";
 import { type ArchivistState, createArchivistState } from "../memory/archivist";
 import { type LoadedMemory, loadMemory } from "../memory/store";
 import { effectiveTools, loadGrants } from "../permissions/store";
@@ -368,6 +371,18 @@ export type PreparedRun = {
   // Which glob-scoped rules have already fired. Rebound on /clear alongside the registry itself, so
   // a cleared session re-fires a rule the previous conversation had already seen.
   rulesState: RulesState;
+  // Whatever `.seri/mcp/servers.yaml` at both scopes defines, each server fused with its cached
+  // tool catalog — frozen data, resolved once here exactly like `skills` and `agents` above: a
+  // server added mid-session, or a catalog a `/mcp` reconnect changed, takes effect next session.
+  // /clear is the one exception (bindSession, below), which reloads it.
+  mcp: McpRegistry;
+  // The live half `mcp` above deliberately is not — dialled handles and per-server status, mutated
+  // as calls actually happen rather than read once from disk, the same split `rules`/`rulesState`
+  // already draws. Never dialled here: `createMcpClients()`'s default dial function connects lazily
+  // on the first call a turn actually makes (mcp/tool.ts), so building this costs nothing at
+  // session start. /clear closes and rebuilds this pool (bindSession, below) rather than carrying a
+  // dialled connection from the old session into the new one.
+  mcpClients: McpClients;
   // Trajectory records for this session id. Rebound in bindSession the same way checkpointer/tools
   // are: /clear mints a new id, so a writer closed over the old one would keep appending under a
   // session nothing resumes. Disabled config still yields a no-op writer.
@@ -510,6 +525,51 @@ export function warnOnNameCollisions(
   }
 }
 
+// The seed prepareSession and bindSession hand runLoop's allowedTools: loadGrants' own stored
+// entries, mapped to the names the gate actually compares calls against. A built-in entry
+// (write_file, edit) passes through unchanged. A stored MCP grant is `mcp_<server>_<tool>@<digest>`,
+// but the gate, the approval prompt and `tool-allowed` all name a call by its BARE
+// `mcp_<server>_<tool>` subject (loop.ts's own callSubject) — so a grant only earns its way into the
+// set as that bare name, never carrying its digest suffix forward, and only when the digest still
+// matches this session's own catalog entry for it. A mismatch is dropped with a warning naming the
+// tool, because "you will be asked again" is the whole point of the fingerprint and must not be
+// silent.
+//
+// This resolves once, here, and is sound only because `registry` is frozen for the life of the
+// session it is called with: nothing between this call and the session ending can change what a
+// name in the returned set resolves to. bindSession (below) does not reuse this result across
+// /clear — it re-reads the grants from disk and re-runs this same derivation against a freshly
+// reloaded registry, which is what actually closes the window a `/mcp` reconnect would otherwise
+// leave open under a standing grant.
+function filterMcpGrants(
+  entries: readonly string[],
+  registry: McpRegistry,
+  onWarning: (message: string) => void,
+): string[] {
+  const result: string[] = [];
+  for (const entry of entries) {
+    if (!isMcpToolName(entry)) {
+      result.push(entry);
+      continue;
+    }
+    // loadGrants' own extractToolList only ever lets an mcp_-prefixed entry through when it is
+    // shaped like a grant key (isMcpGrantKey), so parsing it back out here cannot fail in practice
+    // — the branch exists because parseMcpGrantKey's return type says so, not because this file
+    // has ever observed it.
+    const parsed = parseMcpGrantKey(entry);
+    if (parsed === undefined) continue;
+    const fingerprint = grantFingerprint(registry, parsed.toolName);
+    if (fingerprint !== undefined && mcpGrantMatches(entry, fingerprint)) {
+      result.push(parsed.toolName);
+    } else {
+      onWarning(
+        `the saved approval for "${parsed.toolName}" no longer matches this server's current tool, so you will be asked again`,
+      );
+    }
+  }
+  return result;
+}
+
 // Everything scoped to a session id, rebound in one place — the checkpointer/tools pair,
 // PreparedRun.session, PreparedRun.memory, PreparedRun.trajectory, and the archivist's own
 // counter/cursor, none of which stay valid once `session` is a conceptually different conversation
@@ -521,6 +581,7 @@ export function bindSession(
   prepared: PreparedRun,
   session: RunSession,
   configDir: string,
+  permissionsDir: string,
   onWarning: (message: string) => void,
 ): ArchivistState {
   const trajectory = createSessionTrajectory(session, configDir, onWarning);
@@ -549,6 +610,19 @@ export function bindSession(
     onWarning,
   });
   warnOnNameCollisions(prepared.skills, prepared.agents, onWarning);
+  // Closed BEFORE the reference is replaced: a live McpClientHandle holds an open socket, unlike a
+  // Set, and dropping the old `prepared.mcpClients` on the floor here would leak one connection per
+  // dialled server for the rest of the process — /clear can run any number of times in one seri
+  // process. Registry reloaded fresh rather than reused, because a `/mcp reconnect` between session
+  // start and this /clear may have changed a catalog, and allowedTools is re-derived from the
+  // persisted grants on disk rather than carried over from `prepared.allowedTools`, for the same
+  // reason filterMcpGrants' own comment states: only the stored, digest-bearing entry can still
+  // prove a grant matches the reloaded catalog.
+  closeMcpClients(prepared.mcpClients, onWarning);
+  prepared.mcp = loadMcpRegistry({ worktree: prepared.worktree, configDir, onWarning });
+  prepared.mcpClients = createMcpClients();
+  const grants = loadGrants(permissionsDir, prepared.worktree, onWarning);
+  prepared.allowedTools = filterMcpGrants(effectiveTools(grants), prepared.mcp, onWarning);
   prepared.session = session;
   prepared.trajectory = trajectory;
   return createArchivistState(session);
@@ -703,13 +777,28 @@ export async function prepareSession(
     // the store lives entirely outside the user's repository.
     const { storeDir, worktree } = checkpointTarget(session, dirs(ctx));
 
+    // Disk-only and synchronous, exactly like loadSkillRegistry/loadRuleRegistry just above are —
+    // no server is dialled here, only `.seri/mcp/servers.yaml` and each server's cached catalog
+    // (whatever `/mcp add`'s preview step already wrote). This must never become an await: making
+    // it one would put a network-shaped operation on every session start, and the lazy-dial
+    // contract (mcp/client.ts) exists specifically so a configured-but-unreachable server costs
+    // this run nothing until a turn actually calls it.
+    const mcp = loadMcpRegistry({
+      worktree,
+      configDir,
+      onWarning: (msg) => printWarning(msg, warnSink),
+    });
+    const mcpClients = createMcpClients();
+
     // Read here and nowhere else. An unattended scheduled run must not copy this line. Every
     // entry in that file was written by a human answering a live prompt in a run they were watching.
     // That is consent for that run, not standing consent for one on a timer. Seeding a scheduled
     // run from here would disable the gate through a file instead of a flag. The daemon's
     // scheduled path uses permissionMode read-only and an empty allowlist instead.
     const grants = loadGrants(ctx.permissionsDir, worktree, (msg) => printWarning(msg, warnSink));
-    const allowedTools = effectiveTools(grants);
+    const allowedTools = filterMcpGrants(effectiveTools(grants), mcp, (msg) =>
+      printWarning(msg, warnSink),
+    );
     const permissionMode = skipPermissions ? "auto" : session.permissionMode;
     // approve-each only: in read-only the gate blocks these tools before it ever consults the
     // allowlist (gate.ts:14), and in auto everything is allowed anyway — printing "pre-approved" in
@@ -796,6 +885,8 @@ export async function prepareSession(
       skills,
       rules,
       rulesState: createRulesState(),
+      mcp,
+      mcpClients,
       trajectory,
       preMountMessages,
     };

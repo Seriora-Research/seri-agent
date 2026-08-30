@@ -94,7 +94,7 @@ import {
 } from "./memory/archivist";
 import { decideMemoryCommand } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
-import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
+import { effectiveTools, isPersistableTool, loadGrants, rememberGrant } from "./permissions/store";
 import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
 import { getModelCatalog, prewarmModelCatalog } from "./provider/catalog";
@@ -775,11 +775,10 @@ function makeApprovalPrompt(
         resolve("no");
         return;
       }
-      // A positive list, where the old bash/powershell exclusion set was a negative one: a write
-      // tool added to the gate must be opted in to permanent approval deliberately. Today the two
-      // sets pick out the same names for every input that can reach here (a read tool never
-      // reaches the prompt at all), so this is a change of source of truth, not of behaviour.
-      const offersAlways = PERSISTABLE_TOOLS.has(toolName);
+      // isPersistableTool (permissions/store.ts) is the single answer to "may this be remembered
+      // permanently" — this prompt's offer and rememberGrant's own acceptance read the same
+      // function so the two cannot drift out of agreement with each other.
+      const offersAlways = isPersistableTool(toolName);
       let answered = false;
       const rl = openInterface();
       const abort = onAbort(signal, () => {
@@ -810,7 +809,7 @@ function makeApprovalPrompt(
         const typed = answer.trim().toLowerCase();
         // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
         // user did not clearly give is not an approval. An "a"/"always" typed at a shell prompt
-        // (not offered, see PERSISTABLE_TOOLS) is "unrecognised" by the same rule, not a special case.
+        // (not offered, see isPersistableTool) is "unrecognised" by the same rule, not a special case.
         const wantsAlways = offersAlways && (typed === "a" || typed === "always");
         resolve(typed === "y" || typed === "yes" ? "once" : wantsAlways ? "always" : "no");
       });
@@ -1495,7 +1494,8 @@ async function runTui(
         resolve("no");
         return;
       }
-      const offersAlways = PERSISTABLE_TOOLS.has(toolName);
+      // See makeApprovalPrompt's own comment on this same expression.
+      const offersAlways = isPersistableTool(toolName);
       // The other direction, mirroring makeApprovalPrompt's own onAbort wiring: a cancel that
       // arrives WHILE this prompt is up (a Ctrl-C mid-approval) resolves "no" and clears
       // pendingApproval, the same as an explicit "n" answer would, instead of leaving the box
@@ -2480,6 +2480,7 @@ async function runTui(
             prepared,
             liveState.session as RunSession,
             configDir,
+            ctx.permissionsDir,
             printWarning,
           );
         } catch (err) {
