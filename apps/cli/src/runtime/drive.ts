@@ -20,6 +20,7 @@ import type { CostReport } from "../provider/cost";
 import { configuredProviders } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
 import { resolveReasoningEffort } from "../provider/reasoning";
+import { subscribedProviders } from "../provider/subscriptions";
 import { DISPATCH_TOOL_NAME } from "../provider/tools";
 import { createRuleInjector } from "../rules/match";
 import type { SessionState } from "../session/session";
@@ -284,6 +285,7 @@ export async function driveLoop(
       catalog,
       configured,
       prepared.plan,
+      subscribedProviders(ctx.configDir),
     );
     const samePair = intended.model === route.model && intended.provider === route.provider;
     let childModel = model;

@@ -436,3 +436,56 @@ describe("parseRolePins reads env then config from a real config dir", () => {
     }
   });
 });
+
+describe("a subagent pinned to a subscribed provider", () => {
+  // Found by Claude review on PR #222. resolveSessionRoute threads subscribedProviders, but the
+  // subagent path did not, so a role pinned to xai with a connected subscription and no
+  // XAI_API_KEY resolved to credential "key", hit missingKeyError in dispatchModel, and got
+  // silently downgraded to the parent's model even though a usable credential existed.
+  const grokCatalog: ModelCatalog = {
+    fetchedAt: "2026-08-28T00:00:00.000Z",
+    entries: [entry({ id: "grok-4.5", provider: "xai" }), ...catalog.entries],
+  };
+
+  test("a task-pinned role resolves to the subscription, with no API key configured", () => {
+    const route = resolveChildRoute(
+      undefined,
+      parent,
+      {},
+      { model: "grok-4.5", provider: "xai" },
+      grokCatalog,
+      new Set(),
+      null,
+      new Set(["xai"]),
+    );
+    expect(route.provider).toBe("xai");
+    expect(route.credential).toBe("subscription");
+    expect(route.inherited).toBe(false);
+  });
+
+  test("an env-pinned role resolves to the subscription too", () => {
+    const route = resolveRoleRoute(
+      "oracle",
+      parent,
+      { oracle: { model: "grok-4.5", provider: "xai" } },
+      grokCatalog,
+      new Set(),
+      null,
+      new Set(["xai"]),
+    );
+    expect(route.credential).toBe("subscription");
+  });
+
+  test("with no subscription connected the same pin still reports the key path", () => {
+    const route = resolveRoleRoute(
+      "oracle",
+      parent,
+      { oracle: { model: "grok-4.5", provider: "xai" } },
+      grokCatalog,
+      new Set(["xai"]),
+      null,
+      new Set(),
+    );
+    expect(route.credential).toBe("key");
+  });
+});

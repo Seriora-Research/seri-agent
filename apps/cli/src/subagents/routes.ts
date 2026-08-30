@@ -3,6 +3,8 @@ import type { Plan } from "@seri/plans";
 import { isModelProvider } from "../provider/defaults";
 import { type ResolvedRoute, type RouteCredential, resolveRoute } from "../provider/routing";
 
+const EMPTY_SUBSCRIPTIONS: ReadonlySet<ModelProvider> = new Set();
+
 export const ROUTABLE_ROLES = ["explore", "plan", "code", "test", "oracle", "archivist"] as const;
 
 export type RoutableRole = (typeof ROUTABLE_ROLES)[number];
@@ -89,10 +91,15 @@ export function resolveChildRoute(
   catalog: ModelCatalog,
   configured: ReadonlySet<ModelProvider>,
   plan: Plan | null,
+  // Threaded for the same reason resolveSessionRoute reads it: without it a role pinned to a
+  // provider the user reaches by subscription resolves to credential "key", dispatchModel throws
+  // missingKeyError, and the child is silently downgraded to the parent's model even though a
+  // usable credential exists. Defaulted so callers that never had it keep compiling.
+  subscribed: ReadonlySet<ModelProvider> = EMPTY_SUBSCRIPTIONS,
 ): RoleRoute {
   const taskPin = pinFromTask(request);
   if (taskPin !== undefined) {
-    const resolved = resolveRoute(catalog, taskPin, configured, plan);
+    const resolved = resolveRoute(catalog, taskPin, configured, plan, subscribed);
     return {
       model: resolved.model,
       provider: resolved.provider,
@@ -101,7 +108,7 @@ export function resolveChildRoute(
       inherited: false,
     };
   }
-  return resolveRoleRoute(role, parent, pins, catalog, configured, plan);
+  return resolveRoleRoute(role, parent, pins, catalog, configured, plan, subscribed);
 }
 
 export function resolveRoleRoute(
@@ -111,6 +118,7 @@ export function resolveRoleRoute(
   catalog: ModelCatalog,
   configured: ReadonlySet<ModelProvider>,
   plan: Plan | null,
+  subscribed: ReadonlySet<ModelProvider> = EMPTY_SUBSCRIPTIONS,
 ): RoleRoute {
   const pin = role === undefined ? undefined : pins[role];
   if (pin === undefined) {
@@ -122,7 +130,7 @@ export function resolveRoleRoute(
       inherited: true,
     };
   }
-  const resolved = resolveRoute(catalog, pin, configured, plan);
+  const resolved = resolveRoute(catalog, pin, configured, plan, subscribed);
   return {
     model: resolved.model,
     provider: resolved.provider,
