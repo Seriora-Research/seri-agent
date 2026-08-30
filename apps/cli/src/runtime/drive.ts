@@ -16,12 +16,12 @@ import {
   observeArchivistEvent,
 } from "../memory/archivist";
 import { rememberGrant } from "../permissions/store";
-import { createRuleInjector } from "../rules/match";
 import type { CostReport } from "../provider/cost";
 import { configuredProviders } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
 import { resolveReasoningEffort } from "../provider/reasoning";
 import { DISPATCH_TOOL_NAME } from "../provider/tools";
+import { createRuleInjector } from "../rules/match";
 import type { SessionState } from "../session/session";
 import { onSignalCancel } from "../signals";
 import { withSkills } from "../skills/tool";

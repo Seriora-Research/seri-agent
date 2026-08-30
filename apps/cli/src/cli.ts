@@ -121,6 +121,7 @@ import {
   resolveSessionRoute,
 } from "./provider/routing";
 import { toolDefinitions } from "./provider/tools";
+import type { RuleRegistry } from "./rules/registry";
 import {
   addCost,
   addTokens,
@@ -132,7 +133,6 @@ import { awaitsReply } from "./session/awaitsReply";
 import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { decideSkillsCommand, skillsPanelRows } from "./skills/commands";
-import type { RuleRegistry } from "./rules/registry";
 import { readSkillBody, type SkillRegistry, substituteSkillArgs } from "./skills/registry";
 import type { AgentSpec } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
@@ -218,7 +218,10 @@ export type CliDeps = {
   // One seam covering both, not one each: they are discovered from the same cwd at the same moment,
   // and a caller that stubbed only one would still be reading the other off the real disk, which is
   // the exact bug this exists to remove.
-  loadExtensions?: (cwd: string, configDir: string) => { skills: SkillRegistry; rules: RuleRegistry };
+  loadExtensions?: (
+    cwd: string,
+    configDir: string,
+  ) => { skills: SkillRegistry; rules: RuleRegistry };
   sessionsDir?: string;
   checkpointsDir?: string;
   authConfigDir?: string;

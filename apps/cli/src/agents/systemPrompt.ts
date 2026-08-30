@@ -1,6 +1,6 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import { type LoadedMemory, renderMemoryTier } from "../memory/store";
-import { renderRulesTier, type RuleSpec } from "../rules/registry";
+import { type RuleSpec, renderRulesTier } from "../rules/registry";
 import { renderSkillsTier, type SkillSpec } from "../skills/registry";
 
 // One prompt for every model, deliberately: routing a different prompt per model family is what

@@ -29,14 +29,14 @@ import { dispatchModel } from "../provider/model";
 import { appliedReasoningEffort } from "../provider/reasoning";
 import { type ResolvedRoute, resolveRoute } from "../provider/routing";
 import { createToolDefinitions } from "../provider/tools";
+import { createRulesState, type RulesState } from "../rules/match";
+import { loadRuleRegistry, type RuleRegistry } from "../rules/registry";
 import {
   findMostRecentSession,
   loadSession,
   type SessionState,
   saveSession,
 } from "../session/session";
-import { createRulesState, type RulesState } from "../rules/match";
-import { loadRuleRegistry, type RuleRegistry } from "../rules/registry";
 import { loadSkillRegistry, type SkillRegistry } from "../skills/registry";
 import { type AgentRegistry, loadAgentRegistry } from "../subagents/registry";
 import { createTrajectoryWriter, type TrajectoryWriter } from "../trajectory/writer";

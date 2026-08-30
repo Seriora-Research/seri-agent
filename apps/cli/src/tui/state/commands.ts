@@ -47,8 +47,8 @@ import {
   resolveRoute,
   resolveSessionRoute,
 } from "../../provider/routing";
-import type { SessionState } from "../../session/session";
 import { loadRuleRegistry, type RuleRegistry } from "../../rules/registry";
+import type { SessionState } from "../../session/session";
 import { loadSkillRegistry, type SkillRegistry } from "../../skills/registry";
 import type { TrajectoryWriter } from "../../trajectory/writer";
 

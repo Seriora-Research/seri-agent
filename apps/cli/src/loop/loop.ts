@@ -207,7 +207,9 @@ export async function* runLoop(opts: {
    * Synchronous because it runs between a tool round and the next model call, where an await would
    * add latency to every turn for the benefit of the sessions that have no rules at all.
    */
-  onToolPhaseEnd?: (executed: readonly { toolName: string; input: unknown }[]) => string | undefined;
+  onToolPhaseEnd?: (
+    executed: readonly { toolName: string; input: unknown }[],
+  ) => string | undefined;
   // The tools already approved with "always" before this run started, or nothing. A seed, not a
   // handle: the loop copies it into its own Set and never writes back through this reference, so a
   // caller cannot be surprised by a mutation it did not ask for. Growth leaves as `tool-allowed`.
