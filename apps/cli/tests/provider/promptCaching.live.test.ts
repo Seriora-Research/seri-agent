@@ -16,7 +16,7 @@ test.skipIf(!process.env.GROQ_API_KEY || process.env.SERI_LIVE_CACHE_CHECK !== "
     // an earlier run (this repo's own negative-control rule — .claude/rules/code-quality.md,
     // "An acceptance check must be seen to fail before it counts as passing").
     const nonce = crypto.randomUUID();
-    const system = `${nonce}\n\n${buildSystemPrompt(PADDING)}`;
+    const system = `${nonce}\n\n${buildSystemPrompt({ agentsContent: PADDING, skills: [] })}`;
     const model = getGroqModel(MODEL_ID);
     const messages = [{ role: "user" as const, content: "Reply with a single word: OK." }];
 

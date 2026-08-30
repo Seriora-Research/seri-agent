@@ -23,14 +23,14 @@ function emptyMemoryCtx(): MemoryContext {
 // for a synonym. What they must not become is a snapshot of the whole string.
 describe("buildSystemPrompt", () => {
   test("the assembled system prompt instructs the model to call tools rather than describe them", () => {
-    const prompt = buildSystemPrompt("");
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [] });
 
     expect(prompt).toMatch(/call your tools/i);
     expect(prompt).toMatch(/do not describe/i);
   });
 
   test("the assembled system prompt teaches the read_file -> edit -> write_file sequence", () => {
-    const prompt = buildSystemPrompt("");
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [] });
 
     // The numbered steps, not the section heading. The heading itself reads "Changing a file:
     // read_file, then edit, then write_file", so an ordering assertion over bare `indexOf` matches
@@ -52,8 +52,8 @@ describe("buildSystemPrompt", () => {
   // The case the old assembly collapsed to 29 characters: outside a repo with an AGENTS.md,
   // `loadAgentsFile` returns "" and the model got "You are seri, a coding agent." and nothing else.
   test("a project with no AGENTS.md still gets the full tool guidance", () => {
-    const withoutAgents = buildSystemPrompt("");
-    const withAgents = buildSystemPrompt("# Project rules\nUse tabs.");
+    const withoutAgents = buildSystemPrompt({ agentsContent: "", skills: [] });
+    const withAgents = buildSystemPrompt({ agentsContent: "# Project rules\nUse tabs.", skills: [] });
 
     expect(withoutAgents).toMatch(/call your tools/i);
     expect(withoutAgents).toMatch(/read_file/);
@@ -64,7 +64,7 @@ describe("buildSystemPrompt", () => {
   });
 
   test("the assembled system prompt lists every real tool by its own name", () => {
-    const prompt = buildSystemPrompt("");
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [] });
 
     for (const name of [
       "read_file",
@@ -81,7 +81,7 @@ describe("buildSystemPrompt", () => {
   });
 
   test("the assembled system prompt tells the model bash/powershell/write_file/edit are destructive and to investigate before overwriting unfamiliar state", () => {
-    const prompt = buildSystemPrompt("");
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [] });
 
     expect(prompt).toMatch(/destroy work/i);
     expect(prompt).toMatch(/investigate before deleting or overwriting/i);
@@ -92,9 +92,9 @@ describe("buildSystemPrompt", () => {
   // naive three-operand join can add an extra "\n\n" that today's conditional two-operand join
   // never produced, since only two operands ever existed before and one was dropped when empty.
   test("stable tier precedes context tier, with no extra or missing separator", () => {
-    const withoutAgents = buildSystemPrompt("");
+    const withoutAgents = buildSystemPrompt({ agentsContent: "", skills: [] });
     const agentsFixture = "# Project rules\nUse tabs.";
-    const withAgents = buildSystemPrompt(agentsFixture);
+    const withAgents = buildSystemPrompt({ agentsContent: agentsFixture, skills: [] });
 
     const toolsIndex = withAgents.indexOf("# Calling tools");
     const agentsIndex = withAgents.indexOf(agentsFixture);

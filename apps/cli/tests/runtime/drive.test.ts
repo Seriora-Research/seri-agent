@@ -73,6 +73,7 @@ function preparedStub(): PreparedRun {
       setEnabled: () => {},
       isEnabled: () => true,
     },
+    skills: new Map(),
     preMountMessages: [],
   };
 }

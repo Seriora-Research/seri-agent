@@ -214,6 +214,7 @@ describe("profileNameError", () => {
       "rg",
       "bin",
       "agents",
+      "skills",
       "memories",
       "pending",
       "trajectories",
@@ -225,7 +226,7 @@ describe("profileNameError", () => {
   });
 
   // Stage 6b: memories/ and pending/ join the reserved set the same way sessions/checkpoints did.
-  test.each(["agents", "memories", "pending", "trajectories"])("%s is reserved", (name) => {
+  test.each(["agents", "skills", "memories", "pending", "trajectories"])("%s is reserved", (name) => {
     expect(profileNameError(name)).toBeDefined();
   });
 

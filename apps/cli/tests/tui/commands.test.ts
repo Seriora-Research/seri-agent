@@ -48,6 +48,7 @@ let root: string;
 let storeDir: string;
 let workTree: string;
 let checkpointsDir: string;
+let configDir: string;
 
 const SESSION = "session-1";
 
@@ -78,6 +79,7 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "seri-tui-commands-test-"));
   checkpointsDir = join(root, "checkpoints");
   workTree = join(root, "work");
+  configDir = join(root, "profile");
   mkdirSync(workTree, { recursive: true });
   writeFileSync(join(workTree, "a.txt"), "before\n");
   storeDir = checkpointStoreDir(checkpointsDir, workTree);
@@ -704,12 +706,12 @@ describe("decideClear", () => {
   test("mints a new id and empties messages", () => {
     const before = session({ messages: [{ role: "user", content: "hi" }] });
 
-    const { next } = decideClear(before, "new-id");
+    const { next } = decideClear(before, configDir, "new-id");
     expect(next.id).toBe("new-id");
     expect(next.messages).toEqual([]);
 
     // No second arg: still mints a fresh, distinct id.
-    const { next: auto } = decideClear(before);
+    const { next: auto } = decideClear(before, configDir);
     expect(auto.id).not.toBe(before.id);
     expect(typeof auto.id).toBe("string");
     expect(auto.id.length).toBeGreaterThan(0);
@@ -724,7 +726,7 @@ describe("decideClear", () => {
       messages: [{ role: "user", content: "hi" }],
     });
 
-    const { next } = decideClear(before, "new-id");
+    const { next } = decideClear(before, configDir, "new-id");
 
     expect(next.cwd).toBe(before.cwd);
     expect(next.permissionMode).toBe(before.permissionMode);
@@ -739,9 +741,9 @@ describe("decideClear", () => {
     writeFileSync(join(workTree, "AGENTS.md"), "distinctive project instructions");
     const before = session({ systemPrompt: "stale prompt from before the edit" });
 
-    const { next } = decideClear(before, "new-id");
+    const { next } = decideClear(before, configDir, "new-id");
 
-    expect(next.systemPrompt).toBe(buildSystemPrompt(loadAgentsFile(workTree)));
+    expect(next.systemPrompt).toBe(buildSystemPrompt({ agentsContent: loadAgentsFile(workTree), skills: [] }));
     expect(next.systemPrompt).not.toBe(before.systemPrompt);
   });
 
@@ -749,15 +751,15 @@ describe("decideClear", () => {
     const before = session({ systemPrompt: "stale" });
     const stub = (cwd: string) => `stubbed content for ${cwd}`;
 
-    const { next } = decideClear(before, "new-id", stub);
+    const { next } = decideClear(before, configDir, "new-id", stub);
 
-    expect(next.systemPrompt).toBe(buildSystemPrompt(stub(workTree)));
+    expect(next.systemPrompt).toBe(buildSystemPrompt({ agentsContent: stub(workTree), skills: [] }));
   });
 
   test("does not mutate the session it was given", () => {
     const before = session({ messages: [{ role: "user", content: "hi" }] });
 
-    decideClear(before, "new-id");
+    decideClear(before, configDir, "new-id");
 
     expect(before.messages).toHaveLength(1);
     expect(before.id).toBe(SESSION);
@@ -766,7 +768,7 @@ describe("decideClear", () => {
   test("the message names both ids and points at seri --resume", () => {
     const before = session({ messages: [] });
 
-    const { message } = decideClear(before, "new-id");
+    const { message } = decideClear(before, configDir, "new-id");
 
     expect(message).toContain("new-id");
     expect(message).toContain(SESSION);
@@ -777,7 +779,7 @@ describe("decideClear", () => {
     const sessionsDir = join(root, "sessions");
     const before = session({ messages: [{ role: "user", content: "hi" }] });
 
-    decideClear(before, "new-id");
+    decideClear(before, configDir, "new-id");
 
     expect(existsSync(sessionsDir)).toBe(false);
   });

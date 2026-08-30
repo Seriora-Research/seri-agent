@@ -48,6 +48,7 @@ import {
   resolveSessionRoute,
 } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
+import { loadSkillRegistry, type SkillRegistry } from "../../skills/registry";
 import type { TrajectoryWriter } from "../../trajectory/writer";
 
 export type CommandDirs = {
@@ -611,14 +612,25 @@ export function decideRewind(
 // widening it (or `CommandDirs`) for this one caller was judged not worth it here.
 export function decideClear(
   session: SessionState<ModelMessage>,
+  configDir: string,
   newId: string = randomUUID(),
   loadAgents: typeof loadAgentsFile = loadAgentsFile,
+  // Injected on the same terms `loadAgents` is, and for the same reason: /clear mints a
+  // conceptually new session, so both halves of its context tier are rediscovered rather than
+  // carried over. A skill directory added since the session started is live after /clear. Warnings
+  // are dropped here rather than surfaced — bindSession reloads the identical set moments later
+  // with a real sink attached, and printing each one twice is worse than printing it once.
+  loadSkills: (cwd: string) => SkillRegistry = (cwd) =>
+    loadSkillRegistry({ worktree: cwd, configDir, onWarning: () => {} }),
 ): { next: SessionState<ModelMessage>; message: string } {
   const next = {
     ...session,
     id: newId,
     messages: [],
-    systemPrompt: buildSystemPrompt(loadAgents(session.cwd)),
+    systemPrompt: buildSystemPrompt({
+      agentsContent: loadAgents(session.cwd),
+      skills: [...loadSkills(session.cwd).values()],
+    }),
   };
   // "saved", not "intact": the checkpoint store retains only a fixed number of recent session refs
   // (checkpoint.ts's own pruneSessions), so repeated /clear in one long-lived process can prune an

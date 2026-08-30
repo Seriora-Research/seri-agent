@@ -1,12 +1,12 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
 import type { ToolSet } from "ai";
-import { foldsCase } from "../caseFold";
 import { type OnAfterMutation, withMutationRecording } from "../checkpoint/wrapTools";
 import { commandByName } from "../cli/commandCatalog";
-import { AGENTS_DIRNAME, getAgentsDir, getBaseConfigDir } from "../config/paths";
+import { AGENTS_DIRNAME } from "../config/paths";
 import { messageOf } from "../errors";
+import { type ExtensionSource, extensionScopes } from "../extensions/discovery";
 import {
   createToolDefinitions,
   FS_MUTATING_TOOL_NAMES,
@@ -17,7 +17,8 @@ import {
 import { parseAgentFile } from "./agentFile";
 import { isRoutableRole, pinFromTask, type RoutableRole, type TaskRouteRequest } from "./routes";
 
-export type AgentSource = "builtin" | "user" | "project";
+// "builtin" plus the two scopes every `.seri/<dirname>/` artifact shares (extensions/discovery.ts).
+export type AgentSource = "builtin" | ExtensionSource;
 
 /**
  * One dispatchable seat. Produced ONLY by this module — the built-in table below for the five
@@ -186,29 +187,6 @@ export function describeAgent(spec: AgentSpec): string {
   return `"${spec.name}": ${spec.description} Tools: ${spec.toolNames.join(", ")}.`;
 }
 
-// The upward walk loadAgentsFile.ts already idiomatises for AGENTS.md, stopping at the first
-// ancestor that has one. seri reads no other harness's directories: an agent written for another
-// toolset and another dispatch behaviour auto-loading here is a surprise, not a convenience —
-// compatibility lives in the file format, and migrating is copying the files in.
-function findProjectAgentsDir(startDir: string): string | undefined {
-  // The one candidate the walk must never adopt: `~/.seri/agents` is the default profile's GLOBAL
-  // scope. A repository that happens to sit under $HOME would otherwise claim it as its own
-  // project scope, and a `--profile work` run would reach the default root's agents through it —
-  // the opposite of the disjoint profile trees a named profile promises. Compared case-folded on
-  // win32/darwin (caseFold.ts): the cwd's casing and $HOME's casing are routinely different
-  // spellings of one directory there, and an exact compare would leave the back door open.
-  const fold = (path: string): string => (foldsCase() ? path.toLowerCase() : path);
-  const globalDefault = fold(getAgentsDir(getBaseConfigDir()));
-  let dir = startDir;
-  for (;;) {
-    const candidate = join(dir, ".seri", AGENTS_DIRNAME);
-    if (fold(candidate) !== globalDefault && existsSync(candidate)) return candidate;
-    const parent = dirname(dir);
-    if (parent === dir) return undefined;
-    dir = parent;
-  }
-}
-
 // Sorted, so two files that both define the same name resolve the same way on every platform and
 // every filesystem rather than by readdir order.
 function agentFilesIn(dir: string, onWarning: (message: string) => void): readonly string[] {
@@ -235,11 +213,11 @@ export function loadAgentRegistry(opts: {
   onWarning: (message: string) => void;
 }): AgentRegistry {
   const agents = new Map(builtinRegistry());
-  const scopes: { dir: string; source: Exclude<AgentSource, "builtin"> }[] = [
-    { dir: getAgentsDir(opts.configDir), source: "user" },
-  ];
-  const projectDir = findProjectAgentsDir(opts.worktree);
-  if (projectDir !== undefined) scopes.push({ dir: projectDir, source: "project" });
+  const scopes = extensionScopes({
+    worktree: opts.worktree,
+    configDir: opts.configDir,
+    dirname: AGENTS_DIRNAME,
+  });
 
   // A built-in's name, a routing target's name and a slash command's name are all refused. The
   // routing targets matter beyond tidiness: SERI_ROLE_<NAME>_MODEL is a closed env surface, and a

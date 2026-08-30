@@ -521,7 +521,7 @@ describe("run (task invocation)", () => {
     // The assembled prompt, not the bare identity line: with no AGENTS.md this used to be 29
     // characters of identity and no tool guidance at all. The per-turn volatile tier (which model
     // this run actually is) is appended after it — see driveLoop's system composition.
-    expect(capture()?.system?.startsWith(buildSystemPrompt(""))).toBe(true);
+    expect(capture()?.system?.startsWith(buildSystemPrompt({ agentsContent: "", skills: [] }))).toBe(true);
     expect(capture()?.system).toMatch(/You are powered by the model named/);
   });
 
@@ -865,7 +865,7 @@ describe("run (task invocation)", () => {
     );
 
     expect(code).toBe(0);
-    expect(capture()?.system?.startsWith(buildSystemPrompt(""))).toBe(true);
+    expect(capture()?.system?.startsWith(buildSystemPrompt({ agentsContent: "", skills: [] }))).toBe(true);
     expect(capture()?.system).toContain("model-on-session");
     expect(askedFor).toEqual([sessionCwd]);
   });
@@ -3431,7 +3431,7 @@ describe("run (/clear)", () => {
     const loaded = loadSession(newId, sessionsDir);
     expect(loaded.messages).toEqual([]);
     expect(loaded.cwd).toBe(existing.cwd);
-    expect(loaded.systemPrompt).toBe(buildSystemPrompt(loadAgentsFile(cwd)));
+    expect(loaded.systemPrompt).toBe(buildSystemPrompt({ agentsContent: loadAgentsFile(cwd), skills: [] }));
     expect(loaded.systemPrompt).not.toBe(existing.systemPrompt);
     expect(loaded.permissionMode).toBe(existing.permissionMode);
     expect(loaded.model).toBe(existing.model);

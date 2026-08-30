@@ -20,7 +20,7 @@ import { onAbort } from "./abort";
 import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
-import { login as loginReal, logout as logoutReal } from "./auth/commands";
+import type { login as loginReal, logout as logoutReal } from "./auth/commands";
 import {
   appendBarrier,
   type Checkpointer,
@@ -83,7 +83,7 @@ import {
   type ApprovalPrompt,
   DEFAULT_PRESERVE_RECENT_MESSAGES,
   type LoopEvent,
-  runLoop as runLoopReal,
+  type runLoop as runLoopReal,
 } from "./loop/loop";
 import {
   type ArchivistReport,
@@ -130,6 +130,7 @@ import {
 import { awaitsReply } from "./session/awaitsReply";
 import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
+import { readSkillBody, substituteSkillArgs } from "./skills/registry";
 import type { AgentSpec } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
@@ -641,7 +642,7 @@ async function clearCommand(
   dirs: CommandDirs,
   presenter: CommandPresenter,
 ): Promise<void> {
-  const { next, message } = decideClear(session);
+  const { next, message } = decideClear(session, dirs.configDir);
   await presenter.sessionUpdated(next);
   presenter.transcriptCleared();
   presenter.message(message);
@@ -2210,10 +2211,48 @@ async function runTui(
         // The last place a slash name is looked up: the session's agent registry. `/reviewer grade
         // the diff` runs that agent directly, with no parent round trip to decide whether to.
         const agent = prepared.agents.get(name.slice(1));
-        if (agent === undefined) {
+        const skill = agent === undefined ? prepared.skills.get(name.slice(1)) : undefined;
+        if (agent === undefined && skill === undefined) {
           dispatch({ type: "command-error", message: `Unrecognized command: ${name}` });
           return;
         }
+        // A skill is not a dispatch. Its body IS a prompt, and it runs in this session's own
+        // context, so `/name` on one needs no engine of its own: substitute the user's arguments
+        // into the body and submit the result as an ordinary user turn, exactly as if they had
+        // typed it. The body deliberately never enters the transcript — the user already sees the
+        // `/name` they typed, and printing a page of instructions back at them is noise. The muted
+        // line below is the whole acknowledgement.
+        if (skill !== undefined) {
+          if (turnInFlight) {
+            dispatch({
+              type: "command-error",
+              message:
+                "A turn is already running; wait for it to finish before submitting another.",
+            });
+            return;
+          }
+          let prompt: string;
+          try {
+            prompt = substituteSkillArgs(readSkillBody(skill), trimmed.slice(name.length).trim());
+          } catch (err) {
+            dispatch({ type: "command-error", message: messageOf(err) });
+            return;
+          }
+          dispatch({
+            type: "transcript-append",
+            line: `Skill loaded: ${skill.name}`,
+            muted: true,
+          });
+          currentTurn = runTurn(
+            {
+              ...liveState.session,
+              messages: [...liveState.session.messages, { role: "user", content: prompt }],
+            },
+            prompt,
+          );
+          return;
+        }
+        if (agent === undefined) return;
         // Sliced off `trimmed`, not rejoined from `args`: the goal keeps whatever spacing the user
         // typed, which for a pasted multi-clause task is the difference between a readable prompt
         // and a mangled one.

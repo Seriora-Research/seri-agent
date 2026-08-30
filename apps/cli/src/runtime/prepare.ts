@@ -35,6 +35,7 @@ import {
   type SessionState,
   saveSession,
 } from "../session/session";
+import { loadSkillRegistry, type SkillRegistry } from "../skills/registry";
 import { type AgentRegistry, loadAgentRegistry } from "../subagents/registry";
 import { createTrajectoryWriter, type TrajectoryWriter } from "../trajectory/writer";
 import { destroyTuiRenderer } from "../tui/runtime/renderer";
@@ -101,8 +102,16 @@ export function loadOrCreateSession(
   loadAgentsFileFn: typeof loadAgentsFileReal,
   configDir: string,
   cwd: string,
+  // Injected, and called with the SAME cwd the AGENTS.md read below is given, which on a resume is
+  // the session's own recorded cwd rather than the process's. Both feed one frozen context tier, so
+  // resolving them from two different directories would let a resume launched from elsewhere pick
+  // up this project's skills alongside that project's AGENTS.md. Discovered fresh on both paths for
+  // the same reason the AGENTS.md read is: a skill added since the session was saved must be
+  // visible on resume, and one deleted since must not be. Nothing skill-shaped is ever replayed out
+  // of the session JSON.
+  loadSkills: (cwd: string) => SkillRegistry,
   onTruncated: () => void = () => {},
-): { session: RunSession; modelRecorded: boolean } {
+): { session: RunSession; modelRecorded: boolean; skills: SkillRegistry } {
   if (resuming) {
     const id = resumeId ?? findMostRecentSession(sessionsDir);
     if (!id) throw new Error("No session to resume.");
@@ -146,14 +155,19 @@ export function loadOrCreateSession(
       loaded.model === undefined
         ? resolveDefaultModel(configDir)
         : { model: loaded.model, provider: loaded.provider };
+    const skills = loadSkills(loaded.cwd);
     return {
       session: {
         ...loaded,
-        systemPrompt: buildSystemPrompt(loadAgentsFileFn(loaded.cwd)),
+        systemPrompt: buildSystemPrompt({
+          agentsContent: loadAgentsFileFn(loaded.cwd),
+          skills: [...skills.values()],
+        }),
         model,
         provider,
       },
       modelRecorded: loaded.model !== undefined,
+      skills,
     };
   }
 
@@ -161,11 +175,15 @@ export function loadOrCreateSession(
   // (resolveDefaultModel's own comment), falling back to DEFAULT_MODEL/"groq" the same way
   // resolveModelId always has when nothing was ever picked.
   const { model, provider } = resolveDefaultModel(configDir);
+  const skills = loadSkills(cwd);
   return {
     session: {
       id: randomUUID(),
       cwd,
-      systemPrompt: buildSystemPrompt(loadAgentsFileFn(cwd)),
+      systemPrompt: buildSystemPrompt({
+        agentsContent: loadAgentsFileFn(cwd),
+        skills: [...skills.values()],
+      }),
       // approve-each, not read-only: on native Windows the OS sandbox is not enforced
       // (docs/ARCHITECTURE.md:417), so the permission gate is the whole Base layer and a default
       // that does not ask is a default that writes unattended. read-only was tried and measured —
@@ -181,6 +199,7 @@ export function loadOrCreateSession(
       messages: [],
     },
     modelRecorded: false,
+    skills,
   };
 }
 
@@ -323,6 +342,13 @@ export type PreparedRun = {
   // the same reason: an agent file added mid-session takes effect next session. /clear is the one
   // exception (bindSession, below), which reloads it alongside memory.
   agents: AgentRegistry;
+  // Whatever `.seri/skills/` and the profile root's `skills/` defined, resolved once and frozen for
+  // the session — the same rule `memory` and `agents` above state, and for the same reason. Names
+  // and descriptions only: a SkillSpec has no body (skills/skillFile.ts), so this map cannot be the
+  // thing that puts a skill's instructions in front of the model. Only an actual invocation does
+  // that, by reading the file. /clear is the one exception (bindSession, below), which reloads it
+  // alongside memory and agents.
+  skills: SkillRegistry;
   // Trajectory records for this session id. Rebound in bindSession the same way checkpointer/tools
   // are: /clear mints a new id, so a writer closed over the old one would keep appending under a
   // session nothing resumes. Disabled config still yields a no-op writer.
@@ -464,6 +490,10 @@ export function bindSession(
   prepared.checkpointer = checkpointer;
   prepared.tools = tools;
   prepared.memory = loadMemory({ configDir, worktree: prepared.worktree });
+  // Reloaded from the SESSION's cwd, not the process's, matching decideClear's own rebuild of the
+  // context tier this feeds — the two must agree or /clear would list one set of skills and load
+  // another.
+  prepared.skills = loadSkillRegistry({ worktree: session.cwd, configDir, onWarning });
   prepared.agents = loadAgentRegistry({
     worktree: prepared.worktree,
     configDir,
@@ -512,13 +542,19 @@ export async function prepareSession(
   // that call site's own comment.
   try {
     const configDir = deps.authConfigDir ?? getConfigDir();
-    const { session, modelRecorded } = loadOrCreateSession(
+    const { session, modelRecorded, skills } = loadOrCreateSession(
       ctx.resuming,
       ctx.resumeId,
       ctx.sessionsDir,
       loadAgentsFileFn,
       configDir,
       ctx.cwd,
+      (cwd) =>
+        loadSkillRegistry({
+          worktree: cwd,
+          configDir,
+          onWarning: (msg) => printWarning(msg, warnSink),
+        }),
       () =>
         printWarning(
           "the last message in this session's saved history was incomplete (an interrupted save) and has been dropped — everything before it is intact",
@@ -683,6 +719,21 @@ export async function prepareSession(
       onWarning: (msg) => printWarning(msg, warnSink),
     });
 
+    // Reported here rather than refused at either loader, because neither loader can see the other:
+    // skills load before the session so their listing can be frozen into the context tier, and
+    // agents load after it because an agent file's `model:` needs the catalog. A shared name is not
+    // fatal to either — the model still reaches both, through different tools — so only the ONE
+    // surface they actually compete for is affected, `/name`, where cli.ts checks agents first. The
+    // shadowed half is invisible without this line.
+    for (const name of skills.keys()) {
+      if (agents.has(name)) {
+        printWarning(
+          `"${name}" names both an agent and a skill; /${name} runs the agent. The skill is still reachable through the skill tool.`,
+          warnSink,
+        );
+      }
+    }
+
     return {
       session,
       storeDir,
@@ -699,6 +750,7 @@ export async function prepareSession(
       verifyConfig,
       memory,
       agents,
+      skills,
       trajectory,
       preMountMessages,
     };
