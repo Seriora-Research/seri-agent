@@ -50,6 +50,12 @@ export function byRoutePriority(a: ModelCatalogEntry, b: ModelCatalogEntry): num
   return CATALOG_PROVIDERS.indexOf(a.provider) - CATALOG_PROVIDERS.indexOf(b.provider);
 }
 
+// What pays for a resolved route. "key" is a BYOK console key from env or config.json;
+// "gateway" is seri's own hosted account. A third member arrives with the Grok subscription
+// (docs/specs/040-grok-subscription/spec.md); this commit is the two-state refactor only, so
+// behaviour is unchanged.
+export type RouteCredential = "key" | "gateway";
+
 export type ResolvedRoute = {
   model: string;
   provider: ModelProvider;
@@ -59,12 +65,16 @@ export type ResolvedRoute = {
   // "a reroute is never silent" rule. Not a full sentence: the message shape belongs to the
   // presentation layer (cli.ts), same split as everywhere else in this codebase.
   reason?: string;
-  // True only when no local/native/aggregator key exists ANYWHERE for this model (Rule 1 and
-  // Rule 2 have both already failed to find one) and the caller's plan covers the entry — the
-  // gateway is the fallback for a provider the user never brought a key for, never a substitute
-  // for one they did. Non-optional, like `rerouted`: every consumer gets a real boolean, no
-  // `undefined` case to handle.
-  viaGateway: boolean;
+  // Which credential class actually pays for this route. Replaces the former `viaGateway`
+  // boolean, which was already a credential flag wearing a boolean's clothes: "gateway" meant
+  // seri's hosted account pays, and `false` meant the user's own key does. A single field rather
+  // than a second boolean beside the first, so the state where both are somehow true is not
+  // representable. Non-optional, like `rerouted`: every consumer gets a real value.
+  //
+  // "gateway" is still reached only when no local key exists ANYWHERE for this model (Rule 1 and
+  // Rule 2 have both failed) and the caller's plan covers the entry — the gateway is the fallback
+  // for a provider the user never brought a key for, never a substitute for one they did.
+  credential: RouteCredential;
 };
 
 // The group-scoped half of gatewayCoverage, below — split out so a caller that already holds
@@ -114,7 +124,7 @@ export function resolveRoute(
     model: requested.model,
     provider: requested.provider,
     rerouted: false,
-    viaGateway: false,
+    credential: "key",
   };
 
   // Rule 1: an explicit pick whose own provider has a key wins, unconditionally — never
@@ -151,7 +161,7 @@ export function resolveRoute(
         model: gatewayEntry.id,
         provider: gatewayEntry.provider,
         rerouted: false,
-        viaGateway: true,
+        credential: "gateway",
       };
     }
     return noReroute;
@@ -172,7 +182,7 @@ export function resolveRoute(
     provider: chosen.provider,
     rerouted: true,
     reason: PROVIDER_API_KEY_NAMES[requested.provider],
-    viaGateway: false,
+    credential: "key",
   };
 }
 

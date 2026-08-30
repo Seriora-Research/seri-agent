@@ -134,7 +134,7 @@ export function dispatchModel(
   configDir: string,
   deps: DispatchModelDeps,
 ): LanguageModel {
-  if (route.viaGateway) {
+  if (route.credential === "gateway") {
     const getGatewayModelFn = deps.getGatewayModel ?? getGatewayModelReal;
     return getGatewayModelFn(route.model, route.provider, sessionId, configDir);
   }

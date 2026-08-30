@@ -48,7 +48,7 @@ const parent = {
   model: "solo-model",
   provider: "groq" as const,
   rerouted: false,
-  viaGateway: false,
+  credential: "key" as const,
 };
 
 const PIN_ENV_KEYS = [
@@ -150,7 +150,7 @@ describe("resolveRoleRoute", () => {
       model: "solo-model",
       provider: "groq",
       rerouted: false,
-      viaGateway: false,
+      credential: "key" as const,
       inherited: true,
     });
   });
@@ -168,7 +168,7 @@ describe("resolveRoleRoute", () => {
       model: "claude-sonnet-5",
       provider: "anthropic",
       rerouted: false,
-      viaGateway: false,
+      credential: "key" as const,
       inherited: false,
     });
   });
@@ -186,7 +186,7 @@ describe("resolveRoleRoute", () => {
     expect(route.rerouted).toBe(true);
     expect(route.provider).toBe("anthropic");
     expect(route.model).toBe("claude-sonnet-5");
-    expect(route.viaGateway).toBe(false);
+    expect(route.credential).toBe("key");
   });
 
   test("a pin with no local key and a covering plan uses the gateway", () => {
@@ -217,7 +217,7 @@ describe("resolveRoleRoute", () => {
       model: "groq/shared-model",
       provider: "openrouter",
       rerouted: false,
-      viaGateway: true,
+      credential: "gateway" as const,
       inherited: false,
     });
   });
@@ -295,7 +295,7 @@ describe("resolveChildRoute", () => {
     expect(route).toEqual({
       model: "claude-sonnet-5",
       provider: "anthropic",
-      viaGateway: false,
+      credential: "key" as const,
       rerouted: false,
       inherited: false,
     });
@@ -375,7 +375,7 @@ describe("realizedRoute", () => {
       model: "solo-model",
       provider: "groq",
       rerouted: false,
-      viaGateway: false,
+      credential: "key" as const,
       inherited: true,
     });
     const warning = roleConstructionWarning("oracle", intended, "ANTHROPIC_API_KEY is not set");
@@ -388,7 +388,7 @@ describe("realizedRoute", () => {
     const intended = {
       model: "claude-sonnet-5",
       provider: "anthropic" as const,
-      viaGateway: false,
+      credential: "key" as const,
       rerouted: false,
       inherited: false,
     };

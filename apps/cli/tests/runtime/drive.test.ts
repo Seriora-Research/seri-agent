@@ -54,7 +54,7 @@ function preparedStub(): PreparedRun {
       model: "openai/gpt-oss-120b",
       provider: "groq",
       rerouted: false,
-      viaGateway: false,
+      credential: "key",
     },
     plan: null,
     checkpointer: Object.assign(() => {}, {

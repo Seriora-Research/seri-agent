@@ -295,7 +295,7 @@ export async function driveLoop(
             model: intended.model,
             provider: intended.provider,
             rerouted: intended.rerouted,
-            viaGateway: intended.viaGateway,
+            credential: intended.credential,
           },
           session.id,
           ctx.configDir,

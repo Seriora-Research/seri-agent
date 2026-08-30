@@ -530,7 +530,7 @@ describe("maybeRunArchivist", () => {
         model: "test-model",
         provider: "groq" as const,
         rerouted: false,
-        viaGateway: false,
+        credential: "key" as const,
       };
       const catalog: ModelCatalog = {
         fetchedAt: "",

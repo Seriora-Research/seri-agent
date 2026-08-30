@@ -1,7 +1,7 @@
 import type { ModelCatalog, ModelProvider } from "@seri/model-catalog";
 import type { Plan } from "@seri/plans";
 import { isModelProvider } from "../provider/defaults";
-import { type ResolvedRoute, resolveRoute } from "../provider/routing";
+import { type ResolvedRoute, type RouteCredential, resolveRoute } from "../provider/routing";
 
 export const ROUTABLE_ROLES = ["explore", "plan", "code", "test", "oracle", "archivist"] as const;
 
@@ -26,7 +26,7 @@ export type TaskRouteRequest = {
 export type RoleRoute = {
   model: string;
   provider: ModelProvider;
-  viaGateway: boolean;
+  credential: RouteCredential;
   rerouted: boolean;
   inherited: boolean;
 };
@@ -96,7 +96,7 @@ export function resolveChildRoute(
     return {
       model: resolved.model,
       provider: resolved.provider,
-      viaGateway: resolved.viaGateway,
+      credential: resolved.credential,
       rerouted: resolved.rerouted,
       inherited: false,
     };
@@ -117,7 +117,7 @@ export function resolveRoleRoute(
     return {
       model: parent.model,
       provider: parent.provider,
-      viaGateway: parent.viaGateway,
+      credential: parent.credential,
       rerouted: parent.rerouted,
       inherited: true,
     };
@@ -126,7 +126,7 @@ export function resolveRoleRoute(
   return {
     model: resolved.model,
     provider: resolved.provider,
-    viaGateway: resolved.viaGateway,
+    credential: resolved.credential,
     rerouted: resolved.rerouted,
     inherited: false,
   };
@@ -162,7 +162,7 @@ export function realizedRoute(
   return {
     model: parent.model,
     provider: parent.provider,
-    viaGateway: parent.viaGateway,
+    credential: parent.credential,
     rerouted: parent.rerouted,
     inherited: true,
   };

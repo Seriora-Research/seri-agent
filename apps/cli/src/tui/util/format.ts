@@ -349,7 +349,7 @@ export function formatRouteLabel(input: {
 // the same reason formatModelRow's own comment gives — unit-testable without mounting Ink.
 // `route.rerouted` alone used to disambiguate "your key" from "→ provider", back when a
 // gateway-served route was indistinguishable from a local one here — both have `rerouted: false`.
-// `route.viaGateway` is what tells them apart now: `keyConfigured` is true only when NEITHER is
+// `route.credential` is what tells them apart now: `keyConfigured` is true only when NEITHER is
 // set, and `gatewayReachable` is threaded through so a gateway-served route reads "provided" here
 // exactly as it already does in the model picker's Route column.
 // `route` can be undefined (found 2026-08-13, AppProps.route's own comment): runGuidedSetup mounts
@@ -378,9 +378,9 @@ export function formatModeDetail(
   const modelName = truncate(route.model, NAME_WIDTH);
   if (width < MODE_ROUTE_MIN_COLS) return `  ${modelName}`;
   const routeLabel = formatRouteLabel({
-    keyConfigured: !route.rerouted && !route.viaGateway,
+    keyConfigured: !route.rerouted && route.credential !== "gateway",
     rerouteTo: route.rerouted ? route.provider : undefined,
-    gatewayReachable: route.viaGateway,
+    gatewayReachable: route.credential === "gateway",
   });
   if (effortTier === undefined) return `  ${modelName} · ${routeLabel}`;
   return `  ${modelName} · ${routeLabel} · ${truncate(effortTier, EFFORT_WIDTH)}`;

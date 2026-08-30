@@ -306,7 +306,7 @@ describe("run (task invocation)", () => {
     ).toBe(true);
   });
 
-  // The gateway counterpart to the reroute-notice tests above: a viaGateway route (no local key
+  // The gateway counterpart to the reroute-notice tests above: a gateway-credential route (no local key
   // anywhere, but a logged-in plan covers it) must warn on the non-interactive path exactly like a
   // BYOK reroute already does — otherwise a scripted run silently bills against the user's own
   // seri plan with no indication it ever left their own keys. This is a genuinely blank first run

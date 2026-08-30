@@ -4,16 +4,16 @@ import type { ResolvedRoute } from "../../src/provider/routing";
 
 // Regression for the gap this PR's own manual e2e testing found live: getGatewayModel
 // (provider/gateway.ts) was defined and exported but never called anywhere — resolveRoute could
-// set ResolvedRoute.viaGateway: true, but nothing downstream read it, so a gateway-covered route
+// set ResolvedRoute.credential: "gateway", but nothing downstream read it, so a gateway-covered route
 // always fell through to getModel's provider switch and threw missingKeyError the instant a turn
 // ran, instead of actually routing through the gateway.
 describe("dispatchModel", () => {
-  test("a viaGateway route dispatches through getGatewayModel, never getModel's provider switch", () => {
+  test("a gateway-credential route dispatches through getGatewayModel, never getModel's provider switch", () => {
     const route: ResolvedRoute = {
       model: "groq/shared-model",
       provider: "openrouter",
       rerouted: false,
-      viaGateway: true,
+      credential: "gateway",
     };
     const fakeModel = {} as ReturnType<typeof dispatchModel>;
     const calls: Array<{ id: string; provider: string; sessionId: string; configDir: string }> = [];
@@ -42,7 +42,7 @@ describe("dispatchModel", () => {
       model: "some-id",
       provider: "groq",
       rerouted: false,
-      viaGateway: false,
+      credential: "key",
     };
     const fakeModel = {} as ReturnType<typeof dispatchModel>;
     const model = dispatchModel(route, "test-session-id", "/tmp/config", {
