@@ -1779,7 +1779,11 @@ describe("App", () => {
       await resize(setup, 24, DEFAULT_HEIGHT);
 
       const narrowFrame = setup.captureCharFrame();
-      expect(narrowFrame).toContain("Continue");
+      // "Continu", not "Continue": the panel's own one-column left/right padding
+      // (WelcomeSplashPanel.tsx) costs the label two columns, and at width 24 the middle ellipsis
+      // eats one more character of the head than it used to. The claim this test makes is
+      // unchanged — the MIDDLE of the label is what goes, not an arbitrary substring.
+      expect(narrowFrame).toContain("Continu");
       expect(narrowFrame).not.toContain("without");
     });
 
@@ -1789,6 +1793,44 @@ describe("App", () => {
     // in" used to wrap across two rows instead of truncating to one line with an ellipsis,
     // reproducing the exact symptom the ORIGINAL Ink-era fix (this describe block's own header
     // comment) closed.
+    // The intro block the splash exists to show (routes/setup/SplashBanner.tsx). Asserted through
+    // App rather than by mounting SplashBanner directly, because the thing that actually broke
+    // before was the wiring: App has to forward `splashBanner` to a panel that only renders it on
+    // the splash branch.
+    test("the banner names the product, version, model and directory", async () => {
+      const { setup, dispatch } = await connect({
+        splashBanner: {
+          version: "0.4.2",
+          model: "openai/gpt-oss-120b",
+          provider: "groq",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+      });
+
+      dispatch({ type: "auth-offer", show: true });
+      dispatch({ type: "splash-requested" });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("seri v0.4.2");
+      expect(frame).toContain("openai/gpt-oss-120b · groq");
+      expect(frame).toContain("~/code/seri");
+      expect(frame).toContain("> Log in");
+    });
+
+    // A mount with no banner is the test-only shape (WelcomeSplashPanel's own `banner?` comment) —
+    // pinned so it degrades to the bare wordmark instead of throwing on an undefined field.
+    test("a mount with no banner still renders the menu", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({ type: "auth-offer", show: true });
+      dispatch({ type: "splash-requested" });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("> Log in");
+    });
+
     test("WelcomeSplashPanel's long row truncates to one line rather than wrapping at a narrow width", async () => {
       const { setup, dispatch } = await connect();
 

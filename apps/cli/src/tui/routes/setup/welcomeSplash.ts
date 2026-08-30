@@ -7,9 +7,13 @@
 // owning a separate mount. Reuses `createAuthHandlers` (./handlers) — the same device-flow auth
 // wiring `runTui` reuses, rather than a second implementation of it.
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { createElement } from "react";
+import pkg from "../../../../package.json";
 import type { CliDeps } from "../../../cli";
 import { loadConfig } from "../../../config/config";
+import { DEFAULT_PROVIDER, resolveDefaultModel } from "../../../provider/defaults";
+import { DEFAULT_MODEL } from "../../../provider/groq";
 import { App } from "../../app";
 import { getTuiRenderer } from "../../runtime/renderer";
 import { decideAuthOffer } from "../../state/commands";
@@ -91,12 +95,34 @@ export async function runWelcomeSplash(configDir: string, deps: CliDeps): Promis
     initialConfig = {};
   }
 
+  // The banner's model row (SplashBanner.tsx). Its own guard, not folded into the one above:
+  // `resolveDefaultModel` reads env FIRST, so a corrupted config.json still leaves a
+  // `SERI_MODEL=… seri` launch reporting the right pair, and one shared try would throw that away.
+  // `provider` is `undefined` when nothing named one; `DEFAULT_PROVIDER` is what routing itself
+  // applies then, so the row names what the first turn will dispatch to rather than a blank.
+  let defaultModel: ReturnType<typeof resolveDefaultModel>;
+  try {
+    defaultModel = resolveDefaultModel(configDir);
+  } catch {
+    defaultModel = { model: DEFAULT_MODEL, provider: undefined };
+  }
+
   root.render(
     createElement(App, {
       session: liveState.session,
       route: undefined,
       catalog: undefined, // no PreparedRun exists yet at this point in startup
       config: initialConfig,
+      splashBanner: {
+        version: pkg.version,
+        model: defaultModel.model,
+        provider: defaultModel.provider ?? DEFAULT_PROVIDER,
+        cwd: process.cwd(),
+        // `process.env.HOME || homedir()`, the same order config/paths.ts resolves the seri root
+        // with — so a HOME override that moves the config directory also moves what this row
+        // abbreviates, instead of the two disagreeing about where home is.
+        home: process.env.HOME || homedir(),
+      },
       onSplashLogin,
       onSplashSignup,
       onSplashContinue,

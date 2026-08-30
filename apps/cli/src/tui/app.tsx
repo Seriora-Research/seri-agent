@@ -72,6 +72,7 @@ import { EffortPanel } from "./routes/config/EffortPanel";
 import { PermissionsPanel } from "./routes/config/PermissionsPanel";
 import { McpPanel } from "./routes/mcp/McpPanel";
 import { SetupPanel } from "./routes/setup/SetupPanel";
+import type { SplashBannerInfo } from "./routes/setup/SplashBanner";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { SkillsPanel } from "./routes/skills/SkillsPanel";
 import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
@@ -216,6 +217,11 @@ export type AppProps = {
   onSplashLogin?: () => void;
   onSplashSignup?: () => void;
   onSplashContinue?: () => void;
+  // The splash's own identity block (routes/setup/SplashBanner.tsx). Not derived from `route`/
+  // `catalog` above, which are both genuinely `undefined` at the only mount that renders the
+  // splash — `runWelcomeSplash` computes it from config.json and package.json instead, and passes
+  // it through here rather than this component reaching for either itself.
+  splashBanner?: SplashBannerInfo;
   // Shift+Tab's own resolution — a prop, not a local dispatch into this component's own reducer:
   // `getPermissionMode()` (cli.ts) reads `liveState.session.permissionMode`, and `liveState` is
   // only ever advanced by cli.ts's own dispatch funnel. A cycle dispatched from inside this
@@ -296,6 +302,7 @@ export function App({
   onSplashLogin,
   onSplashSignup,
   onSplashContinue,
+  splashBanner,
   onCycleMode,
   skipPermissions,
 }: AppProps) {
@@ -674,6 +681,7 @@ export function App({
       ) : state.pendingSplash ? (
         <WelcomeSplashPanel
           authenticated={!state.authOffer}
+          banner={splashBanner}
           onLogin={onSplashLogin}
           onSignup={onSplashSignup}
           onContinue={onSplashContinue}

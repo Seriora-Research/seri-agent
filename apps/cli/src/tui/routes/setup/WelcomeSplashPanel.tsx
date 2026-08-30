@@ -11,14 +11,20 @@ import { useKeyboard } from "@opentui/react";
 import { useState } from "react";
 import { theme } from "../../theme/theme";
 import { ListRow } from "../../ui/ListRow";
+import { SplashBanner, type SplashBannerInfo } from "./SplashBanner";
 
 export function WelcomeSplashPanel({
   authenticated,
+  banner,
   onLogin,
   onSignup,
   onContinue,
 }: {
   authenticated: boolean;
+  // Optional for the same reason every other pre-session prop on App is: the panel is mounted by
+  // App, and a test mount that only exercises the menu has no config directory to compute one
+  // from. `runWelcomeSplash` — the only real call site — always passes it.
+  banner?: SplashBannerInfo;
   onLogin?: () => void;
   onSignup?: () => void;
   onContinue?: () => void;
@@ -51,8 +57,18 @@ export function WelcomeSplashPanel({
   });
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
-      <text>SERI</text>
+    // paddingLeft/paddingRight={1}: the intro is the first thing a launch paints, and every
+    // row of it ran flush against the border before this. Scoped to this panel, not the app
+    // root, for the same reason the transcript scrollbox scopes its own margin.
+    <box
+      borderStyle="single"
+      borderColor={theme.muted}
+      flexDirection="column"
+      paddingLeft={1}
+      paddingRight={1}
+    >
+      {banner === undefined ? <text>seri</text> : <SplashBanner info={banner} />}
+      <text> </text>
       {items.map((item, index) => (
         <ListRow key={item.label} selected={index === selected} label={item.label} />
       ))}
