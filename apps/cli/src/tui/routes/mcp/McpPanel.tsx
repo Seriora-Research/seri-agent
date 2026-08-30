@@ -10,7 +10,7 @@ import { useListWindow } from "../../hooks/useListWindow";
 import { theme } from "../../theme/theme";
 import { ErrorLine } from "../../ui/ErrorLine";
 import { ListRow } from "../../ui/ListRow";
-import { formatMcpRow } from "../../util/format";
+import { formatMcpRow, singleLine } from "../../util/format";
 import { isDismiss, isEnter, isPrintableKey } from "../../util/keys";
 
 type HeaderRow = Extract<McpPanelRow, { kind: "header" }>;
@@ -206,11 +206,20 @@ function McpTrustPreview({
   onTrust: () => void;
   onCancel: () => void;
 }) {
+  // Descriptions are opt-in, not absent. docs/CONSTITUTION.md requires a default-on preview for an
+  // MCP server because every name and description below was written by the server you are about to
+  // trust, and once you do, the model reads all of it as instructions the same way it reads your
+  // own prompt. Showing all of it by default did not serve that: a 20-tool server rendered a
+  // screenful of prose nobody reads, which is how a hostile line hides. The default screen names
+  // the count and the tool names, which is the part a person can actually check against what they
+  // meant to connect, and "d" opens the descriptions for the read that matters.
+  const [showDescriptions, setShowDescriptions] = useState(false);
+
   // Mirrors ConfirmPrompt's own contract (ui/ConfirmPrompt.tsx) rather than importing it: Enter and
   // anything unrecognised both cancel, only an explicit "y" trusts, and Escape is inert here for
   // the same reason ConfirmPrompt's own comment gives — a destructive/consequential decision should
   // not have a second, easier-to-hit-by-accident way to answer it. Composed inline instead of
-  // nested inside ConfirmPrompt's own WarningBox because the catalog listing above the question is
+  // nested inside ConfirmPrompt's own WarningBox because the tool listing above the question is
   // exactly the content ConfirmPrompt has no room for.
   useKeyboard((key) => {
     if (isEnter(key)) {
@@ -218,34 +227,44 @@ function McpTrustPreview({
       return;
     }
     if (!isPrintableKey(key)) return;
-    if (key.sequence.toLowerCase() === "y") {
+    const pressed = key.sequence.toLowerCase();
+    if (pressed === "d") {
+      setShowDescriptions(true);
+      return;
+    }
+    if (pressed === "y") {
       onTrust();
       return;
     }
     onCancel();
   });
 
+  const count = catalog.tools.length;
   return (
     <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
       <text fg={theme.text} attributes={TextAttributes.BOLD}>
-        {`${name} — ${catalog.tools.length} tool${catalog.tools.length === 1 ? "" : "s"}`}
+        {`Trust "${name}"? ${count} tool${count === 1 ? "" : "s"}`}
       </text>
-      {catalog.tools.map((tool) => (
-        <text key={tool.toolName} fg={theme.muted} truncate wrapMode="none">
-          {`${tool.name} — ${tool.description}`}
+      {showDescriptions ? (
+        // `singleLine` for ErrorLine's own reason (ui/ErrorLine.tsx): a server is free to write a
+        // description containing literal newlines or a fenced code block, OpenTUI renders each
+        // break as a real row, and one such tool pushes the y/n question off the viewport. Collapse
+        // first, then let `truncate` clip what is left to one row per tool.
+        catalog.tools.map((tool) => (
+          <text key={tool.toolName} fg={theme.muted} truncate wrapMode="none">
+            {singleLine(`${tool.name} — ${tool.description}`)}
+          </text>
+        ))
+      ) : (
+        <text fg={theme.muted} truncate wrapMode="none">
+          {catalog.tools.map((tool) => tool.name).join(", ")}
         </text>
-      ))}
-      {/* The CONSTITUTION's default-on-preview requirement exists because this text is not
-      documentation, it's an input: every name and description above was written by the server
-      you're about to trust, and once you do, the model reads all of it as instructions the same
-      way it reads your own prompt — a hostile server gets to try that exactly once, right here,
-      before any of it reaches the model. */}
+      )}
       <text fg={theme.muted} truncate wrapMode="none">
-        The names and descriptions above were written by this server — the model will read them as
-        instructions once you trust it, the same as anything you type yourself.
+        Written by the server; the model reads them as instructions once you trust it.
       </text>
       <text fg={theme.muted} truncate wrapMode="none">
-        {`Trust "${name}" and save its tools? [y]es / [n]o`}
+        {showDescriptions ? "[y]es · [n]o" : "[y]es · [n]o · d descriptions"}
       </text>
     </box>
   );
