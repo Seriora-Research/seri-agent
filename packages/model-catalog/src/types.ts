@@ -1,7 +1,7 @@
 // The shared vocabulary both apps/cli and (later) apps/portal type against — verbatim from
 // research-spec.md's question (b), mirroring models.dev's own schema rather than either
 // provider's raw API shape.
-export type ModelProvider = "groq" | "openrouter" | "anthropic" | "openai" | "google";
+export type ModelProvider = "groq" | "openrouter" | "anthropic" | "openai" | "google" | "xai";
 
 // models.dev `reasoning_options` — always an array, can carry more than one entry per model
 // (e.g. GLM 5.2 lists toggle+effort+budget_tokens together). `budget_tokens` has no min/max/

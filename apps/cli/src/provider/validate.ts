@@ -1,11 +1,12 @@
-import { generateText as generateTextReal } from "ai";
 import type { ModelProvider } from "@seri/model-catalog";
+import { generateText as generateTextReal } from "ai";
 import { messageOf } from "../errors";
 import { getAnthropicModel } from "./anthropic";
 import { getGoogleModel } from "./google";
 import { getGroqModel } from "./groq";
 import { getOpenAIModel } from "./openai";
 import { getOpenRouterModel } from "./openrouter";
+import { getXaiModel } from "./xai";
 
 // D5 (feature-plan.md): the cheapest model per provider, verified present in the bundled manifest
 // and aligned with nativeProviders.live.test.ts's own choices where they overlap (anthropic,
@@ -18,6 +19,9 @@ export const VALIDATION_MODEL_IDS: Record<ModelProvider, string> = {
   anthropic: "claude-haiku-4-5",
   openai: "gpt-4.1-mini",
   google: "gemini-2.5-flash",
+  // Cheapest xai row that still carries tool_call in the bundled manifest, and undated so it does
+  // not rot the way the grok-4.20-0309-* ids would.
+  xai: "grok-4.3",
 };
 
 // Not a real session — this call never touches loop.ts's own turn machinery, so there is no
@@ -101,6 +105,9 @@ export async function validateProviderKey(
         break;
       case "google":
         model = getGoogleModel(modelId, apiKey);
+        break;
+      case "xai":
+        model = getXaiModel(modelId, apiKey);
         break;
       default:
         return {

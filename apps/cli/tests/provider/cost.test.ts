@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelCatalog } from "@seri/model-catalog";
 import type { LanguageModelUsage, ProviderMetadata } from "ai";
-import { reportForOpenRouter, reportFromCatalogPricing } from "../../src/provider/cost";
+import {
+  reportForOpenRouter,
+  reportForSubscription,
+  reportFromCatalogPricing,
+} from "../../src/provider/cost";
 
 const usage = (inputTokens: number, outputTokens: number): LanguageModelUsage => ({
   inputTokens,
@@ -208,5 +212,26 @@ describe("reportFromCatalogPricing", () => {
       fixtureCatalog,
     );
     expect(report.amountUsd).toBeCloseTo(0.59, 6);
+  });
+});
+
+describe("reportForSubscription", () => {
+  // Pricing a flat-rate turn from the catalog would bill the user for tokens they already bought.
+  test("reports included with no dollar amount", () => {
+    expect(reportForSubscription()).toEqual({
+      amountUsd: undefined,
+      status: "included",
+      source: "custom_contract",
+    });
+  });
+});
+
+describe("a subscription turn is not priced from the catalog", () => {
+  // The gap a reviewer caught: reportForSubscription existed with no production caller, so a
+  // subscription turn was still being costed like a metered one.
+  test("reportForSubscription never returns a dollar amount", () => {
+    const report = reportForSubscription();
+    expect(report.amountUsd).toBeUndefined();
+    expect(report.status).toBe("included");
   });
 });

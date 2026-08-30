@@ -421,7 +421,7 @@ function childScriptPlanClearedOnLogout(dir: string): string {
 }
 
 // Regression: runTui's own runTurn appended a transcript notice for `route.rerouted` but had no
-// counterpart for `route.viaGateway` — so a live TUI turn served through the gateway printed no
+// counterpart for `route.credential` — so a live TUI turn served through the gateway printed no
 // per-turn indication it was billing the user's seri plan, unlike a BYOK reroute (childScriptReroute's
 // own test proves that one already gets a "↻ routing…" line every turn). Same pinned pair as
 // childScriptPlanClearedOnLogout (~openai/gpt-latest via openrouter, no groq sibling to reroute to,

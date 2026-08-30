@@ -31,3 +31,26 @@ describe("groupRoutes over the real bundled catalog manifest", () => {
     expect(multiProvider.length).toBeGreaterThanOrEqual(40);
   });
 });
+
+// The x-ai -> xai alias only earns its place if it actually merges rows in the SHIPPED manifest.
+// Asserted against the real file rather than a fixture because the failure it guards against —
+// native grok and OpenRouter grok sitting in two unrelated groups — is invisible to a unit test
+// that builds its own entries.
+describe("the xai vendor alias against the real bundled manifest", () => {
+  const entries = bundledManifest.entries as ModelCatalogEntry[];
+
+  test("at least one route group holds both a native xai row and an openrouter row", () => {
+    const groups = groupRoutes(entries);
+    const merged = [...groups.values()].filter((group) => {
+      const providers = new Set(group.map((entry) => entry.provider));
+      return providers.has("xai") && providers.has("openrouter");
+    });
+    expect(merged.length).toBeGreaterThan(0);
+  });
+
+  test("every native xai row still carries pricing, so a BYOK key path can be costed", () => {
+    const xai = entries.filter((entry) => entry.provider === "xai");
+    expect(xai.length).toBeGreaterThan(0);
+    expect(xai.every((entry) => entry.pricing !== undefined)).toBe(true);
+  });
+});

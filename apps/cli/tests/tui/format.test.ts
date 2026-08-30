@@ -236,19 +236,19 @@ describe("formatModeDetail", () => {
   });
 
   test("at MODE_ROUTE_MIN_COLS with a gateway-served route: 'provided'", () => {
-    const viaGateway = route({ viaGateway: true });
-    expect(formatModeDetail(viaGateway, 100, undefined)).toBe("  claude-sonnet-5 · provided");
+    const gatewayRoute = route({ credential: "gateway" });
+    expect(formatModeDetail(gatewayRoute, 100, undefined)).toBe("  claude-sonnet-5 · provided");
   });
 
-  // Defensive: resolveRoute's own contract makes rerouted && viaGateway both true unreachable, but
+  // Defensive: resolveRoute's own contract makes rerouted plus a "gateway" credential unreachable, but
   // formatModeDetail must not rely on that — a rerouted route always reads "→ provider", never
-  // "provided", regardless of what viaGateway carries.
-  test("a rerouted route still reads '→ <provider>' even if viaGateway were also true", () => {
+  // "provided", regardless of what the credential carries.
+  test("a rerouted route still reads '→ <provider>' even with a gateway credential", () => {
     const reroutedAndGateway = route({
       provider: "openrouter",
       rerouted: true,
       reason: "ANTHROPIC_API_KEY",
-      viaGateway: true,
+      credential: "gateway",
     });
     expect(formatModeDetail(reroutedAndGateway, 100, undefined)).toBe(
       "  claude-sonnet-5 · → openrouter",

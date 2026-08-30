@@ -32,7 +32,7 @@ export function route(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
     model: "claude-sonnet-5",
     provider: "anthropic",
     rerouted: false,
-    viaGateway: false,
+    credential: "key",
     ...overrides,
   };
 }

@@ -162,6 +162,13 @@ export function buildReasoningProviderOptions(
         // "none"|"minimal"|"low"|"medium"|"high"|"xhigh"|"max"; groq:
         // "none"|"default"|"low"|"medium"|"high") — not a value invented for this branch.
         return { [provider]: { reasoningEffort: "none" } };
+      case "xai":
+        // Deliberately NOT folded into the computed-key case above. provider/xai.ts builds its
+        // client with @ai-sdk/openai, whose chat model hardcodes
+        // `parseProviderOptions({ provider: "openai" })` (dist/index.js:989, verified against the
+        // installed 4.0.36). A `{ xai: ... }` key would be parsed against a provider nobody sends,
+        // so /effort would silently do nothing on grok.
+        return { openai: { reasoningEffort: "none" } };
       case "openrouter":
         return { openrouter: { reasoning: { enabled: false } } };
       // This switch is not the function's own terminal return (the
@@ -191,6 +198,9 @@ export function buildReasoningProviderOptions(
     case "openai":
     case "groq":
       return { [provider]: { reasoningEffort: tier === "on" ? "medium" : tier } };
+    // Keyed `openai`, not `xai` — see the disabled-branch case above for why.
+    case "xai":
+      return { openai: { reasoningEffort: tier === "on" ? "medium" : tier } };
     case "google":
       return { google: { thinkingConfig: { thinkingLevel: tier === "on" ? "medium" : tier } } };
     case "openrouter":

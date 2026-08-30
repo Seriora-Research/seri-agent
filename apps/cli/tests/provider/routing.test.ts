@@ -91,7 +91,7 @@ describe("resolveRoute", () => {
       model: "anthropic/claude-sonnet-5",
       provider: "openrouter",
       rerouted: false,
-      viaGateway: false,
+      credential: "key",
     });
   });
 
@@ -117,7 +117,7 @@ describe("resolveRoute", () => {
       model: "anthropic/claude-sonnet-5",
       provider: "openrouter",
       rerouted: false,
-      viaGateway: false,
+      credential: "key",
     });
   });
 
@@ -131,7 +131,7 @@ describe("resolveRoute", () => {
       model: "claude-sonnet-5",
       provider: "anthropic",
       rerouted: false,
-      viaGateway: false,
+      credential: "key",
     });
   });
 
@@ -145,7 +145,7 @@ describe("resolveRoute", () => {
       model: "anthropic/claude-sonnet-5",
       provider: "openrouter",
       rerouted: false,
-      viaGateway: false,
+      credential: "key",
     });
     expect(() => getModel(route.model, route.provider, "test-session-id")).toThrow(
       "OPENROUTER_API_KEY is not set. Set it as an environment variable and re-run.",
@@ -162,7 +162,7 @@ describe("resolveRoute", () => {
       model: "solo-model",
       provider: "groq",
       rerouted: false,
-      viaGateway: false,
+      credential: "key",
     });
   });
 
@@ -176,12 +176,12 @@ describe("resolveRoute", () => {
       model: "not-in-the-catalog",
       provider: "groq",
       rerouted: false,
-      viaGateway: false,
+      credential: "key",
     });
   });
 
   describe("Rule 4: route via gateway", () => {
-    test("no key anywhere, an OpenRouter sibling exists, and the plan covers it: viaGateway true, routed to the OpenRouter entry", () => {
+    test("no key anywhere, an OpenRouter sibling exists, and the plan covers it: the gateway credential, routed to the OpenRouter entry", () => {
       const route = resolveRoute(
         catalog,
         { model: "shared-model", provider: "groq" },
@@ -192,16 +192,16 @@ describe("resolveRoute", () => {
         model: "groq/shared-model",
         provider: "openrouter",
         rerouted: false,
-        viaGateway: true,
+        credential: "gateway",
       });
     });
 
-    test("no key anywhere and plan: null leaves viaGateway false, unchanged from today", () => {
+    test("no key anywhere and plan: null leaves the credential on the key path, unchanged from today", () => {
       const route = resolveRoute(catalog, { model: "shared-model", provider: "groq" }, new Set());
-      expect(route.viaGateway).toBe(false);
+      expect(route.credential).toBe("key");
     });
 
-    // A provider-exclusive model (no OpenRouter-catalog sibling at all) never shows viaGateway,
+    // A provider-exclusive model (no OpenRouter-catalog sibling at all) never shows a gateway credential,
     // even under a covering plan — correct, not a regression: the gateway only ever forwards to
     // GATEWAY_PROVIDER, so it structurally cannot serve a model that provider doesn't list.
     test("a model with no OpenRouter sibling is never gateway-covered, even under a paid plan", () => {
@@ -215,7 +215,7 @@ describe("resolveRoute", () => {
         model: "solo-model",
         provider: "groq",
         rerouted: false,
-        viaGateway: false,
+        credential: "key",
       });
     });
 
@@ -245,7 +245,7 @@ describe("resolveRoute", () => {
         new Set(),
         "free",
       );
-      expect(route.viaGateway).toBe(false);
+      expect(route.credential).toBe("key");
     });
 
     // The inverse of the mismatch test above: the requested (groq) entry is priced, but the
@@ -277,7 +277,7 @@ describe("resolveRoute", () => {
         model: "groq/mismatch-model-2",
         provider: "openrouter",
         rerouted: false,
-        viaGateway: true,
+        credential: "gateway",
       });
     });
 
@@ -295,13 +295,13 @@ describe("resolveRoute", () => {
         model: "solo-model",
         provider: "groq",
         rerouted: false,
-        viaGateway: false,
+        credential: "key",
       });
     });
 
     // Regression: a configured sibling still wins over gateway coverage — when both a sibling key
     // AND planCoverage are available, the reroute-to-sibling outcome is returned, never
-    // viaGateway: true.
+    // credential: "gateway".
     test("regression: a configured sibling wins over gateway coverage", () => {
       const route = resolveRoute(
         catalog,
@@ -310,7 +310,7 @@ describe("resolveRoute", () => {
         "pro",
       );
       expect(route.rerouted).toBe(true);
-      expect(route.viaGateway).toBe(false);
+      expect(route.credential).toBe("key");
     });
   });
 });
@@ -337,14 +337,14 @@ describe("resolveLegalReasoningTiers", () => {
   test("the same model id resolves its own tier list per provider route", () => {
     expect(
       resolveLegalReasoningTiers(
-        { model: "dual-tier-model", provider: "openrouter", rerouted: false, viaGateway: false },
+        { model: "dual-tier-model", provider: "openrouter", rerouted: false, credential: "key" },
         reasoningCatalog,
       ),
     ).toEqual(["low", "high"]);
 
     expect(
       resolveLegalReasoningTiers(
-        { model: "dual-tier-model", provider: "anthropic", rerouted: false, viaGateway: false },
+        { model: "dual-tier-model", provider: "anthropic", rerouted: false, credential: "key" },
         reasoningCatalog,
       ),
     ).toEqual(["low", "medium", "high"]);
@@ -353,7 +353,7 @@ describe("resolveLegalReasoningTiers", () => {
   test("a route with no matching catalog entry returns no tiers", () => {
     expect(
       resolveLegalReasoningTiers(
-        { model: "unknown-model", provider: "groq", rerouted: false, viaGateway: false },
+        { model: "unknown-model", provider: "groq", rerouted: false, credential: "key" },
         reasoningCatalog,
       ),
     ).toEqual([]);
@@ -379,7 +379,7 @@ describe("resolveSessionRoute", () => {
       model: "claude-sonnet-5",
       provider: "anthropic",
       rerouted: false,
-      viaGateway: false,
+      credential: "key",
     });
   });
 
@@ -430,7 +430,79 @@ describe("resolveSessionRoute", () => {
       model: "claude-sonnet-5",
       provider: "anthropic",
       rerouted: false,
-      viaGateway: false,
+      credential: "key",
     });
+  });
+});
+
+describe("a connected subscription as a credential", () => {
+  const grokCatalog: ModelCatalog = {
+    fetchedAt: "",
+    entries: [
+      entry({ id: "grok-4.5", provider: "xai" }),
+      entry({ id: "x-ai/grok-4.5", provider: "openrouter" }),
+    ],
+  };
+
+  test("a subscribed provider satisfies rule 1 with no API key at all", () => {
+    const route = resolveRoute(
+      grokCatalog,
+      { model: "grok-4.5", provider: "xai" },
+      new Set(),
+      null,
+      new Set(["xai"]),
+    );
+    expect(route.rerouted).toBe(false);
+    expect(route.provider).toBe("xai");
+    expect(route.credential).toBe("subscription");
+  });
+
+  // Both credentials are the user's own, so the tie-break is marginal cost: the subscription is
+  // already paid and flat-rate while the key bills per token.
+  test("a subscription beats an API key on the same provider", () => {
+    const route = resolveRoute(
+      grokCatalog,
+      { model: "grok-4.5", provider: "xai" },
+      new Set(["xai"]),
+      null,
+      new Set(["xai"]),
+    );
+    expect(route.credential).toBe("subscription");
+  });
+
+  // No new precedence rule: NATIVE_PROVIDERS.xai makes byRoutePriority prefer xai over the
+  // aggregator, and the alias in routeKey is what puts them in one group to be compared at all.
+  test("a grok request with only an OpenRouter key reroutes there, but a subscription keeps it native", () => {
+    const viaKey = resolveRoute(
+      grokCatalog,
+      { model: "grok-4.5", provider: "xai" },
+      new Set(["openrouter"]),
+      null,
+    );
+    expect(viaKey.rerouted).toBe(true);
+    expect(viaKey.provider).toBe("openrouter");
+    expect(viaKey.credential).toBe("key");
+
+    const viaSubscription = resolveRoute(
+      grokCatalog,
+      { model: "grok-4.5", provider: "xai" },
+      new Set(["openrouter"]),
+      null,
+      new Set(["xai"]),
+    );
+    expect(viaSubscription.rerouted).toBe(false);
+    expect(viaSubscription.provider).toBe("xai");
+    expect(viaSubscription.credential).toBe("subscription");
+  });
+
+  test("an empty subscription set leaves every existing route unchanged", () => {
+    const route = resolveRoute(
+      grokCatalog,
+      { model: "grok-4.5", provider: "xai" },
+      new Set(["xai"]),
+      null,
+      new Set(),
+    );
+    expect(route.credential).toBe("key");
   });
 });

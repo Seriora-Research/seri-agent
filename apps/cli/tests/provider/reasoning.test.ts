@@ -341,3 +341,29 @@ describe("buildReasoningProviderOptions", () => {
     });
   });
 });
+
+describe("buildReasoningProviderOptions for xai", () => {
+  // The regression this exists for: @ai-sdk/openai's chat model hardcodes
+  // parseProviderOptions({ provider: "openai" }), so a { xai: ... } key would be parsed against a
+  // provider name nobody sends and /effort would silently do nothing on grok.
+  test("keys the enabled shape on openai, not xai", () => {
+    expect(buildReasoningProviderOptions("xai", "high")).toEqual({
+      openai: { reasoningEffort: "high" },
+    });
+  });
+
+  test("maps the generic on tier to medium", () => {
+    expect(buildReasoningProviderOptions("xai", "on")).toEqual({
+      openai: { reasoningEffort: "medium" },
+    });
+  });
+
+  test("keys the disabled shape on openai too", () => {
+    expect(buildReasoningProviderOptions("xai", "off")).toEqual({
+      openai: { reasoningEffort: "none" },
+    });
+    expect(buildReasoningProviderOptions("xai", "none")).toEqual({
+      openai: { reasoningEffort: "none" },
+    });
+  });
+});

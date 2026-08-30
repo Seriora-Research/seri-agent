@@ -48,7 +48,7 @@ const parent = {
   model: "solo-model",
   provider: "groq" as const,
   rerouted: false,
-  viaGateway: false,
+  credential: "key" as const,
 };
 
 const PIN_ENV_KEYS = [
@@ -150,7 +150,7 @@ describe("resolveRoleRoute", () => {
       model: "solo-model",
       provider: "groq",
       rerouted: false,
-      viaGateway: false,
+      credential: "key" as const,
       inherited: true,
     });
   });
@@ -168,7 +168,7 @@ describe("resolveRoleRoute", () => {
       model: "claude-sonnet-5",
       provider: "anthropic",
       rerouted: false,
-      viaGateway: false,
+      credential: "key" as const,
       inherited: false,
     });
   });
@@ -186,7 +186,7 @@ describe("resolveRoleRoute", () => {
     expect(route.rerouted).toBe(true);
     expect(route.provider).toBe("anthropic");
     expect(route.model).toBe("claude-sonnet-5");
-    expect(route.viaGateway).toBe(false);
+    expect(route.credential).toBe("key");
   });
 
   test("a pin with no local key and a covering plan uses the gateway", () => {
@@ -217,7 +217,7 @@ describe("resolveRoleRoute", () => {
       model: "groq/shared-model",
       provider: "openrouter",
       rerouted: false,
-      viaGateway: true,
+      credential: "gateway" as const,
       inherited: false,
     });
   });
@@ -295,7 +295,7 @@ describe("resolveChildRoute", () => {
     expect(route).toEqual({
       model: "claude-sonnet-5",
       provider: "anthropic",
-      viaGateway: false,
+      credential: "key" as const,
       rerouted: false,
       inherited: false,
     });
@@ -375,7 +375,7 @@ describe("realizedRoute", () => {
       model: "solo-model",
       provider: "groq",
       rerouted: false,
-      viaGateway: false,
+      credential: "key" as const,
       inherited: true,
     });
     const warning = roleConstructionWarning("oracle", intended, "ANTHROPIC_API_KEY is not set");
@@ -388,7 +388,7 @@ describe("realizedRoute", () => {
     const intended = {
       model: "claude-sonnet-5",
       provider: "anthropic" as const,
-      viaGateway: false,
+      credential: "key" as const,
       rerouted: false,
       inherited: false,
     };
@@ -434,5 +434,58 @@ describe("parseRolePins reads env then config from a real config dir", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("a subagent pinned to a subscribed provider", () => {
+  // Found by Claude review on PR #222. resolveSessionRoute threads subscribedProviders, but the
+  // subagent path did not, so a role pinned to xai with a connected subscription and no
+  // XAI_API_KEY resolved to credential "key", hit missingKeyError in dispatchModel, and got
+  // silently downgraded to the parent's model even though a usable credential existed.
+  const grokCatalog: ModelCatalog = {
+    fetchedAt: "2026-08-28T00:00:00.000Z",
+    entries: [entry({ id: "grok-4.5", provider: "xai" }), ...catalog.entries],
+  };
+
+  test("a task-pinned role resolves to the subscription, with no API key configured", () => {
+    const route = resolveChildRoute(
+      undefined,
+      parent,
+      {},
+      { model: "grok-4.5", provider: "xai" },
+      grokCatalog,
+      new Set(),
+      null,
+      new Set(["xai"]),
+    );
+    expect(route.provider).toBe("xai");
+    expect(route.credential).toBe("subscription");
+    expect(route.inherited).toBe(false);
+  });
+
+  test("an env-pinned role resolves to the subscription too", () => {
+    const route = resolveRoleRoute(
+      "oracle",
+      parent,
+      { oracle: { model: "grok-4.5", provider: "xai" } },
+      grokCatalog,
+      new Set(),
+      null,
+      new Set(["xai"]),
+    );
+    expect(route.credential).toBe("subscription");
+  });
+
+  test("with no subscription connected the same pin still reports the key path", () => {
+    const route = resolveRoleRoute(
+      "oracle",
+      parent,
+      { oracle: { model: "grok-4.5", provider: "xai" } },
+      grokCatalog,
+      new Set(["xai"]),
+      null,
+      new Set(),
+    );
+    expect(route.credential).toBe("key");
   });
 });

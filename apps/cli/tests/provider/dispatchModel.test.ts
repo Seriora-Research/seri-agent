@@ -4,16 +4,16 @@ import type { ResolvedRoute } from "../../src/provider/routing";
 
 // Regression for the gap this PR's own manual e2e testing found live: getGatewayModel
 // (provider/gateway.ts) was defined and exported but never called anywhere — resolveRoute could
-// set ResolvedRoute.viaGateway: true, but nothing downstream read it, so a gateway-covered route
+// set ResolvedRoute.credential: "gateway", but nothing downstream read it, so a gateway-covered route
 // always fell through to getModel's provider switch and threw missingKeyError the instant a turn
 // ran, instead of actually routing through the gateway.
 describe("dispatchModel", () => {
-  test("a viaGateway route dispatches through getGatewayModel, never getModel's provider switch", () => {
+  test("a gateway-credential route dispatches through getGatewayModel, never getModel's provider switch", () => {
     const route: ResolvedRoute = {
       model: "groq/shared-model",
       provider: "openrouter",
       rerouted: false,
-      viaGateway: true,
+      credential: "gateway",
     };
     const fakeModel = {} as ReturnType<typeof dispatchModel>;
     const calls: Array<{ id: string; provider: string; sessionId: string; configDir: string }> = [];
@@ -42,7 +42,7 @@ describe("dispatchModel", () => {
       model: "some-id",
       provider: "groq",
       rerouted: false,
-      viaGateway: false,
+      credential: "key",
     };
     const fakeModel = {} as ReturnType<typeof dispatchModel>;
     const model = dispatchModel(route, "test-session-id", "/tmp/config", {
@@ -52,5 +52,44 @@ describe("dispatchModel", () => {
       },
     });
     expect(model).toBe(fakeModel);
+  });
+});
+
+describe("dispatchModel for a subscription route", () => {
+  test("dispatches to the subscription client, never getModel's key switch", () => {
+    const calls: string[] = [];
+    const fake = {} as ReturnType<typeof dispatchModel>;
+    const model = dispatchModel(
+      {
+        model: "grok-4.5",
+        provider: "xai",
+        rerouted: false,
+        credential: "subscription",
+      },
+      "session-1",
+      "/tmp/cfg",
+      {
+        getXaiSubscriptionModel: (id) => {
+          calls.push(id);
+          return fake;
+        },
+        getXaiModel: () => {
+          throw new Error("the key path must not be used for a subscription route");
+        },
+      },
+    );
+    expect(model).toBe(fake);
+    expect(calls).toEqual(["grok-4.5"]);
+  });
+
+  test("names the provider when a subscription route resolves to one with no subscription client", () => {
+    expect(() =>
+      dispatchModel(
+        { model: "gpt-4.1", provider: "openai", rerouted: false, credential: "subscription" },
+        "session-1",
+        "/tmp/cfg",
+        {},
+      ),
+    ).toThrow(/No subscription client for provider/);
   });
 });

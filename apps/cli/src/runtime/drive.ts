@@ -20,6 +20,7 @@ import type { CostReport } from "../provider/cost";
 import { configuredProviders } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
 import { resolveReasoningEffort } from "../provider/reasoning";
+import { subscribedProviders } from "../provider/subscriptions";
 import { DISPATCH_TOOL_NAME } from "../provider/tools";
 import { createRuleInjector } from "../rules/match";
 import type { SessionState } from "../session/session";
@@ -284,6 +285,7 @@ export async function driveLoop(
       catalog,
       configured,
       prepared.plan,
+      subscribedProviders(ctx.configDir),
     );
     const samePair = intended.model === route.model && intended.provider === route.provider;
     let childModel = model;
@@ -295,7 +297,7 @@ export async function driveLoop(
             model: intended.model,
             provider: intended.provider,
             rerouted: intended.rerouted,
-            viaGateway: intended.viaGateway,
+            credential: intended.credential,
           },
           session.id,
           ctx.configDir,
@@ -334,6 +336,7 @@ export async function driveLoop(
     model,
     provider: route.provider,
     modelId: route.model,
+    credential: route.credential,
     catalog,
     contextWindowSize: catalogEntry?.contextWindow,
     system,
@@ -460,6 +463,7 @@ export async function driveLoop(
           // would mis-tag a rerouted call's cost report with the wrong provider's pricing branch.
           provider: route.provider,
           modelId: route.model,
+          credential: route.credential,
           catalog,
           // The catalog's own contextWindow for whatever model this turn is actually calling — a
           // /model switch to a provider/model with a different limit must change compaction's own

@@ -601,7 +601,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
               model: action.pick.model,
               provider: action.pick.provider,
               rerouted: false,
-              viaGateway: false,
+              credential: "key",
             }
           : state.route,
       };

@@ -205,7 +205,7 @@ export type CliDeps = {
   // Not one of the five above: a gateway route's provider is always GATEWAY_PROVIDER
   // (planCoverage.ts) but its credential is the WorkOS session, not a local provider key — getModel
   // has no notion of the gateway at all (deliberately: it stays a pure, environment-independent
-  // provider switch). dispatchModel below is what branches on route.viaGateway before either
+  // provider switch). dispatchModel below is what branches on route.credential before either
   // getModel or this is ever called.
   getGatewayModel?: typeof getGatewayModelReal;
   loadAgentsFile?: typeof loadAgentsFileReal;
@@ -1767,7 +1767,7 @@ async function runTui(
         type: "transcript-append",
         line: `↻ ${rerouteNotice(route, requestedProvider)}`,
       });
-    } else if (route.viaGateway) {
+    } else if (route.credential === "gateway") {
       dispatch({
         type: "transcript-append",
         line: `↻ ${gatewayNotice(route, requestedProvider)}`,

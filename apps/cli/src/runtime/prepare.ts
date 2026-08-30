@@ -28,6 +28,7 @@ import { configuredProviders, PROVIDER_DISPLAY_NAMES } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
 import { appliedReasoningEffort } from "../provider/reasoning";
 import { type ResolvedRoute, resolveRoute } from "../provider/routing";
+import { subscribedProviders } from "../provider/subscriptions";
 import { createToolDefinitions } from "../provider/tools";
 import { createRulesState, type RulesState } from "../rules/match";
 import { loadRuleRegistry, type RuleRegistry } from "../rules/registry";
@@ -79,6 +80,7 @@ export async function resolveModelRoute(
     { model: requested.model, provider: requestedProvider },
     configured,
     plan,
+    subscribedProviders(configDir),
   );
   const model = dispatchModel(route, sessionId, configDir, deps);
   return { model, route, catalog, plan };
@@ -411,7 +413,7 @@ export function rerouteNotice(
   return `routing ${route.model} via ${route.provider} (your key) — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
 }
 
-// The gateway counterpart to rerouteNotice above: a viaGateway route is served through the
+// The gateway counterpart to rerouteNotice above: a gateway-credential route is served through the
 // user's own seri plan, not a key they brought, so both the piped/non-interactive path and a live
 // TUI turn need the same "never silent" notice a BYOK reroute already gets — otherwise a run
 // consumes gateway quota with zero indication it ever left the user's own keys. Same
@@ -654,14 +656,14 @@ export async function prepareSession(
     // into the transcript once per turn for either case, and this call ALSO runs on the TUI path
     // (this function has no other reason to know isTTY), so without the gate a session-start
     // reroute printed twice for the same turn: once here (before Ink even mounts) and again from
-    // runTurn. `rerouted` and `viaGateway` are mutually exclusive (routing.ts's own ResolvedRoute
+    // runTurn. `rerouted` and a "gateway" credential are mutually exclusive (routing.ts's own ResolvedRoute
     // comment), so at most one of these ever fires. Both notices take `session.provider` directly
     // (not resolveModelRoute's own DEFAULT_PROVIDER-defaulted copy), matching rerouteNotice's own
     // undefined-aware contract: blaming DEFAULT_PROVIDER for a blank first run that never named one
     // is worse than naming none.
     if (route.rerouted && !isTTY) {
       printWarning(rerouteNotice(route, session.provider));
-    } else if (route.viaGateway && !isTTY) {
+    } else if (route.credential === "gateway" && !isTTY) {
       printWarning(gatewayNotice(route, session.provider));
     }
     // D3's own consequence: findCatalogEntry on the RESOLVED pair, not the requested one — otherwise

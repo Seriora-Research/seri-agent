@@ -10,8 +10,14 @@ import type {
 } from "ai";
 import { streamText } from "ai";
 import { checkPermission, type PermissionMode } from "../gate/gate";
-import { type CostReport, reportForOpenRouter, reportFromCatalogPricing } from "../provider/cost";
+import {
+  type CostReport,
+  reportForOpenRouter,
+  reportForSubscription,
+  reportFromCatalogPricing,
+} from "../provider/cost";
 import { appliedReasoningEffort, buildReasoningProviderOptions } from "../provider/reasoning";
+import type { RouteCredential } from "../provider/routing";
 import {
   type CompactionSummary,
   compactMessages,
@@ -230,6 +236,10 @@ export async function* runLoop(opts: {
   provider?: ModelProvider;
   modelId?: string;
   catalog?: ModelCatalog;
+  // Which credential paid for this turn. Only the cost report reads it: a subscription turn is
+  // flat-rate, so pricing it from the catalog would bill the user for tokens they already bought.
+  // Optional like the three above, so a caller that does not pass it keeps today's behaviour.
+  credential?: RouteCredential;
   // The resolved reasoning-effort tier (session /effort override or config default —
   // resolution happens in driveLoop, this is just the winning
   // value). Requires opts.provider too, to know which provider-options shape to build.
@@ -395,7 +405,9 @@ export async function* runLoop(opts: {
             // happened" — real billed tokens from a turn that streamed partway then failed would
             // silently vanish from the running total instead of degrading it to `unknown`.
             let failedCost: CostReport | undefined;
-            if (opts.provider === "openrouter") {
+            if (opts.credential === "subscription") {
+              failedCost = reportForSubscription();
+            } else if (opts.provider === "openrouter") {
               const providerMetadata = await Promise.resolve(result.providerMetadata).catch(
                 () => undefined,
               );
@@ -420,7 +432,9 @@ export async function* runLoop(opts: {
       // on streamText results (per reportForOpenRouter's own comment) and is only awaited for the
       // provider that actually carries it.
       let cost: CostReport | undefined;
-      if (opts.provider === "openrouter") {
+      if (opts.credential === "subscription") {
+        cost = reportForSubscription();
+      } else if (opts.provider === "openrouter") {
         // A code-review finding: unguarded, a rejection here (providerMetadata is a Promise per
         // reportForOpenRouter's own comment) would escape to the catch below and convert an
         // already-successfully-completed turn into a lost `error` — discarding the text/tool-calls
