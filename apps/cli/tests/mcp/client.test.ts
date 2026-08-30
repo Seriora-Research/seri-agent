@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { UnauthorizedError } from "@ai-sdk/mcp";
+import { McpLoginRequiredError } from "../../src/mcp/authProvider";
 import {
   callMcpTool,
   closeMcpClients,
@@ -141,6 +142,21 @@ describe("callTool flattens content to a string", () => {
   });
 });
 
+describe("a dial that only needs a login says so", () => {
+  // What the model actually reads back. "is unreachable" would make it report a broken server and
+  // the user would never learn the one command that fixes it.
+  test("callMcpTool names /mcp auth instead of reporting the server unreachable", async () => {
+    for (const err of [new UnauthorizedError(), new McpLoginRequiredError("exa")]) {
+      const clients = createMcpClients(async () => {
+        throw err;
+      });
+      await expect(callMcpTool(clients, spec("exa"), "a", {})).rejects.toThrow(
+        'MCP server "exa" needs authentication. Run /mcp auth exa.',
+      );
+    }
+  });
+});
+
 describe("failures throw with the server and tool named", () => {
   test("a failed tool call names both", async () => {
     const handle: McpClientHandle = {
@@ -177,6 +193,17 @@ describe("mcpServerStatus", () => {
   test("needs-auth when the dial rejects with UnauthorizedError", async () => {
     const clients = createMcpClients(async () => {
       throw new UnauthorizedError();
+    });
+    await expect(callMcpTool(clients, spec("exa"), "a", {})).rejects.toThrow();
+    expect(mcpServerStatus(clients, "exa")).toEqual({ state: "needs-auth" });
+  });
+
+  // The refuse persona (mcp/authProvider.ts) throws before the transport ever sends a request, so
+  // this never becomes an UnauthorizedError — without isAuthRequired covering both it would land
+  // on "failed" and the panel would offer no way out.
+  test("needs-auth when the dial rejects with McpLoginRequiredError", async () => {
+    const clients = createMcpClients(async () => {
+      throw new McpLoginRequiredError("exa");
     });
     await expect(callMcpTool(clients, spec("exa"), "a", {})).rejects.toThrow();
     expect(mcpServerStatus(clients, "exa")).toEqual({ state: "needs-auth" });

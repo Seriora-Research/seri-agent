@@ -7,7 +7,7 @@ import { createCheckpointer } from "../checkpoint/checkpoint";
 import type { CliDeps, RunContext } from "../cli";
 import { printWarning } from "../cli/output";
 import { loadVerifyConfig } from "../config/config";
-import { createMcpClients } from "../mcp/client";
+import { createMcpClients, createSessionDial } from "../mcp/client";
 import { createArchivistState } from "../memory/archivist";
 import { loadMemory } from "../memory/store";
 import { resolveDefaultModel } from "../provider/defaults";
@@ -83,7 +83,7 @@ export function createRunScheduled(opts: {
       // not reach a server a human never previewed and trusted, and withMcp (runtime/drive.ts)
       // adds nothing to the ToolSet for a registry with no cataloged tool.
       mcp: new Map(),
-      mcpClients: createMcpClients(),
+      mcpClients: createMcpClients(createSessionDial(opts.configDir)),
       trajectory: createSessionTrajectory(session, opts.configDir, onWarning),
       preMountMessages: [],
     };

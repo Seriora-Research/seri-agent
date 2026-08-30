@@ -18,7 +18,12 @@ import { loadTrajectoryConfig, loadVerifyConfig, type VerifyConfig } from "../co
 import { getConfigDir, getTrajectoriesDir } from "../config/paths";
 import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
-import { closeMcpClients, createMcpClients, type McpClients } from "../mcp/client";
+import {
+  closeMcpClients,
+  createMcpClients,
+  createSessionDial,
+  type McpClients,
+} from "../mcp/client";
 import { grantFingerprint, loadMcpRegistry } from "../mcp/registry";
 import {
   isMcpToolName,
@@ -632,7 +637,7 @@ export function bindSession(
   // prove a grant matches the reloaded catalog.
   closeMcpClients(prepared.mcpClients, onWarning);
   prepared.mcp = loadMcpRegistry({ worktree: prepared.worktree, configDir, onWarning });
-  prepared.mcpClients = createMcpClients();
+  prepared.mcpClients = createMcpClients(createSessionDial(configDir));
   const grants = loadGrants(permissionsDir, prepared.worktree, onWarning);
   prepared.allowedTools = filterMcpGrants(effectiveTools(grants), prepared.mcp, onWarning);
   prepared.session = session;
@@ -800,7 +805,7 @@ export async function prepareSession(
       configDir,
       onWarning: (msg) => printWarning(msg, warnSink),
     });
-    const mcpClients = createMcpClients();
+    const mcpClients = createMcpClients(createSessionDial(configDir));
 
     // Read here and nowhere else. An unattended scheduled run must not copy this line. Every
     // entry in that file was written by a human answering a live prompt in a run they were watching.
