@@ -1819,6 +1819,32 @@ describe("App", () => {
       expect(frame).toContain("> Log in");
     });
 
+    // The banner outlives the splash: dismissing the menu must not take the header with it. Codex
+    // keeps its own session header as the first history cell for the same reason, and this pins
+    // the two halves that make it behave that way — it renders on a live session (no
+    // `splash-requested` here), and it sits ABOVE the transcript so conversation pushes it up.
+    test("the banner holds the top of the transcript on a live session", async () => {
+      const { setup, dispatch } = await connect({
+        splashBanner: {
+          version: "0.4.2",
+          model: "openai/gpt-oss-120b",
+          provider: "groq",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+      });
+
+      dispatch({ type: "transcript-append", role: "system", line: "Session s1 created." });
+      await flush(setup);
+
+      const lines = setup.captureCharFrame().split("\n");
+      const bannerIndex = lines.findIndex((l) => l.includes("seri v0.4.2"));
+      const createdIndex = lines.findIndex((l) => l.includes("Session s1 created."));
+      expect(bannerIndex).toBeGreaterThanOrEqual(0);
+      expect(lines[bannerIndex + 2]).toContain("~/code/seri");
+      expect(bannerIndex).toBeLessThan(createdIndex);
+    });
+
     // A mount with no banner is the test-only shape (WelcomeSplashPanel's own `banner?` comment) —
     // pinned so it degrades to the bare wordmark instead of throwing on an undefined field.
     test("a mount with no banner still renders the menu", async () => {

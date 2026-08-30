@@ -69,13 +69,12 @@ export function WelcomeSplashPanel({
       paddingRight={1}
     >
       {banner === undefined ? <text>seri</text> : <SplashBanner info={banner} />}
-      <text> </text>
+      {/* Eats the leftover height, so the banner keeps the top of the screen and the choice sits
+      on the bottom edge next to its own key hint, rather than crowding the banner. */}
+      <box flexGrow={1} />
       {items.map((item, index) => (
         <ListRow key={item.label} selected={index === selected} label={item.label} />
       ))}
-      {/* Eats the leftover height so the hint sits on the bottom edge of a full-screen panel
-      instead of stranded under the list with a void beneath it. */}
-      <box flexGrow={1} />
       <text fg={theme.muted}>↑/↓ move · Enter select · Esc continue</text>
     </box>
   );
