@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { parseColor, RGBA, TextAttributes } from "@opentui/core";
+import { parseColor, RGBA } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
@@ -1704,29 +1704,57 @@ describe("App", () => {
 
   // ListRow (ui/ListRow.tsx) has no hooks, so calling it directly (not mounting it) is safe: its
   // return value is a plain element tree whose props reflect exactly what it would render.
-  // Selection is reverse video (Design conformance, docs/design/tui.md): a single
-  // `TextAttributes.INVERSE` on both the marker and the label sibling, replacing Ink/chalk's
-  // `backgroundColor`+`inverse` combo — `captureCharFrame()` carries no attribute/color info (the
-  // same limitation the old harness's `lastFrame()` had for the reverse-video row), so this is the
-  // one place that pins the actual style prop rather than just the "> "/"  " marker text.
+  // Selection is reverse video (Design conformance, docs/design/tui.md), spelled as an explicit
+  // `theme.selectedFg` on `theme.selectedBg` — `captureCharFrame()` carries no attribute/color
+  // info (the same limitation the old harness's `lastFrame()` had for the reverse-video row), so
+  // this is the one place that pins the actual style props rather than just the "> "/"  " marker.
   describe("ListRow", () => {
-    test("selected applies TextAttributes.INVERSE to both the marker and the label; unselected applies NONE", () => {
+    // The regression this exists for: the row used to carry `TextAttributes.INVERSE` and no colors
+    // at all, and OpenTUI 0.5.6 renders INVERSE by emitting a background equal to the cell's own
+    // foreground — so every selected row painted a solid block with its text invisible inside it.
+    // Asserting the two tokens is not enough on its own to catch that class of bug coming back;
+    // asserting they are DIFFERENT is, which is why the inequality is spelled out rather than left
+    // implied by the token values.
+    test("a selected row paints selectedFg on selectedBg, two colors that must never be equal", () => {
       const selected = ListRow({ selected: true, label: "x" }) as ReactElement<{
-        children: ReactElement<{ attributes: number; children: string }>[];
+        backgroundColor: string | undefined;
+        children: ReactElement<{ fg: string | undefined; bg: string | undefined }>[];
       }>;
+      const [marker, label] = selected.props.children;
+
+      expect(selected.props.backgroundColor).toBe(theme.selectedBg);
+      for (const node of [marker, label]) {
+        expect(node?.props.fg).toBe(theme.selectedFg);
+        expect(node?.props.bg).toBe(theme.selectedBg);
+        expect(node?.props.fg).not.toBe(node?.props.bg);
+      }
+    });
+
+    test("an unselected row sets no colors of its own, so it inherits ordinary row styling", () => {
       const unselected = ListRow({ selected: false, label: "x" }) as ReactElement<{
-        children: ReactElement<{ attributes: number; children: string }>[];
+        backgroundColor: string | undefined;
+        children: ReactElement<{
+          fg: string | undefined;
+          bg: string | undefined;
+          children: string;
+        }>[];
       }>;
-      const [selectedMarker, selectedLabel] = selected.props.children;
-      const [unselectedMarker, unselectedLabel] = unselected.props.children;
+      const [marker, label] = unselected.props.children;
 
-      expect(selectedMarker?.props.attributes).toBe(TextAttributes.INVERSE);
-      expect(selectedMarker?.props.children).toBe("> ");
-      expect(selectedLabel?.props.attributes).toBe(TextAttributes.INVERSE);
+      expect(unselected.props.backgroundColor).toBeUndefined();
+      expect(marker?.props.children).toBe("  ");
+      for (const node of [marker, label]) {
+        expect(node?.props.fg).toBeUndefined();
+        expect(node?.props.bg).toBeUndefined();
+      }
+    });
 
-      expect(unselectedMarker?.props.attributes).toBe(TextAttributes.NONE);
-      expect(unselectedMarker?.props.children).toBe("  ");
-      expect(unselectedLabel?.props.attributes).toBe(TextAttributes.NONE);
+    test("the marker is a sibling text node carrying the same selection colors as the label", () => {
+      const selected = ListRow({ selected: true, label: "x" }) as ReactElement<{
+        children: ReactElement<{ children: string }>[];
+      }>;
+      expect(selected.props.children[0]?.props.children).toBe("> ");
+      expect(selected.props.children[1]?.props.children).toBe("x");
     });
   });
 

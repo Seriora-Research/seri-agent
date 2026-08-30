@@ -4,8 +4,13 @@ import { useKeyboard, usePaste } from "@opentui/react";
 import { useEffect, useRef, useState } from "react";
 import { theme } from "../theme/theme";
 import { applyCompletion, type CompletionSource, resolveCompletion } from "../util/completion";
+import { slideWindow } from "../util/format";
 import { isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
 import { COMPLETION_POPUP_ROWS, CompletionPopup } from "./CompletionPopup";
+
+// A stable identity for the popup's "selection at the top, window unscrolled" state, so the two
+// places that reset it (a value change, an accepted completion) cannot drift apart.
+const COMPLETION_WINDOW_TOP: { selected: number; offset: number } = { selected: 0, offset: 0 };
 
 // Ceiling on how often a keystroke can trigger InputBox's own repaint (a `setValue` call).
 // OS key-repeat while holding Backspace fires faster than this (~33ms apart, measured under Ink),
@@ -58,10 +63,16 @@ export function InputBox({
 }) {
   const sources = completionSources ?? EMPTY_SOURCES;
   const [value, setValue] = useState(prefill ?? "");
-  // The highlighted row of the completion popup. Reset to 0 on every value change rather than kept
-  // in sync with a moving match list: after another keystroke the list is a different list, and a
-  // preserved index would point at an unrelated entry.
-  const [completionIndex, setCompletionIndex] = useState(0);
+  // The completion popup's highlighted row and the window it scrolls, held as ONE state moved
+  // together by `slideWindow` — the same clamp-don't-re-center rule and the same one-updater shape
+  // every panel list gets from hooks/useListWindow.ts, which this cannot reuse directly because
+  // the popup's window is a fixed COMPLETION_POPUP_ROWS budget rather than useListWindow's own
+  // terminal-height-derived one. `selected` is an index into the FULL match list, never into the
+  // visible slice: clamping it to the slice is what used to make the list unscrollable, stranding
+  // the selection on the last visible row with every later match unreachable. Both reset to 0 on
+  // every value change rather than kept in sync with a moving match list: after another keystroke
+  // the list is a different list, and a preserved index would point at an unrelated entry.
+  const [completionWindow, setCompletionWindow] = useState(COMPLETION_WINDOW_TOP);
   // Set to the value the user pressed Escape on, so the popup stays shut for that exact text and
   // reopens the moment they type anything else. Without it, Escape would be undone by the next
   // render.
@@ -108,7 +119,7 @@ export function InputBox({
   // Escape stops applying.
   function updateAndResetCompletion(next: string) {
     scheduleUpdate(next);
-    setCompletionIndex(0);
+    setCompletionWindow(COMPLETION_WINDOW_TOP);
     if (dismissedFor !== undefined) setDismissedFor(undefined);
   }
 
@@ -135,17 +146,21 @@ export function InputBox({
     const open = liveCompletion();
     if (open !== undefined) {
       if (key.name === "up" || key.name === "down") {
-        const last = Math.min(open.matches.length, COMPLETION_POPUP_ROWS) - 1;
-        setCompletionIndex((index) =>
-          key.name === "up" ? Math.max(0, index - 1) : Math.min(last, index + 1),
-        );
+        setCompletionWindow((current) => {
+          const next =
+            key.name === "up"
+              ? current.selected - 1
+              : Math.min(open.matches.length - 1, current.selected + 1);
+          const selected = Math.max(0, next);
+          return { selected, offset: slideWindow(current.offset, selected, COMPLETION_POPUP_ROWS) };
+        });
         return;
       }
       if (key.name === "escape") {
         setDismissedFor(pendingValueRef.current);
         return;
       }
-      const item = open.matches[completionIndex] ?? open.matches[0];
+      const item = open.matches[completionWindow.selected] ?? open.matches[0];
       // Enter on a name already typed in full submits it rather than "completing" it to the text
       // that is already there, which swallows the keypress. Verified live: typing `/skills` and
       // pressing Enter left the popup up and ran nothing, reading as dropped input. Tab is exempt
@@ -163,7 +178,7 @@ export function InputBox({
         }
         pendingValueRef.current = next;
         setValue(next);
-        setCompletionIndex(0);
+        setCompletionWindow(COMPLETION_WINDOW_TOP);
         return;
       }
     }
@@ -237,7 +252,11 @@ export function InputBox({
   return (
     <>
       {completion !== undefined && (
-        <CompletionPopup matches={completion.matches} selected={completionIndex} />
+        <CompletionPopup
+          matches={completion.matches}
+          selected={completionWindow.selected}
+          offset={completionWindow.offset}
+        />
       )}
       <box
         flexDirection="row"

@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import { TextAttributes } from "@opentui/core";
+import { theme } from "../theme/theme";
 
 // The selection marker + row highlight shared by every selectable-list panel. `truncate` applies
 // unconditionally, not per caller: every `useListWindow`-backed panel budgets exactly one row per
@@ -9,12 +9,18 @@ import { TextAttributes } from "@opentui/core";
 // deliberate, tested behavior change from its pre-ListRow rows, which soft-wrapped instead of
 // truncating (see the splash's own truncation test).
 //
-// Selection is reverse video, not color (Design conformance, docs/design/tui.md): a single
-// `TextAttributes.INVERSE` swaps this row's own foreground/background at render time, replacing
-// Ink/chalk's own `backgroundColor` + `inverse` combo — that combo existed only because Ink's plain
-// `backgroundColor` painted default-foreground text on ANSI black, which reads as invisible on many
-// dark terminal themes, and `inverse` was the second prop needed to fix it. OpenTUI's own INVERSE
-// attribute already does the full swap in one step, so this needs no background-color token at all.
+// Selection is reverse video (Design conformance, docs/design/tui.md), spelled as an explicit
+// `theme.selectedBg` + `theme.selectedFg` pair rather than `TextAttributes.INVERSE`. INVERSE
+// cannot express it on OpenTUI 0.5.6: a raw PTY capture of this very row shows it emitting
+// `38;2;255;255;255` `48;2;255;255;255` `7`, i.e. a background set to the SAME value as the
+// foreground, so the row painted a solid block with `> Log in` invisible inside it. Naming both
+// colors is also what lets the highlight sit on the wrapping `<box>`, which spans the full row
+// width — a background painted only under the glyphs left a ragged right edge whose width moved
+// with each label. INVERSE does survive in three places (`components/InputBox.tsx`,
+// `components/ModelPicker.tsx`, `routes/skills/SkillsPanel.tsx`), all of them a block cursor drawn
+// on a single space: a cell whose background equals its foreground is exactly what a solid caret
+// is, so there the same behavior is the intended one rather than a bug.
+//
 // The marker ("> "/"  ") and `label` are two SIBLING `<text>` nodes, not one `<text>` with two
 // children — verified live (apps/cli/tests/tui/): a single `<text truncate>` whose content spans
 // more than one child (two adjacent string expressions, as `{marker}{label}` used to produce)
@@ -31,13 +37,19 @@ import { TextAttributes } from "@opentui/core";
 // one; without `flexShrink={0}`, the row's flex layout shrinks the marker along with the label
 // once both no longer fit, dropping the marker's own trailing space.
 export function ListRow({ selected, label }: { selected: boolean; label: string }) {
-  const attributes = selected ? TextAttributes.INVERSE : TextAttributes.NONE;
+  const fg = selected ? theme.selectedFg : undefined;
   return (
-    <box flexDirection="row">
-      <text attributes={attributes} flexShrink={0}>
+    <box flexDirection="row" backgroundColor={selected ? theme.selectedBg : undefined}>
+      <text fg={fg} bg={selected ? theme.selectedBg : undefined} flexShrink={0}>
         {selected ? "> " : "  "}
       </text>
-      <text attributes={attributes} truncate wrapMode="none">
+      <text
+        fg={fg}
+        bg={selected ? theme.selectedBg : undefined}
+        truncate
+        wrapMode="none"
+        flexGrow={1}
+      >
         {label}
       </text>
     </box>

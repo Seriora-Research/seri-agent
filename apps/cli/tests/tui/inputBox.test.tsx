@@ -124,6 +124,42 @@ describe("InputBox (OpenTUI)", () => {
     expect(setup.captureCharFrame()).toContain("> second line");
   });
 
+  // The completion popup's own scroll regression: Down used to be clamped to
+  // `Math.min(matches.length, COMPLETION_POPUP_ROWS) - 1`, so the selection stopped dead on the
+  // sixth visible row and every match below it was unreachable no matter how long the user held
+  // the key. This drives the real component through the real keypress path, so it fails on the old
+  // clamp even though the popup itself renders correctly given the right index.
+  test("arrowing past the sixth completion row scrolls the window to matches below it", async () => {
+    const items = Array.from({ length: 26 }, (_, i) => ({
+      value: `/cmd${i}`,
+      description: `does thing ${i}`,
+    }));
+    const setup = await createTestRenderer({ width: 60, height: 14 });
+    await mount(
+      setup,
+      <InputBox
+        onSubmit={() => {}}
+        completionSources={[{ id: "test", trigger: "/", lineStartOnly: true, items }]}
+      />,
+    );
+
+    await setup.mockInput.typeText("/");
+    await settle(setup);
+    await sleep(THROTTLE_MS + 20);
+
+    expect(setup.captureCharFrame()).toContain("/cmd0");
+    expect(setup.captureCharFrame()).not.toContain("/cmd8");
+
+    for (let i = 0; i < 8; i++) {
+      setup.mockInput.pressArrow("down");
+    }
+    await settle(setup);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("/cmd8");
+    expect(frame).not.toContain("/cmd0");
+  });
+
   test("an arrow key is inert, not inserted as raw escape bytes", async () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
     await mount(setup, <InputBox onSubmit={() => {}} />);
