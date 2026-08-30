@@ -4,6 +4,7 @@ import {
   estimateTokens,
   formatDoneLine,
   formatElapsed,
+  formatHomePath,
   formatMcpRow,
   formatModeDetail,
   formatTokenProgress,
@@ -371,5 +372,27 @@ describe("formatMcpRow", () => {
       toolCount: 1,
     };
     expect(formatMcpRow(row)).toBe("exa · connected · 1 tool");
+  });
+});
+
+describe("formatHomePath", () => {
+  test("a path under the home directory collapses to ~", () => {
+    expect(formatHomePath("C:\\Users\\lion\\code\\seri", "C:\\Users\\lion")).toBe("~\\code\\seri");
+    expect(formatHomePath("/home/lion/code/seri", "/home/lion")).toBe("~/code/seri");
+  });
+
+  test("the home directory itself is just ~", () => {
+    expect(formatHomePath("/home/lion", "/home/lion")).toBe("~");
+  });
+
+  // The separator check earns its place here: "/home/lion-old" starts with the home string but is
+  // a different directory, and rewriting it to "~-old" would name a path that does not exist.
+  test("a sibling directory sharing the home prefix is left alone", () => {
+    expect(formatHomePath("/home/lion-old/code", "/home/lion")).toBe("/home/lion-old/code");
+    expect(formatHomePath("/srv/build", "/home/lion")).toBe("/srv/build");
+  });
+
+  test("an unknown home leaves the path untouched", () => {
+    expect(formatHomePath("/srv/build", "")).toBe("/srv/build");
   });
 });
