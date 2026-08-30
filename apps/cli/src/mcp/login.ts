@@ -47,9 +47,9 @@ export async function loginMcpServer(
 
   let server: CallbackServer | undefined;
   try {
-    // Bound before auth() runs, because auth() reaches redirectToAuthorization inside its own
-    // call: the redirect URI it signs the authorization request with has to be a port already
-    // listening.
+    // Bound before the provider exists, because the provider's redirectUrl has to name the port
+    // that actually bound — and auth() reaches redirectToAuthorization inside its own call below,
+    // so the browser can arrive at that port moments later.
     server = await listen();
     const provider = createMcpAuthProvider({
       spec,

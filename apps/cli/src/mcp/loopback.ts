@@ -59,10 +59,13 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
 
   function handle(req: Request): Response {
     const url = new URL(req.url);
-    // A browser asks for /favicon.ico on its own, and a 404 for it must not look like a callback.
+    // Exactly one path is the redirect. A browser fetches /favicon.ico off its own bat, and
+    // treating whatever arrives on this port as the callback would settle the login on it.
     if (req.method !== "GET" || url.pathname !== MCP_CALLBACK_PATH) {
       return new Response("Not found", { status: 404 });
     }
+    // No wait is active before waitForCallback is called and after it has settled, and there is no
+    // expected state to check a request against in either window.
     const wait = active;
     if (wait === undefined) return new Response("Not found", { status: 404 });
 
