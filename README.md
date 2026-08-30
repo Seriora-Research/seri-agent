@@ -299,6 +299,80 @@ shows the exact file, and `/skills approve <id>` writes it. An approved file car
 `author: archivist` and the reason it was proposed, so you can always tell which of your skills you
 wrote and which one seri did.
 
+## Hooks
+
+A hook is a rail rather than an instruction. It is a script seri runs at a fixed point in the loop,
+outside the model's control, so what it enforces is a guarantee instead of a request. Blocking a
+`git push --force`, formatting a file the moment it is written, and keeping an audit log are the
+three things it is for.
+
+Put a manifest at `.seri/hooks/hooks.yaml` (this project) or under your profile root (every
+project) — `~/.seri/hooks/` by default, `~/.seri/<profile>/hooks/` under `--profile <name>`.
+
+```yaml
+hooks:
+  PreToolUse:
+    - script: block-dangerous
+      matcher: bash|powershell
+  PostToolUse:
+    - script: format-on-edit
+      matcher: write_file|edit
+      timeout: 10
+```
+
+`script` is a bare name, and the file beside it is `block-dangerous.ps1` on Windows and
+`block-dangerous.sh` everywhere else. **Write both halves.** seri runs the one for the platform it
+is on and warns at startup, naming the file and the platform, if it is missing — a hook that would
+silently not run on a teammate's machine says so instead.
+
+`matcher` is a regular expression over the tool name, anchored at both ends, so `edit` means the
+`edit` tool and not the tail of something else. Omit it and the hook runs for every tool.
+`mcp_github_.*` scopes a hook to one MCP server. `timeout` is in seconds, 30 by default.
+
+seri sends the script a JSON payload on stdin and reads its exit code:
+
+| exit | meaning |
+| --- | --- |
+| `0` | allow. |
+| `2` | **block.** Whatever the script printed on stderr becomes the reason the model is told. |
+| anything else | the hook could not run. It is reported, and the call proceeds. |
+
+```bash
+#!/usr/bin/env bash
+payload=$(cat)
+if grep -q 'rm -rf /' <<<"$payload"; then
+  echo "BLOCKED: rm -rf /" >&2
+  exit 2
+fi
+```
+
+A `PreToolUse` block runs **before** the permission gate, so no mode reaches around it: `auto` and
+`--dangerously-skip-permissions` are blocked exactly as `approve-each` is, and you are never asked
+to approve a call a hook is about to refuse. `PostToolUse` runs after the tool, where exit 2 has
+nothing left to stop, so it is reported like any other failure.
+
+A broken hook never takes the session down. It fails open, loudly: the call proceeds and the error
+lands in the transcript. That is deliberate — a typo in a formatter should not stop you working.
+
+The contract is Claude Code's and Cursor's, unchanged, so scripts written for either run here when
+you copy them into `.seri/hooks/`. seri does not read `.cursor/hooks/` itself, for the same reason
+it does not read `.cursor/agents/`.
+
+### Hooks from a repository you cloned do not run until you say so
+
+This is the one extension seri will not load on sight. Rules and skills carry text; a hook carries
+a program, and it runs in front of the permission gate on tools that never prompt, which means an
+untrusted one would be code execution from a `git clone` with nothing asked of you first.
+
+So: hooks in **your own profile root** run, because nothing arrives there by cloning anything. A
+project's `.seri/hooks/` is found, listed, and left dormant until you review it. Session start says
+so, naming the directory. `/hooks` shows the wiring and every script in full, and `/hooks trust`
+turns them on.
+
+Trust is bound to the bytes you read, not to the path. Edit any file in the directory, or pull a
+change to one, and the hooks stop running until you look at what moved and trust it again.
+Scheduled runs load no hooks at all, trusted or not.
+
 ## Checking your code after a write
 
 seri can run your project's own check command after every successful `write_file` and hand the
