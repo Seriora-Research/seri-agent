@@ -551,7 +551,7 @@ describe("one login outcome, worded once", () => {
   test("an authorization server's own error is flattened to one bounded line", () => {
     const raw = [
       "HTTP 404: Invalid OAuth error response: [",
-      '  {',
+      "  {",
       '    "expected": "string",',
       '    "code": "invalid_type",',
       '    "path": [',
