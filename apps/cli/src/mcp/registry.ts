@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { Document, parse, parseDocument, YAMLMap } from "yaml";
 import { atomicWriteFile } from "../atomicWriteFile";
@@ -12,7 +12,10 @@ export type { McpEntry, McpRegistry } from "./types";
 
 export const SERVERS_FILENAME = "servers.yaml";
 
-const NAME_SHAPE = /^[a-z0-9][a-z0-9-]*$/;
+// Exported so mcp/commands.ts's `/mcp add` validates against the identical pattern rather than a
+// second copy that could drift from it — a name `/mcp add` accepted but parseOneServer rejected on
+// the next session start would be a confusing way to lose a server silently.
+export const NAME_SHAPE = /^[a-z0-9][a-z0-9-]*$/;
 
 // Only this exact pattern expands. `$(...)` and any other shell-looking syntax is left exactly as
 // written — the CONSTITUTION's standing anti-pattern is "config never executes shell at load",
@@ -166,6 +169,14 @@ function isMcpCatalog(value: unknown): value is McpCatalog {
 // calls ensureOwnerOnlyDir on the directory it writes into).
 export function writeCatalogCache(configDir: string, catalog: McpCatalog): void {
   atomicWriteFile(catalogCachePath(configDir, catalog.server), JSON.stringify(catalog, null, 2));
+}
+
+// Disk. Idempotent: a server with no cache to begin with is left exactly as it was. This is what
+// `/mcp remove` calls so a removed server's stale catalog cannot resurface if the same name is
+// added back later without ever being reconnected.
+export function deleteCatalogCache(configDir: string, server: string): void {
+  const path = catalogCachePath(configDir, server);
+  if (existsSync(path)) unlinkSync(path);
 }
 
 // Disk. undefined for a missing, unreadable, unparseable, or wrongly-shaped cache — a hand-edited
