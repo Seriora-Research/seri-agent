@@ -35,5 +35,24 @@ Each file: H1 title, one paragraph of user-visible behavior, then exactly four H
 
 - [Interactive TUI session](./tui-session.md) — splash, input box, submitting a task, `/exit` and Ctrl-D.
 - [Permission gate](./permission-gate.md) — mode cycling, the ApprovalBox, read-only blocking, persisted grants.
-- [Sessions](./sessions.md) — `--continue`, `--resume <id>`, `/clear`, session files on disk.
-- [Config and API keys](./config-keys.md) — `/config` and `/setup`, masking, env shadowing. Its recipes still name a `config` subcommand that no longer exists and need a live pass.
+- [Sessions](./sessions.md) — `--continue`, `--resume <id>`, `/clear`, the `sessions` table in `seri.db`.
+- [Config and API keys](./config-keys.md) — `/config` and `/setup`, masking, env shadowing.
+
+## Not yet mapped
+
+Real user-facing surfaces with a source path and no feature file. Recorded so a later run picks
+them up instead of rediscovering them; none has been driven.
+
+- `/mcp` — server panel, `add`/`auth`/`remove`, and the trust preview that gates a catalog.
+  `apps/cli/src/tui/routes/mcp/McpPanel.tsx`, `apps/cli/src/mcp/commands.ts`. Landed entirely
+  after this map was written.
+- `/memory` — staged memory-write review: list, diff, approve, reject.
+  `apps/cli/src/memory/commands.ts`, `apps/cli/src/memory/pending.ts`.
+- `/skills` — the skills panel and the staged-skill review subcommands.
+  `apps/cli/src/tui/routes/skills/SkillsPanel.tsx`, `apps/cli/src/skills/commands.ts`.
+- `/model` and `/effort` — mid-session model switch and the reasoning-effort override.
+  `apps/cli/src/tui/components/ModelPicker.tsx`, `apps/cli/src/tui/routes/config/`.
+- Checkpoints — `/undo`, `/rewind`, `/restore <sha>`. `apps/cli/src/checkpoint/`.
+- `/compact` — in-session history summarization. `apps/cli/src/loop/compaction.ts`.
+- Splash login/signup — the WorkOS device flow behind `/login`, `/signup`, `/logout`.
+  `apps/cli/src/tui/routes/setup/`, `apps/cli/src/auth/`.

@@ -23,8 +23,8 @@ Preconditions:
 
 - Baseline (see README); a scratch file name unused at the repo root, e.g. `gate-probe-<run-id>.txt`.
 
-- **Mode cycling.** Run the helper with steps `"wait=Esc continue" sleep=400 key=esc sleep=600 key=shift-tab "wait=bypass permissions on"`. The label moves from `⏸ approve-each mode on` to `⏵⏵ bypass permissions on`.
-- **Prompt and approve.** Steps: `"wait=Esc continue" sleep=400 key=esc sleep=600 "type=Create a file named gate-probe-<run-id>.txt containing exactly GATE-OK" "wait=file named gate-probe" key=enter "wait=[y]es@90000" type=y "wait=done ·@90000" type=/exit sleep=400 key=enter sleep=800`. The ApprovalBox names `write_file` and the file path; after `y` the turn completes.
+- **Mode cycling.** Run the helper with steps `"wait=Esc continue" sleep=400 key=esc "wait=created.@30000" sleep=800 key=shift-tab "wait=bypass permissions on@10000" sleep=400 key=shift-tab "wait=read-only mode on@10000" sleep=400 key=shift-tab "wait=approve-each mode on@10000"`. The label walks `⏸ approve-each mode on` → `⏵⏵ bypass permissions on` → `⏸ read-only mode on` and back, which proves the cycle order rather than one hop of it.
+- **Prompt and approve.** Steps: `"wait=Esc continue" sleep=400 key=esc "wait=created.@30000" sleep=800 "type=Create a file named gate-probe-<run-id>.txt containing exactly GATE-OK" "wait=containing exactly" key=enter "wait=[y]es@90000" type=y "wait=done ·@90000" type=/exit sleep=400 key=enter sleep=800`. The ApprovalBox names `write_file` and the file path; after `y` the turn completes.
 - **Side effect.** `Get-Content gate-probe-<run-id>.txt` contains `GATE-OK`; the profile's `permissions.yaml` shows no grant (a `y` is once, not always).
 - **Persisted grant.** Repeat the drive answering `type=a` instead; the profile's `permissions.yaml` afterwards carries `write_file`. Revoking through `/permissions` is a TUI drive that has not been written yet — add it with `/pstack:maintain-verification-skill`.
 - **Proof.** The transcript (prompt text visible, answer keypress, `done ·`), the probe file's content, and the before/after contents of the profile's `permissions.yaml`.
