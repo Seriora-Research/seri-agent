@@ -3,8 +3,8 @@ import type { PermissionMode } from "../../gate/gate";
 // The TUI's monochrome palette (docs/design/tui.md): every component imports its color from here
 // rather than hardcoding a literal. `error`/`warning` carry no hue — ERROR_MARK/WARNING_MARK below
 // are what distinguishes an alert from ordinary text now that color no longer does. Selection is
-// reverse video, not a background color token (see ui/ListRow.tsx). ANSI-16 color names only, with
-// two exceptions — `userBg` and `mode` below. Verified against @opentui/core's parseColor
+// reverse video, spelled as the `selectedBg`/`selectedFg` pair below (see ui/ListRow.tsx). ANSI-16
+// color names only, with three exceptions — `userBg`, `selectedBg`/`selectedFg`, and `mode` below. Verified against @opentui/core's parseColor
 // (lib/RGBA.ts): both an ANSI-16 name ("white"/"gray") and a raw hex string resolve through the
 // same `fg`/`bg` props every `<text>`/`<box>` accepts, so no adapter is needed here. One real
 // difference from Ink/chalk: OpenTUI resolves a named color to a fixed RGB value at parse time
@@ -14,12 +14,15 @@ import type { PermissionMode } from "../../gate/gate";
 // included), not one meant to track a live terminal theme, but worth knowing if a future token
 // ever expected to inherit the terminal's own palette.
 const MUTED = "gray";
+// Ordinary prose's own off-white, named so `selectedBg` below can state in one place that a
+// selected row is literally the color ordinary text is.
+const TEXT = "#d4d4d4";
 
 export const theme = {
   // An explicit off-white hex, not the ANSI-16 "white" `error`/`warning` use: pure white reads as
   // eye-straining on most dark terminal themes for a color this large a share of the screen (the
   // transcript's own prose), so ordinary text gets a softer off-white instead.
-  text: "#d4d4d4",
+  text: TEXT,
   error: "white",
   warning: "white",
   muted: MUTED,
@@ -30,6 +33,17 @@ export const theme = {
   // low-contrast against the white/light-gray text sitting on it — this dark-charcoal value renders
   // consistently across terminals regardless of how they resolve ANSI-16 names.
   userBg: "#333333",
+  // The selected row of every list (ui/ListRow.tsx, components/CompletionPopup.tsx): ink and paper
+  // swapped, exactly what docs/design/tui.md means by "selection is reverse video, not color".
+  // Two explicit colors rather than `TextAttributes.INVERSE`, which cannot express it on OpenTUI
+  // 0.5.6: verified from a raw PTY capture, INVERSE emits `48;2;<fg>` alongside `7`, so the cell's
+  // background lands on the SAME value as its foreground and the row renders as a solid block with
+  // its text invisible inside it — one gray band per `fg` the row happened to set. `selectedBg` is
+  // `TEXT` itself so the band is the color prose already is; `selectedFg` is tokens.md's own
+  // `--ink`, the near-black the whole design system is anchored on. No hue either way, so the
+  // monochrome rule holds.
+  selectedBg: TEXT,
+  selectedFg: "#141413",
   // The mode indicator's own scoped exception (docs/design/tui.md): the three `PermissionMode`
   // values get one soft hue each rather than sharing `text`/`muted` — the whole point of the
   // indicator is that the most dangerous mode must not look identical to the safest one at a
