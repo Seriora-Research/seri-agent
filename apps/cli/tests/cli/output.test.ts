@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   archivistLine,
+  archivistStagedLines,
   archivistStatsLine,
+  pendingQueueNotice,
   printCost,
   toolResultLine,
   USAGE,
@@ -80,6 +82,7 @@ function archivistReport(overrides: Partial<ArchivistReport> = {}): ArchivistRep
     },
     cost: undefined,
     toolCallsMade: 1,
+    staged: [],
     ...overrides,
   };
 }
@@ -111,9 +114,76 @@ describe("archivistLine", () => {
   });
 
   test("archivistStatsLine equals the undefined-summary archivistLine (mark + stats, no newline)", () => {
-    const report = archivistReport({ summary: undefined });
+    const report = archivistReport({ summary: undefined, staged: [] });
     expect(archivistStatsLine(report)).toBe(archivistLine(report));
     expect(archivistStatsLine(report)).not.toContain("\n");
+  });
+
+  // The queue the archivist fills is reviewed by hand, and until this line existed the only way to
+  // learn an entry was waiting was to already know to type `/memory pending`. A run that stages
+  // must name what it staged.
+  test("names every staged write and the command that reviews it", () => {
+    const line = archivistLine(
+      archivistReport({
+        summary: undefined,
+        staged: [
+          { kind: "memory", id: "a1b2c3d4e5f6", label: "USER.md" },
+          { kind: "memory", id: "0f1e2d3c4b5a", label: "myrepo/MEMORY.md" },
+          { kind: "skill", id: "9988776655ff", label: "run-migrations" },
+        ],
+      }),
+    );
+    expect(line).toContain("staged 2 memory writes: USER.md (a1b2c3d4e5f6)");
+    expect(line).toContain("myrepo/MEMORY.md (0f1e2d3c4b5a)");
+    expect(line).toContain("/memory pending");
+    expect(line).toContain("staged 1 skill: run-migrations (9988776655ff)");
+    expect(line).toContain("/skills pending");
+  });
+
+  // Negative control for the test above: a run that decided nothing was worth keeping must stay a
+  // single stats line, so the notice reads as a real event rather than per-turn furniture.
+  test("adds no staged line when the run staged nothing", () => {
+    const report = archivistReport({ summary: undefined, staged: [] });
+    expect(archivistStagedLines(report)).toEqual([]);
+    expect(archivistLine(report)).not.toContain("staged");
+  });
+
+  // One line per queue, not one combined line: each has its own review command, and pairing the
+  // wrong command with a kind sends the human to a list that does not contain the entry.
+  test("splits memory and skills onto their own lines, each with its own review command", () => {
+    const lines = archivistStagedLines(
+      archivistReport({
+        staged: [
+          { kind: "skill", id: "9988776655ff", label: "run-migrations" },
+          { kind: "memory", id: "a1b2c3d4e5f6", label: "USER.md" },
+        ],
+      }),
+    );
+    expect(lines).toEqual([
+      `${ARCHIVIST_MARK}staged 1 memory write: USER.md (a1b2c3d4e5f6) · /memory pending`,
+      `${ARCHIVIST_MARK}staged 1 skill: run-migrations (9988776655ff) · /skills pending`,
+    ]);
+  });
+});
+
+describe("pendingQueueNotice", () => {
+  // The queue a session inherits is the half the per-run lines cannot cover: an earlier session's
+  // archivist and the daemon's idle flush both stage with no terminal attached.
+  test("names both queues and the command that reviews each", () => {
+    expect(pendingQueueNotice(5, 2)).toBe(
+      "5 memory writes and 2 skills waiting for review · /memory pending, /skills pending",
+    );
+  });
+
+  test("names only the queue that has entries, singular when there is one", () => {
+    expect(pendingQueueNotice(1, 0)).toBe("1 memory write waiting for review · /memory pending");
+    expect(pendingQueueNotice(0, 1)).toBe("1 skill waiting for review · /skills pending");
+  });
+
+  // Negative control: an empty queue prints nothing, so this cannot become a line every session
+  // start carries regardless of state.
+  test("returns undefined when both queues are empty", () => {
+    expect(pendingQueueNotice(0, 0)).toBeUndefined();
   });
 });
 

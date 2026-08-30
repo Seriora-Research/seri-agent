@@ -3,7 +3,7 @@ import { z } from "zod";
 import { commandByName } from "../cli/commandCatalog";
 import { scanForInjection } from "../memory/injectionScan";
 import { isRoutableRole } from "../subagents/routes";
-import { existingSkillBody, stagePendingSkill } from "./pending";
+import { existingSkillBody, type PendingSkill, stagePendingSkill } from "./pending";
 
 // A skill body is read on demand, so it costs nothing per turn the way a memory entry does and
 // needs no cap for that reason. This one is a different guard: an agent-authored file that grows
@@ -44,7 +44,12 @@ const DESCRIPTION =
  * outside the repository; a skill is a standing artifact that lands inside the user's own tree and
  * steers later sessions, so it always waits for a human.
  */
-export function makeSkillWriteTool(ctx: { configDir: string; worktree: string }) {
+export function makeSkillWriteTool(
+  ctx: { configDir: string; worktree: string },
+  // The same seam makeMemoryWriteTool carries, for the same reason: the caller names what this run
+  // staged from the records themselves rather than diffing a queue two sessions can write to.
+  opts: { onStaged?: (staged: PendingSkill) => void } = {},
+) {
   return tool({
     description: DESCRIPTION,
     inputSchema: skillWriteInputSchema,
@@ -94,6 +99,7 @@ export function makeSkillWriteTool(ctx: { configDir: string; worktree: string })
         ctx,
         new Date(),
       );
+      opts.onStaged?.(staged);
       // Told at write time, not discovered at approval time: the human's diff will show a replace,
       // and the archivist should know it is proposing one so it can decide whether it really means
       // to supersede what is already there.

@@ -425,7 +425,50 @@ export function archivistStatsLine(report: ArchivistReport): string {
   return `${ARCHIVIST_MARK}(archivist: ${report.trigger} trigger, ${calls}${tokens}${cost})`;
 }
 
+// The two queues an archivist run can add to, and how each is reviewed. A table rather than a
+// branch per kind so the render below stays one loop, and so a third write path would be one row.
+const ARCHIVIST_STAGED_KINDS = [
+  { kind: "memory", noun: "memory write", review: "/memory pending" },
+  { kind: "skill", noun: "skill", review: "/skills pending" },
+] as const;
+
+// One line per kind rather than one combined line, so each carries the command that reviews it.
+// Every entry names its target and its id, which is what makes the line enough to run
+// `/memory diff <id>` from without listing the queue first. Kept out of `archivistStatsLine`
+// because the TUI pushes each of these as its own muted transcript entry, the same way it already
+// splits the stats line from the summary.
+export function archivistStagedLines(report: ArchivistReport): string[] {
+  const lines: string[] = [];
+  for (const row of ARCHIVIST_STAGED_KINDS) {
+    const of = report.staged.filter((w) => w.kind === row.kind);
+    if (of.length === 0) continue;
+    const named = of.map((w) => `${w.label} (${w.id})`).join(", ");
+    const count = `${of.length} ${row.noun}${of.length === 1 ? "" : "s"}`;
+    lines.push(`${ARCHIVIST_MARK}staged ${count}: ${named} · ${row.review}`);
+  }
+  return lines;
+}
+
 export function archivistLine(report: ArchivistReport): string {
-  const stats = archivistStatsLine(report);
-  return report.summary === undefined ? stats : `${stats}\n  ${report.summary}`;
+  const parts = [archivistStatsLine(report), ...archivistStagedLines(report)];
+  if (report.summary !== undefined) parts.push(`  ${report.summary}`);
+  return parts.join("\n");
+}
+
+// The per-run lines above only cover what THIS session staged. Two other paths fill the same queue
+// with nobody watching: an earlier session's archivist, and the daemon's idle flush, which stages
+// unconditionally against a session that has no terminal attached at all. Both are why a queue can
+// reach double digits before anyone types `/memory pending`. Counts rather than names because this
+// prints once at session start, ahead of any work, and a long list there would read as a wall.
+// Takes counts, not the queues themselves, so this file keeps its no-filesystem-imports contract.
+export function pendingQueueNotice(memoryCount: number, skillCount: number): string | undefined {
+  const parts: string[] = [];
+  if (memoryCount > 0) parts.push(`${memoryCount} memory write${memoryCount === 1 ? "" : "s"}`);
+  if (skillCount > 0) parts.push(`${skillCount} skill${skillCount === 1 ? "" : "s"}`);
+  if (parts.length === 0) return undefined;
+  const review = [
+    memoryCount > 0 ? "/memory pending" : undefined,
+    skillCount > 0 ? "/skills pending" : undefined,
+  ].filter((c) => c !== undefined);
+  return `${parts.join(" and ")} waiting for review · ${review.join(", ")}`;
 }

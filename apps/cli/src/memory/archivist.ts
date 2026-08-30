@@ -11,6 +11,7 @@ import { type CostReport, reportFromCatalogPricing } from "../provider/cost";
 import type { SessionState } from "../session/session";
 import { makeSkillWriteTool } from "../skills/writeTool";
 import { runSubagent, type SubagentRuntime } from "../subagents/dispatch";
+import { pendingLabel } from "./pending";
 import { type LoadedMemory, loadMemory, type MemoryContext, renderMemoryTier } from "./store";
 import { makeMemoryWriteTool } from "./tool";
 
@@ -192,8 +193,26 @@ export function buildArchivistGoal(
   );
 }
 
+// One entry the archivist put in the review queue this run. `label` is what a human recognises the
+// target by: the memory file ("USER.md", "myrepo/MEMORY.md") for a memory write, the skill's own
+// name for a skill. `id` is the same 12-hex id `/memory diff` and `/skills diff` resolve, so the
+// rendered line is enough to act on without listing the queue first.
+export type ArchivistStagedWrite = {
+  kind: "memory" | "skill";
+  id: string;
+  label: string;
+};
+
 export type ArchivistReport = {
   trigger: ArchivistTrigger;
+  // What this run staged, in call order. Empty when the archivist read the transcript and decided
+  // nothing was worth keeping, which is the common case, and also when every write it attempted
+  // was refused (the injection scan, a cap overflow) — `toolCallsMade` counts a refused call, so
+  // it was never a usable proxy for "something is waiting for you".
+  //
+  // Only staged writes appear here. With the approval gate off, memory_write applies to the file
+  // directly and produces no queue entry to name; skill_write has no such branch and always stages.
+  staged: ArchivistStagedWrite[];
   // undefined when the child produced no real closing text of its own — the archivist's own
   // prompt never explicitly asks it to narrate what it did, so runSubagent's own generic
   // fallbackSummary filler ("produced no summary", "stopped at the iteration cap…") is
@@ -247,12 +266,18 @@ export async function runArchivist(args: {
   // dispatched directly by this function via runSubagent, and needs
   // exactly one tool, so the ToolSet is simplest built inline. The (model, provider) pair on
   // `runtime` is whatever the caller already resolved; this function does not parse role pins.
+  const staged: ArchivistStagedWrite[] = [];
   const tools: ToolSet = {
-    memory_write: makeMemoryWriteTool(args.ctx, { forceStage: args.forceStage === true }),
+    memory_write: makeMemoryWriteTool(args.ctx, {
+      forceStage: args.forceStage === true,
+      onStaged: (p) => staged.push({ kind: "memory", id: p.id, label: pendingLabel(p) }),
+    }),
     // The second write path, and the only one that produces a whole file. It always stages —
     // there is no approval-off branch the way memory_write has one — because a skill lands inside
     // the user's own tree and steers later sessions.
-    skill_write: makeSkillWriteTool(args.ctx),
+    skill_write: makeSkillWriteTool(args.ctx, {
+      onStaged: (p) => staged.push({ kind: "skill", id: p.id, label: p.name }),
+    }),
   };
   const runtime: SubagentRuntime = {
     runLoop: args.runLoop ?? runLoop,
@@ -309,6 +334,7 @@ export async function runArchivist(args: {
 
   return {
     trigger: args.trigger,
+    staged,
     summary: result.summaryIsFallback ? undefined : result.summary,
     usage,
     cost,

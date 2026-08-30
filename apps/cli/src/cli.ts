@@ -40,6 +40,7 @@ import {
 import {
   approvalPromptText,
   archivistLine,
+  archivistStagedLines,
   archivistStatsLine,
   printCost,
   printEvent,
@@ -2058,6 +2059,12 @@ async function runTui(
       }
       if (result.archivist) {
         pushTranscriptLine(dispatch, archivistStatsLine(result.archivist), { muted: true });
+        // Between the stats and the summary, and plain rather than markdown for the same reason
+        // the stats line is: a memory label carries "." and "/" and a skill name carries "-", and
+        // the markdown parser would style them.
+        for (const line of archivistStagedLines(result.archivist)) {
+          pushTranscriptLine(dispatch, line, { muted: true });
+        }
         if (result.archivist.summary !== undefined) {
           pushTranscriptLine(dispatch, result.archivist.summary, { muted: true, markdown: true });
         }
