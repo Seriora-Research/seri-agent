@@ -50,3 +50,42 @@ export function mcpToolName(server: string, tool: string): string {
 export function isMcpToolName(name: string): boolean {
   return name.startsWith(MCP_TOOL_PREFIX);
 }
+
+// The digest is truncated because this lands in a hand-editable YAML file that the store's own
+// template invites people to comment and edit; 64 hex characters there is unreadable. 48 bits is
+// ample against accidental collision, and the threat is a server changing its own tool, not one
+// forging a digest.
+const GRANT_DIGEST_LENGTH = 12;
+
+// `.+` is greedy, so it consumes as much as it can before backtracking to satisfy the trailing
+// `@<12 hex>`, which is what makes a `toolName` that itself happens to contain "@" resolve to the
+// LAST such split rather than the first. Anchored at both ends so a value that merely contains a
+// grant-shaped substring does not parse as one.
+const GRANT_KEY_SHAPE = new RegExp(`^(${MCP_TOOL_PREFIX}.+)@([0-9a-f]{${GRANT_DIGEST_LENGTH}})$`);
+
+export function mcpGrantKey(toolName: string, fingerprint: string): string {
+  return `${toolName}@${fingerprint.slice(0, GRANT_DIGEST_LENGTH)}`;
+}
+
+// undefined for anything not shaped `mcp_<name>@<12 hex>` — that is how a built-in entry
+// (`write_file`, `edit`) passes through a caller that tries this first and falls back to the bare
+// name.
+export function parseMcpGrantKey(
+  entry: string,
+): { toolName: string; fingerprint: string } | undefined {
+  const match = GRANT_KEY_SHAPE.exec(entry);
+  if (match === null) return undefined;
+  return { toolName: match[1] as string, fingerprint: match[2] as string };
+}
+
+export function isMcpGrantKey(entry: string): boolean {
+  return parseMcpGrantKey(entry) !== undefined;
+}
+
+// Truncates currentFingerprint the same way mcpGrantKey truncated the one it stored, so the
+// truncation rule is defined once and both sides of the comparison go through it.
+export function mcpGrantMatches(entry: string, currentFingerprint: string): boolean {
+  const parsed = parseMcpGrantKey(entry);
+  if (parsed === undefined) return false;
+  return parsed.fingerprint === currentFingerprint.slice(0, GRANT_DIGEST_LENGTH);
+}

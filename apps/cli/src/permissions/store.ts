@@ -1,8 +1,9 @@
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { Document, parseDocument, Scalar, YAMLMap, YAMLSeq } from "yaml";
+import { type Document, parseDocument, Scalar, YAMLMap, YAMLSeq } from "yaml";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { foldsCase } from "../caseFold";
+import { isMcpGrantKey, isMcpToolName, mcpGrantKey, parseMcpGrantKey } from "../mcp/types";
 
 // NOT derived from WRITE_TOOL_NAMES, on purpose: a tool added to the gate must be opted IN here
 // deliberately, never swept in by a set-difference. bash and powershell are excluded because a grant
@@ -52,9 +53,16 @@ const TEMPLATE = `# seri — tools approved permanently, so seri stops asking.
 #   /permissions                     what is in effect right now; revokes a \`projects\` entry.
 #                                     A \`global\` entry only comes back out by editing it here.
 #
-# Only write_file and edit may appear here. bash and powershell are refused, on read as well as on
-# write: a grant keyed on a tool NAME says nothing about what a shell command will do, so an entry
-# reading "bash" would hand over the shell permanently. Command-pattern grants are a later feature.
+# write_file and edit may appear here by name. bash and powershell are refused, on read as well as
+# on write: a grant keyed on a tool NAME says nothing about what a shell command will do, so an
+# entry reading "bash" would hand over the shell permanently. Command-pattern grants are a later
+# feature.
+#
+# An MCP tool may appear here too, as \`mcp_<server>_<tool>@<digest>\`. The @ suffix is a
+# fingerprint over that tool's name, description, and input schema at the moment you approved it —
+# a server is a third party, and its name and schema together are the only contract you were shown.
+# Change the tool on the server's end and the digest stops matching, so seri asks again instead of
+# trusting the old answer against a tool you never actually saw.
 #
 # Comments survive when seri rewrites this file. Use them: an entry that cannot say why it exists is
 # an entry nobody later dares remove.
@@ -105,9 +113,11 @@ function scalarStrings(seq: YAMLSeq): string[] {
 }
 
 // The read-side filter — the load-bearing half of DECISION 2, not the prompt's write-side check.
-// The file is hand-editable, so a name outside PERSISTABLE_TOOLS reaching this far (typed by hand,
-// or by anything else that can write the config dir) is dropped rather than honoured, and named so
-// the drop is not silent.
+// The file is hand-editable, so a name outside PERSISTABLE_TOOLS and not a validly-shaped MCP
+// grant key reaching this far (typed by hand, or by anything else that can write the config dir)
+// is dropped rather than honoured, and named so the drop is not silent. A malformed digest
+// (wrong length, non-hex) fails isMcpGrantKey the same way an unknown built-in name fails
+// PERSISTABLE_TOOLS — both are "not a shape this store ever wrote".
 function extractToolList(
   node: unknown,
   path: string,
@@ -116,25 +126,22 @@ function extractToolList(
   if (!(node instanceof YAMLSeq)) return [];
   const result: string[] = [];
   for (const value of scalarStrings(node)) {
-    if (PERSISTABLE_TOOLS.has(value)) {
+    if (PERSISTABLE_TOOLS.has(value) || isMcpGrantKey(value)) {
       result.push(value);
     } else {
       onWarning?.(
-        `ignoring "${value}" in ${path}: only write_file and edit can be approved permanently — a grant keyed on a tool name says nothing about what a shell command will do`,
+        `ignoring "${value}" in ${path}: only write_file, edit, and a valid mcp_<server>_<tool>@<digest> grant can be approved permanently — a grant keyed on a bare tool name says nothing about what a shell command will do, and an MCP grant is only meaningful bound to the contract's fingerprint`,
       );
     }
   }
   return result;
 }
 
-// The raw union, unfiltered by PERSISTABLE_TOOLS: used only to answer "does this grant already
-// exist", where a hand-written invalid entry must not cause a duplicate write either.
-function toolsInDoc(doc: Document, key: string): string[] {
-  const global = doc.get("global");
-  const list = doc.getIn(["projects", key]);
-  const globalTools = global instanceof YAMLSeq ? scalarStrings(global) : [];
-  const projectTools = list instanceof YAMLSeq ? scalarStrings(list) : [];
-  return [...globalTools, ...projectTools];
+// The bare tool name an entry is FOR, stripping an MCP grant's `@<digest>` suffix — a built-in
+// entry has no suffix to strip, so it passes through unchanged. This is the comparison key for
+// "is there already a grant for this tool", independent of which digest it carries.
+function bareToolName(entry: string): string {
+  return parseMcpGrantKey(entry)?.toolName ?? entry;
 }
 
 export function loadGrants(
@@ -190,13 +197,27 @@ function writeDocument(doc: Document, configDir: string): void {
 // JSON. `.flow = false` on the map/seq this call touches is what keeps a freshly-populated
 // `projects: {}`/entry list in the block style the populated example in the plan shows, rather than
 // yaml's default of matching the empty flow collection's own style.
+// `fingerprint` is required for an `mcp_` name and refused for a built-in one: a digest on a
+// built-in would mean nothing (there is no third-party contract to pin), and an mcp_ grant with
+// no digest is exactly the unbound rug-pull-prone grant this design exists to stop. bash and
+// powershell are refused either way, by falling through PERSISTABLE_TOOLS below.
 export function rememberGrant(
   configDir: string,
   worktree: string,
   tool: string,
   onWarning?: (message: string) => void,
+  fingerprint?: string,
 ): boolean {
-  if (!PERSISTABLE_TOOLS.has(tool)) return false;
+  const mcp = isMcpToolName(tool);
+  let value: string;
+  if (mcp) {
+    if (fingerprint === undefined) return false;
+    value = mcpGrantKey(tool, fingerprint);
+  } else {
+    if (fingerprint !== undefined) return false;
+    if (!PERSISTABLE_TOOLS.has(tool)) return false;
+    value = tool;
+  }
   const path = permissionsPath(configDir);
   const state = readStore(configDir);
   if (state.status === "malformed") {
@@ -206,11 +227,36 @@ export function rememberGrant(
 
   const doc = state.status === "missing" ? parseDocument(TEMPLATE) : state.doc;
   const key = projectKey(worktree);
-  if (toolsInDoc(doc, key).includes(tool)) return false;
+
+  // Compared on the bare tool name, not the full entry: a stale entry for the same tool under an
+  // old digest must be REPLACED, not left alongside a fresh one, or the old contract keeps
+  // authorising the call. An exact match (same tool, same digest) is a true no-op. The stale
+  // entry can live in EITHER tier: rememberGrant only ever writes the project tier, but the
+  // template's own header invites hand-editing global, so a stale global entry is reachable —
+  // and removing only from the project sequence would leave that one sitting there, authorising
+  // calls against the old contract alongside the fresh project grant.
+  const globalSeq = doc.get("global");
+  const projectSeq = doc.getIn(["projects", key]);
+  const globalStale =
+    globalSeq instanceof YAMLSeq
+      ? scalarStrings(globalSeq).find((existing) => bareToolName(existing) === tool)
+      : undefined;
+  const projectStale =
+    projectSeq instanceof YAMLSeq
+      ? scalarStrings(projectSeq).find((existing) => bareToolName(existing) === tool)
+      : undefined;
+  if (globalStale === value || projectStale === value) return false;
+
+  if (globalStale !== undefined && globalSeq instanceof YAMLSeq) {
+    removeFromSeq(globalSeq, globalStale);
+  }
+  if (projectStale !== undefined && projectSeq instanceof YAMLSeq) {
+    removeFromSeq(projectSeq, projectStale);
+  }
 
   // A trailing same-line comment. Written so the entry says something; a user editing it to say WHY
   // is the point.
-  const entry = doc.createNode(tool) as Scalar;
+  const entry = doc.createNode(value) as Scalar;
   entry.comment = ` added ${new Date().toISOString().slice(0, 10)} by seri`;
 
   let projectsMap = doc.get("projects");
@@ -220,9 +266,9 @@ export function rememberGrant(
   }
   (projectsMap as YAMLMap).flow = false;
 
-  const list = doc.getIn(["projects", key]);
-  if (list instanceof YAMLSeq) {
-    list.add(entry);
+  const updatedList = doc.getIn(["projects", key]);
+  if (updatedList instanceof YAMLSeq) {
+    updatedList.add(entry);
   } else {
     const seq = doc.createNode([entry]);
     seq.flow = false;

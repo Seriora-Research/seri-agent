@@ -5219,9 +5219,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const { loadGrants, permissionsPath, projectKey } = await import(
         "../../src/permissions/store"
       );
-      // Hand-written, not rememberGrant after a global seed: rememberGrant's own dedup
-      // (toolsInDoc) checks the tool's presence across BOTH tiers before writing, so seeding
-      // global first would make it silently refuse to also add the project entry.
+      // Hand-written, not rememberGrant after a global seed: rememberGrant's own dedup checks the
+      // tool's presence across BOTH tiers before writing, so seeding global first would make it
+      // silently refuse to also add the project entry.
       mkdirSync(permissionsDir, { recursive: true });
       writeFileSync(
         permissionsPath(permissionsDir),
