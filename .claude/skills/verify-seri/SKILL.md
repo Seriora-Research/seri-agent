@@ -19,7 +19,7 @@ bun install            # once per checkout; also vendors ripgrep via postinstall
 
 - **TUI session** (the primary drive; needs a real PTY — node-pty/ConPTY on Windows):
   `node .claude/skills/verify-seri/scripts/drive-tui.mjs <evidence>\tui.txt verify-<run-id> <step...>`
-  **node, never bun** — bun as the node-pty host on this machine kills every ConPTY child instantly (exit -1073741510 after only `?9001h?1049h`-style enables); under node the same drive works, including from agent tool-shells. Set `SERI_DISABLE_MODELS_FETCH=1` for the drive (see Gotchas in the TUI feature file: the live models.dev fetch stalled a fresh profile's first turn past 90s here; the flag switches to the bundled catalog, which the app announces with `⚠ could not reach models.dev; using the bundled model catalog`). From Git Bash also set `MSYS_NO_PATHCONV=1`, or `type=/exit` reaches the app as `C:/Program Files/Git/exit`. Ready when the transcript shows the splash (`SERI` wordmark and, on an unauthenticated profile, the login picker with footer `↑/↓ move · Enter select · Esc continue`).
+  **node, never bun** — bun as the node-pty host on this machine kills every ConPTY child instantly (exit -1073741510 after only `?9001h?1049h`-style enables); under node the same drive works, including from agent tool-shells. Do not set `SERI_DISABLE_MODELS_FETCH=1`; drive the same catalog fetch a user gets. From Git Bash also set `MSYS_NO_PATHCONV=1`, or `type=/exit` reaches the app as `C:/Program Files/Git/exit`. Ready when the transcript shows the splash (`SERI` wordmark and, on an unauthenticated profile, the login picker with footer `↑/↓ move · Enter select · Esc continue`).
 - **Subcommands** (the exception — plain processes, piped stdio):
   `bun apps/cli/src/cli.ts --profile verify-<run-id> config list` etc., run from the repo root, stdout + `$LASTEXITCODE` captured directly.
 
@@ -38,9 +38,8 @@ Healthy prints exactly one line, `selftest ok: ripgrep <version>` (CLI loads, wo
 **TUI.** `scripts/drive-tui.mjs` (invocation under Launch) spawns `seri` under ConPTY and executes steps in order: `wait=TEXT` (20s deadline), `type=TEXT`, `key=esc|enter|ctrl-c|ctrl-d|shift-tab`, `sleep=MS`. Extra CLI args (`--continue`, `--resume <id>`) go between the profile and a `::` separator: `drive-tui.mjs <out> <profile> --continue :: <step...>`. It always writes the full decoded transcript to its first argument, exits 0 only if every `wait=` matched, and kills what it spawned (matched by the unique profile name on the command line — one more reason the profile must be unique). A smoke drive:
 
 ```powershell
-$env:SERI_DISABLE_MODELS_FETCH = "1"
 node .claude/skills/verify-seri/scripts/drive-tui.mjs <evidence>\tui.txt verify-<run-id> `
-  "wait=Esc continue" sleep=400 key=esc sleep=600 `
+  "wait=Esc continue" sleep=400 key=esc "wait=created.@30000" sleep=600 `
   type=/exit sleep=400 key=enter sleep=800
 ```
 
@@ -48,14 +47,14 @@ And a real model turn (proven live: `done · 6324 ↑, 34 ↓` on `openai/gpt-os
 
 ```powershell
 node .claude/skills/verify-seri/scripts/drive-tui.mjs <evidence>\tui.txt verify-<run-id> `
-  "wait=Esc continue" sleep=400 key=esc sleep=600 `
+  "wait=Esc continue" sleep=400 key=esc "wait=created.@30000" sleep=600 `
   "type=Reply with exactly the word SERI-TUI-PROOF" "wait=exactly the word" key=enter `
   "wait=done ·@90000" key=ctrl-d sleep=800
 ```
 
 The verified drive pattern (each piece below was learned from a live failure — don't simplify it away):
 
-- **Splash dismissal, always first:** `"wait=Esc continue" sleep=400 key=esc sleep=600`. A fresh profile's splash is a login picker (`Log in / Sign up / Continue without logging in`); a bare Enter on it SELECTS "Log in" and starts a real WorkOS device flow (it can open a browser) — Esc is "continue without logging in". Never use the footer mode label as dismissal proof: it renders behind the splash too.
+- **Splash dismissal, always first:** `"wait=Esc continue" sleep=400 key=esc "wait=created.@30000" sleep=600`. The `created.` wait is load-bearing, not decoration: dismissing the splash does not mean the session exists, and until it does the app shows a `starting session…` placeholder that accepts no input. Typing into that window is what made issue #211 look like a hang. A fresh profile's splash is a login picker (`Log in / Sign up / Continue without logging in`); a bare Enter on it SELECTS "Log in" and starts a real WorkOS device flow (it can open a browser) — Esc is "continue without logging in". Never use the footer mode label as dismissal proof: it renders behind the splash too.
 - **Submit a task:** `"type=<task>" "wait=<inner phrase of the task>" key=enter` — the echo-wait proves the input box had focus. The wait phrase must be a mid-text fragment of a longer task; short strings (and every slash command) get split by cursor redraw in the byte stream and never match.
 - **Slash commands:** `type=/exit sleep=400 key=enter` — type, settle, submit; no echo-wait.
 - **Turn completion:** `"wait=done ·@90000"` — a real turn needs the longer deadline (`@MS` suffix).

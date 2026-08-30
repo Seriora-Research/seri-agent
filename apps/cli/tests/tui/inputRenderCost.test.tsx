@@ -93,6 +93,9 @@ async function measureBackspaceCost(options: {
       route={route()}
       catalog={undefined}
       config={{}}
+      // App renders the input box only when a submitted line has somewhere to go; this measures
+      // that box, so the mount has to be a live-session one.
+      onSubmit={() => {}}
       connectDispatch={(d) => {
         dispatch = d;
       }}

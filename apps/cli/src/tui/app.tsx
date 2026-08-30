@@ -633,6 +633,22 @@ export function App({
           onSignup={onSplashSignup}
           onContinue={onSplashContinue}
         />
+      ) : onSubmit === undefined ? (
+        // Nothing is wired behind this mount yet. The welcome splash and the guided setup
+        // (routes/setup/) render this same component before a session exists, and both keep it on
+        // screen for as long as the startup work behind them takes — the models.dev fetch on the
+        // way to `prepareSession` alone can hold it for seconds. Rendering InputBox here swallows a
+        // task typed in that window: it echoes the text and then drops it on Enter, because there is
+        // nowhere to send it. Same top/bottom rule as InputBox so the mode row below does not jump
+        // when the real session mounts.
+        <box
+          flexDirection="row"
+          borderStyle="single"
+          borderColor={theme.muted}
+          border={["top", "bottom"]}
+        >
+          <text fg={theme.muted}>starting session…</text>
+        </box>
       ) : (
         <InputBox
           onSubmit={onSubmit}

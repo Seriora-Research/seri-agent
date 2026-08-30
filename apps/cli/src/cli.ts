@@ -96,7 +96,7 @@ import { type LoadedMemory, loadMemory } from "./memory/store";
 import { effectiveTools, loadGrants, PERSISTABLE_TOOLS, rememberGrant } from "./permissions/store";
 import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
-import { getModelCatalog } from "./provider/catalog";
+import { getModelCatalog, prewarmModelCatalog } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import type { getGatewayModel as getGatewayModelReal } from "./provider/gateway";
@@ -2555,6 +2555,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   const exec = verbEscaped ? undefined : await handleExecCommand(positionals, deps);
   if (exec !== undefined) return exec;
+
+  // Below every early-return above it, so `--help`, `--version` and `--selftest` never start a fetch
+  // they have no use for, and above the splash, so the fetch runs while the user is reading it.
+  // This is the only reason the pre-session window (App's own `starting session…` state) is short
+  // in practice.
+  prewarmModelCatalog();
 
   if (isTTY) {
     // Wrapped, unlike the rest of this function's own `return N` early exits: `run()` has never had
