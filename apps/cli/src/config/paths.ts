@@ -21,6 +21,7 @@ export const AGENTS_DIRNAME = "agents";
 export const SKILLS_DIRNAME = "skills";
 export const RULES_DIRNAME = "rules";
 export const MCP_DIRNAME = "mcp";
+export const HOOKS_DIRNAME = "hooks";
 export const MEMORIES_DIRNAME = "memories";
 export const PENDING_DIRNAME = "pending";
 export const TRAJECTORIES_DIRNAME = "trajectories";
@@ -60,6 +61,7 @@ export function getReservedProfileNames(): ReadonlySet<string> {
     SKILLS_DIRNAME,
     RULES_DIRNAME,
     MCP_DIRNAME,
+    HOOKS_DIRNAME,
     MEMORIES_DIRNAME,
     PENDING_DIRNAME,
     TRAJECTORIES_DIRNAME,
@@ -186,6 +188,16 @@ export function getRulesDir(configDir: string = getConfigDir()): string {
 // agents, skills and rules.
 export function getMcpDir(configDir: string = getConfigDir()): string {
   return join(configDir, MCP_DIRNAME);
+}
+
+// Global-scope hook manifest and scripts, under the profile root on the same rule as agents,
+// skills, rules and MCP. The rule earns more here than it does for the others: this is the one
+// extension scope trusted by CONSTRUCTION rather than by a recorded grant, on the grounds that
+// nothing reaches a user's own profile root by cloning a repository — so a named profile reaching
+// the default root's hooks would be a way to execute scripts that profile never adopted, not
+// merely a way to read the wrong config.
+export function getHooksDir(configDir: string = getConfigDir()): string {
+  return join(configDir, HOOKS_DIRNAME);
 }
 
 export function getPendingDir(configDir: string = getConfigDir()): string {
