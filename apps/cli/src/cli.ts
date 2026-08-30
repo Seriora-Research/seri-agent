@@ -86,8 +86,14 @@ import {
   type LoopEvent,
   type runLoop as runLoopReal,
 } from "./loop/loop";
-import { fetchCatalog } from "./mcp/client";
-import { decideMcpCommand, type McpRegistryChange, mcpPanelRows } from "./mcp/commands";
+import { createSessionDial, fetchCatalog, isAuthRequired } from "./mcp/client";
+import {
+  decideMcpCommand,
+  type McpRegistryChange,
+  mcpLoginLine,
+  mcpPanelRows,
+} from "./mcp/commands";
+import { loginMcpServer, type McpLoginResult } from "./mcp/login";
 import { writeCatalogCache } from "./mcp/registry";
 import type { McpCatalog } from "./mcp/types";
 import {
@@ -1611,10 +1617,39 @@ async function runTui(
     const entry = prepared.mcp.get(name);
     if (entry === undefined) return { ok: false, message: `No MCP server named "${name}".` };
     try {
-      return { ok: true, catalog: await fetchCatalog(entry.spec) };
+      // createSessionDial, not the bare default: a preview of an already-authenticated server has
+      // to spend its stored token. Still its OWN connection and never the pool — see this block's
+      // own comment above; what the two share is the auth provider, not the socket.
+      const dial = createSessionDial(configDir);
+      return { ok: true, catalog: await fetchCatalog(entry.spec, undefined, dial) };
     } catch (err) {
+      if (isAuthRequired(err)) {
+        return { ok: false, message: `"${name}" needs authentication — press a to log in.` };
+      }
       return { ok: false, message: messageOf(err) };
     }
+  }
+
+  // One controller per attempt, the shape createAuthHandlers uses (tui/state/handlers.ts): without
+  // it a cancelled login would keep its loopback listener bound and its five-minute timer running
+  // with nothing left watching for the result.
+  let mcpAuthController: AbortController | undefined;
+
+  async function onMcpAuth(name: string): Promise<McpLoginResult> {
+    const entry = prepared.mcp.get(name);
+    if (entry === undefined) {
+      return { status: "error", message: `No MCP server named "${name}".` };
+    }
+    const controller = new AbortController();
+    mcpAuthController = controller;
+    return loginMcpServer(entry.spec, configDir, {
+      signal: controller.signal,
+      onMessage: (line) => dispatch({ type: "transcript-append", line }),
+    });
+  }
+
+  function onMcpAuthCancel(): void {
+    mcpAuthController?.abort();
   }
 
   // The one place a McpRegistryChange (mcp/commands.ts) is applied. `prepared.mcp` is what both
@@ -2284,11 +2319,19 @@ async function runTui(
         worktree: checkpointTarget(liveState.session, dirs(ctx)).worktree,
         clients: prepared.mcpClients,
       };
-      const [sub] = args;
+      const [sub, name] = args;
       if (sub === undefined || sub === "list") {
         dispatch({
           type: "mcp-requested",
           rows: mcpPanelRows(prepared.mcp, prepared.mcpClients, deps.worktree),
+        });
+        return;
+      }
+      // Branched before decideMcpCommand, which is synchronous and pure: a login opens a browser
+      // and then waits minutes for a person, which is not a shape that function can have.
+      if (sub === "auth" && name !== undefined) {
+        void onMcpAuth(name).then((result) => {
+          dispatch({ type: "transcript-append", line: mcpLoginLine(name, result) });
         });
         return;
       }
@@ -2660,6 +2703,8 @@ async function runTui(
       onMcpConnect,
       onMcpTrust,
       onMcpRemove,
+      onMcpAuth,
+      onMcpAuthCancel,
       getCompletionSources: buildCompletionSources,
       // No auth-offer recompute here — redundant: every path that reaches this (Escape on
       // "starting"/"device", Enter/Esc on a login-failure result, or

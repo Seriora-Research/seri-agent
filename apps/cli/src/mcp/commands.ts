@@ -5,6 +5,7 @@ import type { ExtensionSource } from "../extensions/discovery";
 import { clearMcpServerAuth } from "./authStore";
 import type { McpClients, McpServerStatus } from "./client";
 import { mcpServerStatus } from "./client";
+import type { McpLoginResult } from "./login";
 import {
   addServerToFile,
   deleteCatalogCache,
@@ -87,6 +88,20 @@ export function mcpStatusWord(status: McpServerStatus): string {
   if (status.state === "needs-auth") return "needs authentication";
   if (status.state === "failed") return "unreachable";
   return "idle, connects on first use";
+}
+
+// The one sentence a finished login is reported with, for exactly the reason mcpStatusWord above
+// exists: the /mcp panel's error line and `/mcp auth`'s transcript line are two surfaces reporting
+// one outcome, and they must not word it two ways. `timeout` and `aborted` carry no message of
+// their own, so this is also the only place their words live.
+export function mcpLoginLine(name: string, result: McpLoginResult): string {
+  if (result.status === "success") {
+    return `Authenticated "${name}". Connect it from /mcp to preview and trust its tools.`;
+  }
+  if (result.status === "denied") return `Authenticating "${name}" was declined: ${result.message}`;
+  if (result.status === "timeout") return `Authenticating "${name}" timed out.`;
+  if (result.status === "aborted") return `Authenticating "${name}" was cancelled.`;
+  return `Could not authenticate "${name}": ${result.message}`;
 }
 
 /**

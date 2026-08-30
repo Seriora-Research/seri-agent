@@ -202,6 +202,93 @@ describe("McpPanel", () => {
     expect(setup.captureCharFrame()).toContain("MCP servers");
   });
 
+  test("a authenticates the highlighted server, showing static busy text while it waits", async () => {
+    let authed: string | undefined;
+    const setup = await createTestRenderer({ width: 100, height: 14 });
+    await mount(
+      setup,
+      <McpPanel
+        rows={rows}
+        onAuth={(name) => {
+          authed = name;
+          return new Promise(() => {});
+        }}
+      />,
+    );
+
+    expect(setup.captureCharFrame()).toContain("a authenticate");
+    setup.mockInput.typeText("a");
+    await settle(setup);
+
+    expect(authed).toBe("exa");
+    expect(setup.captureCharFrame()).toContain("Waiting for your browser");
+  });
+
+  // Without this the user would authenticate and then have to press Enter on the same row to see
+  // anything, with no sign that the login worked.
+  test("a successful login falls straight into the trust preview", async () => {
+    const setup = await createTestRenderer({ width: 100, height: 14 });
+    await mount(
+      setup,
+      <McpPanel
+        rows={rows}
+        onAuth={async () => ({ status: "success" })}
+        onConnect={async (name) => ({ ok: true, catalog: catalog(name) })}
+      />,
+    );
+
+    setup.mockInput.typeText("a");
+    await settle(setup);
+    await settle(setup);
+    await settle(setup);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("web_search");
+    expect(frame).toContain("Trust");
+  });
+
+  test("a login that did not succeed returns to list mode with the reason", async () => {
+    const setup = await createTestRenderer({ width: 100, height: 14 });
+    await mount(setup, <McpPanel rows={rows} onAuth={async () => ({ status: "timeout" })} />);
+
+    setup.mockInput.typeText("a");
+    await settle(setup);
+    await settle(setup);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("timed out");
+    expect(frame).toContain("MCP servers");
+  });
+
+  test("Esc while authenticating cancels the login rather than closing the panel", async () => {
+    let cancelled = false;
+    let closed = false;
+    const setup = await createTestRenderer({ width: 100, height: 14 });
+    await mount(
+      setup,
+      <McpPanel
+        rows={rows}
+        onAuth={() => new Promise(() => {})}
+        onAuthCancel={() => {
+          cancelled = true;
+        }}
+        onMcpClose={() => {
+          closed = true;
+        }}
+      />,
+    );
+
+    setup.mockInput.typeText("a");
+    await settle(setup);
+    setup.mockInput.pressEscape();
+    // See the Esc test above: a bare ESC byte waits out the parser's own disambiguation timeout.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await settle(setup);
+
+    expect(cancelled).toBe(true);
+    expect(closed).toBe(false);
+  });
+
   test("the preview's n cancels without trusting", async () => {
     let trusted: McpCatalog | undefined;
     const setup = await createTestRenderer({ width: 100, height: 14 });

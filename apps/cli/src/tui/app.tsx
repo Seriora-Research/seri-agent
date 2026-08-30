@@ -55,6 +55,7 @@ import { isShiftTabModeCycle } from "../cli/commandCatalog";
 import { truncateArgsDisplay } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
+import type { McpLoginResult } from "../mcp/login";
 import type { McpCatalog } from "../mcp/types";
 import { appliedReasoningEffort, resolveReasoningEffort } from "../provider/reasoning";
 import type { ResolvedRoute } from "../provider/routing";
@@ -206,6 +207,8 @@ export type AppProps = {
   ) => Promise<{ ok: true; catalog: McpCatalog } | { ok: false; message: string }>;
   onMcpTrust?: (catalog: McpCatalog) => void;
   onMcpRemove?: (name: string) => void;
+  onMcpAuth?: (name: string) => Promise<McpLoginResult>;
+  onMcpAuthCancel?: () => void;
   // Every completion source the input box may open (util/completion.ts). A function, not an array:
   // runTui is the only place the command catalog, the agent registry and the skill registry are all
   // in scope, and `/clear` reloads the latter two mid-process — so this is called at render time
@@ -292,6 +295,8 @@ export function App({
   onMcpConnect,
   onMcpTrust,
   onMcpRemove,
+  onMcpAuth,
+  onMcpAuthCancel,
   getCompletionSources,
   onSplashLogin,
   onSplashSignup,
@@ -663,6 +668,8 @@ export function App({
           onConnect={onMcpConnect}
           onTrust={onMcpTrust}
           onRemove={onMcpRemove}
+          onAuth={onMcpAuth}
+          onAuthCancel={onMcpAuthCancel}
           onMcpClose={() => dispatch({ type: "mcp-closed" })}
         />
       ) : state.pendingEffort !== undefined ? (
