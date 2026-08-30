@@ -1214,6 +1214,10 @@ async function runTui(
   deps: CliDeps,
   maxTurns: number | undefined,
   skipPermissions: boolean,
+  // A task typed during the pre-session window (App's own `onPreSessionSubmit` branch), carried
+  // here by `run()`. Submitted through `onSubmit` rather than `runTurn` directly, so a queued
+  // `/model` or `/mode` behaves exactly as it would typed a second later.
+  queuedTask?: string,
 ): Promise<DriveLoopResult> {
   // `root` is awaited here, at the top of this function, instead of at a synchronous `render()`
   // call: `createCliRenderer` is async (`@opentui/core`'s own API, unlike Ink's synchronous
@@ -2714,6 +2718,17 @@ async function runTui(
         // content the earlier session left unanswered, not something submitted just now.
         if (shouldRunTurn) {
           currentTurn = runTurn(prepared.session, start === "task" ? ctx.taskText : undefined);
+          // Both a task on argv and one typed while the session was starting. The argv task owns
+          // this turn, so say the queued one was dropped rather than running two at once or
+          // discarding it silently.
+          if (queuedTask !== undefined) {
+            dispatch({
+              type: "command-error",
+              message: `dropped the message typed while starting, because this run already had a task: ${queuedTask}`,
+            });
+          }
+        } else if (queuedTask !== undefined) {
+          void onSubmit(queuedTask);
         }
       },
     }),
@@ -2805,6 +2820,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // in practice.
   prewarmModelCatalog();
 
+  // The one task the user may type before a session exists. Declared out here, not inside the
+  // splash block below: that block's own mount stays on screen until runTui replaces it, so the
+  // value can land after `runWelcomeSplash` has already resolved, and runTui's call site — past
+  // `prepareSession` — is what finally reads it.
+  let queuedTask: string | undefined;
+
   if (isTTY) {
     // Wrapped, unlike the rest of this function's own `return N` early exits: `run()` has never had
     // a top-level `.catch` (its only caller, `import.meta.main`, does
@@ -2820,7 +2841,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // "unhandledRejection", ...)` pair (registered once `getTuiRenderer` first creates the renderer)
     // is the backstop for one that isn't, not a replacement for this wrapper.
     try {
-      await runWelcomeSplash(ctx.configDir, deps);
+      await runWelcomeSplash(ctx.configDir, deps, (task) => {
+        queuedTask = task;
+      });
       const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
       if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
       // getModelCatalog() deliberately NOT awaited here: awaiting it before runGuidedSetup would
@@ -2870,7 +2893,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // reason `prepareSession`'s own catches flush it: this IS the only other path that can end the
     // run before runTui's own `connectDispatch` ever gets a chance to.
     try {
-      runResult = await runTui(prepared, ctx, deps, maxTurns, skipPermissions);
+      runResult = await runTui(prepared, ctx, deps, maxTurns, skipPermissions, queuedTask);
     } catch (err) {
       return fatalDuringTui(err, prepared.preMountMessages);
     }

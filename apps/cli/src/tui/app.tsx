@@ -222,6 +222,11 @@ export type AppProps = {
   // splash — `runWelcomeSplash` computes it from config.json and package.json instead, and passes
   // it through here rather than this component reaching for either itself.
   splashBanner?: SplashBannerInfo;
+  // Takes the first task typed before a session exists. `runWelcomeSplash` passes this; the value
+  // reaches `runTui` through `run()` (cli.ts), not through this component's own state, because the
+  // renderer unmounts each phase's tree before rendering the next (runtime/renderer.ts) — nothing
+  // in a reducer survives the hop from this mount to the session's.
+  onPreSessionSubmit?: (task: string) => void;
   // Shift+Tab's own resolution — a prop, not a local dispatch into this component's own reducer:
   // `getPermissionMode()` (cli.ts) reads `liveState.session.permissionMode`, and `liveState` is
   // only ever advanced by cli.ts's own dispatch funnel. A cycle dispatched from inside this
@@ -303,6 +308,7 @@ export function App({
   onSplashSignup,
   onSplashContinue,
   splashBanner,
+  onPreSessionSubmit,
   onCycleMode,
   skipPermissions,
 }: AppProps) {
@@ -327,6 +333,10 @@ export function App({
   // above/below it already consume the whole budget — Yoga can genuinely measure it down to 0,
   // which a `<scrollbox height={0}>` would render as nothing rather than "not enough room."
   const [measuredRows, setMeasuredRows] = useState<number | null>(null);
+  // The one task accepted before a session exists (the `onPreSessionSubmit` branch below).
+  // Local, not reducer state: it never outlives this mount — `run()` holds the value that
+  // actually reaches the session, and this only decides whether the box is still offered.
+  const [queued, setQueued] = useState<string | undefined>(undefined);
   const transcriptHeight = Math.max(1, measuredRows ?? rows - FALLBACK_CHROME_ROWS);
   // TurnStatus (below) renders as its own fixed row OUTSIDE the scrollbox, not as one of its
   // scrollable children, so it stays visible regardless of scroll position (this file's own header
@@ -716,6 +726,37 @@ export function App({
           onSignup={onSplashSignup}
           onContinue={onSplashContinue}
         />
+      ) : onSubmit === undefined &&
+        onPreSessionSubmit !== undefined &&
+        state.splashDone &&
+        queued === undefined ? (
+        // The pre-session window is not dead time — the models.dev fetch on the way to
+        // `prepareSession` can hold it for seconds, and every harness this was modelled on takes
+        // input across it. The box is live and the note says where a submitted line goes.
+        <>
+          <text fg={theme.muted}>starting session… your message sends when it is ready</text>
+          <InputBox
+            onSubmit={(value) => {
+              const task = value.trim();
+              if (task.length === 0) return;
+              setQueued(task);
+              dispatch({ type: "transcript-append", role: "user", line: value });
+              onPreSessionSubmit(task);
+            }}
+            onQuit={onQuit}
+          />
+        </>
+      ) : onSubmit === undefined && state.splashDone && queued !== undefined ? (
+        // One task, not a queue: a second line typed here would silently replace the first, since
+        // only one value survives to the session mount. The box goes away instead of lying about it.
+        <box
+          flexDirection="row"
+          borderStyle="single"
+          borderColor={theme.muted}
+          border={["top", "bottom"]}
+        >
+          <text fg={theme.muted}>queued — sending when the session is ready</text>
+        </box>
       ) : onSubmit === undefined ? (
         // Nothing is wired behind this mount yet. The welcome splash and the guided setup
         // (routes/setup/) render this same component before a session exists, and both keep it on
