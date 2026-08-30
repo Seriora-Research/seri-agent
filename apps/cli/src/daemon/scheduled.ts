@@ -36,9 +36,9 @@ export function createRunScheduled(opts: {
     const session: RunSession = {
       ...input.session,
       messages: input.session.messages as ModelMessage[],
-      // No skills, deliberately, on the same rule the `agents: builtinRegistry()` line below
+      // No skills and no rules, deliberately, on the same rule the `agents: builtinRegistry()` line below
       // states: an unattended run gets a strictly smaller surface than an attended one, and a
-      // skill file a human never saw must not steer it.
+      // skill or rule file a human never saw must not steer it.
       systemPrompt: buildSystemPrompt({
         agentsContent: loadAgentsFileFn(input.session.cwd),
         skills: [],
