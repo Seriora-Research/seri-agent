@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { createMcpClients, type McpServerStatus } from "../../src/mcp/client";
 import {
   decideMcpCommand,
@@ -100,16 +100,21 @@ describe("mcpCommandAccepts", () => {
 
 describe("mcpPanelRows", () => {
   test("groups by scope with a header per group, project first", () => {
+    const worktree = "/project";
     const registry: McpRegistry = new Map([
-      ["notion", entry({ name: "notion", source: "user", filePath: "profile/mcp/servers.yaml" })],
+      ["notion", entry({ name: "notion", source: "user", filePath: "/profile/mcp/servers.yaml" })],
       [
         "exa",
-        entry({ name: "exa", source: "project", filePath: "project/.seri/mcp/servers.yaml" }),
+        entry({ name: "exa", source: "project", filePath: "/project/.seri/mcp/servers.yaml" }),
       ],
     ]);
-    const rows = mcpPanelRows(registry, createMcpClients());
+    const rows = mcpPanelRows(registry, createMcpClients(), worktree);
     expect(rows).toEqual([
-      { kind: "header", scope: "project", sourceFile: "project/.seri/mcp/servers.yaml" },
+      {
+        kind: "header",
+        scope: "project",
+        sourceFile: relative(worktree, "/project/.seri/mcp/servers.yaml"),
+      },
       {
         kind: "server",
         name: "exa",
@@ -117,7 +122,7 @@ describe("mcpPanelRows", () => {
         status: { state: "idle" },
         toolCount: undefined,
       },
-      { kind: "header", scope: "user", sourceFile: "profile/mcp/servers.yaml" },
+      { kind: "header", scope: "user", sourceFile: "/profile/mcp/servers.yaml" },
       {
         kind: "server",
         name: "notion",
@@ -128,9 +133,36 @@ describe("mcpPanelRows", () => {
     ]);
   });
 
+  // The precedent this mirrors: skillsPanelRows' own `where` field (src/skills/commands.ts:89) —
+  // a project file is inside the tree the person is standing in, so its short relative form is
+  // more useful than the full path; a profile-root file lives genuinely elsewhere and only its
+  // absolute path helps. `makeTree`'s own fixture (this file's header comment) puts the worktree
+  // and the profile root under two SIBLING directories, so the two forms are visibly different —
+  // not, say, both collapsing to the same string by coincidence.
+  test("a project-scope header renders worktree-relative, a user-scope header renders absolute", () => {
+    const { registry, worktree } = load({
+      "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
+      "profile/mcp/servers.yaml": "servers:\n  notion:\n    url: https://mcp.notion.com/mcp\n",
+    });
+    const projectEntry = registry.get("exa");
+    const userEntry = registry.get("notion");
+    if (projectEntry === undefined || userEntry === undefined) {
+      throw new Error("fixture did not load both servers");
+    }
+
+    const rows = mcpPanelRows(registry, createMcpClients(), worktree);
+    const headers = rows.filter((r) => r.kind === "header");
+    const projectHeader = headers.find((h) => h.scope === "project");
+    const userHeader = headers.find((h) => h.scope === "user");
+
+    expect(projectHeader?.sourceFile).toBe(relative(worktree, projectEntry.spec.filePath));
+    expect(projectHeader?.sourceFile).not.toBe(projectEntry.spec.filePath);
+    expect(userHeader?.sourceFile).toBe(userEntry.spec.filePath);
+  });
+
   test("a server never dialled reports idle with an undefined tool count", () => {
     const registry: McpRegistry = new Map([["exa", entry()]]);
-    const rows = mcpPanelRows(registry, createMcpClients());
+    const rows = mcpPanelRows(registry, createMcpClients(), "w");
     const row = rows.find((r) => r.kind === "server");
     expect(row).toEqual({
       kind: "server",
@@ -147,7 +179,7 @@ describe("mcpPanelRows", () => {
     const clients = createMcpClients();
     clients.status.set("exa", { state: "connected", toolCount: 1 });
 
-    const rows = mcpPanelRows(registry, clients);
+    const rows = mcpPanelRows(registry, clients, "w");
     const row = rows.find((r) => r.kind === "server");
     expect(row).toEqual({
       kind: "server",
@@ -166,7 +198,7 @@ describe("mcpPanelRows", () => {
     const { registry, worktree } = load({
       "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
     });
-    const before = mcpPanelRows(registry, createMcpClients());
+    const before = mcpPanelRows(registry, createMcpClients(), worktree);
 
     const filePath = join(worktree, "..", "..", ".seri", "mcp", "servers.yaml");
     writeFileSync(
@@ -174,7 +206,7 @@ describe("mcpPanelRows", () => {
       "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n  vercel:\n    url: https://mcp.vercel.com/mcp\n",
     );
 
-    const after = mcpPanelRows(registry, createMcpClients());
+    const after = mcpPanelRows(registry, createMcpClients(), worktree);
     expect(after).toEqual(before);
     expect(after.some((r) => r.kind === "server" && r.name === "vercel")).toBe(false);
   });
@@ -271,7 +303,7 @@ describe("decideMcpCommand: list", () => {
         worktree: "w",
         clients,
       });
-      const panelRow = mcpPanelRows(registry, clients).find((r) => r.kind === "server");
+      const panelRow = mcpPanelRows(registry, clients, "w").find((r) => r.kind === "server");
       expect(panelRow?.kind).toBe("server");
 
       const word = mcpStatusWord(status);

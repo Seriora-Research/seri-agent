@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { getMcpDir } from "../config/paths";
 import { messageOf } from "../errors";
 import type { ExtensionSource } from "../extensions/discovery";
@@ -80,13 +80,25 @@ export function mcpStatusWord(status: McpServerStatus): string {
  * A server with no cached catalog reports `toolCount: undefined` and `status: {state:"idle"}` —
  * the visible consequence of never dialling at session start (research-mcp.md §2): idle is a real
  * third state, not "broken" collapsed down to two.
+ *
+ * A header's `sourceFile` is worktree-relative for a project-scope file and absolute for a
+ * user-scope one — the same rule skillsPanelRows' own `where` field states (skills/commands.ts):
+ * a project file is inside the tree the person is standing in, where `.seri/mcp/servers.yaml` is
+ * both shorter and more useful than the full path, while a profile-root file lives genuinely
+ * elsewhere and only its absolute path helps.
  */
-export function mcpPanelRows(registry: McpRegistry, clients: McpClients): readonly McpPanelRow[] {
+export function mcpPanelRows(
+  registry: McpRegistry,
+  clients: McpClients,
+  worktree: string,
+): readonly McpPanelRow[] {
   const rows: McpPanelRow[] = [];
   for (const [scope, entries] of groupOrder([...registry.values()])) {
     const first = entries[0];
     if (first === undefined) continue;
-    rows.push({ kind: "header", scope, sourceFile: first.spec.filePath });
+    const sourceFile =
+      scope === "project" ? relative(worktree, first.spec.filePath) : first.spec.filePath;
+    rows.push({ kind: "header", scope, sourceFile });
     // Sorted by code unit, the same locale-independent order withMcp (mcp/tool.ts) sorts tool
     // names by, so the panel's row order does not depend on the machine it renders on.
     for (const entry of [...entries].sort((a, b) =>

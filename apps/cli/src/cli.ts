@@ -2264,7 +2264,10 @@ async function runTui(
       };
       const [sub] = args;
       if (sub === undefined || sub === "list") {
-        dispatch({ type: "mcp-requested", rows: mcpPanelRows(prepared.mcp, prepared.mcpClients) });
+        dispatch({
+          type: "mcp-requested",
+          rows: mcpPanelRows(prepared.mcp, prepared.mcpClients, deps.worktree),
+        });
         return;
       }
       try {
