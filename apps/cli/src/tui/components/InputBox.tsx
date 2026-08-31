@@ -34,10 +34,12 @@ const EMPTY_SOURCES: readonly CompletionSource[] = [];
 export function InputBox({
   onSubmit,
   onQuit,
+  onEscape,
   prefill,
   onPrefillConsumed,
   onEmptyDown,
   inert,
+  bare,
   completionSources,
 }: {
   // Required, not optional. App renders this component only when a submitted line has somewhere to
@@ -46,6 +48,17 @@ export function InputBox({
   // render a box that echoes a typed task and then drops it on Enter.
   onSubmit: (value: string) => void;
   onQuit?: () => void;
+  // Escape, once the completion popup below has had its say. Handling it HERE rather than in an
+  // App-level useKeyboard is the whole of this feature's Escape precedence, and it is not a style
+  // choice: OpenTUI delivers every keypress to every mounted handler and there is no focus system,
+  // so an App-level handler cannot see whether this box's popup is open — that state is local
+  // (`dismissedFor`/`liveCompletion`) — and would cancel the in-flight turn while the user was
+  // only dismissing a completion list. Every other rule then falls out of gates that already
+  // exist: roster focus and a mid-edit row are covered because `inert` returns before this branch,
+  // and panels and ApprovalBox are covered because they replace this component in App's own render
+  // ternary. The two mounts pass different meanings — the main box cancels the turn, the queue
+  // row's editor abandons the edit.
+  onEscape?: () => void;
   // Leftover text from a combined-chunk terminator in a just-closed ModelPicker (see
   // reducer.ts's `pendingInputPrefill`) — read once, as this mount's own starting value, never
   // re-applied on a later mount because `onPrefillConsumed` clears it in the same tick.
@@ -57,6 +70,12 @@ export function InputBox({
   // When true, printable keys, paste, Enter, and Ctrl-D no-op. Empty Down still calls
   // onEmptyDown so a child view can focus the roster.
   inert?: boolean;
+  // Drops this component's own chrome — the top/bottom bordered box and the "> " marker — leaving
+  // the value and its block cursor. For the mount inside a queue row (components/QueueBlock.tsx),
+  // which supplies its own index prefix and reverse-video band and has one terminal row to do it
+  // in: the bordered form would make an edited row three rows tall and replace its index with a
+  // second "> " prompt. Default false, so no existing call site changes.
+  bare?: boolean;
   // Every source a typed trigger could open (util/completion.ts). Empty by default so the
   // pre-session mounts, which have no registry behind them, render exactly as before.
   completionSources?: readonly CompletionSource[];
@@ -186,6 +205,13 @@ export function InputBox({
       onEmptyDown?.();
       return;
     }
+    // Below the popup block above, which returns on its own Escape, and above everything else: an
+    // Escape that reaches here is one the popup did not want. See `onEscape`'s own comment for why
+    // this branch lives in this component rather than in an App-level handler.
+    if (key.name === "escape") {
+      onEscape?.();
+      return;
+    }
     if (isEnter(key)) {
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current);
@@ -249,6 +275,21 @@ export function InputBox({
       ? undefined
       : resolveCompletion(sources, value);
 
+  // The value and its caret, shared by both forms below so the two can never disagree on how a
+  // block cursor is drawn. INVERSE on a single space is exactly a solid caret (theme/theme.ts's own
+  // note on where that attribute survives), and there is no cursor-position tracking here — the
+  // handlers above only append to and delete from the end — so it always trails the text.
+  const field = (
+    <>
+      <text fg={theme.text}>{bare ? value : `> ${value}`}</text>
+      <text attributes={TextAttributes.INVERSE}> </text>
+    </>
+  );
+
+  if (bare === true) {
+    return <box flexDirection="row">{field}</box>;
+  }
+
   return (
     <>
       {completion !== undefined && (
@@ -265,11 +306,8 @@ export function InputBox({
         border={["top", "bottom"]}
       >
         {/* "> " matches the same marker the transcript's own user-turn echo uses (cli.ts's
-      echoUserInput), so it's visually clear where typed text goes. There is no cursor-position
-      tracking here — the keyboard/paste handlers above only append to/delete from the end of
-      `value` — so a block cursor always trails the text rather than needing its own coordinate. */}
-        <text fg={theme.text}>{`> ${value}`}</text>
-        <text attributes={TextAttributes.INVERSE}> </text>
+      echoUserInput), so it's visually clear where typed text goes. */}
+        {field}
       </box>
     </>
   );

@@ -2189,3 +2189,199 @@ describe("tuiReducer: a /name turn's synthetic dispatch events", () => {
     expect(state.session.messages[0]).toEqual({ role: "user", content: "grade the diff" });
   });
 });
+
+describe("message queue", () => {
+  // Ids are cli.ts's to mint (state/reducer.ts's own note on the field), so the helper stands in
+  // for it. Assertions below read `texts()` rather than `items` directly: what the queue holds is
+  // the messages, and threading a synthetic id through every expectation would bury that.
+  function queued(...items: string[]): TuiState {
+    return items.reduce(
+      (state, text, index) => tuiReducer(state, { type: "queue-appended", id: `q${index}`, text }),
+      initialTuiState(session()),
+    );
+  }
+
+  function texts(state: TuiState): string[] {
+    return state.queue.items.map((item) => item.text);
+  }
+
+  // The invariant MessageQueue's own comment states, asserted as one function so every case below
+  // can end with it instead of restating three expectations each.
+  function expectInvariant(state: TuiState): void {
+    const { items, selected, editing } = state.queue;
+    if (items.length === 0) {
+      expect({ selected, editing }).toEqual({ selected: 0, editing: false });
+      return;
+    }
+    expect(selected).toBeGreaterThanOrEqual(0);
+    expect(selected).toBeLessThan(items.length);
+  }
+
+  test("a fresh session has an empty queue", () => {
+    const state = initialTuiState(session());
+    expect(state.queue).toEqual({ items: [], selected: 0, editing: false });
+  });
+
+  test("the first append selects it, and a later one leaves the selection alone", () => {
+    const one = queued("first");
+    expect(texts(one)).toEqual(["first"]);
+    expect(one.queue.selected).toBe(0);
+
+    const moved = tuiReducer(queued("first", "second"), {
+      type: "queue-selection-moved",
+      delta: 1,
+    });
+    expect(moved.queue.selected).toBe(1);
+
+    const appended = tuiReducer(moved, { type: "queue-appended", id: "q2", text: "third" });
+    expect(appended.queue.selected).toBe(1);
+    expectInvariant(appended);
+  });
+
+  test("appended text is stored exactly as typed, not trimmed", () => {
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "queue-appended",
+      id: "q0",
+      text: "  indented on purpose  ",
+    });
+    expect(texts(state)).toEqual(["  indented on purpose  "]);
+  });
+
+  test("every queued message keeps a distinct id, which is what a row is keyed on", () => {
+    const state = queued("same", "same");
+    const ids = state.queue.items.map((item) => item.id);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  test("selection clamps at both ends instead of wrapping", () => {
+    const top = tuiReducer(queued("a", "b"), { type: "queue-selection-moved", delta: -1 });
+    expect(top.queue.selected).toBe(0);
+
+    const bottom = [1, 1, 1].reduce(
+      (state, delta) => tuiReducer(state, { type: "queue-selection-moved", delta }),
+      queued("a", "b"),
+    );
+    expect(bottom.queue.selected).toBe(1);
+    expectInvariant(bottom);
+  });
+
+  test("selection does not move on an empty queue", () => {
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "queue-selection-moved",
+      delta: 1,
+    });
+    expect(state.queue).toEqual({ items: [], selected: 0, editing: false });
+  });
+
+  // The retargeting bug the three no-ops exist for: without this, the band moves off the row the
+  // editor is mounted on and the commit writes the edited text into a different message.
+  test("selection does not move while a row is being edited", () => {
+    const editing = tuiReducer(queued("a", "b"), { type: "queue-edit-started" });
+    const after = tuiReducer(editing, { type: "queue-selection-moved", delta: 1 });
+    expect(after.queue.selected).toBe(0);
+    expect(after.queue.editing).toBe(true);
+  });
+
+  test("a drop is refused while a row is being edited", () => {
+    const editing = tuiReducer(queued("a", "b"), { type: "queue-edit-started" });
+    const after = tuiReducer(editing, { type: "queue-item-dropped" });
+    expect(texts(after)).toEqual(["a", "b"]);
+    expect(after.queue.editing).toBe(true);
+  });
+
+  test("edit-started is refused on an empty queue and while already editing", () => {
+    const empty = tuiReducer(initialTuiState(session()), { type: "queue-edit-started" });
+    expect(empty.queue.editing).toBe(false);
+
+    const editing = tuiReducer(queued("a"), { type: "queue-edit-started" });
+    expect(tuiReducer(editing, { type: "queue-edit-started" })).toBe(editing);
+  });
+
+  test("a commit replaces the selected row in place and ends the edit", () => {
+    const editing = tuiReducer(
+      tuiReducer(queued("a", "b"), { type: "queue-selection-moved", delta: 1 }),
+      { type: "queue-edit-started" },
+    );
+    const after = tuiReducer(editing, { type: "queue-edit-committed", text: "b, revised" });
+    expect(texts(after)).toEqual(["a", "b, revised"]);
+    expect(after.queue.selected).toBe(1);
+    expect(after.queue.editing).toBe(false);
+  });
+
+  test("an edited row keeps its id, so the editor is not remounted underneath the edit", () => {
+    const editing = tuiReducer(queued("a"), { type: "queue-edit-started" });
+    const before = editing.queue.items[0].id;
+    const after = tuiReducer(editing, { type: "queue-edit-committed", text: "revised" });
+    expect(after.queue.items[0].id).toBe(before);
+  });
+
+  test("a blank commit keeps the original text and still ends the edit", () => {
+    const editing = tuiReducer(queued("a"), { type: "queue-edit-started" });
+    const after = tuiReducer(editing, { type: "queue-edit-committed", text: "   " });
+    expect(texts(after)).toEqual(["a"]);
+    expect(after.queue.editing).toBe(false);
+  });
+
+  test("a cancelled edit leaves the text untouched", () => {
+    const editing = tuiReducer(queued("a"), { type: "queue-edit-started" });
+    const after = tuiReducer(editing, { type: "queue-edit-cancelled" });
+    expect(texts(after)).toEqual(["a"]);
+    expect(after.queue.editing).toBe(false);
+  });
+
+  test("a drop renumbers the rest and clamps the selection to the new last row", () => {
+    const onLast = [1, 1].reduce(
+      (state, delta) => tuiReducer(state, { type: "queue-selection-moved", delta }),
+      queued("a", "b", "c"),
+    );
+    expect(onLast.queue.selected).toBe(2);
+
+    const after = tuiReducer(onLast, { type: "queue-item-dropped" });
+    expect(texts(after)).toEqual(["a", "b"]);
+    expect(after.queue.selected).toBe(1);
+    expectInvariant(after);
+  });
+
+  test("dropping the last row returns the empty shape rather than a stale selection", () => {
+    const after = tuiReducer(queued("only"), { type: "queue-item-dropped" });
+    expect(after.queue).toEqual({ items: [], selected: 0, editing: false });
+  });
+
+  // `selected - 1` rather than `selected`: every remaining row shifted up by one, so the band has
+  // to follow the message it was on rather than slide onto the next one down.
+  test("taking the head keeps the band on the same message", () => {
+    const onSecond = tuiReducer(queued("a", "b", "c"), {
+      type: "queue-selection-moved",
+      delta: 1,
+    });
+    const after = tuiReducer(onSecond, { type: "queue-head-taken" });
+    expect(texts(after)).toEqual(["b", "c"]);
+    expect(after.queue.selected).toBe(0);
+    expectInvariant(after);
+  });
+
+  test("taking the head while it is selected clamps back to the new head", () => {
+    const after = tuiReducer(queued("a", "b"), { type: "queue-head-taken" });
+    expect(texts(after)).toEqual(["b"]);
+    expect(after.queue.selected).toBe(0);
+  });
+
+  test("taking the only queued message empties the queue", () => {
+    const after = tuiReducer(queued("only"), { type: "queue-head-taken" });
+    expect(after.queue).toEqual({ items: [], selected: 0, editing: false });
+  });
+
+  test("clearing drops every row, including one under edit", () => {
+    const editing = tuiReducer(queued("a", "b"), { type: "queue-edit-started" });
+    expect(tuiReducer(editing, { type: "queue-cleared" }).queue).toEqual({
+      items: [],
+      selected: 0,
+      editing: false,
+    });
+  });
+
+  test("the queue survives a turn ending, which is the whole point of it", () => {
+    const state = tuiReducer(queued("next up"), { type: "turn-ended" });
+    expect(texts(state)).toEqual(["next up"]);
+  });
+});
