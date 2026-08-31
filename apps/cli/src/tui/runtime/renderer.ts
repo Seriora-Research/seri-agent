@@ -9,7 +9,7 @@ import { type CliRenderer, createCliRenderer } from "@opentui/core";
 import { createRoot, type Root } from "@opentui/react";
 import { messageOf } from "../../errors";
 import { deliverSignal, onSignalCleanupLast } from "../../signals";
-import { MAIN_TUI_RENDERER_CONFIG } from "./renderOptions";
+import { applyTuiBackground, MAIN_TUI_RENDERER_CONFIG } from "./renderOptions";
 
 let instance: { renderer: CliRenderer; root: Root } | undefined;
 
@@ -90,11 +90,19 @@ export function unmountBeforeRender(rawRoot: Root): Root {
 
 // Idempotent: three call sites share this instance today (see this file's own header comment),
 // so this stays safe to call more than once (returns the same instance) rather than assuming a
-// single caller.
-export async function getTuiRenderer(): Promise<{ renderer: CliRenderer; root: Root }> {
+// single caller. Only the FIRST call's `configDir` is ever read, since every later one returns the
+// instance already built — safe because all three resolve it from the same `deps.authConfigDir ??
+// getConfigDir()` (cli.ts's `ctx.configDir`, forwarded to `runWelcomeSplash`/`runGuidedSetup`, and
+// recomputed identically in `runTui`), so no caller can disagree with whichever ran first.
+export async function getTuiRenderer(
+  configDir: string,
+): Promise<{ renderer: CliRenderer; root: Root }> {
   if (instance !== undefined) return instance;
   const renderer = await createCliRenderer(MAIN_TUI_RENDERER_CONFIG);
   suppressAlternateScroll();
+  // Before `createRoot`/`root.render` below, so the opted-in ground is on the first painted frame
+  // rather than arriving a frame late.
+  applyTuiBackground(renderer, configDir);
   const root = unmountBeforeRender(createRoot(renderer));
   instance = { renderer, root };
   // Ctrl-C is registered once here, directly on the renderer's own key input, rather than via

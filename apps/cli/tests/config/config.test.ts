@@ -10,6 +10,7 @@ import {
   loadVerifyConfig,
   setConfigValue,
   setConfigValues,
+  tuiBackgroundColor,
 } from "../../src/config/config";
 
 const originalHome = process.env.HOME;
@@ -194,5 +195,26 @@ describe("loadTrajectoryConfig", () => {
     delete process.env.SERI_TRAJECTORY_RETENTION_DAYS;
     process.env.SERI_TRAJECTORY_RETENTION_DAYS = "1e3";
     expect(loadTrajectoryConfig().retentionDays).toBe(1000);
+  });
+});
+
+describe("tuiBackgroundColor", () => {
+  test("returns a #rrggbb value, in either case", () => {
+    expect(tuiBackgroundColor("#141413")).toBe("#141413");
+    expect(tuiBackgroundColor("#AABBCC")).toBe("#AABBCC");
+  });
+
+  // Every one of these means "leave the terminal's own ground alone" — the documented `terminal`
+  // spelling and a typo behave identically on purpose, because this is read while the renderer is
+  // being built and has no way to report an error.
+  test.each([
+    ["the documented off switch", "terminal"],
+    ["empty", ""],
+    ["unset", undefined],
+    ["too short", "#12345"],
+    ["a named color", "red"],
+    ["hex with no #", "141413"],
+  ])("returns undefined for %s", (_label, value) => {
+    expect(tuiBackgroundColor(value)).toBeUndefined();
   });
 });

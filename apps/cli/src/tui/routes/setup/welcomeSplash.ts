@@ -28,7 +28,7 @@ export async function runWelcomeSplash(
   // so a task typed in that window arrives AFTER the await below has already returned.
   onPreSessionSubmit: (task: string) => void,
 ): Promise<void> {
-  const { root } = await getTuiRenderer();
+  const { root } = await getTuiRenderer(configDir);
 
   // Same synchronous-mirror pattern as guidedSetup.ts's own liveState/dispatch — see that file's
   // own comment for why a caller reading state right after a dispatch needs this rather than
