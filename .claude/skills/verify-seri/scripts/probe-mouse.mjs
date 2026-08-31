@@ -8,7 +8,8 @@
 // Steps, executed in order:
 //   wait=TEXT       block until TEXT appears in the decoded output (20s deadline, `@MS` overrides)
 //   type=TEXT       write TEXT to the terminal
-//   key=NAME        esc | enter | ctrl-c | ctrl-d | shift-tab | up | down
+//   key=NAME        esc | enter | ctrl-c | ctrl-d | ctrl-v | shift-tab | pageup | pagedown |
+//                   up | down
 //   sleep=MS        pause MS milliseconds
 //   drag=C1,R1,C2,R2  press at (col,row) C1,R1, move to C2,R2, release — SGR 1006 encoding
 //   click=C,R       press and release at one cell
@@ -37,7 +38,10 @@ const KEYS = {
   enter: "\r",
   "ctrl-c": "\x03",
   "ctrl-d": "\x04",
+  "ctrl-v": "\x16",
   "shift-tab": `${ESC}[Z`,
+  pageup: `${ESC}[5~`,
+  pagedown: `${ESC}[6~`,
   up: `${ESC}[A`,
   down: `${ESC}[B`,
 };
