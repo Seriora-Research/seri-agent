@@ -2196,8 +2196,7 @@ describe("message queue", () => {
   // the messages, and threading a synthetic id through every expectation would bury that.
   function queued(...items: string[]): TuiState {
     return items.reduce(
-      (state, text, index) =>
-        tuiReducer(state, { type: "queue-appended", id: `q${index}`, text }),
+      (state, text, index) => tuiReducer(state, { type: "queue-appended", id: `q${index}`, text }),
       initialTuiState(session()),
     );
   }

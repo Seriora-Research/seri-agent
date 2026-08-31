@@ -305,11 +305,7 @@ const EMPTY_QUEUE: MessageQueue = Object.freeze({
 // The single place MessageQueue's invariant is established. Every queue action routes its result
 // through here rather than clamping for itself, so "an empty list pins selection to 0 and cannot
 // be editing" is one statement instead of eight that have to agree.
-function normalizeQueue(
-  items: QueuedMessage[],
-  selected: number,
-  editing: boolean,
-): MessageQueue {
+function normalizeQueue(items: QueuedMessage[], selected: number, editing: boolean): MessageQueue {
   if (items.length === 0) return EMPTY_QUEUE;
   return { items, selected: Math.min(Math.max(selected, 0), items.length - 1), editing };
 }
