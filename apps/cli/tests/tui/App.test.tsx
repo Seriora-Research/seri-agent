@@ -1409,7 +1409,7 @@ describe("App", () => {
     expect(setup.captureCharFrame()).not.toContain("Running read_file…");
     // The settled group takes the running line's place, and its own call line names the same
     // call — so what has to be gone is the live status, not the tool's name.
-    expect(setup.captureCharFrame()).toContain("→ read_file(a.txt)");
+    expect(setup.captureCharFrame()).toContain("→ Read(a.txt)");
   });
 
   test("session-updated refreshes the mode indicator shown", async () => {
@@ -1548,14 +1548,14 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("→ read_file(a.txt)");
+      expect(frame).toContain("→ Read(a.txt)");
       expect(frame).toContain("Read 1 file");
       expect(frame).not.toContain("Running read_file…");
       expect(frame).not.toContain("(done:");
       // Both rows of the group, not just one: the call line and the result line are separate
       // text nodes now, and a group that paints one of them at prose weight reads as an answer.
       const spans = setup.captureSpans();
-      for (const text of ["→ read_file(a.txt)", "Read 1 file"]) {
+      for (const text of ["→ Read(a.txt)", "Read 1 file"]) {
         const line = spans.lines.find((l) => l.spans.some((s) => s.text.includes(text)));
         const span = line?.spans.find((s) => s.text.includes(text));
         expect(span, `no span found containing ${text}`).toBeDefined();
@@ -1636,7 +1636,7 @@ describe("App", () => {
         },
       });
       await flush(setup);
-      expect(setup.captureCharFrame()).toContain("→ grep(TODO)");
+      expect(setup.captureCharFrame()).toContain("→ Grep(TODO)");
 
       dispatch({
         type: "loop-event",
@@ -1649,8 +1649,8 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("→ grep(TODO)");
-      expect(frame).toContain("→ read_file(a.txt)");
+      expect(frame).toContain("→ Grep(TODO)");
+      expect(frame).toContain("→ Read(a.txt)");
       expect(frame).not.toContain("(done:");
     });
 
@@ -1702,7 +1702,7 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("→ read_file(a.txt)");
+      expect(frame).toContain("→ Read(a.txt)");
       expect(frame).toContain("Read 1 file");
       expect(frame).toContain("compaction failed");
       expect(frame).not.toContain("(done:");

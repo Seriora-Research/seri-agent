@@ -29,10 +29,10 @@ function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionSt
   };
 }
 
-const READ_A = `→ read_file(a.txt)\n${TOOL_INDENT}Read 1 file`;
-const READ_TWO = `→ read_file(a.txt)\n${TOOL_INDENT}Read 2 files`;
-const RAN_ECHO_A = `→ bash(echo a)\n${TOOL_INDENT}Ran 1 shell command`;
-const RAN_TWO = `→ bash(echo a)\n${TOOL_INDENT}Ran 2 shell commands`;
+const READ_A = `→ Read(a.txt)\n${TOOL_INDENT}Read 1 file`;
+const READ_TWO = `→ Read(a.txt)\n${TOOL_INDENT}Read 2 files`;
+const RAN_ECHO_A = `→ Bash(echo a)\n${TOOL_INDENT}Ran 1 shell command`;
+const RAN_TWO = `→ Bash(echo a)\n${TOOL_INDENT}Ran 2 shell commands`;
 
 describe("initialTuiState", () => {
   test("starts with an empty transcript and the session's own permission mode", () => {
@@ -328,7 +328,7 @@ describe("tuiReducer: loop-event", () => {
     expect(state.streaming).toBe("");
     expect(state.status).toBe("Running read_file…");
     expect(state.pendingTool).toEqual({ name: "read_file", args: { path: "a.txt" } });
-    expect(state.transcript.some((e) => e.text.includes("→ read_file"))).toBe(false);
+    expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
   });
 
   test("a tool-result clears the running status without pushing a transcript line", () => {

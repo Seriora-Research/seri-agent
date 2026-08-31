@@ -25,9 +25,8 @@ export type ToolActivityEntry = {
   count: number;
   // The `→ name(arg)` line the group paints above its own result line, taken from the FIRST call
   // in the group: every later call folds into the count, so one representative argument is all
-  // this line can honestly show. The tool keeps the name the model called it by, which is what
-  // cli/output.ts's own `printEvent` already writes on the non-interactive path — the two
-  // surfaces name a call identically.
+  // this line can honestly show. The tool is named by its display label, not by the wire name the
+  // model called it with — see TOOL_LABELS below.
   callLine: string;
   singleLine: string;
   detailLines: string[];
@@ -54,24 +53,35 @@ function groupKey(name: string): string {
 // arguments, so it says something a count cannot ("nothing written", a write verification). Every
 // other tool's settled line is its own arguments, which the `→ name(arg)` line above already
 // shows, so repeating it under itself would be the same fact twice.
+//
+// `display` is what the tool is CALLED on screen. The keys here are wire names the model calls
+// (`read_file`, `write_file`), and a wire name is not a label — it is the identifier the protocol
+// happens to use, and putting it in front of a user leaks an implementation detail as a noun.
 export const TOOL_LABELS: Record<
   string,
-  { verb: string; one: string; many: string; settles?: true }
+  { display: string; verb: string; one: string; many: string; settles?: true }
 > = {
-  read_file: { verb: "Read", one: "file", many: "files" },
-  grep: { verb: "Searched", one: "file", many: "files" },
-  glob: { verb: "Searched", one: "file", many: "files" },
-  bash: { verb: "Ran", one: "shell command", many: "shell commands" },
-  powershell: { verb: "Ran", one: "shell command", many: "shell commands" },
-  write_file: { verb: "Wrote", one: "file", many: "files", settles: true },
-  edit: { verb: "Edited", one: "edit", many: "edits", settles: true },
+  read_file: { display: "Read", verb: "Read", one: "file", many: "files" },
+  grep: { display: "Grep", verb: "Searched", one: "file", many: "files" },
+  glob: { display: "Glob", verb: "Searched", one: "file", many: "files" },
+  bash: { display: "Bash", verb: "Ran", one: "shell command", many: "shell commands" },
+  powershell: { display: "PowerShell", verb: "Ran", one: "shell command", many: "shell commands" },
+  write_file: { display: "Write", verb: "Wrote", one: "file", many: "files", settles: true },
+  edit: { display: "Edit", verb: "Edited", one: "edit", many: "edits", settles: true },
   // The group header for MCP_GROUP_KEY, so aggregateLine reads "Ran MCP 3 tools" instead of
   // falling through to its `${name} ×${count}` unknown-key case. Deliberately no bullet on this
   // line — a reference mock for this feature puts `●` (BULLET, TranscriptList.tsx) on the group
   // header, which is reserved for "this is the assistant's answer"; a tool group is muted and
   // unmarked like every other TOOL_LABELS group, so it never reads as one.
-  mcp: { verb: "Ran MCP", one: "tool", many: "tools" },
+  mcp: { display: "MCP", verb: "Ran MCP", one: "tool", many: "tools" },
 };
+
+// An unmapped name falls through to itself, escaped. That is right for an MCP server's own
+// composed tool name (`mcp_exa_web_search`): the operator chose that string, it is not one of
+// seri's own internals, and there is no table entry that could rename it.
+export function toolDisplayName(name: string): string {
+  return TOOL_LABELS[name]?.display ?? display(name);
+}
 
 const COMMAND_CAP = 60;
 const STDERR_CAP = 80;
@@ -136,13 +146,14 @@ export function summarizeArgs(name: string, args: unknown): string {
   return `${labels.verb} ${primaryArg(name, args)}`.trimEnd();
 }
 
-// A settled group's own header. Mirrors cli/output.ts's `printEvent` tool-call line, so the TUI
-// and the non-interactive path name a call the same way; the argument is the display form rather
-// than that path's raw JSON, because this one has a transcript column budget to live inside.
+// A settled group's own header. Takes cli/output.ts's `printEvent` tool-call shape, `→ name(arg)`,
+// and differs from it twice on purpose: the name is the display label rather than the wire name,
+// and the argument is the display form rather than that path's raw JSON, because this line has a
+// transcript column budget to live inside.
 export function toolCallLine(name: string, args: unknown): string {
   const arg = primaryArg(name, args);
-  const called = display(name);
-  return arg === "" ? `→ ${called}` : `→ ${called}(${arg})`;
+  const label = toolDisplayName(name);
+  return arg === "" ? `→ ${label}` : `→ ${label}(${arg})`;
 }
 
 function grepPaths(result: GrepResult): string[] {
@@ -305,15 +316,25 @@ function mapEntry(
   return next;
 }
 
+// toolResultLine opens with `✓ <wire name> done`, which is what the non-interactive path wants:
+// there the call above it was printed with the wire name too. Here the call line above reads
+// `→ Write(...)`, so the same substitution is made rather than leaking `write_file` under a line
+// that never says it.
+function withDisplayName(line: string, name: string): string {
+  const prefix = `✓ ${name} done`;
+  if (!line.startsWith(prefix)) return line;
+  return `✓ ${toolDisplayName(name)} done${line.slice(prefix.length)}`;
+}
+
 function settledSingleLine(name: string, args: unknown, result: unknown): string {
   if (name === "edit") {
-    return toolResultLine({ type: "tool-result", name, result });
+    return withDisplayName(toolResultLine({ type: "tool-result", name, result }), name);
   }
   if (name === "write_file") {
     // Failed/diagnostics verification is a TREE_BRANCH line, not the inline suffix
     // toolResultLine would add — the main line stays the bare done text.
-    if (writeFileAnomaly(result) !== undefined) return "✓ write_file done";
-    return toolResultLine({ type: "tool-result", name, result });
+    if (writeFileAnomaly(result) !== undefined) return `✓ ${toolDisplayName(name)} done`;
+    return withDisplayName(toolResultLine({ type: "tool-result", name, result }), name);
   }
   return summarizeArgs(name, args);
 }
@@ -408,7 +429,7 @@ export function recordDenial(
       ...entry,
       count: settleCount(entry),
       open: false,
-      callLine: keepFirst(entry.callLine, `→ ${display(name)}`),
+      callLine: keepFirst(entry.callLine, `→ ${toolDisplayName(name)}`),
       singleLine: keepFirst(entry.singleLine, labels?.verb ?? name),
       anomalyLines: appendAnomaly(entry.anomalyLines, anomalyLineForDenial(reason)),
     }),

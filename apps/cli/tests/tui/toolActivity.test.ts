@@ -280,13 +280,13 @@ describe("renderToolActivity", () => {
       {
         name: "read_file",
         count: 1,
-        callLine: "→ read_file(a.txt)",
+        callLine: "→ Read(a.txt)",
         singleLine: "Read a.txt",
         detailLines: [],
         anomalyLines: [],
       },
     ];
-    expect(renderToolActivity(entries)).toEqual([`→ read_file(a.txt)\n${I}Read 1 file`]);
+    expect(renderToolActivity(entries)).toEqual([`→ Read(a.txt)\n${I}Read 1 file`]);
   });
 
   test("the result line counts even a single call, so it never repeats the call line", () => {
@@ -294,13 +294,13 @@ describe("renderToolActivity", () => {
       {
         name: "bash",
         count: 1,
-        callLine: "→ bash(bun test)",
+        callLine: "→ Bash(bun test)",
         singleLine: "Ran bun test",
         detailLines: [],
         anomalyLines: [],
       },
     ];
-    expect(renderToolActivity(entries)).toEqual([`→ bash(bun test)\n${I}Ran 1 shell command`]);
+    expect(renderToolActivity(entries)).toEqual([`→ Bash(bun test)\n${I}Ran 1 shell command`]);
   });
 
   test("detail lines keep TREE_BRANCH and sit at the result line's indent", () => {
@@ -308,14 +308,14 @@ describe("renderToolActivity", () => {
       {
         name: "grep",
         count: 1,
-        callLine: "→ grep(TODO)",
+        callLine: "→ Grep(TODO)",
         singleLine: "Searched TODO",
         detailLines: ["a.ts", "b.ts"],
         anomalyLines: [],
       },
     ];
     expect(renderToolActivity(entries)).toEqual([
-      `→ grep(TODO)\n${I}Searched 1 file\n${I}${TREE_BRANCH}a.ts\n${I}${TREE_BRANCH}b.ts`,
+      `→ Grep(TODO)\n${I}Searched 1 file\n${I}${TREE_BRANCH}a.ts\n${I}${TREE_BRANCH}b.ts`,
     ]);
   });
 
@@ -324,14 +324,14 @@ describe("renderToolActivity", () => {
       {
         name: "bash",
         count: 1,
-        callLine: "→ bash(false)",
+        callLine: "→ Bash(false)",
         singleLine: "Ran false",
         detailLines: [],
         anomalyLines: ["exit 1"],
       },
     ];
     expect(renderToolActivity(entries)).toEqual([
-      `→ bash(false)\n${I}Ran 1 shell command\n${I}${TREE_BRANCH}exit 1`,
+      `→ Bash(false)\n${I}Ran 1 shell command\n${I}${TREE_BRANCH}exit 1`,
     ]);
   });
 
@@ -340,13 +340,13 @@ describe("renderToolActivity", () => {
       {
         name: "bash",
         count: 2,
-        callLine: "→ bash(true)",
+        callLine: "→ Bash(true)",
         singleLine: "Ran true",
         detailLines: [],
         anomalyLines: [],
       },
     ];
-    expect(renderToolActivity(entries)).toEqual([`→ bash(true)\n${I}Ran 2 shell commands`]);
+    expect(renderToolActivity(entries)).toEqual([`→ Bash(true)\n${I}Ran 2 shell commands`]);
   });
 
   test("grep count > 1 uses the files noun", () => {
@@ -354,13 +354,13 @@ describe("renderToolActivity", () => {
       {
         name: "grep",
         count: 2,
-        callLine: "→ grep(TODO)",
+        callLine: "→ Grep(TODO)",
         singleLine: "Searched TODO",
         detailLines: [],
         anomalyLines: [],
       },
     ];
-    expect(renderToolActivity(entries)).toEqual([`→ grep(TODO)\n${I}Searched 2 files`]);
+    expect(renderToolActivity(entries)).toEqual([`→ Grep(TODO)\n${I}Searched 2 files`]);
   });
 
   test("glob count > 1 uses the files noun", () => {
@@ -368,13 +368,13 @@ describe("renderToolActivity", () => {
       {
         name: "glob",
         count: 2,
-        callLine: "→ glob(**/*.ts)",
+        callLine: "→ Glob(**/*.ts)",
         singleLine: "Searched **/*.ts",
         detailLines: [],
         anomalyLines: [],
       },
     ];
-    expect(renderToolActivity(entries)).toEqual([`→ glob(**/*.ts)\n${I}Searched 2 files`]);
+    expect(renderToolActivity(entries)).toEqual([`→ Glob(**/*.ts)\n${I}Searched 2 files`]);
   });
 
   test("count > 1 still attaches an anomaly line", () => {
@@ -382,14 +382,14 @@ describe("renderToolActivity", () => {
       {
         name: "bash",
         count: 2,
-        callLine: "→ bash(false)",
+        callLine: "→ Bash(false)",
         singleLine: "Ran false",
         detailLines: [],
         anomalyLines: ["exit 1"],
       },
     ];
     expect(renderToolActivity(entries)).toEqual([
-      `→ bash(false)\n${I}Ran 2 shell commands\n${I}${TREE_BRANCH}exit 1`,
+      `→ Bash(false)\n${I}Ran 2 shell commands\n${I}${TREE_BRANCH}exit 1`,
     ]);
   });
 
@@ -398,14 +398,14 @@ describe("renderToolActivity", () => {
       {
         name: "edit",
         count: 1,
-        callLine: "→ edit",
-        singleLine: "✓ edit done (text returned, nothing written)",
+        callLine: "→ Edit",
+        singleLine: "✓ Edit done (text returned, nothing written)",
         detailLines: [],
         anomalyLines: [],
       },
     ];
     expect(renderToolActivity(entries)).toEqual([
-      `→ edit\n${I}✓ edit done (text returned, nothing written)`,
+      `→ Edit\n${I}✓ Edit done (text returned, nothing written)`,
     ]);
   });
 
@@ -414,13 +414,35 @@ describe("renderToolActivity", () => {
       {
         name: "edit",
         count: 2,
-        callLine: "→ edit",
-        singleLine: "✓ edit done (text returned, nothing written)",
+        callLine: "→ Edit",
+        singleLine: "✓ Edit done (text returned, nothing written)",
         detailLines: [],
         anomalyLines: [],
       },
     ];
-    expect(renderToolActivity(entries)).toEqual([`→ edit\n${I}Edited 2 edits`]);
+    expect(renderToolActivity(entries)).toEqual([`→ Edit\n${I}Edited 2 edits`]);
+  });
+
+  // The fixtures above pass `callLine` in, so they cannot show where it comes from. This one goes
+  // through recordCall and asserts on the label, which is the whole point of the display column.
+  test("a group is named by its display label, never by the wire name the model called", () => {
+    const entries = recordResult(
+      recordCall([], "read_file", { path: "a.txt" }),
+      "read_file",
+      { path: "a.txt" },
+      { content: "x" },
+    );
+    const rendered = renderToolActivity(entries)[0] ?? "";
+    expect(rendered.split("\n")[0]).toBe("→ Read(a.txt)");
+    expect(rendered).not.toContain("read_file");
+  });
+
+  test("a write_file group's settled line takes the label too, not toolResultLine's wire name", () => {
+    const entries = recordResult([], "write_file", { path: "a.txt" }, { written: true });
+    const rendered = renderToolActivity(entries)[0] ?? "";
+    expect(rendered.split("\n")[0]).toBe("→ Write(a.txt)");
+    expect(rendered).toContain("✓ Write done");
+    expect(rendered).not.toContain("write_file");
   });
 
   // Spelled as a literal, unlike every other test in this describe: the rest build their expected
@@ -431,13 +453,13 @@ describe("renderToolActivity", () => {
       {
         name: "read_file",
         count: 1,
-        callLine: "→ read_file(a.txt)",
+        callLine: "→ Read(a.txt)",
         singleLine: "Read a.txt",
         detailLines: [],
         anomalyLines: [],
       },
     ];
-    expect(renderToolActivity(entries)).toEqual(["→ read_file(a.txt)\n  Read 1 file"]);
+    expect(renderToolActivity(entries)).toEqual(["→ Read(a.txt)\n  Read 1 file"]);
   });
 
   test("more than 5 sub-lines cap with an overflow note", () => {
@@ -445,7 +467,7 @@ describe("renderToolActivity", () => {
       {
         name: "grep",
         count: 1,
-        callLine: "→ grep(x)",
+        callLine: "→ Grep(x)",
         singleLine: "Searched x",
         detailLines: ["a", "b", "c", "d"],
         anomalyLines: ["e", "f"],
@@ -496,7 +518,7 @@ describe("recordCall / recordResult / recordDenial", () => {
     let entries = recordCall([], "read_file", { path: "a.txt" });
     entries = recordResult(entries, "read_file", { path: "a.txt" }, { content: "x" });
     expect(entries[0].count).toBe(1);
-    expect(renderToolActivity(entries)).toEqual([`→ read_file(a.txt)\n${I}Read 1 file`]);
+    expect(renderToolActivity(entries)).toEqual([`→ Read(a.txt)\n${I}Read 1 file`]);
   });
 
   test("two failing results in one name-group emit exactly one TREE_BRANCH line", () => {
@@ -514,28 +536,28 @@ describe("renderLiveToolActivity", () => {
   test("skips an open count===1 entry so the first in-flight call is only pendingTool", () => {
     const entries = recordCall([], "read_file", { path: "a.txt" });
     expect(renderLiveToolActivity(entries)).toEqual([]);
-    expect(renderToolActivity(entries)).toEqual([`→ read_file(a.txt)\n${I}Read 1 file`]);
+    expect(renderToolActivity(entries)).toEqual([`→ Read(a.txt)\n${I}Read 1 file`]);
   });
 
   test("open count>1 paints at count-1 until the next result lands", () => {
     let entries = recordCall([], "read_file", { path: "a.txt" });
     entries = recordResult(entries, "read_file", { path: "a.txt" }, { content: "x" });
-    expect(renderLiveToolActivity(entries)).toEqual([`→ read_file(a.txt)\n${I}Read 1 file`]);
+    expect(renderLiveToolActivity(entries)).toEqual([`→ Read(a.txt)\n${I}Read 1 file`]);
     entries = recordCall(entries, "read_file", { path: "b.txt" });
-    expect(renderLiveToolActivity(entries)).toEqual([`→ read_file(a.txt)\n${I}Read 1 file`]);
+    expect(renderLiveToolActivity(entries)).toEqual([`→ Read(a.txt)\n${I}Read 1 file`]);
     entries = recordResult(entries, "read_file", { path: "b.txt" }, { content: "y" });
-    expect(renderLiveToolActivity(entries)).toEqual([`→ read_file(a.txt)\n${I}Read 2 files`]);
+    expect(renderLiveToolActivity(entries)).toEqual([`→ Read(a.txt)\n${I}Read 2 files`]);
   });
 
   test("same open-count filter applies to bash, not only read_file", () => {
     const ok = proc();
     let entries = recordCall([], "bash", { command: "echo a" });
     entries = recordResult(entries, "bash", { command: "echo a" }, ok);
-    expect(renderLiveToolActivity(entries)).toEqual([`→ bash(echo a)\n${I}Ran 1 shell command`]);
+    expect(renderLiveToolActivity(entries)).toEqual([`→ Bash(echo a)\n${I}Ran 1 shell command`]);
     entries = recordCall(entries, "bash", { command: "echo b" });
-    expect(renderLiveToolActivity(entries)).toEqual([`→ bash(echo a)\n${I}Ran 1 shell command`]);
+    expect(renderLiveToolActivity(entries)).toEqual([`→ Bash(echo a)\n${I}Ran 1 shell command`]);
     entries = recordResult(entries, "bash", { command: "echo b" }, ok);
-    expect(renderLiveToolActivity(entries)).toEqual([`→ bash(echo a)\n${I}Ran 2 shell commands`]);
+    expect(renderLiveToolActivity(entries)).toEqual([`→ Bash(echo a)\n${I}Ran 2 shell commands`]);
   });
 });
 
@@ -558,7 +580,7 @@ describe("MCP grouping", () => {
     const grepEntry: ToolActivityEntry = {
       name: "grep",
       count: 1,
-      callLine: "→ grep(TODO)",
+      callLine: "→ Grep(TODO)",
       singleLine: "Searched TODO",
       detailLines: ["a.ts", "b.ts"],
       anomalyLines: [],
@@ -567,7 +589,7 @@ describe("MCP grouping", () => {
     mcpEntries = recordResult(mcpEntries, "mcp_notion_search", {}, { ok: true });
     const rendered = renderToolActivity([grepEntry, ...mcpEntries]);
     expect(rendered[0]).toBe(
-      `→ grep(TODO)\n${I}Searched 1 file\n${I}${TREE_BRANCH}a.ts\n${I}${TREE_BRANCH}b.ts`,
+      `→ Grep(TODO)\n${I}Searched 1 file\n${I}${TREE_BRANCH}a.ts\n${I}${TREE_BRANCH}b.ts`,
     );
     expect(rendered[1]).toBe(
       `→ mcp_exa_web_search\n${I}Ran MCP 2 tools\n${I}${TREE_MID}mcp_exa_web_search\n${I}${TREE_BRANCH}mcp_notion_search`,
@@ -598,7 +620,7 @@ describe("MCP grouping", () => {
     const mcpEntry = entries.find((e) => e.name === "mcp");
     expect(readFileEntry?.count).toBe(2);
     expect(renderToolActivity([readFileEntry as ToolActivityEntry])).toEqual([
-      `→ read_file(a.txt)\n${I}Read 2 files`,
+      `→ Read(a.txt)\n${I}Read 2 files`,
     ]);
     expect(mcpEntry?.count).toBe(1);
     expect(renderToolActivity([mcpEntry as ToolActivityEntry])).toEqual([
