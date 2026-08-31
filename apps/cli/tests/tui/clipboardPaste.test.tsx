@@ -233,6 +233,30 @@ describe("Ctrl-V", () => {
     expect(frame).not.toContain("*".repeat(14));
   });
 
+  test("a representation that is not text is not decoded into the surface", async () => {
+    // `preferredTypes: ["text/plain"]` is a preference the backend is free to decline, not a
+    // filter, and it reports a picked-something-else answer as `status: "read"` like any other —
+    // so a clipboard holding only an image hands back PNG bytes, and decoding them as UTF-8 types
+    // the file's own magic number into whichever surface has focus.
+    // The signature's first four bytes only: its next two are CR LF, and a paste carrying a
+    // terminator submits the line before it (`splitAtTerminator`) — which would clear the box and
+    // hide the mojibake this is looking for.
+    nextRead = async () => ({
+      status: "read",
+      representation: { mimeType: "image/png", bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) },
+    });
+    const setup = await mount(<InputBox onSubmit={() => {}} />);
+
+    setup.mockInput.pressKey("v", { ctrl: true });
+    await flush(setup);
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    await flush(setup);
+
+    // `readCount`, so this cannot pass by the read never having happened at all.
+    expect(readCount).toBe(1);
+    expect(setup.captureCharFrame()).not.toContain("PNG");
+  });
+
   test("a read that lands after the surface is gone is dropped, and a failing one is survived", async () => {
     // Both halves of "do not let an async clipboard take the session down". The surface unmounts
     // between the keypress and the result on every real panel swap — answering an approval, closing

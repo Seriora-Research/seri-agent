@@ -2,8 +2,11 @@
 // and SetupPanel's value steps) — the same four `usePaste` already feeds, since a read-only surface
 // has nothing to paste into. Bracketed paste covers the terminal's OWN paste action (Ctrl-Shift-V,
 // right-click, Cmd-V): the emulator turns those into a paste EVENT, which `usePaste` receives. A
-// bare Ctrl-V is not one of them — no terminal treats it as a paste trigger — so it arrived as an
-// ordinary keypress and did nothing at all, which is not what a Windows user pressing it expects.
+// bare Ctrl-V is not reliably one of them, and which it is depends on the emulator: Windows
+// Terminal binds Ctrl+V to paste by default, so there it never reaches seri at all — the emulator
+// consumes the chord and hands `usePaste` the text. Where the paste chord is Ctrl-Shift-V or Cmd-V
+// instead, Ctrl-V is forwarded, so it arrived here as an ordinary keypress and did nothing at all,
+// which is not what someone pressing the chord they use everywhere else expects.
 //
 // This reads the OS clipboard directly instead: `createHostClipboard` is a compiled native library
 // calling the platform's own clipboard over FFI, with nothing shelled out to `clip.exe`/`pbcopy`/
@@ -32,6 +35,10 @@ export function useClipboardPaste(onText: (text: string) => void): void {
   // outright. A late result is dropped rather than pushed into a component that no longer exists.
   const mounted = useRef(true);
   useEffect(() => {
+    // Set on the way in as well as cleared on the way out. A `useRef` outlives its own cleanup, so
+    // a mount/cleanup/mount of the same instance — what React StrictMode does to every effect —
+    // would otherwise find this already false and leave the hook silently dead for good.
+    mounted.current = true;
     return () => {
       mounted.current = false;
     };
@@ -59,6 +66,11 @@ export function useClipboardPaste(onText: (text: string) => void): void {
         .read({ preferredTypes: ["text/plain"] })
         .then((result) => {
           if (!mounted.current || result.status !== "read") return;
+          // `preferredTypes` is a preference the backend is free to decline, not a filter — it
+          // answers with whatever representation it actually picked. A clipboard holding only an
+          // image comes back as `image/png` with a `read` status, and decoding those bytes as UTF-8
+          // types mojibake into the surface. Any `text/*` decodes; nothing else does.
+          if (!result.representation.mimeType.startsWith("text/")) return;
           const text = new TextDecoder().decode(result.representation.bytes);
           if (text.length > 0) onText(text);
         })
