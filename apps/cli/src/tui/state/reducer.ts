@@ -76,6 +76,30 @@ export type PermissionsPanelState =
 // there is nothing here but a tier to pick or cancel out of.
 export type EffortPanelState = { tiers: string[]; selected: number };
 
+// Messages typed while a turn was already running, held in submission order until drainQueue
+// (cli.ts) re-submits the head. Rendered by components/QueueBlock.tsx.
+//
+// The id is minted by cli.ts and carried in on `queue-appended`, never generated here: this reducer
+// mints nothing and reads no clock by design, which is why `turn-started` carries its timestamp in
+// from cli.ts rather than calling Date.now() itself (see that action's own comment). It earns its
+// place for one reason — a React key that survives a drop. Selection, editing and drop are all
+// index-based and an index key would satisfy them, but the row under the mounted editor would then
+// become a different element the moment a row above it went, taking the half-typed text with it.
+//
+// The invariant every action below re-establishes, and which normalizeQueue is the single place
+// that enforces: `items.length === 0` implies `selected === 0 && editing === false`; otherwise
+// `0 <= selected < items.length`.
+export type QueuedMessage = { id: string; text: string };
+
+export type MessageQueue = {
+  items: QueuedMessage[];
+  // Index into `items`. Pinned to 0 and meaningless while `items` is empty.
+  selected: number;
+  // The SELECTED item is being edited. A boolean rather than an id so "editing an item that is
+  // not the selected one" cannot be represented at all.
+  editing: boolean;
+};
+
 export type TuiState = {
   session: SessionState<ModelMessage>;
   // Append-only committed LOGICAL lines — one entry per `transcript-append`/pushLine call, never
@@ -205,6 +229,10 @@ export type TuiState = {
   route: ResolvedRoute | undefined;
   // See `"config-updated"`'s own comment, below, for what this is and why.
   config: Record<string, string>;
+  // See MessageQueue's own comment, above. Not part of the session and never persisted: a queued
+  // message has not been said to the model yet, and a session resumed with one still pending
+  // would replay it with no way for the user to see it coming.
+  queue: MessageQueue;
   // In-memory live rows for the in-flight dispatch. Cleared when the parent
   // dispatch_subagents tool-result lands (the summaries are already in the parent
   // context), on transcript-cleared (`/clear`), and on turn-started. Not session JSON.
@@ -262,6 +290,30 @@ const EMPTY_ROSTER: Readonly<
   pendingChildView: undefined,
 });
 
+// What "an empty queue" means, in one place — `initialTuiState`, `queue-cleared`, and every action
+// that removes the last item all reach the identical value, so none of them can drift into a shape
+// the MessageQueue invariant forbids. Frozen for the same reason EMPTY_TRANSCRIPT above is: every
+// state spread from this shares the SAME `items` instance.
+const EMPTY_QUEUE: MessageQueue = Object.freeze({
+  // `as string[]`: same cast, same reason as EMPTY_TRANSCRIPT's own — the field is declared
+  // mutable, and TS treats `readonly T[]` as a genuinely different type.
+  items: Object.freeze([] as QueuedMessage[]) as QueuedMessage[],
+  selected: 0,
+  editing: false,
+});
+
+// The single place MessageQueue's invariant is established. Every queue action routes its result
+// through here rather than clamping for itself, so "an empty list pins selection to 0 and cannot
+// be editing" is one statement instead of eight that have to agree.
+function normalizeQueue(
+  items: QueuedMessage[],
+  selected: number,
+  editing: boolean,
+): MessageQueue {
+  if (items.length === 0) return EMPTY_QUEUE;
+  return { items, selected: Math.min(Math.max(selected, 0), items.length - 1), editing };
+}
+
 export function initialTuiState(
   session: SessionState<ModelMessage>,
   opts?: { showSplash?: boolean; route?: ResolvedRoute; config?: Record<string, string> },
@@ -270,6 +322,7 @@ export function initialTuiState(
     session,
     route: opts?.route,
     config: opts?.config ?? {},
+    queue: EMPTY_QUEUE,
     ...EMPTY_TRANSCRIPT,
     status: "",
     turn: undefined,
@@ -424,6 +477,24 @@ export type TuiAction =
   // and clearing TurnStatus's own state on any of those made a turn that was still very much in
   // progress look like it had silently died.
   | { type: "turn-ended" }
+  // The message queue's own eight actions (MessageQueue, above). Three of them — selection-moved,
+  // edit-started, item-dropped — deliberately no-op while `editing`, which is a correctness fix
+  // rather than politeness: without the first of those, two items queued, Ctrl+E on row 1 and then
+  // Ctrl+↓ moves `selected` to row 2, and the Enter that commits row 1's edited text writes it into
+  // row 2 instead, because `queue-edit-committed` targets whatever `selected` is at commit time.
+  // Each case below states its own version of that.
+  //
+  // `text` is carried untrimmed on both `queue-appended` and `queue-edit-committed`: cli.ts trims
+  // only to DECIDE (is this blank, does it start a turn), never to store, so what eventually
+  // reaches the model is the text the user actually typed.
+  | { type: "queue-appended"; id: string; text: string }
+  | { type: "queue-selection-moved"; delta: number }
+  | { type: "queue-edit-started" }
+  | { type: "queue-edit-committed"; text: string }
+  | { type: "queue-edit-cancelled" }
+  | { type: "queue-item-dropped" }
+  | { type: "queue-head-taken" }
+  | { type: "queue-cleared" }
   | ({ type: "subagent-child-event" } & ChildEventPayload)
   | { type: "subagent-panel-focus" }
   | { type: "subagent-panel-blur" }
@@ -725,6 +796,75 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       // done, so this is the only commit point for tools already recorded. After a real done
       // the accumulator is already [], so the flush is a no-op.
       return { ...flushToolActivity(state), turn: undefined };
+    case "queue-appended":
+      // `selected` and `editing` are carried through untouched, not reset: a message queued while
+      // the user is part-way through editing an earlier row must not move the band out from under
+      // them or close the editor. On an empty queue normalizeQueue pins the new row at 0 anyway.
+      return {
+        ...state,
+        queue: normalizeQueue(
+          [...state.queue.items, { id: action.id, text: action.text }],
+          state.queue.selected,
+          state.queue.editing,
+        ),
+      };
+    case "queue-selection-moved":
+      // The retargeting bug TuiAction's own comment above describes: while a row is open in the
+      // editor, the band must not move, because `selected` is what the commit writes into.
+      if (state.queue.editing || state.queue.items.length === 0) return state;
+      return {
+        ...state,
+        queue: normalizeQueue(
+          state.queue.items,
+          state.queue.selected + action.delta,
+          state.queue.editing,
+        ),
+      };
+    case "queue-edit-started":
+      // Already editing: there is nothing to start, and returning `state` itself rather than an
+      // equal-but-fresh object means a mashed Ctrl+E cannot even re-render the mounted editor.
+      // Empty: `editing` with no items is precisely what the MessageQueue invariant rules out.
+      if (state.queue.editing || state.queue.items.length === 0) return state;
+      return { ...state, queue: { ...state.queue, editing: true } };
+    case "queue-edit-committed": {
+      // A blank commit keeps the original text rather than emptying the row: InputBox submits on a
+      // bare Enter too, and an Enter on an editor the user has cleared reads as "never mind", not
+      // as "make this queued message the empty string". cli.ts's onSubmit already routes that case
+      // to `queue-edit-cancelled` before it gets here; this is the same answer stated where the
+      // text actually changes, so the reducer is correct on its own terms.
+      const items =
+        action.text.trim().length === 0
+          ? state.queue.items
+          : state.queue.items.map((item, index) =>
+              index === state.queue.selected ? { ...item, text: action.text } : item,
+            );
+      return { ...state, queue: normalizeQueue(items, state.queue.selected, false) };
+    }
+    case "queue-edit-cancelled":
+      return { ...state, queue: { ...state.queue, editing: false } };
+    case "queue-item-dropped": {
+      // No-op while editing, for the same family of reasons as the two cases above: the selected
+      // row is currently a mounted InputBox holding half-typed text, and dropping it would destroy
+      // that mount with no keypress of the user's that meant "throw this away".
+      if (state.queue.editing || state.queue.items.length === 0) return state;
+      return {
+        ...state,
+        queue: normalizeQueue(
+          state.queue.items.filter((_, index) => index !== state.queue.selected),
+          state.queue.selected,
+          false,
+        ),
+      };
+    }
+    case "queue-head-taken": {
+      // `selected - 1`, not `selected`: every remaining row just shifted up by one, so subtracting
+      // keeps the band on the SAME message rather than sliding it onto the next one down. When the
+      // head itself was selected, normalizeQueue clamps the -1 back to the new head.
+      const [, ...rest] = state.queue.items;
+      return { ...state, queue: normalizeQueue(rest, state.queue.selected - 1, false) };
+    }
+    case "queue-cleared":
+      return { ...state, queue: EMPTY_QUEUE };
     case "subagent-child-event":
       return applyChildEvent(state, action);
     case "subagent-panel-focus":

@@ -260,6 +260,35 @@ export function isTuiClaimed(meta: CommandMeta): boolean {
   }
 }
 
+// Whether a submitted line would start a model turn if it were dispatched right now — the one
+// question cli.ts's message queue has to answer before it defers a submission instead of running
+// it. True for a plain task, for a skill (whose body is submitted as an ordinary user turn), and
+// for an `/agent <goal>` with a non-empty goal. False for everything that resolves without a turn:
+// every catalog name, TUI-claimed or not (a TUI-claimed one opens a panel or quits, both of which
+// must keep working mid-turn; a SLASH_COMMANDS one has its own mid-turn gate already), an
+// unrecognised `/name`, and an agent name with an EMPTY goal — that last one deliberately falls
+// through to the immediate usage error onSubmit already prints, rather than deferring an error
+// message to drain time, minutes later, with nothing on screen to explain it.
+//
+// A pure function taking the registries as an argument rather than an inline closure over
+// `prepared`: the registries are per-run state (PreparedRun's own `agents`/`skills`, reloaded on
+// /clear), and passing them in is what makes every branch here testable without a session, a pty
+// or a model. `unknown` values because nothing here reads a spec — only whether a name is claimed.
+export function startsATurn(
+  name: string,
+  trimmed: string,
+  registries: { agents: ReadonlyMap<string, unknown>; skills: ReadonlyMap<string, unknown> },
+): boolean {
+  if (commandByName(name) !== undefined) return false;
+  if (!name.startsWith("/")) return true;
+  const bare = name.slice(1);
+  // Agents before skills, and `has` rather than a lookup, mirroring onSubmit's own resolution
+  // order exactly (cli.ts): a name defined as both is dispatched as the agent, so answering
+  // "would this start a turn" for it has to consult the agent's empty-goal rule, not the skill's.
+  if (registries.agents.has(bare)) return trimmed.slice(name.length).trim().length > 0;
+  return registries.skills.has(bare);
+}
+
 export function tuiClaimedNames(): string[] {
   return COMMAND_META.filter(isTuiClaimed).map((meta) => meta.name);
 }
