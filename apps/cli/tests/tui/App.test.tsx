@@ -438,6 +438,42 @@ describe("App", () => {
     expect(frame).toContain("! Approve write_file");
   });
 
+  // The state that catches a gate reading `state` instead of the screen: panel commands stay legal
+  // mid-turn (cli.ts's own `tuiHandlers`), so an approval can arrive with /model still open and
+  // leave both fields set. app.tsx's render ternary checks `pendingApproval` first, so the
+  // ApprovalBox is what the user sees — asserted here first, because everything after it is only
+  // meaningful if the picker really is off screen.
+  test("PageUp behind an approval that arrived over an open panel still scrolls the transcript", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    dispatch({
+      type: "model-picker-requested",
+      entries: [
+        { entry: catalogEntry(), keyConfigured: true, alternatives: 0, gatewayReachable: false },
+      ],
+    });
+    dispatch({
+      type: "approval-requested",
+      toolName: "write_file",
+      args: { path: "a.txt" },
+      offersAlways: true,
+    });
+    await flush(setup);
+    let frame = setup.captureCharFrame();
+    expect(frame).toContain("! Approve write_file");
+    expect(frame).not.toContain('Type to filter — try "free" or "paid"…');
+
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    frame = setup.captureCharFrame();
+    expect(frame).toContain("↑ scrolled — End to follow");
+    expect(frame).not.toContain("line 299");
+    expect(frame).toContain("! Approve write_file");
+  });
+
   // The negative control the exception above needs: it is carved out by naming ten OTHER panel
   // fields, and a field dropped from that list would reopen the background-scroll bug the /config
   // guard above closes, on that panel alone and silently. /config pins one branch of the list; this

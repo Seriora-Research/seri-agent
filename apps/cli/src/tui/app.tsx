@@ -433,35 +433,45 @@ export function App({
     onSessionChange?.(state.session);
   }, [state.session, onSessionChange]);
 
-  // True when a modal panel that also claims the paging keys is open. Child inspect is not a modal:
-  // InputBox stays mounted and the shared scrollbox still takes PageUp/PageDown. The transcript box
-  // above (flexGrow/minHeight={0}) still renders unconditionally regardless of which branch is
-  // active, so on a terminal taller than the open panel's own content it stays partially visible
-  // above it, not fully occluded — but PageUp/PageDown/Home/End must still not scroll it in the
-  // background while one of these is open: the user would close the panel to find the transcript
-  // scrolled and the "↑ scrolled" banner showing, with no visible keypress of theirs against the
-  // transcript to explain why.
+  // True when a modal panel that also claims the paging keys is the one ON SCREEN. Child inspect is
+  // not a modal: InputBox stays mounted and the shared scrollbox still takes PageUp/PageDown. The
+  // transcript box above (flexGrow/minHeight={0}) still renders unconditionally regardless of which
+  // branch is active, so on a terminal taller than the open panel's own content it stays partially
+  // visible above it, not fully occluded — but PageUp/PageDown/Home/End must still not scroll it in
+  // the background while one of these is showing: the user would close the panel to find the
+  // transcript scrolled and the "↑ scrolled" banner showing, with no visible keypress of theirs
+  // against the transcript to explain why.
   //
-  // An approval is the one overlay deliberately left out of this list, because reading back what
-  // you are approving is the entire point of the moment — the transcript above it is the diff, the
-  // command, the path. It is also the one moment the user cannot recover from by learning a
-  // different key: the wheel that used to scroll behind a panel is gone with mouse reporting
+  // An approval is the one overlay the keys stay live behind, because reading back what you are
+  // approving is the entire point of the moment — the transcript above it is the diff, the command,
+  // the path. It is also the one moment the user cannot recover from by learning a different key:
+  // the wheel that used to scroll behind a panel is gone with mouse reporting
   // (runtime/renderOptions.ts). Nothing is silently mutated behind an approval either — the
   // ApprovalBox is the ONLY thing on screen the keys could confuse the reader about, it stays put
   // while the transcript moves under it, and the banner below is un-gated in the same breath so a
   // scrolled transcript always says so. The two must be gated on the same boolean, which is why
   // this is one list read twice rather than the same condition written out twice.
+  //
+  // Which is why `pendingApproval` guards the whole list instead of being a tenth field in it:
+  // "on screen" and "in state" come apart here. Panel commands stay legal mid-turn (cli.ts's own
+  // `tuiHandlers`), so a /model or /config left open when an approval arrives leaves both fields
+  // set at once — and the render ternary below checks `pendingApproval` FIRST, so the ApprovalBox
+  // is what the user is looking at. Reading the list on its own would leave the keys dead and the
+  // banner suppressed behind a fully visible approval, in the one state that needs them most.
+  // `pendingSplash` sits outside that override for the same reason from the other side: it returns
+  // above the ternary, so it is the one panel an approval does not appear over.
   const pagingPanelOpen =
-    state.pendingModelPicker !== undefined ||
-    state.pendingSetup !== undefined ||
-    state.pendingAuth !== undefined ||
-    state.pendingConfig !== undefined ||
-    state.pendingPermissions !== undefined ||
-    state.pendingEffort !== undefined ||
-    state.pendingSkills !== undefined ||
-    state.pendingMcp !== undefined ||
-    state.pendingMemory !== undefined ||
-    state.pendingSplash;
+    state.pendingSplash ||
+    (state.pendingApproval === undefined &&
+      (state.pendingModelPicker !== undefined ||
+        state.pendingSetup !== undefined ||
+        state.pendingAuth !== undefined ||
+        state.pendingConfig !== undefined ||
+        state.pendingPermissions !== undefined ||
+        state.pendingEffort !== undefined ||
+        state.pendingSkills !== undefined ||
+        state.pendingMcp !== undefined ||
+        state.pendingMemory !== undefined));
 
   // True when NOTHING modal owns the keyboard, approvals included — what every binding that is not
   // transcript paging still gates on (shift+tab's mode cycle below).
