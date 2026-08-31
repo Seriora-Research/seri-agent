@@ -26,8 +26,25 @@ import type { CliRendererConfig } from "@opentui/core";
 // welcomeSplash.ts`, `routes/setup/guidedSetup.ts`, and `runTui` (cli.ts) all share the one
 // instance this config creates, so this is entered once for the whole splash -> setup -> main-TUI
 // window, not per phase.
+//
+// `useMouse: false` — OpenTUI's own default enables the maximal mouse-reporting set (`?1000` click,
+// `?1002` cell-motion, `?1003` any-motion, `?1006` SGR coordinates), and a terminal reporting the
+// mouse to an application no longer selects text for the user: for as long as seri runs, dragging
+// across the transcript to grab a file path or an error selects nothing, and the alt-screen means
+// the text is not in the scrollback afterwards either. This buys back the terminal's OWN selection
+// and its own copy chord — which work over SSH, inside tmux, with nothing to detect and no OSC 52
+// dependency — and pays for it with the four affordances OpenTUI gives the transcript scrollbox off
+// that same reporting: wheel scroll, scrollbar thumb drag, click-to-focus, Shift+wheel. seri
+// authors no mouse handling of its own (no `onMouseDown`/`onClick` anywhere under `tui/`), so
+// nothing else in the app notices they are gone. Not a door that closes: OpenTUI's own
+// `renderer.useMouse` setter re-emits the enable/disable sequences on the same tick, so a future
+// surface that genuinely needs the mouse turns reporting on for its own lifetime and off again
+// after. docs/specs/044-tui-selection-copy/research.md measures the trade and prices what it costs
+// the transcript — `runtime/renderer.ts`'s own `?1007` suppression and app.tsx's approval-paging
+// gate and hidden scrollbar are the rest of that price, not separate concerns.
 export const MAIN_TUI_RENDERER_CONFIG: CliRendererConfig = {
   exitOnCtrlC: false,
   exitSignals: [],
   screenMode: "alternate-screen",
+  useMouse: false,
 };
