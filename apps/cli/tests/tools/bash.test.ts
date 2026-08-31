@@ -10,6 +10,17 @@ import {
   runBash,
 } from "../../src/tools/bash";
 
+// Resolves as soon as `condition` holds, or gives up after `timeoutMs` and lets the caller's own
+// expect() report the failure - returning rather than throwing keeps the assertion, and its
+// message, in the test where a reader expects it.
+async function waitFor(condition: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
 function countSleepProcesses(): number {
   const probe = spawnSync(
     "powershell",
@@ -111,8 +122,13 @@ describe.skipIf(process.platform !== "win32" || !isBashAvailable())(
       const result = await runBash("sleep 45", 1500);
       expect(result.timedOut).toBe(true);
 
-      // taskkill is synchronous but the process table takes a moment to settle.
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      // Polled rather than slept on. taskkill returns before Windows has finished reaping the
+      // tree, and how long that reaping takes scales with machine load - a fixed wait passes on an
+      // idle box and fails on a busy one, which made this the flakiest test in the suite (observed
+      // failing twice on CI and once in three consecutive local runs of this file alone, on
+      // commits that touch nothing it covers). Waiting for the condition instead of guessing a
+      // duration both removes the flake and makes the test finish sooner when the box is idle.
+      await waitFor(() => countSleepProcesses() <= before, 15_000);
       expect(countSleepProcesses()).toBeLessThanOrEqual(before);
     }, 30_000);
   },
