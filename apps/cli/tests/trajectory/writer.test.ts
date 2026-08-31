@@ -253,3 +253,39 @@ test("legacy trajectory JSONL imports once and remains byte-identical", () => {
     rmSync(configDir, { recursive: true, force: true });
   }
 });
+
+describe("createTrajectoryWriter retention", () => {
+  const day = 24 * 60 * 60 * 1000;
+  const past = new Date("2026-06-01T00:00:00Z");
+  const present = new Date(past.getTime() + 60 * day);
+
+  test("an enabled writer ages out database trajectories at startup", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-retention-"));
+    const dir = join(configDir, "trajectories");
+    try {
+      createTrajectoryWriter(writerOpts(dir, { sessionId: "stale", now: () => past })).recordLoopEvent(
+        { type: "done", reason: "no-tool-call" },
+      );
+      createTrajectoryWriter(writerOpts(dir, { sessionId: "sess-1", now: () => present }));
+
+      expect(readTrajectory(join(dir, "stale.jsonl"))).toEqual([]);
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
+  test("the session being written keeps its records however old they are", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-retention-keep-"));
+    const dir = join(configDir, "trajectories");
+    try {
+      createTrajectoryWriter(writerOpts(dir, { sessionId: "stale", now: () => past })).recordLoopEvent(
+        { type: "done", reason: "no-tool-call" },
+      );
+      createTrajectoryWriter(writerOpts(dir, { sessionId: "stale", now: () => present }));
+
+      expect(readTrajectory(join(dir, "stale.jsonl"))).toHaveLength(2);
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+});

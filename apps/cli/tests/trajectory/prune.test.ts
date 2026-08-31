@@ -1,8 +1,33 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DATABASE_FILENAME, SessionDatabase } from "../../src/session/database";
 import { pruneTrajectories } from "../../src/trajectory/prune";
+import { TRAJECTORY_SCHEMA_VERSION, type TrajectoryRecord } from "../../src/trajectory/schema";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function seedSession(database: SessionDatabase, sessionId: string, at: string): void {
+  database.appendTrajectory(
+    {
+      v: TRAJECTORY_SCHEMA_VERSION,
+      kind: "header",
+      sessionId,
+      cwd: "/tmp/proj",
+      startedAt: at,
+    },
+    {
+      v: TRAJECTORY_SCHEMA_VERSION,
+      ts: at,
+      sessionId,
+      actor: { type: "parent" },
+      kind: "done",
+      reason: "no-tool-call",
+    } as Omit<TrajectoryRecord, "seq">,
+  );
+}
 
 describe("pruneTrajectories", () => {
   test("deletes jsonl older than the window and keeps keepSessionId", () => {
@@ -21,8 +46,8 @@ describe("pruneTrajectories", () => {
       utimesSync(livePath, now, now);
       writeFileSync(join(dir, "notes.txt"), "leave me");
 
-      const deleted = pruneTrajectories(dir, { now, retentionDays: 30, keepSessionId: "live" });
-      expect(deleted).toEqual([oldPath]);
+      const pruned = pruneTrajectories(dir, { now, retentionDays: 30, keepSessionId: "live" });
+      expect(pruned.files).toEqual([oldPath]);
       expect(readdirSync(dir).sort()).toEqual(["live.jsonl", "mid.jsonl", "notes.txt"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -37,9 +62,132 @@ describe("pruneTrajectories", () => {
           now: new Date(),
           retentionDays: 30,
         }),
-      ).toEqual([]);
+      ).toEqual({ files: [], sessions: [] });
     } finally {
       rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("deletes database sessions older than the window and keeps keepSessionId", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-db-prune-"));
+    const dir = join(configDir, "trajectories");
+    const now = new Date("2026-08-27T00:00:00Z");
+    const at = (daysAgo: number) => new Date(now.getTime() - daysAgo * DAY_MS).toISOString();
+    try {
+      const database = new SessionDatabase(configDir);
+      seedSession(database, "old", at(31));
+      seedSession(database, "mid", at(15));
+      seedSession(database, "live", at(40));
+      database.close();
+
+      const pruned = pruneTrajectories(dir, { now, retentionDays: 30, keepSessionId: "live" });
+      expect(pruned.sessions).toEqual(["old"]);
+
+      const after = new SessionDatabase(configDir);
+      try {
+        expect(after.readTrajectory("old")).toEqual([]);
+        expect(after.readTrajectory("mid")).toHaveLength(2);
+        expect(after.readTrajectory("live")).toHaveLength(2);
+      } finally {
+        after.close();
+      }
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a session is aged out on its newest record, not its oldest", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-db-newest-"));
+    const dir = join(configDir, "trajectories");
+    const now = new Date("2026-08-27T00:00:00Z");
+    const at = (daysAgo: number) => new Date(now.getTime() - daysAgo * DAY_MS).toISOString();
+    try {
+      const database = new SessionDatabase(configDir);
+      seedSession(database, "long-running", at(90));
+      database.appendTrajectory(
+        {
+          v: TRAJECTORY_SCHEMA_VERSION,
+          kind: "header",
+          sessionId: "long-running",
+          cwd: "/tmp/proj",
+          startedAt: at(90),
+        },
+        {
+          v: TRAJECTORY_SCHEMA_VERSION,
+          ts: at(1),
+          sessionId: "long-running",
+          actor: { type: "parent" },
+          kind: "retry",
+          attempt: 1,
+        } as Omit<TrajectoryRecord, "seq">,
+      );
+      database.close();
+
+      expect(pruneTrajectories(dir, { now, retentionDays: 30 }).sessions).toEqual([]);
+
+      const after = new SessionDatabase(configDir);
+      try {
+        expect(after.readTrajectory("long-running")).toHaveLength(3);
+      } finally {
+        after.close();
+      }
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
+  test("vacuums the pages freed by a deleted session", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-db-vacuum-"));
+    const dir = join(configDir, "trajectories");
+    const now = new Date("2026-08-27T00:00:00Z");
+    const at = new Date(now.getTime() - 31 * DAY_MS).toISOString();
+    try {
+      const database = new SessionDatabase(configDir);
+      // A session that fits one page frees none on delete, so the assertion needs bulk to mean
+      // anything.
+      for (let i = 0; i < 20; i++) {
+        database.appendTrajectory(
+          {
+            v: TRAJECTORY_SCHEMA_VERSION,
+            kind: "header",
+            sessionId: "bulky",
+            cwd: "/tmp/proj",
+            startedAt: at,
+          },
+          {
+            v: TRAJECTORY_SCHEMA_VERSION,
+            ts: at,
+            sessionId: "bulky",
+            actor: { type: "parent" },
+            kind: "error",
+            error: "x".repeat(2048),
+          } as Omit<TrajectoryRecord, "seq">,
+        );
+      }
+      database.close();
+
+      expect(pruneTrajectories(dir, { now, retentionDays: 30 }).sessions).toEqual(["bulky"]);
+
+      const raw = new Database(join(configDir, DATABASE_FILENAME));
+      expect(raw.query("PRAGMA freelist_count").get()).toEqual({ freelist_count: 0 });
+      raw.close();
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
+  test("no database means nothing to prune and none is created", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-db-absent-"));
+    const dir = join(configDir, "trajectories");
+    mkdirSync(dir);
+    try {
+      expect(pruneTrajectories(dir, { now: new Date(), retentionDays: 30 })).toEqual({
+        files: [],
+        sessions: [],
+      });
+      expect(readdirSync(configDir)).toEqual(["trajectories"]);
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
     }
   });
 });
