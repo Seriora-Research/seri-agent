@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 // below for why: node-pty ships no Linux prebuild, and a top-level `import` would still be
 // requested by `bun test` on ubuntu/macos CI even with the test body itself skipped).
 import type * as PtyModule from "node-pty";
-import { childScriptInput } from "./helpers";
+import { childScriptInput, SPLASH_MARK } from "./helpers";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
@@ -190,7 +190,7 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
         // all — reproduces identically). Whether this is specific to that sandbox or a real
         // limitation of this node-pty version's Windows write path is unconfirmed; needs verifying
         // on an unsandboxed Windows machine before this test can be trusted again.
-        const sawSplash = await waitFor("SERI", 10_000);
+        const sawSplash = await waitFor(SPLASH_MARK, 10_000);
         if (sawSplash) {
           // Swallowed on failure, matching tuiPty.test.ts's own startChild: if this exact write
           // throws (see this block's own comment above), the splash is left undismissed and this
@@ -289,7 +289,7 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
       try {
         // Same splash-dismiss dance as the alt-screen test above (its own comment explains why:
         // the welcome splash mounts ahead of the normal flow on every interactive launch).
-        const sawSplash = await waitFor("SERI", 10_000);
+        const sawSplash = await waitFor(SPLASH_MARK, 10_000);
         if (sawSplash) {
           try {
             term.write("\x1b");

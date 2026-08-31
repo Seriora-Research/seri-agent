@@ -18,7 +18,7 @@ import { checkpointStoreDir } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, resolveRef } from "../../src/checkpoint/shadowGit";
 import { configDirForStore, DATABASE_FILENAME } from "../../src/session/database";
 import { listSessionIds, loadSession, saveSession } from "../../src/session/session";
-import { childScriptInput } from "./helpers";
+import { childScriptInput, SPLASH_MARK } from "./helpers";
 
 function requireSessionId(sessionsDir: string): string {
   const id = listSessionIds(sessionsDir)[0];
@@ -1990,29 +1990,28 @@ async function startChild(
       );
   };
 
-  // "SERI" (WelcomeSplash's own wordmark) is the earliest text the splash's first frame prints —
+  // SPLASH_MARK is the earliest text the splash's first frame prints —
   // waiting for it before writing Escape is the same "raw mode is set by the time the readiness
   // marker prints" reasoning childScriptCancel's own comment (below) already relies on for
   // RUNLOOP_READY. Awaited here, before this function returns, rather than fired in the background:
   // several callers below wait on the mode indicator line (present on the splash's own first frame
   // too, unlike RUNLOOP_READY) as their own first sync point, and writing their own input before
   // Escape has actually been queued would deliver it to the splash instead of the panel they meant
-  // to reach. Swallowed on failure: a script that genuinely never reaches a TTY (none in this file)
-  // degrades to leaving the splash undismissed for that one test's own assertions to fail on.
+  // to reach. Not swallowed: a wait on text the splash no longer prints leaves it undismissed for
+  // every later assertion, which reads as every test in this file timing out rather than as one
+  // wrong handle here.
   if (opts.dismissSplash ?? true) {
-    try {
-      await sawLine("SERI");
-      child.stdin?.write("\x1b");
-      // wait100ms's own 100ms (this file's own convention for "the pause every keypress that swaps
-      // InputBox for a different mounted component already requires," defined below): without it, a
-      // caller that writes its own first input immediately after this function returns can combine
-      // with Escape in the same still-canonical-mode line buffer — the terminal only flushes a line
-      // on a newline/mode-switch boundary, so two writes issued back to back can arrive as ONE read
-      // chunk on the child's side. Measured live, this misdelivered "\x1b/max-turns 1" as one
-      // swallowed chunk instead of Escape-then-text, leaving the splash undismissed for the rest of
-      // the test.
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    } catch {}
+    await sawLine(SPLASH_MARK);
+    child.stdin?.write("\x1b");
+    // wait100ms's own 100ms (this file's own convention for "the pause every keypress that swaps
+    // InputBox for a different mounted component already requires," defined below): without it, a
+    // caller that writes its own first input immediately after this function returns can combine
+    // with Escape in the same still-canonical-mode line buffer — the terminal only flushes a line
+    // on a newline/mode-switch boundary, so two writes issued back to back can arrive as ONE read
+    // chunk on the child's side. Measured live, this misdelivered "\x1b/max-turns 1" as one
+    // swallowed chunk instead of Escape-then-text, leaving the splash undismissed for the rest of
+    // the test.
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
   return {
@@ -5532,7 +5531,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
       try {
-        await sawLine("SERI");
+        await sawLine(SPLASH_MARK);
         await sawLine("Continue without logging in");
 
         // Down twice from the default-selected "Log in" to "Continue without logging in", then
@@ -5560,7 +5559,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         dismissSplash: false,
       });
       try {
-        await sawLine("SERI");
+        await sawLine(SPLASH_MARK);
         await sawLine("> Continue");
         await wait100ms();
 
@@ -5577,7 +5576,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
       try {
-        await sawLine("SERI");
+        await sawLine(SPLASH_MARK);
         // "Log in" is the default-selected (first) item — a bare Enter, no navigation, selects it.
         await sawLine("> Log in");
         child.stdin?.write("\r");
@@ -5603,7 +5602,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
       try {
-        await sawLine("SERI");
+        await sawLine(SPLASH_MARK);
         await sawLine("Continue without logging in");
 
         child.stdin?.write("\x1b[B");

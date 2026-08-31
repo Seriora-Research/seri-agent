@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { SPLASH_MARK } from "./helpers";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
@@ -106,12 +107,11 @@ async function startChild(scriptPath: string, cwd: string) {
 
   // The welcome splash mounts ahead of the normal flow on every interactive launch (same as every
   // other childScript* fixture in tuiPty.test.ts) -- dismissed here the same way its own startChild
-  // does: wait for the splash's wordmark, write Escape, then a settle margin.
-  try {
-    await sawLine("SERI");
-    child.stdin?.write("\x1b");
-    await new Promise((r) => setTimeout(r, 100));
-  } catch {}
+  // does: wait for the splash's mark, write Escape, then a settle margin. Not swallowed, for the
+  // reason startChild's own comment gives.
+  await sawLine(SPLASH_MARK);
+  child.stdin?.write("\x1b");
+  await new Promise((r) => setTimeout(r, 100));
 
   return { child, exited, sawLine, stdoutSoFar: () => stdout };
 }
