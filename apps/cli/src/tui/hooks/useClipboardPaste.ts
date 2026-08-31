@@ -44,13 +44,25 @@ export function useClipboardPaste(onText: (text: string) => void): void {
     // rather than reports because `read` already returns every expected failure as a `status` —
     // a throw here is something unforeseen, and taking a live session down over a failed paste is
     // a worse answer than the paste not happening.
-    void hostClipboard()
-      .read({ preferredTypes: ["text/plain"] })
-      .then((result) => {
-        if (!mounted.current || result.status !== "read") return;
-        const text = new TextDecoder().decode(result.representation.bytes);
-        if (text.length > 0) onText(text);
-      })
-      .catch(() => {});
+    //
+    // Two guards because there are two ways this fails, and the `.catch` only covers the async one.
+    // `createHostClipboard` throws SYNCHRONOUSLY when there is no platform clipboard to reach at all
+    // (@opentui/core 0.5.6's own `new NativeClipboardBackend(...)`: "Failed to create native
+    // clipboard service") — a headless box or an SSH session, exactly where a paste was least
+    // likely to work anyway. Outside the `try` that throw leaves this hook entirely, and what stops
+    // it is OpenTUI's own `KeyHandler.emitWithPriority`, which wraps every registered listener in a
+    // catch and `console.error`s whatever it caught. That is a dependency's internal safety net
+    // rather than this hook's own answer, and it is loud: a stack trace into the renderer's console
+    // on every press, from the one path here that promised not to make noise.
+    try {
+      void hostClipboard()
+        .read({ preferredTypes: ["text/plain"] })
+        .then((result) => {
+          if (!mounted.current || result.status !== "read") return;
+          const text = new TextDecoder().decode(result.representation.bytes);
+          if (text.length > 0) onText(text);
+        })
+        .catch(() => {});
+    } catch {}
   });
 }

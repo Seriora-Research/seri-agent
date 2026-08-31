@@ -12,26 +12,34 @@
 // that the native read reaches the real OS clipboard is opentui's claim, measured separately by
 // `.claude/skills/verify-seri/scripts/probe-clipboard.mjs`.
 
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as opentuiCore from "@opentui/core";
 
 // What the next `read()` resolves (or rejects) with. Mutable because the fake service is created
 // once, by the hook's own module-level cache, and outlives every individual test here.
 let nextRead: () => Promise<unknown> = async () => ({ status: "empty" });
 let readCount = 0;
+// The factory's own two knobs: `createThrows` reproduces the real one's synchronous throw, and
+// `createCount` is what keeps the test that uses it from going vacuous (see it for why).
+let createThrows = false;
+let createCount = 0;
 
 mock.module("@opentui/core", () => ({
   ...opentuiCore,
-  createHostClipboard: () => ({
-    maxWriteBytes: 1024,
-    read: () => {
-      readCount++;
-      return nextRead();
-    },
-    writeText: async () => ({ status: "written" }),
-    clear: async () => ({ status: "cleared" }),
-    dispose: async () => {},
-  }),
+  createHostClipboard: () => {
+    createCount++;
+    if (createThrows) throw new Error("Failed to create native clipboard service");
+    return {
+      maxWriteBytes: 1024,
+      read: () => {
+        readCount++;
+        return nextRead();
+      },
+      writeText: async () => ({ status: "written" }),
+      clear: async () => ({ status: "cleared" }),
+      dispose: async () => {},
+    };
+  },
 }));
 
 // Imported after the mock is installed, the order bun's own module mocking asks for.
@@ -58,6 +66,8 @@ afterEach(() => {
   }
   nextRead = async () => ({ status: "empty" });
   readCount = 0;
+  createThrows = false;
+  createCount = 0;
 });
 
 // Two settled passes, the same shape helpers.ts's own `flush` uses and for the same reason: a
@@ -92,6 +102,50 @@ async function mount(node: React.ReactNode, width = 80, height = 12): Promise<Se
 }
 
 describe("Ctrl-V", () => {
+  // The construction half of "do not let the clipboard take the session down"; the read half is the
+  // last test in this file. @opentui/core 0.5.6's own `new NativeClipboardBackend(...)` throws
+  // "Failed to create native clipboard service" SYNCHRONOUSLY when there is no platform clipboard
+  // to reach — a headless box, an SSH session, a Linux runner with neither Wayland nor X11 — and
+  // the hook's `.catch` covers only the async half, so that throw leaves the hook entirely.
+  //
+  // `console.error` is the assertion, because nothing louder happens: OpenTUI's own
+  // `KeyHandler.emitWithPriority` wraps every registered listener in a catch, logs what it caught
+  // and carries on to the next one, so an unguarded throw never reaches the process and every other
+  // assertion below passes either way. What the guard buys is that this hook answers for its own
+  // failure instead of leaving a dependency to log a stack trace into the renderer's console on
+  // every press.
+  //
+  // First in this file deliberately, because the hook caches one service for the whole process
+  // (`service ??= createHostClipboard()`) and only calls the factory again after a call that threw
+  // — from any later position the cached fake would answer and this would pass without testing
+  // anything. `createCount` is asserted so that reordering fails the test instead of hollowing it.
+  test("a clipboard service that throws on construction is handled inside the hook", async () => {
+    createThrows = true;
+    const setup = await mount(<InputBox onSubmit={() => {}} />);
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    // Read inside the `try`, not after it: `mockRestore` clears the call record along with the
+    // implementation, so a check made after it reports zero calls whatever happened.
+    let logged: string[] = [];
+    try {
+      setup.mockInput.pressKey("v", { ctrl: true });
+      await flush(setup);
+      logged = consoleError.mock.calls.map((args) => String(args[0]));
+    } finally {
+      consoleError.mockRestore();
+    }
+
+    expect(createCount).toBe(1);
+    expect(logged).toEqual([]);
+    expect(readCount).toBe(0);
+    // Survived is not enough: the surface has to still work afterwards, since the press is one the
+    // user will make again. The wait is InputBox's own 50ms keystroke-coalescing window — without
+    // it only the leading character has been painted.
+    await setup.mockInput.typeText("still typing");
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    await flush(setup);
+    expect(setup.captureCharFrame()).toContain("still typing");
+  });
+
   test("inserts the OS clipboard's text into the input box", async () => {
     nextRead = clipboardHolding("apps/cli/src/tui/app.tsx");
     const setup = await mount(<InputBox onSubmit={() => {}} />);
