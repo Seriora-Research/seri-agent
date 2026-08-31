@@ -399,6 +399,74 @@ describe("App", () => {
     expect(frame).toContain("line 299");
   });
 
+  // An approval is the one overlay the paging keys stay live behind, and the exception the gate
+  // above deliberately makes: reading back the command or the diff being approved is the whole
+  // point of that moment, and the wheel that used to scroll behind it is gone now that mouse
+  // reporting is off (runtime/renderOptions.ts). Both halves are asserted here, because un-gating
+  // the keys without also un-gating the banner would recreate exactly the confusion the gate above
+  // exists to prevent — a transcript that moved with nothing on screen saying so.
+  test("PageUp while an approval is pending scrolls the transcript and shows the banner", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    dispatch({
+      type: "approval-requested",
+      toolName: "write_file",
+      args: { path: "a.txt" },
+      offersAlways: true,
+    });
+    await flush(setup);
+    expect(setup.captureCharFrame()).toContain("! Approve write_file");
+
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    let frame = setup.captureCharFrame();
+    expect(frame).toContain("↑ scrolled — End to follow");
+    expect(frame).not.toContain("line 299");
+    // ApprovalBox ignores every non-printable key, so the scroll happens BEHIND the question rather
+    // than answering or dismissing it — assert that, since a paging key silently denying a write is
+    // the worst way this could go wrong.
+    expect(frame).toContain("! Approve write_file");
+
+    setup.mockInput.pressKey(END);
+    await flush(setup);
+    frame = setup.captureCharFrame();
+    expect(frame).not.toContain("↑ scrolled");
+    expect(frame).toContain("line 299");
+    expect(frame).toContain("! Approve write_file");
+  });
+
+  // The negative control the exception above needs: it is carved out by naming ten OTHER panel
+  // fields, and a field dropped from that list would reopen the background-scroll bug the /config
+  // guard above closes, on that panel alone and silently. /config pins one branch of the list; this
+  // pins a second one.
+  test("PageUp while the model picker is open does not scroll the transcript in the background", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    dispatch({
+      type: "model-picker-requested",
+      entries: [
+        { entry: catalogEntry(), keyConfigured: true, alternatives: 0, gatewayReachable: false },
+      ],
+    });
+    await flush(setup);
+
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+
+    dispatch({ type: "model-picker-resolved" });
+    await flush(setup);
+    const pickerClosed = setup.captureCharFrame();
+    expect(pickerClosed).not.toContain("↑ scrolled");
+    expect(pickerClosed).toContain("line 299");
+  });
+
   // Regression guard (found independently by two automated PR reviewers): `transcriptScrollOffset`
   // used to be re-clamped only inside the `transcript-scroll`/`transcript-scroll-to` actions
   // themselves, both fired only by a keypress — a terminal resize that GROWS the viewport fires

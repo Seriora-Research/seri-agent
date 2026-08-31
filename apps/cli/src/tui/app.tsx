@@ -419,26 +419,39 @@ export function App({
     onSessionChange?.(state.session);
   }, [state.session, onSessionChange]);
 
-  // True when no modal panel owns the keyboard. Child inspect is not a modal: InputBox stays
-  // mounted and the shared scrollbox still takes PageUp/PageDown. The transcript box above
-  // (flexGrow/minHeight={0}) still renders unconditionally regardless of which branch is active,
-  // so on a terminal taller than the open panel's own content it stays partially visible above
-  // it, not fully occluded — but PageUp/PageDown/Home/End must still not scroll it in the
-  // background while a modal is open: the user would close the panel to find the transcript
-  // scrolled and the "↑ scrolled" banner showing, with no visible keypress of theirs against
-  // the transcript to explain why.
-  const noPanelOpen =
-    state.pendingApproval === undefined &&
-    state.pendingModelPicker === undefined &&
-    state.pendingSetup === undefined &&
-    state.pendingAuth === undefined &&
-    state.pendingConfig === undefined &&
-    state.pendingPermissions === undefined &&
-    state.pendingEffort === undefined &&
-    state.pendingSkills === undefined &&
-    state.pendingMcp === undefined &&
-    state.pendingMemory === undefined &&
-    !state.pendingSplash;
+  // True when a modal panel that also claims the paging keys is open. Child inspect is not a modal:
+  // InputBox stays mounted and the shared scrollbox still takes PageUp/PageDown. The transcript box
+  // above (flexGrow/minHeight={0}) still renders unconditionally regardless of which branch is
+  // active, so on a terminal taller than the open panel's own content it stays partially visible
+  // above it, not fully occluded — but PageUp/PageDown/Home/End must still not scroll it in the
+  // background while one of these is open: the user would close the panel to find the transcript
+  // scrolled and the "↑ scrolled" banner showing, with no visible keypress of theirs against the
+  // transcript to explain why.
+  //
+  // An approval is the one overlay deliberately left out of this list, because reading back what
+  // you are approving is the entire point of the moment — the transcript above it is the diff, the
+  // command, the path. It is also the one moment the user cannot recover from by learning a
+  // different key: the wheel that used to scroll behind a panel is gone with mouse reporting
+  // (runtime/renderOptions.ts). Nothing is silently mutated behind an approval either — the
+  // ApprovalBox is the ONLY thing on screen the keys could confuse the reader about, it stays put
+  // while the transcript moves under it, and the banner below is un-gated in the same breath so a
+  // scrolled transcript always says so. The two must be gated on the same boolean, which is why
+  // this is one list read twice rather than the same condition written out twice.
+  const pagingPanelOpen =
+    state.pendingModelPicker !== undefined ||
+    state.pendingSetup !== undefined ||
+    state.pendingAuth !== undefined ||
+    state.pendingConfig !== undefined ||
+    state.pendingPermissions !== undefined ||
+    state.pendingEffort !== undefined ||
+    state.pendingSkills !== undefined ||
+    state.pendingMcp !== undefined ||
+    state.pendingMemory !== undefined ||
+    state.pendingSplash;
+
+  // True when NOTHING modal owns the keyboard, approvals included — what every binding that is not
+  // transcript paging still gates on (shift+tab's mode cycle below).
+  const noPanelOpen = !pagingPanelOpen && state.pendingApproval === undefined;
 
   // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
   // "space-between"`, below) — the row's own tier thresholds are sized against the LEFT side
@@ -447,7 +460,7 @@ export function App({
   // OpenTUI wraps the row across two lines. `+ 1` for the row's own `gap={1}` between banner and
   // status, only when both are shown at once. Also what the JSX below renders, rather than
   // re-typing the banner string a second time — the two can't drift apart if there's only one copy.
-  const rightSideText = scrolledUp && noPanelOpen ? "↑ scrolled — End to follow" : "";
+  const rightSideText = scrolledUp && !pagingPanelOpen ? "↑ scrolled — End to follow" : "";
   const rawRightSideWidth =
     rightSideText.length +
     (rightSideText.length > 0 && state.status.length > 0 ? 1 : 0) +
@@ -501,9 +514,10 @@ export function App({
   // simpler of the two `scrollBy` unit multiples already available on this same API, chosen over
   // reproducing the pre-migration reducer's own one-row-overlap pager convention
   // (`viewportRows - reserved - 1`), which no longer has a `viewportRows`/`reserved` pair to compute
-  // it from now that scroll position lives on the scrollbox itself.
+  // it from now that scroll position lives on the scrollbox itself. Gated on `pagingPanelOpen`
+  // rather than `noPanelOpen` — an approval is scrollable behind, see that boolean's own comment.
   useKeyboard((key) => {
-    if (!noPanelOpen) return;
+    if (pagingPanelOpen) return;
     const el = transcriptRef.current;
     if (!el) return;
     if (key.name === "pageup") el.scrollBy(-1, "viewport");
@@ -834,10 +848,11 @@ export function App({
           <text fg={theme.muted}>{modeDetail}</text>
         </box>
         <box flexDirection="row" gap={1}>
-          {/* `rightSideText`, not a re-check of `scrolledUp && noPanelOpen` (`noPanelOpen` matters
-          here too: while a panel is open, End is swallowed by the exact same gate that puts on the
-          transcript-scroll keys above — the banner would otherwise keep telling the user to press
-          a key that does nothing until they close the panel first) — reusing the already-computed
+          {/* `rightSideText`, not a re-check of `scrolledUp && !pagingPanelOpen` (`pagingPanelOpen`
+          matters here too: while one of those panels is open, End is swallowed by the exact same
+          gate that puts on the transcript-scroll keys above — the banner would otherwise keep
+          telling the user to press a key that does nothing until they close the panel first, and
+          behind an approval, where the keys DO work, it has to appear) — reusing the already-computed
           string keeps this render in lockstep with the width budget above, rather than risking the
           two drifting if one is ever edited without the other. `showRightSide` on both nodes: the
           label can't shrink, so on a narrow enough terminal these lose the row instead of wrapping
