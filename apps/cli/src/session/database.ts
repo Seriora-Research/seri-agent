@@ -562,6 +562,31 @@ export class SessionDatabase {
     ).map((row) => JSON.parse(row.json));
   }
 
+  // Selected and deleted in one transaction, not two statements: another seri process can resume a
+  // session this query has already called stale and append to it, and a delete outside the read's
+  // own snapshot would take that fresh record with the rest. Inside one, SQLite refuses the write
+  // instead, which the writer reports as a warning and the next session start retries.
+  pruneTrajectories(opts: { cutoff: string; keepSessionId?: string }): string[] {
+    return this.database.transaction(() => {
+      const stale = (
+        this.database
+          .query(
+            `SELECT session_id AS sessionId
+               FROM trajectory_records
+              WHERE session_id IS NOT ?
+              GROUP BY session_id
+             HAVING MAX(COALESCE(json_extract(json, '$.ts'), json_extract(json, '$.startedAt'))) < ?
+              ORDER BY session_id`,
+          )
+          .all(opts.keepSessionId ?? null, opts.cutoff) as { sessionId: string }[]
+      ).map((row) => row.sessionId);
+      if (stale.length === 0) return stale;
+      const remove = this.database.query("DELETE FROM trajectory_records WHERE session_id = ?");
+      for (const sessionId of stale) remove.run(sessionId);
+      return stale;
+    })();
+  }
+
   insertTurn(id: string, sessionId: string, startedAt: string): void {
     this.database
       .query(
