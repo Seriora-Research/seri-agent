@@ -33,6 +33,11 @@ afterEach(() => {
 // `stickyStart="bottom"` are what park a long transcript at its tail, which is the geometry the
 // scrolled-selection tests below depend on. Mounted without the surrounding <App> deliberately: the
 // scrollbox plus the real TranscriptList is the whole surface selection reaches.
+// `flush()` alone returns before sticky scroll has parked the transcript and painted it, which on a
+// loaded runner leaves the first capture reading a frame the drag then disagrees with — the shape of
+// the CI-only failure this waits out. The last entry is the settle signal for both geometries: it is
+// the bottom row unscrolled, and it is what `stickyStart="bottom"` scrolls to when there are more
+// rows than fit.
 async function mountTranscript(transcript: TranscriptEntry[]): Promise<TestRendererSetup> {
   const setup = await createTestRenderer({ width: TERMINAL_WIDTH, height: TERMINAL_HEIGHT });
   mountedRenderers.push(setup);
@@ -42,6 +47,8 @@ async function mountTranscript(transcript: TranscriptEntry[]): Promise<TestRende
     </scrollbox>,
   );
   await flush(setup);
+  const last = transcript.at(-1);
+  if (last !== undefined) await setup.waitForFrame((frame) => frame.includes(last.text));
   return setup;
 }
 
