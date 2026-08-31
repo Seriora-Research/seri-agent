@@ -3794,7 +3794,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-list.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      // 100 columns, not the default 80: this test is about what /setup lists, not about how a
+      // row degrades when it runs out of room. `envShadowReason`'s text used every one of the 80
+      // default columns before panels took their `PAD_X` interior padding (theme/spacing.ts), so
+      // at 80 the row now middle-truncates and the phrase below never appears whole. The
+      // truncation is pinned by its own test further down rather than left to break this one.
+      const { child, sawLine } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -3806,6 +3813,39 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("sk-a...efgh");
         await sawLine("set by $GROQ_API_KEY in your environment");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The cost of the panel padding, pinned rather than left as a surprise. `envShadowReason`'s
+    // row ended flush against the right border at the classic 80-column default; `PAD_X` on each
+    // side (theme/spacing.ts) takes two columns it did not have, so the row middle-truncates.
+    // Both ends survive and the meaning with them, but the phrase is no longer whole. If the hint
+    // is ever shortened, this test is the one that says so.
+    test("at 80 columns the env-shadow hint middle-truncates rather than reaching the border", async () => {
+      const scriptPath = join(dir, "child-setup-narrow.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, sawInFrameTimes, frameOccurrences } = await startChild(
+        scriptPath,
+        dir,
+        { terminalSize: { cols: 80, rows: 30 } },
+      );
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+        // Polled, not sampled: `lastFrame()` read directly can land on a redraw before the panel
+        // has finished painting, which is the flake this file's own helper comments describe.
+        await sawInFrameTimes("environment — unset it in your shell", 1);
+
+        expect(frameOccurrences("set by $GROQ_API_KEY in ")).toBe(1);
+        expect(frameOccurrences("set by $GROQ_API_KEY in your environment")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -4050,7 +4090,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-env-shadow.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir, { OPENAI_API_KEY: "sk-openai-env-value" }));
 
-      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
+      // 100 columns, for the reason the sibling test above gives: `$OPENAI_API_KEY` is two
+      // characters longer than `$GROQ_API_KEY`, so at the default 80 the padded row clips inside
+      // this prefix and leaves `set by $OPENAI_API_KEY i`.
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -4060,8 +4105,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("/setup — provider API keys");
         // Not the full "...in your environment — unset it in your shell" text: ListRow.tsx's own
-        // `truncate` (its own comment) genuinely clips this row's label at this terminal width,
-        // same as every other `formatSetupRow`-fed row — a prefix is the stable sync point, not the
+        // `truncate` (its own comment) genuinely clips this row's label even at 100 columns, same
+        // as every other `formatSetupRow`-fed row — a prefix is the stable sync point, not the
         // full untruncated phrase.
         await sawLine("set by $OPENAI_API_KEY in");
 

@@ -192,7 +192,9 @@ describe("tuiReducer: transcript-cleared", () => {
 });
 
 describe("tuiReducer: transcript role tagging", () => {
-  test('a role: "user" append after existing content gets a leading blank system separator', () => {
+  // The blank row above a user message is a margin (gapBefore, theme/spacing.ts), not an entry, so
+  // `state.transcript` holds only what something actually said.
+  test('a role: "user" append after existing content lands with no spacer entry before it', () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "transcript-append",
       line: "first",
@@ -201,17 +203,15 @@ describe("tuiReducer: transcript role tagging", () => {
 
     expect(state.transcript).toEqual([
       { role: "system", text: "first" },
-      { role: "system", text: "" },
       { role: "user", text: "> hello" },
     ]);
   });
 
-  // Regression: echoUserInput (cli.ts) is the only call site that ever dispatches `role: "user"`,
-  // and it always passes `flush: false` (deliberately, so a rejected/echoed submission never
-  // fragments an in-progress streamed answer — see pushLine's own comment). The separator used to
-  // be computed only on the `flush: true` branch, so this exact combination — the only one a real
-  // user turn ever produces — silently skipped the leading blank line.
-  test('role: "user", flush: false (the actual echoUserInput dispatch shape) still gets a leading blank separator', () => {
+  // echoUserInput (cli.ts) is the only call site that ever dispatches `role: "user"`, and it always
+  // passes `flush: false` (deliberately, so a rejected/echoed submission never fragments an
+  // in-progress streamed answer — see pushLine's own comment). Asserted separately from the
+  // `flush: true` case above because that combination is the only one a real user turn produces.
+  test('role: "user", flush: false (the actual echoUserInput dispatch shape) appends only the echo', () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "transcript-append",
       line: "first",
@@ -225,12 +225,11 @@ describe("tuiReducer: transcript role tagging", () => {
 
     expect(state.transcript).toEqual([
       { role: "system", text: "first" },
-      { role: "system", text: "" },
       { role: "user", text: "> hello" },
     ]);
   });
 
-  test('the very first entry in a fresh session gets no leading separator, even with role: "user"', () => {
+  test('the very first entry in a fresh session stands alone, even with role: "user"', () => {
     const state = tuiReducer(initialTuiState(session()), {
       type: "transcript-append",
       line: "> hello",

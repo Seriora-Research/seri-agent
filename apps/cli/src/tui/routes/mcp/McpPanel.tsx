@@ -7,6 +7,7 @@ import { mcpLoginLine } from "../../../mcp/commands";
 import type { McpLoginResult } from "../../../mcp/login";
 import type { McpCatalog } from "../../../mcp/types";
 import { useListWindow } from "../../hooks/useListWindow";
+import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
 import { ErrorLine } from "../../ui/ErrorLine";
 import { ListRow } from "../../ui/ListRow";
@@ -163,7 +164,7 @@ export function McpPanel({
   }
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+    <box {...FRAME} flexDirection="column">
       <text fg={theme.text} attributes={TextAttributes.BOLD}>
         MCP servers
       </text>
@@ -247,7 +248,7 @@ function McpTrustPreview({
 
   const count = catalog.tools.length;
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+    <box {...FRAME} flexDirection="column">
       <text fg={theme.text} attributes={TextAttributes.BOLD}>
         {`Trust "${name}"? ${count} tool${count === 1 ? "" : "s"}`}
       </text>

@@ -7,6 +7,7 @@
 import { useKeyboard } from "@opentui/react";
 import { useListWindow } from "../../hooks/useListWindow";
 import type { EffortPanelState } from "../../state/reducer";
+import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
 import { ListRow } from "../../ui/ListRow";
 import { isDismiss, isEnter } from "../../util/keys";
@@ -47,7 +48,7 @@ export function EffortPanel({
   });
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+    <box {...FRAME} flexDirection="column">
       <text fg={theme.muted}>/effort — reasoning effort for the current model</text>
       {visible.map(({ row, isSelected }) => (
         <ListRow key={row} selected={isSelected} label={row} />

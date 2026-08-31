@@ -5,6 +5,7 @@ import { useKeyboard } from "@opentui/react";
 import { useListWindow } from "../../hooks/useListWindow";
 import type { PermissionRow } from "../../state/commands";
 import type { PermissionsPanelState } from "../../state/reducer";
+import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
 import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
 import { ListRow } from "../../ui/ListRow";
@@ -77,7 +78,7 @@ function PermissionsList({
   });
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+    <box {...FRAME} flexDirection="column">
       <text fg={theme.muted}>/permissions — tools approved permanently</text>
       {visible.map(({ row, isSelected }) => (
         <ListRow key={row.tool} selected={isSelected} label={formatPermissionRow(row)} />

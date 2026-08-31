@@ -135,11 +135,11 @@ describe("App", () => {
     expect(modeLineIndex).toBeGreaterThan(inputBottomBorderIndex);
   });
 
-  // `not.toContain("╭")` is what makes this non-vacuous across all 9 borderStyle sites at once —
-  // a stray "rounded" reintroduced anywhere would still leave a rounded corner present elsewhere on
-  // screen. `"─"`, not `"┌"`: InputBox (the only bordered element visible at this default state)
-  // borders top/bottom only now — `border={["top", "bottom"]}` drops its corner glyphs entirely,
-  // not just its side rules.
+  // `not.toContain("╭")` is what makes this non-vacuous: every bordered box in the TUI spreads the
+  // one FRAME (theme/spacing.ts), so a stray "rounded" reintroduced there or at a call site that
+  // overrides it still leaves a rounded corner somewhere on screen. `"─"` is the horizontal rule
+  // `borderStyle="single"` draws; `"╭"` is what rounded puts in its corners instead of the `"┌"`
+  // the test below pins.
   test("borders render with square corners, not rounded ones", async () => {
     const { setup } = await connect();
 
@@ -148,18 +148,20 @@ describe("App", () => {
     expect(frame).not.toContain("╭");
   });
 
-  // InputBox (components/InputBox.tsx) borders top/bottom only — `border={["top", "bottom"]}`
-  // drops both the vertical side rules and every corner glyph, not just the sides.
-  test("InputBox has a top/bottom horizontal rule only — no vertical sides, no corner glyphs", async () => {
+  // InputBox (components/InputBox.tsx) spreads FRAME (theme/spacing.ts), so it draws all
+  // four sides — both vertical rules and every corner glyph, not just the top/bottom rules it used
+  // to. It is the only bordered element visible at this default state, so the whole frame's glyph
+  // set is its own.
+  test("InputBox is a full four-side box — vertical rules and all four corner glyphs", async () => {
     const { setup } = await connect();
 
     const frame = setup.captureCharFrame();
     expect(frame).toContain("─");
-    expect(frame).not.toContain("│");
-    expect(frame).not.toContain("┌");
-    expect(frame).not.toContain("┐");
-    expect(frame).not.toContain("└");
-    expect(frame).not.toContain("┘");
+    expect(frame).toContain("│");
+    expect(frame).toContain("┌");
+    expect(frame).toContain("┐");
+    expect(frame).toContain("└");
+    expect(frame).toContain("┘");
   });
 
   // `onSubmit` is only wired once a session exists (runTui, cli.ts); the splash and guided-setup
@@ -1586,9 +1588,9 @@ describe("App", () => {
       // bordered rows, the same wrapping every other long-line assertion in this file already
       // works around.
       expect(frame).toContain(
-        `Approve write_file({"path":"a.txt","content":"x"})? [y]es / [a]lways (saved for this project) /`,
+        `Approve write_file({"path":"a.txt","content":"x"})? [y]es / [a]lways (saved for this project)`,
       );
-      expect(frame).toContain("[N]o");
+      expect(frame).toContain("/ [N]o");
       // Pins both WARNING_MARK and that it sits immediately before the shared helper's own output.
       expect(frame).toContain("! Approve write_file");
     });

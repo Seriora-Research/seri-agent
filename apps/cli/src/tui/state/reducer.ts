@@ -890,9 +890,6 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
 // entirely and leaves `state.streaming` untouched: not moved into `transcript` (still committed
 // later, whole, by whatever event finishes the turn) and not cleared either (clearing it would
 // silently drop the model's in-progress text instead of just deferring its commit).
-// A blank `{role: "system", text: ""}` separator is inserted immediately before `line` when it is
-// a new user turn (`role === "user"`) following existing content, so a user message reads as its
-// own visually distinct block rather than running straight into whatever came before it.
 function pushLine(
   state: TuiState,
   line: string,
@@ -901,26 +898,20 @@ function pushLine(
   muted = false,
   markdown = false,
 ): TuiState {
-  // Computed before the `flush` branch below, not inside the `flush: true` half of it: echoUserInput
-  // (cli.ts) — the only call site that ever dispatches `role: "user"` — always passes `flush: false`,
-  // so a separator that only existed on the `flush: true` path would never actually fire for a real
-  // user turn.
   const entry: TranscriptEntry = {
     role,
     text: line,
     ...(muted ? { muted: true } : {}),
     ...(markdown ? { markdown: true } : {}),
   };
-  const separator: TranscriptEntry[] =
-    role === "user" && state.transcript.length > 0 ? [{ role: "system", text: "" }] : [];
   if (!flush) {
-    return { ...state, transcript: [...state.transcript, ...separator, entry] };
+    return { ...state, transcript: [...state.transcript, entry] };
   }
   const flushedStreaming: TranscriptEntry[] =
     state.streaming.length > 0 ? [{ role: "assistant", text: state.streaming }] : [];
   return {
     ...state,
-    transcript: [...state.transcript, ...flushedStreaming, ...separator, entry],
+    transcript: [...state.transcript, ...flushedStreaming, entry],
     streaming: "",
   };
 }

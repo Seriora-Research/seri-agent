@@ -80,6 +80,7 @@ import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { SkillsPanel } from "./routes/skills/SkillsPanel";
 import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
 import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
+import { FRAME, gapBefore } from "./theme/spacing";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
 import type { CompletionSource } from "./util/completion";
@@ -613,19 +614,22 @@ export function App({
               transcript, and scrolls away on its own once enough conversation accumulates below
               it. Static after mount — a later `/model` switch moves `state.route` and the mode
               indicator, not this, which reports what the session opened on. */}
-              {splashBanner !== undefined && (
-                <>
-                  <SplashBanner info={splashBanner} />
-                  <text> </text>
-                </>
-              )}
+              {splashBanner !== undefined && <SplashBanner info={splashBanner} />}
               <TranscriptList transcript={state.transcript} />
               {/* Settled toolActivity groups, painted live inside the scrollbox so mid-turn
               scrollback includes them. pendingTool (below) stays pinned outside. After
               flushToolActivity, toolActivity is [] and this region unmounts in the same
-              update that pushLine's the muted transcript entries — no double paint. */}
+              update that pushLine's the muted transcript entries — no double paint.
+              These rows sit outside TranscriptList, so its own per-row rhythm cannot reach them.
+              The first row reads the last committed entry's role and takes its gap from the same
+              table: usually the user message that opened the turn, but a retry or compaction
+              notice can land in between, which a hardcoded pair would space wrongly. */}
               {renderLiveToolActivity(state.toolActivity).map((line, index) => (
-                <text key={index} fg={theme.muted}>
+                <text
+                  key={index}
+                  fg={theme.muted}
+                  marginTop={index === 0 ? gapBefore(state.transcript.at(-1)?.role, "system") : 0}
+                >
                   {line}
                 </text>
               ))}
@@ -658,7 +662,7 @@ export function App({
       {state.pendingTool !== undefined &&
         !(state.pendingTool.name === "dispatch_subagents" && state.subagents.length > 0) &&
         (state.pendingTool.name === "write_file" || state.pendingTool.name === "edit" ? (
-          <box borderStyle="single" borderColor={theme.warning}>
+          <box {...FRAME} borderColor={theme.warning}>
             {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: write_file/edit
             args carry a whole file body — exactly the case the helper exists for, uncapped
             here otherwise. */}
@@ -801,12 +805,7 @@ export function App({
       ) : onSubmit === undefined && state.splashDone && queued !== undefined ? (
         // One task, not a queue: a second line typed here would silently replace the first, since
         // only one value survives to the session mount. The box goes away instead of lying about it.
-        <box
-          flexDirection="row"
-          borderStyle="single"
-          borderColor={theme.muted}
-          border={["top", "bottom"]}
-        >
+        <box flexDirection="row" {...FRAME}>
           <text fg={theme.muted}>queued — sending when the session is ready</text>
         </box>
       ) : onSubmit === undefined ? (
@@ -815,14 +814,9 @@ export function App({
         // screen for as long as the startup work behind them takes — the models.dev fetch on the
         // way to `prepareSession` alone can hold it for seconds. Rendering InputBox here swallows a
         // task typed in that window: it echoes the text and then drops it on Enter, because there is
-        // nowhere to send it. Same top/bottom rule as InputBox so the mode row below does not jump
+        // nowhere to send it. Same FRAME as InputBox so the mode row below does not jump
         // when the real session mounts.
-        <box
-          flexDirection="row"
-          borderStyle="single"
-          borderColor={theme.muted}
-          border={["top", "bottom"]}
-        >
+        <box flexDirection="row" {...FRAME}>
           <text fg={theme.muted}>starting session…</text>
         </box>
       ) : (

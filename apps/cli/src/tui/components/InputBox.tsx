@@ -2,9 +2,10 @@
 import { decodePasteBytes, TextAttributes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import { useEffect, useRef, useState } from "react";
+import { FRAME } from "../theme/spacing";
 import { theme } from "../theme/theme";
 import { applyCompletion, type CompletionSource, resolveCompletion } from "../util/completion";
-import { slideWindow } from "../util/format";
+import { INPUT_PLACEHOLDER, slideWindow } from "../util/format";
 import { isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
 import { COMPLETION_POPUP_ROWS, CompletionPopup } from "./CompletionPopup";
 
@@ -279,10 +280,17 @@ export function InputBox({
   // block cursor is drawn. INVERSE on a single space is exactly a solid caret (theme/theme.ts's own
   // note on where that attribute survives), and there is no cursor-position tracking here — the
   // handlers above only append to and delete from the end — so it always trails the text.
+  // `flexShrink={0}` on both: OpenTUI's own default is 1, so a narrow terminal would otherwise
+  // squeeze the marker and the cursor to make room for the placeholder below instead of clipping
+  // the placeholder, which is the only one of the three that can afford to lose characters.
   const field = (
     <>
-      <text fg={theme.text}>{bare ? value : `> ${value}`}</text>
-      <text attributes={TextAttributes.INVERSE}> </text>
+      <text fg={theme.text} flexShrink={0}>
+        {bare ? value : `> ${value}`}
+      </text>
+      <text attributes={TextAttributes.INVERSE} flexShrink={0}>
+        {" "}
+      </text>
     </>
   );
 
@@ -299,15 +307,15 @@ export function InputBox({
           offset={completionWindow.offset}
         />
       )}
-      <box
-        flexDirection="row"
-        borderStyle="single"
-        borderColor={theme.muted}
-        border={["top", "bottom"]}
-      >
+      <box flexDirection="row" {...FRAME}>
         {/* "> " matches the same marker the transcript's own user-turn echo uses (cli.ts's
       echoUserInput), so it's visually clear where typed text goes. */}
         {field}
+        {value.length === 0 && (
+          <text fg={theme.muted} marginLeft={1} truncate wrapMode="none" flexGrow={1}>
+            {INPUT_PLACEHOLDER}
+          </text>
+        )}
       </box>
     </>
   );
