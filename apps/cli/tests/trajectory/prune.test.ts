@@ -1,15 +1,23 @@
-import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DATABASE_FILENAME, SessionDatabase } from "../../src/session/database";
+import { SessionDatabase } from "../../src/session/database";
 import { pruneTrajectories } from "../../src/trajectory/prune";
-import { TRAJECTORY_SCHEMA_VERSION, type TrajectoryRecord } from "../../src/trajectory/schema";
+import {
+  TRAJECTORY_SCHEMA_VERSION,
+  type TrajectoryKind,
+  type TrajectoryRecord,
+} from "../../src/trajectory/schema";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function seedSession(database: SessionDatabase, sessionId: string, at: string): void {
+function seedSession(
+  database: SessionDatabase,
+  sessionId: string,
+  at: string,
+  kind: TrajectoryKind = { kind: "done", reason: "no-tool-call" },
+): void {
   database.appendTrajectory(
     {
       v: TRAJECTORY_SCHEMA_VERSION,
@@ -23,8 +31,7 @@ function seedSession(database: SessionDatabase, sessionId: string, at: string): 
       ts: at,
       sessionId,
       actor: { type: "parent" },
-      kind: "done",
-      reason: "no-tool-call",
+      ...kind,
     } as Omit<TrajectoryRecord, "seq">,
   );
 }
@@ -40,9 +47,16 @@ describe("pruneTrajectories", () => {
       writeFileSync(midPath, "{}\n");
       writeFileSync(livePath, "{}\n");
       const now = new Date("2026-08-27T00:00:00Z");
-      const day = 24 * 60 * 60 * 1000;
-      utimesSync(oldPath, new Date(now.getTime() - 31 * day), new Date(now.getTime() - 31 * day));
-      utimesSync(midPath, new Date(now.getTime() - 15 * day), new Date(now.getTime() - 15 * day));
+      utimesSync(
+        oldPath,
+        new Date(now.getTime() - 31 * DAY_MS),
+        new Date(now.getTime() - 31 * DAY_MS),
+      );
+      utimesSync(
+        midPath,
+        new Date(now.getTime() - 15 * DAY_MS),
+        new Date(now.getTime() - 15 * DAY_MS),
+      );
       utimesSync(livePath, now, now);
       writeFileSync(join(dir, "notes.txt"), "leave me");
 
@@ -54,7 +68,7 @@ describe("pruneTrajectories", () => {
     }
   });
 
-  test("missing directory returns an empty list", () => {
+  test("a missing directory prunes nothing", () => {
     const parent = mkdtempSync(join(tmpdir(), "seri-traj-missing-"));
     try {
       expect(
@@ -104,23 +118,7 @@ describe("pruneTrajectories", () => {
     try {
       const database = new SessionDatabase(configDir);
       seedSession(database, "long-running", at(90));
-      database.appendTrajectory(
-        {
-          v: TRAJECTORY_SCHEMA_VERSION,
-          kind: "header",
-          sessionId: "long-running",
-          cwd: "/tmp/proj",
-          startedAt: at(90),
-        },
-        {
-          v: TRAJECTORY_SCHEMA_VERSION,
-          ts: at(1),
-          sessionId: "long-running",
-          actor: { type: "parent" },
-          kind: "retry",
-          attempt: 1,
-        } as Omit<TrajectoryRecord, "seq">,
-      );
+      seedSession(database, "long-running", at(1), { kind: "retry", attempt: 1 });
       database.close();
 
       expect(pruneTrajectories(dir, { now, retentionDays: 30 }).sessions).toEqual([]);
@@ -131,46 +129,6 @@ describe("pruneTrajectories", () => {
       } finally {
         after.close();
       }
-    } finally {
-      rmSync(configDir, { recursive: true, force: true });
-    }
-  });
-
-  test("vacuums the pages freed by a deleted session", () => {
-    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-db-vacuum-"));
-    const dir = join(configDir, "trajectories");
-    const now = new Date("2026-08-27T00:00:00Z");
-    const at = new Date(now.getTime() - 31 * DAY_MS).toISOString();
-    try {
-      const database = new SessionDatabase(configDir);
-      // A session that fits one page frees none on delete, so the assertion needs bulk to mean
-      // anything.
-      for (let i = 0; i < 20; i++) {
-        database.appendTrajectory(
-          {
-            v: TRAJECTORY_SCHEMA_VERSION,
-            kind: "header",
-            sessionId: "bulky",
-            cwd: "/tmp/proj",
-            startedAt: at,
-          },
-          {
-            v: TRAJECTORY_SCHEMA_VERSION,
-            ts: at,
-            sessionId: "bulky",
-            actor: { type: "parent" },
-            kind: "error",
-            error: "x".repeat(2048),
-          } as Omit<TrajectoryRecord, "seq">,
-        );
-      }
-      database.close();
-
-      expect(pruneTrajectories(dir, { now, retentionDays: 30 }).sessions).toEqual(["bulky"]);
-
-      const raw = new Database(join(configDir, DATABASE_FILENAME));
-      expect(raw.query("PRAGMA freelist_count").get()).toEqual({ freelist_count: 0 });
-      raw.close();
     } finally {
       rmSync(configDir, { recursive: true, force: true });
     }

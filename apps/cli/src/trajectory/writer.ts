@@ -84,20 +84,18 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
   let header: TrajectoryHeader | undefined;
   const parent: TrajectoryActor = { type: "parent" };
 
-  function pruneIfPresent(keepSessionId?: string): void {
+  function prune(keepSessionId?: string): void {
     try {
-      if (existsSync(opts.dir)) {
-        pruneTrajectories(opts.dir, {
-          now: now(),
-          retentionDays: opts.retentionDays,
-          ...(keepSessionId !== undefined ? { keepSessionId } : {}),
-        });
-      }
+      pruneTrajectories(opts.dir, {
+        now: now(),
+        retentionDays: opts.retentionDays,
+        ...(keepSessionId !== undefined ? { keepSessionId } : {}),
+      });
     } catch (err) {
       opts.onWarning(`could not prune trajectories: ${messageOf(err)}`);
     }
   }
-  if (!enabled) pruneIfPresent(opts.sessionId);
+  prune(opts.sessionId);
 
   function writeRecord(kind: TrajectoryKind, actor: TrajectoryActor = parent): void {
     if (!enabled) return;
@@ -255,7 +253,7 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
     },
     setEnabled: (next) => {
       enabled = next;
-      if (!next) pruneIfPresent(opts.sessionId);
+      if (!next) prune(opts.sessionId);
     },
     isEnabled: () => enabled,
   };

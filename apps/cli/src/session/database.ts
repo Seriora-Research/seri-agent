@@ -562,6 +562,27 @@ export class SessionDatabase {
     ).map((row) => JSON.parse(row.json));
   }
 
+  pruneTrajectories(opts: { cutoff: string; keepSessionId?: string }): string[] {
+    const stale = (
+      this.database
+        .query(
+          `SELECT session_id AS sessionId
+             FROM trajectory_records
+            WHERE session_id IS NOT ?
+            GROUP BY session_id
+           HAVING MAX(COALESCE(json_extract(json, '$.ts'), json_extract(json, '$.startedAt'))) < ?
+            ORDER BY session_id`,
+        )
+        .all(opts.keepSessionId ?? null, opts.cutoff) as { sessionId: string }[]
+    ).map((row) => row.sessionId);
+    if (stale.length === 0) return stale;
+    this.database.transaction(() => {
+      const remove = this.database.query("DELETE FROM trajectory_records WHERE session_id = ?");
+      for (const sessionId of stale) remove.run(sessionId);
+    })();
+    return stale;
+  }
+
   insertTurn(id: string, sessionId: string, startedAt: string): void {
     this.database
       .query(

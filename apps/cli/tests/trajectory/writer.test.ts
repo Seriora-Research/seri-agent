@@ -263,9 +263,9 @@ describe("createTrajectoryWriter retention", () => {
     const configDir = mkdtempSync(join(tmpdir(), "seri-traj-retention-"));
     const dir = join(configDir, "trajectories");
     try {
-      createTrajectoryWriter(writerOpts(dir, { sessionId: "stale", now: () => past })).recordLoopEvent(
-        { type: "done", reason: "no-tool-call" },
-      );
+      createTrajectoryWriter(
+        writerOpts(dir, { sessionId: "stale", now: () => past }),
+      ).recordLoopEvent({ type: "done", reason: "no-tool-call" });
       createTrajectoryWriter(writerOpts(dir, { sessionId: "sess-1", now: () => present }));
 
       expect(readTrajectory(join(dir, "stale.jsonl"))).toEqual([]);
@@ -278,9 +278,9 @@ describe("createTrajectoryWriter retention", () => {
     const configDir = mkdtempSync(join(tmpdir(), "seri-traj-retention-keep-"));
     const dir = join(configDir, "trajectories");
     try {
-      createTrajectoryWriter(writerOpts(dir, { sessionId: "stale", now: () => past })).recordLoopEvent(
-        { type: "done", reason: "no-tool-call" },
-      );
+      createTrajectoryWriter(
+        writerOpts(dir, { sessionId: "stale", now: () => past }),
+      ).recordLoopEvent({ type: "done", reason: "no-tool-call" });
       createTrajectoryWriter(writerOpts(dir, { sessionId: "stale", now: () => present }));
 
       expect(readTrajectory(join(dir, "stale.jsonl"))).toHaveLength(2);
