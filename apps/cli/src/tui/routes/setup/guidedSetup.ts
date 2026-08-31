@@ -57,7 +57,7 @@ export async function runGuidedSetup(
   configDir: string,
   catalogPromise: Promise<ModelCatalog>,
 ): Promise<void> {
-  const { root } = await getTuiRenderer();
+  const { root } = await getTuiRenderer(configDir);
 
   // Same synchronous-mirror pattern as runTui's own `liveState`/`dispatch` — kept here, not
   // shared, because runTui's copy is read from ~20 call sites across a much larger closure, where

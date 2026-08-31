@@ -1263,6 +1263,13 @@ async function runTui(
   // `/model` or `/mode` behaves exactly as it would typed a second later.
   queuedTask?: string,
 ): Promise<DriveLoopResult> {
+  // Matches prepareSession's own resolution (D7, feature-plan.md) — routing-priority's per-turn
+  // re-resolution (runTurn, below) and /setup's own reads/writes (a later commit in this loop)
+  // both need it, and both must agree with prepareSession on where "the config dir" is. Resolved
+  // above `getTuiRenderer` rather than below it because that call now reads config.json for the
+  // renderer's own background (runtime/renderOptions.ts).
+  const configDir = deps.authConfigDir ?? getConfigDir();
+
   // `root` is awaited here, at the top of this function, instead of at a synchronous `render()`
   // call: `createCliRenderer` is async (`@opentui/core`'s own API, unlike Ink's synchronous
   // `render`), so
@@ -1270,12 +1277,7 @@ async function runTui(
   // before the promise executor — every closure below (`quit`, `runTurn`'s catch) can only ever
   // execute from a keypress or reducer effect, neither of which can fire before this `await`
   // resolves and the tree is actually mounted.
-  const { renderer, root } = await getTuiRenderer();
-
-  // Matches prepareSession's own resolution (D7, feature-plan.md) — routing-priority's per-turn
-  // re-resolution (runTurn, below) and /setup's own reads/writes (a later commit in this loop)
-  // both need it, and both must agree with prepareSession on where "the config dir" is.
-  const configDir = deps.authConfigDir ?? getConfigDir();
+  const { renderer, root } = await getTuiRenderer(configDir);
 
   // Findings 2/3/4/6 (thermo-nuclear structural review, round 6): `liveState` is a SYNCHRONOUS
   // mirror of the reducer's own state, kept current by running the exact same pure `tuiReducer`

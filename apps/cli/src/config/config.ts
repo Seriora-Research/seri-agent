@@ -86,6 +86,16 @@ export function configBoolean(value: string | undefined): boolean {
   return value !== "false";
 }
 
+// The ground the TUI paints, or nothing. `#rrggbb` only — `#rgb`, `rgb()` and named colors each
+// cost a validator no caller needs. Everything else, the documented `terminal` spelling included,
+// resolves to undefined and leaves the terminal's own background alone: this runs while the
+// renderer is being built (tui/runtime/renderOptions.ts), where a throw would take the whole TUI
+// down and a warning would have nowhere to print, so a mistyped color reads as no preference at
+// all rather than as an error.
+export function tuiBackgroundColor(value: string | undefined): string | undefined {
+  return value !== undefined && /^#[0-9a-fA-F]{6}$/.test(value) ? value : undefined;
+}
+
 // env-then-file precedence, falsy-skip: an env var set to "" is treated the same as unset, so it
 // falls through to config.json rather than winning as a valid-looking empty value. Mirrors
 // provider/keys.ts's stateFromConfig — value and source come from ONE truthiness test, so a
