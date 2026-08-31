@@ -399,14 +399,28 @@ export function App({
     // `viewport.height` refresh (that happens later in the same layout pass) — so a single `sync`
     // call here can read one-frame-stale geometry; it settles on the NEXT `layout-changed` once Yoga
     // has caught up, which is why a shrink like `/clear` needs two passes to resolve, not one.
+    //
+    // That second pass used to arrive for free, from the scrollbar itself: crossing the
+    // fits/overflows boundary flipped its own `visible`, which set `display: none` on its Yoga node
+    // and so dirtied the layout again. Hiding it for good (below) takes that away, and the mirror
+    // was left permanently one frame stale — a terminal grown until everything fits kept showing
+    // "↑ scrolled". So the settled read is asked for directly instead of hoped for: `Renderable`
+    // emits its own "resize" AFTER running the `onSizeChange` the scrollbox registers on these two
+    // (@opentui/core's own `onResize`), and that callback is `recalculateBarProps` — the very
+    // refresh `layout-changed` is too early for. Both children are needed: the viewport's own size
+    // changes on a terminal resize, the content's on a `/clear`.
     const sync = () => {
       const maxScrollTop = Math.max(0, el.scrollHeight - el.viewport.height);
       setScrolledUp(el.scrollTop < maxScrollTop);
     };
     el.verticalScrollBar.on("change", sync);
+    el.viewport.on("resize", sync);
+    el.content.on("resize", sync);
     renderer.root.on("layout-changed", sync);
     return () => {
       el.verticalScrollBar.off("change", sync);
+      el.viewport.off("resize", sync);
+      el.content.off("resize", sync);
       renderer.root.off("layout-changed", sync);
     };
   }, [renderer]);
@@ -601,7 +615,16 @@ export function App({
         width at a narrow terminal — confirmed empirically to stop assistant markdown from
         rendering at all (not just narrowing it) at widths 4-5, where the bullet gutter alone
         still rendered fine. The margin is cosmetic; making it recede at extreme widths trades a
-        breathing-room nicety for the transcript still rendering at all. */}
+        breathing-room nicety for the transcript still rendering at all.
+        verticalScrollbarOptions: with mouse reporting off (runtime/renderOptions.ts) the thumb
+        cannot be dragged and the track cannot be clicked, and it is not merely dead — it paints
+        real block glyphs (█ ▀ ▄) into the frame's last column, so a terminal-native drag across a
+        full line copies one, and trailing-whitespace trimming does not strip a █. Nothing is lost
+        by hiding it: the "↑ scrolled — End to follow" banner is already this app's own scroll
+        position indicator, and it says what to press, which a thumb never did. `visible` (not the
+        scrollbar's other props) is what actually removes it, and it sticks — `ScrollBarRenderable`'s
+        own setter latches `_manualVisibility`, which its `recalculateVisibility` then early-returns
+        on, so a later transcript append cannot show it again. */}
         <scrollbox
           ref={transcriptRef}
           height={scrollboxHeight}
@@ -609,6 +632,7 @@ export function App({
           stickyStart="bottom"
           paddingLeft={width >= TRANSCRIPT_PADDING_MIN_WIDTH ? 1 : 0}
           paddingRight={width >= TRANSCRIPT_PADDING_MIN_WIDTH ? 1 : 0}
+          verticalScrollbarOptions={{ visible: false }}
         >
           {state.pendingChildView === undefined ? (
             <>

@@ -467,6 +467,48 @@ describe("App", () => {
     expect(pickerClosed).toContain("line 299");
   });
 
+  // Regression guard: with mouse reporting off (runtime/renderOptions.ts) the scrollbox's scrollbar
+  // can be neither dragged nor clicked, and it does not merely sit there dead — its thumb paints
+  // block glyphs (█ ▀ ▄) into the frame's LAST column, which is exactly where a terminal-native drag
+  // across a full line finishes, and trailing-whitespace trimming does not strip a █. Asserted
+  // against the real frame instead of against the prop that hides it, because "the scrollbar is
+  // configured hidden" and "no glyph reaches the last column" are different claims and only the
+  // second one is the point. Verified non-vacuous: removing the prop puts a ▄ back on the
+  // transcript's bottom row here.
+  test("nothing paints the transcript's last column when the content overflows", async () => {
+    const { setup, dispatch } = await connect();
+
+    // Every frame row above InputBox's own top border — the transcript viewport — read down its
+    // last column. InputBox's border is the only thing that legitimately paints the last column at
+    // this default state (the "renders below the input box" test above pins that it is the only
+    // bordered element on screen), so it is the natural bottom edge for this.
+    const transcriptRightEdge = (frame: string) => {
+      const lines = frame.split("\n");
+      const inputBoxTop = lines.findIndex((l) => l.includes("─"));
+      return lines
+        .slice(0, inputBoxTop)
+        .map((l) => l.at(-1) ?? "")
+        .join("");
+    };
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush(setup);
+    expect(transcriptRightEdge(setup.captureCharFrame()).length).toBeGreaterThan(0);
+    expect(transcriptRightEdge(setup.captureCharFrame()).trim()).toBe("");
+
+    // A thumb sits at whatever row the scroll position puts it on, so one capture at the tail would
+    // only clear the row it happened to park on.
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    expect(transcriptRightEdge(setup.captureCharFrame()).trim()).toBe("");
+
+    setup.mockInput.pressKey(HOME);
+    await flush(setup);
+    expect(transcriptRightEdge(setup.captureCharFrame()).trim()).toBe("");
+  });
+
   // Regression guard (found independently by two automated PR reviewers): `transcriptScrollOffset`
   // used to be re-clamped only inside the `transcript-scroll`/`transcript-scroll-to` actions
   // themselves, both fired only by a keypress — a terminal resize that GROWS the viewport fires
