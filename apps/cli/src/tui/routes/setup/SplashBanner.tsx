@@ -47,7 +47,7 @@ export function SplashBanner({ info }: { info: SplashBannerInfo }) {
   ] as const;
 
   return (
-    <box flexDirection="column">
+    <box flexDirection="column" marginBottom={1}>
       <box flexDirection="row">
         <text fg={theme.text} flexShrink={0}>
           {`${MARK}  `}

@@ -8,6 +8,7 @@ import { useState } from "react";
 import { useClipboardPaste } from "../hooks/useClipboardPaste";
 import { useListWindow } from "../hooks/useListWindow";
 import type { ModelPickerEntry } from "../state/commands";
+import { FRAME } from "../theme/spacing";
 import { theme } from "../theme/theme";
 import { ListRow } from "../ui/ListRow";
 import { formatModelRow, MODEL_PICKER_HEADER, matchesFilter } from "../util/format";
@@ -119,7 +120,7 @@ export function ModelPicker({
   const showPlaceholder = filterQuery.length === 0;
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+    <box {...FRAME} flexDirection="column">
       <box flexDirection="row">
         {/* Cursor sits immediately after the prompt/query, matching where a real caret belongs;
         the placeholder (empty filter only) renders after it instead of between them. `promptText`,

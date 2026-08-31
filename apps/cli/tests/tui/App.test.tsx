@@ -135,11 +135,11 @@ describe("App", () => {
     expect(modeLineIndex).toBeGreaterThan(inputBottomBorderIndex);
   });
 
-  // `not.toContain("╭")` is what makes this non-vacuous across all 9 borderStyle sites at once —
-  // a stray "rounded" reintroduced anywhere would still leave a rounded corner present elsewhere on
-  // screen. `"─"`, not `"┌"`: InputBox (the only bordered element visible at this default state)
-  // borders top/bottom only now — `border={["top", "bottom"]}` drops its corner glyphs entirely,
-  // not just its side rules.
+  // `not.toContain("╭")` is what makes this non-vacuous: every bordered box in the TUI spreads the
+  // one FRAME (theme/spacing.ts), so a stray "rounded" reintroduced there or at a call site that
+  // overrides it still leaves a rounded corner somewhere on screen. `"─"` is the horizontal rule
+  // `borderStyle="single"` draws; `"╭"` is what rounded puts in its corners instead of the `"┌"`
+  // the test below pins.
   test("borders render with square corners, not rounded ones", async () => {
     const { setup } = await connect();
 
@@ -148,18 +148,20 @@ describe("App", () => {
     expect(frame).not.toContain("╭");
   });
 
-  // InputBox (components/InputBox.tsx) borders top/bottom only — `border={["top", "bottom"]}`
-  // drops both the vertical side rules and every corner glyph, not just the sides.
-  test("InputBox has a top/bottom horizontal rule only — no vertical sides, no corner glyphs", async () => {
+  // InputBox (components/InputBox.tsx) spreads FRAME (theme/spacing.ts), so it draws all
+  // four sides — both vertical rules and every corner glyph, not just the top/bottom rules it used
+  // to. It is the only bordered element visible at this default state, so the whole frame's glyph
+  // set is its own.
+  test("InputBox is a full four-side box — vertical rules and all four corner glyphs", async () => {
     const { setup } = await connect();
 
     const frame = setup.captureCharFrame();
     expect(frame).toContain("─");
-    expect(frame).not.toContain("│");
-    expect(frame).not.toContain("┌");
-    expect(frame).not.toContain("┐");
-    expect(frame).not.toContain("└");
-    expect(frame).not.toContain("┘");
+    expect(frame).toContain("│");
+    expect(frame).toContain("┌");
+    expect(frame).toContain("┐");
+    expect(frame).toContain("└");
+    expect(frame).toContain("┘");
   });
 
   // `onSubmit` is only wired once a session exists (runTui, cli.ts); the splash and guided-setup
@@ -1732,9 +1734,9 @@ describe("App", () => {
       // bordered rows, the same wrapping every other long-line assertion in this file already
       // works around.
       expect(frame).toContain(
-        `Approve write_file({"path":"a.txt","content":"x"})? [y]es / [a]lways (saved for this project) /`,
+        `Approve write_file({"path":"a.txt","content":"x"})? [y]es / [a]lways (saved for this project)`,
       );
-      expect(frame).toContain("[N]o");
+      expect(frame).toContain("/ [N]o");
       // Pins both WARNING_MARK and that it sits immediately before the shared helper's own output.
       expect(frame).toContain("! Approve write_file");
     });
@@ -4871,6 +4873,174 @@ describe("App", () => {
       setup.mockInput.pressArrow("down");
       await flush(setup);
       expect(panelBand(setup.captureCharFrame()).band).toContain("> ");
+    });
+  });
+  // The queue is the only surface between the transcript and the input box, so most of what matters
+  // here is position and what a keypress reaches — both only observable against a real frame.
+  describe("message queue", () => {
+    async function withQueue(...items: string[]) {
+      const connected = await connect();
+      for (const text of items) {
+        connected.dispatch({ type: "queue-appended", id: text, text });
+      }
+      await flush(connected.setup);
+      return connected;
+    }
+
+    // Row index of the first line containing `needle`, so ordering can be asserted rather than mere
+    // containment: "the queue is on screen" and "the queue is above the input box" are different
+    // claims and only the second one is the design.
+    function rowOf(frame: string, needle: string): number {
+      return frame.split(String.fromCharCode(10)).findIndex((line) => line.includes(needle));
+    }
+
+    test("an empty queue draws nothing at all", async () => {
+      const { setup } = await connect();
+      expect(setup.captureCharFrame()).not.toContain("queued");
+    });
+
+    test("a queued message renders above the input box and below the transcript", async () => {
+      const { setup, dispatch } = await withQueue("then open a PR");
+      dispatch({ type: "transcript-append", line: "> earlier task", role: "user" });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      const transcript = rowOf(frame, "earlier task");
+      const header = rowOf(frame, "1 queued");
+      const row = rowOf(frame, "then open a PR");
+      const inputBox = rowOf(frame, "⏸ approve-each mode on");
+
+      expect(transcript).toBeGreaterThanOrEqual(0);
+      expect(transcript).toBeLessThan(header);
+      expect(header).toBeLessThan(row);
+      expect(row).toBeLessThan(inputBox);
+    });
+
+    test("the depth label counts, and the key legend names the keys that are live", async () => {
+      const { setup } = await withQueue("a", "b");
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("2 queued");
+      expect(frame).toContain("ctrl+e edit");
+      expect(frame).toContain("ctrl+x drop");
+    });
+
+    // The mode row's own rule, applied to this row: when both halves of a space-between row do not
+    // fit, the hint loses rather than the row wrapping onto a line the block has not budgeted.
+    test("the key legend is dropped on a terminal too narrow for both halves", async () => {
+      const { setup } = await withQueue("a");
+      await resize(setup, 40, DEFAULT_HEIGHT);
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("1 queued");
+      expect(frame).not.toContain("ctrl+x drop");
+    });
+
+    test("ctrl+down and ctrl+n both move the band, and ctrl+up moves it back", async () => {
+      const { setup } = await withQueue("first one", "second one");
+      const banded = (frame: string) =>
+        frame.split(String.fromCharCode(10)).find((line) => line.includes("second one"));
+
+      setup.mockInput.pressArrow("down", { ctrl: true });
+      await flush(setup);
+      expect(rowOf(setup.captureCharFrame(), "second one")).toBeGreaterThanOrEqual(0);
+      expect(banded(setup.captureCharFrame())).toBeDefined();
+
+      setup.mockInput.pressArrow("up", { ctrl: true });
+      await flush(setup);
+      setup.mockInput.pressKey("n", { ctrl: true });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("second one");
+    });
+
+    test("a plain arrow key does not move the band, so typing is unaffected", async () => {
+      const { setup } = await withQueue("a", "b");
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("2 queued");
+    });
+
+    test("ctrl+x drops the selected row and renumbers the rest", async () => {
+      const { setup } = await withQueue("first one", "second one");
+      setup.mockInput.pressKey("x", { ctrl: true });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("1 queued");
+      expect(frame).toContain("second one");
+      expect(frame).not.toContain("first one");
+    });
+
+    // Ctrl-D keeps the one meaning AGENTS.md and spec 038 give it, in the queue and out of it —
+    // which is why drop is ctrl+x and not the ctrl+d the issue's simulation proposed.
+    test("ctrl+d still quits while the queue is non-empty", async () => {
+      const quits: number[] = [];
+      const { setup, dispatch } = await connect({ onQuit: () => quits.push(1) });
+      dispatch({ type: "queue-appended", id: "q0", text: "still queued" });
+      await flush(setup);
+
+      setup.mockInput.pressKey("d", { ctrl: true });
+      await flush(setup);
+
+      expect(quits).toEqual([1]);
+      expect(setup.captureCharFrame()).toContain("1 queued");
+    });
+
+    test("ctrl+e opens the row for editing and the main input box keeps its own draft", async () => {
+      const { setup } = await withQueue("queued text");
+      await setup.mockInput.typeText("half typed");
+      // InputBox coalesces a burst behind its own 50ms throttle and paints only the leading-edge
+      // character until it fires, so a frame captured before then shows "> h" and proves nothing
+      // about whether the draft survived.
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      await flush(setup);
+
+      setup.mockInput.pressKey("e", { ctrl: true });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("queued text");
+      expect(frame).toContain("half typed");
+    });
+
+    test("a keystroke during an edit reaches the row, not the main input box", async () => {
+      const { setup } = await withQueue("queued");
+      setup.mockInput.pressKey("e", { ctrl: true });
+      await flush(setup);
+
+      await setup.mockInput.typeText("!");
+      await flush(setup);
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("queued!");
+      expect(frame).not.toContain("> !");
+    });
+
+    test("the band does not move while a row is being edited", async () => {
+      const { setup } = await withQueue("first one", "second one");
+      setup.mockInput.pressKey("e", { ctrl: true });
+      await flush(setup);
+      setup.mockInput.pressArrow("down", { ctrl: true });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("first one");
+    });
+
+    test("six queued messages paint five rows and a +1", async () => {
+      const { setup } = await withQueue("m1", "m2", "m3", "m4", "m5", "m6");
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("6 queued");
+      expect(frame).toContain("+1");
+      expect(frame).not.toContain("m6");
+    });
+
+    // A multi-line paste queues its first line and leaves the rest in the box, so a queued message
+    // really can carry a newline — and one row per queued message is what the window budget counts.
+    test("a queued message containing a newline still renders as one row", async () => {
+      const { setup } = await withQueue(`line one${String.fromCharCode(10)}line two`);
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("line one line two");
+      expect(rowOf(frame, "line one")).toBe(rowOf(frame, "line two"));
     });
   });
 });

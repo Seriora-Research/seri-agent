@@ -64,6 +64,7 @@ import { ApprovalBox } from "./components/ApprovalBox";
 import { ChildTranscript } from "./components/ChildTranscript";
 import { InputBox } from "./components/InputBox";
 import { ModelPicker } from "./components/ModelPicker";
+import { QueueBlock } from "./components/QueueBlock";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { TranscriptList } from "./components/TranscriptList";
 import { TurnStatus } from "./components/TurnStatus";
@@ -79,6 +80,7 @@ import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { SkillsPanel } from "./routes/skills/SkillsPanel";
 import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
 import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
+import { FRAME, gapBefore } from "./theme/spacing";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
 import type { CompletionSource } from "./util/completion";
@@ -139,6 +141,14 @@ export type AppProps = {
   // normal Unix "end input" convention). `cli.ts`'s `quit()` is what actually ends the renderer now
   // (this component no longer calls any exit hook itself — see this file's own header comment).
   onQuit?: () => void;
+  // Escape at the input box while a turn is in flight: cancels it, after which cli.ts's own
+  // drainQueue starts whatever was queued behind it. A prop rather than a `deliverSignal` call from
+  // this component, on the same split every other interactive surface here follows — presentation
+  // calls a prop, cli.ts owns the decision — and here that split is load-bearing rather than
+  // stylistic: the guards that keep an Escape away from signals.ts's fatal path read `turnInFlight`
+  // and a per-turn latch, neither of which exists on this side of the boundary. See `onEscape` in
+  // cli.ts for what each guard prevents.
+  onEscape?: () => void;
   // Answers the TUI-native approval prompt (runTui's own tuiApprovalPrompt, cli.ts) — a real prompt
   // rendered inside this same tree, not readline's own stdin-based prompt: a second stdin consumer
   // and a second SIGINT route would otherwise race the renderer's own raw-mode ownership and
@@ -290,6 +300,7 @@ export function App({
   onSubmit,
   onSessionChange,
   onQuit,
+  onEscape,
   onApprovalAnswer,
   onModelSelected,
   onModelPickerCancel,
@@ -651,19 +662,22 @@ export function App({
               transcript, and scrolls away on its own once enough conversation accumulates below
               it. Static after mount — a later `/model` switch moves `state.route` and the mode
               indicator, not this, which reports what the session opened on. */}
-              {splashBanner !== undefined && (
-                <>
-                  <SplashBanner info={splashBanner} />
-                  <text> </text>
-                </>
-              )}
+              {splashBanner !== undefined && <SplashBanner info={splashBanner} />}
               <TranscriptList transcript={state.transcript} />
               {/* Settled toolActivity groups, painted live inside the scrollbox so mid-turn
               scrollback includes them. pendingTool (below) stays pinned outside. After
               flushToolActivity, toolActivity is [] and this region unmounts in the same
-              update that pushLine's the muted transcript entries — no double paint. */}
+              update that pushLine's the muted transcript entries — no double paint.
+              These rows sit outside TranscriptList, so its own per-row rhythm cannot reach them.
+              The first row reads the last committed entry's role and takes its gap from the same
+              table: usually the user message that opened the turn, but a retry or compaction
+              notice can land in between, which a hardcoded pair would space wrongly. */}
               {renderLiveToolActivity(state.toolActivity).map((line, index) => (
-                <text key={index} fg={theme.muted}>
+                <text
+                  key={index}
+                  fg={theme.muted}
+                  marginTop={index === 0 ? gapBefore(state.transcript.at(-1)?.role, "system") : 0}
+                >
                   {line}
                 </text>
               ))}
@@ -696,7 +710,7 @@ export function App({
       {state.pendingTool !== undefined &&
         !(state.pendingTool.name === "dispatch_subagents" && state.subagents.length > 0) &&
         (state.pendingTool.name === "write_file" || state.pendingTool.name === "edit" ? (
-          <box borderStyle="single" borderColor={theme.warning}>
+          <box {...FRAME} borderColor={theme.warning}>
             {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: write_file/edit
             args carry a whole file body — exactly the case the helper exists for, uncapped
             here otherwise. */}
@@ -710,6 +724,22 @@ export function App({
           </text>
         ))}
       <ErrorLine message={state.commandError} />
+      {/* Directly above the input box and below TurnStatus, which is where the issue's own
+      simulation puts it: a queued message has already left the user's hands as far as the box is
+      concerned, so it sits on the transcript's side of it. Outside the render ternary below, not a
+      branch of it — like AuthBanner and SubagentPanel it accompanies whatever is mounted there
+      rather than replacing it, so the depth stays visible while a panel or an ApprovalBox owns the
+      keyboard. `noPanelOpen` is what tells it its keys are dead in that state, so it can drop the
+      key legend rather than name keys that will not reach it. It draws nothing at depth zero, and
+      the transcript box above is `flexGrow`, so the rows it does draw come out of the scrollbox
+      with no height budget to thread through here. */}
+      <QueueBlock
+        queue={state.queue}
+        width={width}
+        noPanelOpen={noPanelOpen}
+        onSubmit={onSubmit ?? (() => {})}
+        dispatch={dispatch}
+      />
       {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
       is waiting on, and answering it (not typing a task or slash command) is the only input that
       means anything until it clears. Extended to a third state for /model, a fourth for /setup,
@@ -823,12 +853,7 @@ export function App({
       ) : onSubmit === undefined && state.splashDone && queued !== undefined ? (
         // One task, not a queue: a second line typed here would silently replace the first, since
         // only one value survives to the session mount. The box goes away instead of lying about it.
-        <box
-          flexDirection="row"
-          borderStyle="single"
-          borderColor={theme.muted}
-          border={["top", "bottom"]}
-        >
+        <box flexDirection="row" {...FRAME}>
           <text fg={theme.muted}>queued — sending when the session is ready</text>
         </box>
       ) : onSubmit === undefined ? (
@@ -837,28 +862,40 @@ export function App({
         // screen for as long as the startup work behind them takes — the models.dev fetch on the
         // way to `prepareSession` alone can hold it for seconds. Rendering InputBox here swallows a
         // task typed in that window: it echoes the text and then drops it on Enter, because there is
-        // nowhere to send it. Same top/bottom rule as InputBox so the mode row below does not jump
+        // nowhere to send it. Same FRAME as InputBox so the mode row below does not jump
         // when the real session mounts.
-        <box
-          flexDirection="row"
-          borderStyle="single"
-          borderColor={theme.muted}
-          border={["top", "bottom"]}
-        >
+        <box flexDirection="row" {...FRAME}>
           <text fg={theme.muted}>starting session…</text>
         </box>
       ) : (
         <InputBox
           onSubmit={onSubmit}
           onQuit={onQuit}
+          // Only while a turn is actually in flight and no queue row is open in its own editor.
+          // Undefined otherwise, so the Escape that dismisses a completion popup or closes a panel
+          // never reaches cli.ts at all — cli.ts guards this again on its own side, because an
+          // Escape delivered with signals.ts's cancel slot empty kills the process rather than
+          // no-opping. While a row IS being edited this box is inert anyway; passing undefined as
+          // well states the intent rather than relying on that.
+          onEscape={state.turn !== undefined && !state.queue.editing ? onEscape : undefined}
           prefill={state.pendingInputPrefill}
           onPrefillConsumed={() => dispatch({ type: "input-prefill-consumed" })}
           onEmptyDown={
-            state.subagents.length > 0
+            state.subagents.length > 0 && !state.queue.editing
               ? () => dispatch({ type: "subagent-panel-focus" })
               : undefined
           }
-          inert={state.subagentPanelFocus || state.pendingChildView !== undefined}
+          // `state.queue.editing` joins the two subagent conditions: while a queue row holds its own
+          // InputBox, two of them are mounted at once, and OpenTUI delivers every keypress to every
+          // mounted handler — so without this a typed character lands in the row's editor AND in
+          // this box. `inert` no-ops exactly the set that must not double up (printables, paste,
+          // Enter, Ctrl-D) while keeping this mount, and so whatever draft was already typed here,
+          // alive. It deliberately still fires `onEmptyDown`, which is why that prop is suppressed
+          // above too: a Down pressed inside the row editor would otherwise hand the keyboard to
+          // the subagent roster mid-edit.
+          inert={
+            state.subagentPanelFocus || state.pendingChildView !== undefined || state.queue.editing
+          }
           completionSources={getCompletionSources?.()}
         />
       )}

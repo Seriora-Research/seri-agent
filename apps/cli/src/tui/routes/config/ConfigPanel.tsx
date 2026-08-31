@@ -9,6 +9,7 @@ import { useClipboardPaste } from "../../hooks/useClipboardPaste";
 import { useListWindow } from "../../hooks/useListWindow";
 import { type ConfigRow, configKeyInfo } from "../../state/commands";
 import type { ConfigPanelState } from "../../state/reducer";
+import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
 import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
 import { ErrorLine } from "../../ui/ErrorLine";
@@ -119,7 +120,7 @@ function ConfigList({
     selectedRow === undefined ? undefined : configKeyInfo(selectedRow.key).description;
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+    <box {...FRAME} flexDirection="column">
       <text fg={theme.muted}>/config — settings</text>
       {visible.map(({ row, isSelected }) => (
         <ListRow key={row.key} selected={isSelected} label={formatConfigRow(row)} />
@@ -211,7 +212,7 @@ function ConfigEnterValue({
   useClipboardPaste(insertPastedText);
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+    <box {...FRAME} flexDirection="column">
       <text fg={theme.muted}>{`Set ${label} (${key})`}</text>
       <text fg={theme.muted}>{description}</text>
       <text>{"*".repeat(value.length)}</text>

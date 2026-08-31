@@ -83,9 +83,14 @@ const MIXED_TRANSCRIPT: TranscriptEntry[] = [
   { role: "system", text: "tool ran read(src/parse.ts)" },
 ];
 
-function userRows(count: number): TranscriptEntry[] {
+// `role: "system"`, so the rows are dense: `gapBefore` (theme/spacing.ts) puts a blank row on
+// either side of a user turn, and a run of user rows would interleave one between every pair. The
+// tests below measure how a screen row resolves to an entry, which is a different question from
+// how many rows an entry occupies — a fixture carrying the rhythm would fold both into one number.
+// transcriptRhythm.test.tsx covers the gaps themselves.
+function denseRows(count: number): TranscriptEntry[] {
   return Array.from({ length: count }, (_, index) => ({
-    role: "user" as const,
+    role: "system" as const,
     text: `entry ${index} text`,
   }));
 }
@@ -165,7 +170,7 @@ describe("transcript selection", () => {
   test("a drag across the whole unscrolled transcript copies every row in order", async () => {
     const setup = await mountTranscript(MIXED_TRANSCRIPT);
     await flushMarkdown(setup, (frame) => frame.includes("entry point"));
-    await setup.mockMouse.drag(0, 0, 45, 2);
+    await setup.mockMouse.drag(0, 0, 45, 3);
 
     const lines = copiedText(setup).split("\n");
     expect(lines).toHaveLength(3);
@@ -183,11 +188,11 @@ describe("transcript selection", () => {
     // pins as unselectable.
     const assistant = await mountTranscript(MIXED_TRANSCRIPT);
     await flushMarkdown(assistant, (frame) => frame.includes("entry point"));
-    await assistant.mockMouse.drag(2, 1, 45, 1);
+    await assistant.mockMouse.drag(2, 2, 45, 2);
     expect(copiedText(assistant)).toBe("the parse() entry point handles it");
 
     const tool = await mountTranscript(MIXED_TRANSCRIPT);
-    await tool.mockMouse.drag(0, 2, 45, 2);
+    await tool.mockMouse.drag(0, 3, 45, 3);
     expect(copiedText(tool)).toBe("tool ran read(src/parse.ts)");
   });
 
@@ -197,7 +202,7 @@ describe("transcript selection", () => {
   test("defect: the ● marker leaks into the copied assistant text", async () => {
     const setup = await mountTranscript(MIXED_TRANSCRIPT);
     await flushMarkdown(setup, (frame) => frame.includes("entry point"));
-    await setup.mockMouse.drag(0, 0, 45, 2);
+    await setup.mockMouse.drag(0, 0, 45, 3);
 
     expect(copiedText(setup)).toContain("●the parse() entry point handles it");
   });
@@ -209,7 +214,7 @@ describe("transcript selection", () => {
   test("defect: a drag started on the assistant row's bullet gutter starts no selection", async () => {
     const setup = await mountTranscript(MIXED_TRANSCRIPT);
     await flushMarkdown(setup, (frame) => frame.includes("entry point"));
-    await setup.mockMouse.drag(0, 1, 45, 1);
+    await setup.mockMouse.drag(0, 2, 45, 2);
 
     expect(setup.renderer.hasSelection).toBe(false);
     expect(setup.renderer.getSelection()).toBeNull();
@@ -221,7 +226,7 @@ describe("transcript selection", () => {
   test("defect: copied markdown is the rendered text, not the source", async () => {
     const setup = await mountTranscript(MIXED_TRANSCRIPT);
     await flushMarkdown(setup, (frame) => frame.includes("entry point"));
-    await setup.mockMouse.drag(0, 0, 45, 2);
+    await setup.mockMouse.drag(0, 0, 45, 3);
 
     const copied = copiedText(setup);
     expect(copied).toContain("parse()");
@@ -230,7 +235,7 @@ describe("transcript selection", () => {
 
   test("an unscrolled transcript selects the entry shown at each screen row", async () => {
     for (let y = 0; y <= 4; y++) {
-      const { scrollTop, shown, selected } = await probeScreenRow(userRows(5), y);
+      const { scrollTop, shown, selected } = await probeScreenRow(denseRows(5), y);
       expect(scrollTop).toBe(0);
       expect(shown).toBe(`entry ${y} text`);
       expect(selected).toBe(shown);
@@ -239,7 +244,7 @@ describe("transcript selection", () => {
 
   test("a transcript parked at its tail selects the entry shown at screen rows 3 to 9", async () => {
     for (let y = 3; y <= 9; y++) {
-      const { scrollTop, shown, selected } = await probeScreenRow(userRows(24), y);
+      const { scrollTop, shown, selected } = await probeScreenRow(denseRows(24), y);
       expect(scrollTop).toBe(14);
       expect(shown).toBe(`entry ${14 + y} text`);
       expect(selected).toBe(shown);
@@ -252,15 +257,15 @@ describe("transcript selection", () => {
   // geometry that no longer matches what is painted: rows 0 and 1 hand back the entry ABOVE the one
   // on screen, and row 2 hands back nothing.
   test("defect: a scrolled transcript resolves its top three screen rows to the wrong entry", async () => {
-    const first = await probeScreenRow(userRows(24), 0);
+    const first = await probeScreenRow(denseRows(24), 0);
     expect(first.shown).toBe("entry 14 text");
     expect(first.selected).toBe("entry 13 text");
 
-    const second = await probeScreenRow(userRows(24), 1);
+    const second = await probeScreenRow(denseRows(24), 1);
     expect(second.shown).toBe("entry 15 text");
     expect(second.selected).toBe("entry 14 text");
 
-    const third = await probeScreenRow(userRows(24), 2);
+    const third = await probeScreenRow(denseRows(24), 2);
     expect(third.shown).toBe("entry 16 text");
     expect(third.selected).toBe("");
   });

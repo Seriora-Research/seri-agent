@@ -15,6 +15,7 @@
 //   wait=TEXT@MS    same with an explicit deadline (e.g. `wait=done ·@90000` for a model turn)
 //   type=TEXT   write TEXT to the terminal
 //   key=NAME    esc | enter | ctrl-c | ctrl-d | shift-tab | up | down
+//               ctrl-e | ctrl-x | ctrl-p | ctrl-n | ctrl-up | ctrl-down (the message queue)
 //   sleep=MS    pause MS milliseconds
 //
 // The child is `bun apps/cli/src/cli.ts --profile <profile>` with cwd = repo root, so the repo
@@ -38,6 +39,16 @@ const KEYS = {
   "shift-tab": "\x1b[Z",
   up: "\x1b[A",
   down: "\x1b[B",
+  // The message queue's own chords (tui/components/QueueBlock.tsx). ctrl-p/ctrl-n are not a
+  // convenience alias for the arrows: a terminal that strips the arrow modifier delivers ctrl-down
+  // as a plain down, which the input box reads as its own empty-Down, so the single-byte pair is
+  // the only form that behaves identically everywhere.
+  "ctrl-e": "\x05",
+  "ctrl-x": "\x18",
+  "ctrl-p": "\x10",
+  "ctrl-n": "\x0e",
+  "ctrl-up": "\x1b[1;5A",
+  "ctrl-down": "\x1b[1;5B",
 };
 
 const [outFile, profile, ...rest] = process.argv.slice(2);
