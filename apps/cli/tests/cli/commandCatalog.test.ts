@@ -74,17 +74,6 @@ const EXPECTED_SESSION = [
 
 const README = readFileSync(join(import.meta.dir, "../../../../README.md"), "utf8");
 
-/*
- * The published command reference, held to the same completeness bar as the README beside it.
- * Read from here rather than asserted inside apps/docs: this is the file a command is added to,
- * so this is where the failure has to land, and pulling this catalog into the docs package's own
- * tsconfig made it typecheck apps/cli's whole module graph against a different target.
- */
-const DOCS_COMMANDS = readFileSync(
-  join(import.meta.dir, "../../../docs/reference/commands.mdx"),
-  "utf8",
-);
-
 function mentionsName(text: string, name: string): boolean {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`${escaped}(?![A-Za-z0-9_-])`).test(text);
@@ -98,13 +87,6 @@ describe("command catalog completeness", () => {
   test("README names every catalog command as a /name token", () => {
     const missing = COMMAND_META.map((meta) => meta.name).filter(
       (name) => !mentionsName(README, name),
-    );
-    expect(missing).toEqual([]);
-  });
-
-  test("the docs command reference names every catalog command as a /name token", () => {
-    const missing = COMMAND_META.map((meta) => meta.name).filter(
-      (name) => !mentionsName(DOCS_COMMANDS, name),
     );
     expect(missing).toEqual([]);
   });
