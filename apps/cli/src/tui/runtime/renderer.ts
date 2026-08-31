@@ -4,6 +4,7 @@
 // three callers, cli.ts's own `run()` — is what actually creates it; `routes/setup/guidedSetup.ts`
 // and `runTui` (cli.ts) reuse the same instance and `root.render` different content into it rather
 // than each owning a separate mount.
+import { writeSync } from "node:fs";
 import { type CliRenderer, createCliRenderer } from "@opentui/core";
 import { createRoot, type Root } from "@opentui/react";
 import { messageOf } from "../../errors";
@@ -28,16 +29,23 @@ let instance: { renderer: CliRenderer; root: Root } | undefined;
 // SAVE then disable, and RESTORE on the way out — never `?1007h`. The mode's default differs per
 // terminal (on for Windows Terminal, off for xterm), so re-enabling it unconditionally at exit
 // would leave the user's terminal in a state seri invented, outliving the process. Written straight
-// to `process.stdout` rather than through the renderer: OpenTUI only takes ownership of
-// `stdout.write` under `screenMode: "split-footer"` (its `capture-stdout` external-output mode) and
-// `renderOptions.ts` pins `"alternate-screen"`, so this IS the same underlying write OpenTUI's own
-// output falls back to; these are complete, self-contained CSI mode sets that OpenTUI itself never
-// emits for either value, so there is no sequence of its own to interleave with.
-// docs/specs/044-tui-selection-copy/research.md has the per-terminal table.
+// to fd 1 rather than through the renderer: OpenTUI only takes ownership of `stdout.write` under
+// `screenMode: "split-footer"` (its `capture-stdout` external-output mode) and `renderOptions.ts`
+// pins `"alternate-screen"`, so this IS the same underlying stream OpenTUI's own output falls back
+// to; these are complete, self-contained CSI mode sets that OpenTUI itself never emits for either
+// value, so there is no sequence of its own to interleave with.
+//
+// `writeSync`, not `process.stdout.write`, and the restore is what makes that load-bearing: a write
+// to a TTY is asynchronous on Windows, and every caller of the restore dies on its very next
+// statement — the `uncaughtException`/`unhandledRejection` pair below calls `destroyTuiRenderer()`
+// and then `process.exit(1)`, and the signal path runs its cleanup and then `process.kill`. Neither
+// flushes a queued write, so the moment restoring the user's terminal matters most is exactly the
+// moment an async one is dropped. The suppress goes through the same call so the pair cannot come
+// apart. docs/specs/044-tui-selection-copy/research.md has the per-terminal table.
 let alternateScrollSuppressed = false;
 
 function suppressAlternateScroll(): void {
-  process.stdout.write("\x1b[?1007s\x1b[?1007l");
+  writeSync(1, "\x1b[?1007s\x1b[?1007l");
   alternateScrollSuppressed = true;
 }
 
@@ -46,7 +54,7 @@ function suppressAlternateScroll(): void {
 function restoreAlternateScroll(): void {
   if (!alternateScrollSuppressed) return;
   alternateScrollSuppressed = false;
-  process.stdout.write("\x1b[?1007r");
+  writeSync(1, "\x1b[?1007r");
 }
 
 // `@opentui/react`'s own `createRoot(renderer).render(node)` creates a BRAND NEW reconciler
