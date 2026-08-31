@@ -97,7 +97,12 @@ function listLines(deps: HooksCommandDeps): string[] {
   });
   lines.push(...storeWarnings);
   if (verdict.kind === "trusted") {
-    lines.push("Trusted. Hooks below are live.");
+    // "Trusted", and deliberately not "live". This reads the grant off disk, where the session's
+    // own registry was frozen at start (runtime/prepare.ts), so a grant made by `/hooks trust` a
+    // moment ago is true here and not yet in effect — and `trust`'s own reply is what says so.
+    // Claiming liveness this function cannot check is how a user ends up believing a rail is
+    // guarding something it is not.
+    lines.push("Trusted.");
     const rows = wiringRows(hooksLoad.registry, "project");
     lines.push(...(rows.length > 0 ? rows : ["No hooks configured."]));
     return lines;

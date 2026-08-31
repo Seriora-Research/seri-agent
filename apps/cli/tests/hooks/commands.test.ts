@@ -92,7 +92,7 @@ describe("list", () => {
     decideHooksCommand(["trust"], { worktree, configDir });
     const { lines } = decideHooksCommand([], { worktree, configDir });
     const text = lines.join("\n");
-    expect(text).toContain("Trusted. Hooks below are live.");
+    expect(text).toContain("Trusted.");
     expect(
       lines.some(
         (l) => l.includes("PreToolUse") && l.includes("edit") && l.includes("block-dangerous"),
@@ -140,9 +140,7 @@ describe("trust and untrust", () => {
     expect(
       trustLines.some((l) => l.includes("It loads in the next session, or after /clear.")),
     ).toBe(true);
-    expect(decideHooksCommand([], { worktree, configDir }).lines.join("\n")).toContain(
-      "Trusted. Hooks below are live.",
-    );
+    expect(decideHooksCommand([], { worktree, configDir }).lines.join("\n")).toContain("Trusted.");
 
     const untrustLines = decideHooksCommand(["untrust"], { worktree, configDir }).lines;
     expect(untrustLines.some((l) => l.includes("Untrusted"))).toBe(true);
