@@ -5,6 +5,7 @@ import { parseColor, type Renderable, type ScrollBoxRenderable } from "@opentui/
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import { TranscriptList } from "../../src/tui/components/TranscriptList";
+import { MAIN_TUI_RENDERER_CONFIG } from "../../src/tui/runtime/renderOptions";
 import { theme } from "../../src/tui/theme/theme";
 import type { TranscriptEntry } from "../../src/tui/util/format";
 import { flush, flushMarkdown } from "./helpers";
@@ -108,6 +109,21 @@ async function probeScreenRow(
 }
 
 describe("transcript selection", () => {
+  // The one line the rest of this file is the counterfactual for, and the only assertion in the
+  // suite that holds it. seri ships the TERMINAL's selection, bought by not reporting the mouse:
+  // OpenTUI's own default enables `?1000`/`?1002`/`?1003`/`?1006`, and a terminal reporting the
+  // mouse to an application stops selecting text for the person using it. Everything below drives
+  // OpenTUI's in-app selection instead — the strategy issue #254 calls B, rejected in
+  // docs/specs/044-tui-selection-copy/research.md over an upstream defect — through renderers of
+  // its own, so none of it fails if this flag is dropped. Neither does anything built on top of it:
+  // runtime/renderer.ts's `?1007` suppression, app.tsx's approval-paging gate, its hidden
+  // scrollbar, or hooks/useClipboardPaste.ts's Ctrl-V would all stay green as accommodations for a
+  // trade no longer being made. An opentui upgrade that conflicts on that file is the way this goes
+  // quietly, which is what this is here to make loud.
+  test("mouse reporting is off, which is what leaves the selection to the terminal", () => {
+    expect(MAIN_TUI_RENDERER_CONFIG.useMouse).toBe(false);
+  });
+
   test("selection comes from the leaf content, never from the scrollbox", async () => {
     const setup = await mountTranscript(MIXED_TRANSCRIPT);
     await flushMarkdown(setup, (frame) => frame.includes("entry point"));
