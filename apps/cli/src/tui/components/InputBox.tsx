@@ -2,6 +2,7 @@
 import { decodePasteBytes, TextAttributes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import { useEffect, useRef, useState } from "react";
+import { useClipboardPaste } from "../hooks/useClipboardPaste";
 import { FRAME } from "../theme/spacing";
 import { theme } from "../theme/theme";
 import { applyCompletion, type CompletionSource, resolveCompletion } from "../util/completion";
@@ -257,9 +258,8 @@ export function InputBox({
   // substance: everything before the first `\r`/`\n` submits now, same as pressing Enter right
   // there; everything after becomes the new input value, awaiting its own Enter rather than being
   // silently swallowed or further auto-split.
-  usePaste((event) => {
+  function insertPastedText(text: string) {
     if (inert) return;
-    const text = decodePasteBytes(event.bytes);
     const split = splitAtTerminator(text);
     if (split === null) {
       scheduleUpdate(pendingValueRef.current + text);
@@ -267,7 +267,14 @@ export function InputBox({
     }
     onSubmit(pendingValueRef.current + split.before);
     scheduleUpdate(split.after);
-  });
+  }
+
+  usePaste((event) => insertPastedText(decodePasteBytes(event.bytes)));
+
+  // Ctrl-V, which no terminal turns into the paste event above — see the hook's own comment. It
+  // lands on the same `insertPastedText`, so a bare Ctrl-V and the terminal's own paste chord
+  // cannot come to disagree about what a pasted newline does.
+  useClipboardPaste(insertPastedText);
 
   // Derived from the throttled `value`, not the ref: this is the render path, and rendering from a
   // ref would not repaint on its own anyway.

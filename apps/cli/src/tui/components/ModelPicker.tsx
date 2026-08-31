@@ -5,6 +5,7 @@ import { decodePasteBytes, TextAttributes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import { useState } from "react";
+import { useClipboardPaste } from "../hooks/useClipboardPaste";
 import { useListWindow } from "../hooks/useListWindow";
 import type { ModelPickerEntry } from "../state/commands";
 import { FRAME } from "../theme/spacing";
@@ -96,8 +97,7 @@ export function ModelPicker({
   // same way: everything before the first `\r`/`\n` narrows the filter and selects the top match
   // now, same as pressing Enter right there; everything after is handed to `onModelSelected` so it
   // can prefill the very next InputBox mount.
-  usePaste((event) => {
-    const text = decodePasteBytes(event.bytes);
+  function insertPastedText(text: string) {
     const split = splitAtTerminator(text);
     if (split === null) {
       setFilterQuery((query) => query + text);
@@ -108,7 +108,13 @@ export function ModelPicker({
     const nextFiltered =
       nextQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, nextQuery));
     selectRow(nextFiltered[0], split.after || undefined);
-  });
+  }
+
+  usePaste((event) => insertPastedText(decodePasteBytes(event.bytes)));
+
+  // Ctrl-V, which no terminal turns into the paste event above — see the hook's own comment. Shares
+  // `insertPastedText` so the two paste paths cannot drift on what an embedded terminator does.
+  useClipboardPaste(insertPastedText);
 
   const promptText = filterQuery.length === 0 ? "> " : `> ${filterQuery}`;
   const showPlaceholder = filterQuery.length === 0;

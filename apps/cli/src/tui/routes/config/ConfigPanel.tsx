@@ -5,6 +5,7 @@
 import { decodePasteBytes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import { useState } from "react";
+import { useClipboardPaste } from "../../hooks/useClipboardPaste";
 import { useListWindow } from "../../hooks/useListWindow";
 import { type ConfigRow, configKeyInfo } from "../../state/commands";
 import type { ConfigPanelState } from "../../state/reducer";
@@ -199,11 +200,16 @@ function ConfigEnterValue({
   // components/InputBox.tsx's own comment. A pasted config value (an API key is the common case)
   // is appended the same way typed text is, newlines stripped; unlike InputBox/ModelPicker, a
   // paste here never submits on a terminator — this step only ever submits on Enter.
-  usePaste((event) => {
+  function insertPastedText(text: string) {
     if (busy) return;
-    const text = decodePasteBytes(event.bytes).replace(/[\r\n]/g, "");
-    setValue((current) => current + text);
-  });
+    setValue((current) => current + text.replace(/[\r\n]/g, ""));
+  }
+
+  usePaste((event) => insertPastedText(decodePasteBytes(event.bytes)));
+
+  // Ctrl-V, which no terminal turns into the paste event above — see the hook's own comment. Shares
+  // `insertPastedText` so a key pasted either way is stripped of newlines the same.
+  useClipboardPaste(insertPastedText);
 
   return (
     <box {...FRAME} flexDirection="column">

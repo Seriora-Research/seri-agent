@@ -8,15 +8,17 @@
 // Steps, executed in order:
 //   wait=TEXT       block until TEXT appears in the decoded output (20s deadline, `@MS` overrides)
 //   type=TEXT       write TEXT to the terminal
-//   key=NAME        esc | enter | ctrl-c | ctrl-d | shift-tab | up | down
+//   key=NAME        esc | enter | ctrl-c | ctrl-d | ctrl-v | shift-tab | pageup | pagedown |
+//                   up | down
 //   sleep=MS        pause MS milliseconds
 //   drag=C1,R1,C2,R2  press at (col,row) C1,R1, move to C2,R2, release — SGR 1006 encoding
 //   click=C,R       press and release at one cell
 //   wheel=up|down,C,R  one wheel notch at a cell
 //
 // Writes three files into <out-dir>: raw.bin (every byte the app wrote, verbatim),
-// decoded.txt (the same stream as text), and report.json (private-mode enables/disables in
-// arrival order, any OSC 52 payloads decoded from base64, and the child's exit code).
+// decoded.txt (the same stream as text), and report.json (private-mode enables, disables, saves
+// and restores in arrival order, any OSC 52 payloads decoded from base64, and the child's exit
+// code).
 // Everything here is observation only — it never asserts, so a probe run has no pass/fail.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -37,7 +39,10 @@ const KEYS = {
   enter: "\r",
   "ctrl-c": "\x03",
   "ctrl-d": "\x04",
+  "ctrl-v": "\x16",
   "shift-tab": `${ESC}[Z`,
+  pageup: `${ESC}[5~`,
+  pagedown: `${ESC}[6~`,
   up: `${ESC}[A`,
   down: `${ESC}[B`,
 };
@@ -146,14 +151,20 @@ for (const step of steps) {
 
 await sleep(400);
 
-const PRIVATE_MODE = new RegExp(`${ESC}\\[\\?([\\d;]+)([hl])`, "g");
+// `s` and `r` (XTSAVE/XTRESTORE) take the same form as DECSET/DECRST's own `h`/`l`, and the TUI
+// writes `?1007s` on the way in and `?1007r` on the way out (apps/cli/src/tui/runtime/renderer.ts).
+// Parsing only `h`/`l` left the half of the alternate-scroll suppression that PUTS THE WHEEL BACK
+// invisible in report.json, confirmable only by grepping raw.bin. Same array and same `mode` field,
+// two more `action` values, so an `h`/`l` consumer reads it unchanged.
+const PRIVATE_MODE = new RegExp(`${ESC}\\[\\?([\\d;]+)([hlsr])`, "g");
+const MODE_ACTION = { h: "enable", l: "disable", s: "save", r: "restore" };
 const OSC_52 = new RegExp(`${ESC}\\]52;([^;]*);([^${BEL}${ESC}]*)(?:${BEL}|${ESC}\\\\)`, "g");
 
 const raw = chunks.join("");
 const modes = [];
 for (const m of raw.matchAll(PRIVATE_MODE)) {
   for (const code of m[1].split(";"))
-    modes.push({ mode: Number(code), action: m[2] === "h" ? "enable" : "disable" });
+    modes.push({ mode: Number(code), action: MODE_ACTION[m[2]] });
 }
 const osc52 = [];
 for (const m of raw.matchAll(OSC_52)) {

@@ -401,6 +401,152 @@ describe("App", () => {
     expect(frame).toContain("line 299");
   });
 
+  // An approval is the one overlay the paging keys stay live behind, and the exception the gate
+  // above deliberately makes: reading back the command or the diff being approved is the whole
+  // point of that moment, and the wheel that used to scroll behind it is gone now that mouse
+  // reporting is off (runtime/renderOptions.ts). Both halves are asserted here, because un-gating
+  // the keys without also un-gating the banner would recreate exactly the confusion the gate above
+  // exists to prevent — a transcript that moved with nothing on screen saying so.
+  test("PageUp while an approval is pending scrolls the transcript and shows the banner", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    dispatch({
+      type: "approval-requested",
+      toolName: "write_file",
+      args: { path: "a.txt" },
+      offersAlways: true,
+    });
+    await flush(setup);
+    expect(setup.captureCharFrame()).toContain("! Approve write_file");
+
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    let frame = setup.captureCharFrame();
+    expect(frame).toContain("↑ scrolled — End to follow");
+    expect(frame).not.toContain("line 299");
+    // ApprovalBox ignores every non-printable key, so the scroll happens BEHIND the question rather
+    // than answering or dismissing it — assert that, since a paging key silently denying a write is
+    // the worst way this could go wrong.
+    expect(frame).toContain("! Approve write_file");
+
+    setup.mockInput.pressKey(END);
+    await flush(setup);
+    frame = setup.captureCharFrame();
+    expect(frame).not.toContain("↑ scrolled");
+    expect(frame).toContain("line 299");
+    expect(frame).toContain("! Approve write_file");
+  });
+
+  // The state that catches a gate reading `state` instead of the screen: panel commands stay legal
+  // mid-turn (cli.ts's own `tuiHandlers`), so an approval can arrive with /model still open and
+  // leave both fields set. app.tsx's render ternary checks `pendingApproval` first, so the
+  // ApprovalBox is what the user sees — asserted here first, because everything after it is only
+  // meaningful if the picker really is off screen.
+  test("PageUp behind an approval that arrived over an open panel still scrolls the transcript", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    dispatch({
+      type: "model-picker-requested",
+      entries: [
+        { entry: catalogEntry(), keyConfigured: true, alternatives: 0, gatewayReachable: false },
+      ],
+    });
+    dispatch({
+      type: "approval-requested",
+      toolName: "write_file",
+      args: { path: "a.txt" },
+      offersAlways: true,
+    });
+    await flush(setup);
+    let frame = setup.captureCharFrame();
+    expect(frame).toContain("! Approve write_file");
+    expect(frame).not.toContain('Type to filter — try "free" or "paid"…');
+
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    frame = setup.captureCharFrame();
+    expect(frame).toContain("↑ scrolled — End to follow");
+    expect(frame).not.toContain("line 299");
+    expect(frame).toContain("! Approve write_file");
+  });
+
+  // The negative control the exception above needs: it is carved out by naming ten OTHER panel
+  // fields, and a field dropped from that list would reopen the background-scroll bug the /config
+  // guard above closes, on that panel alone and silently. /config pins one branch of the list; this
+  // pins a second one.
+  test("PageUp while the model picker is open does not scroll the transcript in the background", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    dispatch({
+      type: "model-picker-requested",
+      entries: [
+        { entry: catalogEntry(), keyConfigured: true, alternatives: 0, gatewayReachable: false },
+      ],
+    });
+    await flush(setup);
+
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+
+    dispatch({ type: "model-picker-resolved" });
+    await flush(setup);
+    const pickerClosed = setup.captureCharFrame();
+    expect(pickerClosed).not.toContain("↑ scrolled");
+    expect(pickerClosed).toContain("line 299");
+  });
+
+  // Regression guard: with mouse reporting off (runtime/renderOptions.ts) the scrollbox's scrollbar
+  // can be neither dragged nor clicked, and it does not merely sit there dead — its thumb paints
+  // block glyphs (█ ▀ ▄) into the frame's LAST column, which is exactly where a terminal-native drag
+  // across a full line finishes, and trailing-whitespace trimming does not strip a █. Asserted
+  // against the real frame instead of against the prop that hides it, because "the scrollbar is
+  // configured hidden" and "no glyph reaches the last column" are different claims and only the
+  // second one is the point. Verified non-vacuous: removing the prop puts a ▄ back on the
+  // transcript's bottom row here.
+  test("nothing paints the transcript's last column when the content overflows", async () => {
+    const { setup, dispatch } = await connect();
+
+    // Every frame row above InputBox's own top border — the transcript viewport — read down its
+    // last column. InputBox's border is the only thing that legitimately paints the last column at
+    // this default state (the "renders below the input box" test above pins that it is the only
+    // bordered element on screen), so it is the natural bottom edge for this.
+    const transcriptRightEdge = (frame: string) => {
+      const lines = frame.split("\n");
+      const inputBoxTop = lines.findIndex((l) => l.includes("─"));
+      return lines
+        .slice(0, inputBoxTop)
+        .map((l) => l.at(-1) ?? "")
+        .join("");
+    };
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush(setup);
+    expect(transcriptRightEdge(setup.captureCharFrame()).length).toBeGreaterThan(0);
+    expect(transcriptRightEdge(setup.captureCharFrame()).trim()).toBe("");
+
+    // A thumb sits at whatever row the scroll position puts it on, so one capture at the tail would
+    // only clear the row it happened to park on.
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    expect(transcriptRightEdge(setup.captureCharFrame()).trim()).toBe("");
+
+    setup.mockInput.pressKey(HOME);
+    await flush(setup);
+    expect(transcriptRightEdge(setup.captureCharFrame()).trim()).toBe("");
+  });
+
   // Regression guard (found independently by two automated PR reviewers): `transcriptScrollOffset`
   // used to be re-clamped only inside the `transcript-scroll`/`transcript-scroll-to` actions
   // themselves, both fired only by a keypress — a terminal resize that GROWS the viewport fires

@@ -5,6 +5,7 @@ import { decodePasteBytes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import { useState } from "react";
+import { useClipboardPaste } from "../../hooks/useClipboardPaste";
 import { useListWindow } from "../../hooks/useListWindow";
 import type { SetupState } from "../../state/reducer";
 import { FRAME } from "../../theme/spacing";
@@ -174,11 +175,16 @@ function SetupEnterKey({
   // terminator and auto-submit: a pasted key is never expected to contain a newline, and silently
   // accepting one into a credential is worse than the rare dropped keystroke this simplification
   // could cost (SetupEnterKey's original Ink-era comment, carried over unchanged).
-  usePaste((event) => {
+  function insertPastedText(text: string) {
     if (busy) return;
-    const text = decodePasteBytes(event.bytes);
     setValue((current) => current + text.replace(/[\r\n]/g, ""));
-  });
+  }
+
+  usePaste((event) => insertPastedText(decodePasteBytes(event.bytes)));
+
+  // Ctrl-V, which no terminal turns into the paste event above — see the hook's own comment. Shares
+  // `insertPastedText` so a key pasted either way is stripped of newlines the same.
+  useClipboardPaste(insertPastedText);
 
   return (
     <box {...FRAME} flexDirection="column">
