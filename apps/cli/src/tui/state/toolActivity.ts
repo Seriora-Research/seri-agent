@@ -17,11 +17,18 @@ import type { GlobResult } from "../../tools/glob";
 import type { GrepResult } from "../../tools/grep";
 import type { ProcessResult } from "../../tools/spawnCollect";
 import { writeFileVerification } from "../../verify/outcome";
+import { TOOL_INDENT } from "../theme/spacing";
 import { TREE_BRANCH, TREE_MID } from "../theme/theme";
 
 export type ToolActivityEntry = {
   name: string;
   count: number;
+  // The `→ name(arg)` line the group paints above its own result line, taken from the FIRST call
+  // in the group: every later call folds into the count, so one representative argument is all
+  // this line can honestly show. The tool keeps the name the model called it by, which is what
+  // cli/output.ts's own `printEvent` already writes on the non-interactive path — the two
+  // surfaces name a call identically.
+  callLine: string;
   singleLine: string;
   detailLines: string[];
   anomalyLines: string[];
@@ -38,20 +45,32 @@ function groupKey(name: string): string {
   return isMcpToolName(name) ? MCP_GROUP_KEY : name;
 }
 
-export const TOOL_LABELS: Record<string, { verb: string; noun: string }> = {
-  read_file: { verb: "Read", noun: "files" },
-  grep: { verb: "Searched", noun: "files" },
-  glob: { verb: "Searched", noun: "files" },
-  bash: { verb: "Ran", noun: "shell commands" },
-  powershell: { verb: "Ran", noun: "shell commands" },
-  write_file: { verb: "Wrote", noun: "files" },
-  edit: { verb: "Edited", noun: "edits" },
+// `one`/`many` are both spelled out rather than derived by appending an "s": the result line now
+// carries the count on every group, singular included ("Ran 1 shell command"), and a trailing-s
+// rule is a shape assumption that holds for these seven entries and breaks on the first noun that
+// does not pluralise that way.
+//
+// `settles` marks the two tools whose settled line is built from the RESULT rather than from the
+// arguments, so it says something a count cannot ("nothing written", a write verification). Every
+// other tool's settled line is its own arguments, which the `→ name(arg)` line above already
+// shows, so repeating it under itself would be the same fact twice.
+export const TOOL_LABELS: Record<
+  string,
+  { verb: string; one: string; many: string; settles?: true }
+> = {
+  read_file: { verb: "Read", one: "file", many: "files" },
+  grep: { verb: "Searched", one: "file", many: "files" },
+  glob: { verb: "Searched", one: "file", many: "files" },
+  bash: { verb: "Ran", one: "shell command", many: "shell commands" },
+  powershell: { verb: "Ran", one: "shell command", many: "shell commands" },
+  write_file: { verb: "Wrote", one: "file", many: "files", settles: true },
+  edit: { verb: "Edited", one: "edit", many: "edits", settles: true },
   // The group header for MCP_GROUP_KEY, so aggregateLine reads "Ran MCP 3 tools" instead of
   // falling through to its `${name} ×${count}` unknown-key case. Deliberately no bullet on this
   // line — a reference mock for this feature puts `●` (BULLET, TranscriptList.tsx) on the group
   // header, which is reserved for "this is the assistant's answer"; a tool group is muted and
   // unmarked like every other TOOL_LABELS group, so it never reads as one.
-  mcp: { verb: "Ran MCP", noun: "tools" },
+  mcp: { verb: "Ran MCP", one: "tool", many: "tools" },
 };
 
 const COMMAND_CAP = 60;
@@ -87,30 +106,43 @@ export function trimPath(p: string): string {
   return relative;
 }
 
-export function summarizeArgs(name: string, args: unknown): string {
+// The one argument worth naming in a call line, escaped and capped. Empty for a tool whose
+// arguments have no single representative value (edit's per-hunk list, a bare MCP dispatch).
+export function primaryArg(name: string, args: unknown): string {
   const fields = asRecord(args);
   const filePath = str(fields.path);
   const pattern = str(fields.pattern);
   const command = str(fields.command);
-  const labels = TOOL_LABELS[name];
   if (name === "bash" || name === "powershell") {
-    return `${labels.verb} ${command === undefined ? "" : cap(display(command), COMMAND_CAP)}`.trimEnd();
+    return command === undefined ? "" : cap(display(command), COMMAND_CAP);
   }
   if (name === "grep" || name === "glob") {
-    const needle =
-      pattern !== undefined
-        ? display(pattern)
-        : filePath === undefined
-          ? ""
-          : display(trimPath(filePath));
-    return `${labels.verb} ${needle}`.trimEnd();
+    if (pattern !== undefined) return display(pattern);
+    return filePath === undefined ? "" : display(trimPath(filePath));
   }
   if (name === "read_file" || name === "write_file") {
-    return `${labels.verb} ${filePath === undefined ? "" : display(trimPath(filePath))}`.trimEnd();
+    return filePath === undefined ? "" : display(trimPath(filePath));
   }
+  return "";
+}
+
+// The in-flight status line (app.tsx's pendingTool, ChildTranscript, SubagentPanel) — a verb and
+// its argument, which is the only thing known about a call that has not returned yet.
+export function summarizeArgs(name: string, args: unknown): string {
+  const labels = TOOL_LABELS[name];
   if (name === "edit") return labels.verb;
   if (name === "dispatch_subagents") return "Dispatched subagents";
-  return name;
+  if (labels === undefined) return name;
+  return `${labels.verb} ${primaryArg(name, args)}`.trimEnd();
+}
+
+// A settled group's own header. Mirrors cli/output.ts's `printEvent` tool-call line, so the TUI
+// and the non-interactive path name a call the same way; the argument is the display form rather
+// than that path's raw JSON, because this one has a transcript column budget to live inside.
+export function toolCallLine(name: string, args: unknown): string {
+  const arg = primaryArg(name, args);
+  const called = display(name);
+  return arg === "" ? `→ ${called}` : `→ ${called}(${arg})`;
 }
 
 function grepPaths(result: GrepResult): string[] {
@@ -232,7 +264,21 @@ export function anomalyLineForDenial(reason: "blocked" | "declined" | "hook"): s
 }
 
 function emptyEntry(name: string): ToolActivityEntry {
-  return { name, count: 0, singleLine: "", detailLines: [], anomalyLines: [], open: false };
+  return {
+    name,
+    count: 0,
+    callLine: "",
+    singleLine: "",
+    detailLines: [],
+    anomalyLines: [],
+    open: false,
+  };
+}
+
+// First call in the group wins, so a group's header keeps naming the call a reader saw start
+// rather than sliding to whichever call happened to settle last.
+function keepFirst(existing: string, next: string): string {
+  return existing.length > 0 ? existing : next;
 }
 
 function settleCount(entry: ToolActivityEntry): number {
@@ -289,7 +335,8 @@ export function recordCall(
         ...entry,
         count,
         open: true,
-        singleLine: entry.singleLine.length > 0 ? entry.singleLine : summarizeArgs(name, args),
+        callLine: keepFirst(entry.callLine, toolCallLine(name, args)),
+        singleLine: keepFirst(entry.singleLine, summarizeArgs(name, args)),
         // grep/glob's detail lines belong to one search and are dropped the instant a second
         // call turns this into an aggregate. MCP accumulates instead (mcpDetailLines below), so
         // a call starting mid-accumulation must not wipe what already settled.
@@ -329,6 +376,9 @@ export function recordResult(
         ...entry,
         count,
         open: false,
+        // A result can be the first thing a group sees: a denial-then-result ordering reaches
+        // mapEntry here without recordCall having run for this name.
+        callLine: keepFirst(entry.callLine, toolCallLine(name, args)),
         singleLine: settledSingleLine(name, args, result),
         // Per-call grep/glob hits only survive on a single-call group; a repeat drops them
         // back to a bare aggregate count, same as every other tool. MCP is the exception,
@@ -358,18 +408,22 @@ export function recordDenial(
       ...entry,
       count: settleCount(entry),
       open: false,
-      singleLine: entry.singleLine.length > 0 ? entry.singleLine : (labels?.verb ?? name),
+      callLine: keepFirst(entry.callLine, `→ ${display(name)}`),
+      singleLine: keepFirst(entry.singleLine, labels?.verb ?? name),
       anomalyLines: appendAnomaly(entry.anomalyLines, anomalyLineForDenial(reason)),
     }),
     name === "dispatch_subagents",
   );
 }
 
+// The line under the call line. It carries the count on every group, singular included, because
+// the call line above already carries the arguments. A `settles` tool is the exception: a single
+// call's settled text reports something about the result that no count can.
 function aggregateLine(entry: ToolActivityEntry): string {
-  if (entry.count === 1) return entry.singleLine;
   const labels = TOOL_LABELS[entry.name];
   if (labels === undefined) return `${entry.name} ×${entry.count}`;
-  return `${labels.verb} ${entry.count} ${labels.noun}`;
+  if (labels.settles === true && entry.count === 1) return entry.singleLine;
+  return `${labels.verb} ${entry.count} ${entry.count === 1 ? labels.one : labels.many}`;
 }
 
 function cappedSubLines(lines: string[]): string[] {
@@ -377,23 +431,24 @@ function cappedSubLines(lines: string[]): string[] {
   const kept = lines.slice(0, SUB_LINE_CAP - 1);
   return [...kept, `…and ${lines.length - kept.length} more`];
 }
-
+// Two lines per group: the call, then what it did, the second indented under the first so the
+// pair reads as one unit instead of two peers. Sub-lines hang off the result line at the same
+// indent, keeping the tree glyphs that already distinguish a sample from a complete list.
 export function renderToolActivity(entries: ToolActivityEntry[]): string[] {
   return entries.map((entry) => {
-    const main = display(aggregateLine(entry));
     const subs = cappedSubLines([...entry.detailLines, ...entry.anomalyLines].map(display));
-    if (subs.length === 0) return main;
     // grep/glob's sub-lines are a sample (up to 3 matched paths out of however many, dropped
     // entirely once count > 1) — TREE_BRANCH on each means "here is some more detail", and stays
     // that way. An MCP group's sub-lines are the complete call list, not a sample, so only there
     // does the tree glyph mean what it says: every child but the last gets TREE_MID, the last
     // TREE_BRANCH.
     const last = subs.length - 1;
-    const lines =
+    const marked =
       entry.name === MCP_GROUP_KEY
         ? subs.map((line, i) => `${i === last ? TREE_BRANCH : TREE_MID}${line}`)
         : subs.map((line) => `${TREE_BRANCH}${line}`);
-    return [main, ...lines].join("\n");
+    const body = [display(aggregateLine(entry)), ...marked];
+    return [entry.callLine, ...body.map((line) => `${TOOL_INDENT}${line}`)].join("\n");
   });
 }
 

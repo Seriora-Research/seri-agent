@@ -14,10 +14,17 @@ export const PAD_X = 1;
 // sides.
 export const FRAME = {
   borderStyle: "single",
-  borderColor: theme.muted,
+  borderColor: theme.border,
   paddingLeft: PAD_X,
   paddingRight: PAD_X,
 } as const;
+
+// A tool group's result line and its sub-lines sit under the group's own `→ name(arg)` call line,
+// indented by this much (state/toolActivity.ts) so the group reads as one unit rather than as a
+// stack of peers. Two columns, not PAD_X: this is indentation inside one text block, not the
+// interior padding of a box, and tying it to PAD_X would make a change to the box inset silently
+// reflow the transcript.
+export const TOOL_INDENT = "  ";
 
 // Blank rows between two adjacent transcript rows. Only a user turn breaks the rhythm: it is the
 // boundary between one exchange and the next, and everything the model does in reply — its prose,
