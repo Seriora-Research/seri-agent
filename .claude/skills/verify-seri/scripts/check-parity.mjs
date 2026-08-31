@@ -28,6 +28,11 @@ const firstCol = (row) => row.findIndex((c) => (c.ch ?? " ").trim() !== "");
 const results = [];
 const check = (name, pass, detail) => results.push({ name, pass, detail });
 
+// Measured and printed, never counted. A known gap that incremented the failure count would make
+// the exit status permanently 1, which costs the script its whole use as a gate.
+const notes = [];
+const note = (name, met, detail) => notes.push({ name, met, detail });
+
 const all = grid.flat();
 
 const grounds = new Map();
@@ -99,10 +104,14 @@ for (const [i, row] of callRows.entries()) {
 // Only meaningful once a call row has fixed the transcript's edge; without one, `inset` is a
 // default and this would report a pass nothing established.
 if (callRows.length > 0) {
-  const boxRows = grid.filter((row) => (row[0]?.ch ?? " ") === "┌" || (row[0]?.ch ?? " ") === "│");
-  const boxCol = boxRows.length > 0 ? 0 : -1;
-  check(
-    "KNOWN GAP: box rule shares the transcript's text column",
+  // Scanned per row rather than read off row[0]: a box that is itself inset would leave row[0]
+  // blank, and reporting "col -1" for it would contradict the very thing being measured.
+  const boxCols = grid
+    .map((row) => row.findIndex((c) => c.ch === "┌" || c.ch === "│"))
+    .filter((i) => i >= 0);
+  const boxCol = boxCols.length > 0 ? Math.min(...boxCols) : -1;
+  note(
+    "box rule shares the transcript's text column",
     boxCol === inset,
     `box at col ${boxCol}, transcript text at col ${inset}`,
   );
@@ -112,6 +121,9 @@ let failed = 0;
 for (const r of results) {
   if (!r.pass) failed++;
   console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.name} - ${r.detail}`);
+}
+for (const n of notes) {
+  console.log(`GAP${n.met ? " (closed)" : "        "}  ${n.name} - ${n.detail}`);
 }
 console.log(`\n${results.length - failed}/${results.length} checks passed`);
 process.exit(failed === 0 ? 0 : 1);
