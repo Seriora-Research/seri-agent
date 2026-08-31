@@ -36,6 +36,7 @@ import {
   commandByName,
   isTuiClaimed,
   sessionMeta,
+  startsATurn,
 } from "./cli/commandCatalog";
 import {
   approvalPromptText,
@@ -1154,6 +1155,31 @@ function pushTranscriptLine(
   dispatch({ type: "transcript-append", line, muted: opts?.muted, markdown: opts?.markdown });
 }
 
+// A turn can legitimately END on a user message, so appending the next one needs a separator. This
+// is not hypothetical and it is not new: runLoop appends the matched glob-scoped rules as a user
+// message (loop.ts, the `onToolPhaseEnd` push) as the last thing an iteration does — wired for any
+// session with glob-scoped rules, via createRuleInjector (runtime/drive.ts) — and both an abort at
+// the top of the next iteration and the iteration cap then end the turn right there, with that
+// message last. That already reaches disk today through the ordinary messages-updated persist; the
+// queue only makes it easy to reach, because the very next thing that happens is another user turn
+// being appended.
+//
+// Whether a provider accepts two adjacent user messages is not something we may assume: seri ships
+// no model and routes across five providers (docs/CONSTITUTION.md, locked constraint 1). So the gap
+// is closed here, at the one place a user turn is appended to `session.messages`, rather than by
+// trusting each provider to combine them. `[interrupted]` in loop.ts's own assistant-content shape
+// (`[{ type: "text", text }]`) so the row is indistinguishable from any other assistant text entry
+// to everything downstream — the compactor, the trajectory writer, a resumed session.
+function withUserTurn(messages: ModelMessage[], content: string): ModelMessage[] {
+  const last = messages[messages.length - 1];
+  if (last?.role !== "user") return [...messages, { role: "user", content }];
+  return [
+    ...messages,
+    { role: "assistant", content: [{ type: "text", text: "[interrupted]" }] },
+    { role: "user", content },
+  ];
+}
+
 // The TUI's presenter: the same `{message}`/`{plan, message}` shapes tui/commands.ts's decision
 // functions return, dispatched into the live transcript instead of printed. Calls the SAME
 // undoPlanLines/recoveryLines output.ts uses for the console path (M-6: these used to be a
@@ -1361,11 +1387,35 @@ async function runTui(
   // skipped. Also clears a stale commandError from a PREVIOUS submission: this fires before every
   // submission's own branch runs (onSubmit's own comment), so a fresh command-error this
   // submission goes on to produce still lands afterward and is unaffected.
+  //
+  // One submission is deliberately NOT echoed here: a message that gets QUEUED (onSubmit's own
+  // gate, below) returns above this call. The reason above holds for a rejected submission, which
+  // has produced a command-error that needs its typed antecedent; a queued message has produced
+  // nothing to explain, is already visible in the queue block, and would otherwise appear in the
+  // transcript once now and a second time when drainQueue re-submits it for real.
   const echoUserInput = (text: string): void => {
     dispatch({ type: "transcript-append", line: `> ${text.trim()}`, role: "user", flush: false });
     dispatch({ type: "command-error-cleared" });
   };
   let turnInFlight = false;
+  // Whether the in-flight turn's single cancel slot has already been spent by an Esc this turn.
+  // signals.ts keeps no such flag of its own: `deliverSignal` CLEARS the slot as it invokes it,
+  // which is the whole mechanism that makes a second Ctrl-C fatal (signals.ts's own comment) — so
+  // nothing downstream can be asked "is a cancel already unwinding". Cleared in runTurn's `finally`
+  // rather than by the handler, because the slot is only genuinely free again once the turn it
+  // cancelled has actually settled. See onEscape below for what goes wrong without it.
+  let cancelDelivered = false;
+  // A queued message's React key, minted here rather than in the reducer, which mints nothing and
+  // reads no clock by design (state/reducer.ts's own note on the field). A counter rather than a
+  // uuid: the only requirement is that it not repeat within one session, and a counter says that
+  // plainly where a random id would invite the reader to look for a meaning it does not carry.
+  let queueIds = 0;
+  const nextQueueId = (): string => `q${++queueIds}`;
+  // Which key ended a cancelled turn. runtime/renderer.ts routes every Ctrl-C through the same
+  // `deliverSignal("SIGINT")` the Esc handler calls, so by the time driveLoop comes back with
+  // `doneReason: "aborted"` there is nothing left in the result to tell the two presses apart —
+  // and they mean opposite things for the queue: Esc is "skip to the next one", Ctrl-C is "stop".
+  let cancelledByEsc = false;
   // HIGH-B: the currently in-flight turn's own promise (a fresh one assigned at each of the two
   // call sites that start one, both guarded so a new turn is never started while one is already
   // running — see runTurn's own comment). quit() awaits this when a turn is in flight instead of
@@ -2086,6 +2136,22 @@ async function runTui(
       doneReason = result.doneReason;
       refusedWithoutRunning = result.refusedWithoutRunning;
       archivist = result.archivist;
+      // Esc means "skip to the next one"; Ctrl-C means "stop". Both keep the meaning they already
+      // had — this is the one point where they can still be told apart, since renderer.ts routes
+      // Ctrl-C through the same `deliverSignal("SIGINT")` the Esc handler calls and the `finally`
+      // below sees only that the turn ended. Without this, Ctrl-C on a runaway turn would start
+      // the next queued turn instead of stopping, and the user would have to fight the queue to
+      // get back to an idle prompt. The muted line is the whole acknowledgement: nothing else on
+      // screen would otherwise explain where the rows went.
+      if (result.doneReason === "aborted" && !cancelledByEsc && liveState.queue.items.length > 0) {
+        const discarded = liveState.queue.items.length;
+        dispatch({ type: "queue-cleared" });
+        pushTranscriptLine(
+          dispatch,
+          `${discarded} queued message${discarded === 1 ? "" : "s"} discarded`,
+          { muted: true },
+        );
+      }
       // Rendered live into the transcript the moment it happens, the same run this turn just
       // produced it in — not deferred to session end, unlike the `archivist` copy above, which only
       // feeds the FINAL resolveRunTui result (printed once more after Ink unmounts, quit()'s own
@@ -2117,6 +2183,13 @@ async function runTui(
       failure = { err };
     } finally {
       turnInFlight = false;
+      // Both cancel mirrors are reset here, on every exit path, for the reason each declaration
+      // states: the cancel slot they mirror is signals.ts's, and it is only genuinely free again
+      // once this turn has actually settled. `cancelledByEsc` in particular must not survive into
+      // the next turn — a stale `true` would make the NEXT turn's Ctrl-C read as an Esc and drain
+      // the queue instead of clearing it.
+      cancelDelivered = false;
+      cancelledByEsc = false;
       // The one place `driveLoop`'s own call is known to have genuinely settled, success or
       // failure — mirrors `turn-started`'s own dispatch above, at the one place a turn is known to
       // have genuinely begun. This `finally` always runs before the `destroyTuiRenderer()` call
@@ -2125,6 +2198,12 @@ async function runTui(
       // dispatch issued only after `destroyTuiRenderer()` would have no host left to schedule a
       // React update on.
       dispatch({ type: "turn-ended" });
+      // The queue's main re-entry point: after `turn-ended`, so the drained turn's own
+      // `turn-started` can never be batched behind a `state.turn` this one has not yet cleared —
+      // and ONLY on the success path, because the `failure` branch immediately below destroys the
+      // renderer and rejects runTui, so a turn started from here would be dispatching into a host
+      // that is about to be torn down.
+      if (failure === undefined) drainQueue();
     }
     if (failure !== undefined) {
       // H-2: driveLoop rejecting (not just resolving with an aborted/errored `done`) used to
@@ -2167,6 +2246,19 @@ async function runTui(
   async function quit(): Promise<void> {
     if (reactDispatch === undefined || quitting) return;
     quitting = true;
+    // Before the rest of the sequence, so it reads as the first consequence of quitting rather
+    // than as something that happened during the unwind. `quitting` above is what actually stops
+    // the queue draining (drainQueue's own guard); this only says so — a queue is not persisted
+    // (reducer.ts's own comment on the field), so leaving without a word about it would silently
+    // drop work the user can see on screen at the moment they typed /exit.
+    if (liveState.queue.items.length > 0) {
+      const discarded = liveState.queue.items.length;
+      pushTranscriptLine(
+        dispatch,
+        `${discarded} queued message${discarded === 1 ? "" : "s"} discarded`,
+        { muted: true },
+      );
+    }
     // Without this, Ctrl-D would be silently swallowed while ApprovalBox is mounted instead of
     // InputBox. Denying the pending approval is folded into the SAME graceful
     // quit sequence — not a separate "deny just this one prompt" path the way the old
@@ -2217,6 +2309,31 @@ async function runTui(
     } else {
       finishQuit();
     }
+  }
+
+  // Escape at the input box cancels the in-flight turn — the same single-press cancel a Ctrl-C
+  // already performs, and then runTurn's `finally` drains whatever is queued into the next turn.
+  // Which key it was is recorded (`cancelledByEsc`) because that is the only thing separating this
+  // from a Ctrl-C by the time the turn comes back; see runTurn's own aborted-turn block.
+  //
+  // Both guards are load-bearing and neither is optional.
+  //
+  // `turnInFlight` — `deliverSignal` with an EMPTY cancel slot does not no-op, it falls straight
+  // through to signals.ts's fatal body and kills the process. An Escape pressed between turns must
+  // never reach it.
+  //
+  // `cancelDelivered` — `deliverSignal` clears the slot as it invokes it, while `turnInFlight`
+  // stays true for the whole unwind, which waits on whatever the in-flight tool does with its
+  // abort and can take seconds. So without this, a second Escape pressed precisely because nothing
+  // visibly moved yet finds an empty slot, falls through to that same fatal body, and kills the
+  // process: no unwind, no session save, the queue gone with it. Double-press-fatal is a
+  // documented Ctrl-C contract (AGENTS.md's own paragraph on the TUI), deliberately not an Escape
+  // one — Escape is the key people mash when a UI looks stuck, and Ctrl-C is not.
+  function onEscape(): void {
+    if (!turnInFlight || cancelDelivered) return;
+    cancelDelivered = true;
+    cancelledByEsc = true;
+    deliverSignal("SIGINT");
   }
 
   // Claimed TUI names (and /effort, which is session but tuiClaimsFirst) run from this Record
@@ -2490,18 +2607,75 @@ async function runTui(
   };
   assertTuiHandlers(tuiHandlers);
 
+  // Takes the head of the queue and re-enters onSubmit with it, rather than duplicating the
+  // dispatch below: that is what makes the echo land exactly once, at the moment the message
+  // actually starts, and what keeps a plain task, an `/agent` dispatch and a skill on one code
+  // path instead of three copies of the same decision.
+  function drainQueue(): void {
+    // Two overlapping turns is exactly what `turnInFlight` has always existed to prevent — they
+    // would fight over signals.ts's single cancel slot, and runTurn's own guard would silently
+    // DROP this one rather than re-queue it, losing the message outright.
+    if (turnInFlight) return;
+    // quit() captures the promise VALUE, not the variable (`void currentTurn.then(finishQuit)`,
+    // above), so reassigning `currentTurn` from here does not move that chain onto the new turn.
+    // An aborted turn RESOLVES rather than rejects, so without this guard an /exit with something
+    // queued drains, starts turn 2, and `finishQuit` then destroys the renderer and resolves
+    // runTui with turn 2 and whatever tool children it spawned still live — precisely the
+    // orphaned-child case HIGH-B exists to prevent.
+    if (quitting) return;
+    // A message still open in the row editor has not left the user's hands yet.
+    if (liveState.queue.editing) return;
+    const head = liveState.queue.items[0];
+    if (head === undefined) return;
+    dispatch({ type: "queue-head-taken" });
+    void onSubmit(head.text);
+  }
+
   async function onSubmit(value: string): Promise<void> {
     if (reactDispatch === undefined) return;
+    // Above the empty-trim return below, deliberately: InputBox submits on a bare Enter too, and
+    // an empty commit means "keep the original text and leave edit mode", not "do nothing" —
+    // falling through to that return would strand `editing` true with the row editor still
+    // mounted and Escape the only key left that closes it.
+    if (liveState.queue.editing) {
+      const edited = value.trim();
+      dispatch(
+        edited.length === 0
+          ? { type: "queue-edit-cancelled" }
+          : { type: "queue-edit-committed", text: value },
+      );
+      // Either resolution ends the edit, and the edit was one of the three things holding the
+      // drain back (drainQueue's own guards) — so a commit made while nothing is running starts
+      // the head immediately instead of waiting for a turn that may never come.
+      drainQueue();
+      return;
+    }
     const trimmed = value.trim();
     if (trimmed.length === 0) return;
+    // Hoisted above `echoUserInput`, where the split used to sit below it: the queue gate needs
+    // `name`, and a queued message must not be echoed. The move is safe because the parse is pure
+    // — nothing between here and the echo has a side effect — and every branch further down still
+    // reads this same `name`/`args`/`spec`.
+    const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
+    const spec = commandByName(name);
+    // `|| liveState.queue.items.length > 0` is what keeps the queue FIFO. Without it, runTurn's
+    // own early return on a route/model/config resolution failure (its own catch, above) — which
+    // returns before the `try`, so it reaches no `finally` and no drain — leaves an IDLE process
+    // with a non-empty queue, and the user's next Enter would run immediately, ahead of every row
+    // queued before it.
+    if (
+      (turnInFlight || liveState.queue.items.length > 0) &&
+      startsATurn(name, trimmed, prepared)
+    ) {
+      dispatch({ type: "queue-appended", id: nextQueueId(), text: value });
+      return;
+    }
     // Deliberately unconditional and before every branch below (not per-branch, and not moved
     // below the /exit/unrecognized-command guards): a rejected submission — invalid args, an
     // unrecognized command, /exit with arguments — still gets its typed text echoed here, so the
     // command-error it produces has an antecedent that scrolls with it instead of a floating
     // error with nothing to explain it. Do not sink this below the guards.
     echoUserInput(value);
-    const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
-    const spec = commandByName(name);
     if (spec !== undefined && isTuiClaimed(spec)) {
       if (!spec.accepts(args)) {
         dispatch({ type: "command-error", message: `${name}: invalid arguments.` });
@@ -2555,7 +2729,7 @@ async function runTui(
           currentTurn = runTurn(
             {
               ...liveState.session,
-              messages: [...liveState.session.messages, { role: "user", content: prompt }],
+              messages: withUserTurn(liveState.session.messages, prompt),
             },
             prompt,
           );
@@ -2594,7 +2768,7 @@ async function runTui(
       currentTurn = runTurn(
         {
           ...liveState.session,
-          messages: [...liveState.session.messages, { role: "user", content: trimmed }],
+          messages: withUserTurn(liveState.session.messages, trimmed),
         },
         trimmed,
       );
@@ -2742,6 +2916,14 @@ async function runTui(
           });
         }
       }
+      // The queue's second re-entry point, and the one that is easy to miss: /compact, /clear and
+      // /rewind set `turnInFlight = true` above and clear it here without ever entering runTurn, so
+      // a task typed during /compact's own multi-second round trip is queued by the gate in this
+      // function's head and would otherwise sit there forever — and with that gate keeping the
+      // queue FIFO, every later submission would queue behind it too. Last in this block, after the
+      // /clear rebind and the /undo-/restore resync above, so a drained turn runs against the
+      // checkpointer and session those just rebound rather than the ones they replaced.
+      drainQueue();
     }
   }
 
@@ -2765,6 +2947,7 @@ async function runTui(
       onSubmit,
       onSessionChange,
       onQuit: quit,
+      onEscape,
       onApprovalAnswer,
       onModelSelected,
       onModelPickerCancel,

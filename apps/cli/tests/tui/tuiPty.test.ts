@@ -2028,6 +2028,47 @@ async function startChild(
   };
 }
 
+// The message queue's own fake, and it differs from childScriptCancel above in the two ways that
+// matter for what the queue has to prove.
+//
+// It COUNTS its calls (RUNLOOP_CALL n), because every assertion here is about whether a SECOND turn
+// started — and "the fake said READY again" is the only signal that distinguishes a drained queue
+// from a queue that sat still.
+//
+// It yields a messages-updated whose last entry is a `role: "user"` message BEFORE awaiting the
+// abort, mirroring what runLoop itself does with the matched glob-scoped rules at the end of a tool
+// phase (loop.ts's own onToolPhaseEnd push). Without it, an aborted turn persists nothing at all
+// (drive.ts writes only on that event), and the adjacent-user-message assertion below would pass
+// over a session with one message in it no matter what cli.ts did — a green light wired to nothing.
+function childScriptQueue(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  const n = calls;`,
+    `  const messages = [...opts.messages, { role: "user", content: [{ type: "text", text: "rules for turn " + n }] }];`,
+    `  yield { type: "messages-updated", messages };`,
+    `  console.log("\\nRUNLOOP_CALL " + n);`,
+    `  await new Promise((resolve) => opts.signal.addEventListener("abort", resolve, { once: true }));`,
+    `  console.log("\\nRUNLOOP_ABORTED " + n);`,
+    `  yield { type: "done", reason: "aborted" };`,
+    `  return messages;`,
+    `}`,
+    `const code = await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
 // Windows has no pty to allocate — same constraint as approvalPromptPty.test.ts. Real execution is
 // the WSL box and CI's ubuntu/macos legs; a green Windows run means this case SKIPPED.
 describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", () => {
@@ -6216,5 +6257,127 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         }
       }, 60_000);
     });
+  });
+  // The message queue, end to end against the real cli.ts — the reducer and App tests cover the
+  // shape and the keys, but whether a submission is DEFERRED rather than rejected, and whether a
+  // cancel actually promotes the next one, are properties of runTurn's own lifecycle and only
+  // observable here. childScriptQueue's own comment explains what its fake does differently.
+  describe("message queue", () => {
+    async function queueOneBehindTurn() {
+      const scriptPath = join(dir, "queue.mjs");
+      writeFileSync(scriptPath, childScriptQueue(dir));
+      const started = await startChild(scriptPath, dir);
+      await started.sawLine("RUNLOOP_CALL 1");
+      started.child.stdin?.write("second message");
+      await started.sawInFrameTimes("second message", 1);
+      started.child.stdin?.write("\r");
+      await started.sawInFrameTimes("1 queued", 1);
+      return { ...started, scriptPath };
+    }
+
+    test("Enter during a turn queues the message instead of echoing and dropping it", async () => {
+      const { child, lastFrame, frameOccurrences } = await queueOneBehindTurn();
+      try {
+        const frame = lastFrame();
+        expect(frame).toContain("1 queued");
+        expect(frame).toContain("second message");
+        // The half that today gets wrong: the old path echoed "> second message" into the
+        // transcript and THEN rejected it, so the message read as accepted and was unrecoverable.
+        // A queued message has not been sent, so it is not in the transcript at all.
+        expect(frameOccurrences("> second message")).toBe(0);
+        expect(frame).not.toContain("A turn is already running");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("Escape cancels the turn and the queue head starts on its own", async () => {
+      const { child, sawLine } = await queueOneBehindTurn();
+      try {
+        child.stdin?.write("\x1b");
+        await sawLine("RUNLOOP_ABORTED 1");
+        // The whole feature in one line: a second turn exists, and nothing but the drain could
+        // have started it — no key was pressed after the Escape.
+        await sawLine("RUNLOOP_CALL 2");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The claim research.md is built on, and the reason this file's fake yields a messages-updated
+    // ending on a user message at all. runLoop really can leave a session that way (its own
+    // onToolPhaseEnd push), and appending the queue head beside it would put two user messages in
+    // front of a provider we ship no model for.
+    test("promoting the queue head never leaves two adjacent user messages", async () => {
+      const { child, sawLine } = await queueOneBehindTurn();
+      try {
+        child.stdin?.write("\x1b");
+        await sawLine("RUNLOOP_CALL 2");
+
+        const sessionsDir = join(dir, "sessions");
+        const sessionId = requireSessionId(sessionsDir);
+        const deadline = Date.now() + 5_000;
+        let messages: { role: string }[] = [];
+        do {
+          messages = loadSession(sessionId, sessionsDir).messages as { role: string }[];
+        } while (messages.length < 3 && Date.now() < deadline);
+
+        const adjacent = messages.filter(
+          (message, index) =>
+            index > 0 && message.role === "user" && messages[index - 1].role === "user",
+        );
+        expect(adjacent).toEqual([]);
+        // Not a vacuous pass: the fake's own trailing user message has to actually be on disk, or
+        // there would be no pair for the assertion above to have ruled out.
+        expect(messages.length).toBeGreaterThanOrEqual(3);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Esc means "skip to the next one", Ctrl-C means "stop". Both reach the same deliverSignal, so
+    // without cli.ts's own cancel-source flag this is the assertion that would go red.
+    test("Ctrl-C cancels and clears the queue instead of advancing it", async () => {
+      const { child, sawLine, lastFrame, rawOccurrences } = await queueOneBehindTurn();
+      try {
+        child.stdin?.write("\x03");
+        await sawLine("RUNLOOP_ABORTED 1");
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        expect(rawOccurrences("RUNLOOP_CALL 2")).toBe(0);
+        expect(lastFrame()).toContain("1 queued message discarded");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("quitting with something queued says so and does not start it", async () => {
+      const { child, exited, sawLine, rawOccurrences } = await queueOneBehindTurn();
+      try {
+        child.stdin?.write("/exit\r");
+        await sawLine("1 queued message discarded");
+        await sawLine("RUNLOOP_ABORTED 1");
+        await exited;
+        expect(rawOccurrences("RUNLOOP_CALL 2")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // signals.ts clears its one cancel slot as it invokes it, so an ungated second Escape would
+    // find it empty and take the fatal path — process death by signal, mid-unwind, with the queue
+    // and the session going with it. The latch is what keeps Escape from inheriting a contract
+    // that only ever belonged to Ctrl-C.
+    test("a second Escape during the unwind is inert, not fatal", async () => {
+      const { child, sawLine } = await queueOneBehindTurn();
+      try {
+        child.stdin?.write("\x1b");
+        child.stdin?.write("\x1b");
+        child.stdin?.write("\x1b");
+        await sawLine("RUNLOOP_ABORTED 1");
+        await sawLine("RUNLOOP_CALL 2");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
   });
 });
