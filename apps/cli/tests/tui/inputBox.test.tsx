@@ -12,6 +12,7 @@ import { createRoot } from "@opentui/react";
 import type { ReactNode } from "react";
 
 import { InputBox } from "../../src/tui/components/InputBox";
+import { INPUT_PLACEHOLDER } from "../../src/tui/util/format";
 
 const THROTTLE_MS = 50;
 
@@ -196,6 +197,7 @@ describe("InputBox (OpenTUI)", () => {
     expect(setup.captureCharFrame()).toContain("> ");
     expect(setup.captureCharFrame()).not.toContain("> x");
   });
+
   // The whole of this feature's Escape precedence, asserted where it is implemented. An App-level
   // handler cannot see the popup — that state is local to this component — so it would cancel the
   // in-flight turn while the user was only closing a completion list.
@@ -280,5 +282,22 @@ describe("InputBox (OpenTUI)", () => {
     await sleep(THROTTLE_MS + 20);
 
     expect(setup.captureCharFrame()).toContain("> already typed");
+  });
+
+  // 60 columns, not this file's usual 40: the placeholder renders with `truncate`, so a narrower
+  // box would clip it and `toContain` on the whole string would fail for a reason the test does
+  // not mean to assert.
+  test("the placeholder renders on an empty input and is gone after one character", async () => {
+    const setup = await createTestRenderer({ width: 60, height: 5 });
+    await mount(setup, <InputBox onSubmit={() => {}} />);
+
+    expect(setup.captureCharFrame()).toContain(INPUT_PLACEHOLDER);
+
+    await setup.mockInput.typeText("h");
+    await settle(setup);
+    await sleep(THROTTLE_MS + 20);
+
+    expect(setup.captureCharFrame()).toContain("> h");
+    expect(setup.captureCharFrame()).not.toContain(INPUT_PLACEHOLDER);
   });
 });

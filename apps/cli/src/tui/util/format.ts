@@ -166,6 +166,8 @@ export const MODE_ROUTE_MIN_COLS = 100;
 // convention above (13 for a 12-char worst case) rather than COST_WIDTH's wider 3-column margin.
 export const EFFORT_WIDTH = 8;
 
+export const INPUT_PLACEHOLDER = "describe a task · / for commands · @ for files";
+
 // A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined`,
 // and a real pty can separately report a genuine but unusable `columns === 0` for its first render
 // or two — both are what `resolveWidth`'s `stdout.columns || DEFAULT_COLUMNS` (App.tsx) guards

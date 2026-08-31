@@ -7,6 +7,7 @@ import type { ModelProvider } from "@seri/model-catalog";
 import { useState } from "react";
 import { useListWindow } from "../../hooks/useListWindow";
 import type { SetupState } from "../../state/reducer";
+import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
 import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
 import { ErrorLine } from "../../ui/ErrorLine";
@@ -114,7 +115,7 @@ function SetupList({
   });
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+    <box {...FRAME} flexDirection="column">
       <text fg={theme.muted}>/setup — provider API keys</text>
       {visible.map(({ row, isSelected }) => (
         <ListRow key={row.provider} selected={isSelected} label={formatSetupRow(row)} />
@@ -180,7 +181,7 @@ function SetupEnterKey({
   });
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+    <box {...FRAME} flexDirection="column">
       <text fg={theme.muted}>{`${keyName} for ${provider}`}</text>
       <text>{"*".repeat(value.length)}</text>
       <ErrorLine message={error} />

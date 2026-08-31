@@ -3,6 +3,7 @@ import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useState } from "react";
 import { useListWindow } from "../../hooks/useListWindow";
+import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
 import { ListRow } from "../../ui/ListRow";
 import {
@@ -69,7 +70,7 @@ export function SkillsPanel({
   const selectedRow = filtered[selectedIndex];
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+    <box {...FRAME} flexDirection="column">
       <text fg={theme.text} attributes={TextAttributes.BOLD}>
         Skills
       </text>

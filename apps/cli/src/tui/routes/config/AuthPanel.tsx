@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { useKeyboard } from "@opentui/react";
 import type { AuthPanelState } from "../../state/reducer";
+import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
 import { ErrorLine } from "../../ui/ErrorLine";
 import { singleLine } from "../../util/format";
@@ -14,7 +15,7 @@ import { isEnter } from "../../util/keys";
 export function AuthBanner({ show }: { show: boolean }) {
   if (!show) return null;
   return (
-    <box borderStyle="single" borderColor={theme.muted}>
+    <box {...FRAME}>
       {/* `truncate`: APP_CHROME_ROWS (util/format.ts) counts this box as exactly 3 rows — 2
       border + 1 text. Below ~58 columns this fixed string would otherwise soft-wrap to a second
       text row, making the box 4 rows and pushing an open panel's own bottom row past the
@@ -50,7 +51,7 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
 
   if (state.step === "starting") {
     return (
-      <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+      <box {...FRAME} flexDirection="column">
         <text fg={theme.muted}>{`Starting ${state.mode}…`}</text>
         <text fg={theme.muted}>Esc cancel</text>
       </box>
@@ -58,7 +59,7 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
   }
   if (state.step === "device") {
     return (
-      <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+      <box {...FRAME} flexDirection="column">
         <text fg={theme.muted}>{`Open ${state.verificationUri} and enter this code:`}</text>
         <text>{state.userCode}</text>
         <text fg={theme.muted}>Esc cancel</text>
@@ -66,11 +67,7 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
     );
   }
   return (
-    <box
-      borderStyle="single"
-      borderColor={state.error ? theme.error : theme.muted}
-      flexDirection="column"
-    >
+    <box {...FRAME} borderColor={state.error ? theme.error : theme.muted} flexDirection="column">
       {/* `state.error` is a single boolean discriminant on this "result" variant, so the branch
       happens once here rather than as several independently-conditional props — one of the two
       resulting elements is ErrorLine's own constant-styled alert line, the other a plain
