@@ -139,12 +139,18 @@ describe("parseHooksFile", () => {
     }
   });
 
-  test('a script of "../../evil" is rejected', () => {
-    const { specs, warnings } = load(`hooks:\n  PreToolUse:\n    - script: ../../evil\n`);
-    expect(specs).toEqual([]);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("bare file name with no extension and no directory separator");
-  });
+  // The last is the one that does not look like a path: `dir\a:b.ps1` is an NTFS alternate data
+  // stream on `dir\a`, which readdirSync does not list — so the trust digest cannot pin it while
+  // spawn would still run it.
+  test.each(["../../evil", "sub/evil", "sub\\\\evil", "..", "guard:stream"])(
+    'a script of "%s" is rejected',
+    (script) => {
+      const { specs, warnings } = load(`hooks:\n  PreToolUse:\n    - script: "${script}"\n`);
+      expect(specs).toEqual([]);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("bare file name with no extension and no directory separator");
+    },
+  );
 
   test("matcher present but not a string warns and is skipped, leaving siblings loaded", () => {
     const { specs, warnings } = load(

@@ -19,7 +19,13 @@ export type HooksFileOutcome = {
 // The path-escape guard: a manifest name is the only thing that reaches the OS-specific file on
 // disk, so a "/", "\" or "." anywhere (which also catches ".." on its own) is rejected rather than
 // resolved — the pairing lookup below must never be able to step outside `dir`.
-export const SCRIPT_NAME_SHAPE = /^[^./\\]+$/;
+//
+// ":" is in the set for a win32-only reason worth naming, because it is not a separator and looks
+// safe. `dir\a:b.ps1` is an NTFS alternate data stream hanging off `dir\a`, and readdirSync does
+// not list streams — so it is a file the trust digest (hooks/trust.ts) cannot see and therefore
+// cannot pin, while spawn would still run it. Rejecting the name is cheaper than teaching the
+// digest about streams, and nothing legitimate is lost: git cannot check one in.
+export const SCRIPT_NAME_SHAPE = /^[^./\\:]+$/;
 
 function parseOneHookEntry(opts: {
   event: HookEvent;
