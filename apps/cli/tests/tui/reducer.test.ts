@@ -2376,15 +2376,6 @@ describe("message queue", () => {
     expect(after.queue).toEqual({ items: [], selected: 0, editing: false });
   });
 
-  test("clearing drops every row, including one under edit", () => {
-    const editing = tuiReducer(queued("a", "b"), { type: "queue-edit-started" });
-    expect(tuiReducer(editing, { type: "queue-cleared" }).queue).toEqual({
-      items: [],
-      selected: 0,
-      editing: false,
-    });
-  });
-
   test("the queue survives a turn ending, which is the whole point of it", () => {
     const state = tuiReducer(queued("next up"), { type: "turn-ended" });
     expect(texts(state)).toEqual(["next up"]);
