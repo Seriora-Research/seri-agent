@@ -37,6 +37,15 @@
         "typescript": "^5.7.2",
       },
     },
+    "apps/docs": {
+      "name": "@seri/docs",
+      "version": "0.0.1",
+      "devDependencies": {
+        "@seri/copy-policy": "workspace:*",
+        "bun-types": "^1.3.14",
+        "typescript": "^5.7.2",
+      },
+    },
     "apps/lab": {
       "name": "@seri/lab",
       "version": "0.0.1",
@@ -383,6 +392,8 @@
     "@seri/copy-policy": ["@seri/copy-policy@workspace:packages/copy-policy"],
 
     "@seri/daemon-client": ["@seri/daemon-client@workspace:packages/daemon-client"],
+
+    "@seri/docs": ["@seri/docs@workspace:apps/docs"],
 
     "@seri/lab": ["@seri/lab@workspace:apps/lab"],
 
