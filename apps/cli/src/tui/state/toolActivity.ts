@@ -74,6 +74,16 @@ export const TOOL_LABELS: Record<
   // header, which is reserved for "this is the assistant's answer"; a tool group is muted and
   // unmarked like every other TOOL_LABELS group, so it never reads as one.
   mcp: { display: "MCP", verb: "Ran MCP", one: "tool", many: "tools" },
+  // The one entry whose group is only ever built by recordDenial. recordCall and recordResult
+  // both early-return for this name, because a dispatch that runs has the child roster as its
+  // surface and needs no settled line — but a dispatch that is DENIED never reaches the roster,
+  // so the transcript is the only place it can be seen, and it needs a label like any other tool.
+  dispatch_subagents: {
+    display: "Dispatch",
+    verb: "Dispatched",
+    one: "subagent",
+    many: "subagents",
+  },
 };
 
 // An unmapped name falls through to itself, escaped. That is right for an MCP server's own
@@ -442,8 +452,15 @@ export function recordDenial(
 // call's settled text reports something about the result that no count can.
 function aggregateLine(entry: ToolActivityEntry): string {
   const labels = TOOL_LABELS[entry.name];
+  // Two kinds of group keep their own settled text at one call rather than a count: a `settles`
+  // tool, whose text reports something about the result, and a group with no table entry, which
+  // has no noun to count. The second is reachable — a name the model invented, denied by the
+  // gate, reaches recordDenial and nothing else — and `×N` reads as a leftover beside the rest
+  // of this shape, so it is kept for a real group of them and not used to say "one".
+  if (entry.count === 1 && (labels === undefined || labels.settles === true)) {
+    return entry.singleLine;
+  }
   if (labels === undefined) return `${entry.name} ×${entry.count}`;
-  if (labels.settles === true && entry.count === 1) return entry.singleLine;
   return `${labels.verb} ${entry.count} ${entry.count === 1 ? labels.one : labels.many}`;
 }
 

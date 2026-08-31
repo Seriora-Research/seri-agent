@@ -445,6 +445,32 @@ describe("renderToolActivity", () => {
     expect(rendered).not.toContain("write_file");
   });
 
+  // recordDenial is the only recorder that builds a dispatch group, so a denied dispatch is the
+  // only way one reaches the screen. It reads like every other group rather than naming the wire
+  // tool twice.
+  test("a denied dispatch reads as a labelled group, not as the wire name", () => {
+    const entries = recordDenial([], "dispatch_subagents", "declined");
+    const rendered = renderToolActivity(entries)[0] ?? "";
+    expect(rendered).toBe(`→ Dispatch\n${I}Dispatched 1 subagent\n${I}${TREE_BRANCH}declined`);
+    expect(rendered).not.toContain("dispatch_subagents");
+  });
+
+  // A name the model invented, denied by the gate, is the group that reaches the renderer with no
+  // table entry. With no noun there is nothing to count, so it keeps its settled text; `×N` is
+  // still what a real group of them reads as.
+  test("a group with no table entry keeps its settled line at one call, not a ×N count", () => {
+    const entries = recordDenial([], "not_a_real_tool", "blocked");
+    const rendered = renderToolActivity(entries)[0] ?? "";
+    expect(rendered.split("\n")[1]).toBe(`${I}not_a_real_tool`);
+    expect(rendered).not.toContain("×");
+  });
+
+  test("two of them do read as a ×N group", () => {
+    let entries = recordDenial([], "not_a_real_tool", "blocked");
+    entries = recordDenial(entries, "not_a_real_tool", "blocked");
+    expect(renderToolActivity(entries)[0]?.split("\n")[1]).toBe(`${I}not_a_real_tool ×2`);
+  });
+
   // Spelled as a literal, unlike every other test in this describe: the rest build their expected
   // string out of TOOL_INDENT, so emptying that constant moves the assertion with the code and
   // every one of them stays green. This is the test that goes red for it.
