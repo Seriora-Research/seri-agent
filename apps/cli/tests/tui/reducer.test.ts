@@ -4,16 +4,17 @@ import type { ModelMessage } from "ai";
 import type { LoopEvent } from "../../src/loop/loop";
 import type { McpPanelRow } from "../../src/mcp/commands";
 import type { SessionState } from "../../src/session/session";
+import type { ChildEventPayload } from "../../src/subagents/dispatch";
+import { rosterModelSuffix } from "../../src/tui/components/SubagentPanel";
 import type {
   ConfigRow,
   ModelPickerEntry,
   PermissionRow,
   SetupProviderRow,
 } from "../../src/tui/state/commands";
-import type { ChildEventPayload } from "../../src/subagents/dispatch";
-import { rosterModelSuffix } from "../../src/tui/components/SubagentPanel";
 import { initialTuiState, type TuiState, tuiReducer } from "../../src/tui/state/reducer";
 import { renderLiveToolActivity, summarizeArgs } from "../../src/tui/state/toolActivity";
+import { TOOL_INDENT } from "../../src/tui/theme/spacing";
 import { TREE_BRANCH } from "../../src/tui/theme/theme";
 import { estimateTokens, formatTokenProgress, type TokenProgress } from "../../src/tui/util/format";
 
@@ -27,6 +28,11 @@ function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionSt
     ...overrides,
   };
 }
+
+const READ_A = `→ Read(a.txt)\n${TOOL_INDENT}Read 1 file`;
+const READ_TWO = `→ Read(a.txt)\n${TOOL_INDENT}Read 2 files`;
+const RAN_ECHO_A = `→ Bash(echo a)\n${TOOL_INDENT}Ran 1 shell command`;
+const RAN_TWO = `→ Bash(echo a)\n${TOOL_INDENT}Ran 2 shell commands`;
 
 describe("initialTuiState", () => {
   test("starts with an empty transcript and the session's own permission mode", () => {
@@ -322,7 +328,7 @@ describe("tuiReducer: loop-event", () => {
     expect(state.streaming).toBe("");
     expect(state.status).toBe("Running read_file…");
     expect(state.pendingTool).toEqual({ name: "read_file", args: { path: "a.txt" } });
-    expect(state.transcript.some((e) => e.text.includes("→ read_file"))).toBe(false);
+    expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
   });
 
   test("a tool-result clears the running status without pushing a transcript line", () => {
@@ -333,7 +339,7 @@ describe("tuiReducer: loop-event", () => {
     expect(state.pendingTool).toBeUndefined();
     expect(state.transcript).toEqual([]);
     expect(state.toolActivity).toHaveLength(1);
-    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Read a.txt"]);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_A]);
   });
 
   test("a single successful tool-result followed by done produces one muted entry with no raw JSON", () => {
@@ -343,7 +349,7 @@ describe("tuiReducer: loop-event", () => {
 
     const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
     expect(toolLines).toHaveLength(1);
-    expect(toolLines[0]).toEqual({ role: "system", text: "Read a.txt", muted: true });
+    expect(toolLines[0]).toEqual({ role: "system", text: READ_A, muted: true });
     expect(toolLines[0].text).not.toContain("{");
     expect(state.transcript.at(-1)).toEqual({ role: "system", text: "done", muted: true });
     expect(state.toolActivity).toEqual([]);
@@ -358,21 +364,21 @@ describe("tuiReducer: loop-event", () => {
 
     const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
     expect(toolLines).toHaveLength(1);
-    expect(toolLines[0].text).toBe("Read 2 files");
+    expect(toolLines[0].text).toBe(READ_TWO);
     expect(toolLines[0].muted).toBe(true);
   });
 
   test("after two same-name results and before done, live render is one Read 2 files line", () => {
     let state = apply(undefined, { type: "tool-call", name: "read_file", args: { path: "a.txt" } });
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
-    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Read a.txt"]);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_A]);
     expect(state.transcript.filter((e) => e.muted)).toEqual([]);
 
     state = apply(state, { type: "tool-call", name: "read_file", args: { path: "b.txt" } });
-    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Read a.txt"]);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_A]);
 
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
-    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Read 2 files"]);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_TWO]);
     expect(state.transcript.filter((e) => e.muted)).toEqual([]);
   });
 
@@ -387,10 +393,10 @@ describe("tuiReducer: loop-event", () => {
     };
     let state = apply(undefined, { type: "tool-call", name: "bash", args: { command: "echo a" } });
     state = apply(state, { type: "tool-result", name: "bash", result: ok });
-    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Ran echo a"]);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([RAN_ECHO_A]);
     state = apply(state, { type: "tool-call", name: "bash", args: { command: "echo b" } });
     state = apply(state, { type: "tool-result", name: "bash", result: ok });
-    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Ran 2 shell commands"]);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([RAN_TWO]);
     expect(state.transcript.filter((e) => e.muted)).toEqual([]);
   });
 
@@ -458,7 +464,7 @@ describe("tuiReducer: loop-event", () => {
 
     const muted = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
     expect(muted).toHaveLength(1);
-    expect(muted[0]?.text).toBe("Read 2 files");
+    expect(muted[0]?.text).toBe(READ_TWO);
   });
 
   // HIGH 2: thrown execute is tool-call then error, no tool-result. Without recordCall the
@@ -500,7 +506,7 @@ describe("tuiReducer: loop-event", () => {
 
     const muted = state.transcript.filter((e) => e.muted);
     expect(muted).toHaveLength(1);
-    expect(muted[0]?.text).toBe("Read a.txt");
+    expect(muted[0]?.text).toBe(READ_A);
     expect(state.toolActivity).toEqual([]);
   });
 
