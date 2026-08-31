@@ -163,8 +163,7 @@ const OSC_52 = new RegExp(`${ESC}\\]52;([^;]*);([^${BEL}${ESC}]*)(?:${BEL}|${ESC
 const raw = chunks.join("");
 const modes = [];
 for (const m of raw.matchAll(PRIVATE_MODE)) {
-  for (const code of m[1].split(";"))
-    modes.push({ mode: Number(code), action: MODE_ACTION[m[2]] });
+  for (const code of m[1].split(";")) modes.push({ mode: Number(code), action: MODE_ACTION[m[2]] });
 }
 const osc52 = [];
 for (const m of raw.matchAll(OSC_52)) {

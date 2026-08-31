@@ -18,7 +18,11 @@ const BORDER_CHARS = new Set(["┌", "┐", "└", "┘", "─", "│", "├", "
 const frame = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const grid = frame.cells;
 const norm = (c) => (c === undefined || c === null ? "" : String(c).toLowerCase());
-const rowText = (row) => row.map((c) => c.ch ?? " ").join("").replace(/\s+$/, "");
+const rowText = (row) =>
+  row
+    .map((c) => c.ch ?? " ")
+    .join("")
+    .replace(/\s+$/, "");
 const firstCol = (row) => row.findIndex((c) => (c.ch ?? " ").trim() !== "");
 
 const results = [];
@@ -29,7 +33,11 @@ const all = grid.flat();
 const grounds = new Map();
 for (const c of all) grounds.set(norm(c.bg), (grounds.get(norm(c.bg)) ?? 0) + 1);
 const topGround = [...grounds.entries()].sort((a, b) => b[1] - a[1])[0];
-check("ground is #141413", topGround[0] === GROUND, `dominant bg ${topGround[0]} (${topGround[1]} cells)`);
+check(
+  "ground is #141413",
+  topGround[0] === GROUND,
+  `dominant bg ${topGround[0]} (${topGround[1]} cells)`,
+);
 
 // A cell is a border only when a box rule runs through it. TREE_BRANCH and TREE_MID are
 // box-drawing characters used as muted text glyphs, and counting those as border cells reported
@@ -54,7 +62,9 @@ check("muted text is #8A8A8A", muted.length > 0, `${muted.length} cells`);
 const prose = all.filter((c) => norm(c.fg) === TEXT && (c.ch ?? " ").trim() !== "");
 check("prose text is #D4D4D4", prose.length > 0, `${prose.length} cells`);
 
-const bandRows = grid.filter((row) => row.filter((c) => norm(c.bg) === BAND).length > frame.cols / 2);
+const bandRows = grid.filter(
+  (row) => row.filter((c) => norm(c.bg) === BAND).length > frame.cols / 2,
+);
 check("a full-width user band exists", bandRows.length > 0, `${bandRows.length} rows`);
 for (const [i, row] of bandRows.entries()) {
   check(`band row ${i} text starts at column 1`, firstCol(row) === 1, `starts at ${firstCol(row)}`);
@@ -67,10 +77,18 @@ const callRows = grid.filter((row) => /^→ \w+/.test(rowText(row).trimStart()))
 check("a → tool call line exists", callRows.length > 0, `${callRows.length} rows`);
 const inset = callRows.length > 0 ? Math.min(...callRows.map(firstCol)) : 0;
 for (const [i, row] of callRows.entries()) {
-  check(`call row ${i} sits at the transcript edge`, firstCol(row) === inset, `col ${firstCol(row)} against edge ${inset}`);
+  check(
+    `call row ${i} sits at the transcript edge`,
+    firstCol(row) === inset,
+    `col ${firstCol(row)} against edge ${inset}`,
+  );
   const next = grid[grid.indexOf(row) + 1];
   const col = next === undefined ? -1 : firstCol(next);
-  check(`call row ${i} result is indented 2`, col === inset + 2, `result at col ${col}, want ${inset + 2}`);
+  check(
+    `call row ${i} result is indented 2`,
+    col === inset + 2,
+    `result at col ${col}, want ${inset + 2}`,
+  );
 }
 
 // The one measured attribute of the mock that is not met. The mock draws the input box's own rule
