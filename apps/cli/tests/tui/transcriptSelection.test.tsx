@@ -1,10 +1,11 @@
 /** @jsxImportSource @opentui/react */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type { Renderable, ScrollBoxRenderable } from "@opentui/core";
+import { parseColor, type Renderable, type ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import { TranscriptList } from "../../src/tui/components/TranscriptList";
+import { theme } from "../../src/tui/theme/theme";
 import type { TranscriptEntry } from "../../src/tui/util/format";
 import { flush, flushMarkdown } from "./helpers";
 
@@ -115,6 +116,27 @@ describe("transcript selection", () => {
       "        CodeRenderable true",
       "    TextRenderable true",
     ]);
+  });
+
+  // opentui derives the highlight from the row's own colours rather than from a configured pair:
+  // seri passes no `selectionBg`/`selectionFg` anywhere, and `theme.selectedBg`/`selectedFg` are
+  // ListRow's and CompletionPopup's list-highlight tokens, which reach no selection code.
+  test("the highlight is reverse video of the row's own foreground", async () => {
+    const setup = await mountTranscript(MIXED_TRANSCRIPT);
+    await setup.mockMouse.pressDown(0, 0);
+    await setup.mockMouse.moveTo(20, 0);
+    await setup.renderOnce();
+
+    const [selected] = setup.captureSpans().lines[0]?.spans ?? [];
+    if (selected === undefined) throw new Error("the drag painted no span");
+    expect(selected.text).toBe("user asked about the");
+    const rowFg = parseColor(theme.text);
+    expect(selected.bg.r).toBeCloseTo(rowFg.r, 5);
+    expect(selected.bg.g).toBeCloseTo(rowFg.g, 5);
+    expect(selected.bg.b).toBeCloseTo(rowFg.b, 5);
+    expect([selected.fg.r, selected.fg.g, selected.fg.b]).toEqual([0, 0, 0]);
+
+    await setup.mockMouse.release(20, 0);
   });
 
   test("a drag across the whole unscrolled transcript copies every row in order", async () => {
