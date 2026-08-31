@@ -72,6 +72,12 @@ export type HookPayload = {
   readonly tool_name: string;
   readonly cwd: string;
   readonly tool_input: unknown;
+  // PostToolUse only, and absent rather than null on PreToolUse, because at that point there is no
+  // result and a null would claim the tool returned one. Carried at all because the documentation
+  // says this contract is Claude Code's unchanged, and a PostToolUse script that reads
+  // `tool_response` is reading a field that contract defines — a doc making a promise the payload
+  // does not keep is worse than one that never made it.
+  readonly tool_response?: unknown;
 };
 
 // Three outcomes rather than a boolean plus a nullable string. A block always has a reason (the

@@ -131,7 +131,7 @@ export type SubagentRuntime = {
     subject: string,
     input: unknown,
   ) => Promise<{ readonly block?: string; readonly errors?: readonly string[] }>;
-  onAfterTool?: (subject: string, input: unknown) => Promise<readonly string[]>;
+  onAfterTool?: (subject: string, input: unknown, result: unknown) => Promise<readonly string[]>;
 };
 
 // Sum what showed up, like cli.ts's own addTokens — not imported from there because cli.ts

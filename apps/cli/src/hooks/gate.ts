@@ -6,7 +6,11 @@ export type HookRunner = {
     subject: string,
     input: unknown,
   ) => Promise<{ readonly block?: string; readonly errors?: readonly string[] }>;
-  readonly onAfterTool: (subject: string, input: unknown) => Promise<readonly string[]>;
+  readonly onAfterTool: (
+    subject: string,
+    input: unknown,
+    result: unknown,
+  ) => Promise<readonly string[]>;
 };
 
 /**
@@ -57,13 +61,19 @@ export function createHookRunner(opts: {
       }
       return { errors };
     },
-    onAfterTool: async (subject, input) => {
+    onAfterTool: async (subject, input, result) => {
       const messages: string[] = [];
       for (const spec of afterSpecs) {
         if (!hookMatches(spec, subject)) continue;
         const outcome = await run(
           spec,
-          { hook_event_name: "PostToolUse", tool_name: subject, cwd: opts.cwd, tool_input: input },
+          {
+            hook_event_name: "PostToolUse",
+            tool_name: subject,
+            cwd: opts.cwd,
+            tool_input: input,
+            tool_response: result,
+          },
           opts.signal,
         );
         // Exit 2 has no blocking meaning after the fact: the tool has already run and its result is

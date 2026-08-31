@@ -1294,21 +1294,26 @@ describe("runLoop", () => {
     });
 
     test("PostToolUse runs after the call and its messages become error events", async () => {
-      const seen: { subject: string; input: unknown }[] = [];
+      const seen: { subject: string; input: unknown; result: unknown }[] = [];
       const events = await collect(
         runLoop({
           model: oneWriteThenText(),
-          tools: makeTools(async () => "ok"),
+          tools: makeTools(async () => "wrote 3 lines"),
           messages: baseMessages,
           permissionMode: "auto",
-          onAfterTool: async (subject, input) => {
-            seen.push({ subject, input });
+          onAfterTool: async (subject, input, result) => {
+            seen.push({ subject, input, result });
             return ["format rewrote a.txt"];
           },
         }),
       );
 
-      expect(seen).toEqual([{ subject: "write_file", input: { path: "a.txt" } }]);
+      // `result` too, not just the subject and the input: it is what the payload's `tool_response`
+      // is built from, and a PostToolUse script written against Claude Code's contract reads that
+      // field by name.
+      expect(seen).toEqual([
+        { subject: "write_file", input: { path: "a.txt" }, result: "wrote 3 lines" },
+      ]);
       expect(events).toContainEqual({ type: "error", error: "format rewrote a.txt" });
       // The row survives: it is what keeps the session resumable, and a post hook consulted before
       // the push would be one cancel away from deleting it.

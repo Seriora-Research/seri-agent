@@ -253,7 +253,7 @@ export async function* runLoop(opts: {
    * it returns is reported as `error` events and nothing it returns can stop anything: the tool has
    * already run, so a consumer with an objection at this point has a message, not a veto.
    */
-  onAfterTool?: (subject: string, input: unknown) => Promise<readonly string[]>;
+  onAfterTool?: (subject: string, input: unknown, result: unknown) => Promise<readonly string[]>;
   // The tools already approved with "always" before this run started, or nothing. A seed, not a
   // handle: the loop copies it into its own Set and never writes back through this reference, so a
   // caller cannot be surprised by a mutation it did not ask for. Growth leaves as `tool-allowed`.
@@ -705,7 +705,7 @@ export async function* runLoop(opts: {
       if (opts.onAfterTool !== undefined) {
         let messages: readonly string[];
         try {
-          messages = await opts.onAfterTool(subject, call.input);
+          messages = await opts.onAfterTool(subject, call.input, toolResult);
         } catch (err) {
           // Same catch as the pre-hook above and as the `execute` call itself: a cancelled hook
           // rejects, and an escaping rejection would take the generator down without a `done`

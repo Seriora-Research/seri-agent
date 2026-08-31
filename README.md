@@ -335,7 +335,22 @@ If what you mean to protect is a path or a secret rather than one tool, match ev
 get there (`read_file|grep|bash|powershell`), or leave `matcher` out and let the script decide from
 the payload.
 
-seri sends the script a JSON payload on stdin and reads its exit code:
+seri sends the script this JSON payload on stdin, and reads its exit code:
+
+```json
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "bash",
+  "cwd": "/path/to/your/project",
+  "tool_input": { "command": "rm -rf /" }
+}
+```
+
+`tool_response` joins it on `PostToolUse`, carrying whatever the tool returned. The field names are
+Claude Code's, so a ported script finds what it looks for. The **tool names** are seri's own
+(`write_file`, `edit`, `bash`), not `Write`/`Edit`/`Bash`, so a matcher copied from another harness
+needs rewriting.
+
 
 | exit | meaning |
 | --- | --- |
@@ -360,9 +375,8 @@ nothing left to stop, so it is reported like any other failure.
 A broken hook never takes the session down. It fails open, loudly: the call proceeds and the error
 lands in the transcript. That is deliberate — a typo in a formatter should not stop you working.
 
-The contract is Claude Code's and Cursor's, unchanged, so scripts written for either run here when
-you copy them into `.seri/hooks/`. seri does not read `.cursor/hooks/` itself, for the same reason
-it does not read `.cursor/agents/`.
+seri does not read `.cursor/hooks/` itself, for the same reason it does not read `.cursor/agents/`.
+Copying the files in is the migration.
 
 ### Hooks from a repository you cloned do not run until you say so
 

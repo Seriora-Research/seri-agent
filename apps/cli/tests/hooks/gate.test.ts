@@ -174,7 +174,9 @@ describe("createHookRunner", () => {
       run: fake.run,
     });
 
-    expect(await runner.onAfterTool("write_file", { path: "a.txt" })).toEqual(["format failed"]);
+    expect(await runner.onAfterTool("write_file", { path: "a.txt" }, "wrote 3 lines")).toEqual([
+      "format failed",
+    ]);
     expect(fake.calls).toHaveLength(2);
   });
 
@@ -192,7 +194,7 @@ describe("createHookRunner", () => {
       run: fake.run,
     });
 
-    expect(await runner.onAfterTool("write_file", { path: "a.txt" })).toEqual([
+    expect(await runner.onAfterTool("write_file", { path: "a.txt" }, "wrote 3 lines")).toEqual([
       "that file is generated",
     ]);
     // A post block stops nothing, so it must not stop the hooks after it either — the short-circuit
@@ -211,7 +213,7 @@ describe("createHookRunner", () => {
     });
 
     await runner.onBeforeTool("mcp__github__create_issue", { title: "a bug" });
-    await runner.onAfterTool("mcp__github__create_issue", { title: "a bug" });
+    await runner.onAfterTool("mcp__github__create_issue", { title: "a bug" }, { url: "…/1" });
 
     expect(fake.calls.map((call) => call.payload)).toEqual([
       {
@@ -225,6 +227,9 @@ describe("createHookRunner", () => {
         tool_name: "mcp__github__create_issue",
         cwd: "/worktree",
         tool_input: { title: "a bug" },
+        // Present here and absent above, not null above: before the call there is no result, and a
+        // null would tell a script the tool returned one.
+        tool_response: { url: "…/1" },
       },
     ]);
   });
