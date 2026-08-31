@@ -1413,11 +1413,6 @@ async function runTui(
   // plainly where a random id would invite the reader to look for a meaning it does not carry.
   let queueIds = 0;
   const nextQueueId = (): string => `q${++queueIds}`;
-  // Which key ended a cancelled turn. runtime/renderer.ts routes every Ctrl-C through the same
-  // `deliverSignal("SIGINT")` the Esc handler calls, so by the time driveLoop comes back with
-  // `doneReason: "aborted"` there is nothing left in the result to tell the two presses apart —
-  // and they mean opposite things for the queue: Esc is "skip to the next one", Ctrl-C is "stop".
-  let cancelledByEsc = false;
   // HIGH-B: the currently in-flight turn's own promise (a fresh one assigned at each of the two
   // call sites that start one, both guarded so a new turn is never started while one is already
   // running — see runTurn's own comment). quit() awaits this when a turn is in flight instead of
@@ -2138,22 +2133,6 @@ async function runTui(
       doneReason = result.doneReason;
       refusedWithoutRunning = result.refusedWithoutRunning;
       archivist = result.archivist;
-      // Esc means "skip to the next one"; Ctrl-C means "stop". Both keep the meaning they already
-      // had — this is the one point where they can still be told apart, since renderer.ts routes
-      // Ctrl-C through the same `deliverSignal("SIGINT")` the Esc handler calls and the `finally`
-      // below sees only that the turn ended. Without this, Ctrl-C on a runaway turn would start
-      // the next queued turn instead of stopping, and the user would have to fight the queue to
-      // get back to an idle prompt. The muted line is the whole acknowledgement: nothing else on
-      // screen would otherwise explain where the rows went.
-      if (result.doneReason === "aborted" && !cancelledByEsc && liveState.queue.items.length > 0) {
-        const discarded = liveState.queue.items.length;
-        dispatch({ type: "queue-cleared" });
-        pushTranscriptLine(
-          dispatch,
-          `${discarded} queued message${discarded === 1 ? "" : "s"} discarded`,
-          { muted: true },
-        );
-      }
       // Rendered live into the transcript the moment it happens, the same run this turn just
       // produced it in — not deferred to session end, unlike the `archivist` copy above, which only
       // feeds the FINAL resolveRunTui result (printed once more after Ink unmounts, quit()'s own
@@ -2185,13 +2164,10 @@ async function runTui(
       failure = { err };
     } finally {
       turnInFlight = false;
-      // Both cancel mirrors are reset here, on every exit path, for the reason each declaration
-      // states: the cancel slot they mirror is signals.ts's, and it is only genuinely free again
-      // once this turn has actually settled. `cancelledByEsc` in particular must not survive into
-      // the next turn — a stale `true` would make the NEXT turn's Ctrl-C read as an Esc and drain
-      // the queue instead of clearing it.
+      // Reset here, on every exit path, for the reason its declaration states: the cancel slot it
+      // mirrors is signals.ts's, and it is only genuinely free again once this turn has actually
+      // settled.
       cancelDelivered = false;
-      cancelledByEsc = false;
       // The one place `driveLoop`'s own call is known to have genuinely settled, success or
       // failure — mirrors `turn-started`'s own dispatch above, at the one place a turn is known to
       // have genuinely begun. This `finally` always runs before the `destroyTuiRenderer()` call
@@ -2315,8 +2291,8 @@ async function runTui(
 
   // Escape at the input box cancels the in-flight turn — the same single-press cancel a Ctrl-C
   // already performs, and then runTurn's `finally` drains whatever is queued into the next turn.
-  // Which key it was is recorded (`cancelledByEsc`) because that is the only thing separating this
-  // from a Ctrl-C by the time the turn comes back; see runTurn's own aborted-turn block.
+  // Neither key is told apart from the other any more: cancelling means "I am done with this one,
+  // move on", and the queue advances by one either way.
   //
   // Both guards are load-bearing and neither is optional.
   //
@@ -2334,7 +2310,6 @@ async function runTui(
   function onEscape(): void {
     if (!turnInFlight || cancelDelivered) return;
     cancelDelivered = true;
-    cancelledByEsc = true;
     deliverSignal("SIGINT");
   }
 

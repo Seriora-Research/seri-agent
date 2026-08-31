@@ -290,8 +290,8 @@ const EMPTY_ROSTER: Readonly<
   pendingChildView: undefined,
 });
 
-// What "an empty queue" means, in one place — `initialTuiState`, `queue-cleared`, and every action
-// that removes the last item all reach the identical value, so none of them can drift into a shape
+// What "an empty queue" means, in one place — `initialTuiState` and every action that removes the
+// last item all reach the identical value, so none of them can drift into a shape
 // the MessageQueue invariant forbids. Frozen for the same reason EMPTY_TRANSCRIPT above is: every
 // state spread from this shares the SAME `items` instance.
 const EMPTY_QUEUE: MessageQueue = Object.freeze({
@@ -490,7 +490,6 @@ export type TuiAction =
   | { type: "queue-edit-cancelled" }
   | { type: "queue-item-dropped" }
   | { type: "queue-head-taken" }
-  | { type: "queue-cleared" }
   | ({ type: "subagent-child-event" } & ChildEventPayload)
   | { type: "subagent-panel-focus" }
   | { type: "subagent-panel-blur" }
@@ -859,8 +858,6 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       const [, ...rest] = state.queue.items;
       return { ...state, queue: normalizeQueue(rest, state.queue.selected - 1, false) };
     }
-    case "queue-cleared":
-      return { ...state, queue: EMPTY_QUEUE };
     case "subagent-child-event":
       return applyChildEvent(state, action);
     case "subagent-panel-focus":

@@ -6408,16 +6408,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Esc means "skip to the next one", Ctrl-C means "stop". Both reach the same deliverSignal, so
-    // without cli.ts's own cancel-source flag this is the assertion that would go red.
-    test("Ctrl-C cancels and clears the queue instead of advancing it", async () => {
-      const { child, sawLine, lastFrame, rawOccurrences } = await queueOneBehindTurn();
+    // Cancelling means "I am done with this one, move on", whichever key said so. Ctrl-C used to
+    // discard the whole queue and Esc used to advance it, which made the same visible action —
+    // stopping the turn on screen — do opposite things to work the user could see queued.
+    test("Ctrl-C cancels and the queue head starts, the same as Escape", async () => {
+      const { child, sawLine, lastFrame } = await queueOneBehindTurn();
       try {
         child.stdin?.write("\x03");
         await sawLine("RUNLOOP_ABORTED 1");
-        await new Promise((resolve) => setTimeout(resolve, 1_500));
-        expect(rawOccurrences("RUNLOOP_CALL 2")).toBe(0);
-        expect(lastFrame()).toContain("1 queued message discarded");
+        await sawLine("RUNLOOP_CALL 2");
+        expect(lastFrame()).not.toContain("discarded");
       } finally {
         child.kill("SIGKILL");
       }
