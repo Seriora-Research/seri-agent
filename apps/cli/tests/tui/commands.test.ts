@@ -847,6 +847,7 @@ describe("decideConfigOpen", () => {
     "SERI_VERIFY_ENABLED",
     "SERI_VERIFY_COMMAND",
     "SERI_REASONING_EFFORT",
+    "SERI_TUI_BACKGROUND",
   ];
   const originalEnv = Object.fromEntries(KNOWN_KEYS.map((name) => [name, process.env[name]]));
 
@@ -873,6 +874,7 @@ describe("decideConfigOpen", () => {
       "SERI_VERIFY_ENABLED",
       "SERI_VERIFY_COMMAND",
       "SERI_REASONING_EFFORT",
+      "SERI_TUI_BACKGROUND",
     ]);
     expect(rows.every((row) => row.source === "unset" && row.removable === false)).toBe(true);
   });
