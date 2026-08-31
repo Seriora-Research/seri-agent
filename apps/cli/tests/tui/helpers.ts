@@ -12,6 +12,14 @@ import type { SessionState } from "../../src/session/session";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
+// SplashBanner.tsx's own MARK, the one-row mark the welcome splash opens on, and the handle every
+// pty suite waits for before writing Escape to dismiss it. Matched rather than the "seri" wordmark
+// beside it because the mark is a single text node and so arrives contiguous in the raw stream,
+// where the wordmark is split from its version by the escapes between two nodes. Shared so a
+// rename of the mark cannot leave one suite waiting on text nothing prints, which is what
+// 32a1c8cc did.
+export const SPLASH_MARK = "▁▁▄▄▄▁▁";
+
 export function session(
   overrides: Partial<SessionState<ModelMessage>> = {},
 ): SessionState<ModelMessage> {

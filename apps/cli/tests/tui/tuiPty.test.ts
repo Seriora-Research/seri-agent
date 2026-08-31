@@ -18,13 +18,7 @@ import { checkpointStoreDir } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, resolveRef } from "../../src/checkpoint/shadowGit";
 import { configDirForStore, DATABASE_FILENAME } from "../../src/session/database";
 import { listSessionIds, loadSession, saveSession } from "../../src/session/session";
-import { childScriptInput } from "./helpers";
-
-// SplashBanner.tsx's own MARK, the one-row mark the welcome splash opens on. Matched rather
-// than the "seri" wordmark beside it because the mark is a single text node and so arrives
-// contiguous in the raw stream, where the wordmark is split from its version by the escapes
-// between two nodes.
-const SPLASH_MARK = "▁▁▄▄▄▁▁";
+import { childScriptInput, SPLASH_MARK } from "./helpers";
 
 function requireSessionId(sessionsDir: string): string {
   const id = listSessionIds(sessionsDir)[0];
