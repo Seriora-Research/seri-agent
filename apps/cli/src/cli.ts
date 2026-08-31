@@ -2630,10 +2630,17 @@ async function runTui(
     const head = liveState.queue.items[0];
     if (head === undefined) return;
     dispatch({ type: "queue-head-taken" });
-    void onSubmit(head.text);
+    void onSubmit(head.text, true);
   }
 
-  async function onSubmit(value: string): Promise<void> {
+  // `fromDrain` is drainQueue's own re-entry, and only ever true from the call above. A drained
+  // head has nothing ahead of it by construction — that is what taking it off the front MEANS — so
+  // it must skip the FIFO gate below. Without this, a queue holding two or more rows never drains
+  // at all: `queue-head-taken` leaves the tail behind, the gate reads that non-empty tail as
+  // "something is ahead of this", and the head it was just handed goes straight back on as the new
+  // LAST row. Nothing starts, the process sits idle, and the rows silently rotate one place per
+  // cancel. A one-row queue drained fine and hid it, which is every test this feature shipped with.
+  async function onSubmit(value: string, fromDrain = false): Promise<void> {
     if (reactDispatch === undefined) return;
     // Above the empty-trim return below, deliberately: InputBox submits on a bare Enter too, and
     // an empty commit means "keep the original text and leave edit mode", not "do nothing" —
@@ -2666,6 +2673,7 @@ async function runTui(
     // with a non-empty queue, and the user's next Enter would run immediately, ahead of every row
     // queued before it.
     if (
+      !fromDrain &&
       (turnInFlight || liveState.queue.items.length > 0) &&
       startsATurn(name, trimmed, prepared)
     ) {

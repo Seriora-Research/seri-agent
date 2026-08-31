@@ -6319,6 +6319,20 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       return { ...started, scriptPath };
     }
 
+    // Two rows, not one, and that is the whole point: a one-row queue drains through a path that
+    // never reads the tail, so every single-row test here stayed green while a two-row queue
+    // rotated in place and started nothing. `queue-head-taken` leaves the tail behind, and cli.ts's
+    // FIFO gate used to read that tail as "something is ahead of this" and re-append the very head
+    // it had just been handed.
+    async function queueTwoBehindTurn() {
+      const started = await queueOneBehindTurn();
+      started.child.stdin?.write("third message");
+      await started.sawInFrameTimes("third message", 1);
+      started.child.stdin?.write("\r");
+      await started.sawInFrameTimes("2 queued", 1);
+      return started;
+    }
+
     test("Enter during a turn queues the message instead of echoing and dropping it", async () => {
       const { child, lastFrame, frameOccurrences } = await queueOneBehindTurn();
       try {
@@ -6343,6 +6357,21 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // The whole feature in one line: a second turn exists, and nothing but the drain could
         // have started it — no key was pressed after the Escape.
         await sawLine("RUNLOOP_CALL 2");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("a two-row queue advances one row per cancel instead of rotating", async () => {
+      const { child, sawLine, sawInFrameTimes } = await queueTwoBehindTurn();
+      try {
+        child.stdin?.write("\x1b");
+        await sawLine("RUNLOOP_CALL 2");
+        // The row that was second is now the only one left. Rotation looked identical to a drain
+        // on the count alone — it kept saying "2 queued" — so the count is what pins it.
+        await sawInFrameTimes("1 queued", 1);
+        child.stdin?.write("\x1b");
+        await sawLine("RUNLOOP_CALL 3");
       } finally {
         child.kill("SIGKILL");
       }
