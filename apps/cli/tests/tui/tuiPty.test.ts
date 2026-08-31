@@ -6319,6 +6319,20 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       return { ...started, scriptPath };
     }
 
+    // Two rows, not one, and that is the whole point: a one-row queue drains through a path that
+    // never reads the tail, so every single-row test here stayed green while a two-row queue
+    // rotated in place and started nothing. `queue-head-taken` leaves the tail behind, and cli.ts's
+    // FIFO gate used to read that tail as "something is ahead of this" and re-append the very head
+    // it had just been handed.
+    async function queueTwoBehindTurn() {
+      const started = await queueOneBehindTurn();
+      started.child.stdin?.write("third message");
+      await started.sawInFrameTimes("third message", 1);
+      started.child.stdin?.write("\r");
+      await started.sawInFrameTimes("2 queued", 1);
+      return started;
+    }
+
     test("Enter during a turn queues the message instead of echoing and dropping it", async () => {
       const { child, lastFrame, frameOccurrences } = await queueOneBehindTurn();
       try {
@@ -6343,6 +6357,21 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // The whole feature in one line: a second turn exists, and nothing but the drain could
         // have started it — no key was pressed after the Escape.
         await sawLine("RUNLOOP_CALL 2");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("a two-row queue advances one row per cancel instead of rotating", async () => {
+      const { child, sawLine, sawInFrameTimes } = await queueTwoBehindTurn();
+      try {
+        child.stdin?.write("\x1b");
+        await sawLine("RUNLOOP_CALL 2");
+        // The row that was second is now the only one left. Rotation looked identical to a drain
+        // on the count alone — it kept saying "2 queued" — so the count is what pins it.
+        await sawInFrameTimes("1 queued", 1);
+        child.stdin?.write("\x1b");
+        await sawLine("RUNLOOP_CALL 3");
       } finally {
         child.kill("SIGKILL");
       }
@@ -6379,16 +6408,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Esc means "skip to the next one", Ctrl-C means "stop". Both reach the same deliverSignal, so
-    // without cli.ts's own cancel-source flag this is the assertion that would go red.
-    test("Ctrl-C cancels and clears the queue instead of advancing it", async () => {
-      const { child, sawLine, lastFrame, rawOccurrences } = await queueOneBehindTurn();
+    // Cancelling means "I am done with this one, move on", whichever key said so. Ctrl-C used to
+    // discard the whole queue and Esc used to advance it, which made the same visible action —
+    // stopping the turn on screen — do opposite things to work the user could see queued.
+    test("Ctrl-C cancels and the queue head starts, the same as Escape", async () => {
+      const { child, sawLine, lastFrame } = await queueOneBehindTurn();
       try {
         child.stdin?.write("\x03");
         await sawLine("RUNLOOP_ABORTED 1");
-        await new Promise((resolve) => setTimeout(resolve, 1_500));
-        expect(rawOccurrences("RUNLOOP_CALL 2")).toBe(0);
-        expect(lastFrame()).toContain("1 queued message discarded");
+        await sawLine("RUNLOOP_CALL 2");
+        expect(lastFrame()).not.toContain("discarded");
       } finally {
         child.kill("SIGKILL");
       }
